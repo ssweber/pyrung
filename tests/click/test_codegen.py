@@ -14,6 +14,7 @@ from hypothesis import strategies as st
 
 from pyrung.click import (
     ClickBlocks,
+    CodegenIdentityError,
     TagMap,
     ladder_to_pyrung,
     ladder_to_pyrung_project,
@@ -3431,6 +3432,178 @@ class TestStructuredCodegen:
         assert "id = Field(retentive=False)" in code
         assert "Channel[1].id" in code or "Channel[2].id" in code
         assert "val =" not in code
+
+    # ---- Per-slot / auto() default round-trip (identity gap) --------------
+
+    def _named_array_id_records(self, id_initials, *, id_retentive=False):
+        """Records for a ``Chan`` named_array (fields id, val; stride 2).
+
+        ``id`` gets the given per-instance initial values; ``val`` is all 0.
+        """
+        from pyclickplc.addresses import AddressRecord, get_addr_key
+        from pyclickplc.banks import DataType
+
+        n = len(id_initials)
+        records = {
+            get_addr_key("X", 1): AddressRecord(
+                memory_type="X",
+                address=1,
+                nickname="Enable",
+                comment="",
+                initial_value="0",
+                retentive=False,
+                data_type=DataType.BIT,
+            ),
+        }
+        for i, init in enumerate(id_initials):
+            id_addr = 101 + 2 * i
+            val_addr = 102 + 2 * i
+            open_marker = f"<Chan:named_array({n},2)>" if i == 0 else ""
+            close_marker = f"</Chan:named_array({n},2)>" if i == n - 1 else ""
+            records[get_addr_key("DS", id_addr)] = AddressRecord(
+                memory_type="DS",
+                address=id_addr,
+                nickname=f"Chan{i + 1}_id",
+                comment=open_marker,
+                initial_value=str(init),
+                retentive=id_retentive,
+                data_type=DataType.INT,
+            )
+            records[get_addr_key("DS", val_addr)] = AddressRecord(
+                memory_type="DS",
+                address=val_addr,
+                nickname=f"Chan{i + 1}_val",
+                comment=close_marker,
+                initial_value="0",
+                retentive=False,
+                data_type=DataType.INT,
+            )
+        return records
+
+    def _codegen_named_array_ids(self, tmp_path, id_initials, *, id_retentive=False, validate=True):
+        """Emit pyrung source for a ``Chan`` named_array with the given id initials."""
+        Enable = Bool("Enable")
+        Chan_id_1 = Int("Chan1_id")
+        Chan_id_2 = Int("Chan2_id")
+
+        # Reference two id tags so the array's base type is imported by codegen.
+        with Program() as logic:
+            with rung(Enable):
+                copy(Chan_id_1, Chan_id_2)
+
+        mapping = TagMap(
+            {Enable: x[1], Chan_id_1: ds[101], Chan_id_2: ds[103]},
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = self._make_nickname_csv(
+            tmp_path, self._named_array_id_records(id_initials, id_retentive=id_retentive)
+        )
+        return ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path, validate=validate)
+
+    def _reconstruct_ids(self, code, count):
+        """Exec generated code and return the reconstructed Chan.id per-slot defaults."""
+        ns = exec_with_source(code)
+        chan = ns["Chan"]
+        return [chan._blocks["id"].slot(i).default for i in range(1, count + 1)]
+
+    def test_named_array_auto_default_sequence(self, tmp_path: Path):
+        """Divergent 1..N id defaults compress to auto() and reconstruct exactly."""
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3])
+        assert "id = Field(retentive=False, default=auto())" in code
+        assert "Chan.id.slot(" not in code  # clean run needs no per-slot lines
+        assert self._reconstruct_ids(code, 3) == [1, 2, 3]
+
+    def test_named_array_auto_start_step(self, tmp_path: Path):
+        """Non-1/1 arithmetic run emits auto(start=, step=)."""
+        code = self._codegen_named_array_ids(tmp_path, [5, 7, 9])
+        assert "id = Field(retentive=False, default=auto(start=5, step=2))" in code
+        assert self._reconstruct_ids(code, 3) == [5, 7, 9]
+
+    def test_named_array_hybrid_auto_with_deviant(self, tmp_path: Path):
+        """Clean run with a lone deviant emits auto() + one per-slot override."""
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 99])
+        assert "id = Field(retentive=False, default=auto())" in code
+        assert "Chan.id.slot(3, default=99)" in code
+        assert self._reconstruct_ids(code, 3) == [1, 2, 99]
+
+    def test_named_array_non_arithmetic_per_slot_defaults(self, tmp_path: Path):
+        """Non-arithmetic defaults fall back to scalar base + per-slot overrides (no auto)."""
+        code = self._codegen_named_array_ids(tmp_path, [7, 7, 3])
+        assert "id = Field(retentive=False, default=7)" in code
+        assert "auto(" not in code
+        assert "Chan.id.slot(3, default=3)" in code
+        assert self._reconstruct_ids(code, 3) == [7, 7, 3]
+
+    def test_named_array_retentive_divergence_not_reconstructed(self, tmp_path: Path):
+        """Retentive fields drop power-on defaults; validate does not flag the loss."""
+        # Divergent source initials on a retentive field — pyrung's model discards
+        # them, so codegen emits no default and validate=True must not raise.
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3], id_retentive=True)
+        assert "id = 0" in code
+        assert "auto(" not in code
+        assert "Chan.id.slot(" not in code
+        assert self._reconstruct_ids(code, 3) == [0, 0, 0]
+
+    def test_validate_catches_default_collapse(self, tmp_path: Path, monkeypatch):
+        """validate=True raises when the emitted representation drops source values."""
+        # Force the pre-fix collapse: field default = slot-1 value, no overrides.
+        monkeypatch.setattr(
+            "pyrung.click.codegen.collector._summarize_field_defaults",
+            lambda defaults, *, type_name, retentive: (defaults[0] if defaults else None, {}),
+        )
+        with pytest.raises(CodegenIdentityError, match=r"Chan\.id\[2\]"):
+            self._codegen_named_array_ids(tmp_path, [1, 2, 3], validate=True)
+        # validate=False bypasses the check (still collapses, but does not raise).
+        code = self._codegen_named_array_ids(tmp_path, [1, 2, 3], validate=False)
+        assert self._reconstruct_ids(code, 3) == [1, 1, 1]
+
+    def test_format_default_unit(self):
+        """_format_default renders AutoDefault as auto(...); scalars unchanged."""
+        from pyrung.click.codegen.emitter import _format_default
+        from pyrung.core.structure import AutoDefault
+
+        assert _format_default(AutoDefault(start=1, step=1)) == "auto()"
+        assert _format_default(AutoDefault(start=5, step=2)) == "auto(start=5, step=2)"
+        assert _format_default(AutoDefault(start=1, step=3)) == "auto(step=3)"
+        assert _format_default(AutoDefault(start=4, step=1)) == "auto(start=4)"
+        assert _format_default(7) == "7"
+        assert _format_default("x") == "'x'"
+
+    def test_named_array_single_field_not_duplicated_as_block(self, tmp_path: Path):
+        """A count=1 single-field named_array must not also emit a plain block.
+
+        Its field maps as one block entry; re-emitting it as a plain block would
+        map the same hardware twice and raise a duplicate-name conflict on exec.
+        """
+        from pyrung.core import named_array
+
+        Enable = Bool("Enable")
+        runtime = named_array(Int, count=1, stride=1)(
+            type("Arr", (), {"__module__": __name__, "f0": 0})
+        )
+
+        with Program(strict=False) as logic:
+            with rung(Enable):
+                copy(runtime[1].f0, runtime[1].f0)
+
+        mapping = TagMap(
+            [Enable.map_to(x[1]), *runtime.map_to(ds.select(100, 100))],
+            include_system=False,
+        )
+        bundle = pyrung_to_ladder(logic, mapping)
+        csv_dir = tmp_path / "csv_out"
+        bundle.write(csv_dir)
+        nick_path = tmp_path / "nicknames.csv"
+        mapping.to_nickname_file(nick_path)
+
+        code = ladder_to_pyrung(csv_dir / "main.csv", nickname_csv=nick_path)
+
+        assert 'Block("Arr.f0"' not in code  # no phantom duplicate plain block
+        ns = exec_with_source(code)  # must not raise a hardware-address conflict
+        assert "mapping" in ns
 
     def test_udt_codegen(self, tmp_path: Path):
         """UDT: codegen emits @udt decorator and .map_to()."""

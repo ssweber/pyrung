@@ -222,13 +222,18 @@ class _StructureDecl:
     base_type: str | None  # e.g. "Int" for named_array; None for udt
     count: int
     stride: int | None
-    fields: list[tuple[str, str, object]]  # (field_name, type_name, default)
+    fields: list[
+        tuple[str, str, object]
+    ]  # (field_name, type_name, default); default may be AutoDefault
     hw_block_var: str  # "ds", "c", etc. (primary, for named_array)
     hw_start: int | None  # first hw address (for named_array)
     hw_end: int | None  # last hw address (for named_array)
     field_retentive: dict[str, bool] = field(default_factory=dict)
     field_metadata: dict[str, _TagMetadata] = field(default_factory=dict)
     field_slot_metadata: dict[tuple[str, int], _TagMetadata] = field(default_factory=dict)
+    # Per-slot default overrides (deviants only) — reconstructs values that the
+    # field-level default / auto() sequence does not cover.
+    field_slot_default: dict[tuple[str, int], object] = field(default_factory=dict)
     field_hw: dict[str, _FieldHw] = field(default_factory=dict)  # per-field hw (for udt)
     always_number: bool = False
 

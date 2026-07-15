@@ -219,7 +219,11 @@ def ClickBlocks() -> ClickBlockSet:
     )
 
 
-from pyrung.click.codegen import ladder_to_pyrung, ladder_to_pyrung_project
+from pyrung.click.codegen import (
+    CodegenIdentityError,
+    ladder_to_pyrung,
+    ladder_to_pyrung_project,
+)
 from pyrung.click.data_provider import ClickDataProvider
 from pyrung.click.ladder import LadderBundle, LadderExportError, pyrung_to_ladder
 from pyrung.click.nop import NopInstruction, nop
@@ -281,6 +285,7 @@ __all__ = [
     "nop",
     "RawInstruction",
     "raw",
+    "CodegenIdentityError",
     "ladder_to_pyrung",
     "ladder_to_pyrung_project",
     "pyrung_to_ladder",

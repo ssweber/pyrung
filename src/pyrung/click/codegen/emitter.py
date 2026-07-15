@@ -45,6 +45,7 @@ from pyrung.click.codegen.utils import (
     _sub_operand,
     _sub_operand_kwarg,
 )
+from pyrung.core.structure import AutoDefault
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import TagMap
@@ -161,13 +162,27 @@ def _type_default_value(type_name: str) -> object:
 
 def _structure_needs_field_import(collection: _OperandCollection) -> bool:
     for decl in collection.structures:
-        if any(v for v in decl.field_retentive.values()):
-            return True
+        # A field needs the Field() wrapper whenever its retentive policy differs
+        # from its type default (e.g. a non-retentive Int, whose type default is
+        # retentive) — not only when it is explicitly retentive.
+        for field_name, type_name, _default in decl.fields:
+            type_default_ret = _TYPE_NAME_DEFAULT_RETENTIVE.get(type_name, True)
+            if decl.field_retentive.get(field_name, False) != type_default_ret:
+                return True
         if any(_has_metadata(meta) for meta in decl.field_metadata.values()):
             return True
         if any(_has_metadata(meta) for meta in decl.field_slot_metadata.values()):
             return True
     return False
+
+
+def _structure_uses_auto(collection: _OperandCollection) -> bool:
+    """True when any structure field declares an ``auto()`` default sequence."""
+    return any(
+        isinstance(default, AutoDefault)
+        for decl in collection.structures
+        for _, _, default in decl.fields
+    )
 
 
 def _emit_physical_declarations(lines: list[str], collection: _OperandCollection) -> None:
@@ -287,6 +302,8 @@ def _emit_imports(lines: list[str], collection: _OperandCollection) -> None:
         core_imports.append("udt")
     if has_retentive_field:
         core_imports.append("Field")
+    if _structure_uses_auto(collection):
+        core_imports.append("auto")
 
     # Built-in Timer/Counter UDTs
     if collection.used_instructions & {"on_delay", "off_delay"}:
@@ -531,13 +548,14 @@ def _emit_named_array_decl(
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
             if effective_default != _type_default_value(decl.base_type or "Int"):
-                kwargs.append(f"default={_format_literal(effective_default)}")
+                kwargs.append(f"default={_format_default(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(effective_default)
+            default_repr = _format_default(effective_default)
             lines.append(f"    {field_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
+    _emit_structure_slot_defaults(lines, decl)
 
 
 def _emit_udt_decl(
@@ -563,13 +581,14 @@ def _emit_udt_decl(
             if retentive != type_default_ret:
                 kwargs.append(f"retentive={retentive}")
             if effective_default != _type_default_value(type_name):
-                kwargs.append(f"default={_format_literal(effective_default)}")
+                kwargs.append(f"default={_format_default(effective_default)}")
             _append_metadata_kwargs(kwargs, metadata, collection)
             lines.append(f"    {field_name}: {type_name} = Field({', '.join(kwargs)})")
         else:
-            default_repr = _format_literal(effective_default)
+            default_repr = _format_default(effective_default)
             lines.append(f"    {field_name}: {type_name} = {default_repr}")
     _emit_structure_slot_metadata(lines, decl, collection)
+    _emit_structure_slot_defaults(lines, decl)
 
 
 def _emit_structure_slot_metadata(
@@ -582,6 +601,24 @@ def _emit_structure_slot_metadata(
         _append_metadata_kwargs(kwargs, metadata, collection)
         if kwargs:
             lines.append(f"{decl.name}.{field_name}.slot({index}, {', '.join(kwargs)})")
+
+
+def _emit_structure_slot_defaults(lines: list[str], decl: _StructureDecl) -> None:
+    """Emit per-slot ``default=`` overrides the field default does not reconstruct."""
+    for (field_name, index), value in sorted(decl.field_slot_default.items()):
+        lines.append(f"{decl.name}.{field_name}.slot({index}, default={_format_literal(value)})")
+
+
+def _format_default(default: object) -> str:
+    """Format a field default, rendering ``AutoDefault`` as an ``auto(...)`` call."""
+    if isinstance(default, AutoDefault):
+        args: list[str] = []
+        if default.start != 1:
+            args.append(f"start={default.start}")
+        if default.step != 1:
+            args.append(f"step={default.step}")
+        return f"auto({', '.join(args)})"
+    return _format_literal(default)
 
 
 def _format_literal(default: object) -> str:

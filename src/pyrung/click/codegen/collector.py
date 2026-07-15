@@ -40,9 +40,57 @@ from pyrung.click.codegen.utils import (
     _strip_quoted_strings,
 )
 from pyrung.click.system_mappings import SYSTEM_OPERAND_PATHS
+from pyrung.core.structure import AutoDefault
 
 if TYPE_CHECKING:
     from pyrung.click.tag_map import OwnerInfo, TagMap
+
+
+# Numeric type names that support auto() incrementing defaults (mirrors
+# _validate_auto_default_allowed in core.structure).
+_AUTO_NUMERIC_TYPES = frozenset({"Int", "Dint", "Word"})
+
+
+def _summarize_field_defaults(
+    defaults: list[object],
+    *,
+    type_name: str,
+    retentive: bool,
+) -> tuple[object, dict[int, object]]:
+    """Compress a field's per-slot defaults into (base, {slot_index: override}).
+
+    ``base`` is an ``AutoDefault`` for a clean arithmetic run, otherwise the
+    scalar value the emitter should declare; ``overrides`` (1-based indices)
+    holds every slot the base does not reconstruct.  Retentive fields keep
+    slot-1 behaviour — their power-on defaults are moot in pyrung's model.
+    """
+    if not defaults:
+        return None, {}
+    if retentive or len(defaults) == 1:
+        return defaults[0], {}
+
+    # Scalar-base representation: first value + every deviating slot.
+    scalar_base = defaults[0]
+    scalar_overrides = {
+        idx: value for idx, value in enumerate(defaults, start=1) if value != scalar_base
+    }
+    if not scalar_overrides:
+        return scalar_base, {}
+
+    # Auto-sequence representation (numeric int-like types only).
+    if type_name in _AUTO_NUMERIC_TYPES and all(isinstance(v, int) for v in defaults):
+        start = cast(int, defaults[0])
+        step = cast(int, defaults[1]) - start
+        if step != 0:
+            auto_overrides = {
+                idx: value
+                for idx, value in enumerate(defaults, start=1)
+                if value != start + (idx - 1) * step
+            }
+            if len(auto_overrides) < len(scalar_overrides):
+                return AutoDefault(start=start, step=step), auto_overrides
+
+    return scalar_base, scalar_overrides
 
 
 # ---------------------------------------------------------------------------
@@ -291,12 +339,19 @@ def _enrich_with_ownership(
         field_retentive: dict[str, bool] = {}
         field_metadata: dict[str, _TagMetadata] = {}
         field_slot_metadata: dict[tuple[str, int], _TagMetadata] = {}
+        field_slot_default: dict[tuple[str, int], object] = {}
         for fn in field_names:
             block = runtime._blocks[fn]
             type_name = _TAG_TYPE_MAP.get(block.type.name, block.type.name)
             sv = block.slot(1)
-            fields.append((fn, type_name, sv.default))
             field_retentive[fn] = sv.retentive
+            slot_defaults = [block.slot(i).default for i in range(1, si.count + 1)]
+            base_default, default_overrides = _summarize_field_defaults(
+                slot_defaults, type_name=type_name, retentive=sv.retentive
+            )
+            fields.append((fn, type_name, base_default))
+            for idx, value in default_overrides.items():
+                field_slot_default[(fn, idx)] = value
             slot_metadata = tuple(_metadata_from_tag(block.slot(i)) for i in range(1, si.count + 1))
             nonempty_metadata = [meta for meta in slot_metadata if not _metadata_is_empty(meta)]
             if nonempty_metadata and all(meta == slot_metadata[0] for meta in slot_metadata):
@@ -360,6 +415,7 @@ def _enrich_with_ownership(
             field_retentive=field_retentive,
             field_metadata=field_metadata,
             field_slot_metadata=field_slot_metadata,
+            field_slot_default=field_slot_default,
             field_hw=per_field_hw,
             always_number=getattr(runtime, "always_number", False),
         )
@@ -384,6 +440,13 @@ def _enrich_with_ownership(
             return None
 
         logical_block = entry.logical
+        # A single-field, stride-1 named_array maps its field as one block entry
+        # (see _NamedArrayRuntime.map_to). It is already declared via its
+        # @named_array/@udt class, so never re-emit it as a plain block — doing so
+        # would map the same hardware twice (duplicate-name conflict).
+        if getattr(logical_block, "_pyrung_structure_kind", None) in ("named_array", "udt"):
+            return None
+
         first_hw = entry.hardware.block[entry.hardware_addresses[0]]
         last_hw = entry.hardware.block[entry.hardware_addresses[-1]]
         mem_type, hw_start = parse_address(_hw_address_name(first_hw))

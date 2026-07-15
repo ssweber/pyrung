@@ -12,11 +12,69 @@ from pyrung.click.codegen.parser import (
     _parse_rows,
     _parse_subroutines,
 )
+from pyrung.core.structure import resolve_default
 
 if TYPE_CHECKING:
     from pyrung.click.codegen.models import _AnalyzedRung, _OperandCollection, _SubroutineInfo
     from pyrung.click.ladder.types import LadderBundle
     from pyrung.click.tag_map import TagMap
+
+
+class CodegenIdentityError(Exception):
+    """Generated code would not reconstruct the source project's per-slot values.
+
+    Raised by the ``validate=True`` self-check when the compressed structure
+    representation the emitter is about to write (field default + ``auto()``
+    sequence + per-slot overrides) does not resolve back to every value read
+    from the source runtime.
+    """
+
+
+_MISSING = object()
+
+
+def _verify_codegen_identity(
+    collection: _OperandCollection,
+    structured_map: TagMap | None,
+) -> None:
+    """Fail loudly when emitted structure defaults would drop source values.
+
+    Decl-level check (no exec, no re-parse): for each structure field, resolve
+    what the emitted representation reconstructs and compare it to the source
+    per-slot default.  Retentive fields are skipped — pyrung's model discards
+    their power-on defaults, so they are intentionally not reconstructed.
+    """
+    if structured_map is None:
+        return
+
+    mismatches: list[str] = []
+    for decl in collection.structures:
+        si = structured_map.structure_by_name(decl.name)
+        if si is None:
+            continue
+        runtime = si.runtime
+        for field_name, _type_name, base_default in decl.fields:
+            if decl.field_retentive.get(field_name, False):
+                continue
+            block = runtime._blocks.get(field_name)
+            if block is None:
+                continue
+            for index in range(1, decl.count + 1):
+                override = decl.field_slot_default.get((field_name, index), _MISSING)
+                reconstructed = (
+                    override if override is not _MISSING else resolve_default(base_default, index)
+                )
+                source = block.slot(index).default
+                if reconstructed != source:
+                    mismatches.append(
+                        f"{decl.name}.{field_name}[{index}]: source default {source!r} "
+                        f"but generated code reconstructs {reconstructed!r}"
+                    )
+
+    if mismatches:
+        raise CodegenIdentityError(
+            "codegen identity check failed (validate=True):\n  " + "\n  ".join(mismatches)
+        )
 
 
 def _prepare_codegen(
@@ -96,6 +154,7 @@ def ladder_to_pyrung(
     nickname_csv: str | Path | None = None,
     nicknames: dict[str, str] | None = None,
     output_path: str | Path | None = None,
+    validate: bool = True,
 ) -> str:
     """Convert Click ladder data to pyrung Python source code.
 
@@ -110,6 +169,10 @@ def ladder_to_pyrung(
             to ``nickname_csv``; useful when the caller already has the map.
         output_path: Optional path to write the generated Python file.
             If ``None``, the code is returned as a string only.
+        validate: When *True* (default), run codegen self-checks before
+            emitting — currently a decl-level identity check that the generated
+            structure defaults reconstruct every source per-slot value. Raises
+            :class:`CodegenIdentityError` on mismatch.
 
     Returns:
         The generated Python source code as a string.
@@ -119,10 +182,15 @@ def ladder_to_pyrung(
             if required subroutine CSV files are missing, or if the CSV
             format is invalid.
         TypeError: If ``source`` is not a supported type.
+        CodegenIdentityError: If ``validate`` is *True* and the generated code
+            would not reconstruct the source project's per-slot values.
     """
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
         source, nickname_csv=nickname_csv, nicknames=nicknames
     )
+
+    if validate:
+        _verify_codegen_identity(collection, structured_map)
 
     code = _generate_code(
         analyzed, collection, nick_map, subroutines=subroutines, structured_map=structured_map
@@ -163,6 +231,7 @@ def ladder_to_pyrung_project(
     index: bool = False,
     overwrite: bool = False,
     machine_name: str = "PLC",
+    validate: bool = True,
 ) -> dict[str, str]:
     """Convert Click ladder data to a multi-file pyrung project.
 
@@ -182,6 +251,9 @@ def ladder_to_pyrung_project(
             Logic files (tags.py, main.py, subroutines/) are always written.
         machine_name: Human-readable machine name for CLAUDE.md
             header (e.g. from the .ckp filename).
+        validate: When *True* (default), run codegen self-checks before
+            emitting (see :func:`ladder_to_pyrung`). Raises
+            :class:`CodegenIdentityError` on mismatch.
 
     Returns:
         A dict mapping relative file paths to their content, e.g.
@@ -192,6 +264,9 @@ def ladder_to_pyrung_project(
     analyzed, collection, nick_map, subroutines, structured_map = _prepare_codegen(
         source, nickname_csv=nickname_csv, nicknames=nicknames
     )
+
+    if validate:
+        _verify_codegen_identity(collection, structured_map)
 
     files = _generate_project(
         analyzed,
