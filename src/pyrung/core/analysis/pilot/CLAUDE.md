@@ -3,10 +3,10 @@
 The captain (the user) picks the destination. The ship (the PLC program) has its own
 mass, inertia, and habits. PILOT comes aboard, reads the charts, and works the passage.
 
-Under the metaphor it's WWAED — *what would an engineer do*. Everything here is what a
+Under the metaphor it's WWTD — *what would tech do*. Everything here is what a
 real PLC tech does at a fault: trace backward from the symptom, force a bit, watch what
 the program does with it, pull up the trends when something moves that shouldn't have.
-The pilot is that engineer with three superpowers: **perfect memory** (the scan log),
+The pilot is that tech with three superpowers: **perfect memory** (the scan log),
 **perfect understanding — in theory** (static analysis reads the whole ladder at once;
 *in theory*, because live masks humble it exactly the way they humble the human), and **free forks**.
 

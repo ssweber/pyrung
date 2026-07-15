@@ -184,7 +184,7 @@ def _exposure_guard(
 ) -> Any | None:
     """The evidence-derived lifetime of a corrective input assignment.
 
-    WWAED: keep the door closed *wherever the door alarm can trip* — and the
+    WWTD: keep the door closed *wherever the door alarm can trip* — and the
     ladder names those places itself.  An **antagonist** is a rung the
     correction assignment provably silences whose consequence reaches the
     machine: it latched an incident alarm, or its writes flow into the opaque
