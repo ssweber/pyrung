@@ -28,13 +28,13 @@ from typing import Any
 from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.investigate import (
+    ReplayStep,
     _absence_root_correctives,
     build_deviation_incident,
     build_replay_fn,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.trace import compute_steerable
-from pyrung.core.analysis.pilot.types import _Step
 from pyrung.core.runner import PLC
 
 
@@ -102,7 +102,6 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
 
 def _incident(plc: PLC, prog: Program, anchor: int, before: dict[str, Any]):
     return build_deviation_incident(
-        plc,
         anchor_scan=anchor,
         end_scan=plc.state.scan_id,
         action=(),
@@ -202,7 +201,9 @@ class TestAnalogAbsenceRoot:
 
         pdg = ctx.pdg
         steerable = ctx.steerable
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        # A recorded let-run step: the coast holds Phase and re-arms toward the
+        # channel target, bounded by its own span (the abort window).
+        steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
         replay = build_replay_fn(
             cp,
             99,
@@ -221,8 +222,7 @@ class TestAnalogAbsenceRoot:
             zoom_channel_tag="Phase",
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
-            departure_scan=incident.departure_scan,
-            departure_bearing=(("Phase", 6),),
+            replay_watch_roles=("Phase",),
         )
 
         result = investigate_deviation(plc, incident, ctx, replay)
@@ -247,7 +247,9 @@ class TestAbsenceRootConfirmation:
 
         pdg = ctx.pdg
         steerable = ctx.steerable
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        # A recorded let-run step: the coast holds Phase and re-arms toward the
+        # channel target, bounded by its own span (the abort window).
+        steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
         replay = build_replay_fn(
             cp,
             99,
@@ -266,8 +268,7 @@ class TestAbsenceRootConfirmation:
             zoom_channel_tag="Phase",
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
-            departure_scan=incident.departure_scan,
-            departure_bearing=(("Phase", 6),),
+            replay_watch_roles=("Phase",),
         )
 
         result = investigate_deviation(plc, incident, ctx, replay)

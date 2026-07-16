@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_holding_state,
     _coast_to_value,
     _DebugFn,
+    _has_pending_effects,
     _pilot_world_key,
     _settle_delayed_effects,
     fork_with_rungs,
@@ -67,19 +68,44 @@ def _settle_cone(
     floor: int = LIMITS.cone_floor,
     ceiling: int = _SETTLE_CONE_CEILING,
     reached_fn: Callable[[dict[str, Any]], bool] | None = None,
+    session: CoastSession | None = None,
 ) -> list[dict[str, Any]]:
     """Coast *fork* until the cone stops moving — dwell control only.
 
     Thin wrapper over :meth:`CoastSession.settle` (see its docstring for the
     fixpoint/floor/transient semantics); returns the per-scan trajectory.
+    *session*, when given, records the dwell onto that session's timeline.
 
     Settle never accepts or rejects.  Attributing the trajectory to one of the
     five verify outcomes — who moved what — is the caller's job via ``cause()``.
     """
-    receipt = CoastSession(fork, kind="settle").settle(
-        cone, floor=floor, ceiling=ceiling, reached_fn=reached_fn
-    )
+    if session is None:
+        session = CoastSession(fork, kind="settle")
+    assert session.plc is fork
+    receipt = session.settle(cone, floor=floor, ceiling=ceiling, reached_fn=reached_fn)
     return list(receipt.trajectory)
+
+
+def _pen_tags(state: _PilotState, ctx: _PilotContext) -> frozenset[str]:
+    """The trial recorder's pen universe.
+
+    Profile Done bits (a fire-then-reset watchdog pulse must be two recorded
+    transitions, not a net no-op) plus the loop's watch tags and pipeline role
+    channels (bearing departures land as recorded events with exact scans).
+    Accumulator registers are excluded: a change-pen on a per-scan-churny tag
+    would collapse every fold to step-mode, and acc membership in the
+    incident's changed set is served by endpoint diff instead.
+    """
+    from pyrung.core.analysis.pilot.accumulators import iter_profiles
+
+    dones: set[str] = set()
+    accs: set[str] = set()
+    if ctx.program is not None:
+        for profile, _instr in iter_profiles(ctx.program):
+            dones.add(profile.done.name)
+            accs.add(profile.accumulator.name)
+    tags = dones | set(state.watch_tags) | {r.channel_tag for r in ctx.pipeline_roles}
+    return frozenset(tags - accs)
 
 
 def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
@@ -110,6 +136,8 @@ def _apply_actions(
 
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
+    session = CoastSession(fork, kind="pulse")
+    session.arm_pens(_pen_tags(state, ctx))
     patch = {t: v for t, v in actions}
     needs_edge = any(t in ctx.edge_tags for t in patch)
 
@@ -118,9 +146,11 @@ def _apply_actions(
         if release:
             fork.patch(release)
             fork.step()
+            session.note_pens()
 
     fork.patch(patch)
     fork.step()
+    session.note_pens()
     action_snap = dict(fork.state.tags)
     action_scan = fork.state.scan_id
 
@@ -134,7 +164,9 @@ def _apply_actions(
     if _reached(action_snap):
         wait_snaps: list[dict[str, Any]] = []
     else:
-        wait_snaps = _settle_cone(fork, _cone_tags(frame, ctx), floor=2, reached_fn=_reached)
+        wait_snaps = _settle_cone(
+            fork, _cone_tags(frame, ctx), floor=2, reached_fn=_reached, session=session
+        )
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.rungs)
@@ -144,6 +176,7 @@ def _apply_actions(
             frame.snap,
             key_config,
             scan_budget=ctx.max_scans - fork.state.scan_id,
+            session=session,
         )
     fork_snap = dict(fork.state.tags)
     if wait_snaps and wait_snaps[-1] != fork_snap:
@@ -160,6 +193,7 @@ def _apply_actions(
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
         key=_pilot_world_key(fork_snap, key_config, state.rungs),
+        timeline=session.events,
     )
 
 
@@ -493,7 +527,11 @@ def _try_zoom(
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
-    dwell, zoom_receipt = _letrun_zoom(fork, channel_tag, target_value, cone=_cone_tags(frame, ctx))
+    session = CoastSession(fork, kind="zoom")
+    session.arm_pens(_pen_tags(state, ctx))
+    dwell, zoom_receipt = _letrun_zoom(
+        fork, channel_tag, target_value, cone=_cone_tags(frame, ctx), session=session
+    )
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -526,6 +564,7 @@ def _try_zoom(
         snap=snap_after,
         key=key_after,
         coast_receipt=zoom_receipt,
+        timeline=session.events,
     )
 
     result = verify_gates(
@@ -598,6 +637,8 @@ def _try_terminal_letrun(
     )
 
     budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
+    session = CoastSession(fork, kind="letrun")
+    session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
         fork,
         ctx.target_tag,
@@ -605,6 +646,7 @@ def _try_terminal_letrun(
         role_tags,
         budget=budget,
         reached_fn=reached_fn,
+        session=session,
     )
 
     snap_after = dict(fork.state.tags)
@@ -628,10 +670,15 @@ def _try_terminal_letrun(
         None,
     )
     if not reached and changed_role is None:
+        # Hand the stall's receipt + pending flag to the loop: a quiescent
+        # stall is trustworthy memo material (skip the re-coast at this world
+        # key); a stall with a timer mid-flight must stay re-runnable.
         return _AttemptResult(
             trial=None,
             gate_events=(PilotGateEvent("dead-end", "terminal stall, no ejection"),),
             observations=observations,
+            stall_receipt=letrun_receipt,
+            stall_pending=_has_pending_effects(fork),
         )
 
     if reached:
@@ -653,6 +700,7 @@ def _try_terminal_letrun(
         snap=snap_after,
         key=key_after,
         coast_receipt=letrun_receipt,
+        timeline=session.events,
     )
 
     result = verify_gates(
@@ -687,7 +735,7 @@ def _try_terminal_dwell(
     """Re-coast dwell — the verified form of the old bare cone settle.
 
     Reached only when terminal let-run already ran at this key with these holds
-    (``letrun_tried[key] >= len(rungs)``).  The coast is deterministic
+    (``key in letrun_memo``).  The coast is deterministic
     given the held inputs, so re-running the ejection-guarded let-run would only
     re-eject and re-investigate; the old code side-stepped that with a bare
     ``_settle_cone`` straight onto ``state.work`` — the one execution that skipped
@@ -714,7 +762,11 @@ def _try_terminal_dwell(
         return target_reached(tags, ctx.target_tag, ctx.target_value, ctx.target_predicate)
 
     ceiling = min(_LETRUN_DWELL_CEILING, max(2, ctx.max_scans - scan_before))
-    _settle_cone(fork, _cone_tags(frame, ctx), floor=2, ceiling=ceiling, reached_fn=_reached)
+    session = CoastSession(fork, kind="settle")
+    session.arm_pens(_pen_tags(state, ctx))
+    _settle_cone(
+        fork, _cone_tags(frame, ctx), floor=2, ceiling=ceiling, reached_fn=_reached, session=session
+    )
 
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
@@ -746,6 +798,7 @@ def _try_terminal_dwell(
         post_pulse_key=frame.key,
         snap=snap_after,
         key=key_after,
+        timeline=session.events,
     )
 
     # Empty actions, no channel register: the settled fork already reached the
@@ -780,6 +833,7 @@ def _letrun_zoom(
     channel_tag: str | None,
     target_value: Any,
     cone: frozenset[str],
+    session: CoastSession | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -790,12 +844,16 @@ def _letrun_zoom(
     With a channel register and target value, seek with the target and
     departure bumps armed — the coast lands on the exact scan either fires
     and the returned receipt says which.  Without a channel register, fall
-    back to the bounded single-step cone settle (no receipt).
+    back to the bounded single-step cone settle (no receipt — outcome's
+    settle-path arm depends on its absence; the session still records pens).
 
     Returns ``(trajectory, receipt_or_None)``.
     """
     if channel_tag is None:
-        return _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING), None
+        return (
+            _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING, session=session),
+            None,
+        )
 
-    receipt = _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET)
+    receipt = _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET, session=session)
     return [dict(work.state.tags)], receipt

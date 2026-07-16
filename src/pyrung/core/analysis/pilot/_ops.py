@@ -210,6 +210,7 @@ def _coast_to_value(
     target_value: Any,
     *,
     budget: int = _ZOOM_BUDGET,
+    session: Any = None,
 ) -> CoastReceipt:
     """Coast *plc* forward (folding) until ``channel_tag == target_value``.
 
@@ -236,7 +237,7 @@ def _coast_to_value(
 
     if channel_tag is None:
         return CoastReceipt(
-            kind="zoom",
+            kind=session.kind if session is not None else "zoom",
             start_scan=plc.state.scan_id,
             end_scan=plc.state.scan_id,
             stop_reason="skipped",
@@ -255,7 +256,10 @@ def _coast_to_value(
             excluding={channel_tag: target_value},
         ),
     ]
-    return CoastSession(plc, kind="zoom").seek(bumps, budget=budget)
+    if session is None:
+        session = CoastSession(plc, kind="zoom")
+    assert session.plc is plc
+    return session.seek(bumps, budget=budget)
 
 
 def _coast_holding_state(
@@ -266,6 +270,7 @@ def _coast_holding_state(
     *,
     budget: int = _ZOOM_BUDGET,
     reached_fn: Callable[[Any], bool] | None = None,
+    session: Any = None,
 ) -> CoastReceipt:
     """Generalized terminal let-run: coast toward the *global* target while
     holding the current macro-state.
@@ -311,7 +316,10 @@ def _coast_holding_state(
     if role_tags:
         start = {t: plc.state.tags.get(t) for t in role_tags}
         bumps.append(departure_bump(plc, "ejected", start))
-    return CoastSession(plc, kind="letrun").seek(bumps, budget=budget)
+    if session is None:
+        session = CoastSession(plc, kind="letrun")
+    assert session.plc is plc
+    return session.seek(bumps, budget=budget)
 
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
@@ -469,11 +477,21 @@ def _apply_pulse(
     actions: list[tuple[str, Any]],
     resting: dict[str, Any],
     edge_tags: set[str],
+    session: Any = None,
 ) -> int:
     """Apply *actions* with rising-edge semantics where needed.
 
-    Returns the number of scans consumed.
+    Returns the number of scans consumed.  *session*, when given, records the
+    pulse onto that session's timeline (pens ticked after every raw scan, the
+    settle dwell run on the session) so a Done that fires inside the pulse
+    window is a recorded pen mark, not history-only.
     """
+    from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
+
+    if session is None:
+        session = CoastSession(plc, kind="pulse")
+    assert session.plc is plc
+
     patch = {t: v for t, v in actions}
     needs_edge = any(t in edge_tags for t in patch)
 
@@ -482,15 +500,15 @@ def _apply_pulse(
         if release:
             plc.patch(release)
             plc.step()
+            session.note_pens()
 
     plc.patch(patch)
     plc.step()
+    session.note_pens()
 
     # Fixed settle window — the one waiting shape with no predicate (an
     # explicit dwell, never disguised as a bump).
-    from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
-
-    CoastSession(plc, kind="pulse").dwell(LIMITS.pulse_settle_scans)
+    session.dwell(LIMITS.pulse_settle_scans)
 
     return 6 if needs_edge else 5
 
@@ -501,6 +519,7 @@ def _settle_delayed_effects(
     cfg: _StateKeyConfig | None,
     *,
     scan_budget: int = 2000,
+    session: Any = None,
 ) -> list[CoastReceipt]:
     """Fast-forward *fork* past pending timers and harness feedback.
 
@@ -521,7 +540,9 @@ def _settle_delayed_effects(
 
     budget = scan_budget
     receipts: list[CoastReceipt] = []
-    session = CoastSession(fork, kind="delayed-effects")
+    if session is None:
+        session = CoastSession(fork, kind="delayed-effects")
+    assert session.plc is fork
 
     harness = getattr(fork, "_harness", None)
     if harness is not None and harness.pending_count > 0:

@@ -259,8 +259,13 @@ check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
   half); the `WalkContext` seam.
 - `coast.py` — CoastSession: bump-driven coasts with receipts (arm named
   predicates, land on the exact scan the first fires, record what moved);
-  the sole "hold heading and let scans pass" engine. Same layer as `_ops.py`
-  (which imports it, never the reverse).
+  the sole "hold heading and let scans pass" engine. *Pens* are its
+  nonterminal change recorders (Done bits, watch tags — never a raw
+  accumulator): fold-protected so every transition is an exact landing on
+  the session timeline. Incidents and replay judgment consume that timeline
+  (`DeviationIncident.timeline`, `ReplayStep`); history re-diffs are only
+  for recorded-run *testimony* (`causal._changed_in_window`, the empirical
+  veto). Same layer as `_ops.py` (which imports it, never the reverse).
 - `_ops.py` — PLC primitives: pilot rungs, pulses, delayed-effect
   settlement; `_coast_to_value` / `_coast_holding_state` are thin bump
   builders over `coast.py` returning `CoastReceipt`s.

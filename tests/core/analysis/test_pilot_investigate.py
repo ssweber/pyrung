@@ -23,14 +23,15 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
+from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
     InvestigationHypothesis,
     ReplayOutcome,
-    _changed_tags_in_window,
+    ReplayStep,
     _dedupe_pairs,
-    _first_departure_scan,
+    _first_timeline_departure,
     _hold_allowed,
     build_deviation_incident,
     build_replay_fn,
@@ -39,7 +40,7 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_excursion,
 )
 from pyrung.core.analysis.pilot.trace import compute_steerable
-from pyrung.core.analysis.pilot.types import _Step
+from pyrung.core.analysis.pilot.types import _AttemptResult
 from pyrung.core.runner import PLC
 
 
@@ -237,8 +238,8 @@ def _watchdog_program() -> tuple[Program, Timer]:
 
 
 class TestBoundedReplay:
-    """build_replay_fn with departure_scan/departure_bearing bounds the coast
-    and judges by bearing rather than target-reached."""
+    """build_replay_fn with departure_bearing judges a command incident by
+    bearing rather than target-reached; the coast is the recorded dwell span."""
 
     def _setup(self):
         prog, tmr = _watchdog_program()
@@ -252,23 +253,17 @@ class TestBoundedReplay:
             plc.step()
         assert plc.state.tags["Alarm"] is True
 
-        # Find the departure scan (when Alarm went True)
-        departure_scan = None
-        for scan in range(cp.state.scan_id, plc.state.scan_id + 1):
-            s = plc.history.at(scan)
-            if s.tags.get("Alarm") is True:
-                departure_scan = scan
-                break
-        assert departure_scan is not None
-
+        # The recorded coast span: a plain dwell reproduces the same scans the
+        # live coast rode (the timer fires ~10 scans in, so 20 covers it).
+        span = plc.state.scan_id - cp.state.scan_id
         ctx = _make_replay_context(prog, plc, "Target", True)
         cp_trend = 1
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=plc.state.scan_id)]
-        return prog, plc, cp, cp_trend, steps, departure_scan, ctx
+        steps = [ReplayStep(inputs=(), scans=span, kind="dwell")]
+        return prog, plc, cp, cp_trend, steps, ctx
 
     def test_bounded_accepts_good_hold(self):
         """A hold that prevents the departure is accepted under bounded replay."""
-        _prog, _plc, cp, cp_trend, steps, dep_scan, ctx = self._setup()
+        _prog, _plc, cp, cp_trend, steps, ctx = self._setup()
 
         replay = build_replay_fn(
             cp,
@@ -276,7 +271,6 @@ class TestBoundedReplay:
             {},
             steps,
             **ctx,
-            departure_scan=dep_scan,
             departure_bearing=(("Alarm", False),),
         )
         outcome = replay((("Hold", True),))
@@ -285,7 +279,7 @@ class TestBoundedReplay:
 
     def test_bounded_rejects_bad_hold(self):
         """A no-op hold that doesn't prevent the departure is rejected."""
-        _prog, _plc, cp, cp_trend, steps, dep_scan, ctx = self._setup()
+        _prog, _plc, cp, cp_trend, steps, ctx = self._setup()
 
         replay = build_replay_fn(
             cp,
@@ -293,7 +287,6 @@ class TestBoundedReplay:
             {},
             steps,
             **ctx,
-            departure_scan=dep_scan,
             departure_bearing=(("Alarm", False),),
         )
         outcome = replay(())
@@ -302,7 +295,7 @@ class TestBoundedReplay:
 
     def test_unbounded_falls_through_to_trend_judgment(self):
         """Without departure info, replay uses the trace-back trend judgment."""
-        _prog, _plc, cp, cp_trend, steps, _dep_scan, ctx = self._setup()
+        _prog, _plc, cp, cp_trend, steps, ctx = self._setup()
 
         replay = build_replay_fn(
             cp,
@@ -359,10 +352,10 @@ class TestZoomReplay:
         assert plc.state.tags["State"] == 3
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "State", 6)
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
-        # A deliberately *tiny* departure window carrying the unreachable corridor
-        # target as a bearing conjunct: if the zoom coast were (wrongly) bounded
-        # by it, State could never reach 6 and the good hold would be rejected.
+        # A recorded zoom step: the coast re-arms State -> 6 under the ejection
+        # guard, unbounded — the corridor target is a full coast away, so no
+        # departure-window bound may cut it short.
+        steps = [ReplayStep(inputs=(), scans=0, kind="zoom", channel_tag="State", channel_target=6)]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):
@@ -374,8 +367,6 @@ class TestZoomReplay:
             **ctx,
             zoom_channel_tag="State",
             zoom_target_value=6,
-            departure_scan=cp.state.scan_id + 1,
-            departure_bearing=(("State", 6),),
         )
 
     def test_zoom_accepts_hold_that_reaches_corridor_target(self):
@@ -424,12 +415,12 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
         plc.fork(),
         99,
         (),
-        (_Step(inputs={}, scan_before=plc.state.scan_id, scan_after=plc.state.scan_id),),
+        (ReplayStep(inputs=(), scans=12, kind="letrun"),),
         **ctx,
         zoom_channel_tag=State.name,
         zoom_target_value=3,
         terminal_letrun_role_tags=(State.name,),
-        departure_scan=plc.state.scan_id + 12,
+        replay_watch_roles=(State.name,),
         eject_latch_baseline=((AlarmA.name, False), (AlarmB.name, False)),
     )
 
@@ -559,7 +550,10 @@ class TestTerminalLetrunReplay:
         assert plc.state.tags["Phase"] == 6
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "Goal", True)
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        # A recorded let-run step whose span covers the watchdog eject (~20 scans)
+        # so the bad hold ejects inside the bounded coast — the recorded coast
+        # span replaces the old departure-window bound.
+        steps = [ReplayStep(inputs=(), scans=25, kind="letrun")]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):
@@ -572,10 +566,7 @@ class TestTerminalLetrunReplay:
             zoom_channel_tag="Phase",
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
-            # Window covers the watchdog eject (~20 scans) so the bad hold ejects
-            # inside the bounded coast.
-            departure_scan=cp.state.scan_id + 25,
-            departure_bearing=(("Phase", 6),),
+            replay_watch_roles=("Phase",),
         )
 
     def test_letrun_accepts_hold_that_maintains_state(self):
@@ -625,7 +616,9 @@ class TestTerminalLetrunNoChannelRegister:
         plc.step()
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "Goal", True)
-        steps = [_Step(inputs={}, scan_before=cp.state.scan_id, scan_after=cp.state.scan_id)]
+        # A recorded let-run step; its span covers the watchdog eject (~10 scans)
+        # so a missed global target is judged at the bounded point.
+        steps = [ReplayStep(inputs=(), scans=15, kind="letrun")]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):
@@ -636,8 +629,6 @@ class TestTerminalLetrunNoChannelRegister:
             steps,
             **ctx,
             terminal_letrun_role_tags=(),  # no recognized state machine
-            departure_scan=cp.state.scan_id + 15,
-            departure_bearing=(("Goal", True),),
         )
 
     def test_fallback_accepts_hold_that_reaches_global_target(self):
@@ -945,7 +936,6 @@ def _coast_holding_to_trip(plc: PLC, polarity: bool, limit: int = 60) -> Deviati
         if any(plc.state.tags.get(n) for n in wd):
             break
     return build_deviation_incident(
-        plc,
         anchor_scan=anchor,
         end_scan=plc.state.scan_id,
         action=(),
@@ -1231,7 +1221,6 @@ class TestMultiReadCorrections:
             if plc.state.tags.get("WD_Done"):
                 break
         incident = build_deviation_incident(
-            plc,
             anchor_scan=anchor,
             end_scan=plc.state.scan_id,
             action=(),
@@ -1572,32 +1561,101 @@ def _change_program() -> Program:
     return prog
 
 
-class TestWindowHelpers:
-    def test_changed_tags_in_window(self):
-        plc = PLC(_change_program(), dt=0.010)
-        anchor = plc.state.scan_id
-        plc.step()
-        plc.patch({"A": True})
-        plc.step()  # A -> True, B -> True
-        changed = _changed_tags_in_window(plc, anchor, plc.state.scan_id)
-        assert "A" in changed and "B" in changed
+class TestFirstTimelineDeparture:
+    """``_first_timeline_departure`` reads the departure scan straight off the
+    recorded receipt timeline — the pen mark IS the departure scan, never a
+    history re-scan."""
 
-    def test_first_departure_scan(self):
-        plc = PLC(_change_program(), dt=0.010)
-        anchor = plc.state.scan_id
-        plc.step()
-        plc.patch({"A": True})
-        plc.step()
-        # B held False at the anchor and departed (-> True) the scan A latched it.
-        dep = _first_departure_scan(plc, "B", False, anchor, plc.state.scan_id)
-        assert dep == plc.state.scan_id
+    def test_finds_first_transition_off_value(self):
+        timeline = (
+            BumpEvent("pen", "pen", 5, (("B", False, True),)),
+            BumpEvent("pen", "pen", 9, (("B", True, False),)),
+        )
+        assert _first_timeline_departure(timeline, "B", False) == 5
 
-    def test_no_departure_returns_none(self):
-        plc = PLC(_change_program(), dt=0.010)
-        anchor = plc.state.scan_id
-        plc.step()
-        plc.step()  # B never leaves False
-        assert _first_departure_scan(plc, "B", False, anchor, plc.state.scan_id) is None
+    def test_departure_is_relative_to_the_queried_value(self):
+        # A single True -> False transition is a departure off True (scan 3),
+        # not off False (which it lands on).
+        timeline = (BumpEvent("pen", "pen", 3, (("B", True, False),)),)
+        assert _first_timeline_departure(timeline, "B", True) == 3
+        assert _first_timeline_departure(timeline, "B", False) is None
+
+    def test_returns_the_first_of_several(self):
+        timeline = (
+            BumpEvent("pen", "pen", 4, (("B", False, True),)),
+            BumpEvent("pen", "pen", 8, (("B", False, True),)),
+        )
+        assert _first_timeline_departure(timeline, "B", False) == 4
+
+    def test_no_matching_tag_returns_none(self):
+        timeline = (BumpEvent("pen", "pen", 7, (("A", False, True),)),)
+        assert _first_timeline_departure(timeline, "B", False) is None
+
+    def test_empty_timeline_returns_none(self):
+        assert _first_timeline_departure((), "B", False) is None
+
+
+def _oscillating_done_program() -> Program:
+    """A complement-reset timer whose Done bit *pulses* — False -> True -> False
+    each period — plus a latch that fires (and stays) the first time it does.
+    The pens must record both Done transitions and the latch's single rise."""
+    T = Timer.clone("T")
+    Latched = Bool("Latched")
+    with Program() as prog:
+        with Rung(~T.Done):
+            on_delay(T, 30, "ms")  # Done oscillates: ~3 scans off, 1 scan on
+        with Rung(T.Done):
+            latch(Latched)  # the first Done rise latches Latched permanently
+    return prog
+
+
+class TestPens:
+    """CoastSession pens record mid-coast transitions onto the timeline so a
+    fire-then-reset watchdog pulse is two recorded events, and incident
+    construction reads changed tags + departure scans straight off them."""
+
+    def test_pens_capture_fire_and_reset_onto_the_timeline(self):
+        plc = PLC(_oscillating_done_program(), dt=0.010)
+        session = CoastSession(plc, kind="test")
+        session.arm_pens(("T_Done", "Latched"))
+        session.dwell(20)
+
+        pens = [e for e in session.events if e.kind == "pen"]
+        rises = [
+            e.scan
+            for e in pens
+            for t, b, a in e.transitions
+            if t == "T_Done" and b is False and a is True
+        ]
+        falls = [
+            e.scan
+            for e in pens
+            for t, b, a in e.transitions
+            if t == "T_Done" and b is True and a is False
+        ]
+        # Both edges of the pulse landed as recorded pen marks with exact scans.
+        assert rises and falls
+        latched_scan = next(
+            e.scan for e in pens for t, _b, a in e.transitions if t == "Latched" and a is True
+        )
+
+        # The Done bit fired and reset inside the window, so its endpoint diff is
+        # a net no-op (before == after == False) — only the timeline carries it.
+        incident = build_deviation_incident(
+            anchor_scan=0,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=(("T_Done", False), ("Latched", False)),
+            before_snap={"T_Done": False, "Latched": False},
+            after_snap={"T_Done": False, "Latched": True},
+            timeline=tuple(session.events),
+        )
+        assert "T_Done" in incident.changed_tags  # recovered from the timeline
+        assert "Latched" in incident.changed_tags
+        # The departure scan comes off the timeline, not a history re-diff.
+        dep = {d.tag: d.scan for d in incident.departures}
+        assert dep["Latched"] == latched_scan
+        assert incident.departure_scan == latched_scan
 
 
 class TestBuildDeviationIncident:
@@ -1607,14 +1665,16 @@ class TestBuildDeviationIncident:
         plc.step()
         plc.patch({"A": True})
         plc.step()
+        # The recorded evidence: B departed False -> True the scan A latched it.
+        timeline = (BumpEvent("pen", "pen", plc.state.scan_id, (("B", False, True),)),)
         incident = build_deviation_incident(
-            plc,
             anchor_scan=anchor,
             end_scan=plc.state.scan_id,
             action=(("A", True),),
             bearing=(("B", False),),
             before_snap={"B": False},
             after_snap=dict(plc.state.tags),
+            timeline=timeline,
         )
         assert "B" in incident.changed_tags
         # B departed from its bearing (False) inside the window.
@@ -1628,7 +1688,6 @@ class TestBuildDeviationIncident:
         plc.step()
         plc.step()  # B stays False — bearing held
         incident = build_deviation_incident(
-            plc,
             anchor_scan=anchor,
             end_scan=plc.state.scan_id,
             action=(),
@@ -1641,9 +1700,9 @@ class TestBuildDeviationIncident:
 
     def test_program_narrows_changed_tags_to_done_and_acc(self):
         """With ``program`` given, ``changed_tags`` restricts to the fix engine's
-        universe (profile Done bits + accumulators) — the only tags membership is
-        ever tested against — instead of every churned register (e.g. plain coils
-        ``Alarm``/``Target``)."""
+        universe (profile Done bits from the timeline + accumulators from the
+        endpoint diff) — the only tags membership is ever tested against —
+        instead of every churned register (e.g. plain coils ``Alarm``/``Target``)."""
         from pyrung.core.analysis.pilot.accumulators import iter_profiles
 
         prog, _tmr = _watchdog_program()
@@ -1658,23 +1717,30 @@ class TestBuildDeviationIncident:
         before = dict(plc.history.at(anchor).tags)
         after = dict(plc.state.tags)
         end = plc.state.scan_id
+        dones = {p.done.name for p, _ in iter_profiles(prog)}
+        # Recorded evidence: the watchdog's Done bit fired in the window.
+        timeline = tuple(
+            BumpEvent("pen", "pen", end, ((name, False, after.get(name)),))
+            for name in sorted(dones)
+            if after.get(name) is True
+        )
         full = build_deviation_incident(
-            plc,
             anchor_scan=anchor,
             end_scan=end,
             action=(),
             bearing=(("Target", True),),
             before_snap=before,
             after_snap=after,
+            timeline=timeline,
         )
         restricted = build_deviation_incident(
-            plc,
             anchor_scan=anchor,
             end_scan=end,
             action=(),
             bearing=(("Target", True),),
             before_snap=before,
             after_snap=after,
+            timeline=timeline,
             program=prog,
         )
 
@@ -1686,5 +1752,45 @@ class TestBuildDeviationIncident:
         assert "Alarm" not in restricted.changed_tags
         assert set(restricted.changed_tags) <= relevant
         # The watchdog's Done bit actually fired in the window, so it survives.
-        dones = {p.done.name for p, _ in iter_profiles(prog)}
         assert dones & set(restricted.changed_tags)
+
+
+# ---------------------------------------------------------------------------
+# Terminal let-run memo — a trusted (quiescent) stall is memoized, a pending
+# stall is not (the pilot loop's rule; audit C2).
+# ---------------------------------------------------------------------------
+
+
+def _record_letrun_memo(memo: dict, key: tuple, attempt: _AttemptResult) -> None:
+    """The pilot loop's memo rule (pilot.py, the terminal-letrun stall arm):
+    a stall is trustworthy memo material only when its receipt is present AND no
+    harness effect was pending — a pending stall stays re-runnable at that key."""
+    if attempt.stall_receipt is not None and not attempt.stall_pending:
+        memo[key] = attempt.stall_receipt.stop_reason
+
+
+class TestLetrunMemo:
+    """``_AttemptResult.stall_receipt`` / ``stall_pending`` drive whether a
+    terminal-letrun stall is recorded into ``letrun_memo``."""
+
+    def _stall(self, pending: bool) -> _AttemptResult:
+        receipt = CoastReceipt(
+            kind="letrun",
+            start_scan=0,
+            end_scan=5,
+            stop_reason="quiescent",
+            fired=(),
+            events=(),
+            budget=5,
+        )
+        return _AttemptResult(trial=None, stall_receipt=receipt, stall_pending=pending)
+
+    def test_quiescent_stall_records_memo(self):
+        memo: dict = {}
+        _record_letrun_memo(memo, ("world-key",), self._stall(pending=False))
+        assert memo == {("world-key",): "quiescent"}
+
+    def test_pending_stall_not_memoized(self):
+        memo: dict = {}
+        _record_letrun_memo(memo, ("world-key",), self._stall(pending=True))
+        assert memo == {}

@@ -46,8 +46,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DEPARTURE_MARGIN = 10
-
 # Skiff escalation for a live-word-gated antagonist (excursion suppression).
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
 _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
@@ -60,6 +58,7 @@ def _observe_stable_channel_landing(
     channel_tag: str,
     *,
     settle: bool,
+    session: Any = None,
 ) -> None:
     """Follow automatic motion beyond a proved-safe waypoint.
 
@@ -74,7 +73,9 @@ def _observe_stable_channel_landing(
     from pyrung.core.analysis.pilot.coast import CoastSession, departure_bump
 
     waypoint = probe.state.tags.get(channel_tag)
-    session = CoastSession(probe, kind="landing-observe")
+    if session is None:
+        session = CoastSession(probe, kind="landing-observe")
+    assert session.plc is probe
     scan_before = probe.state.scan_id
     receipt = session.seek(
         [departure_bump(probe, "moved", {channel_tag: waypoint})],
@@ -99,6 +100,24 @@ def _proposal_pair(proposal: Any) -> ActionPair:
 
 
 ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
+
+
+@dataclass(frozen=True)
+class ReplayStep:
+    """One recorded journey step with its session spec, replay-ready.
+
+    ``kind`` is the *recorded* coast kind (``"pulse"`` / ``"zoom"`` /
+    ``"letrun"`` / ``"dwell"``), read off the committed step context — never
+    inferred from position or input emptiness.  A zoom step re-arms its own
+    recorded ``channel_tag``/``channel_target``; a letrun step re-coasts
+    toward the global target bounded by its own recorded span.
+    """
+
+    inputs: tuple[tuple[str, Any], ...]
+    scans: int
+    kind: str
+    channel_tag: str | None = None
+    channel_target: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +273,7 @@ def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
     rungs: Sequence[Any],
-    steps: Sequence[Any],
+    steps: Sequence[ReplayStep],
     *,
     resting: dict[str, Any],
     edge_tags: set[str],
@@ -271,7 +290,7 @@ def build_replay_fn(
     zoom_channel_tag: str | None = None,
     zoom_target_value: Any = None,
     terminal_letrun_role_tags: tuple[str, ...] | None = None,
-    departure_scan: int | None = None,
+    replay_watch_roles: tuple[str, ...] = (),
     departure_bearing: tuple[tuple[str, Any], ...] = (),
     eject_cause_dones: frozenset[str] = frozenset(),
     progress_gauge: Any = None,
@@ -312,60 +331,52 @@ def build_replay_fn(
     all_done_tags = frozenset(p.done.name for p, _ in iter_profiles(program))
 
     def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
+        from pyrung.core.analysis.pilot.coast import CoastSession
+
         probe = cp_fork.fork()
         probe_rungs = list(rungs)
         scope = _target_unresolved_condition(probe, target_tag, target_value)
         probe_rungs.extend(_rungs_from_proposals(probe, list(holds), scope))
         _set_rungs(probe, probe_rungs)
-        replay_start = probe.state.scan_id
-        channel_shaped = terminal_letrun_role_tags is not None or zoom_channel_tag is not None
-        for i, step in enumerate(steps):
-            # The last step of a channel-shaped incident IS the ejecting coast.
-            # A terminal let-run commits it with ``inputs`` = the folded steady
-            # holds (the coast's driver is the held context) — those are already
-            # installed on the probe, so treating them as a command pulse would
-            # skip the coast entirely: five settle scans, channel intact, and
-            # every hypothesis "confirms".  Coast it.
-            is_eject_coast = channel_shaped and not step.inputs and i == len(steps) - 1
-            if step.inputs and not is_eject_coast:
-                _apply_pulse(probe, list(step.inputs.items()), resting, edge_tags)
-            elif terminal_letrun_role_tags is not None:
-                budget = (
-                    max(1, departure_scan - probe.state.scan_id + _DEPARTURE_MARGIN)
-                    if departure_scan is not None
-                    else _ZOOM_BUDGET
-                )
+        # One session spans the whole replay; its pens on the profile Done bits
+        # make the replay's own timeline the evidence ``_new_cause`` judges —
+        # the same recorder the live incident used, never a history re-diff.
+        session = CoastSession(probe, kind="replay")
+        session.arm_pens(all_done_tags)
+        for step in steps:
+            # Each step re-arms its RECORDED session spec (``ReplayStep.kind``
+            # off the committed step context) — a letrun eject-coast is coasted,
+            # never pulsed (pulsing it would skip the coast entirely: five
+            # settle scans, channel intact, every hypothesis "confirms").
+            if step.kind == "pulse" and step.inputs:
+                _apply_pulse(probe, list(step.inputs), resting, edge_tags, session=session)
+            elif step.kind == "letrun":
                 # The replay reproduces the INCIDENT — "the channel departed" —
-                # so its ejection guard is the channel alone, never the live
-                # coast's full role set.  The checkpoint world catches the
-                # state machine's scratch registers (isCmdValid__cmd,
-                # sm__where2jump) mid-settlement after the transition that
-                # created it; a role guard pauses on that transient a few
-                # scans in, the channel still reads its held value, and the
-                # judgment below would confirm whatever hypothesis came first.
-                guard_roles = (
-                    (zoom_channel_tag,)
-                    if zoom_channel_tag is not None
-                    else terminal_letrun_role_tags
-                )
+                # so its watch roles (*replay_watch_roles*, an explicit caller
+                # parameter) are the channel alone, never the live coast's full
+                # role set: the checkpoint world catches the state machine's
+                # scratch registers (isCmdValid__cmd, sm__where2jump)
+                # mid-settlement, and a role guard would pause on that
+                # transient with the channel still at its held value.  The
+                # budget is the step's own recorded span — the replay seeks to
+                # first-of {target, eject, timeout} and the judgment below
+                # reads which fired, so no departure margin is needed.
                 _coast_holding_state(
                     probe,
                     target_tag,
                     target_value,
-                    guard_roles,
-                    budget=budget,
+                    replay_watch_roles,
+                    budget=max(1, step.scans),
+                    session=session,
                 )
-            elif zoom_channel_tag is not None:
-                # Coast to the immediate bearing under the ejection guard. Do NOT
-                # bound this by the departure window: the channel register's
-                # requested value is the immediate goal but a full channel coast
-                # away (~the whole Starting->Execute completion), so a bounded
-                # coast can never reach it.  The guard already stops at the first
-                # ejection, so the coast is naturally bounded to this motion.
-                _coast_to_value(probe, zoom_channel_tag, zoom_target_value)
+            elif step.kind == "zoom" and step.channel_tag is not None:
+                # Coast to the step's recorded bearing under the ejection
+                # guard.  Do NOT bound this by the recorded span: the requested
+                # value is the immediate goal but a full channel coast away,
+                # and the guard already stops at the first ejection.
+                _coast_to_value(probe, step.channel_tag, step.channel_target, session=session)
             else:
-                for _ in range(max(1, step.scans)):
-                    probe.step()
+                session.dwell(max(1, step.scans))
         snap = dict(probe.state.tags)
         failure_silenced = bool(eject_latch_baseline) and all(
             _values_match(snap.get(tag), value) for tag, value in eject_latch_baseline
@@ -380,17 +391,16 @@ def build_replay_fn(
                 probe,
                 zoom_channel_tag,
                 settle=not all(isinstance(hold, PilotRung) for hold in holds),
+                session=session,
             )
             snap = dict(probe.state.tags)
         if logger.isEnabledFor(logging.DEBUG):
             roles = terminal_letrun_role_tags or ()
             logger.debug(
-                "replay probe: cp_scan=%s end_scan=%s steps=%d departure=%s shape=%s "
-                "channel=%s=%r roles=%s",
+                "replay probe: cp_scan=%s end_scan=%s steps=%d shape=%s channel=%s=%r roles=%s",
                 cp_fork.state.scan_id,
                 probe.state.scan_id,
                 len(steps),
-                departure_scan,
                 ("letrun" if terminal_letrun_role_tags is not None else "zoom"),
                 zoom_channel_tag,
                 snap.get(zoom_channel_tag) if zoom_channel_tag else None,
@@ -404,19 +414,21 @@ def build_replay_fn(
 
             Symmetric evidence: the incident side (``eject_cause_dones``) is the
             Done bits that *fired inside the incident window*, so the replay side
-            must be the Done bits that fired inside the *replay* window — the same
-            history diff on the probe.  Judging the replay by "Done bits true at
-            the pause snapshot" compares unlike evidence: ambient always-true
-            utility timers read as "new causes" and any window-only pulse reads as
-            "silenced", so an irrelevant hold can score as progress.
+            must be the Done bits that fired inside the *replay* window — read
+            off the replay session's own timeline (its pens are the Done bits).
+            Judging the replay by "Done bits true at the pause snapshot" compares
+            unlike evidence: ambient always-true utility timers read as "new
+            causes" and any window-only pulse reads as "silenced", so an
+            irrelevant hold can score as progress.
             """
             if not eject_cause_dones:
                 return None
-            replay_fired = set(
-                _changed_tags_in_window(
-                    probe, replay_start, probe.state.scan_id, relevant=all_done_tags
-                )
-            )
+            replay_fired = {
+                tag
+                for event in session.events
+                for tag, _before, _after in event.transitions
+                if tag in all_done_tags
+            }
             silenced = eject_cause_dones - replay_fired
             new = replay_fired - eject_cause_dones
             if silenced and new:
@@ -522,6 +534,10 @@ class ExcursionResult:
     confirmed_holds: list[ActionPair]
     reverted: list[str]
     retry_fork: Any = None
+    # The retry pulse's recorded session events — the timeline the retry trial
+    # carries forward (its Done-bit pen marks must stay visible to a later
+    # incident window).
+    retry_timeline: tuple[Any, ...] = ()
 
 
 def investigate_excursion(
@@ -645,6 +661,7 @@ def investigate_excursion(
 
     retry = work.fork()
     retry_rungs = list(rungs)
+    from pyrung.core.analysis.pilot.coast import CoastSession
     from pyrung.core.condition import CompareEq
 
     preserved_tag = reverted[0]
@@ -654,8 +671,11 @@ def investigate_excursion(
     _set_rungs(retry, retry_rungs)
     kickoff = list(action)
     kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in action})
-    _apply_pulse(retry, kickoff, resting, edge_tags)
-    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget)
+    session = CoastSession(retry, kind="excursion-retry")
+    if program is not None:
+        session.arm_pens(p.done.name for p, _ in iter_profiles(program))
+    _apply_pulse(retry, kickoff, resting, edge_tags, session=session)
+    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget, session=session)
     retry_snap = dict(retry.state.tags)
     retry_key = _pilot_state_key(retry_snap, cfg)
 
@@ -664,6 +684,7 @@ def investigate_excursion(
             confirmed_holds=candidate_holds,
             reverted=reverted,
             retry_fork=retry,
+            retry_timeline=session.events,
         )
     return ExcursionResult(confirmed_holds=[], reverted=reverted)
 
@@ -759,8 +780,24 @@ def _skiff_suppression_nominations(
 # ---------------------------------------------------------------------------
 
 
+def _first_timeline_departure(
+    timeline: Sequence[Any],
+    tag: str,
+    value: Any,
+) -> int | None:
+    """The recorded scan of *tag*'s first transition off *value*, or ``None``.
+
+    Read straight off the session timeline — the pen mark IS the departure
+    scan; no history window is re-scanned.
+    """
+    for event in timeline:
+        for t, before, after in event.transitions:
+            if t == tag and _values_match(before, value) and not _values_match(after, value):
+                return event.scan
+    return None
+
+
 def build_deviation_incident(
-    plc: PLC,
     *,
     anchor_scan: int,
     end_scan: int,
@@ -768,27 +805,43 @@ def build_deviation_incident(
     bearing: tuple[ActionPair, ...],
     before_snap: Mapping[str, Any],
     after_snap: Mapping[str, Any],
+    timeline: Sequence[Any] = (),
     program: Any = None,
     channel_tag: str | None = None,
 ) -> DeviationIncident:
     """Capture the facts inside the known off-course window.
 
+    *timeline* is the recorded session evidence for the window (the committed
+    steps' pen marks and bump landings): ``changed_tags`` membership and every
+    departure scan are read off it, never re-derived from history.  A
+    fire-then-reset watchdog pulse is two recorded transitions — exactly the
+    complement-reset oscillation ``correct_enablers`` looks for.
+
     *program*, when given, narrows ``changed_tags`` to the fix engine's actual
-    universe — every profile's Done bit (a mid-window pulse matters: a watchdog
-    can fire then reset, which is exactly the complement-reset oscillation
-    ``correct_enablers`` looks for) and accumulator register (the only tags
-    membership is ever tested against).  Diffing that handful instead of the
-    whole register file is the difference between O(window x all-tags) and
-    O(window x profiles).  ``None`` keeps the full diff (direct callers / tests).
+    universe: every profile's Done bit (from the timeline) and accumulator
+    register (from the endpoint diff — accumulators are deliberately not pens,
+    so their membership is the ``before_snap``/``after_snap`` comparison).
+    ``None`` keeps full generality (direct callers / tests): every recorded
+    transition plus the endpoint diff.
     """
-    relevant: frozenset[str] | None = None
+    changed: set[str] = {t for event in timeline for t, _b, _a in event.transitions}
     if program is not None:
-        relevant = frozenset(
-            name for p, _ in iter_profiles(program) for name in (p.done.name, p.accumulator.name)
+        done_names = frozenset(p.done.name for p, _ in iter_profiles(program))
+        acc_names = frozenset(p.accumulator.name for p, _ in iter_profiles(program))
+        changed &= done_names | acc_names
+        changed.update(
+            name
+            for name in acc_names
+            if not _values_match(before_snap.get(name), after_snap.get(name))
         )
-    changed_tags = _changed_tags_in_window(plc, anchor_scan, end_scan, relevant)
+    else:
+        changed.update(
+            t
+            for t in set(before_snap) | set(after_snap)
+            if not _values_match(before_snap.get(t), after_snap.get(t))
+        )
     departures = tuple(
-        BearingDeparture(tag, value, _first_departure_scan(plc, tag, value, anchor_scan, end_scan))
+        BearingDeparture(tag, value, _first_timeline_departure(timeline, tag, value))
         for tag, value in bearing
         if not _values_match(after_snap.get(tag), value)
     )
@@ -801,9 +854,10 @@ def build_deviation_incident(
         bearing=bearing,
         before_snap=before_snap,
         after_snap=after_snap,
-        changed_tags=changed_tags,
+        changed_tags=tuple(sorted(changed)),
         departures=departures,
         channel_tag=channel_tag,
+        timeline=tuple(timeline),
     )
 
 
@@ -1536,34 +1590,6 @@ def _absence_root_correctives(
 # ---------------------------------------------------------------------------
 
 
-def _changed_tags_in_window(
-    plc: PLC,
-    start_scan: int,
-    end_scan: int,
-    relevant: frozenset[str] | None = None,
-) -> tuple[str, ...]:
-    """Tags whose value changed between any adjacent pair in the window.
-
-    *relevant* restricts the diff to a candidate universe.  The incident's
-    changed set is only ever queried for membership of profile Done bits and
-    accumulator registers (``correct_enablers`` / ``incident_eject_dones``), so
-    the caller passes that handful of tags rather than paying an
-    O(window x whole-register-file) diff.  ``None`` diffs every tag (full
-    generality — used by the direct unit test).
-    """
-    try:
-        states = plc.history.range(start_scan, end_scan + 1)
-    except Exception:  # noqa: BLE001
-        return ()
-    changed: set[str] = set()
-    for prev, cur in zip(states, states[1:], strict=False):
-        tags = (set(prev.tags) | set(cur.tags)) if relevant is None else relevant
-        changed.update(
-            tag for tag in tags if not _values_match(prev.tags.get(tag), cur.tags.get(tag))
-        )
-    return tuple(sorted(changed))
-
-
 def _last_transition_scan(
     plc: PLC,
     tag: str,
@@ -1585,23 +1611,6 @@ def _last_transition_scan(
         if not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
             last = cur.scan_id
     return last
-
-
-def _first_departure_scan(
-    plc: PLC,
-    tag: str,
-    value: Any,
-    start_scan: int,
-    end_scan: int,
-) -> int | None:
-    try:
-        states = plc.history.range(start_scan, end_scan + 1)
-    except Exception:  # noqa: BLE001
-        return None
-    for prev, cur in zip(states, states[1:], strict=False):
-        if _values_match(prev.tags.get(tag), value) and not _values_match(cur.tags.get(tag), value):
-            return cur.scan_id
-    return None
 
 
 def _dedupe_pairs(pairs: list[ActionPair]) -> list[ActionPair]:

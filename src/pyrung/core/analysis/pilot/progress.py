@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot.detour import (
     classify_departure,
 )
 from pyrung.core.analysis.pilot.investigate import (
+    ReplayStep,
     build_deviation_incident,
     build_replay_fn,
     incident_eject_dones,
@@ -626,6 +627,34 @@ def _channel_transitions(
     return tuple(out)
 
 
+def _replay_step(step: Any, sc: Any) -> ReplayStep:
+    """One recorded journey step + its committed context → a replay spec.
+
+    The kind is the RECORDED motion (pulse / zoom / letrun), never inferred
+    from position or input emptiness.  A coast step with no channel register
+    (the settle-path zoom) replays as a plain dwell, exactly the shape it ran
+    live.  A step with no surviving context (pre-loop seeding) degrades to
+    pulse-or-dwell by its inputs.
+    """
+    inputs = tuple(step.inputs.items())
+    if sc is None:
+        return ReplayStep(inputs=inputs, scans=step.scans, kind="pulse" if inputs else "dwell")
+    kind = {
+        MotionKind.INTERVENTION: "pulse",
+        MotionKind.COAST_TO_BEARING: "zoom",
+        MotionKind.COAST_HOLDING_WORLD: "letrun",
+    }[sc.motion]
+    if kind == "zoom" and sc.channel_tag is None:
+        kind = "dwell"
+    return ReplayStep(
+        inputs=inputs,
+        scans=step.scans,
+        kind=kind,
+        channel_tag=sc.channel_tag,
+        channel_target=sc.channel_target,
+    )
+
+
 def _investigate_and_revert(
     trial: _TrialResult,
     frame: _IterationFrame,
@@ -677,21 +706,38 @@ def _investigate_and_revert(
                 bearing_pairs = [(t, v) for t, v in bearing_pairs if t != chan]
                 bearing_pairs.append((chan, trial.zoom_target_value))
         bearing = tuple(bearing_pairs)
+        # The incident's evidence is the recorded step timelines inside the
+        # window — the trend recorder's pen marks — never a history re-diff.
+        # ``step_contexts`` is world-side, so reverted steps are already gone
+        # and the just-committed trial's context is the last entry.
+        window_timeline = tuple(
+            event
+            for sc in state.step_contexts
+            for event in sc.timeline
+            if anchor_scan <= event.scan <= end_scan
+        )
         incident = build_deviation_incident(
-            state.work,
             anchor_scan=anchor_scan,
             end_scan=end_scan,
             action=trial.applied,
             bearing=bearing,
             before_snap=incident_before_snap or frame.snap,
             after_snap=trial.fork_snap,
+            timeline=window_timeline,
             program=ctx.program,
             channel_tag=trial.zoom_channel_tag,
         )
 
+        # Replay re-arms each step's RECORDED session spec (kind + channel +
+        # target off the committed step context), replacing the old positional
+        # "last empty-input step is the eject coast" inference.
+        sc_by_scan = {c.scan_before: c for c in state.step_contexts}
         replay_steps = tuple(
-            step for step in state.steps if step.scan_before >= cp_fork.state.scan_id
+            _replay_step(step, sc_by_scan.get(step.scan_before))
+            for step in state.steps
+            if step.scan_before >= cp_fork.state.scan_id
         )
+        role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
@@ -712,11 +758,15 @@ def _investigate_and_revert(
             zoom_channel_tag=trial.zoom_channel_tag,
             zoom_target_value=trial.zoom_target_value,
             terminal_letrun_role_tags=(
-                tuple(r.channel_tag for r in ctx.pipeline_roles)
-                if trial.motion is MotionKind.COAST_HOLDING_WORLD
-                else None
+                role_tags if trial.motion is MotionKind.COAST_HOLDING_WORLD else None
             ),
-            departure_scan=incident.departure_scan,
+            # The replay reproduces the incident, so its eject watch is the
+            # departed channel alone when one exists (audit I2 — an explicit
+            # caller decision, not buried dispatch); the full role set only
+            # when no channel register is recognized.
+            replay_watch_roles=(
+                (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
+            ),
             departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
             eject_cause_dones=incident_eject_dones(incident, ctx.program),
             progress_gauge=state.gauge,

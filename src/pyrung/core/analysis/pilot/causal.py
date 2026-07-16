@@ -66,7 +66,16 @@ def _changed_in_window(
     end_scan: int,
     relevant: frozenset[str],
 ) -> frozenset[str]:
-    """Subset of *relevant* whose recorded value changed inside the window."""
+    """Subset of *relevant* whose recorded value changed inside the window.
+
+    Deliberately a history walk, not a receipt read: its sole consumer is
+    :func:`empirical_program_writes` — recorded-run *testimony* about tags the
+    program wrote.  The skiff consults it over the whole run (scan 0..now), a
+    window no coast session covers, and its suspects are arbitrary steerable
+    tags outside any pen universe.  Incident evidence, by contrast, comes off
+    the session timeline (investigate.build_deviation_incident) — do not
+    route new coast-evidence consumers through this function.
+    """
     if not relevant:
         return frozenset()
     try:

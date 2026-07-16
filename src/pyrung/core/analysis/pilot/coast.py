@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 TARGET = "target"
 DEPARTURE = "departure"
 QUIESCENT = "quiescent"
+PEN = "pen"
 
 
 @dataclass(frozen=True)
@@ -176,8 +177,67 @@ class CoastSession:
 
     plc: PLC
     kind: str = "coast"
+    # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
+    # re-arming change recorder — the literal trend-recorder pen.  During a
+    # seek the pens ride as one internal nonterminal bump (their tags are
+    # fold-protected, so every transition is an exact landing); during
+    # step-mode ops (dwell / settle / a caller's raw pulse scans) the caller
+    # ticks :meth:`note_pens` once per scan.  Pens never end a seek — they
+    # only write the timeline.
+    pens: dict[str, Any] = field(default_factory=dict)
     _events: list[BumpEvent] = field(default_factory=list)
     _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def events(self) -> tuple[BumpEvent, ...]:
+        """The session timeline so far — ordered, same-scan groups preserved."""
+        return tuple(self._events)
+
+    def arm_pens(self, tags: Iterable[str]) -> None:
+        """Arm a change pen on each tag, baselined at the current value.
+
+        Re-arming an already-armed pen keeps its existing baseline (the pen
+        is mid-stroke, not reset).  Callers own the universe; a per-scan-churny
+        tag (a raw accumulator) must never be a pen — it would collapse every
+        fold to step-mode.
+        """
+        state_tags = self.plc.state.tags
+        for t in tags:
+            self.pens.setdefault(t, state_tags.get(t))
+
+    def note_pens(self) -> None:
+        """Record one timeline event for every pen that moved since its baseline.
+
+        Step-mode counterpart of the seek-time pen bump: one BumpEvent per
+        scan carrying all simultaneous transitions (same-scan groups are one
+        pen mark, never collapsed with a neighbor scan's).
+        """
+        if not self.pens:
+            return
+        state = self.plc.state
+        transitions = tuple(
+            (t, held, state.tags.get(t))
+            for t, held in self.pens.items()
+            if not _values_match(held, state.tags.get(t))
+        )
+        if not transitions:
+            return
+        self._events.append(BumpEvent("pen", PEN, state.scan_id, transitions))
+        for t, _, after in transitions:
+            self.pens[t] = after
+
+    def _pen_bump(self) -> Bump:
+        """The armed pens as one nonterminal bump for :meth:`seek`.
+
+        The predicate reads the live ``pens`` baselines, so a re-armed pen
+        (seek's nonterminal refresh) is immediately consistent.
+        """
+        pens = self.pens
+
+        def _pred(s: Any) -> bool:
+            return any(not _values_match(held, s.tags.get(t)) for t, held in pens.items())
+
+        return Bump(name="pen", kind=PEN, predicate=_pred, watched=tuple(pens), terminal=False)
 
     def seek(self, bumps: Iterable[Bump], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal bump fires; return the receipt.
@@ -192,8 +252,12 @@ class CoastSession:
         armed: list[Bump] = list(bumps)
         if not armed:
             raise ValueError("seek() requires at least one bump")
+        if self.pens:
+            armed.append(self._pen_bump())
         start_scan = plc.state.scan_id
-        baseline: dict[str, Any] = {}
+        # Pen baselines predate the seek (they carry from the session's last
+        # note); other watched tags baseline at the current value.
+        baseline: dict[str, Any] = dict(self.pens)
         for b in armed:
             for t in b.watched:
                 baseline.setdefault(t, plc.state.tags.get(t))
@@ -205,58 +269,68 @@ class CoastSession:
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
 
+        # After a nonterminal (pen) firing steps the world, the next armed bump
+        # may already be true at that very scan — judge it BEFORE folding
+        # again, or the fold's advance-≥1-before-judging would land one scan
+        # late and a cascading transition could carry the machine past the
+        # crossing the legacy (pen-less) coast landed on exactly.
+        judge_before_run = False
         while True:
-            live = list(armed)
-
-            def _any_pred(s: Any, _live: list[Bump] = live) -> bool:
-                return any(b.predicate(s) for b in _live)
-
             elapsed = plc.state.scan_id - start_scan
             remaining = budget - elapsed
             if remaining <= 0:
                 break
-            # NOTE(phase 4): like the legacy coasts (run_until semantics), a
-            # seek always advances at least one scan before judging — a bump
-            # already true at arm time lands after one scan, not zero.  The
-            # immediate-landing rule ("a target stops the scan it holds")
-            # arrives with the golden regeneration in the verify/outcome phase.
             sterile = False
-            if active_rungs:
-                from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
-
-                stats: dict[str, int] = {}
-                cycle_fold_until(
-                    plc,
-                    _any_pred,
-                    budget=remaining,
-                    fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
-                    extra_comparisons=crossings,
-                    predicate_reads=protected | clock_reads,
-                    stats=stats,
-                )
-                real_scans += stats.get("real_scans", 0)
-                folds += stats.get("folds", 0)
-                self._last_cyclefold_stats = stats
-                # A certified sterile cycle is a *proof* no armed bump can ever
-                # fire — the strongest form of timeout, arrived early.
-                sterile = bool(stats.get("sterile_cycle"))
-            else:
-                from pyrung.core.fold import fold_run_until
-
-                fold_run_until(
-                    plc,
-                    _any_pred,
-                    max_cycles=remaining,
-                    fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
-                    extra_comparisons=crossings,
-                )
-
             state = plc.state
-            now_fired = [b for b in armed if b.predicate(state)]
+            now_fired = [b for b in armed if b.predicate(state)] if judge_before_run else []
+            judge_before_run = False
             if not now_fired:
-                elapsed = state.scan_id - start_scan
-                stop_reason = "timeout" if sterile or elapsed >= budget else "paused"
-                break
+                live = list(armed)
+
+                def _any_pred(s: Any, _live: list[Bump] = live) -> bool:
+                    return any(b.predicate(s) for b in _live)
+
+                # NOTE(phase 4): like the legacy coasts (run_until semantics), a
+                # seek always advances at least one scan before judging — a bump
+                # already true at arm time lands after one scan, not zero.  The
+                # immediate-landing rule ("a target stops the scan it holds")
+                # arrives with the golden regeneration in the verify/outcome phase.
+                if active_rungs:
+                    from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+
+                    stats: dict[str, int] = {}
+                    cycle_fold_until(
+                        plc,
+                        _any_pred,
+                        budget=remaining,
+                        fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
+                        extra_comparisons=crossings,
+                        predicate_reads=protected | clock_reads,
+                        stats=stats,
+                    )
+                    real_scans += stats.get("real_scans", 0)
+                    folds += stats.get("folds", 0)
+                    self._last_cyclefold_stats = stats
+                    # A certified sterile cycle is a *proof* no armed bump can
+                    # ever fire — the strongest form of timeout, arrived early.
+                    sterile = bool(stats.get("sterile_cycle"))
+                else:
+                    from pyrung.core.fold import fold_run_until
+
+                    fold_run_until(
+                        plc,
+                        _any_pred,
+                        max_cycles=remaining,
+                        fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
+                        extra_comparisons=crossings,
+                    )
+
+                state = plc.state
+                now_fired = [b for b in armed if b.predicate(state)]
+                if not now_fired:
+                    elapsed = state.scan_id - start_scan
+                    stop_reason = "timeout" if sterile or elapsed >= budget else "paused"
+                    break
 
             scan = state.scan_id
             for b in now_fired:
@@ -266,6 +340,16 @@ class CoastSession:
                     if not _values_match(baseline.get(t), state.tags.get(t))
                 )
                 self._events.append(BumpEvent(b.name, b.kind, scan, transitions))
+            # Refresh every fired bump's watched baseline AFTER all events are
+            # recorded (two bumps watching one tag must both see the old value)
+            # and BEFORE the terminal check, so a terminal exit leaves the
+            # session pens current — the next session op must not re-record a
+            # transition the terminal landing already wrote down.
+            for b in now_fired:
+                for t in b.watched:
+                    baseline[t] = state.tags.get(t)
+                    if b.kind == PEN:
+                        self.pens[t] = state.tags.get(t)
 
             terminal = [b for b in now_fired if b.terminal]
             if terminal:
@@ -279,21 +363,26 @@ class CoastSession:
                     stop_reason = terminal[0].kind
                 break
 
-            # All firings nonterminal: re-arm (or disarm one-shots), refresh
-            # each fired bump's watched baseline so its next event records the
-            # next transition, and keep coasting.
+            # All firings nonterminal: re-arm (or disarm one-shots) and keep
+            # coasting — baselines were already refreshed above.
             for b in now_fired:
                 if b.one_shot:
                     armed.remove(b)
-                for t in b.watched:
-                    baseline[t] = state.tags.get(t)
             if not armed:
                 stop_reason = "departed"
                 break
             # A nonterminal bump still true next scan would spin the loop
-            # without motion; step once so the world moves past the firing.
+            # without motion; step once so the world moves past the firing,
+            # then judge that scan directly on the next pass.
             plc.step()
             real_scans += 1
+            judge_before_run = True
+
+        # A timeout can break out after a step the loop never judged, and an
+        # external pause can stop the fold between landings — write down any
+        # pen drift the loop didn't get to evaluate (exact scan for the
+        # timeout case; the pause case attributes to the pause scan).
+        self.note_pens()
 
         receipt = CoastReceipt(
             kind=self.kind,
@@ -330,6 +419,7 @@ class CoastSession:
         start_scan = plc.state.scan_id
         for _ in range(scans):
             plc.step()
+            self.note_pens()
         return CoastReceipt(
             kind=self.kind,
             start_scan=start_scan,
@@ -430,6 +520,7 @@ class CoastSession:
         prev = dict(plc.state.tags)
         for i in range(ceiling):
             plc.step()
+            self.note_pens()
             cur = dict(plc.state.tags)
             snaps.append(cur)
             if reached_fn is not None and reached_fn(cur):

@@ -236,6 +236,10 @@ class DeviationIncident:
     # terminal-letrun channel tag) — other departures downstream of it are
     # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
     channel_tag: str | None = None
+    # The recorded session events inside the window (BumpEvents, ordered,
+    # same-scan groups preserved).  This is the incident's evidence: a
+    # fire-then-reset pulse is two transitions here, never a net no-op.
+    timeline: tuple[Any, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +344,14 @@ class _StepContext:
     channel_tag: str | None = None
     before_snap: dict[str, Any] = field(default_factory=dict)
     after_snap: dict[str, Any] = field(default_factory=dict)
+    # The requested channel value for a coast step (the zoom bearing / the
+    # letrun channel's held value) — with ``motion`` + ``channel_tag`` this is
+    # the recorded session spec a replay re-arms, replacing the old positional
+    # "last empty-input step is the eject coast" inference.
+    channel_target: Any = None
+    # The step's session timeline (pen marks + bump landings).  Incident
+    # construction reads these instead of re-diffing history windows.
+    timeline: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -378,11 +390,17 @@ class _PilotState:
     # gauge advances, regressed only when that gauge moves behind, and otherwise
     # rolled back on expiry without manufacturing a nogood.
     provisional: Any = None
-    # State key -> forced-hold count when the terminal let-run last ran there.
-    # The coast is deterministic given the held inputs, so re-running at the same
-    # key with no new hold just re-burns the budget (or re-ejects forever).  Only
-    # re-fire when investigation has since installed a new hold (count grew).
-    letrun_tried: dict[_StateKey, int] = field(default_factory=dict)
+    # World key -> stop_reason of the terminal let-run that already ran there.
+    # A receipt-backed memo (the audit's C2): an entry is recorded only when it
+    # can be trusted — the coast ejected (deterministic re-eject after a revert
+    # restores the identical world), or it stalled *quiescent* (no pending
+    # harness feedback / running accumulator, so the masked state key genuinely
+    # captures the world).  A stall with pending effects is deliberately NOT
+    # memoized: the key masks accumulators, and a same-key world with a timer
+    # mid-flight might complete where this one timed out.  The world key
+    # already includes the rung overlay, so a newly installed hold re-fires
+    # the let-run naturally.
+    letrun_memo: dict[_StateKey, str] = field(default_factory=dict)
     # State key -> number of skiff (ORIENT last-tier) escalations spent there.  The
     # skiff is the reading-ladder's last tier; a stuck key gets a bounded number of
     # skiff laps and then the loop STOPS honestly instead of alternating forever.
@@ -519,6 +537,10 @@ class _PulseState:
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
     coast_receipt: Any = None
+    # The trial session's full event timeline (pen marks + bump landings across
+    # pulse, settle, and coast) — stamped onto the committed step context so
+    # incident construction reads recorded evidence, not history re-diffs.
+    timeline: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -549,6 +571,8 @@ class _TrialResult:
     zoom_target_value: Any = None
     # See _PulseState.coast_receipt — carried through verify onto the result.
     coast_receipt: Any = None
+    # See _PulseState.timeline — carried through verify onto the result.
+    timeline: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -565,3 +589,9 @@ class _AttemptResult:
     # ``_PilotState.avoid_names`` at RECORD so a terminal decline can name what
     # excluded the path.
     avoid_names: tuple[str, ...] = ()
+    # A stalled terminal let-run's receipt + pending-effects flag (trial=None,
+    # nothing committed).  The loop reads these to decide whether the stall is
+    # trustworthy memo material (quiescent) or must stay re-runnable (a timer
+    # was mid-flight when the budget ran out).
+    stall_receipt: Any = None
+    stall_pending: bool = False

@@ -675,6 +675,8 @@ def _record_step_context(
             channel_tag=trial.zoom_channel_tag,
             before_snap=dict(trial.before_snap),
             after_snap=dict(trial.fork_snap),
+            channel_target=trial.zoom_target_value,
+            timeline=trial.timeline,
         )
     )
 
@@ -1626,10 +1628,13 @@ def _pilot_loop_events(
         # the current macro-state and let the program's self-advancing frontier
         # coast toward the global target.  Reached -> CONFIRMED; the program
         # leaving the held macro-state -> AMBIENT_DRIFT, handed to investigation.
-        if state.letrun_tried.get(frame.key, -1) >= len(state.rungs):
-            # Already coasted this key with no fewer holds.  The let-run is
-            # deterministic given the held inputs, so re-running its ejection-guard
-            # coast would only re-eject and re-investigate.  Do ONE verified
+        if frame.key in state.letrun_memo:
+            # A trusted receipt already covers this world key: the coast ejected
+            # here (deterministic re-eject — the world key includes the rung
+            # overlay, so only a new hold re-opens it) or stalled quiescent (no
+            # pending effects, so the masked key genuinely captured the world).
+            # Re-running its ejection-guard coast would only re-eject and
+            # re-investigate.  Do ONE verified
             # cone-settle dwell instead: a self-advancing frontier that crosses the
             # target during the dwell is CONFIRMED through the shared verify target
             # gate; anything else is a legible terminal stall that falls through to
@@ -1666,7 +1671,6 @@ def _pilot_loop_events(
                 {"gates": attempt.gate_events},
             )
         else:
-            state.letrun_tried[frame.key] = len(state.rungs)
             yield PilotEvent(
                 "zoom",
                 state.work.state.scan_id,
@@ -1681,6 +1685,14 @@ def _pilot_loop_events(
             _record_attempt(attempt, frame, state, ctx)
             if attempt.trial is not None:
                 trial = attempt.trial
+                # A committed coast (ejection handed to investigation, or target
+                # reached) is deterministic at this pre-coast world key: memo it
+                # so a post-revert re-arrival dwells instead of re-ejecting.
+                state.letrun_memo[frame.key] = (
+                    trial.coast_receipt.stop_reason
+                    if trial.coast_receipt is not None
+                    else "committed"
+                )
                 yield PilotEvent(
                     "zoom_accepted",
                     trial.fork.state.scan_id,
@@ -1689,8 +1701,13 @@ def _pilot_loop_events(
                 yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
                 state.last_wait_log = None
                 continue
-            # Stall: the key is recorded in letrun_tried (set before firing), so we
-            # won't re-coast it unless a new hold is installed.
+            # Stall: memoize only a *quiescent* stall.  A stall with pending
+            # effects (a timer mid-flight when the budget ran out) stays
+            # re-runnable — the world key masks accumulators, and a same-key
+            # world could complete where this one timed out (audit C2).  The
+            # re-run cost is bounded by the skiff key budget.
+            if attempt.stall_receipt is not None and not attempt.stall_pending:
+                state.letrun_memo[frame.key] = attempt.stall_receipt.stop_reason
             yield PilotEvent(
                 "zoom_rejected",
                 state.work.state.scan_id,

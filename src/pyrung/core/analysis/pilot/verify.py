@@ -171,6 +171,9 @@ def _gate_spin(
                 post_pulse_key=trial.post_pulse_key,
                 snap=retry_snap,
                 key=retry_key,
+                # The retry fork replaced the original pulse; its recorded
+                # session is the timeline this trial carries forward.
+                timeline=result.retry_timeline,
             )
         if result.reverted:
             _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS", gate_events=gate_events)
@@ -483,6 +486,7 @@ def verify_gates(
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
                 coast_receipt=trial.coast_receipt,
+                timeline=trial.timeline,
             ),
             gate_events=tuple(gate_events),
         )
@@ -528,6 +532,7 @@ def verify_gates(
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
                 coast_receipt=trial.coast_receipt,
+                timeline=trial.timeline,
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
@@ -666,6 +671,7 @@ def verify_gates(
             zoom_channel_tag=zoom_channel_tag,
             zoom_target_value=zoom_target_value,
             coast_receipt=trial.coast_receipt,
+            timeline=trial.timeline,
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),
