@@ -1175,30 +1175,37 @@ def _build_def_use_chains(
             for tag_name in (event.condition_reads | event.data_reads | event.writes)
         }
     )
-    chains: dict[str, tuple[TagVersion, ...]] = {}
 
-    for tag_name in all_tags:
-        versions: list[dict[str, Any]] = [{"defined_at": None, "read_by": set()}]
-        current_index = 0
+    # One pass over the events, touching only the tags each one actually names.
+    # Sweeping every tag across every event instead asks "does this event mention
+    # me?" for each pair — quadratic, and almost always a miss, since a tag appears
+    # in a handful of events out of thousands.  The event already knows its tags.
+    versions_by_tag: dict[str, list[dict[str, Any]]] = {
+        tag_name: [{"defined_at": None, "read_by": set()}] for tag_name in all_tags
+    }
 
-        for event in access_events:
-            if tag_name in event.condition_reads or tag_name in event.data_reads:
-                versions[current_index]["read_by"].add(event.node_index)
+    for event in access_events:
+        # Reads land on the version in force *before* this event's write, so a
+        # rung that reads and writes the same tag reads the old value — the scan's
+        # own semantics, and the reason reads are applied first.
+        for tag_name in event.condition_reads:
+            versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
+        for tag_name in event.data_reads:
+            versions_by_tag[tag_name][-1]["read_by"].add(event.node_index)
+        for tag_name in event.writes:
+            versions_by_tag[tag_name].append({"defined_at": event.node_index, "read_by": set()})
 
-            if tag_name in event.writes:
-                versions.append({"defined_at": event.node_index, "read_by": set()})
-                current_index = len(versions) - 1
-
-        chains[tag_name] = tuple(
+    return {
+        tag_name: tuple(
             TagVersion(
                 tag=tag_name,
                 defined_at=version["defined_at"],
                 read_by=frozenset(version["read_by"]),
             )
-            for version in versions
+            for version in versions_by_tag[tag_name]
         )
-
-    return chains
+        for tag_name in all_tags
+    }
 
 
 def resolve_rung(program: Program, node: RungNode) -> Rung | None:
