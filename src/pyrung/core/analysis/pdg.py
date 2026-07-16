@@ -1228,13 +1228,16 @@ def resolve_rung(program: Program, node: RungNode) -> Rung | None:
 
 def classify_tags(graph: ProgramGraph) -> dict[str, TagRole]:
     """Classify tags by coarse graph role."""
+    # One pass over the nodes, same reason as _build_def_use_chains: sweeping every
+    # tag across every node asks "does this node read me?" per pair and answers no
+    # almost every time.  Tags with no condition reads simply get no entry — every
+    # read below goes through .get(..., frozenset()).
+    _condition_readers: dict[str, set[int]] = {}
+    for node_index, node in enumerate(graph.rung_nodes):
+        for tag_name in node.condition_reads:
+            _condition_readers.setdefault(tag_name, set()).add(node_index)
     condition_readers_of: dict[str, frozenset[int]] = {
-        tag_name: frozenset(
-            node_index
-            for node_index, node in enumerate(graph.rung_nodes)
-            if tag_name in node.condition_reads
-        )
-        for tag_name in (set(graph.readers_of) | set(graph.writers_of))
+        tag_name: frozenset(indices) for tag_name, indices in _condition_readers.items()
     }
 
     roles: dict[str, TagRole] = {}
