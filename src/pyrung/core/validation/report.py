@@ -125,6 +125,7 @@ def _validator_dispatch(
     from pyrung.core.validation.readonly_write import validate_readonly_writes
     from pyrung.core.validation.rung_conditions import validate_rung_conditions
     from pyrung.core.validation.stuck_bits import validate_stuck_bits
+    from pyrung.core.validation.wait_escape import validate_wait_escapes
 
     return {
         "stuck": lambda: validate_stuck_bits(program).findings,
@@ -136,4 +137,5 @@ def _validator_dispatch(
         "physical": lambda: validate_physical_realism(program, dt=dt).findings,
         "rung": lambda: validate_rung_conditions(program).findings,
         "cmp": lambda: validate_cmp_conditions(program).findings,
+        "wait": lambda: validate_wait_escapes(program).findings,
     }

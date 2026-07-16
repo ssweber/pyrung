@@ -35,12 +35,19 @@ The static validator [`COIL_STUCK_HIGH`](analysis-structure.md#rule-reference) c
 for finding in plc.query.wait_edges_without_escape():
     print(finding.message)
     # Rotate step 1 waits on i_RotateFB with no escape — R9 guards
-    # Rotate_CurStep == 3 and Rotate_EnableLimit = 0 disables the R5 timeout
+    # Rotate_CurStep == 3 and R5 needs Rotate_EnableLimit, which nothing sets
+    # (rests at 0)
 ```
 
-A step that only advances when an external input arrives is a *wait edge*. If nothing else can fire while the step waits — no timeout, no error rung covering that step — the step can hang forever with no alarm. This survey is static (no history needed): it reads each step register whose only advance is gated on an external input and reports the absence of a fireable escape. An escape rung whose guard excludes the waiting step, or whose config value is dead (a disabled timeout), does not count.
+A step that only advances when something outside the program arrives is a *wait edge*. If nothing else can fire while the step waits, the machine sits there looking fine. This survey is static — no history needed — and reports the absence of an escape the program can fire unaided.
 
-It reports the design decision — it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding also surfaces in Click validation as a `CLK_WAIT_STEP_NO_ESCAPE` warning.
+One rule decides both halves: a guard clause on a tag the ladder does not author holds only if the tag's resting value already satisfies it. That makes the advance a wait (`i_RotateFB` may never arrive) and disqualifies escapes gated the same way — a timeout switched off by a register nobody set and an abort waiting on a button nobody pressed fail for the same reason. An escape whose guard excludes the waiting step fails separately, on range.
+
+The survey deliberately does not guess *why* nobody sets a tag. A config register someone should have set at commissioning and a button someone would press are indistinguishable from a declaration — `Bool("EnableLimit")` is an ordinary way to write a config flag — so it reports the fact it proved ("nothing sets this") and leaves the intent to you.
+
+It reports the design decision; it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding surfaces in core validation as the [`STEP_NO_ESCAPE`](analysis-structure.md#rule-reference) warning, so `logic.validate()` picks it up with no extra call.
+
+**Reach.** It recognizes step machines that advance by `calc(Step + 1, Step)` or by stamping a literal in (`copy(2, Step)`), gated on a level or a rising edge, waiting on a contact or an analog threshold. It stays silent on shapes it cannot read — a `fall()`-gated advance, an `Or` guard, a drum — rather than guessing.
 
 ## Coverage reports and merge
 

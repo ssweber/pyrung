@@ -91,6 +91,12 @@ from pyrung.core.validation.stuck_bits import (
     StuckBitReport,
     validate_stuck_bits,
 )
+from pyrung.core.validation.wait_escape import (
+    STEP_NO_ESCAPE,
+    StepEscapeFinding,
+    StepEscapeReport,
+    validate_wait_escapes,
+)
 from pyrung.core.validation.walker import (
     FactScope,
     OperandFact,
@@ -123,6 +129,7 @@ __all__ = [
     "CMP_EQ_ON_MONOTONE",
     "CMP_STATIC_ON_LEFT",
     "CMP_TRUE_AT_RESET",
+    "STEP_NO_ESCAPE",
     "ChoicesViolationFinding",
     "ChoicesViolationReport",
     "CmpConditionFinding",
@@ -145,6 +152,8 @@ __all__ = [
     "ReadonlyWriteReport",
     "RungConditionFinding",
     "RungConditionReport",
+    "StepEscapeFinding",
+    "StepEscapeReport",
     "StuckBitFinding",
     "StuckBitReport",
     "ValidationReport",
@@ -159,5 +168,6 @@ __all__ = [
     "validate_pointer_defaults",
     "validate_readonly_writes",
     "validate_stuck_bits",
+    "validate_wait_escapes",
     "walk_program",
 ]

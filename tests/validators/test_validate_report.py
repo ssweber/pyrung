@@ -195,6 +195,7 @@ class TestValidationReport:
             "CMP_EQ_ON_MONOTONE",
             "CMP_TRUE_AT_RESET",
             "CMP_STATIC_ON_LEFT",
+            "STEP_NO_ESCAPE",
         }
         assert ALL_RULES == expected
 

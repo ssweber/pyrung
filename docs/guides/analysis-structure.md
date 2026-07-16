@@ -196,6 +196,7 @@ Unknown codes raise `ValueError`.
 | `TAG_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
 | `PHYS_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
 | `PHYS_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
+| `STEP_NO_ESCAPE` | A step whose only advance needs something the program cannot supply, with no escape it can fire unaided. The machine can sit there forever. See [wait edges without escape](analysis-coverage.md#wait-edges-without-escape). |
 
 `PTR_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.
 

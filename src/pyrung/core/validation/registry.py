@@ -31,7 +31,7 @@ class RuleSpec:
     """
 
     code: str
-    category: str  # "TAG" | "COIL" | "PTR" | "PHYS" | "RUNG"  (+ "CMP" when added)
+    category: str  # "TAG" | "COIL" | "PTR" | "PHYS" | "RUNG" | "CMP" | "STEP"
     severity: Severity
     validator: str
     title: str
@@ -62,6 +62,7 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec("CMP_EQ_ON_MONOTONE", "CMP", "error", "cmp", "Equality vs Self-Advancing Register"),
     RuleSpec("CMP_TRUE_AT_RESET", "CMP", "warning", "cmp", "Comparison True at Reset Value"),
     RuleSpec("CMP_STATIC_ON_LEFT", "CMP", "advisory", "cmp", "Static Operand on Left"),
+    RuleSpec("STEP_NO_ESCAPE", "STEP", "warning", "wait", "Wait Step Can Hang Forever"),
 )
 
 RULES: dict[str, RuleSpec] = {spec.code: spec for spec in _SPECS}
@@ -88,6 +89,7 @@ VALIDATOR_ORDER: tuple[str, ...] = (
     "physical",
     "rung",
     "cmp",
+    "wait",
 )
 
 
