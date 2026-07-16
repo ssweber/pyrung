@@ -69,20 +69,16 @@ def test_completion_reread_names_rotate_fb(tumbler_logic) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="cold-boot how(y_BurnerLoop) completion gate (design Part 2/3): the "
-    "completion re-read holds the FB permissives and clears the doors round so "
-    "Starting reaches Execute, but the drive still stalls on the Heat subtree "
-    "(o_BurnerLoop / Heat_CurStep=3) short of the ~scan 2100 target — the rotate "
-    "OSCILLATE + Heat rounds are not yet earned",
-)
 def test_cold_boot_how_y_burnerloop_completes(tumbler_logic) -> None:
-    """The silent-hang fixture end-to-end — born strict-xfail (shipyard rule).
+    """The silent-hang fixture end-to-end — the wait-edge design's phase-3 gate.
 
-    Doors round (investigation), FB permissives via completion-trace holds, then
-    the rotate OSCILLATE + Heat rounds to the burner loop at ~scan 2100.  Flip
-    when the cold-boot drive reaches y_BurnerLoop.
+    Born strict-xfail (shipyard rule); flipped when the full passage landed:
+    the doors round (investigation), FB permissives via completion-trace holds,
+    Starting -> Execute through the wait edge, the guard-aware investigation
+    re-earning the door hold for the Execute era, the rotate-sensor liveness
+    round, and the heat cascade to the burner loop.  Each era's correction is
+    earned through its own incident and survives later reverts (the banked
+    checkpoint) — a hold solves one bump, not the passage.
     """
     plc = PLC(tumbler_logic, dt=0.010)
     plc.step()

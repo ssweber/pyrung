@@ -17,6 +17,7 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
     _DebugFn,
+    _pilot_world_key,
     _set_rungs,
 )
 from pyrung.core.analysis.pilot.causal import pilot_touched_tags
@@ -787,7 +788,7 @@ def _investigate_and_revert(
             ctx,
             replay,
             needed=needed,
-            installed={r.dest: r.value for r in state.rungs},
+            installed_rungs=tuple(state.rungs),
             pilot_touched=pilot_touched_tags(
                 state.hold_log, state.journey, {r.dest: r.value for r in state.rungs}
             ),
@@ -885,6 +886,26 @@ def _investigate_and_revert(
     state.load_world(cp_world)
     if investigation_rungs:
         state.rungs = _append_rungs(state.work, investigation_rungs, state.rungs)
+        # Bank the corrected world onto the checkpoint.  A replay-confirmed
+        # correction is knowledge, but rungs live in the revertible World half —
+        # a later revert to this same checkpoint would silently drop it, so
+        # round N+1 relearns round N's correction and the restored overlay
+        # re-collides with the letrun memo at the pre-correction key.  Replacing
+        # the checkpoint's world (same tag state, corrected overlay, re-keyed)
+        # is what makes "knowledge accumulates across reverts" true for
+        # installed rungs, the way nogoods already survive outside the world.
+        key_config = state.key_config
+        banked_key = (
+            _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
+            if key_config is not None
+            else cp_key
+        )
+        state.checkpoints[-1] = _Checkpoint(
+            banked_key,
+            state.snapshot_world(),
+            cp_trend,
+            checkpoint.frontier,
+        )
     state.best_trend = cp_trend
     return (
         PilotEvent(

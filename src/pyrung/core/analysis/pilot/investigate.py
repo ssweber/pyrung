@@ -922,7 +922,14 @@ def build_deviation_incident(
 # ---------------------------------------------------------------------------
 
 
-def _hold_is_noop(tag: str, value: Any, snap: Mapping[str, Any], pdg: Any, program: Any) -> bool:
+def _hold_is_noop(
+    tag: str,
+    value: Any,
+    snap: Mapping[str, Any],
+    pdg: Any,
+    program: Any,
+    pilot_managed: frozenset[str] = frozenset(),
+) -> bool:
     """A hold that changes nothing cannot be a correction.
 
     Pinning *tag* at a value it already holds is inert when no program writer
@@ -932,10 +939,19 @@ def _hold_is_noop(tag: str, value: Any, snap: Mapping[str, Any], pdg: Any, progr
     test: it either drives the tag OFF its current value or pins against a
     writer that can produce a different one.  Oscillating (``PilotRung``)
     values are never no-ops.
+
+    A tag already driven by an installed PilotRung (*pilot_managed*) is never a
+    no-op either: the overlay itself is a mover.  The incident-anchor value only
+    reads stable because the pilot's own rung holds it there, and that rung's
+    guard can expire inside the coast window — managed-Boolean lowering then
+    drives the tag off the "stable" value.  The program-writer scan below cannot
+    see that mover, so it is short-circuited here.
     """
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.pilot.trace import _literal_write
+    from pyrung.core.analysis.steerable import _literal_write
 
+    if tag in pilot_managed:
+        return False
     if getattr(value, "rules", None) is not None:
         return False
     if not _values_match(snap.get(tag), value):
@@ -1030,7 +1046,7 @@ def investigate_deviation(
     replay: ReplayFn,
     *,
     needed: Sequence[tuple[str, Any]] = (),
-    installed: Mapping[str, Any] | None = None,
+    installed_rungs: Sequence[Any] = (),
     pilot_touched: frozenset[str] = frozenset(),
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
@@ -1060,11 +1076,26 @@ def investigate_deviation(
     # and a mid-chain suppressor (the abort rung's ~Suspend enabler) both
     # survive the bounded replay, the terminal names the cause while the
     # suppressor merely mutes the response.
+    installed_rungs = tuple(installed_rungs)
+    # Every dest an installed PilotRung drives — regardless of whether its guard
+    # was active at the incident anchor.  The vacuity check treats each of these
+    # as a mover (the overlay itself moves the tag when its guard expires).
+    pilot_managed = frozenset(r.dest for r in installed_rungs)
+    # The effective pilot-held value per dest *at the incident anchor*: managed
+    # lowering returns each Boolean to its rest, then active rungs write in append
+    # order, so the last active rung wins.  A rung whose guard evaluated False at
+    # the anchor (an expired door hold in Execute) contributes nothing — it was
+    # NOT active when the incident happened and must not gate the installed-skip.
+    _before_view = _SnapshotView(dict(incident.before_snap), {})
+    installed_active: dict[str, Any] = {}
+    for _rung in installed_rungs:
+        if bool(_rung.guard.evaluate(_before_view)):
+            installed_active[_rung.dest] = _rung.value
     absence_hyps, absence_tags = _absence_root_correctives(
         plc,
         incident,
         ctx,
-        exclude=frozenset(pilot_touched) | frozenset(installed or ()),
+        exclude=frozenset(pilot_touched) | pilot_managed,
     )
     raw: list[InvestigationHypothesis] = list(absence_hyps)
     precise = _precise_cause(plc, incident, ctx, pilot_touched)
@@ -1095,11 +1126,17 @@ def investigate_deviation(
         if not hypothesis.holds:
             _reject(hypothesis, "no-holds", "no holds proposed")
             continue
-        if installed and all(
-            ht in installed and (installed[ht] == hv or _values_match(installed[ht], hv))
+        if installed_active and all(
+            ht in installed_active
+            and (installed_active[ht] == hv or _values_match(installed_active[ht], hv))
             for ht, hv in map(_proposal_pair, hypothesis.holds)
         ):
-            continue  # active when the incident happened — escalate past it
+            # Skip only when an installed rung *actively covered* every proposed
+            # pair at the incident anchor: it was truly active when the incident
+            # happened, so a repeat regression escalates to the runner-up.  A rung
+            # installed but guard-expired (a door hold released in Execute) is
+            # absent here, so its hypothesis proceeds to replay instead.
+            continue
         if (
             pdg is not None
             and program is not None
@@ -1108,7 +1145,7 @@ def investigate_deviation(
                     action_tag == ht and not _values_match(action_value, hv)
                     for action_tag, action_value in incident.action
                 )
-                and _hold_is_noop(ht, hv, incident.before_snap, pdg, program)
+                and _hold_is_noop(ht, hv, incident.before_snap, pdg, program, pilot_managed)
                 for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
         ):
@@ -1264,8 +1301,8 @@ def _holds_defeat_needed(
 ) -> bool:
     """Static write-vs-need proof for one executable hold assignment."""
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.pilot.trace import _literal_write
     from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr, _expr_forced_true
+    from pyrung.core.analysis.steerable import _literal_write
 
     needed_first: dict[str, Any] = {}
     for nt, nv in needed:
