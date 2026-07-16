@@ -29,7 +29,12 @@ from pyrung.core.analysis.pilot.compass import (
     is_action,
     is_composite_action,
 )
-from pyrung.core.analysis.pilot.trace import _all_nodes, _WriterAvailability
+from pyrung.core.analysis.pilot.trace import (
+    _all_nodes,
+    _WriterAvailability,
+    frontier_pairs,
+    trace_back,
+)
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 
@@ -109,6 +114,12 @@ class _CandidateList:
     # Stage-1 command actions deferred this iteration because a stage-0 establish
     # gate is still pending (diagnostic only — the drive loop never sees them).
     deferred_commands: tuple[_ActionPair, ...] = ()
+    # The completion re-read's unmet frontier: a prescribed wait's charted
+    # completion condition, re-traced against the live world (``_prescribe_wait``).
+    # Names the pressable lever behind the wait (``x_RotateFB``) so the terminal
+    # frontier clause points past the pipeline cut.  The loop stamps it onto the
+    # frame for ``_frontier_clause``; empty when no wait carries completion.
+    completion_frontier: tuple[_ActionPair, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -532,6 +543,136 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
     )
 
 
+def _completion_reread(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> tuple[tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
+    """Re-trace a completion edge's charted gate pairs against the live world.
+
+    The wait's bearing (``CompassEdge.completion`` — charts.py) is ordinary
+    transparent ladder below the pipeline boundary: each recorded ``(tag,
+    value)`` is traced back with a fresh walk (clean ancestry, so the
+    opaque-loop feedback guard admits the one-hop descent), and its steerable
+    leaves + unmet frontier are collected.  Availability orders, never rejects:
+    a satisfied or self-advancing completion yields nothing pressable and the
+    wait proceeds unchanged.  Returns ``(action_details, frontier)`` — the
+    frontier lists the pressable levers (steerable leaves, e.g. ``x_RotateFB``)
+    ahead of the trace's non-steerable interior so the terminal clause names the
+    true blocker, not the post-cut interior.
+    """
+    details: list[TraceAction] = []
+    seen_action: set[_ActionPair] = set()
+    frontier: list[_ActionPair] = []
+    seen_frontier: set[tuple[str, str]] = set()
+
+    def _add_frontier(tag: str, value: Any) -> None:
+        key = (tag, repr(value))
+        if key not in seen_frontier:
+            seen_frontier.add(key)
+            frontier.append((tag, value))
+
+    for tag, value in edge.completion:
+        if _values_match(frame.snap.get(tag), value):
+            continue
+        tree = trace_back(
+            tag,
+            value,
+            frame.snap,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            clear_only=ctx.clear_only,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            prior=ctx.domain_prior,
+            avoid_pred=ctx.avoid_pred,
+            via_pred=ctx.via_pred,
+            harness=getattr(state.work, "_harness", None),
+        )
+        for action in tree.ordered_action_details():
+            if action.pair not in seen_action:
+                seen_action.add(action.pair)
+                details.append(action)
+            if not _values_match(frame.snap.get(action.tag), action.value):
+                _add_frontier(action.tag, action.value)
+        for ftag, fval in frontier_pairs(tree, frame.snap):
+            _add_frontier(ftag, fval)
+    return tuple(details), tuple(frontier)
+
+
+def _prescribe_wait(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    dbg: _DebugFn,
+    *,
+    reason: str | None = None,
+) -> tuple[bool, str | None, tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
+    """Mint a prescribed-wait bearing and re-read its charted completion.
+
+    The single owner of "a wait is prescribed" for all three mint sites.  A
+    route completion edge (the zoom / fallback sites) must be *grounded* — a
+    wildcard from-value has no dwell semantics, so it refuses the wait (returns
+    ``prescribed=False``).  Its charted ``completion`` pairs are re-read
+    (:func:`_completion_reread`): the steerable leaves feed the candidate
+    ranking and the unmet frontier names the true blocker.  An influence-path
+    wait passes ``edge=None`` with an explicit ``reason`` — always coastable,
+    nothing charted to re-read.  Returns ``(prescribed, reason,
+    completion_details, completion_frontier)``.
+    """
+    if edge is None:
+        return True, reason, (), ()
+    if not _edge_grounded(edge):
+        dbg(
+            f"# wait refused: {edge.role.channel_tag} first edge rides a "
+            "wildcard from-value (stateless — not a coastable claim)"
+        )
+        return False, None, (), ()
+    reason = f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
+    details, frontier = _completion_reread(edge, frame, state, ctx) if edge.completion else ((), ())
+    return True, reason, details, frontier
+
+
+def _rank_candidates(
+    cands: list[_Candidate],
+    frame: Any,
+    ctx: Any,
+    wake_cap: int,
+    detail_by_pair: dict[_ActionPair, TraceAction],
+) -> list[_Candidate]:
+    """Score and sort candidates; records each rank rationale onto the candidate.
+
+    A prescribed edge (route / influence / current) bypasses scoring and keeps
+    top priority; every other candidate is ordered by worst-on-path writer
+    availability, then wake, then compass progress.  ``index`` breaks every tie
+    so the candidate object itself is never compared.
+    """
+    scored: list[tuple[tuple[int, int, int, int], int, _Candidate]] = []
+    for index, candidate in enumerate(cands):
+        prescribed = (
+            candidate.route_prescribed
+            or candidate.influence_prescribed
+            or candidate.current_prescribed
+        )
+        base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
+        avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
+        over_wake = (
+            0 if prescribed else int(candidate.wake is not None and candidate.wake > wake_cap)
+        )
+        candidate = replace(
+            candidate,
+            avail_tier=avail_tier,
+            over_wake=bool(over_wake),
+            compass_score=(base[0], base[1]),
+            scored=not prescribed,
+        )
+        scored.append(((avail_tier, over_wake, base[0], base[1]), index, candidate))
+    return [candidate for _score, _index, candidate in sorted(scored)]
+
+
 def _build_candidates(
     frame: Any,
     state: Any,
@@ -626,6 +767,41 @@ def _build_candidates(
         else ()
     )
 
+    wait_prescribed = False
+    wait_reason: str | None = None
+    completion_frontier: tuple[_ActionPair, ...] = ()
+    # ORIENT re-reads the wait: when the zoom's grounded completion edge carries a
+    # charted condition (charts.py), :func:`_prescribe_wait` re-traces it as
+    # ordinary transparent ladder and returns its producers + unmet frontier.  The
+    # producers enter the trace pool *before* the prerequisite split below, so a
+    # self-advancing producer (``x_RotateFB``, ``until Rotate_Trans``) is held for
+    # the coast and any remaining lever ranks as an ordinary candidate; the
+    # frontier rides to the terminal clause via the frame so a stall names the true
+    # blocker.  The wait's reason is applied at the mint site after scoring.
+    _zoom_wait_prescribed = False
+    _zoom_wait_reason: str | None = None
+    if _is_zoom:
+        assert route_plan is not None  # _is_zoom is True only when route_plan exists
+        _zoom_wait_prescribed, _zoom_wait_reason, _comp_details, completion_frontier = (
+            _prescribe_wait(route_plan.first_edge, frame, state, ctx, dbg)
+        )
+        for detail in _comp_details:
+            pair = detail.pair
+            if (
+                pair in active_trace_actions
+                or pair in ctx.blocked_route_actions
+                or pair in key_nogoods
+                or not ctx.route_allowed(pair)
+                or (
+                    _values_match(frame.snap.get(pair[0]), pair[1]) and pair[0] not in ctx.edge_tags
+                )
+            ):
+                continue
+            detail_by_pair.setdefault(pair, detail)
+            trace_actions = trace_actions + (pair,)
+            active_trace_actions = active_trace_actions + (pair,)
+            trace_action_details = trace_action_details + (detail,)
+
     # Prerequisite/command split: on zoom iterations, and on a self-advancing
     # coast leaf that has no compass route (a harness-linked sensor ramp, or a
     # timer/counter threshold reached via the terminal let-run rather than a
@@ -651,7 +827,6 @@ def _build_candidates(
         # surface the skip.  Static, name-free (write-vs-need); belt-and-suspenders
         # on top of clear-only/writer-selection for levers those don't reroute.
         from pyrung.core.analysis.pilot.investigate import hold_defeats_needed
-        from pyrung.core.analysis.pilot.trace import frontier_pairs
 
         needed = frontier_pairs(frame.tree, frame.snap)
         oscillate_tags = {d.tag for d in trace_action_details if d.oscillate}
@@ -689,8 +864,6 @@ def _build_candidates(
     inf_candidates: list[_ActionPair] = []
     prescribed_action: _ActionPair | None = None
     prescribed_batch: tuple[_ActionPair, ...] | None = None
-    wait_prescribed = False
-    wait_reason: str | None = None
     probed_leaf_states: set[tuple[str, Any]] = set()
     # Stage 0 is the sole bearing while an establish gate is pending — silence the
     # compass so it can't prescribe a move on the target register past the closed
@@ -737,8 +910,14 @@ def _build_candidates(
         if path:
             first_step = path[0]
             if not is_action(first_step):
-                wait_prescribed = True
-                wait_reason = f"{n.tag}: {cur_val!r}->{n.value!r}"
+                wait_prescribed, wait_reason, _cd, _cf = _prescribe_wait(
+                    None,
+                    frame,
+                    state,
+                    ctx,
+                    dbg,
+                    reason=f"{n.tag}: {cur_val!r}->{n.value!r}",
+                )
                 dbg(
                     f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} "
                     f"begins with {first_step}"
@@ -855,65 +1034,25 @@ def _build_candidates(
                     current_note=current_action.note,
                 )
             )
-    scored: list[tuple[tuple[int, int, int, int], int, _Candidate]] = []
-    for index, candidate in enumerate(candidates):
-        prescribed = (
-            candidate.route_prescribed
-            or candidate.influence_prescribed
-            or candidate.current_prescribed
-        )
-        base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
-        # Writer-availability demotion (never veto): a command leaf whose writer
-        # chain cannot fire from the current live state sinks below leaves whose
-        # chain is reachable.  On a cyclic state machine every unsatisfied leaf
-        # across the machine contributes a command candidate (C_Clear, C_Reset,
-        # C_Start, mode-change… all at once); ordering by the worst-on-path writer
-        # availability sinks the counterfactual commands below the ones actually
-        # reachable from here, ahead of the wake/compass tie-breakers.  Prescribed
-        # edges (the compass' explicit bearing) keep top priority regardless.
-        avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
-        # Deprioritize (never veto) a candidate whose downstream write cone
-        # exceeds the cap: it sorts into a trailing tier so a large-wake master
-        # enable is tried after every tighter lever.  Prescribed edges (the
-        # compass' explicit bearing) keep their priority regardless of wake.
-        over_wake = (
-            0 if prescribed else int(candidate.wake is not None and candidate.wake > wake_cap)
-        )
-        # Record the rank rationale onto the candidate (recording only — the sort
-        # key below is byte-identical, and ``index`` breaks every tie so the
-        # candidate object itself is never compared).
-        candidate = replace(
-            candidate,
-            avail_tier=avail_tier,
-            over_wake=bool(over_wake),
-            compass_score=(base[0], base[1]),
-            scored=not prescribed,
-        )
-        scored.append(((avail_tier, over_wake, base[0], base[1]), index, candidate))
-    candidates = [candidate for _score, _index, candidate in sorted(scored)]
+    # Writer-availability demotion (never veto): a command leaf whose writer chain
+    # cannot fire from the current live state sinks below leaves whose chain is
+    # reachable.  On a cyclic state machine every unsatisfied leaf across the
+    # machine contributes a command candidate (C_Clear, C_Reset, C_Start,
+    # mode-change… all at once); availability orders the counterfactual commands
+    # below the ones actually reachable, ahead of the wake/compass tie-breakers.
+    # Prescribed edges (the compass' explicit bearing) keep top priority.
+    candidates = _rank_candidates(candidates, frame, ctx, wake_cap, detail_by_pair)
 
-    # Zoom iteration: route says the next step is a completion (WAIT).
+    # Zoom-wait mint: apply the reason from the early completion re-read (its
+    # producers already entered the trace pool above).  An influence-path wait
+    # (site 1, in the compass leaf loop) takes precedence when it fired.
     if _is_zoom and not wait_prescribed:
-        assert route_plan is not None  # _is_zoom is True only when route_plan exists
-        edge = route_plan.first_edge
-        if _edge_grounded(edge):
-            wait_prescribed = True
-            wait_reason = (
-                f"let-run {route_plan.role.channel_tag}: "
-                f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
-            )
-        else:
-            dbg(
-                f"# wait refused: {route_plan.role.channel_tag} first edge rides a "
-                f"wildcard from-value (stateless — not a coastable claim)"
-            )
+        wait_prescribed, wait_reason = _zoom_wait_prescribed, _zoom_wait_reason
 
-    # Fallback: route exists with an action but no candidates surfaced.  Only a
-    # *grounded* first edge (a concrete from-value) is a coastable claim — a
-    # wildcard (ANY_FROM) edge whose action was filtered (nogooded / already at
-    # value) has no dwell semantics: waiting on it burns the whole scan budget on
-    # a register that will never move (fail-closed; the loop's stuck diagnosis
-    # names the state instead).
+    # Fallback: route exists with an action but no candidates surfaced.  A wildcard
+    # (ANY_FROM) edge whose action was filtered (nogooded / already at value) has
+    # no dwell semantics — ``_prescribe_wait`` refuses it (the loop's stuck
+    # diagnosis names the state instead of burning the budget on a dead register).
     if (
         route_plan is not None
         and not _is_zoom
@@ -921,14 +1060,11 @@ def _build_candidates(
         and not route_candidates
         and not trace_actions
         and not wait_prescribed
-        and _edge_grounded(route_plan.first_edge)
     ):
-        edge = route_plan.first_edge
-        wait_prescribed = True
-        wait_reason = (
-            f"let-run {route_plan.role.channel_tag}: "
-            f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
+        wait_prescribed, wait_reason, _cd, _cf = _prescribe_wait(
+            route_plan.first_edge, frame, state, ctx, dbg
         )
+        completion_frontier += _cf
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
     # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and
@@ -984,6 +1120,7 @@ def _build_candidates(
         route_co_actions=route_co_actions,
         deferred_commands=deferred_commands,
         held_command_tags=held_command_tags,
+        completion_frontier=completion_frontier,
     )
 
 

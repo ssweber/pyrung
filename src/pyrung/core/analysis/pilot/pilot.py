@@ -449,7 +449,11 @@ def _frontier_clause(frame: _IterationFrame | None) -> str:
     """
     if frame is None:
         return ""
-    needs = frontier_pairs(frame.tree, frame.snap)
+    # Completion blockers first: a prescribed wait's re-read frontier names the
+    # pressable lever behind the pipeline cut (``x_RotateFB``) ahead of the
+    # target tree's own post-cut interior.
+    extra = getattr(frame, "completion_frontier", ())
+    needs = extra + tuple(n for n in frontier_pairs(frame.tree, frame.snap) if n not in extra)
     if not needs:
         return ""
     head = ", ".join(_fmt_need(t, v, frame.snap) for t, v in needs[:3])
@@ -992,6 +996,9 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "wait_reason": candidates.wait_reason,
         "prerequisite_rungs": candidates.prerequisite_rungs,
         "stuck_reason": candidates.stuck_reason,
+        # The completion re-read's unmet frontier — names the pressable lever
+        # behind a prescribed wait (``x_RotateFB``) past the pipeline cut.
+        "completion_frontier": candidates.completion_frontier,
     }
 
 
@@ -1420,6 +1427,12 @@ def _pilot_loop_events(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
         )
         candidates = _build_candidates(frame, state, ctx, _dbg)
+        # Carry the completion re-read's frontier onto the frame so every terminal
+        # ``_frontier_clause(frame)`` in this iteration names the true blocker
+        # behind a prescribed wait (candidates.py owns the merge decision; the
+        # frame is only its carrier).
+        if candidates.completion_frontier:
+            frame = replace(frame, completion_frontier=candidates.completion_frontier)
         yield PilotEvent(
             "candidates_built",
             state.work.state.scan_id,

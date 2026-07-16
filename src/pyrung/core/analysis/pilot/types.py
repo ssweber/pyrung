@@ -515,6 +515,11 @@ class _IterationFrame:
     distance_before: int
     raw_trace_actions: tuple[_ActionPair, ...]
     raw_trace_action_details: tuple[TraceAction, ...]
+    # The completion re-read's unmet frontier (candidates.py), stamped by the
+    # loop after ORIENT so ``_frontier_clause`` names the pressable lever behind
+    # a prescribed wait (``x_RotateFB``) instead of the target tree's post-cut
+    # interior.  Empty unless this iteration prescribed a wait with completion.
+    completion_frontier: tuple[_ActionPair, ...] = ()
 
 
 # ---------------------------------------------------------------------------
