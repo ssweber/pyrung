@@ -201,6 +201,102 @@ def test_timer_done():
     assert "x_Start" in names
 
 
+def _leaves(node: TraceNode) -> list[TraceNode]:
+    out: list[TraceNode] = []
+
+    def rec(n: TraceNode) -> None:
+        if not n.children:
+            out.append(n)
+        for c in n.children:
+            rec(c)
+
+    rec(node)
+    return out
+
+
+def test_timer_done_running_yields_coast():
+    """A *running* on-delay timer's Done bit becomes a self-advancing coast leaf.
+
+    When the enable (rung condition) is already satisfied on the snapshot there
+    is nothing to hold; reaching ``Done == True`` means letting the accumulator
+    cross ``preset`` on its own — the same ``self_advancing`` accumulator coast
+    the counter Done branch and the ``Acc > N`` threshold branch emit.
+    """
+    x_Start = Bool("x_Start", external=True)
+    timer = Timer.clone("T1")
+
+    with Program() as logic:
+        with rung(x_Start):
+            on_delay(timer, preset=100)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back("T1_Done", True, {"x_Start": True}, pdg, logic, steerable)
+    coast = [lf for lf in _leaves(tree) if lf.self_advancing]
+    assert len(coast) == 1
+    assert (coast[0].tag, coast[0].value) == ("T1_Acc", 100)
+    assert not coast[0].is_steerable
+
+
+def test_timer_done_idle_keeps_enable_walk():
+    """An idle timer's Done bit is unchanged: the enable surfaces as a steerable.
+
+    The enable-unsatisfied arm belongs to the ordinary hold-and-coast walk — the
+    coast helper returns ``None`` and today's shape (``x_Start`` steerable, no
+    self-advancing leaf) is byte-identical.
+    """
+    x_Start = Bool("x_Start", external=True)
+    timer = Timer.clone("T1")
+
+    with Program() as logic:
+        with rung(x_Start):
+            on_delay(timer, preset=100)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back("T1_Done", True, {"x_Start": False}, pdg, logic, steerable)
+    leaves = _leaves(tree)
+    assert not any(lf.self_advancing for lf in leaves)
+    assert "x_Start" in _steerable_names(tree)
+
+
+def test_timer_done_running_honors_call_gate():
+    """The enable includes the subroutine call gate, mirroring the ordinary walk.
+
+    A running timer inside a subroutine coasts only when the call gate
+    (``Mode == 1``) is satisfied too; with the gate unsatisfied the helper
+    returns ``None`` and the ordinary walk surfaces the gate as the steerable
+    blocker rather than a coast.
+    """
+    Mode = Int("Mode", external=True)
+    Step = Bool("Step", external=True)
+    timer = Timer.clone("T1")
+    y_Complete = Bool("y_Complete")
+
+    with Program() as logic:
+        with subroutine("ExecSteps"):
+            with rung(Step):
+                on_delay(timer, preset=100)
+            with rung(timer.Done):
+                out(y_Complete)
+        with rung(Mode == 1):
+            call("ExecSteps")
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    gated = trace_back("T1_Done", True, {"Step": True, "Mode": 1}, pdg, logic, steerable)
+    coast = [lf for lf in _leaves(gated) if lf.self_advancing]
+    assert len(coast) == 1
+    assert (coast[0].tag, coast[0].value) == ("T1_Acc", 100)
+
+    blocked = trace_back("T1_Done", True, {"Step": True, "Mode": 2}, pdg, logic, steerable)
+    assert not any(lf.self_advancing for lf in _leaves(blocked))
+    assert "Mode" in _steerable_names(blocked)
+
+
 # -- Test 6: Mixed (copy + guard + subroutine) ------------------------------
 
 

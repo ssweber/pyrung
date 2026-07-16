@@ -1239,6 +1239,102 @@ def _counter_done_frontier(
     return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast, driver])
 
 
+def _timer_done_frontier(
+    env: _TraceEnv, done_tag: str, provenance: tuple[str, ...]
+) -> TraceNode | None:
+    """Recognize a *running* on-delay timer's ``Done`` bit as a coast frontier.
+
+    The counter analog (:func:`_counter_done_frontier`) surfaces the accumulator
+    coast plus a steerable advance driver.  A timer whose enable is *unsatisfied*
+    is already handled by the ordinary walk — it surfaces the enable's steerable
+    inputs, they get held, and the hold's ``until`` powers the coast — so this
+    helper owns only the complementary case that walk cannot represent: an
+    on-delay timer whose enable (writer rung condition AND its call-site gate) is
+    *already satisfied* on the snapshot.  Nothing is left to hold; reaching
+    ``Done == True`` means letting the accumulator cross ``preset`` under the held
+    state, exactly the ``Acc > N`` threshold branch (a lone ``self_advancing``
+    coast leaf).
+
+    Restricted to :data:`KIND_ON_DELAY` — the only kind whose ``Done`` latches by
+    forward accumulation under a *true* enable.  An off-delay accumulates while
+    its rung is *unpowered*, so "enable satisfied" is the opposite condition and
+    this coast would be wrong; it is excluded.  ``None`` (today's enable-condition
+    walk, byte-identical) when *done_tag* is not an on-delay ``Done`` bit, its
+    preset is unresolvable, or its enable is not currently satisfied.
+    """
+    from pyrung.core.analysis.pilot.accumulators import resolve_profile
+    from pyrung.core.instruction.accumulating import KIND_ON_DELAY
+
+    match = resolve_profile(done_tag, env.program)
+    if match is None or not match.via_done:
+        return None
+    profile = match.profile
+    if profile.kind != KIND_ON_DELAY:
+        return None
+    preset = _resolve_preset_value(profile.preset, env.snapshot)
+    if preset is None:
+        return None
+    if not _timer_enable_satisfied(env, done_tag, profile):
+        return None
+    coast = TraceNode(
+        tag=profile.accumulator.name,
+        value=profile.done_target(preset),
+        self_advancing=True,
+        provenance=provenance,
+    )
+    return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast])
+
+
+def _timer_enable_satisfied(env: _TraceEnv, done_tag: str, profile: Any) -> bool:
+    """Whether an on-delay timer is *currently accumulating* on the snapshot.
+
+    The enable is the writer rung condition (``profile.advance`` at its
+    ``advance_value``) AND the call-site gate of the rung's subroutine — the same
+    atoms the ordinary walk attaches as ``Done``-node children.  Fail-closed: an
+    unreadable advance, or no currently-called writer path, returns ``False`` and
+    the ordinary hold-and-coast walk owns the case.
+    """
+    try:
+        advancing = profile.advance.evaluate(_SnapshotView(env.snapshot, {}))
+    except Exception:  # noqa: BLE001 — unreadable advance → not provably running
+        return False
+    if bool(advancing) != bool(profile.advance_value):
+        return False
+    return _writer_subroutine_reached(env, done_tag)
+
+
+def _writer_subroutine_reached(env: _TraceEnv, tag: str) -> bool:
+    """Whether every writer rung of *tag* sits under a currently-called path.
+
+    Mirrors the ordinary walk's one-level caller-route attachment: a Main-scope
+    writer carries no call gate (trivially reached); a subroutine writer is
+    reached only when some caller rung whose ``calls`` name its subroutine has a
+    satisfied condition on the snapshot.  ``False`` when *tag* has no writers.
+    """
+    writers = env.pdg.writers_of.get(tag, frozenset())
+    if not writers:
+        return False
+    for ri in writers:
+        subroutine = env.pdg.rung_nodes[ri].subroutine
+        if subroutine and not _subroutine_called(env, subroutine):
+            return False
+    return True
+
+
+def _subroutine_called(env: _TraceEnv, subroutine: str) -> bool:
+    """Whether some caller rung invoking *subroutine* has a satisfied condition."""
+    for cn in env.pdg.rung_nodes:
+        if subroutine not in cn.calls:
+            continue
+        call_ro = resolve_rung(env.program, cn)
+        if call_ro is None:
+            continue
+        call_sp = call_ro.sp_tree()
+        if call_sp is None or _expr_satisfied(_sp_to_expr(call_sp), env.snapshot):
+            return True
+    return False
+
+
 def trace_relational(
     predicate: Atom,
     snapshot: dict[str, Any],
@@ -1886,11 +1982,15 @@ def _trace_back(
     if tag in env.pipeline_internal_tags:
         return TraceNode(tag=tag, value=value, pipeline_internal=True)
 
-    # Counter Done bit: reaching Done==True means driving the accumulator to
-    # preset (a coast), not firing the writer rung once.  Surface the accumulator
-    # frontier + its advance driver instead of the naive rung-condition walk.
+    # Counter/timer Done bit: reaching Done==True means driving the accumulator
+    # to preset (a coast), not firing the writer rung once.  Surface the
+    # accumulator frontier instead of the naive rung-condition walk — the counter
+    # branch adds an advance driver; the timer branch owns only the already-running
+    # case (enable satisfied, nothing left to hold).
     if _values_match(value, True):
         frontier = _counter_done_frontier(env, tag, ())
+        if frontier is None:
+            frontier = _timer_done_frontier(env, tag, ())
         if frontier is not None:
             return frontier
 
