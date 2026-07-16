@@ -6,6 +6,8 @@ that aggregate dynamic history across retained scans:
 - ``cold_rungs()`` — rungs that never fired (1-indexed rung numbers)
 - ``hot_rungs()`` — rungs that fired every scan (1-indexed rung numbers)
 - ``stranded_bits()`` — persistent bits with no reachable clear path
+- ``wait_edges_without_escape()`` — wait-shaped steps that can hang forever
+  (static survey; the only read-side survey here, needs no history)
 
 These are compositions over the causal chain primitives (``cause``/``effect``)
 and the per-scan ``rung_firings`` data.
@@ -107,6 +109,523 @@ def _rung_sort_key(ident: tuple[str | None, int]) -> tuple[int, str, int]:
     return (0 if subroutine is None else 1, subroutine or "", rung_index)
 
 
+# ---------------------------------------------------------------------------
+# Hang-forever survey — wait-shaped steps with no fireable escape
+# ---------------------------------------------------------------------------
+#
+# A step register whose only advance out of value ``k`` is gated on an external
+# input is a *wait edge*.  If no timeout/error rung can fire while the machine
+# sits at step ``k`` (the escape is disabled by a program-constant config value,
+# or its guard excludes step ``k``), the wait can hang forever.  This is a
+# read-side static survey: it reports the design decision, never fixes it.
+#
+# Guard reading is fail-closed.  A guard clause we cannot decode statically
+# (an ``Or``, a rising edge, an indirect compare) makes the rung unreadable;
+# an unreadable escape candidate is treated as a *possible* escape (so we never
+# fabricate a "no escape" verdict), and an unreadable advance guard is skipped.
+
+_OP_SYMBOL = {"eq": "==", "ne": "!=", "gt": ">", "ge": ">=", "lt": "<", "le": "<="}
+
+
+def _unwrap_target(value: Any) -> Any:
+    from pyrung.core.tag import ImmediateRef
+
+    if isinstance(value, ImmediateRef):
+        return object.__getattribute__(value, "value")
+    return value
+
+
+def _guard_atoms(rung: Rung) -> tuple[list[tuple[Any, ...]], bool]:
+    """Decode a rung's conditions into required atoms.
+
+    Returns ``(atoms, readable)``.  ``readable`` is ``False`` when any clause
+    cannot be pinned to a required value (``Or``, edges, indirect refs) — the
+    conjunction is then not statically decidable and the caller fails closed.
+
+    Atom shapes: ``("eq"|"ne"|"gt"|"ge"|"lt"|"le", tag_name, int)``,
+    ``("true"|"false"|"nonzero", tag_name)``, ``("cmp_tag", tag_name, tag_name)``.
+    """
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        BitCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+        IntTruthyCondition,
+        NormallyClosedCondition,
+    )
+    from pyrung.core.tag import Tag as TagClass
+
+    atoms: list[tuple[Any, ...]] = []
+    readable = True
+    _CMP = {
+        CompareEq: "eq",
+        CompareNe: "ne",
+        CompareGt: "gt",
+        CompareGe: "ge",
+        CompareLt: "lt",
+        CompareLe: "le",
+    }
+
+    def walk(cond: Any) -> None:
+        nonlocal readable
+        if isinstance(cond, AllCondition):
+            for sub in cond.conditions:
+                walk(sub)
+        elif isinstance(cond, BitCondition):
+            atoms.append(("true", _unwrap_target(cond.tag).name))
+        elif isinstance(cond, NormallyClosedCondition):
+            atoms.append(("false", _unwrap_target(cond.tag).name))
+        elif isinstance(cond, IntTruthyCondition):
+            atoms.append(("nonzero", cond.tag.name))
+        elif type(cond) in _CMP:
+            tag = cond.tag
+            value = cond.value
+            if isinstance(tag, TagClass) and isinstance(value, bool):
+                readable = False
+            elif isinstance(tag, TagClass) and isinstance(value, int):
+                atoms.append((_CMP[type(cond)], tag.name, value))
+            elif isinstance(tag, TagClass) and isinstance(value, TagClass):
+                atoms.append(("cmp_tag", tag.name, value.name))
+            else:
+                readable = False
+        else:
+            # AnyCondition, edges, indirect compares — not statically pinnable.
+            if isinstance(cond, AnyCondition):
+                readable = False
+            else:
+                readable = False
+
+    for cond in rung._conditions:
+        walk(cond)
+    return atoms, readable
+
+
+def _self_increment_target(instr: Any) -> str | None:
+    """Return the tag name for a ``calc(X + 1, X)`` self-increment, else None."""
+    from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
+    from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.tag import Tag as TagClass
+
+    if not isinstance(instr, CalcInstruction):
+        return None
+    expr = instr.expression
+    if not (isinstance(expr, BinaryExpr) and expr.symbol == "+"):
+        return None
+    dest = instr.dest
+    if not isinstance(dest, TagClass):
+        return None
+    for operand, other in ((expr.left, expr.right), (expr.right, expr.left)):
+        if isinstance(operand, TagExpr) and isinstance(other, LiteralExpr):
+            if isinstance(operand.tag, TagClass) and operand.tag.name == dest.name:
+                return dest.name
+    return None
+
+
+def _condition_tag_names(rung: Rung) -> set[str]:
+    """Every tag name referenced in a rung's conditions, decodable or not.
+
+    Used for step-scoping unreadable guards: a rung whose guard we cannot pin
+    to atoms (an ``Or``) still reveals which tags it touches, so a step-scoped
+    escape we cannot decode fails closed (a possible escape) rather than being
+    silently dropped.
+    """
+    from pyrung.core.tag import Tag as TagClass
+
+    names: set[str] = set()
+    for cond in rung._conditions:
+        stack = [cond]
+        while stack:
+            node = stack.pop()
+            subs = getattr(node, "conditions", None)
+            if subs is not None:
+                stack.extend(subs)
+            for attr in ("tag", "value"):
+                obj = _unwrap_target(getattr(node, attr, None))
+                if isinstance(obj, TagClass):
+                    names.add(obj.name)
+    return names
+
+
+def _nonzero_const_writes(rung: Rung) -> list[str]:
+    """Target names of ``copy(<nonzero int literal>, target)`` writes in a rung."""
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import Tag as TagClass
+
+    result: list[str] = []
+    for instr in rung._instructions:
+        if isinstance(instr, CopyInstruction):
+            source = instr.source
+            target = _unwrap_target(instr.target)
+            if (
+                isinstance(target, TagClass)
+                and isinstance(source, int)
+                and not isinstance(source, bool)
+                and source != 0
+            ):
+                result.append(target.name)
+    return result
+
+
+def _all_scopes(program: Any) -> list[tuple[str | None, list[Rung]]]:
+    scopes: list[tuple[str | None, list[Rung]]] = [(None, list(program.rungs))]
+    for name in sorted(program.subroutines):
+        scopes.append((name, list(program.subroutines[name])))
+    return scopes
+
+
+def _tag_index(program: Any) -> dict[str, Tag]:
+    """Name -> Tag object over every tag referenced in the program."""
+    from pyrung.core.tag import Tag as TagClass
+
+    index: dict[str, TagClass] = {}
+
+    def note(value: Any) -> None:
+        value = _unwrap_target(value)
+        if isinstance(value, TagClass):
+            index.setdefault(value.name, value)
+
+    for _scope, rungs in _all_scopes(program):
+        for rung in rungs:
+            for cond in rung._conditions:
+                stack = [cond]
+                while stack:
+                    node = stack.pop()
+                    subs = getattr(node, "conditions", None)
+                    if subs is not None:
+                        stack.extend(subs)
+                    note(getattr(node, "tag", None))
+                    note(getattr(node, "value", None))
+            for instr in rung._instructions:
+                for attr in ("target", "dest", "source"):
+                    note(getattr(instr, attr, None))
+    return index
+
+
+def _written_registers(program: Any) -> tuple[set[str], set[tuple[int, int]]]:
+    """Registers written anywhere: (target names, filled (block_id, addr) pairs)."""
+    from pyrung.core.instruction.data_transfer import FillInstruction
+    from pyrung.core.tag import Tag as TagClass
+
+    names: set[str] = set()
+    filled: set[tuple[int, int]] = set()
+    for _scope, rungs in _all_scopes(program):
+        for rung in rungs:
+            for instr in rung._instructions:
+                for attr in ("target", "dest"):
+                    target = _unwrap_target(getattr(instr, attr, None))
+                    if isinstance(target, TagClass):
+                        names.add(target.name)
+                if isinstance(instr, FillInstruction):
+                    block_range = instr.dest
+                    block = getattr(block_range, "block", None)
+                    for addr in getattr(block_range, "addresses", ()):
+                        filled.add((id(block), addr))
+    return names, filled
+
+
+def _constant_predicate(program: Any):
+    """A register is constant if nothing (copy/calc/fill) ever writes it."""
+    from pyrung.core.tag import Tag as TagClass
+
+    names, filled = _written_registers(program)
+
+    def is_constant(tag: Any) -> bool:
+        if not isinstance(tag, TagClass):
+            return False
+        if tag.name in names:
+            return False
+        block = getattr(tag, "_pyrung_block", None)
+        addr = getattr(tag, "_pyrung_block_addr", None)
+        if block is not None and addr is not None and (id(block), addr) in filled:
+            return False
+        return True
+
+    return is_constant
+
+
+def _external_input_names(program: Any) -> set[str]:
+    """Tags the ladder cannot drive: ``external`` slots, their one-hop mirrors,
+    and Bool contacts never written anywhere (read-only physical inputs)."""
+    from pyrung.core.instruction.coils import OutInstruction
+    from pyrung.core.tag import Tag as TagClass
+    from pyrung.core.tag import TagType
+
+    scopes = _all_scopes(program)
+    external: set[str] = set()
+
+    index = _tag_index(program)
+    written, _filled = _written_registers(program)
+    for name, tag in index.items():
+        if getattr(tag, "external", False):
+            external.add(name)
+        elif tag.type == TagType.BOOL and name not in written:
+            external.add(name)
+
+    # Fixpoint: out(dst) whose guard is only external true-contacts mirrors an
+    # external signal onto ``dst``.
+    changed = True
+    while changed:
+        changed = False
+        for _scope, rungs in scopes:
+            for rung in rungs:
+                atoms, readable = _guard_atoms(rung)
+                if not readable or not atoms:
+                    continue
+                if not all(atom[0] == "true" and atom[1] in external for atom in atoms):
+                    continue
+                for instr in rung._instructions:
+                    if isinstance(instr, OutInstruction):
+                        target = _unwrap_target(instr.target)
+                        if isinstance(target, TagClass) and target.name not in external:
+                            external.add(target.name)
+                            changed = True
+    return external
+
+
+def _x_admits(atoms: list[tuple[Any, ...]], step: str, value: int) -> bool:
+    """Do the guard's constraints on ``step`` admit ``step == value``?"""
+    for atom in atoms:
+        if len(atom) == 3 and atom[1] == step:
+            op, _name, bound = atom
+            if op == "eq" and value != bound:
+                return False
+            if op == "ne" and value == bound:
+                return False
+            if op == "gt" and not value > bound:
+                return False
+            if op == "ge" and not value >= bound:
+                return False
+            if op == "lt" and not value < bound:
+                return False
+            if op == "le" and not value <= bound:
+                return False
+    return True
+
+
+def _dead_config_atom(
+    atoms: list[tuple[Any, ...]], index: dict[str, Tag], is_constant
+) -> tuple[str, int] | None:
+    """First guard clause unsatisfiable against a program constant, as
+    ``(config_tag_name, default_value)`` — else None."""
+    for atom in atoms:
+        name = atom[1]
+        tag = index.get(name)
+        if tag is None or not is_constant(tag):
+            continue
+        default = tag.default
+        op = atom[0]
+        dead = (
+            (op == "eq" and default != atom[2])
+            or (op == "ne" and default == atom[2])
+            or (op == "true" and not default)
+            or (op == "nonzero" and not default)
+            or (op == "false" and bool(default))
+            or (op == "gt" and not default > atom[2])
+            or (op == "ge" and not default >= atom[2])
+            or (op == "lt" and not default < atom[2])
+            or (op == "le" and not default <= atom[2])
+        )
+        if dead:
+            return (name, default)
+    return None
+
+
+@dataclass(frozen=True)
+class WaitEscapeFinding:
+    """One wait-shaped step that can hang forever with no fireable escape.
+
+    Read-side verdict: the step advances only when an external input arrives,
+    and no timeout/error rung can fire while the machine waits.  Reported as a
+    design decision for the engineer — never auto-fixed.  Doubles as the
+    wait-edge annotation the pilot wants (no self-escape ⇒ trace the producers,
+    don't budget-wait here).
+    """
+
+    subroutine: str | None
+    step_register: str
+    step_value: int
+    wait_inputs: tuple[str, ...]
+    advance_rung: str
+    ranged_escapes: tuple[tuple[str, str, str, int], ...] = ()
+    dead_escapes: tuple[tuple[str, str, int], ...] = ()
+
+    @property
+    def location(self) -> str:
+        """User-facing anchor, e.g. ``"Rotate:R8"`` or ``"R8"`` for main."""
+        return (
+            self.advance_rung
+            if self.subroutine is None
+            else f"{self.subroutine}:{self.advance_rung}"
+        )
+
+    @property
+    def message(self) -> str:
+        who = self.subroutine or "main"
+        waits = ", ".join(self.wait_inputs)
+        head = f"{who} step {self.step_value} waits on {waits} with no escape"
+        clauses: list[str] = []
+        for rung_label, step, op, bound in self.ranged_escapes:
+            clauses.append(f"{rung_label} guards {step} {_OP_SYMBOL.get(op, op)} {bound}")
+        for rung_label, config_tag, default in self.dead_escapes:
+            clauses.append(f"{config_tag} = {default} disables the {rung_label} timeout")
+        if not clauses:
+            return head
+        return head + " — " + " and ".join(clauses)
+
+
+def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
+    """Survey wait-shaped steps that can hang forever (see module docstring).
+
+    Static and read-side: for each step register whose only advance out of a
+    value ``k`` is gated on an external input, report the absence of a fireable
+    escape (timeout or error rung that can actually fire under the declared
+    config).  A step-range guard that excludes ``k`` or a clause dead against a
+    program-constant config value does not count as an escape.  Fail-closed:
+    an unreadable escape guard is treated as a possible escape, never as proof
+    of absence.
+    """
+    index = _tag_index(program)
+    is_constant = _constant_predicate(program)
+    external = _external_input_names(program)
+
+    findings: list[WaitEscapeFinding] = []
+    for subroutine, rungs in _all_scopes(program):
+        step_registers: set[str] = set()
+        for rung in rungs:
+            for instr in rung._instructions:
+                target = _self_increment_target(instr)
+                if target is not None:
+                    step_registers.add(target)
+        if not step_registers:
+            continue
+
+        for step in sorted(step_registers):
+            # Advance triggers: the self-increment rungs, plus writers of any
+            # transition flag that gates such an increment.
+            increment_idx = {
+                i
+                for i, rung in enumerate(rungs)
+                if any(_self_increment_target(instr) == step for instr in rung._instructions)
+            }
+            flags: set[str] = set()
+            for i in increment_idx:
+                atoms, readable = _guard_atoms(rungs[i])
+                if not readable:
+                    continue
+                for atom in atoms:
+                    if atom[0] in ("true", "nonzero") and atom[1] != step:
+                        flags.add(atom[1])
+                    elif atom[0] == "eq" and atom[1] != step and atom[2] != 0:
+                        flags.add(atom[1])
+            advance_idx = set(increment_idx)
+            for i, rung in enumerate(rungs):
+                if any(name in flags for name in _nonzero_const_writes(rung)):
+                    advance_idx.add(i)
+
+            # Step timer accumulators: non-step, non-external registers compared
+            # with a range in an advance guard (e.g. ``tmr.Acc > 2``).
+            timer_acc: set[str] = set()
+            for i in advance_idx:
+                atoms, readable = _guard_atoms(rungs[i])
+                if not readable:
+                    continue
+                for atom in atoms:
+                    if atom[0] in ("gt", "ge", "lt", "le") and atom[1] != step:
+                        if atom[1] not in external:
+                            timer_acc.add(atom[1])
+
+            # Wait edges: an advance trigger pinned to ``step == k`` that
+            # requires an external input.
+            waits: dict[int, tuple[set[str], int]] = {}
+            for i in sorted(advance_idx):
+                atoms, readable = _guard_atoms(rungs[i])
+                if not readable:
+                    continue
+                pin = next((a[2] for a in atoms if a[0] == "eq" and a[1] == step), None)
+                if pin is None:
+                    continue
+                inputs = {a[1] for a in atoms if a[0] in ("true", "nonzero") and a[1] in external}
+                if inputs:
+                    existing = waits.setdefault(pin, (set(), i))
+                    existing[0].update(inputs)
+
+            if not waits:
+                continue
+
+            # Escape candidates: step-scoped, state-changing rungs that are not
+            # themselves the advance.  Step-scoping reads raw condition tags so
+            # an unreadable guard that touches the step still counts.
+            escape_candidates: list[tuple[int, list[tuple[Any, ...]], bool, list[str]]] = []
+            for i, rung in enumerate(rungs):
+                if i in advance_idx:
+                    continue
+                writes = _nonzero_const_writes(rung)
+                if not writes:
+                    continue
+                raw_names = _condition_tag_names(rung)
+                if step not in raw_names and not (raw_names & timer_acc):
+                    continue
+                atoms, readable = _guard_atoms(rung)
+                escape_candidates.append((i, atoms, readable, writes))
+
+            # Fault sink: a register several escape candidates write — the shared
+            # target that surfaces in the message (drops lone bookkeeping writes).
+            sink_writers: dict[str, set[int]] = {}
+            for i, _atoms, _readable, writes in escape_candidates:
+                for name in writes:
+                    sink_writers.setdefault(name, set()).add(i)
+            fault_sinks = {name for name, writers in sink_writers.items() if len(writers) >= 2}
+
+            for value, (inputs, anchor) in sorted(waits.items()):
+                escaped = False
+                for _i, atoms, readable, _writes in escape_candidates:
+                    if not readable:
+                        # Fail-closed: could fire at this step; assume it escapes.
+                        escaped = True
+                        break
+                    if not _x_admits(atoms, step, value):
+                        continue
+                    if _dead_config_atom(atoms, index, is_constant) is not None:
+                        continue
+                    if any(a[0] in ("true", "nonzero") and a[1] in inputs for a in atoms):
+                        continue
+                    escaped = True
+                    break
+                if escaped:
+                    continue
+
+                ranged: list[tuple[str, str, str, int]] = []
+                dead: list[tuple[str, str, int]] = []
+                for i, atoms, readable, writes in escape_candidates:
+                    if not readable or not (set(writes) & fault_sinks):
+                        continue
+                    dead_atom = _dead_config_atom(atoms, index, is_constant)
+                    label = f"R{i + 1}"
+                    if dead_atom is not None:
+                        dead.append((label, dead_atom[0], dead_atom[1]))
+                    elif not _x_admits(atoms, step, value):
+                        pin_atom = next((a for a in atoms if len(a) == 3 and a[1] == step), None)
+                        if pin_atom is not None:
+                            ranged.append((label, step, pin_atom[0], pin_atom[2]))
+                findings.append(
+                    WaitEscapeFinding(
+                        subroutine=subroutine,
+                        step_register=step,
+                        step_value=value,
+                        wait_inputs=tuple(sorted(inputs)),
+                        advance_rung=f"R{anchor + 1}",
+                        ranged_escapes=tuple(ranged),
+                        dead_escapes=tuple(dead),
+                    )
+                )
+    return findings
+
+
 class QueryNamespace:
     """Survey namespace for whole-program dynamic analysis.
 
@@ -206,6 +725,17 @@ class QueryNamespace:
             if chain is not None and chain.mode == "unreachable":
                 stranded.append(chain)
         return stranded
+
+    def wait_edges_without_escape(self) -> list[WaitEscapeFinding]:
+        """Wait-shaped steps that can hang forever with no fireable escape.
+
+        A static (read-side) survey over the whole program — the only survey
+        here that needs no retained history.  For each step register whose only
+        advance out of a value is gated on an external input, report the absence
+        of a timeout or error rung that can actually fire under the declared
+        config.  A design decision surfaced to the engineer, never auto-fixed.
+        """
+        return wait_edges_without_escape(self._plc.program)
 
     def report(self) -> CoverageReport:
         """Emit a per-test coverage report for merge across a test suite."""

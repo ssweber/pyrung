@@ -29,6 +29,19 @@ Returns `CausalChain` objects for each latched tag with no reachable reset path.
 
 The static validator [`COIL_STUCK_HIGH`](analysis-structure.md#rule-reference) checks structure — "is there a reset rung at all?" `stranded_bits()` checks reachability — "is there a reset rung *and can it actually fire*?"
 
+## Wait edges without escape
+
+```python
+for finding in plc.query.wait_edges_without_escape():
+    print(finding.message)
+    # Rotate step 1 waits on i_RotateFB with no escape — R9 guards
+    # Rotate_CurStep == 3 and Rotate_EnableLimit = 0 disables the R5 timeout
+```
+
+A step that only advances when an external input arrives is a *wait edge*. If nothing else can fire while the step waits — no timeout, no error rung covering that step — the step can hang forever with no alarm. This survey is static (no history needed): it reads each step register whose only advance is gated on an external input and reports the absence of a fireable escape. An escape rung whose guard excludes the waiting step, or whose config value is dead (a disabled timeout), does not count.
+
+It reports the design decision — it never edits the program. When a guard can't be read statically it stays silent rather than inventing a verdict. The same finding also surfaces in Click validation as a `CLK_WAIT_STEP_NO_ESCAPE` warning.
+
 ## Coverage reports and merge
 
 Individual test findings are mostly noise — a single test only exercises a slice of the program. The signal emerges when you merge findings across a test suite.

@@ -39,6 +39,7 @@ from .findings import (
     CLK_STATUS_BIT_NOT_PORTABLE,
     CLK_TILDE_BOOL_CONTACT_ONLY,
     CLK_TIMER_PRESET_OVERFLOW,
+    CLK_WAIT_STEP_NO_ESCAPE,
     ClickFinding,
     ClickValidationReport,
     FindingSeverity,
@@ -132,6 +133,40 @@ def _iter_instruction_sites(program: Program) -> list[tuple[Any, ProgramLocation
     return sites
 
 
+def _evaluate_wait_escapes(program: Program) -> list[ClickFinding]:
+    """Surface the hang-forever survey as advisory Click findings.
+
+    A wait-shaped step with no fireable escape is a design decision, not a
+    portability violation, so it is always a warning (never routed to an error
+    in strict mode).
+    """
+    from pyrung.core.analysis.query import wait_edges_without_escape
+
+    findings: list[ClickFinding] = []
+    for finding in wait_edges_without_escape(program):
+        remedies: list[str] = []
+        for _label, step, op, bound in finding.ranged_escapes:
+            remedies.append(
+                f"widen the {step} guard so it also covers step {finding.step_value} "
+                f"(currently {step} {op} {bound})"
+            )
+        for _label, config_tag, _default in finding.dead_escapes:
+            remedies.append(f"enable the timeout ({config_tag} = 1)")
+        suggestion = (
+            "Give this step a self-escape: " + ", or ".join(remedies) + "." if remedies else None
+        )
+        findings.append(
+            ClickFinding(
+                code=CLK_WAIT_STEP_NO_ESCAPE,
+                severity="warning",
+                message=finding.message,
+                location=finding.location,
+                suggestion=suggestion,
+            )
+        )
+    return findings
+
+
 def validate_click_program(
     program: Program,
     tag_map: TagMap,
@@ -148,6 +183,7 @@ def validate_click_program(
 
     findings.extend(_evaluate_immediate_usage(facts.operands, instruction_sites, tag_map, mode))
     findings.extend(_evaluate_status_bit_usage(program, mode))
+    findings.extend(_evaluate_wait_escapes(program))
 
     for instruction, base_location in instruction_sites:
         findings.extend(_evaluate_instruction_portability(instruction, base_location, mode))
@@ -234,6 +270,7 @@ __all__ = [
     "CLK_IMMEDIATE_RANGE_MUST_BE_CONTIGUOUS",
     "CLK_TIMER_PRESET_OVERFLOW",
     "CLK_STATUS_BIT_NOT_PORTABLE",
+    "CLK_WAIT_STEP_NO_ESCAPE",
     "ClickFinding",
     "ClickValidationReport",
 ]
