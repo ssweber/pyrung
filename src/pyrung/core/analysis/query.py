@@ -147,7 +147,6 @@ def _guard_atoms(rung: Rung) -> tuple[list[tuple[Any, ...]], bool]:
     """
     from pyrung.core.condition import (
         AllCondition,
-        AnyCondition,
         BitCondition,
         CompareEq,
         CompareGe,
@@ -157,6 +156,7 @@ def _guard_atoms(rung: Rung) -> tuple[list[tuple[Any, ...]], bool]:
         CompareNe,
         IntTruthyCondition,
         NormallyClosedCondition,
+        RisingEdgeCondition,
     )
     from pyrung.core.tag import Tag as TagClass
 
@@ -193,23 +193,73 @@ def _guard_atoms(rung: Rung) -> tuple[list[tuple[Any, ...]], bool]:
                 atoms.append(("cmp_tag", tag.name, value.name))
             else:
                 readable = False
+        elif isinstance(cond, RisingEdgeCondition):
+            # rise(X) requires X to go false->true: a *stronger* demand than X,
+            # and the same demand for our purposes — the rung needs X supplied.
+            # Pinning it as ("true", X) keeps an edge-triggered advance visible as
+            # the wait it is.  Sound in the escape direction too: an edge escape
+            # needing an unguaranteed X is no more fireable than a level one.
+            atoms.append(("true", _unwrap_target(cond.tag).name))
         else:
-            # AnyCondition, edges, indirect compares — not statically pinnable.
-            if isinstance(cond, AnyCondition):
-                readable = False
-            else:
-                readable = False
+            # AnyCondition, falling edges, indirect compares — not statically
+            # pinnable.  fall(X) is deliberately excluded: it needs X to have been
+            # true and then drop, which a resting value cannot tell us about.
+            readable = False
 
     for cond in rung._conditions:
         walk(cond)
     return atoms, readable
 
 
-def _self_increment_target(instr: Any) -> str | None:
-    """Return the tag name for a ``calc(X + 1, X)`` self-increment, else None."""
+def _guard_leaf(rung: Rung, tag_name: str) -> Any | None:
+    """The first leaf condition in ``rung`` that constrains ``tag_name``.
+
+    ``_guard_atoms`` flattens a guard to ``(op, name, bound)`` tuples, which is
+    all the *decision* needs but drops the condition the engineer wrote.  A
+    finding has to point back at that condition to underline it, so this
+    recovers the leaf by name.  ``AllCondition`` is transparent (a rung's
+    implicit AND); anything else is returned as found.
+    """
+    from pyrung.core.condition import AllCondition
+    from pyrung.core.tag import Tag as TagClass
+
+    stack = list(rung._conditions)
+    while stack:
+        cond = stack.pop(0)
+        if isinstance(cond, AllCondition):
+            stack = list(cond.conditions) + stack
+            continue
+        tag = _unwrap_target(getattr(cond, "tag", None))
+        if isinstance(tag, TagClass) and tag.name == tag_name:
+            return cond
+    return None
+
+
+def _step_write_target(instr: Any) -> str | None:
+    """Tag name for a write that moves a step register, else None.
+
+    Two idioms, one meaning — the rung sets where the sequence goes next:
+
+    * ``calc(X + 1, X)`` — the self-increment.
+    * ``copy(k, X)`` — stamping the next state number in, the commoner Click form.
+
+    ``copy(k, X)`` alone is far too broad (``copy(1, Err)`` is not a sequencer), so
+    it only counts once the caller confirms the *same* rung is gated on ``X == j``:
+    a rung that reads the step to decide and then writes the step is a step machine
+    by construction.  The increment needs no such check — ``X + 1`` into ``X`` names
+    the register itself.
+    """
     from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
     from pyrung.core.instruction.calc import CalcInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.tag import Tag as TagClass
+
+    if isinstance(instr, CopyInstruction):
+        dest = _unwrap_target(instr.dest)
+        source = instr.source
+        if isinstance(dest, TagClass) and isinstance(source, int) and not isinstance(source, bool):
+            return dest.name
+        return None
 
     if not isinstance(instr, CalcInstruction):
         return None
@@ -224,6 +274,49 @@ def _self_increment_target(instr: Any) -> str | None:
             if isinstance(operand.tag, TagClass) and operand.tag.name == dest.name:
                 return dest.name
     return None
+
+
+def _self_increment_target(instr: Any) -> str | None:
+    """Return the tag name for a ``calc(X + 1, X)`` self-increment, else None.
+
+    The narrow form: unlike :func:`_step_write_target` this never matches a
+    ``copy``, so it identifies a step register without needing the rung's guard.
+    """
+    from pyrung.core.instruction.calc import CalcInstruction
+
+    if not isinstance(instr, CalcInstruction):
+        return None
+    return _step_write_target(instr)
+
+
+def _step_registers(rungs: list[Rung]) -> set[str]:
+    """Registers this scope drives as a step machine.
+
+    A self-increment names its own register (``calc(X + 1, X)``).  A literal
+    stamp does not — ``copy(1, Err)`` is a fault write, not a sequencer — so it
+    counts only when the same rung *reads* the register it writes (``Step == j``
+    gating ``copy(k, Step)``).  Read-to-decide plus write-to-move is the step
+    machine; either half alone is ordinary logic.
+
+    Requiring the self-reference costs nothing downstream: a step whose advance
+    is not pinned to ``step == k`` yields no wait edge anyway.
+    """
+    registers: set[str] = set()
+    for rung in rungs:
+        written = {
+            name for instr in rung._instructions if (name := _step_write_target(instr)) is not None
+        }
+        if not written:
+            continue
+        for instr in rung._instructions:
+            if (inc := _self_increment_target(instr)) is not None:
+                registers.add(inc)
+        atoms, readable = _guard_atoms(rung)
+        if not readable:
+            continue
+        pinned = {atom[1] for atom in atoms if atom[0] == "eq" and len(atom) == 3}
+        registers |= written & pinned
+    return registers
 
 
 def _condition_tag_names(rung: Rung) -> set[str]:
@@ -328,43 +421,34 @@ def _written_registers(program: Any) -> tuple[set[str], set[tuple[int, int]]]:
     return names, filled
 
 
-def _constant_predicate(program: Any):
-    """A register is constant if nothing (copy/calc/fill) ever writes it."""
-    from pyrung.core.tag import Tag as TagClass
+def _unguaranteed_names(program: Any) -> set[str]:
+    """Tags whose value the program cannot author, so it cannot guarantee them.
 
-    names, filled = _written_registers(program)
+    The survey's one predicate, and the reason it can answer "can this hang?".
+    Steerability (:func:`pyrung.core.analysis.steerable.compute_steerable`) is
+    usually read as *"what may I command?"*; read the other way it says *"what
+    might never be steered?"* — a physical input nobody trips, an operator button
+    nobody presses, a config register nobody sets.  Same fact, and it is exactly
+    what the ladder cannot make happen on its own.
 
-    def is_constant(tag: Any) -> bool:
-        if not isinstance(tag, TagClass):
-            return False
-        if tag.name in names:
-            return False
-        block = getattr(tag, "_pyrung_block", None)
-        addr = getattr(tag, "_pyrung_block_addr", None)
-        if block is not None and addr is not None and (id(block), addr) in filled:
-            return False
-        return True
+    Two consumers, one set: a guard clause on such a tag can neither *advance* a
+    step (it is a wait) nor *rescue* one (it is not an automatic escape).  Which
+    of those a clause is depends on the rung, never on the tag.
 
-    return is_constant
-
-
-def _external_input_names(program: Any) -> set[str]:
-    """Tags the ladder cannot drive: ``external`` slots, their one-hop mirrors,
-    and Bool contacts never written anywhere (read-only physical inputs)."""
+    Mirrors extend it: an ``out(dst)`` whose guard is only unguaranteed contacts
+    republishes a signal the program still does not author, so ``dst`` inherits
+    the property even though the ladder writes it.  Steerability alone would miss
+    that (an out coil is program-authored by construction).
+    """
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.steerable import compute_steerable
     from pyrung.core.instruction.coils import OutInstruction
     from pyrung.core.tag import Tag as TagClass
-    from pyrung.core.tag import TagType
 
     scopes = _all_scopes(program)
-    external: set[str] = set()
-
     index = _tag_index(program)
-    written, _filled = _written_registers(program)
-    for name, tag in index.items():
-        if getattr(tag, "external", False):
-            external.add(name)
-        elif tag.type == TagType.BOOL and name not in written:
-            external.add(name)
+    pdg = build_program_graph(program)
+    external: set[str] = set(compute_steerable(pdg, index, program))
 
     # Fixpoint: out(dst) whose guard is only external true-contacts mirrors an
     # external signal onto ``dst``.
@@ -407,15 +491,31 @@ def _x_admits(atoms: list[tuple[Any, ...]], step: str, value: int) -> bool:
     return True
 
 
-def _dead_config_atom(
-    atoms: list[tuple[Any, ...]], index: dict[str, Tag], is_constant
+def _unmet_atom(
+    atoms: list[tuple[Any, ...]], index: dict[str, Tag], unguaranteed: set[str]
 ) -> tuple[str, int] | None:
-    """First guard clause unsatisfiable against a program constant, as
-    ``(config_tag_name, default_value)`` — else None."""
+    """First guard clause the program cannot satisfy on its own, as
+    ``(tag_name, resting_value)`` — else None.
+
+    A clause on an unguaranteed tag (:func:`_unguaranteed_names`) holds only if
+    the tag's resting value already satisfies it: nothing in the ladder will move
+    it.  ``EnableLimit == 1`` on a register nobody writes rests at 0 and never
+    fires; ``i_AbortBtn`` rests False until a human intervenes.  Both are the
+    same fact — the rung needs something from outside — and neither makes the
+    program's own progress possible.
+
+    Deliberately *not* classified further.  Whether a tag is a config register
+    someone should have set at commissioning or a button someone would press is a
+    question about intent, and the only signals available here — type, the
+    ``external`` flag — do not carry it: ``Bool("EnableLimit")`` is an ordinary way
+    to write a config flag, and an Int mode selector may live on an HMI screen.
+    Reporting the fact we proved ("nothing sets this") and leaving the intent to
+    the engineer who wrote it beats guessing from a declaration.
+    """
     for atom in atoms:
         name = atom[1]
         tag = index.get(name)
-        if tag is None or not is_constant(tag):
+        if tag is None or name not in unguaranteed:
             continue
         default = tag.default
         op = atom[0]
@@ -436,6 +536,48 @@ def _dead_config_atom(
 
 
 @dataclass(frozen=True)
+class RangedEscape:
+    """An escape rung that exists but guards a step range excluding the wait.
+
+    The classic near-miss: a timeout written for ``Step == 3`` while the wait
+    sits at step 1.  It reads as coverage and fires for some other step.
+
+    ``conditions`` is the rung as written and ``guard`` is the step clause
+    within it — the two a caller needs to underline the wrong range at its
+    source rather than describe it.
+    """
+
+    rung_label: str
+    conditions: tuple[Any, ...]
+    guard: Any | None
+    step: str
+    op: str
+    bound: int
+
+
+@dataclass(frozen=True)
+class UnmetEscape:
+    """An escape rung needing a value the program never sets.
+
+    The rung is aimed at the right step, but a clause tests a tag the ladder does
+    not author, resting at a value that does not satisfy it.  Nothing in the
+    program will move it, so the rung cannot fire unaided — a timeout switched off
+    by a config register nobody set, or an abort that waits on a button nobody
+    pressed.  One shape, deliberately: see :func:`_unmet_atom` on why the survey
+    does not guess which.
+
+    ``guard`` is the clause that cannot be met; ``resting`` is the value the tag
+    sits at.
+    """
+
+    rung_label: str
+    conditions: tuple[Any, ...]
+    guard: Any | None
+    tag: str
+    resting: Any
+
+
+@dataclass(frozen=True)
 class WaitEscapeFinding:
     """One wait-shaped step that can hang forever with no fireable escape.
 
@@ -444,6 +586,12 @@ class WaitEscapeFinding:
     design decision for the engineer — never auto-fixed.  Doubles as the
     wait-edge annotation the pilot wants (no self-escape ⇒ trace the producers,
     don't budget-wait here).
+
+    ``ranged_escapes`` / ``unmet_escapes`` are the escapes that *look* like
+    coverage and aren't — the diagnostic payload, since an engineer skimming
+    the ladder sees a timeout and stops looking.  Each carries the rung it came
+    from so a caller can show it as written; ``advance_conditions`` and
+    ``wait_guard`` do the same for the waiting rung itself.
     """
 
     subroutine: str | None
@@ -451,8 +599,10 @@ class WaitEscapeFinding:
     step_value: int
     wait_inputs: tuple[str, ...]
     advance_rung: str
-    ranged_escapes: tuple[tuple[str, str, str, int], ...] = ()
-    dead_escapes: tuple[tuple[str, str, int], ...] = ()
+    advance_conditions: tuple[Any, ...] = ()
+    wait_guard: Any | None = None
+    ranged_escapes: tuple[RangedEscape, ...] = ()
+    unmet_escapes: tuple[UnmetEscape, ...] = ()
 
     @property
     def location(self) -> str:
@@ -469,10 +619,14 @@ class WaitEscapeFinding:
         waits = ", ".join(self.wait_inputs)
         head = f"{who} step {self.step_value} waits on {waits} with no escape"
         clauses: list[str] = []
-        for rung_label, step, op, bound in self.ranged_escapes:
-            clauses.append(f"{rung_label} guards {step} {_OP_SYMBOL.get(op, op)} {bound}")
-        for rung_label, config_tag, default in self.dead_escapes:
-            clauses.append(f"{config_tag} = {default} disables the {rung_label} timeout")
+        for esc in self.ranged_escapes:
+            clauses.append(
+                f"{esc.rung_label} guards {esc.step} {_OP_SYMBOL.get(esc.op, esc.op)} {esc.bound}"
+            )
+        for esc in self.unmet_escapes:
+            clauses.append(
+                f"{esc.rung_label} needs {esc.tag}, which nothing sets (rests at {esc.resting})"
+            )
         if not clauses:
             return head
         return head + " — " + " and ".join(clauses)
@@ -482,35 +636,35 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
     """Survey wait-shaped steps that can hang forever (see module docstring).
 
     Static and read-side: for each step register whose only advance out of a
-    value ``k`` is gated on an external input, report the absence of a fireable
-    escape (timeout or error rung that can actually fire under the declared
-    config).  A step-range guard that excludes ``k`` or a clause dead against a
-    program-constant config value does not count as an escape.  Fail-closed:
-    an unreadable escape guard is treated as a possible escape, never as proof
-    of absence.
+    value ``k`` needs something the program cannot author, report the absence of
+    an escape the program *can* fire unaided.
+
+    One rule decides both halves (:func:`_unguaranteed_names`): a clause on a tag
+    the ladder does not author holds only if the tag's resting value already
+    satisfies it.  So the advance waits (its input may never arrive) and an
+    escape gated the same way does not rescue it (its clause may never be met) —
+    a config-gated timeout and an operator's abort button fail for one reason,
+    not two.  A step-range guard excluding ``k`` fails separately, on range.
+
+    Fail-closed: an unreadable escape guard is treated as a possible escape,
+    never as proof of absence.
     """
     index = _tag_index(program)
-    is_constant = _constant_predicate(program)
-    external = _external_input_names(program)
+    unguaranteed = _unguaranteed_names(program)
 
     findings: list[WaitEscapeFinding] = []
     for subroutine, rungs in _all_scopes(program):
-        step_registers: set[str] = set()
-        for rung in rungs:
-            for instr in rung._instructions:
-                target = _self_increment_target(instr)
-                if target is not None:
-                    step_registers.add(target)
+        step_registers = _step_registers(rungs)
         if not step_registers:
             continue
 
         for step in sorted(step_registers):
-            # Advance triggers: the self-increment rungs, plus writers of any
-            # transition flag that gates such an increment.
+            # Advance triggers: the rungs that move the step, plus writers of any
+            # transition flag that gates such a move.
             increment_idx = {
                 i
                 for i, rung in enumerate(rungs)
-                if any(_self_increment_target(instr) == step for instr in rung._instructions)
+                if any(_step_write_target(instr) == step for instr in rung._instructions)
             }
             flags: set[str] = set()
             for i in increment_idx:
@@ -536,11 +690,18 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
                     continue
                 for atom in atoms:
                     if atom[0] in ("gt", "ge", "lt", "le") and atom[1] != step:
-                        if atom[1] not in external:
+                        if atom[1] not in unguaranteed:
                             timer_acc.add(atom[1])
 
-            # Wait edges: an advance trigger pinned to ``step == k`` that
-            # requires an external input.
+            # Wait edges: an advance trigger pinned to ``step == k`` that needs
+            # something the program cannot supply.
+            #
+            # A contact (``FB``) and a threshold on a live measurement
+            # (``S_Temp > 100``) are the same wait: the ladder does not author
+            # either operand, so it cannot make the clause true.  The step
+            # register's own pin is excluded (that is what holds us here, not what
+            # we wait for), as is a timer accumulator — the program drives those,
+            # which is exactly what makes them not-a-wait.
             waits: dict[int, tuple[set[str], int]] = {}
             for i in sorted(advance_idx):
                 atoms, readable = _guard_atoms(rungs[i])
@@ -549,7 +710,13 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
                 pin = next((a[2] for a in atoms if a[0] == "eq" and a[1] == step), None)
                 if pin is None:
                     continue
-                inputs = {a[1] for a in atoms if a[0] in ("true", "nonzero") and a[1] in external}
+                inputs = {
+                    a[1]
+                    for a in atoms
+                    if a[1] != step
+                    and a[1] in unguaranteed
+                    and a[0] in ("true", "nonzero", "gt", "ge", "lt", "le", "eq", "ne")
+                }
                 if inputs:
                     existing = waits.setdefault(pin, (set(), i))
                     existing[0].update(inputs)
@@ -573,13 +740,22 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
                 atoms, readable = _guard_atoms(rung)
                 escape_candidates.append((i, atoms, readable, writes))
 
-            # Fault sink: a register several escape candidates write — the shared
-            # target that surfaces in the message (drops lone bookkeeping writes).
+            # Fault sink: the register the escapes converge on — the shared target
+            # that surfaces in the message, dropping lone bookkeeping writes.
+            #
+            # "Shared" needs two writers to mean anything, so that is the bar when
+            # there is a choice to make.  With a single candidate there is nothing
+            # to disambiguate and the bar deletes the only explanation the finding
+            # has (the verdict is unaffected — this filter feeds the *message*), so
+            # a sole candidate's writes qualify on their own.
             sink_writers: dict[str, set[int]] = {}
             for i, _atoms, _readable, writes in escape_candidates:
                 for name in writes:
                     sink_writers.setdefault(name, set()).add(i)
-            fault_sinks = {name for name, writers in sink_writers.items() if len(writers) >= 2}
+            _sink_floor = 1 if len(escape_candidates) == 1 else 2
+            fault_sinks = {
+                name for name, writers in sink_writers.items() if len(writers) >= _sink_floor
+            }
 
             for value, (inputs, anchor) in sorted(waits.items()):
                 escaped = False
@@ -590,7 +766,7 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
                         break
                     if not _x_admits(atoms, step, value):
                         continue
-                    if _dead_config_atom(atoms, index, is_constant) is not None:
+                    if _unmet_atom(atoms, index, unguaranteed) is not None:
                         continue
                     if any(a[0] in ("true", "nonzero") and a[1] in inputs for a in atoms):
                         continue
@@ -599,28 +775,49 @@ def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:
                 if escaped:
                     continue
 
-                ranged: list[tuple[str, str, str, int]] = []
-                dead: list[tuple[str, str, int]] = []
+                ranged: list[RangedEscape] = []
+                unmet: list[UnmetEscape] = []
                 for i, atoms, readable, writes in escape_candidates:
                     if not readable or not (set(writes) & fault_sinks):
                         continue
-                    dead_atom = _dead_config_atom(atoms, index, is_constant)
+                    rung = rungs[i]
+                    unmet_atom = _unmet_atom(atoms, index, unguaranteed)
                     label = f"R{i + 1}"
-                    if dead_atom is not None:
-                        dead.append((label, dead_atom[0], dead_atom[1]))
+                    if unmet_atom is not None:
+                        unmet.append(
+                            UnmetEscape(
+                                rung_label=label,
+                                conditions=tuple(rung._conditions),
+                                guard=_guard_leaf(rung, unmet_atom[0]),
+                                tag=unmet_atom[0],
+                                resting=unmet_atom[1],
+                            )
+                        )
                     elif not _x_admits(atoms, step, value):
                         pin_atom = next((a for a in atoms if len(a) == 3 and a[1] == step), None)
                         if pin_atom is not None:
-                            ranged.append((label, step, pin_atom[0], pin_atom[2]))
+                            ranged.append(
+                                RangedEscape(
+                                    rung_label=label,
+                                    conditions=tuple(rung._conditions),
+                                    guard=_guard_leaf(rung, step),
+                                    step=step,
+                                    op=pin_atom[0],
+                                    bound=pin_atom[2],
+                                )
+                            )
+                sorted_inputs = tuple(sorted(inputs))
                 findings.append(
                     WaitEscapeFinding(
                         subroutine=subroutine,
                         step_register=step,
                         step_value=value,
-                        wait_inputs=tuple(sorted(inputs)),
+                        wait_inputs=sorted_inputs,
                         advance_rung=f"R{anchor + 1}",
+                        advance_conditions=tuple(rungs[anchor]._conditions),
+                        wait_guard=_guard_leaf(rungs[anchor], sorted_inputs[0]),
                         ranged_escapes=tuple(ranged),
-                        dead_escapes=tuple(dead),
+                        unmet_escapes=tuple(unmet),
                     )
                 )
     return findings

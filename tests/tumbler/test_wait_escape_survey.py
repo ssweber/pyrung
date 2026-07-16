@@ -29,15 +29,15 @@ def test_survey_flags_exactly_rotate_step_1(tumbler_logic) -> None:
     assert f.advance_rung == "R8"
 
 
-def test_finding_message_names_input_range_and_dead_timeout(tumbler_logic) -> None:
+def test_finding_message_names_input_range_and_unmet_timeout(tumbler_logic) -> None:
     message = wait_edges_without_escape(tumbler_logic)[0].message
 
-    # Waits on the external feedback with no escape.
+    # Waits on the feedback the program cannot supply, with no escape.
     assert "Rotate step 1 waits on i_RotateFB with no escape" in message
     # The mis-ranged R9 error rung.
     assert "R9 guards Rotate_CurStep == 3" in message
-    # The config-dead R5 timeout.
-    assert "Rotate_EnableLimit = 0 disables the R5 timeout" in message
+    # The R5 timeout, gated on a register nothing sets.
+    assert "R5 needs Rotate_EnableLimit, which nothing sets (rests at 0)" in message
 
 
 def test_blower_step_is_not_flagged(tumbler_logic) -> None:
