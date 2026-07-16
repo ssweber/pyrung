@@ -143,6 +143,12 @@ class ReplayOutcome:
     trend: int | None
     snapshot: Mapping[str, Any]
     reason: str = ""
+    # Whether ``snapshot`` is a real LANDING (target reached, or the coast
+    # departed and settled somewhere) rather than a mid-journey timeout.  A
+    # departure-silenced acceptance times out with the channel intact — its
+    # snapshot is where the budget ran out, not a destination, and channel
+    # scoping must not derive a lifetime from it.
+    landed: bool = True
 
 
 @dataclass(frozen=True)
@@ -194,6 +200,7 @@ def _scoped_correction_rungs(
     channel_tag = incident.channel_tag
     if (
         channel_tag is not None
+        and outcome.landed
         and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
     ):
         from pyrung.core.condition import CompareEq, CompareNe
@@ -343,6 +350,10 @@ def build_replay_fn(
         # the same recorder the live incident used, never a history re-diff.
         session = CoastSession(probe, kind="replay")
         session.arm_pens(all_done_tags)
+        # The last coast step IS the incident's eject coast; its receipt is the
+        # bump-local verdict ("did the recorded departure reproduce?") the
+        # judgment below reads alongside the endpoint snapshot.
+        eject_receipt: Any = None
         for step in steps:
             # Each step re-arms its RECORDED session spec (``ReplayStep.kind``
             # off the committed step context) — a letrun eject-coast is coasted,
@@ -361,7 +372,7 @@ def build_replay_fn(
                 # budget is the step's own recorded span — the replay seeks to
                 # first-of {target, eject, timeout} and the judgment below
                 # reads which fired, so no departure margin is needed.
-                _coast_holding_state(
+                eject_receipt = _coast_holding_state(
                     probe,
                     target_tag,
                     target_value,
@@ -374,7 +385,9 @@ def build_replay_fn(
                 # guard.  Do NOT bound this by the recorded span: the requested
                 # value is the immediate goal but a full channel coast away,
                 # and the guard already stops at the first ejection.
-                _coast_to_value(probe, step.channel_tag, step.channel_target, session=session)
+                eject_receipt = _coast_to_value(
+                    probe, step.channel_tag, step.channel_target, session=session
+                )
             else:
                 session.dwell(max(1, step.scans))
         snap = dict(probe.state.tags)
@@ -407,10 +420,8 @@ def build_replay_fn(
                 {t: snap.get(t) for t in roles},
             )
 
-        def _new_cause() -> str | None:
-            """Reason string if this replay ejected on a *different* watchdog than
-            the incident — the one-sided liveness hold fixed its own watchdog and
-            tripped the complement — else ``None``.
+        def _done_diff() -> tuple[frozenset[str], frozenset[str]]:
+            """(silenced, new) Done-bit sets: incident window vs replay window.
 
             Symmetric evidence: the incident side (``eject_cause_dones``) is the
             Done bits that *fired inside the incident window*, so the replay side
@@ -421,19 +432,51 @@ def build_replay_fn(
             causes" and any window-only pulse reads as "silenced", so an
             irrelevant hold can score as progress.
             """
-            if not eject_cause_dones:
-                return None
-            replay_fired = {
+            replay_fired = frozenset(
                 tag
                 for event in session.events
                 for tag, _before, _after in event.transitions
                 if tag in all_done_tags
-            }
-            silenced = eject_cause_dones - replay_fired
-            new = replay_fired - eject_cause_dones
+            )
+            return (eject_cause_dones - replay_fired, replay_fired - eject_cause_dones)
+
+        def _new_cause() -> str | None:
+            """Reason string if this replay ejected on a *different* watchdog than
+            the incident — the one-sided liveness hold fixed its own watchdog and
+            tripped the complement — else ``None``."""
+            if not eject_cause_dones:
+                return None
+            silenced, new = _done_diff()
             if silenced and new:
                 return (
                     f"new-cause progress: silenced {sorted(silenced)}, now ejects on {sorted(new)}"
+                )
+            return None
+
+        def _departure_silenced() -> str | None:
+            """Reason string if the recorded departure did not reproduce.
+
+            Bump-local judgment: the incident IS a departure bump; a hold is
+            progress when the replay's eject coast reports the bump never fired
+            (``stop_reason == "timeout"``, channel intact through the incident's
+            own duration) — the machine now waits on the *next* blocker, which
+            is the next round's incident.  A hold does not have to carry the
+            channel all the way to the requested bearing to have solved this
+            bump.  Corroboration: at least one of the incident's ejecting Done
+            bits must be silenced on the replay's own timeline — a hold that
+            freezes the channel pipeline leaves the alarm timers firing, so its
+            silenced set is empty and it still rejects (the frozen-channel
+            false confirm stays unrepresentable).
+            """
+            if eject_receipt is None or eject_receipt.stop_reason != "timeout":
+                return None
+            if not eject_cause_dones:
+                return None
+            silenced, _new = _done_diff()
+            if silenced:
+                return (
+                    "departure bump silenced (coast timeout, channel intact): "
+                    f"silenced {sorted(silenced)}"
                 )
             return None
 
@@ -452,6 +495,8 @@ def build_replay_fn(
         if zoom_channel_tag is not None:
             reached = _values_match(snap.get(zoom_channel_tag), zoom_target_value)
             progressed = _new_cause() if not reached else None
+            if not reached and progressed is None:
+                progressed = _departure_silenced()
             if (
                 not reached
                 and progressed is None
@@ -472,7 +517,18 @@ def build_replay_fn(
                 trend=None,
                 snapshot=snap,
                 reason=progressed
-                or f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}",
+                or (
+                    f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}"
+                    + (
+                        f" (eject coast: {eject_receipt.stop_reason})"
+                        if eject_receipt is not None
+                        else ""
+                    )
+                ),
+                # A coast that timed out mid-journey landed nowhere — its end
+                # snapshot must not seed a channel scope.
+                landed=reached
+                or (eject_receipt is not None and eject_receipt.stop_reason == "departed"),
             )
 
         # Terminal let-run without a channel register (no recognized state
@@ -1133,66 +1189,6 @@ def investigate_deviation(
 # ---------------------------------------------------------------------------
 
 
-def _atom_true_under(atom: Any, value: Any) -> bool | None:
-    """Whether a simplified ``Atom`` holds given its tag is steadily *value*.
-
-    Returns ``None`` for an edge form (``rise``/``fall``) — a steadily held value
-    never produces an edge, so it can never *force* an edge-gated rung.
-    """
-    form = atom.form
-    if form in ("rise", "fall"):
-        return None
-    if form in ("xic", "truthy"):
-        return bool(value)
-    if form == "xio":
-        return not bool(value)
-    op = atom.operand
-    if form == "eq":
-        return _values_match(value, op)
-    if form == "ne":
-        return not _values_match(value, op)
-    try:
-        if form == "lt":
-            return value < op
-        if form == "le":
-            return value <= op
-        if form == "gt":
-            return value > op
-        if form == "ge":
-            return value >= op
-    except TypeError:
-        return None
-    return None
-
-
-def _expr_forced_true(expr: Any, assign: dict[str, Any]) -> bool | None:
-    """Three-valued: is *expr* **necessarily** True under partial *assign*?
-
-    Tags absent from *assign* are UNKNOWN.  ``True`` means the expression holds
-    regardless of the unknowns (an ``Or`` with one satisfied disjunct, an ``And``
-    whose every term is satisfied); ``None`` means it depends on the unknowns.
-    """
-    from pyrung.core.analysis.simplified import And, ArithAtom, Atom, Const, Or
-
-    if isinstance(expr, Const):
-        return expr.value
-    if isinstance(expr, Atom):
-        return None if expr.tag not in assign else _atom_true_under(expr, assign[expr.tag])
-    if isinstance(expr, ArithAtom):
-        return None
-    if isinstance(expr, And):
-        vals = [_expr_forced_true(t, assign) for t in expr.terms]
-        if any(v is False for v in vals):
-            return False
-        return True if all(v is True for v in vals) else None
-    if isinstance(expr, Or):
-        vals = [_expr_forced_true(t, assign) for t in expr.terms]
-        if any(v is True for v in vals):
-            return True
-        return False if all(v is False for v in vals) else None
-    return None
-
-
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
     """The steady values a hold can pin its tag to: a scalar hold is that value;
     a ``PilotRung`` contributes each of its rule target values (an
@@ -1269,7 +1265,7 @@ def _holds_defeat_needed(
     """Static write-vs-need proof for one executable hold assignment."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.pilot.trace import _literal_write
-    from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr
+    from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr, _expr_forced_true
 
     needed_first: dict[str, Any] = {}
     for nt, nv in needed:

@@ -89,6 +89,72 @@ class TerminalForm:
 
 
 # ---------------------------------------------------------------------------
+# Three-valued evaluation under a partial assignment
+# ---------------------------------------------------------------------------
+
+
+def _atom_true_under(atom: Atom, value: Any) -> bool | None:
+    """Whether a simplified ``Atom`` holds given its tag is steadily *value*.
+
+    Returns ``None`` for an edge form (``rise``/``fall``) — a steadily held value
+    never produces an edge, so it can never *force* an edge-gated rung.
+    """
+    form = atom.form
+    if form in ("rise", "fall"):
+        return None
+    if form in ("xic", "truthy"):
+        return bool(value)
+    if form == "xio":
+        return not bool(value)
+    from pyrung.core.analysis.sp_values import _values_match
+
+    op = atom.operand
+    if form == "eq":
+        return _values_match(value, op)
+    if form == "ne":
+        return not _values_match(value, op)
+    try:
+        if form == "lt":
+            return value < op
+        if form == "le":
+            return value <= op
+        if form == "gt":
+            return value > op
+        if form == "ge":
+            return value >= op
+    except TypeError:
+        return None
+    return None
+
+
+def _expr_forced_true(expr: Any, assign: dict[str, Any]) -> bool | None:
+    """Three-valued: is *expr* **necessarily** True under partial *assign*?
+
+    Tags absent from *assign* are UNKNOWN.  ``True`` means the expression holds
+    regardless of the unknowns (an ``Or`` with one satisfied disjunct, an ``And``
+    whose every term is satisfied); ``False`` means it cannot hold; ``None``
+    means it depends on the unknowns.
+    """
+    if isinstance(expr, Const):
+        return expr.value
+    if isinstance(expr, Atom):
+        return None if expr.tag not in assign else _atom_true_under(expr, assign[expr.tag])
+    if isinstance(expr, ArithAtom):
+        return None
+    if isinstance(expr, And):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is False for v in vals):
+            return False
+        return True if all(v is True for v in vals) else None
+    if isinstance(expr, Or):
+        vals = [_expr_forced_true(t, assign) for t in expr.terms]
+        if any(v is True for v in vals):
+            return True
+        return False if all(v is False for v in vals) else None
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Condition → Expr conversion
 # ---------------------------------------------------------------------------
 

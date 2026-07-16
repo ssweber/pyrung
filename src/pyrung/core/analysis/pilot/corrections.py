@@ -365,6 +365,8 @@ def _coil_corrections(
         the antagonist rungs actually consume, already derived by the same
         ``trace_back`` that produced the holds.
         """
+        from pyrung.core.analysis.simplified import _conditions_list_to_expr, _expr_forced_true
+
         holds: list[ActionPair] = []
         image_pairs: list[ActionPair] = []
         seen: set[ActionPair] = set()
@@ -374,22 +376,35 @@ def _coil_corrections(
             if ro is None or not any(isinstance(i, LatchInstruction) for i in ro._instructions):
                 continue
             # The PDG node's condition_reads is subroutine-aware; the resolved
-            # rung's sp_tree() has no tag-name accessor.  Polarity is irrelevant
-            # here — we flip each guard off its current value and let the replay
-            # judge — so the read set is all we need.
+            # rung's sp_tree() has no tag-name accessor.  The safe value per
+            # guard is computed exactly: the value that three-valued-FORCES the
+            # latch rung's condition false regardless of the other reads
+            # (``i_DoorClosed=True`` kills the door rung; a watchdog
+            # ``Done=False`` kills the alarm rung).  Flipping off the guard's
+            # ``after_snap`` value — the old heuristic — lies for a
+            # fire-then-reset guard: the Done bit that latched the alarm has
+            # already reset by the after snapshot, so the flip proposed the
+            # latch-CAUSING polarity and the hypothesis silently vanished.
+            # Fallback when no forcing value exists (guard absent from the
+            # resolved expr): the legacy flip, judged by replay as before.
+            expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
             condition_tags = set(node.condition_reads)
             state_tags = condition_tags & opaque_loop
             for guard in sorted(condition_tags - state_tags):
                 cur = incident.after_snap.get(guard)
                 if not isinstance(cur, bool):
                     continue
+                safe = next(
+                    (v for v in (False, True) if _expr_forced_true(expr, {guard: v}) is False),
+                    not cur,
+                )
                 resolved = [
                     hold
-                    for hold in _steerable_holds(guard, not cur)
+                    for hold in _steerable_holds(guard, safe)
                     if hold not in seen and _hold_allowed(ctx, hold)
                 ]
                 if resolved:
-                    image_pairs.append((guard, not cur))
+                    image_pairs.append((guard, safe))
                 for hold in resolved:
                     seen.add(hold)
                     holds.append(hold)

@@ -1804,7 +1804,7 @@
    "rejected_detail": [
     {
      "detail": "Cmd_P2_Dry_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P2_Dry_Tm >= 1 (e.g., Cmd_P2_Dry_Tm = 1)",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "Cmd_P2_Dry_Tm",
@@ -1819,7 +1819,7 @@
     },
     {
      "detail": "Cmd_P4_CoolDown_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P4_CoolDown_Tm >= 1 (e.g., Cmd_P4_CoolDown_Tm = 1)",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "Cmd_P4_CoolDown_Tm",
@@ -1834,7 +1834,7 @@
     },
     {
      "detail": "Cmd_P1_OperatingTempF held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P1_OperatingTempF >= 120 (e.g., Cmd_P1_OperatingTempF = 120)",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "Cmd_P1_OperatingTempF",
@@ -1849,7 +1849,7 @@
     },
     {
      "detail": "S_DryerTemp_F held 0.0 since cold on Sts_StateCurrent's deep cause chain [external]; cross S_DryerTemp_F >= S_ValLowBandTemp_F (e.g., S_DryerTemp_F = 133)",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "S_DryerTemp_F",
@@ -1864,7 +1864,7 @@
     },
     {
      "detail": "x_RotateSensor held False since cold on Sts_StateCurrent's deep cause chain [external]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "x_RotateSensor",
@@ -1879,7 +1879,7 @@
     },
     {
      "detail": "x_DoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "x_DoorClosed",
@@ -1894,7 +1894,7 @@
     },
     {
      "detail": "x_LintDoorClosed held False since cold on Sts_StateCurrent's deep cause chain [external]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "x_LintDoorClosed",
@@ -1909,7 +1909,7 @@
     },
     {
      "detail": "AlmHistorian__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "AlmHistorian__empty1",
@@ -1924,7 +1924,7 @@
     },
     {
      "detail": "_Battery Low Voltage held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "_Battery Low Voltage",
@@ -1939,7 +1939,7 @@
     },
     {
      "detail": "_Battery Replacement held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "_Battery Replacement",
@@ -1954,7 +1954,7 @@
     },
     {
      "detail": "_Watchdog Timer Error held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "_Watchdog Timer Error",
@@ -1969,7 +1969,7 @@
     },
     {
      "detail": "WarnTimestamp__empty1 held False since cold on Sts_StateCurrent's deep cause chain [never_written]",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "WarnTimestamp__empty1",
@@ -1984,7 +1984,7 @@
     },
     {
      "detail": "Cmd_P3_Fluff_Tm held 0 since cold on Sts_StateCurrent's deep cause chain [never_written]; cross Cmd_P3_Fluff_Tm >= 1 (e.g., Cmd_P3_Fluff_Tm = 1)",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       [
        "Cmd_P3_Fluff_Tm",
@@ -1999,7 +1999,7 @@
     },
     {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False",
+     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
      "holds": [
       {
        "__type__": "PilotRung",
