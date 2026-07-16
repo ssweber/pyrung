@@ -19,7 +19,7 @@ import pytest
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.skiff import _frontier_free_words
-from pyrung.core.analysis.pilot.trace import compute_steerable
+from pyrung.core.analysis.steerable import compute_steerable
 
 pytestmark = pytest.mark.tumbler
 

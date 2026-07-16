@@ -145,8 +145,8 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.pilot import _build_pilot_context, pilot_events
-    from pyrung.core.analysis.pilot.trace import compute_steerable
     from pyrung.core.analysis.prove.classify import _compute_stepping_tags
+    from pyrung.core.analysis.steerable import compute_steerable
 
     logic, tags = _indirect_state_program(table_write=None)
     plc = PLC(logic, dt=0.010)

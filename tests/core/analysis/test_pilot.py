@@ -191,7 +191,8 @@ def test_auto_complete_command_premise() -> None:
 def test_trace_surfaces_resume_ack_when_execute_is_needed_from_held() -> None:
     """Hint for the detour failure: Held -> Execute is ResumeAck, not Start."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+    from pyrung.core.analysis.pilot.trace import trace_back
+    from pyrung.core.analysis.steerable import compute_steerable
 
     logic, tags = _auto_complete_command_program()
     plc = PLC(logic, dt=0.010)
@@ -1215,7 +1216,8 @@ def test_writer_ranking_literal_preferred():
     unreachable intermediate value.
     """
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import compute_steerable, trace_back
+    from pyrung.core.analysis.pilot.trace import trace_back
+    from pyrung.core.analysis.steerable import compute_steerable
 
     CmdClear = Bool("CmdClear", external=True)
     CmdStart = Bool("CmdStart", external=True)
@@ -1476,7 +1478,7 @@ def test_detect_opaque_pipeline():
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.compass import detect_opaque_pipelines
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -1853,7 +1855,7 @@ def test_expand_routes_packml_state_machine():
     """Static route expansion finds all state transitions with correct destinations."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.evidence import expand_routes
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _Output = _packml_program()
     plc = PLC(prog)
@@ -1891,7 +1893,7 @@ def test_expand_routes_indirect_jump_table_pipeline():
         expand_routes,
         infer_pipeline_roles,
     )
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
     StateComplete = Bool("StateComplete", external=True)
@@ -1968,7 +1970,7 @@ def test_skiff_scan_suppresses_non_participants():
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles, roles_for_needed_tag
     from pyrung.core.analysis.pilot.skiff import run_skiff_scan
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
     StateCurrent = Int("StateCurrent", default=4)
@@ -2017,7 +2019,7 @@ def test_seed_compass_from_static_routes():
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.compass import Compass
     from pyrung.core.analysis.pilot.evidence import expand_routes
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _Output = _packml_program()
     plc = PLC(prog)
@@ -2040,7 +2042,7 @@ def test_expand_routes_direct_writer():
     """Direct Literal writers produce routes without a request tag."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.evidence import expand_routes
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     CmdA = Bool("CmdA", external=True)
     CmdB = Bool("CmdB", external=True)
@@ -2081,7 +2083,7 @@ def test_expand_routes_subroutine_call_site_gates():
     """Routes through subroutine writers include call-site gate conditions."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.evidence import expand_routes
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     Enable = Bool("Enable", external=True)
     Cmd = Bool("Cmd", external=True)

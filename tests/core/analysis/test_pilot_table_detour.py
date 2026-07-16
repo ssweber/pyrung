@@ -250,7 +250,7 @@ def _current_ctx(logic, plc):
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.pilot import _build_pilot_context
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
@@ -407,7 +407,7 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.pilot import _build_pilot_context
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)

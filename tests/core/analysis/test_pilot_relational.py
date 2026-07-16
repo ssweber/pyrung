@@ -13,9 +13,9 @@ from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     _all_nodes,
-    compute_steerable,
     trace_back,
 )
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.physical import Physical, Ramp
 
 # Harness-linked thermal ramp: Temp rises while its link (Enable) is held.

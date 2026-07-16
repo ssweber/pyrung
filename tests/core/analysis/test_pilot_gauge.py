@@ -20,7 +20,7 @@ from pyrung import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.pilot import _build_pilot_context
-from pyrung.core.analysis.pilot.trace import compute_clear_only, compute_steerable
+from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 from tests.core.analysis.test_pilot_detour_progress import _knock_three_times_program
 
 

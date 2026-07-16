@@ -26,11 +26,11 @@ from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.pilot.availability import _writer_availability, _WriterAvailability
 from pyrung.core.analysis.pilot.trace import (
     _written_value_for_tag,
-    compute_steerable,
     frontier_pairs,
     trace_back,
 )
 from pyrung.core.analysis.sp_values import _writer_projection
+from pyrung.core.analysis.steerable import compute_steerable
 
 
 def _build_sfc() -> Program:

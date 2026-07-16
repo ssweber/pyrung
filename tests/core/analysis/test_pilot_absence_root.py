@@ -34,7 +34,7 @@ from pyrung.core.analysis.pilot.investigate import (
     build_replay_fn,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.trace import compute_steerable
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
 

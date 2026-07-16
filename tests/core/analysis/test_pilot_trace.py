@@ -31,10 +31,10 @@ from pyrung.core.analysis.pilot.trace import (
     _trace_back,
     _TraceEnv,
     compute_reference_constants,
-    compute_steerable,
     trace_back,
 )
 from pyrung.core.analysis.simplified import Atom
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 

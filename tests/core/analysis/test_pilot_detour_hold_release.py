@@ -339,7 +339,7 @@ def test_stepper_is_a_gauge_component() -> None:
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.gauge import build_gauge
     from pyrung.core.analysis.pilot.pilot import _build_pilot_context
-    from pyrung.core.analysis.pilot.trace import compute_clear_only, compute_steerable
+    from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
     logic, tags = _door_cycle_program()
     plc = PLC(logic, dt=0.010)

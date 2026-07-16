@@ -75,11 +75,9 @@ from pyrung.core.analysis.pilot.trace import (
     _route_forced_names,
     _route_forces,
     _trace_score,
-    compute_clear_only,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
-    compute_steerable,
     enumerate_trace_choices,
     frontier_pairs,
     route_rung_order,
@@ -104,6 +102,7 @@ from pyrung.core.analysis.pilot.types import (
     _World,
 )
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph

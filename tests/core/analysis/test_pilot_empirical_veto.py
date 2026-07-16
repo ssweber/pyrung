@@ -23,7 +23,8 @@ from pyrung.core.analysis.pilot.causal import (
     pilot_touched_tags,
 )
 from pyrung.core.analysis.pilot.skiff import _frontier_free_words, _frontier_probes
-from pyrung.core.analysis.pilot.trace import compute_resting_values, compute_steerable
+from pyrung.core.analysis.pilot.trace import compute_resting_values
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------

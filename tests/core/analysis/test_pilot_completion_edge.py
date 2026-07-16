@@ -22,7 +22,8 @@ from pyrung.core.analysis.pilot.pilot import (
     _build_pilot_context,
     _infer_pipeline_roles_for_context,
 )
-from pyrung.core.analysis.pilot.trace import compute_reference_constants, compute_steerable
+from pyrung.core.analysis.pilot.trace import compute_reference_constants
+from pyrung.core.analysis.steerable import compute_steerable
 
 
 def _compass_graphs(logic, plc):

@@ -173,8 +173,8 @@ def test_transient_stepper_ranks_current_state_tools() -> None:
         _rank_writers,
         _writer_availability,
         _WriterAvailability,
-        compute_steerable,
     )
+    from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _target, _tags = _transient_stepper_program()
     pdg = build_program_graph(prog)

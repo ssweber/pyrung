@@ -11,10 +11,10 @@ from pyrung.core.analysis.pilot.candidates import _build_candidates
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
-    compute_steerable,
     trace_back,
 )
 from pyrung.core.analysis.simplified import Atom
+from pyrung.core.analysis.steerable import compute_steerable
 
 
 def _hold_for_operator_program():

@@ -30,7 +30,6 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict, Provisional
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _anchor_bearing_receipt, _monitor_trend
-from pyrung.core.analysis.pilot.trace import compute_steerable
 from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
     _PilotState,
@@ -38,6 +37,7 @@ from pyrung.core.analysis.pilot.types import (
     _TrialResult,
     _World,
 )
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------

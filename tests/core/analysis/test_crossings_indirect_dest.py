@@ -19,7 +19,7 @@ from __future__ import annotations
 from pyrung import Int, Program, Rung, blockcopy, calc, copy, fill
 from pyrung.core.analysis.crossings.indirect_dest import writable_slots
 from pyrung.core.analysis.pdg import _build_writer_instrs, build_program_graph
-from pyrung.core.analysis.pilot.trace import compute_steerable
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 
@@ -168,7 +168,7 @@ def _never_written_band_program() -> tuple[Program, Block]:
     band slots masquerade as *never-program-written* free words (the docstring's
     scenario).  There is no ``fill`` here — this isolates the region crossing as the
     *sole* demoter of steerability, distinct from the multi-slot bulk-fill
-    housekeeping rule (``_is_bulk_fill_reset`` in trace.py) that ``_band_program``
+    housekeeping rule (``_is_bulk_fill_reset`` in steerable.py) that ``_band_program``
     also triggers.
     """
     ds = Block("DS", TagType.INT, 1, _BIG)

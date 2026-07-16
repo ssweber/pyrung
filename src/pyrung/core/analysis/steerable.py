@@ -17,14 +17,6 @@ Two callers want this for opposite reasons, and both are right:
 
 That second reading is why this lives here rather than under ``pilot/``.  A
 validator must not import the planner to ask a static question about the ladder.
-
-.. warning::
-
-   ``pilot/trace.py`` still carries its own copy of these functions; pilot reads
-   that one, this module's callers read this one.  ``tests/core/analysis/
-   test_steerable.py`` pins the two implementations to identical verdicts so
-   neither can drift while the duplicate stands.  Collapse trace.py onto this
-   module (delete its copies, import from here) and drop that agreement test.
 """
 
 from __future__ import annotations

@@ -33,7 +33,7 @@ def bench():
 def bench_trace():
     """bench plus the steerable set — for the trace-side enablement-gate tests."""
     from examples.packml_bench import logic
-    from pyrung.core.analysis.pilot.trace import compute_steerable
+    from pyrung.core.analysis.steerable import compute_steerable
 
     plc = PLC(logic)
     for _ in range(3):
@@ -433,7 +433,8 @@ def _mask_gate_program(transition: str):
 
 def _mask_gate_trace(transition: str, *, mode: int = 3):
     """``(tree, holding)`` for a trace of the HOLDING transition from *mode*."""
-    from pyrung.core.analysis.pilot.trace import DomainPrior, compute_steerable, trace_back
+    from pyrung.core.analysis.pilot.trace import DomainPrior, trace_back
+    from pyrung.core.analysis.steerable import compute_steerable
 
     prog, holding = _mask_gate_program(transition)
     plc = PLC(prog)

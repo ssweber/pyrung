@@ -35,8 +35,9 @@ from pyrung.core.analysis.pilot.investigate import (
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
-from pyrung.core.analysis.pilot.trace import compute_steerable, frontier_pairs, trace_back
+from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult, _World
+from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq
 from pyrung.core.memory_block import Block
 

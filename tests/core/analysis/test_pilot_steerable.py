@@ -34,7 +34,7 @@ from pyrung import (
     rung,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.trace import (
+from pyrung.core.analysis.steerable import (
     _clear_only_command,
     compute_steerable,
 )

@@ -1,19 +1,11 @@
 """Tests for ``core.analysis.steerable`` — the neutral steerability predicate.
 
-Two jobs:
-
-1. Pin the predicate's own terms (never-written input, ack-cleared command,
-   external nudge, program-authored) so a reader can see what steerable means
-   without reading pilot.
-2. **Agreement.** ``pilot/trace.py`` still carries a duplicate of these
-   functions while pilot is owned elsewhere; ``test_agrees_with_pilot_trace``
-   pins the two to identical verdicts so neither can drift. Delete that test
-   when trace.py is collapsed onto this module.
+Pins the predicate's own terms (never-written input, ack-cleared command,
+external nudge, program-authored) so a reader can see what steerable means
+without reading pilot.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from pyrung.core import PLC, Bool, Int, Program, Real, Rung, copy, fill, latch, out, reset
 from pyrung.core.analysis.pdg import build_program_graph
@@ -154,73 +146,3 @@ class TestSteerable:
                 out(Err)
 
         assert "EnableLimit" in _steerable(prog)
-
-
-class TestAgreementWithPilotTrace:
-    """Pins the temporary duplicate in ``pilot/trace.py`` to this module.
-
-    DELETE this class when trace.py imports from ``core.analysis.steerable``.
-    """
-
-    @pytest.mark.parametrize("builder", ["ack", "external_nudge", "mixed"])
-    def test_agrees_with_pilot_trace(self, builder: str) -> None:
-        from pyrung.core.analysis.pilot.trace import compute_steerable as trace_steerable
-
-        prog = _build_agreement_program(builder)
-        plc = PLC(prog)
-        pdg = build_program_graph(prog)
-        known = plc._known_tags_by_name
-
-        assert compute_steerable(pdg, known, prog) == trace_steerable(pdg, known, prog)
-
-    def test_agrees_on_clear_only_as_well(self) -> None:
-        from pyrung.core.analysis.pilot.trace import compute_clear_only as trace_clear_only
-        from pyrung.core.analysis.pilot.trace import compute_steerable as trace_steerable
-
-        prog = _build_agreement_program("mixed")
-        plc = PLC(prog)
-        pdg = build_program_graph(prog)
-        known = plc._known_tags_by_name
-
-        assert compute_steerable(pdg, known, prog) == trace_steerable(pdg, known, prog)
-        assert compute_clear_only(pdg, known, prog) == trace_clear_only(pdg, known, prog)
-
-
-def _build_agreement_program(kind: str) -> Program:
-    """Programs exercising each steerability arm, for the agreement pin."""
-    prog = Program(strict=False)
-    if kind == "ack":
-        C_Ack = Bool("C_Ack")
-        Done = Bool("Done")
-        with prog:
-            with Rung(C_Ack):
-                latch(Done)
-            with Rung(C_Ack):
-                reset(C_Ack)
-    elif kind == "external_nudge":
-        Setpoint = Real("Setpoint", external=True)
-        Rst = Bool("Rst")
-        Hot = Bool("Hot")
-        with prog:
-            with Rung(Rst):
-                copy(0.0, Setpoint)
-            with Rung(Setpoint > 100.0):
-                out(Hot)
-    else:  # mixed — the survey's own shape
-        Step = Int("Step")
-        Acc = Int("Acc")
-        EnableLimit = Int("EnableLimit")
-        Err = Int("Err")
-        FB = Bool("FB")
-        C_Ack = Bool("C_Ack")
-        Motor = Bool("Motor")
-        with prog:
-            with Rung(Step == 1, Acc > 2, FB):
-                copy(2, Step)
-            with Rung(Acc > 10, EnableLimit == 1):
-                copy(1, Err)
-            with Rung(C_Ack):
-                reset(C_Ack)
-            with Rung(Step == 2):
-                out(Motor)
-    return prog

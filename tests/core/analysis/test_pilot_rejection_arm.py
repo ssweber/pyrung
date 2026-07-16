@@ -29,12 +29,12 @@ from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     _all_nodes,
     _writer_guard_verdict,
-    compute_steerable,
     resolve_rung,
     trace_back,
 )
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import copy_source_binding
+from pyrung.core.analysis.steerable import compute_steerable
 
 
 def _known(logic: Program) -> dict:
