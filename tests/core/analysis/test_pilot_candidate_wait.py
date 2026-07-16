@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot.candidates import _build_candidates, _compass_route_plan
@@ -151,6 +152,38 @@ def test_program_owned_sibling_preserves_an_automatic_edge() -> None:
     )
 
     assert {edge.action for edge in edges} == {("Complete", True), None}
+
+
+def test_completion_edge_records_its_bearing_action_edge_does_not() -> None:
+    """The recorded wait bearing is the route's charted gate pairs — minus the
+    channel from-value and the operator's own button (pressing it is the
+    alternative to waiting) — and rides only the completion (``action is
+    None``) edge; the action-bearing command edge for the same route keeps
+    ``()``."""
+    role = PipelineRoles("State")
+    route = replace(
+        _action_route(6, 16, "Complete"),
+        enablers=(("Complete", True), ("Tmr_Done", True)),
+    )
+    edges = _edges_from_routes(
+        role,
+        (route,),
+        {},
+        frozenset({("Complete", repr(True))}),
+    )
+
+    by_action = {edge.action: edge for edge in edges}
+    assert by_action[None].completion == (("Tmr_Done", True),)
+    assert by_action[("Complete", True)].completion == ()
+
+
+def test_completion_defaults_empty_without_a_recorded_bearing() -> None:
+    """No ``completion_by_route`` entry → the completion edge records ``()`` and
+    behaves exactly as before (chart evidence, never invented)."""
+    role = PipelineRoles("State")
+    edges = _edges_from_routes(role, (_route(6, 16),), {})
+
+    assert [edge.completion for edge in edges] == [()]
 
 
 def test_prescribed_wait_suppresses_stuck_reason():

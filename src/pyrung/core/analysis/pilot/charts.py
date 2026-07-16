@@ -42,6 +42,13 @@ class CompassEdge:
     ``co_actions`` are the steerable inputs that must fire *in the same scan* as
     ``action`` — the one-shot edge gate (``rise(CmdChgRequest)``) — without which
     the command rung never executes.  Completion (let-run) edges carry neither.
+
+    ``completion`` carries the charted gate pairs a completion edge
+    (``action is None``) waits on — the route's recorded condition, verbatim,
+    minus the channel's own from-value and the operator's buttons.  The wait's
+    bearing: a sibling trace re-reads it every ORIENT and does all
+    classification; nothing is invented here.  Action-bearing edges and routes
+    whose gate names nothing else carry ``()``.
     """
 
     role: PipelineRoles
@@ -54,6 +61,7 @@ class CompassEdge:
     enablers: tuple[tuple[str, Any], ...]
     route: TransitionRoute
     co_actions: tuple[ActionPair, ...] = ()
+    completion: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -261,6 +269,16 @@ def _edges_from_routes(
         # edge gate (``rise(CmdChgRequest)``) must fire the same scan as the
         # button.  Completion edges have no edge gates → coast.
         co_actions = tuple(route.edge_gates)
+        # The wait's bearing, recorded on completion (``action is None``) edges:
+        # the route's charted gate pairs, verbatim.  Part 2's sibling trace does
+        # all classification — a coil gate descends to its driving predicate, a
+        # satisfied pair contributes nothing — so no producer analysis happens
+        # here; the chart's recorded condition is the whole claim.
+        completion = _route_completion_pairs(role, route)
+        has_program_owned = any(
+            (tag, _value_key(value)) in program_owned_enablers
+            for tag, value in (*route.enablers, *route.source_constraints)
+        )
         if not from_values and action_pairs:
             from_values = [ANY_FROM]
         if not from_values:
@@ -269,14 +287,35 @@ def _edges_from_routes(
             if action_pairs:
                 for action in action_pairs:
                     edges.append(_edge(role, route, from_value, action, co_actions))
-                if any(
-                    (tag, _value_key(value)) in program_owned_enablers
-                    for tag, value in (*route.enablers, *route.source_constraints)
-                ):
-                    edges.append(_edge(role, route, from_value, None, ()))
+                if has_program_owned:
+                    edges.append(_edge(role, route, from_value, None, (), completion))
             else:
-                edges.append(_edge(role, route, from_value, None, ()))
+                edges.append(_edge(role, route, from_value, None, (), completion))
     return tuple(edges)
+
+
+def _route_completion_pairs(
+    role: PipelineRoles,
+    route: TransitionRoute,
+) -> tuple[tuple[str, Any], ...]:
+    """The route's charted gate pairs — what its completion edge waits on.
+
+    Everything the writer's condition requires besides the channel's own
+    from-value and the operator's own buttons (``action_tags`` — pressing one is
+    the *alternative* to waiting, never part of the wait).  Recorded chart
+    evidence, verbatim and read-side; a route whose gate names nothing else
+    records ``()`` and the edge behaves exactly as before.
+    """
+    seen: set[tuple[str, str]] = set()
+    pairs: list[tuple[str, Any]] = []
+    for tag, value in (*route.enablers, *route.source_constraints):
+        if tag == role.channel_tag or tag in route.action_tags:
+            continue
+        key = (tag, _value_key(value))
+        if key not in seen:
+            seen.add(key)
+            pairs.append((tag, value))
+    return tuple(pairs)
 
 
 def _route_from_values(role: PipelineRoles, route: TransitionRoute) -> list[Any]:
@@ -366,6 +405,7 @@ def _edge(
     from_value: Any,
     action: ActionPair | None,
     co_actions: tuple[ActionPair, ...] = (),
+    completion: tuple[tuple[str, Any], ...] = (),
 ) -> CompassEdge:
     return CompassEdge(
         role=role,
@@ -378,6 +418,7 @@ def _edge(
         enablers=route.enablers,
         route=route,
         co_actions=co_actions,
+        completion=completion,
     )
 
 

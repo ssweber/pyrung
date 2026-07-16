@@ -431,6 +431,39 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     assert tags["StateRequested"].name in role.request_tags
 
 
+def test_completion_edges_record_program_owned_command_bearings() -> None:
+    """Part 1 of the wait-edge arc: each completion edge records its route's
+    charted gate pair — the wait's bearing, verbatim.
+
+    The Holding(→10) route's writer is gated on ``Cmd == HOLD_CMD``, the
+    Completing(→16) route's on ``Cmd == COMPLETE_CMD``; those recorded pairs
+    are the completion.  That the program's own ``rise(HoldTmr.Done)`` /
+    ``rise(CompleteTmr.Done)`` producers issue them is Part 2's discovery —
+    the sibling trace reads it, record time invents nothing.
+    """
+    from pyrung.core.analysis.pilot.charts import build_compass_graphs
+    from pyrung.core.analysis.pilot.pilot import _infer_pipeline_roles_for_context
+
+    HOLD_CMD, COMPLETE_CMD = 4, 10
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
+    roles = _infer_pipeline_roles_for_context(pdg, logic, steerable, opaque_loop, evidence)
+    graphs = build_compass_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
+
+    completions = {
+        edge.to_value: edge.completion
+        for graph in graphs
+        if graph.role.channel_tag == tags["State"].name
+        for edge in graph.edges
+        if edge.action is None and edge.completion
+    }
+    assert completions[tags["Holding"]] == (("PackTbl_Cmd", HOLD_CMD),)
+    assert completions[tags["Completing"]] == (("PackTbl_Cmd", COMPLETE_CMD),)
+
+
 def test_pilot_table_detour_reaches_completed_avoiding_complete() -> None:
     """PILOT follows the program-owned command detour, never pressing Complete.
 
