@@ -1212,11 +1212,19 @@ def _counter_done_frontier(
     the ``Acc > N`` branch (a ``self_advancing`` coast leaf) plus the analog
     ``_coupling_driver_leaf`` sibling: the coast leaf rides let-run; the driver
     leaf is held (level) or oscillated (edge).  Scoped to counters — timer ``Done``
-    bits already work via their enable-condition coast, so this leaves them
-    untouched.  ``None`` when *done_tag* is not a counter ``Done`` bit, or its
-    preset / driver can't be resolved.
+    bits are owned by :func:`_timer_done_frontier` / the enable-condition coast.
+
+    A counter with no resolvable steerable driver (the advance condition is
+    program-owned) gets the coast anyway when that advance is a *level*
+    condition currently satisfied on the snapshot — the counter is provably
+    counting and there is nothing to hold, the running-timer shape.  An
+    edge-gated advance is excluded there ("currently firing" is not a level
+    property a snapshot can witness).  ``None`` when *done_tag* is not a
+    counter ``Done`` bit, its preset can't be resolved, or neither a driver
+    nor a live level advance exists.
     """
     from pyrung.core.analysis.pilot.accumulators import resolve_profile
+    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
     from pyrung.core.instruction.accumulating import KIND_COUNT_DOWN, KIND_COUNT_UP
 
     match = resolve_profile(done_tag, env.program)
@@ -1228,15 +1236,19 @@ def _counter_done_frontier(
     preset = _resolve_preset_value(profile.preset, env.snapshot)
     if preset is None:
         return None
-    driver = _counter_driver_leaf(env, profile, provenance)
-    if driver is None:
-        return None
     coast = TraceNode(
         tag=profile.accumulator.name,
         value=profile.done_target(preset),
         self_advancing=True,
         provenance=provenance,
     )
+    driver = _counter_driver_leaf(env, profile, provenance)
+    if driver is None:
+        if isinstance(profile.advance, (RisingEdgeCondition, FallingEdgeCondition)):
+            return None
+        if not _accumulator_running(env, done_tag, profile):
+            return None
+        return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast])
     return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast, driver])
 
 
@@ -1275,7 +1287,7 @@ def _timer_done_frontier(
     preset = _resolve_preset_value(profile.preset, env.snapshot)
     if preset is None:
         return None
-    if not _timer_enable_satisfied(env, done_tag, profile):
+    if not _accumulator_running(env, done_tag, profile):
         return None
     coast = TraceNode(
         tag=profile.accumulator.name,
@@ -1286,14 +1298,17 @@ def _timer_done_frontier(
     return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast])
 
 
-def _timer_enable_satisfied(env: _TraceEnv, done_tag: str, profile: Any) -> bool:
-    """Whether an on-delay timer is *currently accumulating* on the snapshot.
+def _accumulator_running(env: _TraceEnv, done_tag: str, profile: Any) -> bool:
+    """Whether an accumulator is *currently advancing* on the snapshot.
 
-    The enable is the writer rung condition (``profile.advance`` at its
+    Shared by the running on-delay and the program-owned-level-advance counter:
+    the enable is the writer rung condition (``profile.advance`` at its
     ``advance_value``) AND the call-site gate of the rung's subroutine — the same
-    atoms the ordinary walk attaches as ``Done``-node children.  Fail-closed: an
-    unreadable advance, or no currently-called writer path, returns ``False`` and
-    the ordinary hold-and-coast walk owns the case.
+    atoms the ordinary walk attaches as ``Done``-node children.  Edge-gated
+    advances are the caller's job to exclude ("currently firing" is not a level
+    property a snapshot can witness).  Fail-closed: an unreadable advance, or no
+    currently-called writer path, returns ``False`` and the ordinary
+    hold-and-coast walk owns the case.
     """
     try:
         advancing = profile.advance.evaluate(_SnapshotView(env.snapshot, {}))

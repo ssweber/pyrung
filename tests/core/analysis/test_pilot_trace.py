@@ -297,6 +297,56 @@ def test_timer_done_running_honors_call_gate():
     assert "Mode" in _steerable_names(blocked)
 
 
+def _program_advance_counter():
+    """Counter whose advance is a program-owned level (no steerable driver)."""
+    x_Run = Bool("x_Run", external=True)
+    x_Rst = Bool("x_Rst", external=True)
+    Running = Bool("Running")
+    counter = Counter.clone("C1")
+
+    with Program() as logic:
+        with rung(x_Run):
+            out(Running)
+        with rung(Running):
+            count_up(counter, preset=5).reset(x_Rst)
+    return logic
+
+
+def test_counter_done_program_owned_live_advance_yields_coast():
+    """A counter counting under a live program-owned level gets the coast anyway.
+
+    ``_counter_driver_leaf`` resolves no steerable driver (the advance reads the
+    program-owned ``Running``), which used to fall to the blind ordinary walk —
+    the running-counter twin of the running-timer gap.  With the advance
+    satisfied on the snapshot, the Done trace emits the coast-only node.
+    """
+    logic = _program_advance_counter()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back("C1_Done", True, {"Running": True, "x_Run": True}, pdg, logic, steerable)
+    coast = [lf for lf in _leaves(tree) if lf.self_advancing]
+    assert len(coast) == 1
+    assert (coast[0].tag, coast[0].value) == ("C1_Acc", 5)
+    assert not coast[0].is_steerable
+
+
+def test_counter_done_idle_program_advance_keeps_enable_walk():
+    """The advance-unsatisfied arm is unchanged: the walk surfaces the chain.
+
+    With ``Running`` false the counter is not provably counting, so the helper
+    falls back to today's shape — the walk descends ``Running``'s writer and
+    surfaces ``x_Run`` as the steerable lever, no self-advancing leaf.
+    """
+    logic = _program_advance_counter()
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back("C1_Done", True, {"Running": False, "x_Run": False}, pdg, logic, steerable)
+    assert not any(lf.self_advancing for lf in _leaves(tree))
+    assert "x_Run" in _steerable_names(tree)
+
+
 # -- Test 6: Mixed (copy + guard + subroutine) ------------------------------
 
 
