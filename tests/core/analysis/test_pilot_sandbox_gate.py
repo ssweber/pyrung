@@ -291,6 +291,56 @@ def test_compass_contradict_falsifies_seeded_edge():
     assert changed is False
 
 
+def test_compass_apply_identity_on_no_new_knowledge():
+    """Byte-identical re-application returns the same object with changed=False.
+
+    Loop termination outside provisional motion hinges on ``Compass.apply``
+    reporting ``changed`` truthfully — skiff retries continue only when new
+    knowledge arrives.  A spurious ``changed=True`` on repeated observations
+    would turn bounded searches unbounded, so identity return is a liveness
+    invariant, not an optimization.
+    """
+    from pyrung.core.analysis.pilot.compass import (
+        ActionNogoodObservation,
+        CoastObservation,
+        Compass,
+        CompassObservation,
+        ProbeDeclinedObservation,
+        ProbeExhaustedObservation,
+        StaticEdgeObservation,
+    )
+
+    wk = ("wk", 1)
+    batch = (
+        CompassObservation("edge", "State", ("Cmd", True), 1, 6),
+        CompassObservation("no_change", "State", ("Cmd", False), 1),
+        CompassObservation("contradict", "State", ("Stop", True), 2),
+        ActionNogoodObservation(wk, ("act", "Cmd", True)),
+        ProbeDeclinedObservation(wk, "free word"),
+        CoastObservation(wk, "budget"),
+        StaticEdgeObservation(("edge-id",), "confirmed"),
+    )
+
+    compass, changed = Compass().apply(batch)
+    assert changed is True
+
+    # Every kind re-applied byte-identically: same facade object, no change.
+    same, changed = compass.apply(batch)
+    assert same is compass
+    assert changed is False
+
+    # An empty batch is identity too.
+    same, changed = compass.apply(())
+    assert same is compass
+    assert changed is False
+
+    # The one deliberate exception: probe exhaustion consumes budget, so every
+    # application is real accounting — not knowledge that could re-arm a loop.
+    spent, changed = compass.apply((ProbeExhaustedObservation(wk),))
+    assert changed is True
+    assert spent.knowledge.probe_count(wk) == 1
+
+
 def test_confirmed_provenance_only_from_outcome_factory():
     """CONFIRMED is minted solely by ``outcome.confirmed_entry``.
 
