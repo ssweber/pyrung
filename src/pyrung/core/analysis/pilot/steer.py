@@ -1,13 +1,12 @@
-"""ACT — the steering phase of the PILOT loop.
+"""Execute and verify one proposed PILOT action or wait.
 
-Cone settlement, pulse execution, zoom through timer plateaus, try-verify
-wrappers, and candidate value proposals.  Everything the pilot does to test
-a bearing or coast through a dwell.  ACT is where execution lives; ORIENT
-(trace + compass) only reads.
+The `_try_*` functions prepare a fork, settle prerequisite regions, pulse an
+action or coast through a dwell, and pass the resulting trial to
+``verify.verify_gates``. They return an ``_AttemptResult`` containing the
+verdict, receipts, and transition observations.
 
-Act never writes the compass: the wrappers gather ``CompassObservation``
-values onto the returned ``_AttemptResult``; the loop's RECORD point applies
-them.
+This module does not apply observations, replace the committed world, manage
+checkpoints, or install corrections.
 """
 
 from __future__ import annotations
@@ -198,7 +197,7 @@ def _apply_actions(
 
 
 # ---------------------------------------------------------------------------
-# Compass observation gathering — Act observes; RECORD applies
+# Compass observation gathering — execution observes; the drive loop applies
 # ---------------------------------------------------------------------------
 
 
@@ -232,10 +231,10 @@ def _compass_observations(
     fork: PLC | None = None,
     scan: int | None = None,
 ) -> tuple[CompassObservation, ...]:
-    """Observe compass-relevant motion between two snapshots — never applies.
+    """Return compass-relevant motion between two snapshots without applying it.
 
-    The causal chase (control vs wind) is evidence-*gathering*, so it happens
-    here; the write happens at the loop's RECORD point.
+    The causal chase is evidence gathering. The drive loop later applies the
+    returned observations to its persistent compass value.
     """
     action_tag = cause[0] if is_action(cause) else None
     observations: list[CompassObservation] = []
@@ -470,7 +469,7 @@ def _try_widening(
         all_observations.extend(attempt.observations)
         if attempt.trial is not None:
             # Earlier (rejected) widths executed too — their observations ride
-            # along so RECORD commits them with the accepted width's.
+            # along so the drive loop applies them with the accepted width's.
             return replace(attempt, observations=tuple(all_observations))
     return _AttemptResult(
         trial=None,
@@ -516,7 +515,7 @@ def _try_zoom(
 
     # A rejected wait is evidence about THIS world: the edge did not complete
     # here (a recipe-gated automatic transition, a dwell that never arms).
-    # Record it as a world-keyed nogood so the next ORIENT's route query walks
+    # Record it as a world-keyed nogood so the next iteration's route query walks
     # around the edge instead of re-burning the same sterile coast.
     wait_nogood = (
         wait_edge_nogood(channel_tag, snap_before.get(channel_tag), target_value)
@@ -732,18 +731,15 @@ def _try_terminal_dwell(
     ctx: _PilotContext,
     dbg: _DebugFn,
 ) -> _AttemptResult:
-    """Re-coast dwell — the verified form of the old bare cone settle.
+    """Run one bounded repeated dwell through the shared trial gates.
 
     Reached only when terminal let-run already ran at this key with these holds
-    (``key in letrun_memo``).  The coast is deterministic
-    given the held inputs, so re-running the ejection-guarded let-run would only
-    re-eject and re-investigate; the old code side-stepped that with a bare
-    ``_settle_cone`` straight onto ``state.work`` — the one execution that skipped
-    verify (and let the loop's top-of-scan reached check confirm a coast the
-    verify target gate never saw).
+    (``key in letrun_memo``). The coast is deterministic under the held inputs,
+    so repeating the full ejection-guarded let-run would reproduce the same
+    departure.
 
-    Instead, do ONE bounded, deterministic cone settle on a *fork* and route it
-    through the same :func:`verify_gates` target gate as terminal let-run:
+    Perform one deterministic cone settle on a fork and route it through the
+    same :func:`verify_gates` target gate as terminal let-run:
 
       - a self-advancing frontier that crosses the target during the dwell is
         CONFIRMED through the shared target gate (verify stays the sole source);

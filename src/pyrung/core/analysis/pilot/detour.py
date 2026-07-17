@@ -1,39 +1,13 @@
-"""Departure classification for ordinary PILOT motion.
+"""Classify an observed channel departure for post-commit recovery.
 
-ASSESS's ejection arm used to treat every channel departure as a regression:
-investigate, revert, re-march. But useful program-owned motion (the machine
-issuing its own Hold mid-recipe) destroys nothing — the recipe gauge
-(``Internal__Step``, event-earned counters) survives and the machine's own
-transition structure offers a forward route back.  Reverting it throws away the
-whole march, and investigation honestly confirms nothing.
+``classify_departure`` settles the landing under the active holds, compares
+target-relative gauge evidence, and inspects static routes for reset boundaries
+or already-discharged actions that would have to be repeated. It returns
+provisional motion only when a clean continuation is supported, regression
+when earned work is known to have moved backward, and unknown otherwise.
 
-The law (state names like HELD/ABORTED are instances, never the rule):
-
-**Regression is resurrected work, not channel displacement.**  A departure is
-classified at its settled landing by the routes back:
-
-* a route is *dirty* when it must pass through a channel value where a
-  gauge **reset** is enabled (``S_Resetting`` guards
-  ``Internal__Step := 101`` — writing behind the anchor destroys earned work),
-  or when one of its command edges **resurrects a discharged obligation** (the
-  route from ABORTED re-requires the very ``C_Clear``/``C_Reset``/``C_Start``
-  presses the march already committed, in the same channel contexts);
-* a clean route existing → **provisional**: useful static evidence supports
-  continued piloting;
-* missing or inconclusive route evidence → **unknown**: no regression fact is
-  minted, but operational policy remains conservative (investigate/revert);
-* an observed gauge move behind the exact source receipt → **regression**.
-
-The route is evidence, not a contract and not carried state. Progress later
-settles the provisional attempt whenever gauge comparability returns; it does
-not wait for a stored channel value to recur.
-
-Classifying the landing runs the ship with pilot rungs active, so this is an
-ASSESS-side helper; ``progress.py`` is its only consumer.
-Falsified-and-replaced proofs (see
-``scratchpad/burner/detour_recognition.md``): raw ``_pilot_state_key`` novelty
-(accepts destructive landings; threshold-aliases event-earned work) and
-committed-channel-history membership (a sampled shadow of the reset test).
+The returned route evidence is not retained as a plan. ``progress.py`` is the
+consumer and applies the conservative policy for unknown departures.
 """
 
 from __future__ import annotations

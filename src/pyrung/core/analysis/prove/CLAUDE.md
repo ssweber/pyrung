@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this subsystem does
 
-`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two uses of the BFS engine: `always(logic, condition)` checks a safety property (with `never()` as the dual), and `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number. `plc.how(*conditions)` is NOT this subsystem — it's the corridor walker (`../walk/`, with its own CLAUDE.md), which consumes this pipeline's `_ExploreContext` as a static prior.
+`prove/` is an exhaustive state-space verifier for pyrung programs. It runs BFS over all reachable states using the compiled replay kernel as the execution oracle. Two uses of the BFS engine: `always(logic, condition)` checks a safety property (with `never()` as the dual), and `reachable_states(logic)` computes the full reachable set for lock files. Both use `depth_budget` as an abstract BFS work budget; hidden-event acceleration can cover more concrete scans than that number. `plc.how(*conditions)` is NOT this subsystem — it is PILOT (`../pilot/`, with its own CLAUDE.md), which consumes this pipeline's `_ExploreContext` as a static prior.
 
 The verifier strives to be sound — no false negatives. It may over-approximate domains (include unreachable values), which can only produce false positives (Intractable, never a missed violation). The fuzzer and soundness matrix continuously validate this property.
 

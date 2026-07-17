@@ -17,7 +17,7 @@ The shape (a miniature of the real tumbler's HoldForSheet handshake):
 
 The gate proves there is no second detour controller: normal candidate,
 VERIFY, regression, investigation, PilotRung, checkpoint, and retry mechanics
-remain active inside the provisional corridor.
+remain active while the program departure is provisional.
 
 The fixture reuses the armed opaque-loop / constant-mask-table skeleton of
 ``test_pilot_table_detour.py`` (the plain-copy sibling never arms the compass
@@ -381,7 +381,7 @@ def test_provisional_departure_keeps_the_ordinary_pilot_loop_active() -> None:
 
     logic, tags = _door_cycle_program()
     plc = PLC(logic, dt=0.010)
-    # Focus the gate on the corridor departure.  Starting from Idle lets the
+    # Focus the gate on the program departure. Starting from Idle lets the
     # candidate settlement fast-forward the phase timer and land directly in
     # HELD, so no Execute checkpoint, earned Door=True hold, or detour loan ever
     # exists.  At Execute the first zoom earns that hold before the program's

@@ -1,25 +1,12 @@
-"""Accumulator resolution for PILOT — *"a held input drove this to completion"*.
+"""Resolve accumulating instructions and their next relevant crossing.
 
-When PILOT coasts a self-advancing frontier and an accumulating instruction
-completes on its own — a timer ``Done`` rises, a counter hits ``preset``, or a
-rung fires on ``Acc > Target`` — the held input that was *driving* the
-accumulator is the real cause of the ejection.  This module maps an ejecting
-*consumer tag* back to the owning instruction's
-:class:`~pyrung.core.instruction.accumulating.AccProfile` and answers *"how many
-held scans until it crosses?"*.
+Given an observed consumer or held driver, this module finds the corresponding
+``AccProfile`` and target threshold. ``scans_to_eject`` computes the crossing
+distance analytically when the profile supports it; ``measure_scans`` uses a
+bounded forked run when it does not.
 
-Two tiers, mirroring ``walk/rules.py``'s timer-only ``_timer_safe_scans`` but
-generalized across timers/counters (and, via the empirical fallback, anything
-else):
-
-* **Tier 1 — analytic** (:func:`scans_to_eject`): closed-form from the profile's
-  ``scans_until``.  Covers timers and counters.
-* **Tier 2 — empirical** (:func:`measure_scans`): when the profile can't compute
-  it statically (``scans_until`` → ``None``, e.g. a future drum profile), fork,
-  hold the advance condition, and *run until* the crossing — pyrung's
-  "fork is ground truth" philosophy.  Drums return no profile today, so they fall
-  through gracefully; once a drum ``accumulating_profile()`` lands, this is the
-  mechanism it uses.
+No profile or unresolvable threshold produces no estimate rather than a guessed
+crossing.
 """
 
 from __future__ import annotations

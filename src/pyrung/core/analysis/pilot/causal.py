@@ -1,15 +1,11 @@
-"""Cause-chain walker — root finding for PILOT over the deep ``cause()`` walk.
+"""Query recorded cause chains for PILOT attribution and investigation.
 
-Shared by the gate pipeline (excursion diagnosis), the outcome classifier
-(causal attribution), and investigation (hypothesis generation).
+The helpers consume the deep ``cause()`` result, including held supports,
+absence links, reset-blocked steps, and classified roots. They expose relevant
+root actions and chain tags without independently reconstructing history.
 
-The recorded ``cause()`` walk is *deep*: it chases each step's held supports
-(temporal + absence hops) and classifies the terminals into
-``CausalChain.roots``.  These walkers **consume** that single deep chain — the
-held/reset-blocked steps and the classified roots — instead of re-walking the
-history themselves.  A pipeline destination the old shallow walk dead-ended on
-(a jump-table copy gated by a held ``StateRequested``) is now crossed natively
-by the deep walk, so the old route-inversion *compass bridge* is gone.
+The module also derives empirical evidence that a tag is program-written; that
+evidence may remove a presumed steering input but never invent one.
 """
 
 from __future__ import annotations

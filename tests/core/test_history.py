@@ -295,8 +295,8 @@ def test_fork_reuses_parent_tag_index_without_program_rewalk(
 
     The index is derived only from the immutable program shared by every
     fork, and the AST walk dominates fork cost on large programs (~95 ms
-    on a 6,000-tag PackML project) — the corridor walker pays one fork per
-    steer per node, so a re-walk per fork turns explore wall-clock from
+    on a 6,000-tag PackML project) — PILOT uses many forks for verified actions
+    and isolated probes, so a re-walk per fork turns drive wall-clock from
     seconds into hours.
     """
     from pyrung import Bool, Program, Rung, out

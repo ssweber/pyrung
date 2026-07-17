@@ -1,23 +1,12 @@
-"""Writer-availability layer for PILOT's backward trace.
+"""Classify how close a writer is to firing in the current state.
 
-Carved out of ``trace.py`` (at the captain's direction — the recursion core
-stays singular there).  This module answers *"how reachable is a writer's fire
-condition from the current live state?"* — the state-indexed
-:class:`_WriterAvailability` verdict the shared ``_rank_writers`` selector stamps
-onto each ``TraceNode`` and folds worst-wins onto each steerable
-``TraceAction.availability``, so ``candidates.py`` can demote (never drop) the
-command-leaf sprawl a cyclic state machine emits below the commands actually
-fireable from the held state.
+The module reduces writer guards against the live snapshot and exact fire-time
+pins, then returns a four-level ``_WriterAvailability`` verdict. Trace attaches
+that verdict to actions and candidates use it for ordering only; availability
+never rejects or removes a writer that can produce the requested value.
 
-It also owns the guard-reduction helpers that decide OR/And guard arms against a
-writer's own exact fire-time pins (``_reduce_guard_by_fire_pins`` /
-``_reduce_guard_by_pin`` / the ``partial_eval`` delegation), the mode-flag
-channel-value aliasing (``_equality_gated_coil``), and the simplified-expr tag
-sweep the tide tables read.
-
-Imports only lower layers (``simplified``, ``sp_values``, ``pdg``, ``prove.expr``,
-``crossing``) plus a lazy hop into ``evidence`` — never ``trace.py`` — so
-``trace.py`` imports *from here* with no cycle.  See ``pilot/CLAUDE.md``.
+The guard-reduction helpers are intentionally below ``trace.py`` and do not
+execute the program.
 """
 
 from __future__ import annotations
@@ -244,8 +233,8 @@ def _expr_availability(
     snapshot, answering *"how far from firing is this guard?"* as a 4-valued tier.
     Its ``AFTER_PREREQ`` leaves are the same prerequisites #1 ``frontier_pairs``
     surfaces and #2 ``_projected_guard_frontier`` returns as ``frontier`` tags; #3
-    takes #2's ``counterfactual`` as an input.  See ``pilot/CLAUDE.md`` "Three notions
-    of what's still needed".
+    takes #2's ``counterfactual`` as an input. The agreement among all three is
+    pinned by ``tests/core/analysis/test_pilot_needed_vocabulary.py``.
     """
     if isinstance(expr, Const):
         return (

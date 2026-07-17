@@ -1,8 +1,13 @@
-"""Backward trace engine for PILOT — the transparent static reader of the compass.
+"""Backward static requirement analysis for PILOT.
 
-Walks writer conditions / copy / calc backward to steerable inputs
-(``trace_back``).  The opaque-but-constant value-graph reader lives in
-``compass.py``.  See ``pilot/CLAUDE.md``.
+``trace_back`` resolves a target through writers, guards, copies, calculations,
+and accumulating instructions until it reaches steerable actions or an
+unreadable requirement. The module also enumerates trace routes, determines
+steerable and clear-only inputs, and ranks writers without suppressing a writer
+that could produce the requested value.
+
+Tracing reads program structure and a snapshot. It does not execute trials,
+record transition knowledge, or choose the iteration's final candidate order.
 """
 
 from __future__ import annotations
@@ -73,9 +78,7 @@ class _TraceEnv:
 
     Everything here is constant for the whole trace — only ``tag``/``value`` (or
     ``expr``), ``provenance``, ``_visited``, ``_ancestry`` and ``_depth`` change
-    between recursive calls.  Bundling the constants into one frozen value
-    replaces the ten-kwarg wall that used to thread through every ``trace_back``
-    / ``_trace_expression`` call.  ``avoid_pred`` biases OR-arm selection away
+    between recursive calls. ``avoid_pred`` biases OR-arm selection away
     from arms that force the avoided condition; ``via_pred`` is its dual — it
     biases selection *toward* an arm that forces the named condition (``None``
     each for an unconstrained trace).
@@ -84,9 +87,7 @@ class _TraceEnv:
     ``steerable`` / ``opaque_loop`` / ``prior`` — is the **read-side seam**: this
     env structurally satisfies :class:`~pyrung.core.analysis.pilot.types.WalkContext`,
     so a read-side capability consuming a ``WalkContext`` takes this ``env``
-    straight in.  A new such instrument is born in its own module and imported
-    here (``availability.py`` is the worked example) — never written inside because
-    the walk context was trace-private.  See ``pilot/CLAUDE.md``.
+    directly without depending on the recursion controls.
     """
 
     snapshot: dict[str, Any]
@@ -301,7 +302,7 @@ class TraceNode:
     # ``Atom`` (evaluable via ``_eval_expr_from_state``).  The single-lever
     # resolution rides as the child subtree so steering is unchanged; distance
     # counts the predicate once and does not recurse into the lever (means, not
-    # a separate goal).  See ``pilot/CLAUDE.md`` and the relational-goals plan.
+    # a separate goal).
     relational: bool = False
     predicate: Any = None
     lever: str | None = None  # "left"/"right" — which operand this subtree steers
@@ -549,8 +550,8 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
     Notion **#1** of three "what's still needed" — the whole-tree aggregate residual,
     read AFTER writer selection.  Distinct from #2 ``_projected_guard_frontier``
     (per-writer, projected fire-time) and #3 ``_expr_availability`` (per-writer, live
-    tier); see ``pilot/CLAUDE.md`` "Three notions of what's still needed" and the
-    agreement gate ``tests/core/analysis/test_pilot_needed_vocabulary.py``.
+    tier); see the agreement gate
+    ``tests/core/analysis/test_pilot_needed_vocabulary.py``.
     """
     pairs: list[tuple[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -779,8 +780,8 @@ def _heuristic_inequality_target(
 
     Returns ``(value, marker)`` where *marker* is the honesty sentence appended
     to the lever note, or ``None``.  The proposal is a trial like any other —
-    replay-verified via Act→Verify, never used for rejection/DEAD/domain
-    fabrication (see ``pilot/CLAUDE.md``).
+    replay-verified as an ordinary trial and never used for rejection,
+    dead-end proof, or domain fabrication.
     """
     if atom.form not in ("lt", "le", "gt", "ge"):
         return None
@@ -3183,13 +3184,12 @@ def _writer_guard_verdict(
 ) -> str:
     """Tide-tables verdict for a candidate writer's guard under its own fire pins.
 
-    The rejection arm of ``tide_tables`` (``pilot/CLAUDE.md``: "tries first — and
-    punts — and the skiff is its escalation").  Fixes the pins the writer
-    *itself* forces to produce ``value`` (:func:`_transition_fire_pins` — the
+    Fixes the pins the writer itself forces to produce ``value``
+    (:func:`_transition_fire_pins` — the
     inverted copy/affine source, never a borrowed pin) and enumerates the
     remaining guard operands over the ``DomainPrior``'s ``nd_domains`` (the
     prover-derived complete domains; a Bool resolves to ``(False, True)``, a
-    missing domain punts inside the tide tables).  Returns one of
+    missing domain punts inside the tide tables). Returns one of
     ``GUARD_DEAD``/``GUARD_SAT``/``GUARD_PUNT``.
 
     Memoized on ``(rung id, fire-pins, guard route key)``: the verdict is a pure

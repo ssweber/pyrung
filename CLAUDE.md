@@ -82,7 +82,7 @@ src/pyrung/
 ## Sub-CLAUDE.md Files
 
 - `src/pyrung/core/analysis/prove/CLAUDE.md` — Prover internals, optimization glossary, module map, invariants
-- `src/pyrung/core/analysis/pilot/CLAUDE.md` — PILOT compass architecture, three instruments, module map
+- `src/pyrung/core/analysis/pilot/CLAUDE.md` — PILOT steering invariants, actual control flow, module map
 - `editors/vscode/pyrung-debug/CLAUDE.md` — VS Code extension event architecture, key files
 - `docs/CLAUDE.md` — Documentation tone/style, API design decisions, technical details
 - `tests/twin/CLAUDE.md` — Twin harness protocol, slot layout, coverage checklist

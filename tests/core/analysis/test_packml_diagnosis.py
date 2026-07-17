@@ -508,14 +508,14 @@ class TestHiddenEventJumpSelfLoopOnly:
 
 
 # ===================================================================
-# Test 15: Multi-scan waypoint path from ABORTED to EXECUTE
+# Test 15: Multi-scan drive from ABORTED to EXECUTE
 # ===================================================================
 
 
 class TestHowAbortedToExecute:
-    """The waypoint planner must decompose a long multi-scan path through the
-    PackML state machine: ABORTED → CLEARING → STOPPED → RESETTING → IDLE →
-    STARTING → EXECUTE (7 steps).
+    """PILOT must steer a long multi-scan transition through the PackML state
+    machine: ABORTED → CLEARING → STOPPED → RESETTING → IDLE → STARTING →
+    EXECUTE.
 
     Regression for the hidden-event-jump bug (commit 8aa66f4) which caused
     ``how(EXECUTE)`` to return "path found but replay verification failed"
@@ -543,7 +543,7 @@ class TestHowAbortedToExecute:
 
         path = plc.how(StateCurrent == S.EXECUTE.default)
         assert path.reachable, f"how(EXECUTE) should be reachable, got: {path.reason}"
-        assert path.total_changes >= 2, "ABORTED→EXECUTE requires multiple waypoints"
+        assert path.total_changes >= 2, "ABORTED→EXECUTE requires multiple operator changes"
 
         # Two-oracle check: replay on a fresh PLC must reach EXECUTE
         replay = path.replay()

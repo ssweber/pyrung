@@ -1,13 +1,12 @@
-"""Compass bearing → candidate list.
+"""Build the actions and wait modes available for one PILOT iteration.
 
-Reads the trace tree and compass route plans to produce a ranked
-``_CandidateList`` for the current iteration.  This is the "compass" half
-of the loop — everything that decides *which way to steer* before the pilot
-acts.
+``_build_candidates`` combines the current trace tree, constrained static
+routes, learned transitions, program-awaited actions, existing corrections,
+and prerequisite holds. It returns their priority order together with any
+prescribed wait, completion frontier, or no-bearing diagnosis.
 
-Only reading: trace-derived actions and statically-expanded compass routes.
-No upstream cone mining, no influence probing — if the instruments can't
-read the bearing, the pilot yields a stuck event and stops.
+Candidate construction reads the current world and knowledge but does not
+execute a trial, apply observations, or commit state.
 """
 
 from __future__ import annotations
@@ -58,7 +57,7 @@ class _Candidate:
     provenance: tuple[str, ...] = ()
     wake: int | None = None
     route_prescribed: bool = False
-    # The first compass edge's executable promise. VERIFY uses this for every
+    # The first compass edge's executable promise. Trial verification uses this for every
     # route-prescribed action, not only a coast/zoom: landing elsewhere means
     # the program displaced the route and must be investigated.
     bearing_channel_tag: str | None = None
@@ -366,15 +365,15 @@ def _plan_ungrounded(plan: CompassPlan) -> int:
 def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
     """0 when *plan* drives the overall target, 1 otherwise.
 
-    ``frame.tree`` surfaces waypoint sub-goals on the *same* channel register
-    as the target — e.g. reaching ``S_StateCurrent==11`` (Held) trails
+    The trace can surface other requirements on the same channel register as
+    the target — e.g. reaching ``S_StateCurrent==11`` (Held) trails
     ``==10`` (Holding, a real predecessor) and ``==1`` (Clearing, an off-path
     artifact of tracing the completion bool through a counterfactual writer).
     Ranking purely by edge count lets the shortest of these hijack the route: at
     Stopped the 3-edge ``C_Abort`` plan toward ``==1`` beats the 6-edge
     ``C_Reset`` plan toward the real target and drives the wrong way.  The
-    target's own ``find_path`` already threads through the genuine waypoints, so
-    anchor to it and let waypoint plans lose ties.
+    target's own ``find_path`` already includes its required intermediate
+    values, so anchor to it and let off-target requirement plans lose ties.
     """
     on_target = plan.needed_tag == ctx.target_tag and _values_match(
         plan.needed_value, ctx.target_value
@@ -770,7 +769,7 @@ def _build_candidates(
     wait_prescribed = False
     wait_reason: str | None = None
     completion_frontier: tuple[_ActionPair, ...] = ()
-    # ORIENT re-reads the wait: when the zoom's grounded completion edge carries a
+    # The next iteration re-reads the wait: when the zoom's grounded completion edge carries a
     # charted condition (charts.py), :func:`_prescribe_wait` re-traces it as
     # ordinary transparent ladder and returns its producers + unmet frontier.  The
     # producers enter the trace pool *before* the prerequisite split below, so a

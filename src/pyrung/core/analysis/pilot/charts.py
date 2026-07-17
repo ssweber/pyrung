@@ -1,10 +1,12 @@
-"""statics.py — PILOT's static-analysis side of the compass.
+"""Build and query PILOT's static transition graphs.
 
-The static per-register value graph (``CompassGraph`` and its construction from
-``evidence.expand_routes``, plus the edge / action-lookup bridging helpers) and
-opaque-pipeline detection (``detect_opaque_loop`` / ``detect_opaque_pipelines``)
-live here.  ``compass.py`` — the knowledge store — imports from this module; this
-module never imports ``compass.py``.  See ``pilot/CLAUDE.md``.
+Expanded routes from ``evidence.py`` become per-register ``CompassGraph``
+objects whose edges describe source values, destinations, and possible
+drivers. ``best_compass_plan`` searches those graphs without executing the
+program. The module also detects opaque transition-pipeline slices used when
+building the analysis context.
+
+Runtime observations and probe history belong to ``compass.py``.
 """
 
 from __future__ import annotations
@@ -46,7 +48,7 @@ class CompassEdge:
     ``completion`` carries the charted gate pairs a completion edge
     (``action is None``) waits on — the route's recorded condition, verbatim,
     minus the channel's own from-value and the operator's buttons.  The wait's
-    bearing: a sibling trace re-reads it every ORIENT and does all
+    bearing: the next trace re-reads it and does all
     classification; nothing is invented here.  Action-bearing edges and routes
     whose gate names nothing else carry ``()``.
     """

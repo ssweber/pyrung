@@ -1,38 +1,13 @@
-"""currents.py — recognize when the *program itself* is a current running toward
-the target, and surface the one operator action it is waiting for to ride it.
+"""Read program-owned transitions from the current machine state.
 
-A program-owned current is the program's own self-driving motion — you don't
-fight it, you read its set and drift and ride it with the one push it needs.
+``operator_action_for_state`` recognizes a channel transition that is presently
+waiting on one unique, legal operator action. The module also classifies sibling
+producer families so an automatic producer is not erased when an equivalent
+operator action is disallowed.
 
-A **read-side capability** (the walk-context seam — see ``pilot/CLAUDE.md``,
-"Where new read-side capabilities live"): it reads the charts, never runs the
-ship.  It consumes only a :class:`~pyrung.core.analysis.pilot.types.WalkContext`
-(``snapshot`` / ``pdg`` / ``program`` / ``steerable`` / ``opaque_loop`` /
-``prior``) plus the channel state register, and returns a bearing — never a
-stored plan.
-
-The problem it closes (future-direction item 0, the "drive capability").  A
-PackML-shaped state machine reaches its terminal command through a deliberate
-lateral detour *out of the acceptance region*: EXECUTE issues an internal Hold
-(EXECUTE→HELD), the operator supplies one ack, the program issues Unhold
-(HELD→EXECUTE) and then, one recipe step later, self-issues the terminal command
-(EXECUTE→COMPLETING→COMPLETED).  At both program-owned transitions **no command
-tag is the answer** — the recognizable signal is the ``(step register, state)``
-pair, and the whole detour contains exactly the operator actions that are legal
-only in a tight ``(state, step)`` window.
-
-At a stall the pilot's backward trace dead-ends on the opaque-loop state register
-(the feedback guard punts to the compass), and the compass value-graph route is
-the avoided operator command — so nothing surfaces the *one* legal operator
-action (the ack while HELD).  This module recognizes it directly from the
-program's command/transition structure: the operator button whose gated rung
-fires **at the current state** and issues a command that a live
-``(command==cv, state==current)`` transition consumes — i.e. the one push the
-program is dwelling on before it drives itself onward.  It is a bearing: Act
-presses it, ``verify_gates`` judges the outcome, and if it was the wrong read the
-loop reverts exactly as before.  Fail-closed: if the legal action is not unique,
-or is avoided, or the register is not a recognized channel, it returns ``None``
-and the loop keeps today's behavior.
+These capabilities consume ``WalkContext`` and program structure only. They
+return no suggestion when the channel or action is ambiguous, and they never
+execute the program or retain a route.
 """
 
 from __future__ import annotations

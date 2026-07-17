@@ -1,4 +1,4 @@
-"""Physical layer glue: Harness installation on PILOT forks."""
+"""Install physical-feedback harnesses and identify non-steerable feedback tags."""
 
 from __future__ import annotations
 

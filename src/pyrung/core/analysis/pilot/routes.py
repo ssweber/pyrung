@@ -1,8 +1,8 @@
-"""Live route readings for ORIENT.
+"""Apply current constraints to a static transition-graph query.
 
-This instrument reads the current compass graph under the captain's active
-constraints. It returns a bearing for *this* world only; callers never carry
-the returned suffix through later observations.
+``live_compass_plan`` removes disallowed edges before path selection, then
+delegates to ``charts.best_compass_plan``. Its result is valid for the supplied
+snapshot and constraints only; callers query again after the world changes.
 """
 
 from __future__ import annotations
@@ -21,12 +21,12 @@ def live_compass_plan(
     *,
     edge_allowed: Callable[[CompassEdge], bool],
 ) -> CompassPlan | None:
-    """Read the best currently allowed compass bearing.
+    """Return the best static graph path allowed in the current world.
 
     ``edge_allowed`` filters BEFORE path selection — avoided actions and
     world-keyed wait nogoods are removed, including edges later in a
-    prospective suffix, so BFS returns the surviving route.  The next ORIENT
-    performs a fresh query against its newly observed world.
+    prospective suffix, so BFS returns the surviving route. Callers query again
+    after observing a new world.
     """
     from pyrung.core.analysis.pilot.charts import best_compass_plan
 

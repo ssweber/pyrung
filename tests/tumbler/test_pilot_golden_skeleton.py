@@ -253,9 +253,9 @@ def test_pilot_internal_route_gate_completed_avoiding_shortcut(tumbler_logic) ->
 
     The pilot is NOT currently expected to manage this (a related single-Bool
     drive, ``how(y_BurnerLoop)``, is known to flounder in blind let-run coasts
-    on this fixture — under separate diagnosis), so per the shipyard rule in
-    ``pilot/CLAUDE.md`` the test is born strict-xfail and flips when the
-    step-4 CoastSession mechanism lands.  No golden JSON yet — a floundering
+    on this fixture — under separate diagnosis), so per the mechanism-gate rule
+    in ``pilot/CLAUDE.md`` the test is born strict-xfail and flips when the
+    CoastSession mechanism lands. No golden JSON yet — a floundering
     skeleton would churn; the golden gets recorded when this first
     legitimately passes.
 

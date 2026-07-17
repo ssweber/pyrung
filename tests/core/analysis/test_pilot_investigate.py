@@ -309,16 +309,16 @@ class TestBoundedReplay:
 
 
 # ---------------------------------------------------------------------------
-# Zoom incident — channel register reaches its corridor target
+# Zoom incident — channel register reaches its requested value
 # ---------------------------------------------------------------------------
 
 
-def _zoom_corridor_program() -> tuple[Program, Timer, Any]:
+def _zoom_transition_program() -> tuple[Program, Timer, Any]:
     """``State`` advances 3 -> 6 after a watchdog timer, but ejects to 8 (Aborting)
     if the door (``Guard``) is open at completion.  Holding the door closed lets
-    the coast reach the corridor target (6); leaving it open ejects (8).
+    the coast reach the requested value (6); leaving it open ejects (8).
 
-    The timer is long (50 scans) on purpose: the corridor target is reachable
+    The timer is long (50 scans) on purpose: the requested value is reachable
     only by an *unbounded* coast, so a coast bounded to the departure window
     would never get there — that is the regression this guards.
     """
@@ -338,14 +338,14 @@ def _zoom_corridor_program() -> tuple[Program, Timer, Any]:
 class TestZoomReplay:
     """build_replay_fn for a zoom incident.
 
-    Judged by the channel register reaching its corridor target over an
+    Judged by the channel register reaching its requested value over an
     *unbounded*, ejection-guarded coast — never by the bounded bearing-held test
-    (the bearing carries the far-off corridor target as a conjunct, which a
+    (the bearing carries the far-off requested value as a conjunct, which a
     bounded coast can never restore, so it would reject every hold).
     """
 
     def _setup(self):
-        prog, _tmr, _state = _zoom_corridor_program()
+        prog, _tmr, _state = _zoom_transition_program()
         plc = PLC(prog, dt=0.010)
         plc.patch({"State": 3})
         plc.step()
@@ -353,7 +353,7 @@ class TestZoomReplay:
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "State", 6)
         # A recorded zoom step: the coast re-arms State -> 6 under the ejection
-        # guard, unbounded — the corridor target is a full coast away, so no
+        # guard, unbounded — the requested value is a full coast away, so no
         # departure-window bound may cut it short.
         steps = [ReplayStep(inputs=(), scans=0, kind="zoom", channel_tag="State", channel_target=6)]
         return cp, steps, ctx

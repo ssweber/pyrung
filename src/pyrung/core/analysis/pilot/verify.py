@@ -1,15 +1,11 @@
-"""VERIFY — the gate-pipeline phase of the PILOT loop (trial acceptance).
+"""Judge an executed fork before it may replace the current world.
 
-After an Act (command pulse or zoom), the trial flows through:
+``verify_gates`` applies avoid and target checks, rejects spins, visited states,
+and dead ends, then delegates motion attribution and progress classification to
+``outcome.py``. A suspicious excursion may be replayed before the final verdict.
 
-  0. Avoid gate     — settled state matches avoid predicate
-  1. Target gate    — target already reached (early exit)
-  2. Spin gate      — state key must change (with excursion retry)
-  3. Cycle gate     — new key must not have been visited
-  4. Dead-end gate  — frontier must be non-empty or async pending
-  5. Outcome        — classify via ``outcome.py``
-
-Both ``_try_action_batch`` and ``_try_zoom`` converge on ``verify_gates``.
+Passing these gates makes a trial eligible for commit and progress monitoring;
+it does not guarantee that later assessment will retain the committed world.
 """
 
 from __future__ import annotations
@@ -423,10 +419,10 @@ def verify_gates(
     zoom_target_value: Any = None,
     motion: MotionKind = MotionKind.INTERVENTION,
 ) -> _AttemptResult:
-    """Shared verify pipeline for both command pulses and zoom.
+    """Apply the shared trial gates to an executed pulse or coast.
 
-    Runs target check → spin gate → cycle gate → dead-end gate → outcome
-    classification.  Both ``_try_action_batch`` and ``_try_zoom`` converge here.
+    Runs avoid and target checks, then spin, cycle, and dead-end gates followed
+    by outcome classification. All steering execution modes converge here.
     """
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []

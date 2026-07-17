@@ -1,7 +1,7 @@
 """CI gates for the program-owned-current capability pieces.
 
 Covers the read-side building blocks that make a program-owned command producer
-visible beside the avoided operator button (``pilot/CLAUDE.md``, currents.py):
+visible beside the avoided operator button (see ``currents.py``):
 
 * **const-fold** (piece 1) — a copy from a program constant (never-written,
   non-lever) folds to its declared default, so a value-by-literal producer search

@@ -1,7 +1,8 @@
-"""Shared types for the PILOT package.
+"""Cross-module protocols and state records for the PILOT package.
 
-Cross-boundary dataclasses and type aliases imported by pilot.py, verify.py,
-steer.py, candidates.py, and progress.py.
+The records distinguish the revertible PLC world from search knowledge that
+survives a revert, and carry iteration, trial, event, incident, and correction
+data between reading, execution, verification, and recovery modules.
 """
 
 from __future__ import annotations
@@ -53,12 +54,11 @@ class MotionKind(Enum):
 class WalkContext(Protocol):
     """What a read-side capability may consume from one backward trace.
 
-    ``trace.py``'s ``_TraceEnv`` bundles *all* the constants threaded through one
-    trace — but a **read-side capability** (a static reader that resolves a need by
-    *reading the charts*, never running the ship) consumes only the world-describing
-    subset, never the route/recursion control (writer/or locks, ``avoid_pred`` /
-    ``via_pred``, ``guard_memo``, ``max_depth``, ``harness``, ``clear_only``).  That
-    subset — the seam — is this structural protocol:
+    ``trace.py``'s ``_TraceEnv`` contains all constants threaded through one
+    trace. A separate static reader consumes only the world-describing subset,
+    not route or recursion controls such as writer locks, ``avoid_pred``,
+    ``via_pred``, ``guard_memo``, ``max_depth``, ``harness``, or ``clear_only``.
+    This protocol defines that subset:
 
     - ``snapshot`` — the live register frame guards are evaluated against;
     - ``pdg`` — the :class:`ProgramGraph` (``writers_of`` / ``rung_nodes`` / ``tags``);
@@ -69,14 +69,10 @@ class WalkContext(Protocol):
     - ``prior`` — the prover-derived ``DomainPrior`` (``nd_domains`` / ``func_deps``)
       an *enumerating* reader needs for complete-domain soundness.
 
-    ``_TraceEnv`` satisfies this **structurally** (it carries these six as
-    attributes), so ``trace.py`` passes its ``env`` straight in with no adapter.  The
-    seam lives here — importable **without** ``trace`` — precisely so the next
-    read-side instrument is *born in its own module* consuming a ``WalkContext``, and
-    ``trace.py`` imports it, rather than being written inside ``trace.py`` because the
-    walk context was trace-private (``availability.py`` is the worked example of that
-    born-inside-then-extracted anti-pattern).  See ``pilot/CLAUDE.md`` — "Where new
-    read-side capabilities live".
+    ``_TraceEnv`` satisfies this protocol structurally, so callers pass it
+    without an adapter. Keeping the protocol outside ``trace.py`` lets static
+    read capabilities depend on a narrow interface without importing the trace
+    recursion engine.
     """
 
     snapshot: Mapping[str, Any]
@@ -304,7 +300,7 @@ class _PilotContext:
     domain_prior: DomainPrior | None
     evidence: TransitionEvidence | None
     # A compass *value*, replaced once per attempt / skiff round at the loop's
-    # RECORD point (``ctx.compass, _ = ctx.compass.apply(...)``) — never a shared
+    # observation-application point (``ctx.compass, _ = ctx.compass.apply(...)``) — never a shared
     # mutable advanced behind readers' backs.  Knowledge commits, the world
     # reverts.
     compass: Compass
@@ -401,7 +397,7 @@ class _PilotState:
     # already includes the rung overlay, so a newly installed hold re-fires
     # the let-run naturally.
     letrun_memo: dict[_StateKey, str] = field(default_factory=dict)
-    # State key -> number of skiff (ORIENT last-tier) escalations spent there.  The
+    # State key -> number of skiff probe escalations spent there. The
     # skiff is the reading-ladder's last tier; a stuck key gets a bounded number of
     # skiff laps and then the loop STOPS honestly instead of alternating forever.
     # Knowledge: the world reverts between laps but this does not, so re-arriving
@@ -516,7 +512,7 @@ class _IterationFrame:
     raw_trace_actions: tuple[_ActionPair, ...]
     raw_trace_action_details: tuple[TraceAction, ...]
     # The completion re-read's unmet frontier (candidates.py), stamped by the
-    # loop after ORIENT so ``_frontier_clause`` names the pressable lever behind
+    # loop after reading so ``_frontier_clause`` names the pressable lever behind
     # a prescribed wait (``x_RotateFB``) instead of the target tree's post-cut
     # interior.  Empty unless this iteration prescribed a wait with completion.
     completion_frontier: tuple[_ActionPair, ...] = ()
@@ -587,11 +583,11 @@ class _AttemptResult:
     nogood_pairs: frozenset[_ActionPair] = frozenset()
     excursion_holds: tuple[_ActionPair, ...] = ()
     # Compass observations gathered during the Act — applied only at the loop's
-    # RECORD point (``_record_attempt``), never by the instrument itself.
+    # drive-loop application point (``_record_attempt``), never by the instrument itself.
     observations: tuple[CompassObservation, ...] = ()
     # Names of the ``avoid=`` conditions this trial tripped (action gate before
     # the pulse, or scan gate on a settled/transient snapshot).  Folded into
-    # ``_PilotState.avoid_names`` at RECORD so a terminal decline can name what
+    # ``_PilotState.avoid_names`` when applied so a terminal decline can name what
     # excluded the path.
     avoid_names: tuple[str, ...] = ()
     # A stalled terminal let-run's receipt + pending-effects flag (trial=None,

@@ -1,32 +1,13 @@
-"""CoastSession — bump-driven coasts with receipts (the technician's trend recorder).
+"""Run bump-driven coasts and return exact observation receipts.
 
-WWTD: a tech at a fault doesn't stare at a frozen screen and guess; they put a
-trend recorder on the registers that matter and read the pen marks.  A *bump*
-is one armed pen: a named predicate over machine state.  A *seek* coasts the
-machine (folding) until the first armed bump fires and lands on that exact
-scan.  The *receipt* records what was observed — which bump, when, what moved —
-so callers judge evidence instead of re-deriving it from history.
+A ``Bump`` is a named state predicate. ``CoastSession`` advances with folding
+when safe, lands each crossing on a real recorded scan, re-arms nonterminal
+bumps, and records simultaneous terminal bumps in a ``CoastReceipt``.
 
-Three perfections, each a property the fold machinery already guarantees:
-
-- **Perfect reaction** — the fold stops one scan short of the nearest crossing
-  and executes the landing as a real probe scan; a bump is never overshot.
-- **Perfect recall** — nonterminal bumps re-arm and append to an ordered
-  timeline; simultaneous terminal bumps are all recorded, never collapsed.
-- **Perfect tracing** — every landing is a real, fully-recorded scan, so
-  ``rung_firings`` / ``cause()`` attribution is exact there (and only there).
-
-Authority split (the behavior-neutrality invariant): each bump's **predicate
-callable is authoritative** — it decides truth with the same ``_values_match``
-semantics the legacy coasts used.  The optional compiled **condition supplies
-fold metadata only** (crossing thresholds + protected reads), so the fold lands
-exactly without the predicate's semantics ever drifting.  A bump with no
-condition still works; it just leans on the plateau guard alone (the documented
-opaque-callable fallback).
-
-Depends only on the PLC/fold interface — never on pilot loop logic, verify
-gates, or investigation (same layer as ``_ops.py``, which imports this module,
-never the reverse).
+The predicate callable decides whether a bump fired. An optional compiled
+condition supplies crossing and protected-read metadata for folding only; it
+does not replace predicate semantics. This module records what happened but
+does not classify the observation as progress, regression, or acceptance.
 """
 
 from __future__ import annotations

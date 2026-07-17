@@ -1,16 +1,14 @@
-"""PILOT drive loop — orchestration and entry points.
+"""Public entry points and outer orchestration for PILOT drives.
 
-Owns the iteration cycle: prepare frame → select candidates → steer
-(``steer.py``) → commit/revert → monitor progress (``progress.py``).
-The instruments live in their own modules:
+This module builds the static and runtime context, prepares any user-selected
+trace route, and runs the event-producing iteration loop. For each iteration it
+requests candidates, invokes the execution/verification wrappers, applies
+their transition observations, commits eligible forks, and delegates
+post-commit retention or recovery to ``progress.py``.
 
-- ``steer.py``      — Act (pulse, zoom, try-verify wrappers)
-- ``verify.py``     — gate pipeline (SPIN, CYCLE, DEAD-END, outcome)
-- ``progress.py``   — trend monitoring, checkpoints, regression recovery
-- ``candidates.py`` — compass bearing → ranked candidate list
-- ``investigate.py``— bounded incident investigation
-- ``causal.py``     — cause-chain walker (shared utility)
-- ``types.py``      — cross-boundary types
+It also owns terminal diagnostics and conversion of the event stream into the
+public plan/drive results. Static reading, candidate construction, trial gates,
+and recovery mechanics remain in their respective modules.
 """
 
 from __future__ import annotations
@@ -604,13 +602,11 @@ def _record_attempt(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
-    """RECORD: commit an attempt's knowledge — accepted or rejected alike.
+    """Commit knowledge from an attempt, whether accepted or rejected.
 
-    Runs unconditionally after every Act, before ASSESS (``_monitor_trend``)
-    can revert the world.  Compass observations, excursion holds, and nogoods
-    all commit even when the trial is rejected: negative knowledge (probe
-    marks, contradictions) must survive, or the skiff's singles→pairs
-    escalation never terminates.
+    Runs after each execution/verification wrapper and before any accepted world
+    is assessed. Compass observations, excursion holds, and nogoods commit even
+    when the trial is rejected so negative knowledge survives world reverts.
     """
     # The commit point: apply() returns the next compass value; this single
     # assignment replaces the context's compass (a value, never a shared
@@ -852,19 +848,19 @@ def _commit_and_monitor(
     dbg: _DebugFn,
     observe: _ObserveFn,
 ) -> Iterator[PilotEvent]:
-    """Commit an accepted trial, then ASSESS it (progress.py).
+    """Commit a gate-approved trial, then run post-commit progress handling.
 
-    VERIFY already ran inside the Act's ``_try_*`` wrapper to mint this trial;
-    RECORD (``_record_attempt``) already committed its knowledge.  Here the world
-    advances and ``_monitor_trend`` runs the ASSESS phase — trend, checkpoint,
-    revert — whose regression arm escalates to Investigate.
+    Verification already ran inside the steering wrapper and
+    ``_record_attempt`` already committed its knowledge. Here the world advances
+    and ``_monitor_trend`` decides checkpoint, provisional continuation, or
+    recovery and revert.
     """
     # Capture a satisfied bearing's launch world before commit. Its landing
     # is provisional until ordinary progress is banked; an Alarm ejection must
     # replays from this exact source with its PilotRungs, not an older trend CP.
     _anchor_bearing_receipt(trial, frame, state, dbg)
 
-    # RECORD may have installed an excursion correction after VERIFY minted the
+    # Knowledge handling may have installed an excursion correction after verification built the
     # trial.  The accepted world key must describe that effective rung overlay,
     # not the pre-correction one used by the diagnostic fork.
     if trial.new_key is not None:
@@ -1179,7 +1175,7 @@ def _accepted_payload(
     }
 
 
-# A stuck state key earns a bounded number of skiff (ORIENT last-tier) laps before
+# A stuck state key earns a bounded number of skiff probe laps before
 # the loop stops honestly.  One lap is enough for a small-domain live-guard frontier
 # (the skiff gate learns its pair edge in a single round); the budget only bounds
 # the pathological case — a huge free-word / config-word probe space that would
@@ -1193,30 +1189,19 @@ def _orient_escalate_skiff(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> Generator[PilotEvent, None, bool]:
-    """ORIENT's hardest reading tier — send out the skiff.
+    """Probe unreadable frontiers before either stuck exit becomes terminal.
 
-    The reading-escalation ladder is trace transparent → trace opaque-but-constant
-    value graph (both in ``_prepare_iteration``) → let-run dwell (an Act tier) →
-    **skiff**, the last tier.  The skiff fires only at a *stuck exit*: when
-    no static instrument produced a bearing, run isolated fork-pin-step experiments
-    over the live-guard frontier and feed any observed edges into the compass as
-    bearings (never a plan).
+    When static reading and ordinary attempts cannot produce a usable action,
+    run isolated fork-pin-step experiments over the unreadable live-guard
+    frontier and apply any resulting transition observations.
 
-    This owns that tier's decision — probe, apply observations at RECORD, emit the
-    ``skiff`` event — for **both** stuck exits (no-bearing and all-rejected).  Use
-    via ``yield from``: it yields the ``skiff`` event when observations were learned
-    and *returns* whether the caller should ``continue`` (re-orient next iteration)
-    or fall through to the terminal ``stuck`` exit.  ``reason`` is the only thing
-    the two sites differ on; the event order is byte-identical to the inlined form.
+    The helper owns this decision for both no-bearing and all-rejected exits. It
+    yields a ``skiff`` event when knowledge changed and returns whether the
+    caller should begin another iteration.
 
-    **Exhausted-key escalation rule (the skiff row of the trigger table).** A skiff
-    round buys another orient lap only when it changed knowledge (``Compass.apply``'s
-    no-new-knowledge signal — an identical re-probe adds nothing, so it must not spin)
-    **and** the per-key skiff budget is unspent.  The world reverts between laps but
-    ``stuck_keys`` (Knowledge) does not: re-arriving stuck at the same key with only
-    fresh probe-mark churn means the skiff is not moving the world, so after
-    ``_SKIFF_KEY_BUDGET`` laps the loop STOPS honestly (the caller falls to the
-    terminal ``stuck`` dump) rather than alternating let-run ↔ terminal-dwell forever.
+    Another iteration is allowed only when ``Compass.apply`` reports new
+    knowledge and the per-world-key skiff budget remains. The budget survives
+    world reverts and bounds repeated probing at the same state.
     """
     skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
     before = ctx.compass
@@ -1354,16 +1339,12 @@ def _pilot_loop_events(
         },
     )
 
-    # One turn of the loop runs five phases, interleaved per Act rather than laid
-    # out linearly (a rejected Act falls through to the next in the same turn):
-    #   ORIENT   — read the charts, consult the compass for a bearing (below).
-    #   ACT      — steer toward the bearing (steer.py); each Act is followed by →
-    #   RECORD   — _record_attempt, the sole compass write path, before revert; →
-    #   VERIFY   — the trial's gate verdict (verify.py / outcome.py), run inside the
-    #              _try_* wrappers, then →
-    #   ASSESS   — _monitor_trend (progress.py) via _commit_and_monitor.
-    # Compass is a noun (the knowledge store), never a phase; Investigate is an
-    # escalation inside ASSESS's regression arm, not a phase of its own.
+    # Each turn reads the current world and builds candidate modes. Every mode
+    # executes and verifies on a fork inside steer.py, after which the loop
+    # applies its observations. A gate-approved fork is then committed and sent
+    # to progress.py, which may checkpoint it, continue provisionally, or
+    # investigate and revert it. Rejected modes fall through to the next mode in
+    # the same turn.
     # The budget charges *searching*, never *waiting*: committed scan-ids minus
     # the accepted-coast dwell credit (see ``_World.dwell_scans``).  An armed
     # self-advancing dwell — a 39k-scan dry timer the coast rides — is the
@@ -1400,7 +1381,7 @@ def _pilot_loop_events(
             )
             return
 
-        # ═══════════════════════ ORIENT ═══════════════════════
+        # ═══════════════════════ READ CURRENT WORLD ═══════════════════════
         # Read as hard as the charts require, along the reading-escalation ladder:
         # trace transparent → trace opaque-but-constant value graph (both inside
         # _prepare_iteration) → let-run dwell (an Act tier, below) → skiff
@@ -1440,8 +1421,7 @@ def _pilot_loop_events(
 
         # ── Stuck: instruments can't read the bearing ──
         if candidates.stuck_reason is not None:
-            # Escalate to the skiff before declaring terminal (ORIENT's hardest
-            # reading tier — owned by _orient_escalate_skiff): on live-guard
+            # Escalate to the skiff before declaring terminal: on live-guard
             # frontiers (unreadable writer guards) run isolated probes and feed
             # observed edges into the compass — bearings only; the next iteration
             # proposes them as candidates and the verify pipeline confirms live.
@@ -1483,13 +1463,12 @@ def _pilot_loop_events(
             )
             return
 
-        # ═══════════════════════ ACT ═══════════════════════
+        # ═══════════════════════ TRY EXECUTION MODES ═══════════════════════
         # Steer toward the bearing (steer.py), trying each Act in turn until one is
         # accepted: zoom → skiff-prescribed batch → command candidates → widening →
-        # terminal let-run/dwell.  Every _try_* wrapper runs VERIFY (verify.py /
-        # outcome.py) internally to produce a trial; each Act is then followed by
-        # RECORD (_record_attempt) and, on acceptance, ASSESS (_commit_and_monitor →
-        # _monitor_trend, progress.py — where Investigate escalates on regression).
+        # terminal let-run/dwell. Every _try_* wrapper runs trial verification
+        # internally; the loop then records its observations and, on acceptance,
+        # commits and delegates post-commit handling to progress.py.
         accepted = False
 
         # ── Establish prerequisites (level holds — steerable inputs, not state) ──
@@ -1727,8 +1706,7 @@ def _pilot_loop_events(
             )
 
         # ── Stuck: all candidates rejected, terminal let-run failed ──
-        # Same skiff escalation as the no-bearing exit above (ORIENT's hardest
-        # reading tier, _orient_escalate_skiff): unreadable-guard frontiers get one
+        # Same skiff escalation as the no-bearing exit above: unreadable-guard frontiers get one
         # round of isolated probes before the loop gives up.
         if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
             continue

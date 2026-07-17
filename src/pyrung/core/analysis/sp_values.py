@@ -5,15 +5,9 @@ program's structure: what values a condition expression requires
 (`_extract_required_values`, `_extract_condition_values`) and what value a
 rung writes to a tag (`_written_value_for_tag`, `_has_arithmetic_writer`).
 
-Consumed by the corridor walker (``analysis/walk``) as candidate-generation
-priors, by the prover's heuristic seeding (``analysis/prove/seeding``), and
-by causal analysis (``analysis/causal``) for projected-relation moves.
-Everything here is static analysis used as a *prior* — never
-correctness-bearing on its own.
-
-History: these began life in ``prove/waypoints.py`` (the legacy ``how()``
-waypoint planner, deleted when the corridor walker became the sole path)
-and moved here as the neutral home both subsystems can import.
+Consumed by PILOT's static readers, the prover's heuristic seeding, and causal
+analysis for projected-relation moves. Everything here is static evidence used
+as a prior; it is never correctness-bearing on its own.
 """
 
 from __future__ import annotations
@@ -870,7 +864,7 @@ def _writer_projection(
     PROJECTED fire-time overlay, answering *"dead branch? + what prereqs remain?"*.
     Its ``counterfactual`` feeds #3 ``_writer_availability``'s ``is_counterfactual``;
     its non-pinned frontier tags resurface in #1 ``frontier_pairs`` one recursion
-    level down.  See ``pilot/CLAUDE.md`` "Three notions of what's still needed".
+    level down. See ``pilot/CLAUDE.md`` "Soundness and behavior invariants".
     """
     built = projected_writer_overlay(ro, tag, value, snapshot, pdg, program, dict(pinned_overlay))
     if built is None:

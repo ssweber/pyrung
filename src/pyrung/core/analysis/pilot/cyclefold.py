@@ -1,24 +1,12 @@
-"""Limit-cycle fold — pilot-authorized macro-skip through active-hold soaks.
+"""Fold long waits that contain a proven repeating active-hold cycle.
 
-See ``scratchpad/cyclefold/DESIGN.md`` for the full rationale.
+``detect_cycle`` identifies a stable period and its monotone progress
+coordinate. ``cycle_fold_until`` advances that coordinate by whole periods,
+then executes one real period at normal scan time so cyclic tags retain their
+phase and time-dependent resets still run.
 
-The runner's plateau fold (``core/fold.py``) skips spans where the *visible
-state is unchanged* and rides the dt-knob.  An **active-hold soak** defeats both:
-a sub-cycle the pilot must keep running every scan — an oscillation it installed,
-a watchdog pet, a keep-alive handshake — churns a few tags every scan (breaking
-the plateau guard), and the dt-knob would advance the very timer the sub-cycle is
-there to reset (timers accumulate by per-scan ``_dt``; one fat ``dt*N`` scan trips
-the watchdog).
-
-This module detects the *period* of such a cycle and folds it the way a
-commissioning engineer would: **patch the monotone coordinate forward and run one
-real period at normal dt** — never compressing time across the sub-cycle.  The
-cyclic tags are left at their current phase, which is exact because they are
-net-zero over the skipped span.
-
-This file provides the classifier (:func:`detect_cycle`) and the fold loop
-(:func:`cycle_fold_until`); ``_ops._coast_holding_state`` consumes it whenever
-conditional (oscillating) holds are installed.
+If the period, monotone coordinate, or safe crossing cannot be established, the
+module declines to fold and the caller continues with ordinary scans.
 """
 
 from __future__ import annotations

@@ -482,9 +482,9 @@ def test_pilot_table_detour_reaches_completed_avoiding_complete() -> None:
     self-issued Complete -> Completing(16) -> Completed(17), reaching the target
     without ever pressing ``C_Complete``.  The undeclared mask-table neighbor
     ``PackTbl_A_Alm100`` rests at 0 throughout, so the enable is satisfied
-    naturally and the old free-word mis-attribution decline never fires — proving
-    (Phase K/L in ``pilot/CLAUDE.md``) that reaching Completed was a *drive*
-    problem, not the free-word suppression project.
+    naturally and the old free-word mis-attribution decline never fires —
+    proving that reaching Completed was a drive problem, not a free-word
+    suppression problem.
 
     ``C_Start`` records ``False`` in ``path.changes`` (not ``True``): it is a
     momentary start command, released by the convergence-command pulse when the

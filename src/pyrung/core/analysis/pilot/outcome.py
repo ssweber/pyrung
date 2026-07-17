@@ -1,18 +1,13 @@
-"""VERIFY — who moved what?
+"""Classify the evidence produced by one executed trial.
 
-The classification half of the PILOT loop's VERIFY phase (the gate pipeline is
-``verify.py``).  Post-act outcome classification: after a candidate passes
-the pre-act gates (SPIN, CYCLE, DEAD-END), this module decides which of the
-four outcomes occurred:
+``assess_outcome`` attributes relevant motion to the pilot, program, or an
+unknown source and records bearing, target-progress, and frontier effects in a
+``TrialAssessment``. ``confirmed_entry`` constructs the only transition entry
+eligible for CONFIRMED provenance.
 
-  1. CONFIRMED     — I moved it where I wanted.
-  2. BAD_EDGE      — I moved it wrong → correct the compass.
-  3. AMBIENT_DRIFT — The PLC moved it wrong → learn both edges.
-  4. FRONTIER      — Productive regression → new prereqs revealed.
-
-The classifier replaces the old CAUSED-REGRESSION gate, which was too blunt:
-it rejected *any* pilot-caused trend increase, including a route-prescribed
-forward step that correctly exposes more prerequisites.
+This module classifies observations. ``verify.py`` applies the trial gates,
+``pilot.py`` commits accepted worlds, and ``progress.py`` may later retain or
+revert them.
 """
 
 from __future__ import annotations
@@ -56,9 +51,9 @@ class BearingEffect(Enum):
 class ProgressEffect(Enum):
     """Target-relative evidence visible inside this one trial.
 
-    ASSESS owns checkpoint-relative promotion and regression.  This value is
-    deliberately narrower: it records only what VERIFY can prove from the
-    before/after target trace and the progress gauge.
+    ``progress.py`` owns checkpoint-relative promotion and regression. This
+    value is narrower: it records only what the before/after target trace and
+    progress gauge establish for this trial.
     """
 
     ADVANCED = "advanced"
@@ -68,10 +63,10 @@ class ProgressEffect(Enum):
 
 @dataclass(frozen=True)
 class TrialAssessment:
-    """Orthogonal evidence returned by VERIFY.
+    """Orthogonal evidence returned by trial verification.
 
-    ``Outcome`` remains as a compatibility projection while callers migrate;
-    policy must read these axes rather than infer semantics from the Act label.
+    ``Outcome`` is a compatibility projection. Policy should read these axes
+    rather than infer semantics from the execution mode's label.
     """
 
     agency: Agency
@@ -97,15 +92,11 @@ def confirmed_entry(
     cause: TransitionCause,
     to_val: Any,
 ) -> CompassEntry:
-    """Mint a CONFIRMED compass entry — the sole constructor of that provenance.
+    """Build a CONFIRMED entry after causal attribution supports the action.
 
-    Verify is the sole source of CONFIRMED: an entry earns it only when the
-    outcome pipeline in this module has judged that *we* moved the register
-    where we wanted (outcome #1, "I moved it where I wanted").  ``Compass.record``
-    rejects the CONFIRMED provenance and ``Compass.commit_confirmed`` accepts
-    only a prebuilt entry, so this factory — owned by the module that assigns
-    ``Outcome.CONFIRMED`` — is structurally the only place CONFIRMED can be
-    built.  Grep ``Provenance.CONFIRMED``: it appears only in the enum and here.
+    ``Compass.record`` rejects CONFIRMED provenance and
+    ``Compass.commit_confirmed`` accepts only a prebuilt confirmed entry, making
+    this the structural confirmation boundary.
     """
     return CompassEntry(
         tag=tag,
@@ -210,8 +201,8 @@ def assess_outcome(
 
     Only the *immediate* requested channel value can satisfy a bearing.  A
     stored route suffix is intent, not evidence: landing on a later or earlier
-    chart value is a departure and ASSESS decides what that observed world
-    means for target-relative progress.
+    chart value is a departure and post-commit progress handling decides what
+    that observed world means for target-relative progress.
     """
     if zoom_progressed or new_trend < frame.distance_before:
         progress = ProgressEffect.ADVANCED
@@ -248,7 +239,7 @@ def assess_outcome(
             )
         if channel_moved:
             # The channel moved, but not to the requested value.  Attribute the
-            # move independently from its usefulness; ASSESS may later prove the
+            # move independently from its usefulness; post-commit handling may later prove the
             # resulting world advanced, regressed, or remains incomparable.
             pilot_caused = bool(action_pairs) and _action_caused_regression(
                 trial, action_pairs, frame, ctx, chase_cause_roots

@@ -1,12 +1,14 @@
-"""ASSESS — the trend/checkpoint/revert phase of the PILOT loop.
+"""Retain, provisionally continue, or revert a committed trial world.
 
-Tracks distance trend across iterations, manages checkpoints, and reverts on
-regression.  Improved → checkpoint; plateau → re-orient (escalate a reading
-tier, not a new Act heuristic); sustained decline → revert to checkpoint.
+After a trial passes verification, this module compares target distance and
+gauge marks, updates checkpoints, and classifies program-owned departures.
+Regression handling builds an incident, replay-validates corrective hypotheses,
+installs at most one surviving correction, and restores the appropriate
+checkpoint. Provisional motion is bounded and is promoted or rolled back from
+later gauge evidence.
 
-Investigate is an *escalation inside* ASSESS's regression arm — not a phase of
-its own: when ASSESS reverts, ``investigate_deviation`` mines the incident for a
-single corrective hold.  Compass is a noun (the knowledge store), never a phase.
+This is the owner of post-commit recovery policy, not trial execution or local
+gate acceptance.
 """
 
 from __future__ import annotations
@@ -314,7 +316,7 @@ def _monitor_trend(
 
 
 def _bearing_satisfied(trial: _TrialResult) -> bool:
-    """Whether VERIFY proved the immediate requested channel bearing."""
+    """Whether trial verification proved the requested channel value."""
     if trial.zoom_channel_tag is None:
         return False
     if trial.assessment is not None:
@@ -795,7 +797,7 @@ def _investigate_and_revert(
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this
-        # exact installed form. ASSESS does not reinterpret that proof through
+        # exact installed form. Post-commit recovery does not reinterpret that proof through
         # a second, globally-steady-hold rule.
         investigation_holds.extend(investigation.confirmed_holds)
 
@@ -830,7 +832,7 @@ def _investigate_and_revert(
         }
         if investigation_holds:
             # Investigation owns applicability and replayed these exact guarded
-            # rungs. ASSESS only installs the proved intervention.
+            # rungs. This module only installs the proved intervention.
             investigation_rungs = [
                 proposal for proposal in investigation_holds if isinstance(proposal, PilotRung)
             ]

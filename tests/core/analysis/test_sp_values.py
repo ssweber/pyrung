@@ -1,9 +1,4 @@
-"""Tests for the shared static value-extraction helpers (analysis/sp_values).
-
-Moved from the legacy waypoint-planner tests when ``prove/waypoints.py``
-was deleted — these helpers survived as the neutral home both the corridor
-walker and the prover's seeding import.
-"""
+"""Tests for the shared static value-extraction helpers in ``analysis.sp_values``."""
 
 from __future__ import annotations
 

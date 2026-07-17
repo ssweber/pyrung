@@ -1,24 +1,9 @@
-"""Multi-target ``how(A, B, …)`` — static ME classifier + ordering.
+"""Conservatively classify and order multiple requested targets.
 
-Static read ONLY (no skiff / forward-sim, per ``pilot/CLAUDE.md``): trace owns
-a *sound* mutual-exclusion prune plus a clobberer-first ordering; anything it
-cannot prove statically it declines to prune (fail-open), and the drive loop —
-the real execution truth — attempts it.
-
-Two prune rules, both sound:
-
-1. **Same tag, different value** — one scalar register cannot hold two values.
-
-2. **Mutual retentive clobber** — establishing each target *retentively* drives
-   the other off its value, in **both** directions.  "Establishing X clobbers Y"
-   is universal over X's establish **routes** (``∀`` route ``∃`` clobbering rung
-   on that route): a route that dodges the clobber means the pair composes.
-   "Retentive" = the clobbering writer is a latch/SET/copy-into-held register
-   (``_can_produce`` False ∧ tag ∉ ``ote_writes``); an OTE / self-clearing write
-   is transient, not a clobber.
-
-Ordering: if establishing A clobbers B one-directionally, A is a clobberer of B
-and must be established first, so B (established last) is not re-clobbered.
+The static pre-pass proves only direct same-tag conflicts and mutual retentive
+clobber across every establish route. A one-directional clobber determines
+clobberer-first order. Anything not proved is left for concrete driving and the
+final all-target check; this module performs no simulation or probing.
 """
 
 from __future__ import annotations

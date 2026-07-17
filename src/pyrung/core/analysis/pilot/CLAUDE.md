@@ -1,308 +1,265 @@
-# pilot/ — a harbor pilot for PLC programs
+# pilot/ — steer a running PLC program
 
-The captain (the user) picks the destination. The ship (the PLC program) has its own
-mass, inertia, and habits. PILOT comes aboard, reads the charts, and works the passage.
+PILOT drives a program from its current state toward conditions chosen by the
+user. It is a pilot, not a planner: it does not compute a sequence and then
+execute it. The PLC continues to run, write registers, complete timers, and
+invalidate assumptions between observations. PILOT therefore reads the current
+world again before choosing each direction.
 
-Under the metaphor it's WWTD — *what would tech do*. Everything here is what a
-real PLC tech does at a fault: trace backward from the symptom, force a bit, watch what
-the program does with it, pull up the trends when something moves that shouldn't have.
-The pilot is that tech with three superpowers: **perfect memory** (the scan log),
-**perfect understanding — in theory** (static analysis reads the whole ladder at once;
-*in theory*, because live masks humble it exactly the way they humble the human), and **free forks**.
+The concrete execution oracle is always a PLC fork. Static analysis proposes
+what may work; trial verification and later progress handling decide what the
+live result means.
 
-## Theory
+Use WWTD — *what would the tech do?* — as the first-principles check: read the
+ladder and trend first, make the smallest reversible intervention, then observe
+what the program actually did.
 
-You share the helm with a program you can't fully read. Same registers, same scan, no
-locks. The scan is atomic and you're on one side of it: set inputs, the ship moves, look
-at what happened. The same command means different things in different waters (Reset
-from STOPPED ≠ Reset from EXECUTE), and your actions ripple through rungs you haven't
-traced. Everything below falls out of those facts.
+## Working principles
 
-- **Sail by bearing, not by route.** Stored plans go stale the moment the state changes.
-  Knowledge is a direction you re-check every iteration (the compass), never a script.
-  When the loop wanders — oscillating, stuck on a plateau — the fix is *consult the
-  compass*, not another acceptance heuristic.
-- **Knowledge is observed, never invented.** A reader that can't resolve something says
-  UNKNOWN. And nothing is believed until the verify pipeline watches who moved what —
-  after a scan a register changed, and you can't tell by looking whether it was you or
-  the ship.
-- **Guess freely, reject only on proof.** Every proposed action is replay-verified
-  before it's believed, so a guess can't hurt. A *no* — unreachable, DEAD, route
-  pruned — is never re-checked by anything downstream, so a no requires a provably
-  complete domain (Bool, prover `nd_domains`, declared `choices=`). Can't prove it?
-  Punt, and let the next instrument have a go.
-- **Every stall is pointable.** The acceptance bar: if the pilot is stuck you should be
-  able to dump the state, name the tag it's stuck on, and say what kind of stuck. A
-  mechanism that can stall somewhere you can't point at doesn't ship — and the exits
-  that still miss this bar are listed honestly in "How we fail".
+### Recompute from the current world
 
-## The happy path
+Do not store a suffix of actions to execute later. Every iteration rebuilds the
+trace and candidate set from the current snapshot, static evidence, accumulated
+transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
-Trace the tree. Find the blocking leaf. Pulse the lever. The program advances. Distance
-drops. Repeat until zero. The compass learns edges as you go. No holds, no skiff, no
-investigation.
+The exception is the user's trace-route lock. `_prepare_route` chooses it once
+before the loop because `via=` and `avoid=` express user intent. A graph path or
+learned transition is evidence for the next action only.
 
-Concretely, one iteration of the loop (`pilot.py`):
+### Read before probing
 
-```
-ORIENT   — trace the target backward to a tree of steerable prerequisites
-           (trace.py). Distance = the tree's unsatisfied-leaf count. Rank
-           this iteration's candidates (candidates.py).
-ACT      — press the top candidate: command pulse, prescribed batch, or
-           zoom through a timer/counter dwell (steer.py).
-VERIFY   — inside every attempt, record independent evidence axes
-           (verify.py → outcome.py): agency, immediate bearing effect,
-           target-relative progress, and frontier novelty. Trial shape does
-           not select a different judgment procedure.
-RECORD   — the sole compass write path: instruments return
-           CompassObservation values, the loop applies them (Compass.apply)
-           unconditionally, before ASSESS can revert the world. Always
-           bearings, never plan steps.
-ASSESS   — trend + checkpoint + revert (progress.py). Improved → checkpoint;
-           plateau → escalate a reading tier; sustained decline → revert.
-```
+Escalate according to what remains unreadable:
 
-The user-facing trace-route lock is chosen once, *before* the loop
-(`_prepare_route`, pilot.py): a concrete value target gets a deterministic
-default trace route, redirectable with `avoid=` / `via=`; a relational target
-(`State > 5`) drives without one. Compass bearings are different: ORIENT reads
-them again from the current world every iteration and never carries a suffix.
+1. `trace.py` follows writers, guards, copies, calculations, and accumulators.
+2. `availability.py`, `evidence.py`, `tide_tables.py`, and `currents.py` extend
+   that read with current-state guards, pipeline structure, finite
+   constant-backed tables, and program-awaited actions.
+3. A self-advancing timer, counter, or program transition is handled by holding
+   the required inputs and allowing scans to pass.
+4. `skiff.py` runs isolated fork probes only for a genuinely unreadable
+   frontier.
 
-**Scheduling is triggers, not positions.** The phase names say what *kind* of work
-something is, not when it runs — VERIFY→RECORD→ASSESS run per-trial inside ACT's
-candidate loop, and the skiff fires only at the two stuck exits. An escalation's loop
-position *is* its trigger condition ("no reading left" is only knowable there); don't
-tidy the ladder into a sequence. The coherence test for loop changes is **does every
-decision have exactly one owner?** Route: `_prepare_route`. Writer: `_rank_writers`.
-Candidate order: `_build_candidates`. Escalations: their trigger sites. Knowledge
-commit: `Compass.apply`.
+An incomplete static read returns an unresolved requirement. It does not invent
+an edge or silently convert uncertainty into impossibility.
 
-## Read before you run
+### Try freely; reject only with proof
 
-Three instruments, all answering *"I need (tag = value); what must I do?"* — differing
-only in how much of the path is readable. Escalate only when reading isn't enough:
+A proposed action is cheap because it is executed and checked on a fork.
+Ranking may demote an action but must not remove one merely because it looks
+unlikely.
 
-1. **trace** (trace.py) — read the ladder backward, run nothing. Transparent walk of
-   writer conditions / copy / calc down to steerable inputs; establish + preserve for
-   retentive targets; value navigation over declared-constant tables (charts.py,
-   tide_tables.py) for the opaque-but-constant stuff — a `stateMask & disabledMask`
-   gate *looks* runtime-computed but is constant-table-backed, so the tide tables read
-   it. Punts the moment a genuinely live word gates enablement.
-2. **let-run / zoom** (steer.py) — sometimes you just watch it run. When the bearing
-   points at a self-advancing frontier (a timer or step counter completing on its own
-   under the held state), hold heading and let scans pass, with an ejection guard for
-   surprises.
-3. **skiff** (skiff.py) — bench test. When a guard is genuinely unreadable, fork, pin
-   everything outside the frontier's upstream cone, try one unprobed lever (singles,
-   then pairs), step, observe. A control run first proves the frontier is stuck without
-   you. Results feed the compass as observations — a learned edge is a bearing, never a
-   plan step.
+A rejection is stronger: downstream code may never reconsider it. Static
+rejection therefore requires a complete finite domain, such as Bool, prover
+`nd_domains`, or declared `choices=`. In particular, callers using
+`tide_tables.py` to prove a guard impossible must pass through
+`trace._writer_guard_verdict`, which checks domain completeness first.
 
-## What breaks the happy path, and what handles each break
+Failure to make progress is not proof that a transition is impossible.
+Provisional expiry rolls the world back without creating a nogood.
 
-Each is a named response to a named failure — not a peer system.
+### Bound loops and name failures
 
-| The break | The response |
-|---|---|
-| The trace picks a rung that can't fire from where the machine actually is — it looks shortest on paper, but its conditions belong to a different state | Prefer the rung whose conditions are already mostly true *right now* (`_rank_writers`, trace.py + availability.py). Re-orders what to try first; never throws anything away. |
-| The "easiest" way to get the value is the init/reset rung — like fixing a fault by power-cycling the machine. Works, wrecks everything else | Rank it last; prefer the rung that advances the sequence normally. The reset stays available as a last resort (trace.py). |
-| A momentary pushbutton gets latched on — but the program clears it every scan; it was built to be pressed and released | Spot the press-and-release idiom (`compute_clear_only`): pulse it, never hold it. |
-| Firing a rung to satisfy one condition stomps a value another condition needs (it copies 2 into the command word while a sibling needs Cmd == 5) | Among otherwise-tied rungs, sink the one that provably stomps a sibling's need (the clobber tie-break, trace.py). Can't prove the stomp? Don't punish it. |
-| A rung is gated by a value computed at runtime — indirect address, live mask. You can stare at the ladder all day and not know what turns it on | Bench test it: the skiff, bounded probes, learned edges only. The static reader (`guard_verdict`) punts first; the skiff is its escalation. |
-| The gate compares against a word nobody declared a range for — there's no honest list of values to try | If it's an equals/mask gate: stop, *name the word*, and ask for a `choices=` declaration. If it's a greater/less-than: try the exact boundary value and report it as an example — the relation is the requirement, not the number. |
-| The thing you're waiting on is a timer or counter that finishes by itself | Don't push — hold everything steady and let it run (zoom / let-run, steer.py). |
-| To keep the machine alive you're wiggling something every scan (petting a watchdog, faking an encoder) — so fast-forward can't fast-forward: "something changed every scan" | cyclefold: jump the slow ramp ahead, then run one real period of the wiggle at normal speed. Fails closed — step, never mis-fold. |
-| Something moved and you didn't touch it. The program has its own ideas — an alarm reset it, a watchdog tripped | Investigate like a tech with a trend screen: one incident, competing explanations, and only the first one that survives a replay gets a force installed — *alone*, never as a bundle (investigate.py, corrections.py). |
-| A corrective input is useful in one machine context but wrong after the program moves on | The proposer derives the guard from the exposure: every consumer rung the correction provably silences whose consequence reaches a fired latch or the channel pipeline contributes its own state conjuncts (`_exposure_guard`, corrections.py) — the ladder names the contexts itself (a door alarm's `Or(S_Starting, S_Unholding, …)`). A silenced chain with no readable state gate poisons the derivation and the correction falls back to the observed-landing scope; either way the exact installed guarded form is replayed before confirmation and ASSESS installs it verbatim. |
-| A route's automatic completion edge is real on the chart but recipe-gated right now — waiting on it burns the budget forever | One honest coast, then the rejected wait mints a world-keyed nogood (`wait_edge_nogood`) and the next ORIENT's route query walks around the edge to the surviving route (the Unhold shape at a held state). |
-| A latch changed during the incident but was normal machine motion, not the failure | Keep only latched transitions on the deep causal spine of the channel departure. A bystander cannot block or validate a correction merely because it changed in the same window. |
-| The captain said "get there without touching X" | Three gates: never plan a route through it, never press it (checked *before* the pulse), never even let it blip mid-travel (every in-between scan is checked). `avoid=(A, B)` avoids either; `And(A, B)` only the pair together. The decline names a member it actually caught in the way (witness-based — see "How we fail"). |
-| The state register is loaded by a jump-table copy — the backward trace hits it and goes blind | The deep `cause()` walk (causal.py) crosses it natively: it chases the held enable-flag / request enabler to the scan the program set it and picks the recorded walk up on the far side — no route inversion, no unconfirmed hop. (Replaced the old opt-in compass bridge.) |
-| A tag that looks like an operator lever is actually written by the program — force it and you'll be overwritten next scan | Empirical veto (causal.py): if the recording shows the program wrote it when you weren't touching it, stop treating it as yours and trace through it instead. Evidence only ever removes levers, never invents them. |
-| The machine is mid-sequence, just waiting on one acknowledge button — and the backward trace can't see that | currents (currents.py): read the command/transition structure and find the one legal button for this state. If it's not unique, offer nothing. |
-| An avoided operator button and a timer/program rung produce the same command value | Producer-family evidence preserves a parallel automatic chart edge. ORIENT removes the forbidden button before BFS without deleting the PLC's own current. |
-| Reaching goal B undoes goal A | Multi-goal pre-pass (multitarget.py): prove what can't coexist, do the clobberer first, then drive each goal alone. The final all-goals-at-once check is the honest referee. |
+Every repeated activity must either consume a finite budget or accumulate
+durable knowledge that prevents byte-identical repetition.
 
-## How we fail
+- `max_scans` counts committed search work; accepted coast dwell is credited
+  separately.
+- Skiff retries use a per-world-key budget and continue only when
+  `Compass.apply` reports new knowledge.
+- Provisional program motion has a finite scan budget and a saved rollback
+  boundary.
+- Revert cycles outside provisional motion currently rely on accumulating
+  nogoods or installed corrections rather than a separate counter.
 
-The bar: every spinning mode drains a named finite budget, and every stop points at a
-named leaf. Here is where that honestly stands today (audited 2026-07-09).
+A terminal result must name the outstanding frontier when one can be read.
+Keep `reason`, `skiff_decline`, `avoid_names`, `lever_notes`, journey, and hold
+receipts attached to the result path that discovered them.
 
-**Where we are.** Every spin mode is finitely bounded, but not all by a *named* budget:
+### Give each decision one owner
 
-- The skiff is the model citizen: `_SKIFF_KEY_BUDGET` laps per stuck key, a lap only
-  counts if the compass actually changed, a decline requires a control run first (the
-  frontier really is stuck without you), and the stuck exit reverts to the last
-  checkpoint and reports honestly.
-- The work budget (`max_scans`, default 3000) counts *committed* scans — and it rewinds
-  on revert, so it bounds forward progress, not revert churn.
-- Program departures with a proven clean continuation use a named bounded
-  provisional scan budget. Gauge advance promotes, gauge loss regresses, and an
-  incomparable/preserved expiry rolls back without inventing a nogood.
-- Revert cycles outside provisional motion still terminate because knowledge
-  accumulates (nogoods, installed rungs), not because a separate counter drains.
+Do not reproduce a decision in a second module for convenience. Shared callers
+should consume the first owner's result.
 
-On a failed single-target `how()`, the `Plan` always carries `reason`, plus whatever
-breadcrumbs apply: `skiff_decline` (names the frontier tag and the free word that needs
-`choices=` — a caption from the first such frontier, not a proven unique culprit),
-`avoid_names` (only when proven; witness-based for a union), `lever_notes` (relational
-reports with their example values), and the full `journey` / `hold_log`. Every terminal
-reason — both stuck exits and the budget exit — additionally appends a
-`"— still waiting on tag=need (have cur)"` clause naming the frame's outstanding
-frontier pairs (`_frontier_clause`), and the budget exit reverts to the last checkpoint
-like the stuck exits do. The clause is honest but only as deep as the trace tree: a
-producer-guarded table edge (see `scratchpad/burner/handoff.md`) still surfaces the
-channel/request pair, not the producer chain behind it.
+- User trace route: `pilot.py::_prepare_route`
+- Writer eligibility and order: `trace.py::_rank_writers`
+- Per-iteration modes and candidate order: `candidates.py::_build_candidates`
+- Local trial gates: `verify.py::verify_gates`
+- Evidence classification: `outcome.py::assess_outcome`
+- Transition-knowledge update: `Compass.apply`, invoked by the drive loop
+- Post-commit retention, recovery, and correction installation: `progress.py`
+- Corrective hypothesis derivation: `corrections.py`
+- Corrective hypothesis replay and confirmation: `investigate.py`
 
-**Where we want to go** (delete each as it lands; see `scratchpad/burner/handoff.md`):
+## Actual control flow
 
-1. Multi-target failure `Plan`s carry only `reason` — thread `journey` / `hold_log` /
-   `lever_notes` through like the single-target path does.
-2. Reverts outside bounded provisional motion remain knowledge-bounded, not
-   counter-bounded. Add a per-world cap only with a gate that distinguishes honest
-   repeated learning from byte-identical churn.
-3. Declines are witness-based, and witnesses are lossy — a union `avoid=(A, B)` decline
-   names whichever arm the terminal frame saw; the answers are sound, the explanations
-   order-dependent. Aggregate over `journey` / `hold_log` (they already survive onto
-   the `Plan`) instead of reading the last frame. (The frontier clause now rides along,
-   but the headline itself is still last-frame.)
+The loop is nested; do not describe it as a linear
+ORIENT → ACT → VERIFY → RECORD → ASSESS pipeline.
 
-## The reefs (charted; don't sail into them)
+1. `pilot.py` prepares an iteration frame from the current world.
+2. `candidates.py` returns executable candidates, prerequisite holds, wait
+   modes, and any no-bearing diagnosis.
+3. Each `_try_*` wrapper in `steer.py` executes on a fork and calls
+   `verify.verify_gates` before returning an attempt.
+4. `pilot.py::_record_attempt` applies the attempt's observations whether the
+   trial passed or failed. Negative knowledge must survive rejection and world
+   reverts.
+5. If the trial passed its local gates, the loop commits its fork and
+   `progress.py` decides whether to checkpoint, continue provisionally, or
+   investigate and revert.
+6. At either stuck exit, the loop may run one bounded skiff round. It starts a
+   new iteration only if that round changed transition knowledge.
 
-- **"What's still needed" is three different questions**, asked at three stations:
-  `frontier_pairs` (whole chosen tree, after selection), `_writer_projection` (is this
-  candidate a dead branch? — projected fire-time overlay), `_expr_availability` (how far
-  from firing? — live snapshot). They're composed, not duplicated — #2's counterfactual
-  verdict is an *input* to #3 — and `test_pilot_needed_vocabulary.py` pins the
-  relationships. Don't merge them.
-- **Rejection soundness lives at the call sites.** `tide_tables.py` has softer
-  plausible-value fallbacks inside; they're unreachable from the rejection arm only
-  because `_writer_guard_verdict` (trace.py) pre-screens every free tag to a complete
-  domain before `guard_verdict` may enumerate. A new caller that skips the pre-gate
-  fabricates proofs.
-- **The compass's persistence is semantics, not a perf problem.** Tables are tiny and
-  off the hot path; the `pyrsistent` value semantics mean knowledge never mutates under
-  a holder. Don't "optimize" it back to shared dicts.
-- **Writers that could produce the value are never suppressed** (`_can_produce` in the
-  preserve walk), and availability **orders, never rejects** — prescribed edges keep top
-  priority, no candidate is dropped.
+Passing verification means "eligible to commit and assess", not "durable
+progress". Use distinct language for those two decisions.
 
-## The shipyard rule
+## World and knowledge
 
-No instrument gets wired without a hand-driveable, honestly-failing gate program first,
-born strict-xfail, flipped when the mechanism lands. The standing gates:
+`types.py` separates state that a revert may undo from knowledge that must
+survive:
 
-- **burner Starting→Execute** — trace + let-run end to end. If a change makes the skiff
-  look needed here, the bug is in trace's writer selection.
-- `test_pilot_sandbox_gate.py` — the skiff pair (command-selected mask passing;
-  free-word declining by name until `choices=` is declared).
-- `test_pilot_avoid_gates.py` — one program per avoid gate, plus the union semantics.
-- `test_pilot_free_word_lever.py` — the fill shape (relational lever on an undeclared
-  Real).
-- `test_pilot_self_defeating.py` — checkpoint-frontier feed for hold self-defeat.
-- the program-departure pair in `test_pilot.py` and `test_pilot_table_detour.py` —
-  currents and the transparent-machine refinements.
-- `test_pilot_detour_hold_release.py` — bounded provisional progress, guarded
-  correction ownership, and live route re-reading through the HELD door cycle.
-- `test_pilot_compass_bridge.py`, `test_pilot_empirical_veto.py`,
-  `test_pilot_needed_vocabulary.py` — native pipeline crossing, veto, vocabulary pins.
+- `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
+  dwell accounting.
+- `_PilotState` knowledge: seen keys, nogoods, checkpoints, skiff budgets and
+  declines, provisional receipts, gauge, and diagnostic history.
+- `_PilotContext`: static program analysis plus the current persistent
+  `Compass` value.
 
-The full burner drive (`how(y_BurnerLoop)` from cold, reached ~scan 2011) is the live
-check — machine-local (`scratchpad/burner/repro_regression.py`), not CI.
+`Compass.apply` returns a new compass and a `changed` flag. When no entry
+changes, it returns the same object. Runtime instruments return
+`CompassObservation` values and do not mutate the compass themselves.
 
-## Module map — who owns which decision
+## Soundness and behavior invariants
 
-- `pilot.py` — the conductor: the loop, both stuck exits, route choice
-  (`_prepare_route`, one-shot pre-loop), terminal honesty (reason assembly).
-- `trace.py` — writer choice (`_rank_writers`), the backward walk, route enumeration,
-  steerability (`compute_steerable`, `compute_clear_only`), `frontier_pairs`.
-- `availability.py` — how far is this writer from firing? (4-valued verdict; read-side,
-  imports lower layers only, never trace.py).
-- `candidates.py` — what do we try this iteration, in what order
-  (`_build_candidates`)? Each candidate records its own rank rationale into the events.
-- `steer.py` — press it: pulses, batches, zoom; try-verify wrappers that *return*
-  observations (Act never writes the compass).
-- `verify.py` — accept or reject a trial (SPIN / CYCLE / DEAD-END gates + the avoid
-  scan gate).
-- `outcome.py` — observed judgment axes: agency, immediate bearing effect,
-  target-relative progress, novelty, and their compatibility projection.
-- `compass.py` — the notepad: learned transitions, one entry per
-  `(tag, from_val, cause)`, provenance as lifecycle; `Compass.apply` is the loop's only
-  write path and returns `(compass, changed)` so a round that taught nothing can't buy
-  another lap.
-- `charts.py` — static value graphs (`CompassGraph`) + opaque-pipeline detection.
-- `routes.py` — live read-side route query; filters captain constraints before
-  path selection and is re-run every ORIENT.
-- `tide_tables.py` — constant-table predicate solvers (`guard_verdict`,
-  `solve_calc_preimage`).
-- `evidence.py` — static route/role expansion that trace reads.
-- `currents.py` — the one button a program-owned current is waiting for.
-- `skiff.py` — isolated fork-pin-step experiments (`probe_live_guard_frontiers`).
-- `progress.py` — trend, checkpoints (with frontier capture), reverts.
-- `investigate.py` — what just went wrong, and which single hold explains it.
-- `corrections.py` — the corrective-hold vocabulary (FLIP / FREEZE / OSCILLATE),
-  dispatched by instruction class + profile, never by name.
-- `accumulators.py` — which held input really drives a timer/counter, and how many
-  scans to eject (analytic, then empirical).
-- `cyclefold.py` — fold soaks without breaking the oscillation that sustains them.
-- `gauge.py` — target-relative progress instrument: event-earned ordinals and
-  steppers, plus the reset boundaries route readers must avoid.
-- `detour.py` — legacy-named departure reader: classifies observed program motion
-  as provisional, regression, or unknown by consulting charts and the gauge. It
-  does not carry a route or control the loop.
-- `multitarget.py` — the `how(A, B, …)` pre-pass.
-- `causal.py` — cause-chain walkers shared by gates, outcomes, and investigation;
-  consume the deep `cause()` chain (held/reset-blocked steps + classified roots);
-  home of the empirical steerable veto.
-- `physical.py` — harness/feedback install on forks.
-- `types.py` — shared types; the World/Knowledge split (`_World` is the revertible
-  half); the `WalkContext` seam.
-- `coast.py` — CoastSession: bump-driven coasts with receipts (arm named
-  predicates, land on the exact scan the first fires, record what moved);
-  the sole "hold heading and let scans pass" engine. *Pens* are its
-  nonterminal change recorders (Done bits, watch tags — never a raw
-  accumulator): fold-protected so every transition is an exact landing on
-  the session timeline. Incidents and replay judgment consume that timeline
-  (`DeviationIncident.timeline`, `ReplayStep`); history re-diffs are only
-  for recorded-run *testimony* (`causal._changed_in_window`, the empirical
-  veto). Same layer as `_ops.py` (which imports it, never the reverse).
-- `_ops.py` — PLC primitives: pilot rungs, pulses, delayed-effect
-  settlement; `_coast_to_value` / `_coast_holding_state` are thin bump
-  builders over `coast.py` returning `CoastReceipt`s.
+- Writers that can produce the requested value remain eligible.
+  Availability and wake/clobber heuristics order; they do not reject.
+- "Still needed" has separate meanings:
+  `frontier_pairs` reports unresolved needs in the selected trace tree;
+  `_writer_projection` checks a writer under its fire-time overlay;
+  `_expr_availability` compares a guard with the live snapshot.
+- Avoidance is enforced when choosing a route, before applying an action, and
+  across every intermediate scan of a trial.
+- Learned or static route edges are suggestions. A live trial still passes the
+  same verification gates.
+- A program-written tag may be removed from the steerable set by recorded
+  evidence. Empirical evidence never creates a new lever.
+- A correction is installed only in the exact guarded form that survived
+  replay, and only one competing explanation is installed for an incident.
+- Coast predicates decide bump truth. Compiled conditions provide fold metadata
+  only. Every reported crossing lands on a real recorded scan.
+- Cycle folding, table inversion, producer recognition, and departure
+  classification decline when their proof requirements are not met.
+- Static multi-target rejection is conservative. Concrete execution and the
+  final all-target check remain authoritative.
 
-**Where new read-side capabilities live:** a static reader — reads the charts, never
-runs the ship — names `WalkContext` (types.py: `snapshot` / `pdg` / `program` /
-`steerable` / `opaque_loop` / `prior`) in its signature, lives in its own module
-importing only lower layers, and trace.py imports *it*, never the reverse.
-availability.py was born inside trace.py and had to be carved out; a capability born on
-the seam never needs extraction.
+## Navigation
+
+### Orchestration and package surface
+
+- `pilot.py` — context construction, user route lock, event loop, knowledge
+  application, world commit, terminal results, and public drive entry points.
+- `types.py` — cross-module protocols and world, trial, event, and incident
+  records.
+- `__init__.py` — package exports.
+- `physical.py` — harness installation and feedback-tag exclusion.
+- `multitarget.py` — conservative incompatibility proof and target ordering.
+
+### Static reading and candidate construction
+
+- `trace.py` — backward requirement tree, route enumeration, steerability, and
+  writer ranking.
+- `availability.py` — current-state writer availability used for ordering.
+- `evidence.py` — pipeline-role inference and static transition-route expansion.
+- `tide_tables.py` — finite constant-backed table and calculation preimages.
+- `charts.py` — static transition-graph construction, path search, and opaque
+  pipeline detection.
+- `compass.py` — static graph references plus persistent seeded/observed
+  transition knowledge.
+- `routes.py` — current-constraint filtering before static path selection.
+- `currents.py` — unique program-awaited actions and producer-family evidence.
+- `candidates.py` — per-iteration action, hold, and wait-mode construction and
+  ordering.
+
+### Execution and observation
+
+- `steer.py` — forked action/coast execution and invocation of trial gates.
+- `_ops.py` — shared PLC operations, world keys, holds, pulses, coast adapters,
+  and action-admission checks.
+- `coast.py` — bump-driven coasts with exact-scan receipts.
+- `cyclefold.py` — proven active-cycle skipping during long waits.
+- `accumulators.py` — accumulator/profile resolution and scans-to-crossing.
+- `skiff.py` — finite isolated probes of unreadable frontiers.
+
+### Judgment and recovery
+
+- `verify.py` — avoid, target, spin, cycle, dead-end, and outcome gates.
+- `outcome.py` — agency, bearing, progress, and frontier evidence.
+- `progress.py` — checkpoints, provisional motion, regression recovery,
+  correction installation, and reverts.
+- `detour.py` — channel-departure classification for progress handling.
+- `gauge.py` — conservative target-relative earned-work marks and reset
+  boundaries.
+- `causal.py` — recorded cause-chain queries and empirical program-write
+  evidence.
+- `investigate.py` — incident construction, hypothesis ranking, and replay.
+- `corrections.py` — scoped corrective-hold hypothesis derivation.
+
+Module docstrings define the current local contracts. If a change moves a
+decision between modules, update both affected docstrings and this navigation
+entry in the same change.
 
 ## Vocabulary
 
-- **rung** — a `PilotRung(dest, value, guard)`: required-condition steering in the
-  simulated physical-input image. Each managed Boolean returns to `False` first;
-  active rungs then write in append order, so the last active rung wins. Non-Boolean
-  inputs retain their prior/plant-supplied value when no rung is active.
-- **gauge** — the target-relative progress instrument. It recognizes two proven
-  clue families (ordinal and stepper), records their resets, and otherwise says
-  unknown. Verification, provisional motion, and route readers may consult it.
-- **provisional** — bounded ordinary piloting after an observed program departure.
-  It carries a gauge receipt and rollback boundary, never a route. Progress proof
-  promotes it; loss regresses it; expiry rolls back without negative knowledge.
-- **edge** — a compass edge is a learned transition; a rise/fall edge is a tag read
-  through `rise()` / `fall()`.
-- **pin** — a fire-time pin: the source value a writer forces the scan it fires.
-- **clear-only** — an ack-cleared momentary command: the program only ever resets it, so
-  the operator supplies the active value. Pulse-and-release; never a pilot rung.
-- **frontier** — the tree's outstanding non-steerable `(tag, value)` needs
-  (`frontier_pairs`, BFS-ordered); distinct from the single frontier *tag* a stall dump
-  points at.
-- **cone** — the upstream cone is a tag *region*; cone settlement is the *operation* of
-  coasting over it.
-- **widening** — two unrelated uses: `_try_widening` (steer.py) grows the candidate
-  set; "Or-widens / And-narrows" (trace.py) is boolean-domain math.
+Keep the terms that distinguish the model, and define specialized terms in
+plain language on first use.
 
-## Future direction
+- **pilot** — continuously steers a running program; never executes a stored
+  plan.
+- **bearing** — the next direction recomputed from the current world.
+- **compass** — the `Compass` value containing static graph references and
+  persistent transition knowledge.
+- **coast** — hold the required inputs while scans pass.
+- **skiff** — an isolated fork probe for an unreadable frontier.
+- **tide table** — a finite solver for constant-backed transition-availability
+  conditions.
+- **current** — program-owned motion or the unique operator action that motion
+  currently awaits.
+- **frontier** — unresolved non-steerable requirements in the selected trace
+  tree.
+- **cone** — a region of tags upstream of a requirement; settling a cone is an
+  execution operation.
+- **gauge** — conservative target-relative evidence of earned work.
 
-See `scratchpad/burner/handoff.md`. The graceful-failure gaps live in "How we fail —
-where we want to go" above; delete each as it lands.
+Avoid extending the nautical metaphor in technical contracts. Words such as
+captain, vessel, reef, shipyard, and waters add a translation step without
+naming code abstractions.
+
+## Testing changes
+
+Run:
+
+```text
+make test-pilot
+make lint
+```
+
+Use the focused gate before the full suite when changing a risky invariant:
+
+- rejection/domain completeness:
+  `test_pilot_rejection_arm.py`, `test_pilot_sandbox_gate.py`
+- trial gates and outcome attribution:
+  `test_pilot_verify.py`, `test_pilot_outcome.py`
+- compass learning and recording:
+  `test_pilot_recording.py`, `test_pilot_nogood.py`
+- waits, coasts, and cycle folding:
+  `test_pilot_candidate_wait.py`, `test_pilot_coast.py`,
+  `test_pilot_cyclefold.py`
+- departures, gauges, and recovery:
+  `test_pilot_detour_progress.py`, `test_pilot_detour_hold_release.py`,
+  `test_pilot_gauge.py`, `test_pilot_investigate.py`
+- avoid semantics:
+  `test_pilot_avoid_gates.py`
+- writer selection and unresolved-need semantics:
+  `test_pilot_trace.py`, `test_pilot_needed_vocabulary.py`
+
+New mechanisms that can reject, wait, probe, install a hold, or revert need a
+small program that demonstrates both success and an honest failure mode.

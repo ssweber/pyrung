@@ -1,22 +1,12 @@
-"""Unified enabler-correction classifier for PILOT investigation.
+"""Derive scoped corrective-hold candidates from writer enablers.
 
-When ``cause()`` finds no steerable *trigger* for a bearing departure, the
-*enablers* that held the writer's path open are the real cause.  This module
-owns the single decision — given such a writer, what is the corrective hold? —
-and dispatches by writer instruction:
+Coil writers produce guard-flip candidates; accumulating instructions produce
+steady or oscillating holds that prevent an unwanted completion. Both paths
+return ``EnablerCorrection`` values with the exposure-derived scope that can be
+proved from program structure.
 
-  * coil (latch)             -> FLIP a non-state guard       (``_coil_corrections``)
-  * accumulating instruction -> OSCILLATE / steady stop-hold (``_accumulator_corrections``)
-
-The two arms enumerate *different* work-sets (the coil arm sweeps ``after_snap``
-for latches that fired on state entry; the accumulator arm sweeps instruction
-profiles for watchdogs that completed during the coast), so they are not one
-loop.  What unifies them is the shared **output vocabulary**
-(:class:`EnablerCorrection`): both arms emit it, and ``correct_enablers`` hands
-``investigate_deviation`` a single stream regardless of which arm produced it.
-
-Replaces the former ``_latch_exposure_hypotheses`` and
-``_done_boundary_hypotheses`` passes in ``investigate.py``.
+These are hypotheses, not installed corrections. ``investigate.py`` replay
+validates them and ``progress.py`` installs at most one confirmed result.
 """
 
 from __future__ import annotations
@@ -476,7 +466,7 @@ def _accumulator_corrections(
     incident: DeviationIncident,
     ctx: Any,
 ) -> list[EnablerCorrection]:
-    """Generalized accumulator-completion handler (subsumes the old liveness pass).
+    """Derive corrections for accumulator completion during a coast.
 
     While PILOT coasts, an accumulating instruction (timer/counter) can *complete
     on its own* and eject the bearing — its ``Done`` bit rises, or a rung fires on
@@ -485,10 +475,8 @@ def _accumulator_corrections(
 
     * **Complement-reset watchdog** — reset driven by a single input held at the
       wrong polarity (``rotate.py`` ``SensorOnWD``/``SensorOffWD``): a steady hold
-      can never satisfy it, so the input must *oscillate*.  Emit a guarded
-      :class:`PilotRung`, one rule per resetting polarity.  (This is the old
-      ``_liveness_hypotheses``, now keyed off any accumulator's profile rather
-      than just ``OnDelayInstruction``.)
+      can never satisfy it, so the input must *oscillate*. Emit a guarded
+      :class:`PilotRung`, one rule per resetting polarity.
     * **Plain held-advance -> Done** — no input-driven reset (or a counter hitting
       ``preset``): the advancing input must not *stay held*.  Emit a steady hold
       driving it off the advancing value.

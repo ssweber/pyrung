@@ -156,7 +156,7 @@ class TestCheckpoints:
         assert state.best_trend == 3  # unchanged on a flat checkpoint
 
     def test_frontier_preserves_baseline(self):
-        # A FRONTIER knowingly enters a deeper corridor (worse trend) — the
+        # A FRONTIER knowingly exposes deeper prerequisites (worse trend) — the
         # pre-frontier checkpoint and high-water mark must survive.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(8, Outcome.FRONTIER)

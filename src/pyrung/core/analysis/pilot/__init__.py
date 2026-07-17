@@ -1,8 +1,8 @@
-"""PILOT — drive a PLC program from its current state to a target.
+"""Drive a PLC program from its current state toward requested conditions.
 
-Backward-trace + forward-simulate engine.  Navigation is organised around the
-*compass* (``compass.py``): ``trace`` (static reader) + ``let-run`` + ``skiff``.
-See ``pilot/CLAUDE.md``.
+The package combines backward static requirement analysis with verified
+execution on PLC forks. This module exposes the drive entry points and selected
+analysis, event, and investigation types used by integrations and tests.
 """
 
 from __future__ import annotations

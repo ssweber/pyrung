@@ -7,7 +7,7 @@ copy — ``copy(JumpTable[StateRequested], State)`` — whose source is an
 ``IndirectRef``, not a named tag.  Before the fix that dropped ``State`` from
 the stepping set: ``infer_pipeline_roles`` found no channel role, no compass
 value-graph was built, and ``how()`` on such a target dead-ended instantly with
-``no_candidates`` (see pilot/CLAUDE.md future-direction item 0, "Phase L").
+``no_candidates``.
 
 The coupling is sound only when the table is *constant* (never written): then
 ``dest = table[index]`` is a pure function of the index, so ``dest`` steps iff

@@ -1,34 +1,12 @@
-"""Tide tables — published constant tables consulted to know when a passage is
-possible.  Inverts boolean predicates whose operands are lookups into
-declared-constant tables.
+"""Solve finite predicates over constant-backed lookup tables.
 
-This generalizes the single-table value-jump inversion (``trace._invert_indirect``)
-from an *equality on one table* to an arbitrary finite-domain *predicate over N
-constant-table operands*.  It is the reader for gates like
+The solvers model indirect table operands, enumerate known finite index
+domains, and return satisfying assignments or calculation preimages for the
+backward trace. Unmodelled live operands produce no exact solution.
 
-  - PackML state-enablement: ``stateMask[State] & disabledMask[Mode] == 0``
-  - PackML command validity:  ``cmdMask[Cmd]   & allowMask[State] == 0``
-
-where the operands (``stateMask``, ``disabledMask``) are each an indirect copy
-``copy(dh[affine(idx)], operand)`` out of a constant ``dh``/``ds`` table, and the
-result of a ``calc(<bitwise/arith expr>)`` is compared to a literal.
-
-Trace on its own returns UNKNOWN here — a bitwise ``&`` is not affine, so the
-Calc crossing can't invert it (``core/analysis/reverse_edges.py`` only handles
-``+ - *``).  But nothing in the chain is truly *live*: every operand is a pure
-function of a constant table indexed by a pipeline register with a finite
-domain.  So instead of inverting the operator symbolically we **evaluate and
-enumerate**: pin the context-fixed indices, walk the free indices over their
-finite domains, evaluate the real expression tree, and keep the assignments that
-satisfy the predicate.  Those become ordinary prerequisite constraints
-(``index_reg == value``) the backward trace continues to chase — e.g.
-``S_UnitModeCurrent == 1`` (Production), which trace resolves back to
-``C_ProductionMode``.
-
-Soundness: enumeration is exact only over *complete finite* domains.  If any
-operand is neither a constant nor a constant-table lookup with a known finite
-index domain, the tide tables return ``None`` (punt) — they never guess a singleton
-they cannot guarantee (the same over-approximation discipline as ``core/crossing``).
+Some helper paths can return plausible values for non-rejecting reads. A caller
+that uses a result to prove a guard impossible must first establish complete
+domains for every free tag; ``trace._writer_guard_verdict`` owns that gate.
 """
 
 from __future__ import annotations

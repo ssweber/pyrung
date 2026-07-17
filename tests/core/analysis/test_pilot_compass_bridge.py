@@ -12,7 +12,7 @@ request enabler to its establishing transition and continues the recorded walk
 from there, reaching the latched alarm and the starved watchdog without any
 route inversion.  These gates pin that native crossing — the bridge is gone.
 
-Gate discipline (pilot/CLAUDE.md §Boundary gates):
+Gate discipline (pilot/CLAUDE.md §Testing changes):
 
 * ``test_watchdog_starve_ejects`` — hand-driveable ground truth: a starved
   watchdog latches the alarm which requests the state, bumping StateCurrent 6->8.

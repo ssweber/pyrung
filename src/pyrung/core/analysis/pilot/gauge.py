@@ -1,33 +1,13 @@
-"""The target-relative progress gauge — event-earned work, not channel motion.
+"""Measure conservative, target-relative work that search keys may alias.
 
-``_pilot_state_key`` is a *search* key: it threshold-abstracts recognized
-progress sources (essential for finite search), which aliases partial progress
-between thresholds — ``(AtDoor, count=1)`` and ``(AtDoor, count=2)`` project to
-the same key even though the second knock earned real work.  And raw-key
-novelty is cheap to obtain accidentally (868 dims of local actuator and
-calendar state).  Neither can say whether a departure *destroyed work*.
+``build_gauge`` recognizes retained ordinal and stepper registers whose writers
+all have classifiable discrete provenance. A ``Gauge`` compares marks across
+worlds and exposes reset boundaries used by verification and departure
+classification.
 
-This module builds the **gauge**: the small set of retained registers
-in the target's causal cone whose writers have *proven discrete provenance* —
-work earned by an edge, a command pulse, or a Done/threshold crossing, never a
-timer tick.  v1 deliberately recognizes only two provable structural families
-and returns nothing (→ ``unknown`` downstream) for everything else:
-
-* **ordinal** — a threshold-absorbed monotone source (the prover masked its raw
-  value behind crossing vectors; ``Knock_Count``).  Raw value stays out of the
-  search key; here it contributes an *ordinal overlay* in its stride direction.
-* **stepper** — a retained sequence register whose writers are constant-stride
-  affine steps and/or literal loads (``Internal__Step``): the discrete affine
-  steps advance it; a literal load *behind* the current value is a reset
-  (``S_Resetting -> 101``), and its enabling channel values are resolved one
-  hop through the state-alias Bool so a candidate route can be tested for
-  reset residency.
-
-A tag enters the gauge only if **every** effective writer is classifiable;
-otherwise it is omitted and any decision that would have needed it must report
-``unknown`` rather than guess.  Consumers: the verify SPIN/CYCLE gates (an
-ordinal advance is progress even when the search key aliases) and provisional
-departure assessment (progress marks at the observed start vs. later worlds).
+If any effective writer of a component is unclassifiable, that component is
+omitted. Consumers receive unknown rather than inferred progress from an
+incomplete gauge.
 """
 
 from __future__ import annotations

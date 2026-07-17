@@ -1,14 +1,13 @@
-"""Skiff scans for opaque transition pipelines.
+"""Probe unreadable transition frontiers with isolated forked scans.
 
-The *scout* instrument of the compass: when ``trace`` cannot statically read an
-edge (a runtime-computed table), run an isolated experiment — fork, pin every
-non-participating mutable tag to its pre-scan value, step, and observe the
-isolated edge. See ``pilot/CLAUDE.md`` for where this sits in the compass.
+The low-level scan helpers pin nonparticipating mutable tags, apply a bounded
+action set, step a fork, and report the resulting changes. The frontier probe
+logic selects only finite declared action domains, runs control and probe
+experiments, and returns ``CompassObservation`` values or a diagnostic naming
+an undeclared free-word domain.
 
-Purely the fork-pin-step instrument: this module executes. The static
-need→pipeline-route bridging (``PipelineNeedExpansion``,
-``roles_for_needed_tag``, ``expand_pipeline_need``) lives in ``evidence.py``
-alongside the ``PipelineRoles``/``TransitionRoute`` types it operates on.
+Skiff probing does not update the compass itself or treat an observation as a
+committed plan step.
 """
 
 from __future__ import annotations
@@ -187,7 +186,7 @@ def probe_live_guard_frontiers(
     scans: int = _SKIFF_SCANS,
     max_probes: int = _SKIFF_MAX_PROBES,
 ) -> tuple[CompassObservation, ...]:
-    """Send the skiff at every unreadable frontier in the current tree.
+    """Probe each unreadable frontier in the current trace tree.
 
     A frontier is unreadable when the static walk punted on it: a
     ``live_guard`` node (writer guard over a genuinely-live word) or an
@@ -202,12 +201,9 @@ def probe_live_guard_frontiers(
     carries a *composite* cause — a tuple of action pairs); a still stand is
     ``"no_change"`` so the same probe is never re-sent.
 
-    Returns the NEW observations — the skiff never writes the compass itself;
-    the caller applies them at its RECORD point (an empty return means
-    genuinely stuck).  Honesty invariant: a learned edge is a *bearing* only —
-    it surfaces as a prescribed candidate (or prescribed batch, for a
-    composite) on the next iteration and must be confirmed live through the
-    verify pipeline.  Nothing here commits a plan step.
+    Returns new observations without applying them. An empty result means the
+    probes added no knowledge. A learned edge only surfaces a candidate on the
+    next iteration and must still pass live trial verification.
     """
     from pyrung.core.analysis.pilot.trace import _all_nodes
 
@@ -350,7 +346,7 @@ def _send_probe(
     ctx: Any,
     scans: int,
 ) -> CompassObservation:
-    """Run one isolated probe and return the observation — applied at RECORD."""
+    """Run one isolated probe and return its unapplied observation."""
     actions = dict(context)
     actions.update(probe_actions)
     result = run_pinned_scan(

@@ -1,9 +1,12 @@
-"""Low-level PLC manipulation helpers shared across pilot modules.
+"""Shared PLC operations and action-admission helpers for PILOT.
 
-Pure operational primitives — state-key projection, hold installation,
-pulse application, delayed-effect settlement.  Depend only on the PLC
-interface and prove/absorb (lazily), never on pilot loop logic, verify
-gates, or investigation.
+The module projects search/world keys, installs guarded input rungs, forks PLC
+state, applies pulses, settles delayed effects, and adapts common coasts to
+``CoastReceipt`` results. It also contains the shared avoid and hold/route
+admission checks used at execution boundaries.
+
+It does not choose candidates, judge trial outcomes, or manage checkpoints and
+reverts.
 """
 
 from __future__ import annotations
@@ -134,11 +137,7 @@ def _rungs_from_proposals(
     proposals: list[Any],
     scope: Any,
 ) -> list[PilotRung]:
-    """Lower legacy investigation proposals at the boundary to scoped rungs.
-
-    This is intentionally the sole transitional seam while correction producers
-    move from pair-shaped hypotheses to ``PilotRung`` directly.
-    """
+    """Normalize pair-shaped or ``PilotRung`` proposals to scoped pilot rungs."""
     result: list[PilotRung] = []
     for proposal in proposals:
         if isinstance(proposal, PilotRung):
@@ -399,7 +398,7 @@ def wait_edge_nogood(channel_tag: str, from_value: Any, to_value: Any) -> tuple[
     A completion edge carries no action, so the ordinary ``(tag, value)``
     action nogood can never name it.  This synthetic pair — keyed by the
     channel and the exact ``from -> to`` claim — lets a rejected wait be
-    remembered at its world key and filtered out of the next ORIENT's route
+    remembered at its world key and filtered out of the next iteration's route
     query, exactly like a failed press.
     """
     return (f"wait::{channel_tag}", (from_value, to_value))

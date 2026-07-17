@@ -247,9 +247,9 @@ class _JournalBuilder:
 class _PipelineCache:
     """Reusable classification/absorption results from a prior pipeline run.
 
-    The cached results come from a broader scope (the outer how() target).
-    Per-waypoint rebuilds filter them to the waypoint's upstream cone,
-    skipping the expensive kernel scans and fixed-point domain propagation.
+    The cached results come from a broader analysis scope. Narrowed rebuilds
+    filter them to the current upstream cone, skipping expensive kernel scans
+    and fixed-point domain propagation.
     """
 
     stateful_dims: dict[str, tuple[Any, ...]]
@@ -284,17 +284,17 @@ class _PassContext:
     initial_state: dict[str, Any] | None = None
     pipeline_cache: _PipelineCache | None = None
     # how()-only: restrict the varied nondeterministic inputs to those in *scope*
-    # (the narrowed per-step cone), holding all others at their initial value.
+    # (the narrowed local cone), holding all others at their initial value.
     # Avoids varying inputs that only reach the scope via a shared derived tag's
     # other writers (e.g. a sub-state's level inputs reached through fill_subStatus)
-    # — don't-cares for this waypoint's transition that otherwise blow up branching.
+    # — don't-cares for this local transition that otherwise blow up branching.
     # Unsound for always()/never() (would skip reachable states); safe for how()
     # where each path is replay-verified.
     restrict_inputs_to_scope: bool = False
     # how()-only (mirrors _OptConfig.domains_only): passes may record
     # advice-grade results the BFS could not soundly act on — e.g.
     # functional-dep projections for slice-elided or ordering-violating
-    # scratch, which the walker's idx-chase validates by interpretation.
+    # scratch, which PILOT's index chase validates by interpretation.
     domains_only: bool = False
 
     graph: ProgramGraph | None = None

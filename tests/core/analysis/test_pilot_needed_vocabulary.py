@@ -1,7 +1,7 @@
 """Agreement gate for the three "what's still needed" notions.
 
 PILOT computes "what's still needed" three ways, at three points in the trace
-pipeline (see ``pilot/CLAUDE.md`` "Three notions of what's still needed"):
+pipeline (see ``pilot/CLAUDE.md`` "Soundness and behavior invariants"):
 
 * **#1** ``frontier_pairs`` — whole-tree residual, AFTER writer selection;
 * **#2** ``_projected_guard_frontier`` (via ``_writer_projection``) — per-writer

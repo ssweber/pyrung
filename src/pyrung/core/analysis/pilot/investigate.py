@@ -1,8 +1,13 @@
-"""Bounded incident investigation for PILOT regressions.
+"""Build and replay bounded hypotheses for departures and excursions.
 
-``pilot.py`` decides that the vessel left the bearing.  This module owns the
-separate question: what hypotheses are worth replaying, and which ones survive
-counterfactual validation?
+The module constructs incident windows and replay functions, derives candidate
+holds from causal roots, writer enablers, and pinned scans, ranks those
+hypotheses, and returns the first explanation that survives counterfactual
+replay. It also provides the shorter excursion investigation used by trial
+verification.
+
+Investigation confirms a proposed correction but does not install it; recovery
+and installation belong to ``progress.py``.
 """
 
 from __future__ import annotations
@@ -60,29 +65,29 @@ def _observe_stable_channel_landing(
     settle: bool,
     session: Any = None,
 ) -> None:
-    """Follow automatic motion beyond a proved-safe waypoint.
+    """Follow automatic motion beyond a replay-proved channel value.
 
     The incident window proves that a correction silenced the observed
-    failure, but it can end while the PLC still sits at a commanded waypoint.
+    failure, but it can end while the PLC still sits at a commanded value.
     A raw hypothesis continues until the channel moves and then remains at one
     value long enough to reveal a stable landing. An already-scoped hypothesis
     stops at the first landing transition, exactly where the live loop regains
-    control and re-orients. If the channel never moves, leave the snapshot at
-    the waypoint and let guarded replay fail closed.
+    control. If the channel never moves, leave the snapshot at the commanded
+    value and let guarded replay fail closed.
     """
     from pyrung.core.analysis.pilot.coast import CoastSession, departure_bump
 
-    waypoint = probe.state.tags.get(channel_tag)
+    commanded_value = probe.state.tags.get(channel_tag)
     if session is None:
         session = CoastSession(probe, kind="landing-observe")
     assert session.plc is probe
     scan_before = probe.state.scan_id
     receipt = session.seek(
-        [departure_bump(probe, "moved", {channel_tag: waypoint})],
+        [departure_bump(probe, "moved", {channel_tag: commanded_value})],
         budget=_ZOOM_BUDGET,
     )
     if receipt.stop_reason != "departed":
-        # Channel never moved: leave the snapshot at the waypoint and let
+        # Channel never moved: leave the snapshot at the commanded value and let
         # guarded replay fail closed — an honest non-landing, never a
         # settled one.
         return
@@ -1057,7 +1062,7 @@ def investigate_deviation(
     2. Enabler correction — when cause finds no steerable trigger, the held
        enablers are the cause; ``correct_enablers`` dispatches by writer
        instruction (coil latch -> FLIP guard, accumulator -> OSCILLATE /
-       stop-hold).  Subsumes the former latch-exposure + done-boundary passes.
+       stop-hold).
     No upstream cone sweep.
 
     Hypotheses are **competing explanations of one incident, not a bundle of
@@ -1348,16 +1353,15 @@ def _precise_cause(
 ) -> InvestigationHypothesis | None:
     """Single cause()-chain walk from the first departure to a steerable input.
 
-    Replaces the old ``_cause_hypotheses`` sweep: one walk, one hypothesis,
-    early exit.  If no departure's cause chain reaches a steerable input,
-    returns ``None``.
+    Returns the first supported hypothesis. If no departure's cause chain
+    reaches a steerable input, returns ``None``.
 
     The **empirical steerable veto** (``empirical_program_writes``) is consulted
     over the incident window: a statically-steerable tag the recorded run shows
     the *program* wrote is not a terminal nogood, so the walk recurses through it
-    toward the real root (the sail-relay chain, even where the indirect-dest
-    crossing did not attribute the masquerading alarm word).  This is where the
-    only steerable-ness consultation in investigation lives, so the veto is wired
+    toward the real root even when an indirect-destination crossing did not
+    attribute the intermediate word. This is where the only steerability
+    consultation in investigation lives, so the veto is wired
     here once.
     """
     steerable = getattr(ctx, "steerable", frozenset())

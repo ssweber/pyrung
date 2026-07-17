@@ -1,19 +1,12 @@
-"""compass.py — the bearing layer of PILOT.
+"""Static transition graphs and accumulated transition knowledge for PILOT.
 
-The compass is the generalized transition graph that PILOT navigates by. It is a
-*bearing*, not a route: it keeps pointing at the target while the pilot is free
-to detour. See ``pilot/CLAUDE.md``.
+``Compass`` combines immutable references to the graphs built by ``charts.py``
+with a persistent table of seeded and observed transitions. Instruments return
+``CompassObservation`` values; :meth:`Compass.apply` is the value-semantic
+update path used by the drive loop.
 
-Edges carry two generalized axes:
-
-* **driver** — *how the edge fires*: an ``Action`` ``(tag, value)`` to pulse, a
-  ``WaitCause`` (let-run — hold state and let scans coast), or a request to be
-  re-entered into the trace.
-* **provenance** — *how the edge was learned*: a static route read by ``trace``,
-  a runtime observation from ``skiff``, or a learned transition.
-
-One :class:`Compass` object holds them all: the static per-register value graph
-(``CompassGraph``) plus the learned transition table (formerly ``InfluenceMap``).
+This module stores and queries transition knowledge. It does not choose the
+current candidate or commit a trial world.
 """
 
 from __future__ import annotations
@@ -92,12 +85,11 @@ def is_action(cause: TransitionCause) -> TypeGuard[Action]:
 
 @dataclass(frozen=True)
 class CompassObservation:
-    """One instrument observation, deferred to the loop's RECORD point.
+    """One transition observation waiting to be applied by the drive loop.
 
-    Instruments (steer's try-verify wrappers, the skiff) *observe*; only RECORD
-    applies observations to the compass — unconditionally, before ASSESS can
-    revert the world, so negative knowledge (probe marks, contradictions)
-    commits even when the trial is rejected.
+    Execution and skiff probes produce observations without mutating the
+    compass. The loop applies every observation, including those from rejected
+    trials, so probe marks and contradictions survive a world revert.
 
     ``kind`` selects the write:
 
@@ -119,21 +111,15 @@ class CompassObservation:
 
 
 class Provenance(Enum):
-    """How a compass entry was learned — its place in the edge lifecycle.
+    """How a compass entry was established and whether it remains traversable.
 
-    Replaces the old parallel ``_transitions`` / ``_probed`` dicts: an entry's
-    *provenance* is what used to be smeared across the two structures.  The
-    three **live** provenances (SEEDED / OBSERVED / CONFIRMED) carry a
-    ``to_val`` and are the edges ``find_path`` walks; the two **tombstones**
-    (NO_CHANGE / CONTRADICTED) have no destination and traversal skips them —
-    but every entry, live or tombstone, still *is a probe mark*.  That is the
-    invariant the anchor fact protects: the skiff's singles→pairs escalation
-    reads the entry key set, never the provenance, so a demoted edge still
-    terminates the escalation exactly as the old probe mark did.
+    SEEDED, OBSERVED, and CONFIRMED entries carry destinations. NO_CHANGE and
+    CONTRADICTED entries are nontraversable tombstones, but still count as probe
+    marks so a disproved or ineffective action is not sent again.
     """
 
     SEEDED = "seeded"  # statically-seeded route (seed_routes); unconfirmed
-    OBSERVED = "observed"  # a runtime motion recorded at RECORD
+    OBSERVED = "observed"  # a runtime motion applied by the drive loop
     CONFIRMED = "confirmed"  # minted only by outcome.confirmed_entry (verify)
     NO_CHANGE = "no_change"  # probe mark: the cause was tried and nothing moved
     CONTRADICTED = "contradicted"  # a falsified edge, kept as negative knowledge
@@ -146,7 +132,7 @@ _LIVE_PROVENANCE = frozenset({Provenance.SEEDED, Provenance.OBSERVED, Provenance
 
 
 def _canon(value: Any) -> Any:
-    """Canonicalize a keyed value at RECORD: ``bool`` → ``int``.
+    """Canonicalize a transition-table key value from ``bool`` to ``int``.
 
     ``hash(True) == hash(1)`` and ``True == 1``, so a PMap already collapses the
     two forms into one slot; canonicalizing makes the stored key uniform so a
@@ -160,19 +146,14 @@ def _canon(value: Any) -> Any:
 class CompassEntry(PRecord):
     """One learned transition (or probe mark) for a ``(tag, from_val, cause)``.
 
-    A ``pyrsistent`` PRecord: the entry table is a persistent value, so learned
-    knowledge is shared structurally and never mutated out from under a holder
-    (the anchor fact — *knowledge commits, the world reverts*).  Unifies the
-    former dual-dict lifecycle: ``_transitions`` held the destination, ``_probed``
-    held the fact it had been tried; here both live in one entry, distinguished
-    by ``provenance``.  A live entry (``provenance in _LIVE_PROVENANCE``) has a
-    real ``to_val``; a tombstone (NO_CHANGE / CONTRADICTED) has ``to_val=None``,
-    is skipped by traversal, yet still counts as a probe mark.  ``contradict``
-    *demotes* a live edge to a CONTRADICTED tombstone rather than deleting it.
+    The persistent record keeps learned knowledge independent from revertible
+    PLC worlds. A live entry has a destination; a NO_CHANGE or CONTRADICTED
+    tombstone is skipped during traversal but remains evidence that the cause
+    was tried. ``contradict`` demotes rather than deletes an entry.
 
-    A ``CONFIRMED`` entry is minted **only** by ``outcome.confirmed_entry`` — the
+    A CONFIRMED entry is minted only by ``outcome.confirmed_entry``; the
     general write path (:meth:`Compass.record`) rejects that provenance, so
-    "verify is the sole source of CONFIRMED" is structural, not convention.
+    confirmation cannot be asserted by a general observation writer.
     """
 
     tag = field(type=str)
@@ -224,7 +205,7 @@ def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
 
 # ===========================================================================
 # Pure table operations — every write is persistent-table-in, persistent-
-# table-out; the Compass methods and the RECORD fold both delegate here so
+# table-out; the Compass methods and observation fold both delegate here so
 # the semantics exist exactly once.
 # ===========================================================================
 
@@ -346,7 +327,7 @@ class Compass:
             else frozenset()
         )
         # One entry per (tag, from_val, cause), a persistent PMap of PRecords
-        # advanced by the RECORD write path.  A live entry is a learned edge; a
+        # advanced by the observation-application path. A live entry is a learned edge; a
         # tombstone (NO_CHANGE / CONTRADICTED) is a probe mark with no
         # destination.  Replaces the former parallel _transitions / _probed.
         #
@@ -447,7 +428,7 @@ class Compass:
     ) -> None:
         """In-place advance of the entry table — seeding and direct callers.
 
-        The loop's RECORD phase never lands here: it goes through :meth:`apply`,
+        The drive loop does not call this directly: it goes through :meth:`apply`,
         which returns the next compass as a value.  Semantics live in
         :func:`_table_record`.
         """
@@ -469,7 +450,7 @@ class Compass:
         self._entries = self._entries.set((entry.tag, fv, entry.cause), entry.set(from_val=fv))
 
     def apply(self, observations: Iterable[CompassObservation]) -> tuple[Compass, bool]:
-        """The RECORD write path: fold instrument observations into the compass.
+        """Return a compass with the supplied observations folded into it.
 
         Instruments never call ``record``/``contradict`` themselves — they
         return :class:`CompassObservation` values and the loop applies them

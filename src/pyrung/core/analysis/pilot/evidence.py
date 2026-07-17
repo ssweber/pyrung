@@ -1,21 +1,12 @@
-"""Transition evidence — static route expansion for the PILOT compass.
+"""Infer transition-pipeline roles and expand static transition routes.
 
-Bridges ExploreContext classifications and PDG writer analysis into
-structured transition routes.  Given a target register, enumerates all
-ingress paths through the writer pipeline, separating source constraints
-(current-state facts) from enablers (things to cause) and identifying
-steerable action tags.
+This module combines exploration classifications with PDG writer analysis. It
+canonicalizes pipeline aliases, identifies channel, action, stepping, and
+internal tags, and expands ingress paths into ``TransitionRoute`` values with
+separate source constraints and enablers.
 
-Three capabilities:
-
-1. **Canonicalize** — map scratch/index tags to their representative
-   driver via functional dependency projections.
-
-2. **Classify** — bucket tags as internal (don't chase), action
-   (steerable), stepping (state dimension), etc.
-
-3. **Expand routes** — enumerate all static ingress paths into a
-   target register's writer pipeline.
+The result is static evidence consumed by trace and graph construction; no
+program execution or runtime transition learning occurs here.
 """
 
 from __future__ import annotations
