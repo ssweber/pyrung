@@ -82,7 +82,8 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
-- Current-world navigation result: `compass.py::Compass.orient`
+- Current-world navigation result: `orientation.py::orient`, entered via the
+  `compass.py::Compass.orient` facade
 - Option materialization and ranking evidence: `options.py::_build_candidates`
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
@@ -172,6 +173,8 @@ changes, it returns the same object. Runtime instruments return
 - `tide_tables.py` — finite constant-backed table and calculation preimages.
 - `charts.py` — immutable static transition graphs, constrained path evidence,
   and opaque pipeline detection.
+- `static_expressions.py` — low-level static-expression helpers shared by trace
+  and tide readers.
 - `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
 - `orientation.py` — sole result synthesis and terminal/probe policy.
 - `options.py` — private evidence-rich option materialization and ranking.
