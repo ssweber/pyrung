@@ -774,7 +774,10 @@ def _investigate_and_revert(
             eject_cause_dones=incident_eject_dones(incident, ctx.program),
             progress_gauge=state.gauge,
             progress_anchor=dict(cp_fork.state.tags),
-            eject_latch_baseline=incident_eject_latches(state.work, incident, ctx),
+            # The trial fork contains the incident's recorded transitions.
+            # ``state.work`` is the pre-trial checkpoint and cannot explain a
+            # latch that only fired while the trial was running.
+            eject_latch_baseline=incident_eject_latches(trial.fork, incident, ctx),
         )
 
         # The register set the target still needs: the checkpoint's *frontier*,
@@ -785,7 +788,9 @@ def _investigate_and_revert(
         # ``ordered_actions()``-style extractions can never surface.
         needed = list(checkpoint.frontier)
         investigation = investigate_deviation(
-            state.work,
+            # Derive hypotheses from the PLC that actually observed the
+            # incident.  Replay still starts from ``cp_fork`` above.
+            trial.fork,
             incident,
             ctx,
             replay,

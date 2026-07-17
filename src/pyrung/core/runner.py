@@ -672,6 +672,13 @@ class PLC:
         # data-writers (Crossings Tier 2).  Same lifecycle as
         # ``_cached_replay_trace``.
         self._cached_replay_capture: tuple[int, ConditionViewCapture] | None = None
+        # Read-only causal ancestry for fork-boundary evidence. A child starts
+        # executing *after* its initial state, so the exact scan it forked from
+        # belongs to the parent that ran it (including that scan's synthesis
+        # overlay). Recorded cause/view queries at that boundary delegate to
+        # this parent instead of trying to replay the scan under the child's
+        # current overlay. Forward state remains fully independent.
+        self._causal_parent: PLC | None = None
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -802,6 +809,12 @@ class PLC:
             on ``Rung`` may be needed later.
         """
         target = self._playhead if scan_id is None else scan_id
+        if (
+            self._causal_parent is not None
+            and target <= self._initial_scan_id
+            and self._causal_parent.history.contains(target)
+        ):
+            return self._causal_parent.rung_firings(target)
         return self._rung_firing_timelines.at(target)
 
     def _node_firings_at(self, scan_id: int | None = None) -> PMap:
@@ -814,6 +827,12 @@ class PLC:
         instead of the rolled-up call-site main rung.
         """
         target = self._playhead if scan_id is None else scan_id
+        if (
+            self._causal_parent is not None
+            and target <= self._initial_scan_id
+            and self._causal_parent.history.contains(target)
+        ):
+            return self._causal_parent._node_firings_at(target)
         return self._node_firing_timelines.at(target)
 
     def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
@@ -945,15 +964,12 @@ class PLC:
         """Explain what caused a tag to transition.
 
         **Recorded** (default, ``to`` omitted): walks recorded history
-        backward from the transition.  Returns ``None`` if no transition
-        was found.  The chain never dead-ends at a value that merely
-        held: each step's held supports are chased — to their
-        establishing transition when they moved earlier (temporal hop),
-        or through why-held attribution when they never moved (absence
-        hop) — and the terminals are classified into
-        :attr:`~pyrung.core.analysis.causal.CausalChain.roots`
-        (external / never-written / system), so a cause that never moved
-        (a permissive stuck open since cold) is still named.
+        backward from the transition. Returns ``None`` if no transition
+        was found. With ``deep=True``, each fired rung's steady enablers
+        are recursively explained through their establishing transitions
+        or an observed writer of their current value. Non-firing static
+        writers are not swept into the result. Terminals are classified in
+        :attr:`~pyrung.core.analysis.causal.CausalChain.roots`.
 
         **Projected** (``to=value``): projects forward from the current
         state, finding reachable paths that would drive the tag to *value*.
@@ -971,10 +987,8 @@ class PLC:
                 the given tags to specified values during analysis.
                 Raises ``ValueError`` if used without ``to=`` or if
                 any key is a ``readonly`` tag.
-            deep: Recorded mode only.  ``False`` restores the shallow
-                trigger-only walk (no held-support recursion, empty
-                ``roots``) — for callers that do their own enabler
-                handling.
+            deep: Recorded mode only. ``False`` restores the shallow
+                trigger-only walk (no recursive enabler explanation).
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
@@ -1000,6 +1014,14 @@ class PLC:
             )
 
         from pyrung.core.analysis.causal import recorded_cause
+
+        if (
+            scan is not None
+            and self._causal_parent is not None
+            and scan <= self._initial_scan_id
+            and self._causal_parent.history.contains(scan)
+        ):
+            return self._causal_parent.cause(tag, scan=scan, deep=deep)
 
         return recorded_cause(
             logic=self._logic,
@@ -1392,11 +1414,37 @@ class PLC:
             # the returned fork is a continuous recording from the anchor, not just
             # its final segment.
             fork._scan_log = self._scan_log.clone(up_to=target_scan_id)
+            fork._causal_parent = self
         return fork
 
     def fork_from(self, scan_id: int) -> PLC:
         """Create an independent runner from a retained historical snapshot."""
         return self.fork(scan_id=scan_id)
+
+    def _causal_history_range(
+        self,
+        start_scan_id: int,
+        end_scan_id: int,
+    ) -> list[SystemState]:
+        """Historical states across this runner's read-only fork ancestry.
+
+        Public ``History`` deliberately starts clean at a fork point. Causal
+        analysis has a different requirement: an incident may begin in the
+        parent and finish in the child, and the parent is the only runner that
+        executed its segment under the correct synthesis overlay. Stitch the
+        immutable ancestral prefix to this runner's local range without
+        changing ordinary fork/history semantics.
+        """
+        if end_scan_id <= start_scan_id:
+            return []
+        local_start = start_scan_id
+        prefix: list[SystemState] = []
+        parent = self._causal_parent
+        if parent is not None and start_scan_id <= self._initial_scan_id:
+            prefix_end = min(end_scan_id, self._initial_scan_id + 1)
+            prefix = parent._causal_history_range(start_scan_id, prefix_end)
+            local_start = max(local_start, self._initial_scan_id + 1)
+        return prefix + self.history.range(local_start, end_scan_id)
 
     def _seed_defaults_for_fork(self, state: SystemState) -> SystemState:
         """Return *state* with defaults for any known tag it lacks.
@@ -1667,6 +1715,18 @@ class PLC:
         fork._set_rtc_internal(rtc_at_state, state.timestamp)
         fork._input_overrides._forces.clear()
         fork._input_overrides._forces.update(forces)
+        if self._synthesis is not None:
+            # Historical at-fire replay must execute the same soft program as
+            # the recorded scan.  PILOT holds and Harness plant rungs live in
+            # the synthesis brackets rather than the user Program; dropping
+            # them here reconstructs a different intra-scan command path and
+            # makes consumed commands appear as steady/default enablers.
+            from pyrung.core.synthesis import Synthesis
+
+            fork._synthesis = Synthesis(
+                holds=list(self._synthesis.holds),
+                plant=list(self._synthesis.plant),
+            )
         fork._replay_mode = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
@@ -2000,6 +2060,12 @@ class PLC:
         over :meth:`_replay_capture_at`; returns ``{}`` when there is nothing to
         replay.
         """
+        if (
+            self._causal_parent is not None
+            and target_scan_id <= self._initial_scan_id
+            and self._causal_parent.history.contains(target_scan_id)
+        ):
+            return self._causal_parent._replay_node_views_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
         return capture.views if capture is not None else {}
 
@@ -2013,6 +2079,12 @@ class PLC:
         crossing an opaque data-writer.  Returns ``{}`` when there is nothing to
         replay.
         """
+        if (
+            self._causal_parent is not None
+            and target_scan_id <= self._initial_scan_id
+            and self._causal_parent.history.contains(target_scan_id)
+        ):
+            return self._causal_parent._replay_node_reads_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
         return capture.reads if capture is not None else {}
 

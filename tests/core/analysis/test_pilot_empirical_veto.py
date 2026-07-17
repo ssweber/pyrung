@@ -157,6 +157,24 @@ def test_chase_veto_none_is_byte_identical() -> None:
     assert a == b
 
 
+def test_chase_steps_behind_steerable_effect_with_recorded_writer() -> None:
+    """The departure being explained is not its own corrective lever."""
+    logic = _chain_program()
+    plc = PLC(logic)
+    plc.step()
+    plc.patch({"Lever": True})
+    plc.step()
+
+    nogoods, holds = chase_cause_roots(
+        plc,
+        "Out",
+        frozenset({"Out", "Lever"}),
+    )
+
+    assert nogoods == {"Lever"}
+    assert holds == [("Lever", False)]
+
+
 # ---------------------------------------------------------------------------
 # Consumer: skiff free-word decline / probe selection
 # ---------------------------------------------------------------------------

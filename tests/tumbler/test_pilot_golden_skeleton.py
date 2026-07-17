@@ -28,6 +28,8 @@ import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.condition import CompareEq
 from pyrung.core.runner import _compile_avoid
 from tests.tumbler.skeleton import divergence_message, dump_skeleton, extract_skeleton
 
@@ -38,6 +40,8 @@ REGEN_ENV = "PYRUNG_REGEN_GOLDEN"
 
 EXECUTE_MAX_SCANS = 20_000
 COMPLETED_MAX_SCANS = 400_000
+BURNER_MAX_SCANS = 20_000
+BURNER_WALL_BUDGET_S = 240.0
 # The internal-route gate's scan budget must clear a HEALTHY drive (the
 # hand-driven Bench route completes around scan ~2,817, and ``max_scans``
 # charges committed scans minus accepted-coast dwell credit) — 40k is
@@ -72,6 +76,25 @@ def _drive_state_target(logic, value: int, max_scans: int):
         events.append(event)
         if event.kind == "finished":
             break
+    return events
+
+
+def _drive_bool_target(logic, tag_name: str, max_scans: int, wall_budget_s: float):
+    """Cold-boot Pilot drive toward one Boolean output."""
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    target = plc._known_tags_by_name[tag_name]
+    deadline = time.monotonic() + wall_budget_s
+    events = []
+    for event in pilot_events(plc, target, max_scans=max_scans):
+        events.append(event)
+        if event.kind == "finished":
+            break
+        if time.monotonic() > deadline:
+            pytest.fail(
+                f"how({tag_name}) exceeded the {wall_budget_s:.0f}s wall budget "
+                f"at scan {event.scan} (kind={event.kind})"
+            )
     return events
 
 
@@ -186,6 +209,90 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
         )
 
     _assert_matches_golden(skeleton, GOLDEN_DIR / "how_completed_skeleton.json")
+
+
+# ---------------------------------------------------------------------------
+# Causal-frontier gate: how(y_BurnerLoop)
+# ---------------------------------------------------------------------------
+
+
+def _confirmed_holds(skeleton: list[dict], kind: str) -> list[list]:
+    return [
+        hypothesis.get("holds", [])
+        for entry in skeleton
+        if entry["kind"] == "trend_regression"
+        for hypothesis in (entry.get("investigation") or {}).get("confirmed_detail", ())
+        if hypothesis.get("kind") == kind
+    ]
+
+
+def _hold_dest(hold) -> str | None:
+    if isinstance(hold, list) and hold:
+        return hold[0]
+    if isinstance(hold, dict):
+        return hold.get("dest")
+    return None
+
+
+def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
+    """The exact deep-chain route to the burner output."""
+    events = _drive_bool_target(
+        tumbler_logic,
+        "y_BurnerLoop",
+        BURNER_MAX_SCANS,
+        BURNER_WALL_BUDGET_S,
+    )
+    skeleton = extract_skeleton(events)
+
+    finished = _finished(skeleton)
+    assert finished["reached"] is True, f"BurnerLoop drive did not reach: {finished}"
+    _assert_zoom_tripwire(skeleton)
+
+    # The Execute-era departure has one exact coordinated corrective frontier:
+    # the physical door contacts. Defaults and first-scan plumbing must never
+    # reappear as a broad batch.
+    precise_dest_sets = [
+        {_hold_dest(hold) for hold in holds}
+        for holds in _confirmed_holds(skeleton, "precise-cause")
+    ]
+    assert {"x_DoorClosed", "x_LintDoorClosed"} in precise_dest_sets
+    assert not any(
+        dest in {"Test_Simulate_1st_Scan", "Cmd_ForceClear", "Cmd_CmdChgRequest"}
+        for destinations in precise_dest_sets
+        for dest in destinations
+    )
+
+    # The first door correction owns the actual state-mapping condition from
+    # the recorded deep chain. The serialized golden records its class; this
+    # raw-object tripwire locks the operands too.
+    starting_door_rungs = [
+        hold
+        for event in events
+        if event.kind == "trend_regression"
+        for hypothesis in (event.data.get("investigation") or {}).get(
+            "confirmed_detail", ()
+        )
+        if hypothesis.get("kind") == "latch-exposure"
+        for hold in hypothesis.get("holds", ())
+        if isinstance(hold, PilotRung)
+        and hold.dest in {"x_DoorClosed", "x_LintDoorClosed"}
+        and isinstance(hold.guard, CompareEq)
+        and hold.guard.tag.name == "Sts_StateCurrent"
+        and hold.guard.value == 3
+    ]
+    assert {rung.dest for rung in starting_door_rungs} == {
+        "x_DoorClosed",
+        "x_LintDoorClosed",
+    }
+
+    # The later complement-reset watchdog is a separate causal era.
+    liveness_dest_sets = [
+        {_hold_dest(hold) for hold in holds}
+        for holds in _confirmed_holds(skeleton, "liveness")
+    ]
+    assert {"x_RotateSensor"} in liveness_dest_sets
+
+    _assert_matches_golden(skeleton, GOLDEN_DIR / "how_y_burnerloop_skeleton.json")
 
 
 # ---------------------------------------------------------------------------

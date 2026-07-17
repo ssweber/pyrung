@@ -623,6 +623,16 @@ def test_fork_inf_budget_inherited_by_subfork() -> None:
     assert child._cache_retention_scans is None
 
 
+def test_causal_history_range_stitches_fork_ancestry_without_widening_history() -> None:
+    plc = PLC(logic=[], dt=0.01)
+    plc.run(cycles=2)
+    child = plc.fork()
+    child.run(cycles=2)
+
+    assert [state.scan_id for state in child.history.latest(10)] == [2, 3, 4]
+    assert [state.scan_id for state in child._causal_history_range(0, 5)] == [0, 1, 2, 3, 4]
+
+
 def test_history_scan_ids_reflects_trim() -> None:
     """scan_ids() range narrows after auto-trim."""
     plc = PLC(logic=[], dt=0.01, history="200ms", checkpoint_interval=5)

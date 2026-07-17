@@ -105,186 +105,153 @@ def correct_enablers(
 
 
 # ---------------------------------------------------------------------------
-# Exposure lifetime — the guard is read off the antagonist rungs themselves
+# Exposure lifetime — exact conditions from the recorded deep cause
 # ---------------------------------------------------------------------------
 
-_EXPOSURE_DEPTH = 3
 
-
-def _is_state_read(tag: str, opaque_loop: frozenset[str], pdg: Any) -> bool:
-    """Whether *tag* is channel-ish: an opaque-loop register or a one-hop alias.
-
-    The alias test is the ``sm_MapVal2State`` idiom: every writer of the tag is
-    gated by an opaque-loop read (``S_Starting`` written under
-    ``S_StateCurrent == STARTINGREF``).  Bounded to one hop and a handful of
-    writers — anything wider is not a state alias and must not be treated as
-    context.
-    """
-    if tag in opaque_loop:
-        return True
-    writer_idxs = pdg.writers_of.get(tag, frozenset())
-    if not writer_idxs or len(writer_idxs) > 4:
-        return False
-    return all(pdg.rung_nodes[ri].condition_reads & opaque_loop for ri in writer_idxs)
-
-
-def _state_conjuncts(ro: Any, opaque_loop: frozenset[str], pdg: Any) -> list[Any]:
-    """Top-level conjuncts of *ro* whose every read is channel-ish.
-
-    These are the ladder's own statement of *where* this rung can fire —
-    ``Or(S_Starting, S_Unholding, S_Unsuspending)`` on a door alarm.  Branch
-    conditions are not visited: top-level conjuncts are necessary conditions,
-    so the projection can only be at least as wide as the true exposure.
-    """
-    from pyrung.core.analysis.pdg import _extract_reads_from_condition
-
-    out: list[Any] = []
-    for cond in tuple(getattr(ro, "_conditions", ()) or ()):
-        reads = _extract_reads_from_condition(cond, {})
-        if reads and all(_is_state_read(r, opaque_loop, pdg) for r in reads):
-            out.append(cond)
-    return out
-
-
-def _silenced_by(ro: Any, assignment: Mapping[str, Any]) -> bool:
-    """The correction assignment provably prevents *ro* from firing.
-
-    Proof = some top-level conjunct reads only assigned tags and evaluates
-    falsy under them (``~i_DoorClosed`` with the door held True).  A conjunct
-    with unassigned reads proves nothing; fail closed.
-    """
-    for cond in tuple(getattr(ro, "_conditions", ()) or ()):
-        from pyrung.core.analysis.pdg import _extract_reads_from_condition
-
-        reads = _extract_reads_from_condition(cond, {})
-        if not reads or not reads <= set(assignment):
-            continue
-        try:
-            if not bool(cond.evaluate(_SnapView(assignment))):
-                return True
-        except Exception:  # noqa: BLE001
-            continue
-    return False
-
-
-def _exposure_guard(
-    assignment_pairs: tuple[ActionPair, ...],
+def _causal_channel_guard(
+    plc: PLC,
+    source_tags: tuple[str, ...],
     incident: DeviationIncident,
     ctx: Any,
 ) -> Any | None:
-    """The evidence-derived lifetime of a corrective input assignment.
+    """Actual channel conditions on the deep chains that fired *source_tags*.
 
-    WWTD: keep the door closed *wherever the door alarm can trip* — and the
-    ladder names those places itself.  An **antagonist** is a rung the
-    correction assignment provably silences whose consequence reaches the
-    machine: it latched an incident alarm, or its writes flow into the opaque
-    channel pipeline (a Hold/Abort command copy).  A warning lamp that reads
-    the same input qualifies for neither and contributes nothing.
-
-    The guard is the Or, over every silenced antagonist's qualifying
-    consequence chain (bounded depth), of the state conjuncts collected along
-    that chain (And within a chain — each gate must pass for the consequence
-    to propagate).  A qualifying chain with *no* state conjunct means the
-    exposure is unconditional: return ``None`` and let the caller keep the
-    legacy pair shape (landing-scoped downstream) rather than invent a wider
-    guard than the ladder states.
+    A latch correction belongs to the state in which its latch rung actually
+    fired.  The deep chain already expands state aliases such as
+    ``Sts_State_Starting`` through the observed writer that established them.
+    Resolve that chain step back to its rung and retain the rung's actual
+    channel-reading condition (``Sts_StateCurrent == 3``), rather than
+    synthesizing equality from a sampled value or widening to a replay
+    source-to-landing corridor.
     """
-    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition, resolve_rung
     from pyrung.core.condition import AllCondition, AnyCondition
-    from pyrung.core.instruction.coils import LatchInstruction
 
-    maybe_pdg = getattr(ctx, "pdg", None)
-    maybe_program = getattr(ctx, "program", None)
-    opaque_loop = getattr(ctx, "opaque_loop", frozenset())
-    if maybe_pdg is None or maybe_program is None or not opaque_loop or not assignment_pairs:
+    channel_name = incident.channel_tag
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if channel_name is None or pdg is None or program is None:
         return None
-    pdg: Any = maybe_pdg
-    program: Any = maybe_program
-    assignment = dict(assignment_pairs)
 
-    fired_latches = {
-        tag
-        for tag, val in incident.after_snap.items()
-        if val is True and incident.before_snap.get(tag) is not True
-    }
-
-    def _machine_write(node: Any, ro: Any) -> bool:
-        """This rung is itself the damage: it latched an incident alarm or
-        writes an opaque-loop register directly."""
-        if any(isinstance(i, LatchInstruction) for i in ro._instructions) and (
-            set(node.all_writes) & fired_latches
-        ):
-            return True
-        return bool(set(node.all_writes) & opaque_loop)
-
-    def _slice_reaches_machine(node: Any) -> bool:
-        return any(
-            pdg.downstream_slice(written, follow_calls=True) & opaque_loop
-            for written in node.all_writes
-        )
-
-    def _chain_contributions(
-        ri: int, conjuncts: tuple[Any, ...], depth: int, seen: frozenset[int]
-    ) -> list[tuple[Any, ...]] | None:
-        """Qualifying chains' conjunct tuples from rung *ri* onward.
-
-        A chain settles at a **machine write** (fired latch / direct opaque
-        write): with gates collected it contributes them; with none it returns
-        ``None`` and poisons the whole derivation — a context-free antagonist
-        means no honest state guard exists.  A chain that has collected a gate
-        *and* provably flows on toward the machine settles early on those
-        gates; a gate-less chain keeps walking for the gate and is discarded
-        (fail closed) if the depth budget runs out first.
-        """
-        node = pdg.rung_nodes[ri]
-        ro = resolve_rung(program, node)
-        if ro is None:
-            return []
-        here = (*conjuncts, *_state_conjuncts(ro, opaque_loop, pdg))
-        if _machine_write(node, ro):
-            if not here:
-                return None
-            return [here]
-        if here and _slice_reaches_machine(node):
-            return [here]
-        if depth >= _EXPOSURE_DEPTH:
-            return []
-        found: list[tuple[Any, ...]] = []
-        for written in sorted(node.all_writes):
-            for reader in sorted(pdg.readers_of.get(written, frozenset())):
-                if reader in seen:
-                    continue
-                sub = _chain_contributions(reader, here, depth + 1, seen | {reader})
-                if sub is None:
-                    return None
-                found.extend(sub)
-        return found
-
-    contributions: list[tuple[Any, ...]] = []
-    seen_rungs: set[int] = set()
-    for tag in sorted(assignment):
-        for ri in sorted(pdg.readers_of.get(tag, frozenset())):
-            if ri in seen_rungs:
-                continue
-            seen_rungs.add(ri)
-            ro = resolve_rung(program, pdg.rung_nodes[ri])
-            if ro is None or not _silenced_by(ro, assignment):
-                continue
-            chains = _chain_contributions(ri, (), 0, frozenset({ri}))
-            if chains is None:
-                return None
-            contributions.extend(chains)
-
-    if not contributions:
-        return None
     terms: list[Any] = []
     seen_terms: set[tuple[int, ...]] = set()
-    for chain in contributions:
-        key = tuple(sorted(id(c) for c in chain))
-        if key in seen_terms:
+    for source in source_tags:
+        source_scan = next(
+            (
+                event.scan
+                for event in incident.timeline
+                if any(
+                    tag == source and before is not True and after is True
+                    for tag, before, after in getattr(event, "transitions", ())
+                )
+            ),
+            None,
+        )
+        if source_scan is None:
+            try:
+                states = plc._causal_history_range(
+                    max(0, incident.anchor_scan - 1),
+                    incident.end_scan + 1,
+                )
+            except Exception:  # noqa: BLE001
+                states = ()
+            source_scan = next(
+                (
+                    current.scan_id
+                    for previous, current in zip(states, states[1:], strict=False)
+                    if previous.tags.get(source) is not True
+                    and current.tags.get(source) is True
+                ),
+                None,
+            )
+            # A trial fork can retain history from the first post-action scan,
+            # while the incident's anchor snapshot predates it.  In that
+            # shape the first retained state already contains the latch.  The
+            # endpoint evidence still brackets the activation exactly:
+            # false at the incident anchor, true at this first recorded scan.
+            if source_scan is None and incident.before_snap.get(source) is not True:
+                source_scan = next(
+                    (state.scan_id for state in states if state.tags.get(source) is True),
+                    None,
+                )
+        if source_scan is None:
+            logger.debug(
+                "exact exposure: no activation scan for %s in [%s, %s]",
+                source,
+                incident.anchor_scan,
+                incident.end_scan,
+            )
             continue
-        seen_terms.add(key)
-        terms.append(chain[0] if len(chain) == 1 else AllCondition(*chain))
+        try:
+            chain = plc.cause(source, scan=source_scan, deep=True)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "causal exposure: cause(%s@%s) raised",
+                source,
+                source_scan,
+                exc_info=True,
+            )
+            continue
+        if (
+            chain is None
+            or chain.effect.scan_id < incident.anchor_scan
+            or chain.effect.scan_id > incident.end_scan
+        ):
+            logger.debug(
+                "exact exposure: unusable chain for %s@%s (effect=%r, window=[%s, %s])",
+                source,
+                source_scan,
+                None if chain is None else chain.effect,
+                incident.anchor_scan,
+                incident.end_scan,
+            )
+            continue
+        for step in chain.steps:
+            links = (*step.triggers, *step.enablers)
+            if not any(link.tag_name == channel_name for link in links):
+                continue
+            node = next(
+                (
+                    pdg.rung_nodes[node_idx]
+                    for node_idx in sorted(
+                        pdg.writers_of.get(step.transition.tag_name, frozenset())
+                    )
+                    if (
+                        pdg.rung_nodes[node_idx].rung_index,
+                        pdg.rung_nodes[node_idx].subroutine,
+                    )
+                    == (step.rung_index, step.subroutine)
+                ),
+                None,
+            )
+            if node is None:
+                continue
+            rung_obj = resolve_rung(program, node)
+            if rung_obj is None:
+                continue
+            conditions = [
+                condition
+                for condition in tuple(getattr(rung_obj, "_conditions", ()) or ())
+                if channel_name in _extract_reads_from_condition(condition, {})
+            ]
+            if not conditions:
+                continue
+            term_key = tuple(id(condition) for condition in conditions)
+            term = conditions[0] if len(conditions) == 1 else AllCondition(*conditions)
+            if term_key not in seen_terms:
+                seen_terms.add(term_key)
+                terms.append(term)
+            # ``chain.steps`` walks effect -> causes. The first rung whose
+            # actual links read the channel is the conductive context that
+            # admitted the undesired effect (for example Starting's
+            # ``StateCurrent == 3`` mapper). Older channel-bearing steps explain
+            # how that context was reached (Idle's ``StateCurrent == 4``); they
+            # are ancestry, not additional correction lifetimes.
+            break
+
+    if not terms:
+        return None
     return terms[0] if len(terms) == 1 else AnyCondition(*terms)
 
 
@@ -346,19 +313,15 @@ def _coil_corrections(
             return []
         return list(tree.steerable_leaves())
 
-    def _latch_guard_holds(tag: str) -> tuple[list[ActionPair], list[ActionPair]]:
+    def _latch_guard_holds(tag: str) -> list[ActionPair]:
         """Corrective steerable holds for an active latch *tag*, or [].
 
-        Returns ``(holds, image_pairs)``: the resolved steerable levers plus
-        the image-level ``(guard, safe)`` assignments the trace bridged them
-        from (``i_DoorClosed=True`` for a ``x_DoorClosed`` lever) — the reads
-        the antagonist rungs actually consume, already derived by the same
-        ``trace_back`` that produced the holds.
+        The trace may bridge an image-level contact such as
+        ``i_DoorClosed`` to its physical ``x_DoorClosed`` lever.
         """
         from pyrung.core.analysis.simplified import _conditions_list_to_expr, _expr_forced_true
 
         holds: list[ActionPair] = []
-        image_pairs: list[ActionPair] = []
         seen: set[ActionPair] = set()
         for ri in pdg.writers_of.get(tag, frozenset()):
             node = pdg.rung_nodes[ri]
@@ -393,21 +356,17 @@ def _coil_corrections(
                     for hold in _steerable_holds(guard, safe)
                     if hold not in seen and _hold_allowed(ctx, hold)
                 ]
-                if resolved:
-                    image_pairs.append((guard, safe))
                 for hold in resolved:
                     seen.add(hold)
                     holds.append(hold)
-        return holds, image_pairs
+        return holds
 
-    def _guarded(holds: list[ActionPair], image_pairs: list[ActionPair]) -> tuple[Any, ...]:
-        """Wrap holds into exposure-guarded rungs; keep pairs when unreadable.
-
-        The silencing assignment is the image pairs the trace already bridged
-        plus the levers themselves — consumers read either level.
-        """
-        assignment = tuple(dict((*image_pairs, *holds)).items())
-        guard = _exposure_guard(assignment, incident, ctx)
+    def _guarded(
+        holds: list[ActionPair],
+        source_tags: tuple[str, ...],
+    ) -> tuple[Any, ...]:
+        """Wrap holds in the exact recorded conductive context when readable."""
+        guard = _causal_channel_guard(plc, source_tags, incident, ctx)
         if guard is None:
             return tuple(holds)
         return tuple(PilotRung(tag, value, guard) for tag, value in holds)
@@ -416,19 +375,17 @@ def _coil_corrections(
     conjunction: list[ActionPair] = []
     conj_seen: set[ActionPair] = set()
     conj_latches: list[str] = []
-    conj_image: list[ActionPair] = []
-    conj_image_seen: set[ActionPair] = set()
-    for tag, val in incident.after_snap.items():
+    for tag, val in sorted(incident.after_snap.items()):
         if val is not True or incident.before_snap.get(tag) is True:
             continue
-        latch_holds, latch_image = _latch_guard_holds(tag)
+        latch_holds = _latch_guard_holds(tag)
         if not latch_holds:
             continue
         corrections.append(
             EnablerCorrection(
                 correction=Correction.FLIP,
                 kind="latch-exposure",
-                holds=_guarded(latch_holds, latch_image),
+                holds=_guarded(latch_holds, (tag,)),
                 sources=(tag, *(h[0] for h in latch_holds)),
                 detail=f"latch {tag} fired during incident",
             )
@@ -438,17 +395,13 @@ def _coil_corrections(
             if hold not in conj_seen:
                 conj_seen.add(hold)
                 conjunction.append(hold)
-        for pair in latch_image:
-            if pair not in conj_image_seen:
-                conj_image_seen.add(pair)
-                conj_image.append(pair)
 
     if len(conjunction) > 1:
         corrections.append(
             EnablerCorrection(
                 correction=Correction.FLIP,
                 kind="latch-exposure",
-                holds=_guarded(conjunction, conj_image),
+                holds=_guarded(conjunction, tuple(conj_latches)),
                 sources=(*conj_latches, *(h[0] for h in conjunction)),
                 detail=f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}",
             )
@@ -657,7 +610,12 @@ def _accumulator_corrections(
 
 
 def _resolve_steerable_driver(
-    read_tag: str, value: Any, snap: Mapping[str, Any], ctx: Any
+    read_tag: str,
+    value: Any,
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    steerable: frozenset[str] | None = None,
 ) -> tuple[str, Any] | None:
     """Steerable ``(phys, polarity)`` that drives ``read_tag == value``.
 
@@ -665,7 +623,9 @@ def _resolve_steerable_driver(
     nearest steerable driver (e.g. the ``i_DoorClosed`` PIVOT to physical
     ``x_DoorClosed``).  Shared by the oscillation and cannot-hold sub-cases.
     """
-    steerable = getattr(ctx, "steerable", frozenset())
+    steerable = (
+        getattr(ctx, "steerable", frozenset()) if steerable is None else steerable
+    )
     if read_tag in steerable:
         return (read_tag, value)
     pdg = getattr(ctx, "pdg", None)
@@ -788,6 +748,7 @@ def _minimal_forcing_sets(
     order: tuple[str, ...],
     domains: dict[str, tuple[Any, ...]],
     satisfies: Callable[[Any], bool],
+    base: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Minimal partial assignments that *force* ``satisfies(condition.evaluate)``.
 
@@ -798,10 +759,13 @@ def _minimal_forcing_sets(
     conjunct; for a disjunction each arm is its own single-literal set.  Returned
     smallest-first.
     """
+    base_values = dict(base or {})
 
     def _eval(assignment: dict[str, Any]) -> bool | None:
         try:
-            return bool(satisfies(condition.evaluate(_SnapView(assignment))))
+            return bool(
+                satisfies(condition.evaluate(_SnapView({**base_values, **assignment})))
+            )
         except Exception:  # noqa: BLE001
             return None
 
@@ -826,7 +790,11 @@ def _minimal_forcing_sets(
 
 
 def _resolve_partial(
-    partial: dict[str, Any], snap: Mapping[str, Any], ctx: Any
+    partial: dict[str, Any],
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    steerable: frozenset[str] | None = None,
 ) -> list[ActionPair] | None:
     """Resolve each ``read == value`` literal to its steerable ``(phys, value)``.
 
@@ -835,7 +803,13 @@ def _resolve_partial(
     """
     holds: dict[str, Any] = {}
     for read, value in partial.items():
-        resolved = _resolve_steerable_driver(read, value, snap, ctx)
+        resolved = _resolve_steerable_driver(
+            read,
+            value,
+            snap,
+            ctx,
+            steerable=steerable,
+        )
         if resolved is None:
             return None
         phys, polarity = resolved
@@ -852,6 +826,8 @@ def _best_forcing_holds(
     ctx: Any,
     *,
     satisfies: Callable[[Any], bool],
+    base: Mapping[str, Any] | None = None,
+    steerable: frozenset[str] | None = None,
 ) -> list[ActionPair] | None:
     """Cheapest drivable coordinated holds that force *condition* to satisfy.
 
@@ -875,7 +851,7 @@ def _best_forcing_holds(
     if total > _MAX_COMBOS:
         return None
 
-    sets = _minimal_forcing_sets(condition, order, domains, satisfies)
+    sets = _minimal_forcing_sets(condition, order, domains, satisfies, base)
     if not sets:
         return None
 
@@ -884,13 +860,21 @@ def _best_forcing_holds(
         return (changes, len(partial))
 
     for partial in sorted(sets, key=_rank):
-        holds = _resolve_partial(partial, snap, ctx)
+        holds = _resolve_partial(partial, snap, ctx, steerable=steerable)
         if holds:
             return holds
     return None
 
 
-def break_guard_holds(rung_obj: Any, snap: Mapping[str, Any], ctx: Any) -> list[ActionPair] | None:
+def break_guard_holds(
+    rung_obj: Any,
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    changeable: set[str] | frozenset[str] | None = None,
+    fixed: Mapping[str, Any] | None = None,
+    steerable: frozenset[str] | None = None,
+) -> list[ActionPair] | None:
     """Minimal drivable lever set that forces *rung_obj*'s enable guard FALSE.
 
     The **suppression dual** of the accumulator arm's satisfy-the-reset
@@ -899,12 +883,19 @@ def break_guard_holds(rung_obj: Any, snap: Mapping[str, Any], ctx: Any) -> list[
     *suppress* a clobbering writer — force its guard false so the deviated
     register keeps the value the pulse established.
 
+    ``changeable`` narrows the correction frontier to selected guard reads,
+    while every other read stays at ``snap``.  ``fixed`` overlays at-fire values
+    for protected reads (normally the actual triggers that represent intended
+    progress). ``steerable`` optionally supplies the exact terminal lever set
+    for this incident, so program-written or protected tags are traversed rather
+    than mistaken for free inputs.
+
     Returns coordinated ``(phys, value)`` holds, or ``None`` when the guard is
-    unreadable/undrivable — no reads, an unknown (live-word) domain, or no
-    drivable forcing assignment.  ``None`` is the **punt signal** the caller
-    escalates to the skiff on.  Rejection stays over COMPLETE finite domains only
-    (inherited from ``_best_forcing_holds`` / ``_read_domains``); it never
-    fabricates a hold it cannot read.
+    unreadable/undrivable — no candidate reads, an unknown (live-word) domain,
+    or no drivable forcing assignment.  ``None`` is the **punt signal** the
+    caller escalates to the skiff on.  Rejection stays over COMPLETE finite
+    domains only (inherited from ``_best_forcing_holds`` / ``_read_domains``);
+    it never fabricates a hold it cannot read.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
@@ -914,7 +905,22 @@ def break_guard_holds(rung_obj: Any, snap: Mapping[str, Any], ctx: Any) -> list[
     reads = _extract_reads_from_condition(guard, {})
     if not reads:
         return None
-    return _best_forcing_holds(guard, reads, snap, ctx, satisfies=lambda evaluated: not evaluated)
+    if changeable is not None:
+        reads &= set(changeable)
+    if not reads:
+        return None
+    base = dict(snap)
+    if fixed:
+        base.update(fixed)
+    return _best_forcing_holds(
+        guard,
+        reads,
+        snap,
+        ctx,
+        satisfies=lambda evaluated: not evaluated,
+        base=base,
+        steerable=steerable,
+    )
 
 
 class _SnapView:

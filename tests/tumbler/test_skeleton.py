@@ -123,3 +123,44 @@ def test_skeleton_address_tokens_preserve_shared_guard_identity() -> None:
     holds = skeleton[0]["investigation"]["confirmed_detail"][0]["holds"]
     assert holds[0]["guard"] == holds[1]["guard"]
     assert holds[0]["guard"].endswith("at <ADDR:1>>")
+
+
+def test_hypothesis_hold_order_ignores_process_local_guard_addresses() -> None:
+    def event(reverse: bool):
+        holds = [
+            PilotRung("Sensor", False, object()),
+            PilotRung("Sensor", True, object()),
+        ]
+        if reverse:
+            holds.reverse()
+        detail = {
+            "kind": "liveness",
+            "detail": "oscillate Sensor",
+            "holds": holds,
+            "sources": ["Sensor"],
+        }
+        return SimpleNamespace(
+            kind="trend_regression",
+            data={
+                "from_trend": 2,
+                "to_trend": 1,
+                "channel_transitions": (),
+                "regression_nogoods": (),
+                "investigation": {
+                    "hypotheses": 1,
+                    "confirmed": 1,
+                    "rejected": 0,
+                    "unresolved": (),
+                    "hypothesis_detail": (detail,),
+                    "confirmed_detail": (detail,),
+                    "rejected_detail": (),
+                },
+            },
+        )
+
+    forward = extract_skeleton([event(False)])
+    reversed_order = extract_skeleton([event(True)])
+
+    assert forward == reversed_order
+    holds = forward[0]["investigation"]["confirmed_detail"][0]["holds"]
+    assert [hold["value"] for hold in holds] == [False, True]

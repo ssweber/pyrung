@@ -33,13 +33,16 @@ from pyrung.core.analysis.pilot.investigate import (
     _dedupe_pairs,
     _first_timeline_departure,
     _hold_allowed,
+    _hold_is_noop,
+    _precise_cause,
+    _precise_causes,
     build_deviation_incident,
     build_replay_fn,
     incident_eject_latches,
     investigate_deviation,
     investigate_excursion,
 )
-from pyrung.core.analysis.pilot.types import _AttemptResult
+from pyrung.core.analysis.pilot.types import BearingDeparture, _AttemptResult
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -121,8 +124,8 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
         lambda *_args, **_kwargs: ([raw_reject, guarded_reject], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_cause",
-        lambda *_args, **_kwargs: None,
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.investigate.correct_enablers",
@@ -180,8 +183,8 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
         lambda *_args, **_kwargs: ([empty, noop], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_cause",
-        lambda *_args, **_kwargs: None,
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.investigate.correct_enablers",
@@ -207,6 +210,43 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
     assert result.rejected[1][0] == noop
     assert result.rejected[1][1].startswith("vacuous no-op hold")
     assert result.rejection_slugs == ("no-holds", "vacuous-hold")
+
+
+def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():
+    Bool("RecordedMover", external=True)
+    with Program(strict=False) as prog:
+        with Rung():
+            out(Bool("RecordedMoverReader"))
+    plc = PLC(prog, dt=0.010)
+    ctx = _make_ctx(prog, plc)
+    snap = {"RecordedMover": False}
+
+    assert _hold_allowed(ctx, ("RecordedMover", False))
+    assert _hold_is_noop("RecordedMover", False, snap, ctx.pdg, prog)
+    assert not _hold_is_noop(
+        "RecordedMover",
+        False,
+        snap,
+        ctx.pdg,
+        prog,
+        frozenset({"RecordedMover"}),
+    )
+    assert not _hold_is_noop(
+        "RecordedMover",
+        False,
+        snap,
+        ctx.pdg,
+        prog,
+        after_snap={"RecordedMover": True},
+    )
+    assert not _hold_is_noop(
+        "RecordedMover",
+        False,
+        snap,
+        ctx.pdg,
+        prog,
+        synthesis_rungs=(PilotRung("RecordedMover", True, Bool("SynthesisGuard")),),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -655,11 +695,120 @@ class TestTerminalLetrunNoChannelRegister:
 class TestPreciseCause:
     """_precise_cause: single cause walk to steerable input, early exit."""
 
-    @pytest.mark.skip(reason="stub — needs cause()-based detection refactor")
-    def test_single_departure_produces_hold(self): ...
+    def test_newly_conductive_enablers_break_actual_writer(self):
+        Enter = Bool("Precise_EnterExecute", external=True)
+        Door = Bool("Precise_DoorClosed", external=True)
+        LintDoor = Bool("Precise_LintDoorClosed", external=True)
+        FirstScan = Bool("Precise_FirstScan", external=True)
+        Execute = Bool("Precise_StateExecute")
+        State = Int("Precise_State")
+        Cmd = Int("Precise_Command")
+        Requested = Int("Precise_StateRequested")
+        Unrelated = Int("Precise_Unrelated")
 
-    @pytest.mark.skip(reason="stub — needs cause()-based detection refactor")
-    def test_non_steerable_departure_skipped(self): ...
+        with Program() as prog:
+            with Rung(State == 6):
+                out(Execute)
+            with Rung(Enter):
+                copy(6, State)
+            with Rung(Execute, Or(~Door, ~LintDoor)):
+                copy(4, Cmd)
+            with Rung(Cmd == 4):
+                copy(10, Requested)
+            with Rung(Requested != 0):
+                copy(Requested, State)
+                copy(0, Requested)
+                copy(0, Cmd)
+            # A steady false default elsewhere in the program is support for
+            # nothing on the fired causal path and must never become a hold.
+            with Rung(~FirstScan):
+                copy(0, Unrelated)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Precise_EnterExecute": True})
+        plc.step()
+        before = dict(plc.state.tags)
+        anchor = plc.state.scan_id
+        plc.patch({"Precise_EnterExecute": False})
+        plc.step()
+        departure_scan = plc.state.scan_id
+
+        incident = DeviationIncident(
+            anchor_scan=anchor,
+            departure_scan=departure_scan,
+            end_scan=departure_scan,
+            action=(),
+            bearing=(("Precise_State", 6),),
+            before_snap=before,
+            after_snap=dict(plc.state.tags),
+            changed_tags=("Precise_State",),
+            departures=(BearingDeparture("Precise_State", 6, departure_scan),),
+            channel_tag="Precise_State",
+        )
+
+        hypothesis = _precise_cause(plc, incident, _make_ctx(prog, plc))
+
+        assert hypothesis is not None
+        assert hypothesis.kind == "precise-cause"
+        assert set(hypothesis.holds) == {
+            ("Precise_DoorClosed", True),
+            ("Precise_LintDoorClosed", True),
+        }
+        assert all(tag != "Precise_FirstScan" for tag, _value in hypothesis.holds)
+        assert "R3 fired" in hypothesis.detail
+        assert "minimal conductive cut" in hypothesis.detail
+
+    def test_disabled_out_writer_is_not_treated_as_suppressed(self):
+        """OUT writes False when its guard is false; false is not suppression."""
+        Door = Bool("OutCut_Door", external=True)
+        Init = Bool("OutCut_Init", external=True)
+        Image = Bool("OutCut_Image")
+        State = Int("OutCut_State")
+
+        with Program() as prog:
+            with Rung(Door):
+                out(Image)
+            with Rung(Init):
+                copy(6, State)
+            with Rung(~Image):
+                copy(10, State)
+
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"OutCut_Door": True})
+        plc.step()
+        plc.patch({"OutCut_Init": True})
+        plc.step()
+        before = dict(plc.state.tags)
+        plc.patch({"OutCut_Door": False, "OutCut_Init": False})
+        plc.step()
+        scan = plc.state.scan_id
+        incident = DeviationIncident(
+            anchor_scan=scan - 1,
+            departure_scan=scan,
+            end_scan=scan,
+            action=(),
+            bearing=(("OutCut_State", 6),),
+            before_snap=before,
+            after_snap=dict(plc.state.tags),
+            changed_tags=("OutCut_Door", "OutCut_Image", "OutCut_State"),
+            departures=(BearingDeparture("OutCut_State", 6, scan),),
+            channel_tag="OutCut_State",
+        )
+
+        hypotheses = _precise_causes(
+            plc,
+            incident,
+            _make_ctx(prog, plc, steerable=frozenset({"OutCut_Door"})),
+        )
+
+        chain = plc.cause("OutCut_State", scan=scan)
+        assert chain is not None
+        assert any(
+            step.transition.tag_name == "OutCut_Image"
+            and step.transition.to_value is False
+            for step in chain.steps
+        )
+        assert all(("OutCut_Door", False) not in h.holds for h in hypotheses)
 
 
 # ---------------------------------------------------------------------------
@@ -702,11 +851,12 @@ class TestLatchExposureHypotheses:
         )
 
         hyps = correct_enablers(plc, incident, ctx)
-        # The latch's non-state guard (Guard=False) flips to True to break it,
-        # carried as a rung guarded by the latch's own state context.
+        # The latch's non-state guard (Guard=False) flips to True to break it.
+        # This hand-built incident carries no recorded activation chain, so no
+        # channel scope is invented.
         assert len(hyps) == 1
         assert hyps[0].kind == "latch-exposure"
-        assert [(h.dest, h.value) for h in hyps[0].holds] == [("Guard", True)]
+        assert hyps[0].holds == (("Guard", True),)
         assert "Alarm" in hyps[0].sources
 
     def test_conjunction_proposed_when_multiple_latches(self):
@@ -733,7 +883,9 @@ class TestLatchExposureHypotheses:
             action=(("Enter", True),),
             bearing=(("A1", False), ("A2", False)),
             before_snap={"State": True, "G1": False, "G2": False},
-            after_snap={"State": True, "G1": False, "G2": False, "A1": True, "A2": True},
+            # Deliberately reverse latch insertion order: hypothesis order is
+            # semantic/deterministic, not an artifact of snapshot construction.
+            after_snap={"State": True, "G1": False, "G2": False, "A2": True, "A1": True},
             changed_tags=("A1", "A2"),
             departures=(),
         )
@@ -745,12 +897,16 @@ class TestLatchExposureHypotheses:
         conjunction = [h for h in hyps if len(h.holds) == 2]
 
         def _pairs(holds):
-            return {(h.dest, h.value) for h in holds}
+            return {
+                (h.dest, h.value) if isinstance(h, PilotRung) else h
+                for h in holds
+            }
 
         assert {frozenset(_pairs(h.holds)) for h in per_latch} == {
             frozenset({("G1", True)}),
             frozenset({("G2", True)}),
         }
+        assert [h.sources[0] for h in per_latch] == ["A1", "A2"]
         assert len(conjunction) == 1
         assert _pairs(conjunction[0].holds) == {("G1", True), ("G2", True)}
 
@@ -1698,11 +1854,12 @@ class TestBuildDeviationIncident:
         assert incident.departures == ()
         assert incident.departure_scan is None
 
-    def test_program_narrows_changed_tags_to_done_and_acc(self):
-        """With ``program`` given, ``changed_tags`` restricts to the fix engine's
-        universe (profile Done bits from the timeline + accumulators from the
-        endpoint diff) — the only tags membership is ever tested against —
-        instead of every churned register (e.g. plain coils ``Alarm``/``Target``)."""
+    def test_program_does_not_narrow_factual_changed_tags(self):
+        """Incident evidence stays complete when a Program is supplied.
+
+        Timer consumers select their Done/accumulator profile tags locally;
+        constructing the incident must not erase unrelated recorded movement.
+        """
         from pyrung.core.analysis.pilot.accumulators import iter_profiles
 
         prog, _tmr = _watchdog_program()
@@ -1744,15 +1901,14 @@ class TestBuildDeviationIncident:
             program=prog,
         )
 
-        relevant = {
+        profile_tags = {
             name for p, _ in iter_profiles(prog) for name in (p.done.name, p.accumulator.name)
         }
-        # Full diff sees the churned plain coils; the restricted diff does not.
+        # Program metadata does not change the factual incident.
         assert "Alarm" in full.changed_tags
-        assert "Alarm" not in restricted.changed_tags
-        assert set(restricted.changed_tags) <= relevant
+        assert restricted.changed_tags == full.changed_tags
         # The watchdog's Done bit actually fired in the window, so it survives.
-        assert dones & set(restricted.changed_tags)
+        assert dones & set(restricted.changed_tags) & profile_tags
 
 
 # ---------------------------------------------------------------------------

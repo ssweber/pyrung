@@ -34,12 +34,11 @@ if TYPE_CHECKING:
 
 
 class _DeepSupport:
-    """Mutable per-``cause()`` state for the deep (held-support) walk.
+    """Mutable state for recursively explaining newly conductive enablers.
 
-    ``roots`` collects the classified terminals; ``root_seen`` dedups them
-    by ``(tag, kind)``; ``absence_visited`` guards the frame-anchored
-    why-held recursion (a never-moved tag's support set is walked once per
-    ``cause()`` call).
+    ``roots`` collects classified terminals; ``root_seen`` deduplicates them
+    by ``(tag, kind)``; ``absence_visited`` prevents cycles while following a
+    steady enabler through the writer that actually supplied its value.
     """
 
     __slots__ = ("roots", "root_seen", "absence_visited")
@@ -47,7 +46,7 @@ class _DeepSupport:
     def __init__(self) -> None:
         self.roots: list[RootCause] = []
         self.root_seen: set[tuple[str, str]] = set()
-        self.absence_visited: set[str] = set()
+        self.absence_visited: set[tuple[str, int, str]] = set()
 
 
 def recorded_cause(
@@ -85,11 +84,10 @@ def recorded_cause(
         timelines: Per-rung firing timelines for O(log S) transition
             detection without state reads.
         program: Full Program for subroutine rung resolution.
-        deep: Chase each step's held supports (temporal + absence hops)
-            and classify terminals into ``CausalChain.roots``.  ``False``
-            restores the shallow trigger-only walk — internal callers
-            (the pilot's chain chases) that do their own enabler handling
-            opt out until they are wired onto labeled roots.
+        deep: Recursively explain each fired rung's enablers through their
+            establishing transitions or observed value writers, and classify
+            terminals into ``CausalChain.roots``. ``False`` restores the
+            shallow trigger-only walk.
 
     Returns:
         A ``CausalChain``, or ``None`` if no transition was found.
@@ -461,20 +459,14 @@ def _walk_backward(
 ) -> None:
     """Recursive backward walk from a single transition.
 
-    Beyond the classic trigger recursion, the walk chases each step's
-    **held supports** (its enablers) so a chain never dead-ends at a value
-    that merely didn't move:
+    Beyond trigger recursion, the walk may recursively explain a fired rung's
+    steady enablers. An enabler that transitioned earlier is followed to that
+    establishing transition. A never-moved enabler is followed only through a
+    writer observed supplying its current value at this frame. Static writers
+    that did not fire are not part of the chain.
 
-    - **Temporal hop** — an enabler that transitioned earlier
-      (``held_since_scan``) is chased to that establishing transition and
-      the recorded walk continues there.  The log outranks the charts.
-    - **Absence hop** — an enabler that never moved in retained history is
-      resolved by *why-held* attribution: each static writer's condition is
-      attributed at this frame (factual — the conjunction of falsified
-      arms, never a route choice), and the resulting supports recurse.
-
-    Terminals are classified into ``deep.roots`` (external / never-written
-    / system / unattributed) instead of being silently dropped.
+    Terminals are classified into ``deep.roots`` (external / never-written /
+    system / unattributed).
     """
     tag_name = transition.tag_name
     scan_id = transition.scan_id
@@ -537,7 +529,7 @@ def _walk_backward(
     def _chase_supports(
         supports: tuple[EnablingCondition, ...], base_trail: tuple[str, ...]
     ) -> None:
-        """Recurse a step's held supports — the hop that removes dead-ends."""
+        """Recursively explain enablers on the actual fired path."""
         if deep is None or pdg is None:
             return
         for ec in supports:
@@ -583,7 +575,14 @@ def _walk_backward(
             _absence_hop(name, ec.value, base_trail)
 
     def _absence_hop(name: str, value: Any, base_trail: tuple[str, ...]) -> None:
-        """Why-held attribution for a tag that never moved in retained history."""
+        """Expand a held enabler through its observed value writer.
+
+        A steady contact only enters here because an actual fired rung made it
+        newly relevant.  Continue through a writer that really executed and
+        supplied the observed value at this frame; never sweep every static
+        writer merely because it *could* write the tag.  If no matching writer
+        executed, the held/default fact is the honest terminal.
+        """
         if deep is None or pdg is None:
             return
         hop_trail = (*base_trail, f"{name}(held)")
@@ -593,74 +592,92 @@ def _walk_backward(
                 value = history.at(scan_id).tags.get(name)
             _add_root(name, value, kind, None, hop_trail)
             return
-        if name in deep.absence_visited:
-            return
-        deep.absence_visited.add(name)
-
         state = history.at(scan_id)
         if value is None:
             value = state.tags.get(name)
-        view = _HistoricalView(state)
+        absence_key = (name, scan_id, repr(value))
+        if absence_key in deep.absence_visited:
+            return
+        deep.absence_visited.add(absence_key)
 
-        for node_idx in sorted(pdg.writers_of.get(name, frozenset())):
-            node = pdg.rung_nodes[node_idx]
-            if program is not None:
-                w_rung = resolve_rung(program, node)
-            elif node.subroutine is None and node.rung_index < len(logic):
-                w_rung = logic[node.rung_index]
-            else:
-                w_rung = None
-            if w_rung is None:
-                continue
-            sp_tree = w_rung.sp_tree()
-            supports: list[EnablingCondition] = []
-            seen_sup: set[str] = {name}
-            if sp_tree is not None:
-
-                def _eval_snap(cond: Condition, _v: Any = view) -> bool:
-                    return cond.evaluate(_v)  # type: ignore[arg-type]
-
-                try:
-                    attributions = attribute(sp_tree, _eval_snap)
-                except Exception:  # noqa: BLE001 - indirect/edge conditions on a bare frame
-                    attributions = []
-                for attr in attributions:
-                    cond_tag = _condition_tag_name(attr.condition)
-                    if cond_tag is None or cond_tag in seen_sup:
-                        continue
-                    seen_sup.add(cond_tag)
-                    supports.append(
-                        EnablingCondition(
-                            tag_name=cond_tag,
-                            value=state.tags.get(cond_tag),
-                            held_since_scan=_held_since(cond_tag),
-                        )
-                    )
-            for read_tag in sorted(node.data_reads):
-                if read_tag in seen_sup:
-                    continue
-                seen_sup.add(read_tag)
-                supports.append(
-                    EnablingCondition(
-                        tag_name=read_tag,
-                        value=state.tags.get(read_tag),
-                        held_since_scan=_held_since(read_tag),
-                    )
-                )
-            if not supports:
-                continue
-            steps.append(
-                ChainStep(
-                    transition=Transition(name, scan_id, value, value),
-                    rung_index=node.rung_index,
-                    triggers=(),
-                    enablers=tuple(supports),
-                    fidelity="structural",
-                    kind="held",
-                    subroutine=node.subroutine,
-                )
+        writer_scan = scan_id
+        observed_writers = _recorded_writers_from_firings(
+            pdg=pdg,
+            program=program,
+            logic=logic,
+            history=history,
+            rung_firings_fn=rung_firings_fn,
+            node_firings_fn=node_firings_fn,
+            tag_name=name,
+            scan_id=scan_id,
+            to_value=value,
+        )
+        if not observed_writers:
+            # The firing timeline records effective writes, so a rung that
+            # re-asserted the already-held value is intentionally absent.
+            # On-demand replay separately records which exact rungs executed
+            # and what each saw at entry.  Combine that execution evidence
+            # with the PDG's writer identity; never infer execution merely
+            # because a static writer's guard is true in the committed frame.
+            observed_writers = _replayed_writers_from_pdg(
+                pdg=pdg,
+                program=program,
+                logic=logic,
+                tag_name=name,
+                to_value=value,
+                scan_id=scan_id,
+                node_views_fn=node_views_fn,
+                node_views_cache=node_views_cache,
             )
-            _chase_supports(tuple(supports), hop_trail)
+        if not observed_writers:
+            # The consumer can run before a later rung changes the alias in the
+            # same scan. In that shape the current frame truthfully says the
+            # mapper is no longer conductive; the exact support is the most
+            # recent earlier frame where a replayed writer maintained the held
+            # value. Walk retained history newest-first and stop at the first
+            # execution-proven, value-proven writer.
+            for prior_scan in range(scan_id - 1, history.oldest_scan_id - 1, -1):
+                prior_writers = _replayed_writers_from_pdg(
+                    pdg=pdg,
+                    program=program,
+                    logic=logic,
+                    tag_name=name,
+                    to_value=value,
+                    scan_id=prior_scan,
+                    node_views_fn=node_views_fn,
+                    node_views_cache=node_views_cache,
+                )
+                if prior_writers:
+                    writer_scan = prior_scan
+                    observed_writers = prior_writers
+                    break
+        if not observed_writers:
+            _add_root(name, value, "unattributed", None, hop_trail)
+            return
+
+        _walk_backward(
+            logic=logic,
+            history=history,
+            rung_firings_fn=rung_firings_fn,
+            transition=Transition(name, writer_scan, value, value),
+            steps=steps,
+            conjunctive_roots=conjunctive_roots,
+            ambiguous_roots=ambiguous_roots,
+            visited=visited,
+            pdg=pdg,
+            timelines=timelines,
+            state_in_cache_fn=state_in_cache_fn,
+            program=program,
+            scan_log=scan_log,
+            initial_tags=initial_tags,
+            node_firings_fn=node_firings_fn,
+            node_views_fn=node_views_fn,
+            node_views_cache=node_views_cache,
+            node_reads_fn=node_reads_fn,
+            node_reads_cache=node_reads_cache,
+            deep=deep,
+            trail=hop_trail,
+        )
 
     # Resolved writers: (rung_index, rung, subroutine).  The node-level
     # firing timeline names the precise subroutine writer rung; the
@@ -678,18 +695,15 @@ def _walk_backward(
     )
 
     if not resolved_writers and pdg is not None:
-        # The firing log has been PDG-filtered — writes to tags no rung
-        # reads never landed.  Recover the writer by evaluating each
-        # static candidate from ``writers_of`` against the historical
-        # state at ``scan_id``.  A rung whose SP tree was true at that
-        # scan is treated as the writer; unconditional rungs (no SP
-        # tree) always qualify.
-        resolved_writers = _fallback_writers_from_pdg(
+        # The firing timeline can omit a PDG-filtered tag value. Recover its writer
+        # only from an exact rung observed during interpreted replay; the PDG
+        # supplies writer identity, not evidence that a candidate executed.
+        resolved_writers = _replayed_writers_from_pdg(
             pdg=pdg,
             program=program,
             logic=logic,
-            history=history,
             tag_name=tag_name,
+            to_value=transition.to_value,
             scan_id=scan_id,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
@@ -863,13 +877,39 @@ def _walk_backward(
 
             proximate: list[Transition] = []
             enabling: list[EnablingCondition] = []
+            attributed_tags: dict[str, Any] = {}
 
             for attr in attributions:
                 cond_tag = _condition_tag_name(attr.condition)
                 if cond_tag is None:
                     continue
+                attributed_tags.setdefault(cond_tag, view.get_tag(cond_tag))
 
-                cond_transition = _find_recent_transition(
+            # Classify contacts against the value the writer actually read,
+            # not the end-of-scan value.  Commands are commonly written,
+            # consumed, and cleared within one scan; the committed history then
+            # shows no transition even though the command is precisely what
+            # made this rung newly conductive. A value established in the prior
+            # scan stays an enabler here; deep recursion follows that separate
+            # establishing transition.
+            fire_diff = recorded_read_changes(
+                history,
+                frozenset(attributed_tags),
+                scan_id,
+                read_values=attributed_tags,
+            )
+            changed_at_fire = {
+                name: Transition(name, scan_id, before, after)
+                for name, before, after in fire_diff.changed
+            }
+
+            for cond_tag, at_fire_value in attributed_tags.items():
+                cond_transition = changed_at_fire.get(cond_tag)
+                if cond_transition is not None:
+                    proximate.append(cond_transition)
+                    continue
+
+                held_since = _find_last_transition_scan(
                     history,
                     cond_tag,
                     scan_id,
@@ -878,29 +918,13 @@ def _walk_backward(
                     scan_log=scan_log,
                     initial_tags=initial_tags,
                 )
-                if cond_transition is not None:
-                    proximate.append(cond_transition)
-                else:
-                    held_since = _find_last_transition_scan(
-                        history,
-                        cond_tag,
-                        scan_id,
-                        timelines=timelines,
-                        pdg=pdg,
-                        scan_log=scan_log,
-                        initial_tags=initial_tags,
+                enabling.append(
+                    EnablingCondition(
+                        tag_name=cond_tag,
+                        value=at_fire_value,
+                        held_since_scan=held_since,
                     )
-                    enabling.append(
-                        EnablingCondition(
-                            tag_name=cond_tag,
-                            value=(
-                                view.get_tag(cond_tag)
-                                if fire_view is not None
-                                else state.tags.get(cond_tag)
-                            ),
-                            held_since_scan=held_since,
-                        )
-                    )
+                )
 
             step = ChainStep(
                 transition=transition,
@@ -1108,141 +1132,29 @@ def _walk_backward(
                     deep=deep,
                     trail=trail,
                 )
-        # Deep walk: a chain must not dead-end at a value that merely held.
-        # Chase this step's supports — temporal hop to each enabler's
-        # establishing transition, absence hop for never-moved ones.
+        # Deep walk: explain this fired rung's enablers through their
+        # establishing transitions or observed value writers.
         _chase_supports(steps[step_idx].enablers, trail)
 
-    # Countervail pass: the transition also stands because writers statically
-    # bound to a *different* value stayed silent — a timer/latch whose reset
-    # never fired (the stuck-sensor shape).  Attribute why each blocked
-    # countervailing writer is false at this frame and chase those supports;
-    # factual (conjunction of falsified arms), never a route choice.
-    if deep is not None and pdg is not None:
-        _chase_countervailing_writers(
-            pdg=pdg,
-            program=program,
-            logic=logic,
-            history=history,
-            tag_name=tag_name,
-            scan_id=scan_id,
-            to_value=transition.to_value,
-            resolved_writers=resolved_writers,
-            steps=steps,
-            held_since=_held_since,
-            chase_supports=_chase_supports,
-            trail=trail,
-        )
 
-
-def _chase_countervailing_writers(
+def _replayed_writers_from_pdg(
     *,
     pdg: ProgramGraph,
     program: Program | None,
     logic: list[Rung],
-    history: History,
     tag_name: str,
-    scan_id: int,
     to_value: Any,
-    resolved_writers: list[tuple[int, Rung, str | None]],
-    steps: list[ChainStep],
-    held_since: Any,  # Callable[[str], int | None]
-    chase_supports: Any,  # Callable[[tuple[EnablingCondition, ...], tuple[str, ...]], None]
-    trail: tuple[str, ...],
-) -> None:
-    """Chase non-firing writers statically bound to a different value.
-
-    Only writers whose forward classification is a ``Literal`` that cannot
-    match *to_value* qualify (reset instructions, constant off-writers) —
-    dynamic writers (jump-table copies, calcs) are excluded, which keeps the
-    blast radius to genuinely countervailing rungs.  A qualifying writer that
-    evaluates True at the frame fired and was overwritten in program order —
-    that is sequencing, not absence — so only false ones are attributed.
-    """
-    from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
-    from pyrung.core.crossing import Literal as _CrossLiteral
-
-    fired = {(sub, idx) for idx, _r, sub in resolved_writers}
-    state = None
-    view = None
-    for node_idx in sorted(pdg.writers_of.get(tag_name, frozenset())):
-        node = pdg.rung_nodes[node_idx]
-        if (node.subroutine, node.rung_index) in fired:
-            continue
-        if program is not None:
-            w_rung = resolve_rung(program, node)
-        elif node.subroutine is None and node.rung_index < len(logic):
-            w_rung = logic[node.rung_index]
-        else:
-            w_rung = None
-        if w_rung is None:
-            continue
-        wv = _written_value_for_tag(w_rung, tag_name)
-        if not isinstance(wv, _CrossLiteral) or _values_match(wv.value, to_value):
-            continue
-        sp_tree = w_rung.sp_tree()
-        if sp_tree is None:
-            continue  # an unconditional countervail can't be blocked
-        if state is None:
-            state = history.at(scan_id)
-            view = _HistoricalView(state)
-
-        def _eval_snap(cond: Condition, _v: Any = view) -> bool:
-            return cond.evaluate(_v)  # type: ignore[arg-type]
-
-        try:
-            if evaluate_sp(sp_tree, _eval_snap):
-                continue  # fired but overwritten — sequencing, not absence
-            attributions = attribute(sp_tree, _eval_snap)
-        except Exception:  # noqa: BLE001 - indirect/edge conditions on a bare frame
-            continue
-        supports: list[EnablingCondition] = []
-        seen_sup: set[str] = {tag_name}
-        for attr in attributions:
-            cond_tag = _condition_tag_name(attr.condition)
-            if cond_tag is None or cond_tag in seen_sup:
-                continue
-            seen_sup.add(cond_tag)
-            supports.append(
-                EnablingCondition(
-                    tag_name=cond_tag,
-                    value=state.tags.get(cond_tag),
-                    held_since_scan=held_since(cond_tag),
-                )
-            )
-        if not supports:
-            continue
-        steps.append(
-            ChainStep(
-                transition=Transition(tag_name, scan_id, to_value, to_value),
-                rung_index=node.rung_index,
-                triggers=(),
-                enablers=tuple(supports),
-                fidelity="structural",
-                kind="reset_blocked",
-                subroutine=node.subroutine,
-            )
-        )
-        chase_supports(tuple(supports), (*trail, f"{tag_name}(unreset)"))
-
-
-def _fallback_writers_from_pdg(
-    *,
-    pdg: ProgramGraph,
-    program: Program | None,
-    logic: list[Rung],
-    history: History,
-    tag_name: str,
     scan_id: int,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
-    """Recover candidate writers of ``tag_name`` at ``scan_id`` from the PDG.
+    """Resolve writers omitted by the effective-write timeline from replay evidence.
 
-    Used when the firing log has dropped the write under PDG filtering —
-    the structural ``writers_of`` set tells us which rungs *can* write
-    the tag; re-evaluating each rung's SP tree against the historical
-    state narrows to those that *did* fire at ``scan_id``.
+    ``writers_of`` says which rungs *can* write the tag.  It does not prove a
+    subroutine was called, or even that a main rung was reached.  The runner's
+    interpreted replay supplies that missing fact: a ``ConditionView`` exists
+    only for a rung that actually executed in the historical scan.  A candidate
+    qualifies only when that exact view exists and its guard is conductive.
 
     Returns resolved ``(rung_index, rung, subroutine)`` tuples so the
     caller gets correct rung objects for subroutine and branch writers.
@@ -1250,15 +1162,14 @@ def _fallback_writers_from_pdg(
     candidates = pdg.writers_of.get(tag_name, frozenset())
     if not candidates:
         return []
-    return _semantic_writers_from_pdg(
+    return _executed_writers_from_pdg(
         pdg=pdg,
         program=program,
         logic=logic,
-        history=history,
         tag_name=tag_name,
+        to_value=to_value,
         scan_id=scan_id,
         candidates=candidates,
-        capture_rung_index=None,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
     )
@@ -1580,43 +1491,22 @@ def _with_caller_gate(
     return step.with_caller(caller_idx, tuple(caller_enablers))
 
 
-def _semantic_writers_from_pdg(
+def _executed_writers_from_pdg(
     *,
     pdg: ProgramGraph,
     program: Program | None,
     logic: list[Rung],
-    history: History,
     tag_name: str,
+    to_value: Any,
     scan_id: int,
     candidates: frozenset[int],
-    capture_rung_index: int | None,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
-    """Return PDG writer rungs that were enabled at *scan_id*.
-
-    If *capture_rung_index* is provided, candidates are limited to nodes
-    whose writes are captured under that main-rung timeline key.
-
-    Edge-triggered conditions (``rise``/``fall``) may evaluate False at
-    end-of-scan because the edge was consumed within the same rung
-    evaluation.  When the end-of-scan SP check fails and a fire-time view
-    is available, re-evaluate against it — the view captures the state at
-    rung entry, before consumption.
-    """
-    state = history.at(scan_id)
-    view = _HistoricalView(state)
-
-    def _eval(cond: Condition, _v: Any = view) -> bool:
-        return cond.evaluate(_v)  # type: ignore[arg-type]
+    """Return PDG writers proven executed and conductive by replay."""
 
     writers: list[tuple[int, Rung, str | None]] = []
     for node_idx in sorted(candidates):
-        if (
-            capture_rung_index is not None
-            and capture_rung_index not in pdg.timeline_capture_indices_for_node(node_idx)
-        ):
-            continue
         node = pdg.rung_nodes[node_idx]
         if program is not None:
             rung = resolve_rung(program, node)
@@ -1626,10 +1516,6 @@ def _semantic_writers_from_pdg(
             rung = None
         if rung is None:
             continue
-        sp_tree = rung.sp_tree()
-        if sp_tree is None or evaluate_sp(sp_tree, _eval):
-            writers.append((node.rung_index, rung, node.subroutine))
-            continue
         fire_view = _writer_fire_view(
             node.subroutine,
             node.rung_index,
@@ -1637,14 +1523,73 @@ def _semantic_writers_from_pdg(
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
         )
-        if fire_view is not None:
-
-            def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
-                return cond.evaluate(_v)  # type: ignore[arg-type]
-
-            if evaluate_sp(sp_tree, _eval_fire):
+        if fire_view is None:
+            continue
+        sp_tree = rung.sp_tree()
+        if sp_tree is None:
+            if _replayed_writer_proves_value(rung, tag_name, to_value, fire_view):
                 writers.append((node.rung_index, rung, node.subroutine))
+            continue
+
+        def _eval_fire(cond: Condition, _v: Any = fire_view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
+
+        if evaluate_sp(sp_tree, _eval_fire) and _replayed_writer_proves_value(
+            rung, tag_name, to_value, fire_view
+        ):
+            writers.append((node.rung_index, rung, node.subroutine))
     return writers
+
+
+def _replayed_writer_proves_value(
+    rung: Rung,
+    tag_name: str,
+    to_value: Any,
+    fire_view: Any,
+) -> bool:
+    """Whether a conductive replayed rung must write ``tag_name=to_value``."""
+    from pyrung.core.analysis.sp_values import (
+        _values_match,
+        _writer_for_tag,
+        _written_value_for_tag,
+    )
+    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.instruction.coils import LatchInstruction, OutInstruction
+    from pyrung.core.instruction.data_transfer import (
+        CopyInstruction,
+        _store_copy_value_to_tag_type,
+    )
+    from pyrung.core.tag import Tag
+
+    written = _written_value_for_tag(rung, tag_name)
+    if isinstance(written, Literal):
+        return _values_match(written.value, to_value)
+    if isinstance(written, Affine):
+        try:
+            source = fire_view.get_tag(written.source)
+            return _values_match(source * written.scale + written.offset, to_value)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+    # A named slot inside a block can evade the generic forward crossing even
+    # though Boolean coil semantics remain exact.
+    instr = _writer_for_tag(rung, tag_name)
+    if (
+        isinstance(instr, CopyInstruction)
+        and instr.convert is None
+        and isinstance(instr.source, Tag)
+        and isinstance(instr.dest, Tag)
+        and instr.dest.name == tag_name
+    ):
+        try:
+            source = fire_view.get_tag(instr.source.name)
+            stored = _store_copy_value_to_tag_type(source, instr.dest)
+            return _values_match(stored, to_value)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+    return isinstance(instr, (OutInstruction, LatchInstruction)) and _values_match(
+        to_value,
+        True,
+    )
 
 
 # ---------------------------------------------------------------------------

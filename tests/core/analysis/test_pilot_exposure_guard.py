@@ -1,37 +1,17 @@
-"""PILOT gate: a latch correction's lifetime is the exposure, not the journey.
-
-The shape (a miniature of the burner's door requirement, no burner names):
-
-* a channel register with ``sm_MapVal2State``-style alias Bools;
-* an **alarm latch** that fires in two states (``Or(InStarting, InUnholding)``)
-  when the door input is absent;
-* a **command writer** that pushes the channel (Hold) in a third state
-  (``InExecute``) when either door input is absent — its write reaches the
-  channel through an ordinary command register, not a latch;
-* a **warning** rung at a fourth state (``InHeld``) that reads the same door
-  input but whose write leads nowhere.
-
-The corrective ``Door=True`` must carry a guard active in every state where a
-*silenced antagonist* can fire — the alarm's own ``Or`` plus (for the joint
-door+lint correction) the command writer's state — and inactive in the
-warning-only state, so a later held-state door-open advance still works.
-
-The guard is read structurally off the antagonist rungs' own conditions.  No
-state literal is invented: an unreadable exposure falls back to pair-shaped
-proposals (legacy landing scoping downstream).
-"""
+"""PILOT scopes latch corrections to the recorded conductive context."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
 
-from pyrung import Bool, Int, Or, Program, Rung, copy, latch, out
+from pyrung import Bool, Int, Or, Program, Rung, latch, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import DeviationIncident
 from pyrung.core.analysis.steerable import compute_steerable
+from pyrung.core.condition import CompareEq
 from pyrung.core.runner import PLC
 
 
@@ -59,233 +39,84 @@ def _make_ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**ns)
 
 
-def _alias_snap(**states: bool) -> dict[str, Any]:
-    """A snapshot with the alias Bools set per keyword (others False)."""
-    snap = {
-        "InStarting": False,
-        "InUnholding": False,
-        "InExecute": False,
-        "InHeld": False,
-        "Door": False,
-        "Lint": False,
-    }
-    snap.update(states)
-    return snap
-
-
 def _guard_active(rung: PilotRung, snap: dict[str, Any]) -> bool:
     return bool(rung.guard.evaluate(_SnapView(snap)))
 
 
-def _door_cycle_program() -> Program:
-    Door = Bool("Door", external=True)
-    Lint = Bool("Lint", external=True)
-    State = Int("State", default=4)
-    InStarting = Bool("InStarting")
-    InUnholding = Bool("InUnholding")
-    InExecute = Bool("InExecute")
-    InHeld = Bool("InHeld")
-    Alarm = Bool("Alarm")
-    LintAlarm = Bool("LintAlarm")
-    Warn = Bool("Warn")
-    Cmd = Int("Cmd")
-
-    with Program() as prog:
-        # sm_MapVal2State idiom: alias Bools written under channel equality.
-        with Rung(State == 3):
-            out(InStarting)
-        with Rung(State == 12):
-            out(InUnholding)
-        with Rung(State == 6):
-            out(InExecute)
-        with Rung(State == 11):
-            out(InHeld)
-        # Latch antagonists: the ladder names its own contexts.
-        with Rung(Or(InStarting, InUnholding), ~Door):
-            latch(Alarm)
-        with Rung(Or(InStarting, InUnholding), ~Lint):
-            latch(LintAlarm)
-        # Command antagonist: pushes the channel in a third state — silenced
-        # only by the JOINT door+lint correction.
-        with Rung(InExecute, Or(~Door, ~Lint)):
-            copy(4, Cmd)
-        # The command register drives the channel, so its downstream reaches
-        # the opaque loop.
-        with Rung(Cmd == 4):
-            copy(10, State)
-            copy(0, Cmd)
-        # Bystander: reads the door in a fourth state, write leads nowhere.
-        with Rung(InHeld, ~Door):
-            out(Warn)
-    return prog
-
-
-def _door_incident() -> DeviationIncident:
-    before = _alias_snap(InStarting=True)
-    after = dict(before, Alarm=True, LintAlarm=True)
-    return DeviationIncident(
-        anchor_scan=0,
-        departure_scan=None,
-        end_scan=5,
-        action=(("Go", True),),
-        bearing=(("Alarm", False), ("LintAlarm", False)),
-        before_snap=before,
-        after_snap=after,
-        changed_tags=("Alarm", "LintAlarm"),
-        departures=(),
-    )
-
-
 class TestExposureGuard:
-    def test_single_input_correction_covers_every_latch_state(self):
-        prog = _door_cycle_program()
-        plc = PLC(prog, dt=0.010)
-        ctx = _make_ctx(prog, plc, opaque_loop=frozenset({"State"}))
-
-        hyps = correct_enablers(plc, _door_incident(), ctx)
-        door_only = [
-            h
-            for h in hyps
-            if h.kind == "latch-exposure"
-            and len(h.holds) == 1
-            and isinstance(h.holds[0], PilotRung)
-            and h.holds[0].dest == "Door"
-        ]
-        assert door_only, f"no guarded Door rung proposed: {[h.holds for h in hyps]}"
-        rung = door_only[0].holds[0]
-        assert rung.value is True
-
-        # Active in every state where the silenced latch can arm ...
-        assert _guard_active(rung, _alias_snap(InStarting=True))
-        assert _guard_active(rung, _alias_snap(InUnholding=True))
-        # ... and inactive where only the bystander reads the door.  The
-        # command writer is NOT silenced by the door alone (the lint arm keeps
-        # it fireable), so Execute stays out of the single-input guard.
-        assert not _guard_active(rung, _alias_snap(InExecute=True))
-        assert not _guard_active(rung, _alias_snap(InHeld=True))
-
-    def test_joint_correction_also_covers_the_command_writer_state(self):
-        prog = _door_cycle_program()
-        plc = PLC(prog, dt=0.010)
-        ctx = _make_ctx(prog, plc, opaque_loop=frozenset({"State"}))
-
-        hyps = correct_enablers(plc, _door_incident(), ctx)
-        joint = [h for h in hyps if len(h.holds) == 2]
-        assert joint, "no joint door+lint proposal"
-        rungs = joint[0].holds
-        assert all(isinstance(r, PilotRung) for r in rungs), "joint correction must own its guard"
-        for rung in rungs:
-            # The joint assignment silences the command writer too, so the
-            # guard now spans its state alongside the latch's own states.
-            assert _guard_active(rung, _alias_snap(InExecute=True))
-            assert _guard_active(rung, _alias_snap(InStarting=True))
-            assert _guard_active(rung, _alias_snap(InUnholding=True))
-            # The warning-only state still releases the input.
-            assert not _guard_active(rung, _alias_snap(InHeld=True))
-
-    def test_state_gate_downstream_of_the_silenced_rung_is_collected(self):
-        """The FB shape: the lever sits behind a ReadInputs image copy; one
-        silenced consumer (the latch) carries its own state gate, another (a
-        stateless error producer) is gated only downstream, on the command
-        writer its consequence flows through.  Both contexts must land in the
-        guard — the union is the exposure."""
-        FB = Bool("FB", external=True)
-        iFB = Bool("iFB")
-        ErrBit = Bool("ErrBit")
+    def test_uses_actual_condition_from_recorded_alias_writer(self) -> None:
+        """Only the state that conducted this incident scopes the correction."""
+        Door = Bool("Door", external=True)
+        Lint = Bool("Lint", external=True)
         State = Int("State", default=4)
-        Cmd = Int("Cmd")
         InStarting = Bool("InStarting")
-        InExecute = Bool("InExecute")
-        FBAlarm = Bool("FBAlarm")
+        InUnholding = Bool("InUnholding")
+        Alarm = Bool("Alarm")
+        LintAlarm = Bool("LintAlarm")
 
         with Program() as prog:
             with Rung(State == 3):
                 out(InStarting)
-            with Rung(State == 6):
-                out(InExecute)
-            # ReadInputs idiom: the program reads the image, not the lever.
-            with Rung(FB):
-                out(iFB)
-            # Latch antagonist with its own state gate.
-            with Rung(InStarting, ~iFB):
-                latch(FBAlarm)
-            # Stateless silenced producer ...
-            with Rung(~iFB):
-                out(ErrBit)
-            # ... whose state gate lives one hop downstream, on the command
-            # writer that pushes the channel.
-            with Rung(InExecute, ErrBit):
-                copy(8, Cmd)
-            with Rung(Cmd == 8):
-                copy(9, State)
-                copy(0, Cmd)
+            with Rung(State == 12):
+                out(InUnholding)
+            with Rung(Or(InStarting, InUnholding), ~Door):
+                latch(Alarm)
+            with Rung(Or(InStarting, InUnholding), ~Lint):
+                latch(LintAlarm)
 
         plc = PLC(prog, dt=0.010)
         ctx = _make_ctx(prog, plc, opaque_loop=frozenset({"State"}))
-        before = {
-            "InStarting": True,
-            "InExecute": False,
-            "FB": False,
-            "iFB": False,
-            "ErrBit": True,
-            "State": 3,
-            "Cmd": 0,
-        }
+        before = dict(plc.state.tags)
+        anchor = plc.state.scan_id
+
+        plc.patch({"State": 3})
+        plc.step()
         incident = DeviationIncident(
-            anchor_scan=0,
-            departure_scan=None,
-            end_scan=5,
-            action=(("Go", True),),
-            bearing=(("FBAlarm", False),),
+            anchor_scan=anchor,
+            departure_scan=plc.state.scan_id,
+            end_scan=plc.state.scan_id,
+            action=(("State", 3),),
+            bearing=(("State", 3),),
             before_snap=before,
-            after_snap=dict(before, FBAlarm=True),
-            changed_tags=("FBAlarm",),
+            after_snap=dict(plc.state.tags),
+            changed_tags=("State", "Alarm", "LintAlarm"),
             departures=(),
+            channel_tag="State",
         )
 
         hyps = correct_enablers(plc, incident, ctx)
-        fb_rungs = [
-            h.holds[0]
-            for h in hyps
-            if h.kind == "latch-exposure"
-            and len(h.holds) == 1
-            and isinstance(h.holds[0], PilotRung)
-            and h.holds[0].dest == "FB"
-        ]
-        assert fb_rungs, f"no guarded FB rung proposed: {[h.holds for h in hyps]}"
-        rung = fb_rungs[0]
-        view_starting = {"InStarting": True, "InExecute": False}
-        view_execute = {"InStarting": False, "InExecute": True}
-        view_neither = {"InStarting": False, "InExecute": False}
-        assert _guard_active(rung, view_starting)
-        assert _guard_active(rung, view_execute)
-        assert not _guard_active(rung, view_neither)
+        joint = next(h for h in hyps if len(h.holds) == 2)
+        assert all(isinstance(proposed, PilotRung) for proposed in joint.holds)
+        for proposed in joint.holds:
+            # This is the original mapping rung condition, not a sampled
+            # equality and not a union of every state where the alarm could
+            # theoretically fire.
+            assert isinstance(proposed.guard, CompareEq)
+            assert proposed.guard.tag.name == "State"
+            assert proposed.guard.value == 3
+            assert _guard_active(proposed, {"State": 3})
+            assert not _guard_active(proposed, {"State": 6})
+            assert not _guard_active(proposed, {"State": 12})
 
-    def test_stateless_exposure_falls_back_to_pair_proposals(self):
-        """No state gate anywhere on the antagonist chain: never invent one.
-        The proposal stays pair-shaped so the legacy landing scoping applies."""
+    def test_no_recorded_channel_condition_keeps_pair_proposal(self) -> None:
+        """Without causal channel evidence, Pilot does not invent a scope."""
         Guard = Bool("Guard", external=True)
-        State = Bool("State")
         Alarm = Bool("Alarm")
-        Enter = Bool("Enter", external=True)
 
         with Program() as prog:
-            with Rung(Enter):
-                out(State)
-            # The latch reads only the corrected input — no channel context.
             with Rung(~Guard):
                 latch(Alarm)
 
         plc = PLC(prog, dt=0.010)
-        ctx = _make_ctx(prog, plc, opaque_loop=frozenset({"State"}))
+        ctx = _make_ctx(prog, plc)
         incident = DeviationIncident(
             anchor_scan=0,
             departure_scan=None,
-            end_scan=5,
-            action=(("Enter", True),),
+            end_scan=1,
+            action=(),
             bearing=(("Alarm", False),),
-            before_snap={"State": True, "Guard": False},
-            after_snap={"State": True, "Guard": False, "Alarm": True},
+            before_snap={"Guard": False, "Alarm": False},
+            after_snap={"Guard": False, "Alarm": True},
             changed_tags=("Alarm",),
             departures=(),
         )

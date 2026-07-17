@@ -116,11 +116,10 @@ def recorded_read_changes(
     falls back to end-of-scan state.  *before* is always the committed value
     entering the scan (end of N-1).
 
-    Adjacent-scan consume: when *before* == *after* (no change in the ``[N-1, N]``
-    window) but the operand transitioned at N-1 (end-of-(N-2) differs from
-    *before*), the operand was written one scan before consumption and the
-    single-scan diff misses it.  Widen to ``[N-2, N]`` so the write-then-consume
-    pair surfaces as a trigger.
+    A value established in an earlier scan remains an enabler, even when this
+    writer consumes or clears it later in the current scan. Deep cause follows
+    that enabler to its establishing transition; widening the trigger window
+    would collapse two distinct causal hops and mislabel a steady read.
     """
     if not footprint:
         return ReadDiff(footprint=frozenset())
@@ -130,9 +129,6 @@ def recorded_read_changes(
 
     cur = history.at(scan_id)
     prev = history.at(prev_scan_id) if prev_scan_id is not None else None
-    prev2_id = _prev_scan_id(history, prev_scan_id) if prev_scan_id is not None else None
-    prev2 = history.at(prev2_id) if prev2_id is not None else None
-
     changed: list[tuple[str, Any, Any]] = []
     nonzero_now: list[str] = []
     for tag in sorted(footprint):
@@ -144,13 +140,6 @@ def recorded_read_changes(
             before = prev.tags.get(tag)
             if before != after:
                 changed.append((tag, before, after))
-            elif prev2 is not None:
-                eos = cur.tags.get(tag)
-                consumed = read_values is not None and tag in read_values and after != eos
-                if consumed:
-                    before2 = prev2.tags.get(tag)
-                    if before2 != after:
-                        changed.append((tag, before2, after))
         if _is_nonzero(after):
             nonzero_now.append(tag)
 

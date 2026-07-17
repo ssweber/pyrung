@@ -226,6 +226,8 @@ class DeviationIncident:
     bearing: tuple[_ActionPair, ...]
     before_snap: Mapping[str, Any]
     after_snap: Mapping[str, Any]
+    # Complete factual movement set: every timeline transition plus every
+    # before/after endpoint difference. Consumers filter it locally.
     changed_tags: tuple[str, ...]
     departures: tuple[BearingDeparture, ...]
     # The macro-state register whose departure IS the incident (the zoom /

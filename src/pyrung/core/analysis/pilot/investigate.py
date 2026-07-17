@@ -13,7 +13,7 @@ and installation belong to ``progress.py``.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import product
 from types import SimpleNamespace
@@ -42,7 +42,12 @@ from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_en
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
-from pyrung.core.analysis.sp_values import _SnapshotView, _values_match, _written_value_for_tag
+from pyrung.core.analysis.sp_values import (
+    _SnapshotView,
+    _values_match,
+    _writer_for_tag,
+    _written_value_for_tag,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -878,29 +883,20 @@ def build_deviation_incident(
     fire-then-reset watchdog pulse is two recorded transitions — exactly the
     complement-reset oscillation ``correct_enablers`` looks for.
 
-    *program*, when given, narrows ``changed_tags`` to the fix engine's actual
-    universe: every profile's Done bit (from the timeline) and accumulator
-    register (from the endpoint diff — accumulators are deliberately not pens,
-    so their membership is the ``before_snap``/``after_snap`` comparison).
-    ``None`` keeps full generality (direct callers / tests): every recorded
-    transition plus the endpoint diff.
+    ``changed_tags`` is factual incident evidence: every recorded transition
+    plus every endpoint difference.  Consumers such as the timer correction
+    engine select their own relevant profile tags from this complete set;
+    incident construction never discards evidence on a consumer's behalf.
+
+    *program* is retained for call compatibility.  It no longer changes the
+    evidence recorded in the incident.
     """
     changed: set[str] = {t for event in timeline for t, _b, _a in event.transitions}
-    if program is not None:
-        done_names = frozenset(p.done.name for p, _ in iter_profiles(program))
-        acc_names = frozenset(p.accumulator.name for p, _ in iter_profiles(program))
-        changed &= done_names | acc_names
-        changed.update(
-            name
-            for name in acc_names
-            if not _values_match(before_snap.get(name), after_snap.get(name))
-        )
-    else:
-        changed.update(
-            t
-            for t in set(before_snap) | set(after_snap)
-            if not _values_match(before_snap.get(t), after_snap.get(t))
-        )
+    changed.update(
+        t
+        for t in set(before_snap) | set(after_snap)
+        if not _values_match(before_snap.get(t), after_snap.get(t))
+    )
     departures = tuple(
         BearingDeparture(tag, value, _first_timeline_departure(timeline, tag, value))
         for tag, value in bearing
@@ -933,7 +929,9 @@ def _hold_is_noop(
     snap: Mapping[str, Any],
     pdg: Any,
     program: Any,
-    pilot_managed: frozenset[str] = frozenset(),
+    incident_movers: frozenset[str] = frozenset(),
+    after_snap: Mapping[str, Any] | None = None,
+    synthesis_rungs: Sequence[PilotRung] = (),
 ) -> bool:
     """A hold that changes nothing cannot be a correction.
 
@@ -945,19 +943,22 @@ def _hold_is_noop(
     writer that can produce a different one.  Oscillating (``PilotRung``)
     values are never no-ops.
 
-    A tag already driven by an installed PilotRung (*pilot_managed*) is never a
-    no-op either: the overlay itself is a mover.  The incident-anchor value only
-    reads stable because the pilot's own rung holds it there, and that rung's
-    guard can expire inside the coast window — managed-Boolean lowering then
-    drives the tag off the "stable" value.  The program-writer scan below cannot
-    see that mover, so it is short-circuited here.
+    A tag recorded as moving during this incident, whose endpoint differs from
+    its anchor, or which is written by the installed synthesis overlay is not a
+    no-op even when the proposed correction equals its anchor value.  The
+    overlay is executable writer evidence outside the program PDG; replay, not
+    this cheap prefilter, decides whether a different scoped rule is useful.
     """
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.steerable import _literal_write
 
-    if tag in pilot_managed:
+    if tag in incident_movers:
+        return False
+    if after_snap is not None and not _values_match(after_snap.get(tag), value):
         return False
     if getattr(value, "rules", None) is not None:
+        return False
+    if any(rung.dest == tag for rung in synthesis_rungs):
         return False
     if not _values_match(snap.get(tag), value):
         return False
@@ -1082,10 +1083,6 @@ def investigate_deviation(
     # survive the bounded replay, the terminal names the cause while the
     # suppressor merely mutes the response.
     installed_rungs = tuple(installed_rungs)
-    # Every dest an installed PilotRung drives — regardless of whether its guard
-    # was active at the incident anchor.  The vacuity check treats each of these
-    # as a mover (the overlay itself moves the tag when its guard expires).
-    pilot_managed = frozenset(r.dest for r in installed_rungs)
     # The effective pilot-held value per dest *at the incident anchor*: managed
     # lowering returns each Boolean to its rest, then active rungs write in append
     # order, so the last active rung wins.  A rung whose guard evaluated False at
@@ -1100,12 +1097,13 @@ def investigate_deviation(
         plc,
         incident,
         ctx,
-        exclude=frozenset(pilot_touched) | pilot_managed,
+        # Protect only the action that launched this incident. Historical
+        # Pilot ownership is not causal evidence; deep cause replays the actual
+        # installed synthesis and can attribute an active or expired rule.
+        exclude=frozenset(tag for tag, _value in incident.action),
     )
     raw: list[InvestigationHypothesis] = list(absence_hyps)
-    precise = _precise_cause(plc, incident, ctx, pilot_touched)
-    if precise is not None:
-        raw.append(precise)
+    raw.extend(_precise_causes(plc, incident, ctx, pilot_touched))
     raw.extend(
         InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
         for c in correct_enablers(plc, incident, ctx)
@@ -1119,6 +1117,10 @@ def investigate_deviation(
     confirmed_holds: list[Any] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
+    # A proposed hold at the anchor value is meaningful when the complete
+    # incident record says that tag moved away (including an installed guard
+    # expiring).  Correction engines filter this factual set locally.
+    recorded_incident_movers = frozenset(incident.changed_tags)
 
     def _reject(hyp: InvestigationHypothesis, slug: str, detail: str) -> None:
         # Recording only: ``detail`` is the unchanged human ground, ``slug`` the
@@ -1150,7 +1152,16 @@ def investigate_deviation(
                     action_tag == ht and not _values_match(action_value, hv)
                     for action_tag, action_value in incident.action
                 )
-                and _hold_is_noop(ht, hv, incident.before_snap, pdg, program, pilot_managed)
+                and _hold_is_noop(
+                    ht,
+                    hv,
+                    incident.before_snap,
+                    pdg,
+                    program,
+                    recorded_incident_movers,
+                    incident.after_snap,
+                    installed_rungs,
+                )
                 for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
         ):
@@ -1167,12 +1178,13 @@ def investigate_deviation(
         outcome = replay(hypothesis.holds)
         if outcome.accepted:
             scoped = _scoped_correction_rungs(plc, hypothesis.holds, incident, outcome, ctx)
+            required_progress = (*incident.bearing, *needed)
             if (
                 pdg is not None
                 and program is not None
                 and _active_rungs_defeat_needed(
                     scoped,
-                    needed,
+                    required_progress,
                     incident.before_snap,
                     pdg,
                     program,
@@ -1187,8 +1199,8 @@ def investigate_deviation(
                 _reject(
                     hypothesis,
                     "self-defeat",
-                    "guarded correction defeats checkpoint frontier: "
-                    f"needed={tuple(needed)!r}, correction={tuple(scoped)!r}",
+                    "guarded correction defeats requested progress: "
+                    f"needed={required_progress!r}, correction={tuple(scoped)!r}",
                 )
                 continue
             installed_outcome = replay(scoped)
@@ -1263,11 +1275,10 @@ def hold_defeats_needed(
     shallowest need — a write matching only a deeper stopover (``fill(1, …)``
     against a needed 3) still pins progress short of the goal and defeats.
 
-    Scope note: this is the *indirect* pin check (a hold forcing some OTHER
-    register away from its need through a literal-writing rung). A hold that
-    contradicts the trace's own demand for the SAME tag is handled by the
-    ordinary trace and active-PilotRung ownership rules; it must not be
-    reconstructed here from writer shapes.
+    Direct contradictions are harmful too: a correction that actively writes a
+    required tag to another value is already a proof of self-defeat. The
+    writer walk below additionally catches an indirect pin where the held value
+    forces some other required register away from its need.
     """
     return _holds_defeat_needed(((tag, hold_value),), needed, pdg, program)
 
@@ -1324,6 +1335,12 @@ def _holds_defeat_needed(
         held_values[tag] = _hold_values(hold_value)
     if not held_values:
         return False
+    if any(
+        tag in needed_first
+        and any(not _values_match(value, needed_first[tag]) for value in values)
+        for tag, values in held_values.items()
+    ):
+        return True
     for node in pdg.rung_nodes:
         read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
         if not read_tags:
@@ -1345,28 +1362,36 @@ def _holds_defeat_needed(
     return False
 
 
-def _precise_cause(
+def _precise_causes(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
     pilot_touched: frozenset[str] = frozenset(),
-) -> InvestigationHypothesis | None:
-    """Single cause()-chain walk from the first departure to a steerable input.
+) -> list[InvestigationHypothesis]:
+    """Minimal controllable cuts of the exact deep fired chain.
 
-    Returns the first supported hypothesis. If no departure's cause chain
-    reaches a steerable input, returns ``None``.
+    For each departure, ``cause(deep=True)`` supplies the rungs that actually
+    fired, their exact transitions, and their steady enablers. The walk derives
+    two forms of cut from that one record:
 
-    The **empirical steerable veto** (``empirical_program_writes``) is consulted
-    over the incident window: a statically-steerable tag the recorded run shows
-    the *program* wrote is not a terminal nogood, so the walk recurses through it
-    toward the real root even when an indirect-destination crossing did not
-    attribute the intermediate word. This is where the only steerability
-    consultation in investigation lives, so the veto is wired
-    here once.
+    * revert a steerable transition at its pre-incident value;
+    * force a fired rung's guard false with the cheapest drivable assignment.
+
+    Program-written condition tags are never terminal levers merely because
+    static steerability includes them; guard solving follows their
+    observed/static writers to an external lever. Cuts that oppose requested
+    progress are still hypotheses: the investigation layer proves them harmful
+    against the incident bearing/checkpoint frontier and records a
+    ``self-defeat`` rejection. Every returned hypothesis names the fired rung
+    whose conductive path it cuts.
     """
     steerable = getattr(ctx, "steerable", frozenset())
     if not steerable:
-        return None
+        return []
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None:
+        return []
     empirical_writes = empirical_program_writes(
         plc,
         steerable,
@@ -1374,24 +1399,274 @@ def _precise_cause(
         end_scan=incident.end_scan,
         pilot_touched=pilot_touched,
     )
-    for departure in incident.departures:
-        nogoods, holds = chase_cause_roots(
+    hypotheses: list[InvestigationHypothesis] = []
+
+    # The channel departure is the incident's causal effect. Bearing aliases
+    # (``Sts_State_Starting`` falling because the channel already left Starting)
+    # are downstream symptoms and must not seed cuts of their observer/mapping
+    # rungs. Coast receipts retain the exact channel transition even when the
+    # requested destination was never reached and therefore has no ordinary
+    # ``BearingDeparture.scan``.
+    seeds = list(incident.departures)
+    if incident.channel_tag is not None:
+        channel_scan = next(
+            (
+                event.scan
+                for event in reversed(incident.timeline)
+                if any(
+                    tag == incident.channel_tag
+                    and not _values_match(before, after)
+                    for tag, before, after in getattr(event, "transitions", ())
+                )
+            ),
+            None,
+        )
+        if channel_scan is not None:
+            desired = next(
+                (
+                    value
+                    for tag, value in incident.bearing
+                    if tag == incident.channel_tag
+                ),
+                incident.before_snap.get(incident.channel_tag),
+            )
+            seeds = [BearingDeparture(incident.channel_tag, desired, channel_scan)]
+
+    for departure in seeds:
+        try:
+            chain = plc.cause(departure.tag, scan=departure.scan, deep=True)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "causal-frontier: cause(%s@%s) raised",
+                departure.tag,
+                departure.scan,
+                exc_info=True,
+            )
+            chain = None
+        if chain is None:
+            continue
+
+        steps_by_tag: dict[str, list[Any]] = {}
+        for step in chain.steps:
+            steps_by_tag.setdefault(step.transition.tag_name, []).append(step)
+
+        # Anything with an observed writer in this chain is an intermediate,
+        # even if the broad static classifier calls it steerable.
+        effective_steerable = (
+            frozenset(steerable)
+            - empirical_writes
+            - frozenset(steps_by_tag)
+        )
+
+        origin_memo: dict[str, frozenset[str]] = {}
+
+        def _origins(
+            name: str,
+            visiting: frozenset[str] = frozenset(),
+            *,
+            _steps_by_tag: dict[str, list[Any]] = steps_by_tag,
+            _origin_memo: dict[str, frozenset[str]] = origin_memo,
+        ) -> frozenset[str]:
+            if name in _origin_memo:
+                return _origin_memo[name]
+            if name in visiting:
+                return frozenset()
+            next_visiting = visiting | {name}
+            found: set[str] = set()
+            for step in _steps_by_tag.get(name, ()):
+                links = step.triggers or step.enablers
+                for link in links:
+                    found.update(_origins(link.tag_name, next_visiting))
+            result = frozenset(found or {name})
+            _origin_memo[name] = result
+            return result
+
+        def _step_label(step: Any) -> str:
+            return (
+                f"{step.subroutine + ':' if step.subroutine else ''}"
+                f"R{step.rung_index + 1}"
+            )
+
+        # The undesired path is the trigger spine from the effect. Deep enabler
+        # expansion supplies origins for conditions on that spine, but those
+        # supporting writer rungs are not themselves antagonists to cut.
+        trigger_spine: set[int] = set()
+
+        def _mark_trigger_spine(
+            name: str,
+            visiting: frozenset[str] = frozenset(),
+            *,
+            _steps_by_tag: dict[str, list[Any]] = steps_by_tag,
+            _trigger_spine: set[int] = trigger_spine,
+        ) -> None:
+            if name in visiting:
+                return
+            next_visiting = visiting | {name}
+            for step in _steps_by_tag.get(name, ()):
+                _trigger_spine.add(id(step))
+                for trigger in step.triggers:
+                    _mark_trigger_spine(trigger.tag_name, next_visiting)
+
+        _mark_trigger_spine(chain.effect.tag_name)
+
+        # First candidate: exact transitioned leaves. This is the same causal
+        # frontier as the rung cuts below, not a separate heuristic; it is
+        # preferred because preserving the pre-transition physical value is the
+        # lightest faithful correction.
+        nogoods, mover_holds = chase_cause_roots(
             plc,
             departure.tag,
-            steerable,
+            effective_steerable,
             scan=departure.scan,
             bridge=ctx,
-            empirical_writes=empirical_writes,
         )
-        holds_filtered = tuple(pair for pair in _dedupe_pairs(holds) if _hold_allowed(ctx, pair))
-        if holds_filtered:
-            return InvestigationHypothesis(
-                kind="precise-cause",
-                holds=holds_filtered,
-                sources=tuple(sorted(nogoods | {departure.tag})),
-                detail=f"{departure.tag} departed at scan {departure.scan}",
+        moved_tags = {
+            tr.tag_name
+            for step in chain.steps
+            for tr in step.triggers
+            if not _values_match(tr.from_value, tr.to_value)
+        }
+        mover_holds_filtered = tuple(
+            pair
+            for pair in _dedupe_pairs(mover_holds)
+            if pair[0] in moved_tags and _hold_allowed(ctx, pair)
+        )
+        if mover_holds_filtered:
+            mover_names = {tag for tag, _value in mover_holds_filtered}
+            common: list[tuple[int, Any]] = []
+            for index, step in enumerate(chain.steps):
+                if id(step) not in trigger_spine:
+                    continue
+                leaves: set[str] = set()
+                for trigger in step.triggers:
+                    leaves.update(_origins(trigger.tag_name))
+                if mover_names <= leaves:
+                    common.append((index, step))
+            frontier = common[-1][1] if common else chain.steps[0]
+            hypotheses.append(
+                InvestigationHypothesis(
+                    kind="precise-cause",
+                    holds=mover_holds_filtered,
+                    sources=tuple(sorted(nogoods | mover_names | {departure.tag})),
+                    detail=(
+                        f"{_step_label(frontier)} fired at scan "
+                        f"{frontier.transition.scan_id}; revert exact trigger frontier"
+                    ),
+                )
             )
-    return None
+
+        if departure.scan is None:
+            frame = dict(plc.state.tags)
+        else:
+            try:
+                frame = dict(plc.history.at(departure.scan).tags)
+            except Exception:  # noqa: BLE001
+                frame = dict(plc.state.tags)
+
+        # Then enumerate minimal guard cuts for every actual fired rung. Reads
+        # are all eligible hypotheses, including cuts through requested
+        # progress. The investigation layer, not the generator, records why a
+        # progress-damaging cut is harmful.
+        from pyrung.core.analysis.pdg import resolve_rung
+
+        for step in reversed(chain.steps):
+            if id(step) not in trigger_spine:
+                continue
+            direct_values = {
+                **{tr.tag_name: tr.to_value for tr in step.triggers},
+                **{ec.tag_name: ec.value for ec in step.enablers},
+            }
+            if not direct_values:
+                continue
+            node = next(
+                (
+                    pdg.rung_nodes[node_idx]
+                    for node_idx in sorted(
+                        pdg.writers_of.get(step.transition.tag_name, frozenset())
+                    )
+                    if (
+                        pdg.rung_nodes[node_idx].rung_index,
+                        pdg.rung_nodes[node_idx].subroutine,
+                    )
+                    == (step.rung_index, step.subroutine)
+                ),
+                None,
+            )
+            if node is None:
+                continue
+            rung_obj = resolve_rung(program, node)
+            if rung_obj is None:
+                continue
+            writer = _writer_for_tag(rung_obj, step.transition.tag_name)
+            if writer is None:
+                continue
+            if not getattr(writer, "INERT_WHEN_DISABLED", True):
+                # A false rung is not necessarily a suppressed writer. OUT
+                # actively writes False when disabled; timers/counters and
+                # drums also have instruction-specific disabled behavior.
+                # Only the ordinary OUT-to-True case has the generic
+                # "make guard false" inverse. Other non-inert writers belong
+                # to their instruction-specific correction machinery.
+                from pyrung.core.instruction.coils import OutInstruction
+
+                if not (
+                    isinstance(writer, OutInstruction)
+                    and step.transition.to_value is True
+                ):
+                    continue
+            guard_reads = set(getattr(node, "condition_reads", ())) & set(direct_values)
+            fixed: dict[str, Any] = {}
+            changeable = guard_reads
+            if not changeable:
+                continue
+            fire_frame = {**frame, **direct_values}
+            holds = break_guard_holds(
+                rung_obj,
+                fire_frame,
+                ctx,
+                changeable=changeable,
+                fixed=fixed,
+                steerable=effective_steerable,
+            )
+            holds_filtered = tuple(
+                pair
+                for pair in _dedupe_pairs(holds or ())
+                if _hold_allowed(ctx, pair)
+            )
+            if not holds_filtered:
+                continue
+            hypotheses.append(
+                InvestigationHypothesis(
+                    kind="precise-cause",
+                    holds=holds_filtered,
+                    sources=tuple(
+                        sorted(
+                            {
+                                departure.tag,
+                                step.transition.tag_name,
+                                *direct_values,
+                                *(tag for tag, _value in holds_filtered),
+                            }
+                        )
+                    ),
+                    detail=(
+                        f"{_step_label(step)} fired at scan "
+                        f"{step.transition.scan_id}; minimal conductive cut"
+                    ),
+                )
+            )
+    return list(_dedupe_hypotheses(hypotheses))
+
+
+def _precise_cause(
+    plc: PLC,
+    incident: DeviationIncident,
+    ctx: Any,
+    pilot_touched: frozenset[str] = frozenset(),
+) -> InvestigationHypothesis | None:
+    """Compatibility helper returning the first exact causal frontier."""
+    hypotheses = _precise_causes(plc, incident, ctx, pilot_touched)
+    return hypotheses[0] if hypotheses else None
 
 
 # ---------------------------------------------------------------------------
@@ -1650,7 +1925,7 @@ def _last_transition_scan(
     return last
 
 
-def _dedupe_pairs(pairs: list[ActionPair]) -> list[ActionPair]:
+def _dedupe_pairs(pairs: Iterable[ActionPair]) -> list[ActionPair]:
     out: list[ActionPair] = []
     seen: set[ActionPair] = set()
     for pair in pairs:

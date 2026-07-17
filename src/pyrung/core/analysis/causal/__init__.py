@@ -35,12 +35,12 @@ direct-log path.)  Without a fallback, the firing log would lack
 the rung that wrote the non-Bool terminal, and the chain's first
 step would never materialize.
 
-The fix is a PDG fallback keyed off the static ``writers_of`` /
-``readers_of`` sets.  When the firing log doesn't identify a writer
-for a transition, :func:`_fallback_writers_from_pdg` iterates the
-PDG's static writers and re-evaluates each candidate's SP-tree
-against the historical state at that scan.  A candidate whose tree
-evaluates True is treated as the writer.  Symmetric logic widens
+The fix combines the static ``writers_of`` / ``readers_of`` sets with
+the runner's interpreted replay.  When the firing timeline doesn't identify
+a writer for a transition, :func:`_replayed_writers_from_pdg` considers
+the PDG's static writers but accepts only a rung that has an exact replayed
+entry view for that scan and whose SP-tree was conductive in that view.
+The PDG identifies possible writers; replay proves execution. Symmetric logic widens
 the effect forward walk: for each scan, rungs missing from the log
 but reading a current frontier tag are re-entered and evaluated
 with PDG-synthesized candidate writes (history then filters via

@@ -215,27 +215,18 @@ def chase_chain_tags(
     """Every meaningful tag on the deep cause chain of *tag*'s transition.
 
     Causal-primacy ranking needs chain *membership* (is this watchdog Done part
-    of why the channel register moved?), which :func:`chase_cause_roots` cannot
-    answer: an ejection caused by an **absence** — a sensor that never moved
-    starving a complement-reset watchdog — has no steerable mover at all, so the
-    roots come back empty while the chain itself
-    (``WD_tmr_Done -> Rotate_Error -> S_StateCurrent``) is right there.
+    of why the channel register moved?), which :func:`chase_cause_roots` alone
+    cannot answer. The fired transition spine itself remains meaningful even
+    when none of its terminals is steerable.
 
     The deep walk crosses the opaque-pipeline hop natively (the held
     ``StateRequested`` / enable-flag enabler is chased to the requester's guard
     chain), so the watchdog Done sits in the chain without any route inversion.
 
     Membership is the chain's **spine** — step transitions, their triggers, and
-    the classified roots — NOT the why-held support names.  A deep chain's
-    support closure contains half the program's steady state (every falsified
-    arm of every held writer), and granting those tags chain-member standing
-    hands causal primacy to bystanders: ``Test_Simulate_1st_Scan`` appears as a
-    support of the held ``S_Pending1stScanSuspend`` in almost *any* burner
-    chain, which let its liveness hypothesis outrank the starved watchdog's.
-    Everything that legitimately confers membership is on the spine already —
-    a fired watchdog Done is a transition step, a never-moved sensor is a
-    classified root.  System tags (``sys.*`` / ``rtc.*``) and lookup-table
-    reference constants are dropped — steady-state plumbing, not causal levers.
+    classified roots. Steady enablers remain enablers rather than gaining
+    trigger standing merely through recursion. System tags (``sys.*`` /
+    ``rtc.*``) and lookup-table reference constants are dropped.
 
     *bridge* is accepted but ignored (see :func:`chase_cause_roots`).
     """
@@ -267,8 +258,8 @@ def _cause(
     The same ``(tag, scan)`` reappears across overlapping chases, and each call
     can fork+replay a historical view, so a per-chase cache avoids re-resolving
     the same registers dozens of times (``cause()`` is pure for a fixed fork).
-    ``deep=True`` (the default): the returned chain has already chased every
-    held support and classified its terminals into ``chain.roots``.
+    ``deep=True`` (the default) recursively explains enablers on fired rungs
+    through observed value origins and classifies terminals in ``chain.roots``.
     """
     if cache is not None and (tag, scan) in cache:
         return cache[(tag, scan)]
@@ -348,11 +339,20 @@ def _roots_from_chain(
                 else:
                     descend(tr.tag_name)
 
-    # Mover pass.
-    if chain.effect.tag_name in steerable:
-        take_lever(chain.effect.tag_name, from_value.get(chain.effect.tag_name))
+    # Mover pass. The effect is the departure being explained, not its own
+    # corrective lever. When a recorded writer exists, step behind it even if
+    # static steerability also happens to classify the destination as writable
+    # by a user. This is crucial for state flags: entering Execute is intended
+    # progress; the newly conductive input behind its departure is what Pilot
+    # must correct. A genuinely external effect has no writer step, so it can
+    # still terminate at itself.
+    effect = chain.effect.tag_name
+    if steps_by_tag.get(effect):
+        descend(effect)
+    elif effect in steerable:
+        take_lever(effect, from_value.get(effect))
     else:
-        descend(chain.effect.tag_name)
+        descend(effect)
 
     # Absence fallback — no steerable mover, so the cause is a held support.
     if not nogoods:

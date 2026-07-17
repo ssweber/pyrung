@@ -30,13 +30,20 @@ from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
     ReplayOutcome,
     _active_rungs_defeat_needed,
+    _precise_causes,
     hold_defeats_needed,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.progress import _monitor_trend
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
-from pyrung.core.analysis.pilot.types import _Checkpoint, _PilotState, _TrialResult, _World
+from pyrung.core.analysis.pilot.types import (
+    BearingDeparture,
+    _Checkpoint,
+    _PilotState,
+    _TrialResult,
+    _World,
+)
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq
 from pyrung.core.memory_block import Block
@@ -147,6 +154,103 @@ def test_write_consistent_with_need_is_allowed():
 
     pdg = _pdg(prog)
     assert hold_defeats_needed("SetFlag", 1, [("Counter", 3)], pdg, prog) is False
+
+
+def test_direct_progress_cut_is_a_proven_self_defeat():
+    """A causal cut may target the required register itself. It remains a
+    hypothesis, but its contradiction of the requested frontier proves it
+    harmful without a long replay."""
+    State = Int("DirectCutState")
+    with Program(strict=False) as prog:
+        with rung(State == 6):
+            out(Bool("DirectCutExecute"))
+
+    pdg = _pdg(prog)
+    assert hold_defeats_needed(State.name, 8, [(State.name, 6)], pdg, prog) is True
+    assert hold_defeats_needed(State.name, 6, [(State.name, 6)], pdg, prog) is False
+
+
+def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
+    """Entering the requested state conducts a harmful mapping rung. Reverting
+    that entry is a real exact-chain hypothesis; its contradiction of the
+    requested state is recorded as self-defeat instead of being pruned during
+    generation."""
+    State = Int("GeneratedCutState", external=True)
+    Channel = Int("GeneratedCutChannel")
+
+    with Program(strict=False) as prog:
+        with rung(State == 6):
+            copy(8, Channel)
+
+    plc = PLC(prog, dt=0.010)
+    plc.patch({State.name: 0, Channel.name: 6})
+    plc.step()
+    before = dict(plc.state.tags)
+    anchor = plc.state.scan_id
+    plc.patch({State.name: 6})
+    plc.step()
+    scan = plc.state.scan_id
+
+    pdg = build_program_graph(prog)
+    ctx = SimpleNamespace(
+        pdg=pdg,
+        program=prog,
+        steerable=frozenset(compute_steerable(pdg, plc._known_tags_by_name, prog)),
+        opaque_loop=frozenset({Channel.name}),
+        pipeline_internal_tags=frozenset(),
+        route=None,
+        compass=SimpleNamespace(action_tags=frozenset()),
+        target_tag=Channel.name,
+        target_value=99,
+    )
+    incident = DeviationIncident(
+        anchor_scan=anchor,
+        departure_scan=scan,
+        end_scan=scan,
+        action=((State.name, 6),),
+        bearing=((State.name, 6), (Channel.name, 6)),
+        before_snap=before,
+        after_snap=dict(plc.state.tags),
+        changed_tags=(State.name, Channel.name),
+        departures=(BearingDeparture(Channel.name, 6, scan),),
+        channel_tag=Channel.name,
+    )
+
+    hypotheses = _precise_causes(plc, incident, ctx, frozenset({State.name}))
+    progress_cut = next(h for h in hypotheses if (State.name, 0) in h.holds)
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    replayed: list[tuple[object, ...]] = []
+
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(
+            accepted=True,
+            trend=None,
+            snapshot={**before, Channel.name: 6},
+            reason="short incident suppressed",
+            landed=True,
+        )
+
+    result = investigate_deviation(
+        plc,
+        incident,
+        ctx,
+        replay,
+        pilot_touched=frozenset({State.name}),
+    )
+
+    assert replayed == [progress_cut.holds]
+    assert result.confirmed_holds == ()
+    assert result.rejected[0][0] == progress_cut
+    assert result.rejection_slugs == ("self-defeat",)
 
 
 def test_conditional_oscillating_hold_reaching_init_value_is_caught():
@@ -388,8 +492,8 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
         lambda *_args, **_kwargs: ([], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_cause",
-        lambda *_args, **_kwargs: hypothesis,
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [hypothesis],
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.investigate.correct_enablers",
@@ -433,7 +537,7 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     assert len(result.rejected) == 1
     rejected, ground = result.rejected[0]
     assert rejected == hypothesis
-    assert "defeats checkpoint frontier" in ground
+    assert "defeats requested progress" in ground
     assert result.rejection_slugs == ("self-defeat",)
 
 

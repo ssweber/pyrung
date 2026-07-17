@@ -88,6 +88,27 @@ def _sort_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+def _address_neutral_sort_key(value: Any) -> str:
+    """Stable ordering for values whose repr contains process-local addresses.
+
+    Encounter-ordered address tokens are assigned only after the complete
+    skeleton is assembled.  Sorting first on raw addresses makes equivalent
+    PilotRungs swap order across processes, so erase only the address component
+    for this comparison.
+    """
+
+    def neutralize(item: Any) -> Any:
+        if isinstance(item, str):
+            return _OBJECT_ADDRESS_RE.sub("<ADDR>", item)
+        if isinstance(item, list):
+            return [neutralize(child) for child in item]
+        if isinstance(item, Mapping):
+            return {key: neutralize(item[key]) for key in sorted(item, key=str)}
+        return item
+
+    return _sort_key(neutralize(value))
+
+
 # ---------------------------------------------------------------------------
 # JSON-ification of payload values
 # ---------------------------------------------------------------------------
@@ -364,7 +385,7 @@ def _extract_hypothesis(detail: Mapping[str, Any]) -> dict[str, Any]:
     out = {k: _jsonify(detail.get(k)) for k in _HYPOTHESIS_KEEP if k in detail}
     for field in ("holds", "sources"):
         if isinstance(out.get(field), list):
-            out[field] = sorted(out[field], key=_sort_key)
+            out[field] = sorted(out[field], key=_address_neutral_sort_key)
     return out
 
 
