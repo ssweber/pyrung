@@ -844,6 +844,7 @@ def _investigate_and_revert(
                         for p in investigation_holds
                     ),
                     source="investigation",
+                    rungs=tuple(investigation_rungs),
                 )
             )
             for proposal in investigation_holds:

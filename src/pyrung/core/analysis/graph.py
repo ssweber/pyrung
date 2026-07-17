@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.validation.render import operand_name, render_condition
+
 if TYPE_CHECKING:
     from collections.abc import Callable as _Callable
 
@@ -178,6 +180,11 @@ class PlanStep:
     # the requirement, not this number)".  The relation is the requirement; the
     # value is an example.
     notes: tuple[str, ...] = ()
+    # Exact PilotRungs behind an installation or present during a coast.
+    # ``steady_holds`` / ``pulsing_holds`` remain as a compact compatibility
+    # summary; the renderer prefers this lossless representation.
+    rungs: tuple[Any, ...] = ()
+    source: str = ""
 
 
 def _format_value(value: Any) -> str:
@@ -190,6 +197,82 @@ def _format_value(value: Any) -> str:
     if " " in s:
         return f'"{s}"'
     return s
+
+
+def _rungs_by_tag(rungs: tuple[Any, ...]) -> dict[str, list[Any]]:
+    grouped: dict[str, list[Any]] = {}
+    for rung in rungs:
+        grouped.setdefault(rung.dest, []).append(rung)
+    return grouped
+
+
+def _rung_values(rungs: list[Any]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(_format_value(rung.value) for rung in rungs))
+
+
+def _oscillator_tags(rungs: tuple[Any, ...]) -> set[str]:
+    return {
+        tag
+        for tag, rules in _rungs_by_tag(rungs).items()
+        if len(_rung_values(rules)) > 1
+    }
+
+
+def _source_suffix(source: str) -> str:
+    return f"  (from {source})" if source else ""
+
+
+def _rung_guard(rung: Any) -> str:
+    return render_condition(rung.guard)
+
+
+def _format_rung_install(
+    prefix: str,
+    rungs: tuple[Any, ...],
+    source: str,
+    notes: tuple[str, ...],
+) -> str:
+    """Render the actual guarded rungs installed by PILOT."""
+    by_guard: dict[str, list[Any]] = {}
+    for rung in rungs:
+        by_guard.setdefault(_rung_guard(rung), []).append(rung)
+
+    line = f"{prefix} install synthesis rungs{_source_suffix(source)}"
+    detail: list[str] = []
+    for guard, guarded_rungs in by_guard.items():
+        detail.append(f"       with rung({guard}):")
+        detail.extend(
+            f"         copy({operand_name(rung.value)}, {rung.dest})"
+            for rung in guarded_rungs
+        )
+    detail.extend(f"       {note}" for note in notes)
+    return line + "\n" + "\n".join(detail)
+
+
+def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
+    """Summarize installed control machinery without implying every guard is active."""
+    by_tag = _rungs_by_tag(rungs)
+    oscillator_tags = _oscillator_tags(rungs)
+    steady: list[str] = []
+    for rung in rungs:
+        if rung.dest in oscillator_tags:
+            continue
+        assignment = f"{rung.dest}={_format_value(rung.value)}"
+        if assignment not in steady:
+            steady.append(assignment)
+
+    lines: list[str] = []
+    if steady:
+        lines.append(f"       installed holds: {', '.join(steady)}")
+    if oscillator_tags:
+        oscillators = ", ".join(
+            f"{tag} ({' ↔ '.join(_rung_values(by_tag[tag]))})"
+            for tag in dict.fromkeys(
+                rung.dest for rung in rungs if rung.dest in oscillator_tags
+            )
+        )
+        lines.append(f"       installed oscillators: {oscillators}")
+    return lines
 
 
 @dataclass(frozen=True)
@@ -275,11 +358,13 @@ def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> s
         return line
 
     if step.kind == "force":
-        tags = ", ".join(t for t, _v in step.inputs)
+        if step.rungs:
+            return _format_rung_install(prefix, step.rungs, step.source, step.notes)
+        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} force {tags}")
 
     if step.kind == "pulse":
-        tags = ", ".join(t for t, _v in step.inputs)
+        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} pulse {tags}")
 
     if step.kind == "coast":
@@ -293,10 +378,13 @@ def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> s
         sub: list[str] = []
         if step.waiting_for:
             sub.append(f"       waiting for: {', '.join(step.waiting_for)}")
-        if step.steady_holds:
-            sub.append(f"       holds: {', '.join(step.steady_holds)}")
-        if step.pulsing_holds:
-            sub.append(f"       pulsing: {', '.join(step.pulsing_holds)}")
+        if step.rungs:
+            sub.extend(_rung_coast_summary(step.rungs))
+        else:
+            if step.steady_holds:
+                sub.append(f"       holds: {', '.join(step.steady_holds)}")
+            if step.pulsing_holds:
+                sub.append(f"       pulsing: {', '.join(step.pulsing_holds)}")
         if step.accelerators:
             skip_items = ", ".join(f"{t}={v}" for t, v in step.accelerators)
             sub.append(f"       skip: {skip_items}")
@@ -308,7 +396,7 @@ def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> s
         tags = ", ".join(f"{t}={v}" for t, v in step.inputs)
         return f"{prefix} skip {tags}"
 
-    inputs = ", ".join(t for t, _v in step.inputs)
+    inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
     trans = f"  ({step.transition})" if step.transition else ""
     return _with_notes(f"{prefix} {inputs}{trans}")
 

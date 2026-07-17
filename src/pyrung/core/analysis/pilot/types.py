@@ -337,6 +337,9 @@ class _StepContext:
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
+    # Exact synthesis rules present during this step. Kept as ``Any`` here to
+    # avoid coupling the state container back to the PilotRung implementation.
+    control_rungs: tuple[Any, ...] = ()
     channel_tag: str | None = None
     before_snap: dict[str, Any] = field(default_factory=dict)
     after_snap: dict[str, Any] = field(default_factory=dict)
@@ -357,6 +360,9 @@ class _HoldLogEntry:
     scan: int
     tags: tuple[_ActionPair, ...]
     source: str
+    # Exact guarded rules installed by this event. ``tags`` remains for
+    # compatibility with old recordings and concise knowledge serialization.
+    rungs: tuple[Any, ...] = ()
 
 
 @dataclass

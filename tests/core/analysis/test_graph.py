@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from pyrung.core import (
@@ -20,7 +22,9 @@ from pyrung.core import (
     out,
     rise,
 )
-from pyrung.core.analysis.graph import Plan
+from pyrung.core.analysis.graph import Plan, PlanStep
+from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.condition import AllCondition
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,6 +104,89 @@ class TestPlanDisplay:
         plc.step()
         plan = plc.how(Running)
         assert "reached in 0 scan" in str(plan)
+
+    def test_guarded_hold_renders_value_scope_and_source(self):
+        State = Int("Sts_StateCurrent")
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("DoorClosed", True),),
+                    label="DoorClosed",
+                    rungs=(PilotRung("DoorClosed", True, State != 6),),
+                    source="investigation",
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(Sts_StateCurrent != 6):" in text
+        assert "copy(True, DoorClosed)" in text
+        assert "(from investigation)" in text
+        assert "force DoorClosed" not in text
+
+    def test_guarded_pair_renders_as_oscillator(self):
+        State = Int("Sts_StateCurrent")
+        RotateSensor = Bool("RotateSensor", external=True)
+        rungs = (
+            PilotRung(
+                "RotateSensor",
+                True,
+                AllCondition(State == 6, RotateSensor != True),  # noqa: E712
+            ),
+            PilotRung(
+                "RotateSensor",
+                False,
+                AllCondition(State == 6, RotateSensor != False),  # noqa: E712
+            ),
+        )
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(
+                state=SimpleNamespace(scan_id=10),
+                _dt=0.010,
+            ),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(("RotateSensor", True), ("RotateSensor", False)),
+                    label="RotateSensor",
+                    rungs=rungs,
+                    source="investigation",
+                ),
+                PlanStep(
+                    kind="coast",
+                    scan=3,
+                    scans=5,
+                    inputs=(),
+                    label="",
+                    rungs=rungs,
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != True)):" in text
+        assert "copy(True, RotateSensor)" in text
+        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != False)):" in text
+        assert "copy(False, RotateSensor)" in text
+        assert "installed oscillators: RotateSensor (true ↔ false)" in text
+        assert "holds: RotateSensor" not in text
 
 
 # ---------------------------------------------------------------------------

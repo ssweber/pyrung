@@ -21,13 +21,20 @@ from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
 
-from pyrung.core.analysis.graph import Plan, PlanStep, RouteAlt, RoutePivot, RouteTaken
+from pyrung.core.analysis.graph import (
+    Plan,
+    PlanStep,
+    RouteAlt,
+    RoutePivot,
+    RouteTaken,
+)
 from pyrung.core.analysis.pilot._ops import (
     _append_rungs,
     _apply_pulse,
     _DebugFn,
     _pilot_world_key,
     _rungs_from_proposals,
+    _semantic_key,
     _StateKeyConfig,
     _target_unresolved_condition,
 )
@@ -616,9 +623,12 @@ def _record_attempt(
         scope = _target_unresolved_condition(
             state.work, ctx.target_tag, ctx.target_value, ctx.target_predicate
         )
+        excursion_rungs = _rungs_from_proposals(
+            state.work, list(attempt.excursion_holds), scope
+        )
         state.rungs = _append_rungs(
             state.work,
-            _rungs_from_proposals(state.work, list(attempt.excursion_holds), scope),
+            excursion_rungs,
             state.rungs,
         )
         state.hold_log.append(
@@ -626,6 +636,7 @@ def _record_attempt(
                 scan=state.work.state.scan_id,
                 tags=tuple(attempt.excursion_holds),
                 source="excursion",
+                rungs=tuple(excursion_rungs),
             )
         )
     if attempt.nogood_pairs:
@@ -646,6 +657,7 @@ def _record_step_context(
     frontier_tags: tuple[str, ...] = ()
     steady_holds: tuple[str, ...] = ()
     pulsing_holds: tuple[str, ...] = ()
+    control_rungs: tuple[Any, ...] = ()
 
     if is_coast:
         seen: set[str] = set()
@@ -661,6 +673,7 @@ def _record_step_context(
                 frontier.append(n.tag)
         frontier_tags = tuple(frontier)
         steady_holds = tuple(dict.fromkeys(r.dest for r in state.rungs))
+        control_rungs = tuple(state.rungs)
 
     state.step_contexts = state.step_contexts.append(
         _StepContext(
@@ -671,6 +684,7 @@ def _record_step_context(
             frontier_tags=frontier_tags,
             steady_holds=steady_holds,
             pulsing_holds=pulsing_holds,
+            control_rungs=control_rungs,
             channel_tag=trial.zoom_channel_tag,
             before_snap=dict(trial.before_snap),
             after_snap=dict(trial.fork_snap),
@@ -760,6 +774,7 @@ def _build_plan_journal(
                         steady_holds=sc.steady_holds,
                         pulsing_holds=sc.pulsing_holds,
                         accelerators=tuple(accel),
+                        rungs=sc.control_rungs,
                     ),
                 )
             )
@@ -797,15 +812,36 @@ def _build_plan_journal(
     else:
         path_start = path_end = 0
 
-    seen_hold_tags: set[str] = set()
+    seen_rungs: set[tuple[Any, ...]] = set()
+    seen_legacy_holds: set[tuple[str, str]] = set()
     for entry in state.hold_log:
         if entry.scan < path_start or entry.scan > path_end:
             continue
-        force_tags = [(t, v) for t, v in entry.tags if t not in seen_hold_tags]
-        pulse_tags: list[tuple[str, Any]] = []
-        for t, _v in entry.tags:
-            seen_hold_tags.add(t)
-        if force_tags:
+        new_rungs: list[Any] = []
+        for rung in entry.rungs:
+            key = (
+                rung.dest,
+                _semantic_key(rung.value),
+                _semantic_key(rung.guard),
+            )
+            if key in seen_rungs:
+                continue
+            seen_rungs.add(key)
+            new_rungs.append(rung)
+
+        if entry.rungs:
+            hold_inputs = tuple((rung.dest, rung.value) for rung in new_rungs)
+        else:
+            legacy_inputs: list[tuple[str, Any]] = []
+            for tag, value in entry.tags:
+                key = (tag, repr(value))
+                if key in seen_legacy_holds:
+                    continue
+                seen_legacy_holds.add(key)
+                legacy_inputs.append((tag, value))
+            hold_inputs = tuple(legacy_inputs)
+
+        if hold_inputs:
             entries.append(
                 (
                     entry.scan,
@@ -814,24 +850,11 @@ def _build_plan_journal(
                         kind="force",
                         scan=entry.scan,
                         scans=0,
-                        inputs=tuple(force_tags),
-                        label=", ".join(t for t, _v in force_tags),
-                        notes=_notes_for(force_tags),
-                    ),
-                )
-            )
-        if pulse_tags:
-            entries.append(
-                (
-                    entry.scan,
-                    "a_hold",
-                    PlanStep(
-                        kind="pulse",
-                        scan=entry.scan,
-                        scans=0,
-                        inputs=tuple((t, True) for t, _v in pulse_tags),
-                        label=", ".join(t for t, _v in pulse_tags),
-                        notes=_notes_for(pulse_tags),
+                        inputs=hold_inputs,
+                        label=", ".join(dict.fromkeys(tag for tag, _value in hold_inputs)),
+                        notes=_notes_for(hold_inputs),
+                        rungs=tuple(new_rungs),
+                        source=entry.source,
                     ),
                 )
             )
@@ -1481,6 +1504,7 @@ def _pilot_loop_events(
                     scan=state.work.state.scan_id,
                     tags=tuple((r.dest, r.value) for r in candidates.prerequisite_rungs),
                     source="prerequisite",
+                    rungs=tuple(candidates.prerequisite_rungs),
                 )
             )
 

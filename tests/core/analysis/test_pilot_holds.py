@@ -6,8 +6,13 @@ a rising EnableB edge but its seal-in is gated by Common.
 
 from __future__ import annotations
 
-from pyrung import Bool, Or, Program, Rung, out, rise
+from types import SimpleNamespace
+
+from pyrung import Bool, Int, Or, Program, Rung, out, rise
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.pilot import _build_plan_journal
+from pyrung.core.analysis.pilot.types import _HoldLogEntry, _Step
 from pyrung.core.runner import PLC
 
 
@@ -58,3 +63,29 @@ def test_shared_gate_solves() -> None:
 
     replay = _replay(prog, path)
     assert replay.state.tags["Target"] is True
+
+
+def test_shared_gate_journal_retains_hold_values_and_guards() -> None:
+    """Journal construction keeps the exact guarded rule, not just its tag."""
+    State = Int("State")
+    hold = PilotRung("DoorClosed", True, State != 6)
+    state = SimpleNamespace(
+        steps=[_Step(inputs={}, scan_before=0, scan_after=10)],
+        step_contexts=[],
+        lever_notes={},
+        hold_log=[
+            _HoldLogEntry(
+                scan=2,
+                tags=(("DoorClosed", True),),
+                source="investigation",
+                rungs=(hold,),
+            )
+        ],
+    )
+
+    journal = _build_plan_journal(state, None, frozenset(), frozenset())
+    hold_steps = [step for step in journal if step.kind == "force"]
+
+    assert hold_steps
+    assert hold_steps[0].rungs[0] is hold
+    assert hold_steps[0].source == "investigation"
