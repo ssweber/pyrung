@@ -392,11 +392,19 @@ def _bfs_explore_gen(
         current_values = {
             name: kernel.tags.get(name, context.nondeterministic_dims[name][0]) for name in live
         }
+        has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         _factoring = context.free_input_factoring
         _factoring_active = (
             bfs_config.free_input_factoring
             and _factoring is not None
             and not (paced and just_flipped)
+            # Factored successors are currently generated only by the
+            # single-outcome fast path below.  If the base assignment settles
+            # or jumps a hidden event, that branch bypasses composition and
+            # silently omits the factored input combinations.  Fall back to
+            # exact joint enumeration until both paths share one successor
+            # pipeline.
+            and not has_hidden_events
         )
         _factored_names: frozenset[str] = frozenset()
         _group_combos: list[list[tuple[tuple[str, Any], ...]]] | None = None
@@ -442,7 +450,6 @@ def _bfs_explore_gen(
             else:
                 _shared_combos = [()]
 
-        has_hidden_events = bool(context.done_event_specs or context.threshold_event_specs)
         seen_outcomes: set[tuple[tuple[Any, ...], tuple[Any, ...]]] | None = (
             set() if project is not None else None
         )

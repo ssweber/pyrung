@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
-from pyrung.core import Bool, Int, Program, Rung, Word, calc, latch, out, receive
+from dataclasses import replace
+
+from pyrung.core import (
+    Bool,
+    Counter,
+    Dint,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    Word,
+    calc,
+    count_up,
+    fall,
+    latch,
+    off_delay,
+    out,
+    receive,
+)
 from pyrung.core.analysis.prove import (
     Counterexample,
     Intractable,
@@ -373,6 +391,60 @@ class TestFactoringReachableStates:
         assert not isinstance(on, Intractable)
         assert not isinstance(off, Intractable)
         assert on == off
+
+    def test_hidden_event_program_falls_back_to_exact_input_enumeration(self):
+        """Hidden-event branches must not bypass free-input combinations."""
+        in0 = Bool("In0", external=True)
+        in1 = Bool("In1", external=True)
+        d0 = Dint("D0")
+        b0 = Bool("B0")
+        b1 = Bool("B1")
+        c0 = Counter.clone("C0")
+        t0 = Timer.clone("T0")
+
+        with Program(strict=False) as logic:
+            with Rung(in0):
+                calc(c0.Acc + 5, c0.Acc)
+            with Rung(in0):
+                count_up(c0, 10).reset(b0)
+            with Rung(d0 != 0):
+                out(b1)
+            with Rung(fall(in1)):
+                out(b0)
+                off_delay(t0, 50)
+
+        projection = ["B0", "B1", "C0_Done", "T0_Done"]
+        baseline_config = _OptConfig.sound_baseline()
+        factored_config = replace(baseline_config, free_input_factoring=True)
+        baseline = reachable_states(
+            logic,
+            project=projection,
+            max_states=10_000,
+            depth_budget=20,
+            _opt_config=baseline_config,
+        )
+        factored = reachable_states(
+            logic,
+            project=projection,
+            max_states=10_000,
+            depth_budget=20,
+            _opt_config=factored_config,
+        )
+
+        assert not isinstance(baseline, Intractable)
+        assert not isinstance(factored, Intractable)
+        assert factored == baseline
+        assert (
+            frozenset(
+                {
+                    ("B0", False),
+                    ("B1", True),
+                    ("C0_Done", True),
+                    ("T0_Done", True),
+                }
+            )
+            in factored
+        )
 
 
 # ---------------------------------------------------------------------------
