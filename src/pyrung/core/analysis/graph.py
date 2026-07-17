@@ -211,11 +211,7 @@ def _rung_values(rungs: list[Any]) -> tuple[str, ...]:
 
 
 def _oscillator_tags(rungs: tuple[Any, ...]) -> set[str]:
-    return {
-        tag
-        for tag, rules in _rungs_by_tag(rungs).items()
-        if len(_rung_values(rules)) > 1
-    }
+    return {tag for tag, rules in _rungs_by_tag(rungs).items() if len(_rung_values(rules)) > 1}
 
 
 def _source_suffix(source: str) -> str:
@@ -242,8 +238,7 @@ def _format_rung_install(
     for guard, guarded_rungs in by_guard.items():
         detail.append(f"       with rung({guard}):")
         detail.extend(
-            f"         copy({operand_name(rung.value)}, {rung.dest})"
-            for rung in guarded_rungs
+            f"         copy({operand_name(rung.value)}, {rung.dest})" for rung in guarded_rungs
         )
     detail.extend(f"       {note}" for note in notes)
     return line + "\n" + "\n".join(detail)
@@ -267,9 +262,7 @@ def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
     if oscillator_tags:
         oscillators = ", ".join(
             f"{tag} ({' ↔ '.join(_rung_values(by_tag[tag]))})"
-            for tag in dict.fromkeys(
-                rung.dest for rung in rungs if rung.dest in oscillator_tags
-            )
+            for tag in dict.fromkeys(rung.dest for rung in rungs if rung.dest in oscillator_tags)
         )
         lines.append(f"       installed oscillators: {oscillators}")
     return lines
