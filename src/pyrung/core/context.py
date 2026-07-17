@@ -442,11 +442,13 @@ class ScanContext:
         rung_id: RungId,
         journal: dict[str, Any],
         previous_node_id: RungId | None,
+        *,
+        retain_all_writes: bool = False,
     ) -> None:
         """Close a hot-path subroutine journal and merge repeated calls."""
         self._current_node_id = previous_node_id
         self._capture_stack.pop()
-        writes = self._finalize_capture(journal)
+        writes = self._finalize_capture(journal, retain_all_writes=retain_all_writes)
         if writes is None:
             return
         previous = self._node_firings.get(rung_id)
@@ -484,7 +486,7 @@ class ScanContext:
             self._finish_rung_capture(rung_index, journal)
 
     @contextmanager
-    def capturing_node(self, rung_id: RungId) -> Iterator[None]:
+    def capturing_node(self, rung_id: RungId, *, retain_all_writes: bool = False) -> Iterator[None]:
         """Attribute writes made inside this block to ``rung_id`` (a subroutine rung).
 
         Opens an inner scope stacked under the enclosing
@@ -505,9 +507,16 @@ class ScanContext:
         try:
             yield
         finally:
-            self._finish_node_capture(rung_id, journal, previous_node_id)
+            self._finish_node_capture(
+                rung_id,
+                journal,
+                previous_node_id,
+                retain_all_writes=retain_all_writes,
+            )
 
-    def _finalize_capture(self, journal: dict[str, Any]) -> dict[str, Any] | None:
+    def _finalize_capture(
+        self, journal: dict[str, Any], *, retain_all_writes: bool = False
+    ) -> dict[str, Any] | None:
         """Diff a closed capture scope's journal into its firing writes.
 
         Returns the (PDG-filtered) ``{tag: value}`` written during the
@@ -526,6 +535,8 @@ class ScanContext:
         }
         if not raw_writes:
             return None
+        if retain_all_writes:
+            return raw_writes
         consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
         if consumed is None:
             return raw_writes

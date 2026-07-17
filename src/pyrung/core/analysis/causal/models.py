@@ -246,6 +246,8 @@ class ChainStep:
             d["kind"] = self.kind
         if self.instruction is not None:
             d["instruction"] = self.instruction
+        if self.subroutine is not None:
+            d["subroutine"] = self.subroutine
         if self.caller_rung_index is not None:
             d["caller_rung_index"] = self.caller_rung_index
         return d
@@ -402,10 +404,9 @@ class CausalChain:
         for step in self.steps:
             t = step.transition
             if step.kind in ("held", "reset_blocked") and self.mode == "recorded":
-                sub = f"{step.subroutine}:" if step.subroutine else ""
                 verb = "holds" if step.kind == "held" else "not countered while"
                 lines.append(
-                    f"  Rung {sub}{step.rung_index + 1}: {t.tag_name} {verb} {t.to_value!r}"
+                    f"  Rung {_recorded_rung_label(step)}: {t.tag_name} {verb} {t.to_value!r}"
                 )
                 for ec in step.enablers:
                     lines.append(f"    support:  {ec.tag_name} = {ec.value!r}")
@@ -416,7 +417,7 @@ class CausalChain:
             elif step.fidelity == "structural":
                 fidelity_note = "  (structural)"
             lines.append(
-                f"  Rung {step.rung_index + 1}: {t.tag_name} → {t.to_value!r}{fidelity_note}"
+                f"  Rung {_recorded_rung_label(step)}: {t.tag_name} → {t.to_value!r}{fidelity_note}"
             )
             for pc in step.triggers:
                 if step.fidelity == "structural":
@@ -520,6 +521,15 @@ class CausalChain:
             lines.append(f"{prefix}r{step.rung_index + 1}: {instr}({t.tag_name}){suffix}")
 
         return "\n".join(lines)
+
+
+def _recorded_rung_label(step: ChainStep) -> str:
+    """Render stable writer identity without exposing bracket offsets."""
+    if step.subroutine in ("plant", "PILOT"):
+        return f"{step.subroutine}:{step.rung_index}"
+    if step.subroutine is not None:
+        return f"{step.subroutine}:{step.rung_index + 1}"
+    return str(step.rung_index + 1)
 
 
 def _fmt_value(

@@ -3,15 +3,15 @@
 The soft-exec runner scans synthesis rungs at the **top of the scan, before the
 user program reads its inputs** (the input-read phase)::
 
-    plant (input-read)  →  holds  →  user rungs
+    plant (input-read)  →  PILOT holds  →  user rungs
 
 ``plant`` synthesizes feedback from the *previous* scan's committed commands (the
 harness couplings — a sensor reflecting the outputs the program already wrote), so
 the feedback is an input image that lags the command by one scan.  ``holds`` then
-steer inputs before the program reads them (PILOT's holds — the input vector the
-program sees this scan).  Both are ordinary :class:`~pyrung.core.rung.Rung`
-objects built programmatically here, so the reader, fold, compile, and causal
-subsystems consume them with no special case — synthesis *is* rungs.
+steer inputs before the program reads them (PILOT's input vector for this scan).
+Both are ordinary :class:`~pyrung.core.rung.Rung` objects built programmatically
+here, so the reader, fold, compile, and causal subsystems consume them with no
+special case — synthesis *is* rungs.
 
 Synthesis lives on the soft-exec :class:`~pyrung.core.runner.PLC` only (see
 ``PLC._synthesis``); it is **never** part of the user :class:`Program`, so deploy
@@ -33,14 +33,17 @@ if TYPE_CHECKING:
     from pyrung.core.condition import Condition
     from pyrung.core.tag import Tag
 
+PLANT_RUNG_NAMESPACE = "plant"
+PILOT_RUNG_NAMESPACE = "PILOT"
+
 
 @dataclass
 class Synthesis:
-    """The two bracketing rung lists the runner scans around the user program.
+    """The two synthetic rung lists scanned before the user program.
 
-    ``holds`` run before user logic (pre-scan input steering); ``plant`` runs
-    after (post-scan feedback).  An empty ``Synthesis`` is equivalent to no
-    overlay — the runner skips the bracket entirely (zero overhead).
+    ``plant`` builds the input image, then ``holds`` steer managed inputs.  An
+    empty ``Synthesis`` is equivalent to no overlay — the runner skips the
+    bracket entirely (zero overhead).
     """
 
     holds: list[Rung] = field(default_factory=list)
@@ -50,9 +53,9 @@ class Synthesis:
         return not self.holds and not self.plant
 
     def all_rungs(self) -> Iterator[Rung]:
-        """Yield every synthesis rung (holds then plant) — for fold/compile walks."""
-        yield from self.holds
+        """Yield every synthesis rung in scan order — for fold/compile walks."""
         yield from self.plant
+        yield from self.holds
 
 
 def _rung_holding(condition: Condition | Tag | None, instruction: Any) -> Rung:

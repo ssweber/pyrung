@@ -696,6 +696,123 @@ class TestEdgeCases:
             ("ReplayHeldInput", False, True)
         ]
 
+    def test_plant_writer_has_stable_synthetic_identity(self) -> None:
+        """A plant transition is attributed to its exact zero-based rung."""
+        PlantValue = Bool("AttributedPlantValue")
+        Observed = Bool("AttributedPlantObserved")
+
+        with Program() as prog:
+            with Rung(PlantValue):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            plant=[copy_hold_rung(value=True, dest=PlantValue)],
+        )
+        plc.step()
+
+        chain = plc.cause(PlantValue)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == ("plant", 0)
+        assert "plant:0" in str(chain)
+
+    def test_active_hold_writer_has_stable_synthetic_identity(self) -> None:
+        """An active guarded hold is attributed to its exact PILOT rung."""
+        Guard = Bool("AttributedHoldGuard", default=True)
+        Held = Bool("AttributedHeldValue")
+        Observed = Bool("AttributedHeldObserved")
+
+        with Program() as prog:
+            with Rung(Guard, Held):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            holds=[copy_hold_rung(value=True, dest=Held, guard=Guard)],
+        )
+        plc.step()
+
+        chain = plc.cause(Held)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == ("PILOT", 0)
+        assert {(e.tag_name, e.value) for e in chain.steps[0].enablers} == {(Guard.name, True)}
+        assert chain.steps[0].to_dict()["subroutine"] == "PILOT"
+        assert "PILOT:0" in str(chain)
+
+        from pyrung.core.context import RungId
+
+        assert RungId("PILOT", 0) in plc._replay_node_views_at(plc.state.scan_id)
+
+    def test_guard_expiry_names_restoring_plant_not_stale_hold(self) -> None:
+        """When a hold expires, the plant rung that restores the value owns it."""
+        Guard = Bool("ReleaseGuard", external=True)
+        Value = Bool("ReleasedValue")
+        Observed = Bool("ReleasedObserved")
+
+        with Program() as prog:
+            with Rung(Value):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            plant=[copy_hold_rung(value=False, dest=Value)],
+            holds=[copy_hold_rung(value=True, dest=Value, guard=Guard)],
+        )
+        plc.patch({Guard.name: True})
+        plc.step()  # patch drains after synthesis
+        plc.step()  # hold sees Guard=True and raises Value
+        plc.patch({Guard.name: False})
+        plc.step()  # hold still sees the prior input image
+        plc.step()  # plant restores Value after the guard has expired
+
+        chain = plc.cause(Value)
+
+        assert chain is not None
+        assert chain.effect.to_value is False
+        assert [(step.subroutine, step.rung_index) for step in chain.steps[:1]] == [("plant", 0)]
+
+    def test_last_actual_hold_writer_wins(self) -> None:
+        """Two holds on one tag retain only the later matching writer."""
+        Value = Bool("OrderedHeldValue")
+        Observed = Bool("OrderedHeldObserved")
+
+        with Program() as prog:
+            with Rung(Value):
+                out(Observed)
+
+        plc = PLC(prog)
+        from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+        plc._synthesis = Synthesis(
+            holds=[
+                copy_hold_rung(value=False, dest=Value),
+                copy_hold_rung(value=True, dest=Value),
+            ],
+        )
+        plc.step()
+
+        chain = plc.cause(Value)
+
+        assert chain is not None
+        assert [
+            (step.subroutine, step.rung_index)
+            for step in chain.steps
+            if step.transition.tag_name == Value.name
+        ] == [("PILOT", 1)]
+
+        child = plc.fork()
+        inherited = child.cause(Value, scan=plc.state.scan_id)
+        assert inherited is not None
+        assert (inherited.steps[0].subroutine, inherited.steps[0].rung_index) == ("PILOT", 1)
+
 
 # ---------------------------------------------------------------------------
 # Serialization

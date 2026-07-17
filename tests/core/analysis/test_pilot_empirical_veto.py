@@ -20,7 +20,6 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.causal import (
     chase_cause_roots,
     empirical_program_writes,
-    pilot_touched_tags,
 )
 from pyrung.core.analysis.pilot.skiff import _frontier_free_words, _frontier_probes
 from pyrung.core.analysis.pilot.trace import compute_resting_values
@@ -53,9 +52,7 @@ def test_empirical_program_writes_fires_on_recorded_program_write() -> None:
 
     end = plc.state.scan_id
     # The pilot never touched Status → its recorded 0->1 is the program's.
-    fired = empirical_program_writes(
-        plc, frozenset({"Status"}), start_scan=0, end_scan=end, pilot_touched=frozenset()
-    )
+    fired = empirical_program_writes(plc, frozenset({"Status"}), start_scan=0, end_scan=end)
     assert "Status" in fired
 
 
@@ -67,40 +64,64 @@ def test_veto_is_fail_safe_without_evidence() -> None:
 
     end = plc.state.scan_id
     assert (
-        empirical_program_writes(
-            plc, frozenset({"Status"}), start_scan=0, end_scan=end, pilot_touched=frozenset()
-        )
+        empirical_program_writes(plc, frozenset({"Status"}), start_scan=0, end_scan=end)
         == frozenset()
     )
 
 
-def test_veto_excludes_pilot_touched_tags() -> None:
-    logic = _mover_program()
+def test_veto_excludes_exact_recorded_pilot_write() -> None:
+    status = Int("PilotWrittenStatus")
+    seen = Bool("PilotWrittenSeen")
+    with Program(strict=False) as logic:
+        with Rung(status == 1):
+            out(seen)
     plc = PLC(logic)
-    plc.step()
-    plc.patch({"Trigger": True})
-    plc.step()
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    plc._synthesis = Synthesis(
+        holds=[copy_hold_rung(value=1, dest=status)],
+    )
     plc.step()
     end = plc.state.scan_id
-    # If the pilot itself could have moved Status, positive evidence is withheld
-    # (fail-safe): a tag in pilot_touched is never demoted.
+
     assert (
         empirical_program_writes(
             plc,
-            frozenset({"Status"}),
+            frozenset({status.name}),
             start_scan=0,
             end_scan=end,
-            pilot_touched=frozenset({"Status"}),
         )
         == frozenset()
     )
 
 
-def test_pilot_touched_tags_unions_holds_and_journey() -> None:
-    hold_log = [SimpleNamespace(tags=(("HeldA", 1), ("HeldB", 0)))]
-    journey = [SimpleNamespace(inputs={"Pulsed": True})]
-    touched = pilot_touched_tags(hold_log, journey, {"ForcedC": 1})
-    assert touched == frozenset({"HeldA", "HeldB", "Pulsed", "ForcedC"})
+def test_veto_accepts_later_plant_restoration_after_hold_expiry() -> None:
+    guard = Bool("EmpiricalReleaseGuard", external=True)
+    status = Int("EmpiricalReleasedStatus")
+    seen = Bool("EmpiricalReleasedSeen")
+    with Program(strict=False) as logic:
+        with Rung(status == 1):
+            out(seen)
+    plc = PLC(logic)
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    plc._synthesis = Synthesis(
+        plant=[copy_hold_rung(value=0, dest=status)],
+        holds=[copy_hold_rung(value=1, dest=status, guard=guard)],
+    )
+    plc.patch({guard.name: True})
+    plc.step()
+    plc.step()
+    plc.patch({guard.name: False})
+    plc.step()
+    plc.step()
+
+    assert empirical_program_writes(
+        plc,
+        frozenset({status.name}),
+        start_scan=0,
+        end_scan=plc.state.scan_id,
+    ) == frozenset({status.name})
 
 
 # ---------------------------------------------------------------------------

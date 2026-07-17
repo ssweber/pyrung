@@ -695,6 +695,65 @@ class TestTerminalLetrunNoChannelRegister:
 class TestPreciseCause:
     """_precise_cause: single cause walk to steerable input, early exit."""
 
+    def test_guard_expiry_keeps_external_destinations_on_frontier(self):
+        """Exact PILOT authorship must not erase the released field levers."""
+        Door = Bool("Release_DoorClosed", external=True)
+        LintDoor = Bool("Release_LintDoorClosed", external=True)
+        DoorImage = Bool("Release_DoorImage")
+        LintDoorImage = Bool("Release_LintDoorImage")
+        Enter = Bool("Release_Enter", external=True)
+        State = Int("Release_State", default=3)
+
+        with Program() as prog:
+            with Rung(Door):
+                out(DoorImage)
+            with Rung(LintDoor):
+                out(LintDoorImage)
+            with Rung(Enter):
+                copy(6, State)
+            with Rung(State == 6, Or(~DoorImage, ~LintDoorImage)):
+                copy(10, State)
+
+        plc = PLC(prog, dt=0.010)
+        _set_rungs(
+            plc,
+            [
+                PilotRung(Door.name, True, State != 6),
+                PilotRung(LintDoor.name, True, State != 6),
+            ],
+        )
+        plc.patch({Enter.name: True})
+        plc.step()
+        assert plc.state.tags[State.name] == 6
+        before = dict(plc.state.tags)
+        anchor = plc.state.scan_id
+
+        plc.patch({Enter.name: False})
+        plc.step()
+        departure_scan = plc.state.scan_id
+        assert plc.state.tags[State.name] == 10
+
+        incident = DeviationIncident(
+            anchor_scan=anchor,
+            departure_scan=departure_scan,
+            end_scan=departure_scan,
+            action=(),
+            bearing=((State.name, 6),),
+            before_snap=before,
+            after_snap=dict(plc.state.tags),
+            changed_tags=(Door.name, LintDoor.name, State.name),
+            departures=(BearingDeparture(State.name, 6, departure_scan),),
+            channel_tag=State.name,
+        )
+
+        hypothesis = _precise_cause(plc, incident, _make_ctx(prog, plc))
+
+        assert hypothesis is not None
+        assert set(hypothesis.holds) == {
+            (Door.name, True),
+            (LintDoor.name, True),
+        }
+
     def test_newly_conductive_enablers_break_actual_writer(self):
         Enter = Bool("Precise_EnterExecute", external=True)
         Door = Bool("Precise_DoorClosed", external=True)

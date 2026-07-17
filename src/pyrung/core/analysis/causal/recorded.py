@@ -63,6 +63,7 @@ def recorded_cause(
     scan_log: Any = None,  # ScanLog | None
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
+    node_rung_fn: Any = None,  # Callable[[RungId], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
     node_reads_fn: Any = None,  # Callable[[int], dict[RungId, set[str]]] | None
     deep: bool = True,
@@ -136,6 +137,7 @@ def recorded_cause(
         scan_log=scan_log,
         initial_tags=initial_tags,
         node_firings_fn=node_firings_fn,
+        node_rung_fn=node_rung_fn,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
         node_reads_fn=node_reads_fn,
@@ -450,6 +452,7 @@ def _walk_backward(
     scan_log: Any = None,
     initial_tags: Any = None,
     node_firings_fn: Any = None,
+    node_rung_fn: Any = None,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
     node_reads_fn: Any = None,
@@ -564,6 +567,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
                         node_reads_fn=node_reads_fn,
@@ -608,6 +612,7 @@ def _walk_backward(
             history=history,
             rung_firings_fn=rung_firings_fn,
             node_firings_fn=node_firings_fn,
+            node_rung_fn=node_rung_fn,
             tag_name=name,
             scan_id=scan_id,
             to_value=value,
@@ -671,6 +676,7 @@ def _walk_backward(
             scan_log=scan_log,
             initial_tags=initial_tags,
             node_firings_fn=node_firings_fn,
+            node_rung_fn=node_rung_fn,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
             node_reads_fn=node_reads_fn,
@@ -689,6 +695,7 @@ def _walk_backward(
         history=history,
         rung_firings_fn=rung_firings_fn,
         node_firings_fn=node_firings_fn,
+        node_rung_fn=node_rung_fn,
         tag_name=tag_name,
         scan_id=scan_id,
         to_value=transition.to_value,
@@ -778,6 +785,7 @@ def _walk_backward(
                     scan_log=scan_log,
                     initial_tags=initial_tags,
                     node_firings_fn=node_firings_fn,
+                    node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
                     node_reads_fn=node_reads_fn,
@@ -836,6 +844,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
                         node_reads_fn=node_reads_fn,
@@ -1093,6 +1102,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
                         node_reads_fn=node_reads_fn,
@@ -1125,6 +1135,7 @@ def _walk_backward(
                     scan_log=scan_log,
                     initial_tags=initial_tags,
                     node_firings_fn=node_firings_fn,
+                    node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
                     node_reads_fn=node_reads_fn,
@@ -1289,6 +1300,7 @@ def _recorded_writers_from_firings(
     history: History,
     rung_firings_fn: Any,
     node_firings_fn: Any,
+    node_rung_fn: Any,
     tag_name: str,
     scan_id: int,
     to_value: Any,
@@ -1310,16 +1322,39 @@ def _recorded_writers_from_firings(
     resolved: list[tuple[int, Rung, str | None]] = []
     seen: set[tuple[str | None, int]] = set()
 
-    # 1. Subroutine writers — named precisely from the node-level timeline.
-    if node_firings_fn is not None and program is not None:
+    firings = rung_firings_fn(scan_id)
+    main_matching = {
+        rung_idx
+        for rung_idx, writes in firings.items()
+        if tag_name in writes and writes[tag_name] == to_value
+    }
+
+    # 1. Node writers — precise subroutine nodes plus synthesis namespaces.
+    if node_firings_fn is not None:
+        from pyrung.core.synthesis import (
+            PILOT_RUNG_NAMESPACE,
+            PLANT_RUNG_NAMESPACE,
+        )
+
         node_firings = node_firings_fn(scan_id)
+        synthetic_matches: list[RungId] = []
         for rung_id in sorted(node_firings, key=lambda r: (r.subroutine or "", r.rung_index)):
             if rung_id.subroutine is None:
                 continue
             writes = node_firings[rung_id]
             if tag_name not in writes or writes[tag_name] != to_value:
                 continue
-            rung = _resolve_subroutine_rung(program, rung_id.subroutine, rung_id.rung_index)
+            if rung_id.subroutine in (
+                PLANT_RUNG_NAMESPACE,
+                PILOT_RUNG_NAMESPACE,
+            ):
+                synthetic_matches.append(rung_id)
+                continue
+            rung = (
+                node_rung_fn(rung_id)
+                if node_rung_fn is not None
+                else _resolve_subroutine_rung(program, rung_id.subroutine, rung_id.rung_index)
+            )
             if rung is None:
                 continue
             key = (rung_id.subroutine, rung_id.rung_index)
@@ -1328,15 +1363,24 @@ def _recorded_writers_from_firings(
             seen.add(key)
             resolved.append((rung_id.rung_index, rung, rung_id.subroutine))
 
+        # User logic executes after both synthesis brackets.  Only when no main
+        # rung wrote the final value can a synthesis node be the final writer.
+        # Holds follow plant, and higher indices execute later within a bracket.
+        if not main_matching and synthetic_matches:
+            holds = [r for r in synthetic_matches if r.subroutine == PILOT_RUNG_NAMESPACE]
+            winner = max(holds or synthetic_matches, key=lambda r: r.rung_index)
+            rung = node_rung_fn(winner) if node_rung_fn is not None else None
+            if rung is not None:
+                key = (winner.subroutine, winner.rung_index)
+                seen.add(key)
+                resolved.append((winner.rung_index, rung, winner.subroutine))
+
     # 2. Main-scope (and branch) writers — from the main-rung firing log.
-    firings = rung_firings_fn(scan_id)
     main_rungs = program.rungs if program is not None else logic
     candidates = pdg.writers_of.get(tag_name, frozenset()) if pdg is not None else frozenset()
 
-    for rung_idx in sorted(firings):
+    for rung_idx in sorted(main_matching):
         writes = firings[rung_idx]
-        if tag_name not in writes or writes[tag_name] != to_value:
-            continue
         if pdg is not None and candidates:
             # A main-scope node at this capture index that writes the tag.
             # If there is none, this firing is a rolled-up subroutine call

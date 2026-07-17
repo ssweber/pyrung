@@ -16,7 +16,7 @@ import itertools
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot.causal import empirical_program_writes, pilot_touched_tags
+from pyrung.core.analysis.pilot.causal import empirical_program_writes
 from pyrung.core.analysis.pilot.compass import (
     CompassObservation,
     NavigationObservation,
@@ -247,11 +247,6 @@ def probe_live_guard_frontiers(
         frozenset(cone_steerable),
         start_scan=0,
         end_scan=getattr(getattr(state.work, "state", None), "scan_id", 0) or 0,
-        pilot_touched=pilot_touched_tags(
-            getattr(state, "hold_log", ()),
-            getattr(state, "journey", ()),
-            tuple(r.dest for r in getattr(state, "rungs", ())),
-        ),
     )
 
     # Honest decline: an unreadable frontier whose upstream cone holds a free

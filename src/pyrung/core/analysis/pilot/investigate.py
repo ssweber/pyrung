@@ -1053,7 +1053,6 @@ def investigate_deviation(
     *,
     needed: Sequence[tuple[str, Any]] = (),
     installed_rungs: Sequence[Any] = (),
-    pilot_touched: frozenset[str] = frozenset(),
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -1103,7 +1102,7 @@ def investigate_deviation(
         exclude=frozenset(tag for tag, _value in incident.action),
     )
     raw: list[InvestigationHypothesis] = list(absence_hyps)
-    raw.extend(_precise_causes(plc, incident, ctx, pilot_touched))
+    raw.extend(_precise_causes(plc, incident, ctx))
     raw.extend(
         InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
         for c in correct_enablers(plc, incident, ctx)
@@ -1365,7 +1364,6 @@ def _precise_causes(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
-    pilot_touched: frozenset[str] = frozenset(),
 ) -> list[InvestigationHypothesis]:
     """Minimal controllable cuts of the exact deep fired chain.
 
@@ -1396,7 +1394,6 @@ def _precise_causes(
         steerable,
         start_scan=incident.anchor_scan,
         end_scan=incident.end_scan,
-        pilot_touched=pilot_touched,
     )
     hypotheses: list[InvestigationHypothesis] = []
 
@@ -1444,9 +1441,11 @@ def _precise_causes(
         for step in chain.steps:
             steps_by_tag.setdefault(step.transition.tag_name, []).append(step)
 
-        # Anything with an observed writer in this chain is an intermediate,
-        # even if the broad static classifier calls it steerable.
-        effective_steerable = frozenset(steerable) - empirical_writes - frozenset(steps_by_tag)
+        # Static steerability is narrowed only by exact evidence that the user
+        # program/plant authored the transition.  A recorded synthesis writer
+        # does not by itself turn its external destination into an internal
+        # intermediate; the causal walk may still terminate at that lever.
+        effective_steerable = frozenset(steerable) - empirical_writes
 
         origin_memo: dict[str, frozenset[str]] = {}
 
@@ -1480,21 +1479,27 @@ def _precise_causes(
         trigger_spine: set[int] = set()
 
         def _mark_trigger_spine(
-            name: str,
-            visiting: frozenset[str] = frozenset(),
+            transition: Any,
+            visiting: frozenset[tuple[str, int]] = frozenset(),
             *,
             _steps_by_tag: dict[str, list[Any]] = steps_by_tag,
             _trigger_spine: set[int] = trigger_spine,
         ) -> None:
-            if name in visiting:
+            key = (transition.tag_name, transition.scan_id)
+            if key in visiting:
                 return
-            next_visiting = visiting | {name}
-            for step in _steps_by_tag.get(name, ()):
+            next_visiting = visiting | {key}
+            for step in _steps_by_tag.get(transition.tag_name, ()):
+                if step.transition.scan_id != transition.scan_id or not _values_match(
+                    step.transition.to_value,
+                    transition.to_value,
+                ):
+                    continue
                 _trigger_spine.add(id(step))
                 for trigger in step.triggers:
-                    _mark_trigger_spine(trigger.tag_name, next_visiting)
+                    _mark_trigger_spine(trigger, next_visiting)
 
-        _mark_trigger_spine(chain.effect.tag_name)
+        _mark_trigger_spine(chain.effect)
 
         # First candidate: exact transitioned leaves. This is the same causal
         # frontier as the rung cuts below, not a separate heuristic; it is
@@ -1510,6 +1515,7 @@ def _precise_causes(
         moved_tags = {
             tr.tag_name
             for step in chain.steps
+            if id(step) in trigger_spine
             for tr in step.triggers
             if not _values_match(tr.from_value, tr.to_value)
         }
@@ -1644,10 +1650,9 @@ def _precise_cause(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
-    pilot_touched: frozenset[str] = frozenset(),
 ) -> InvestigationHypothesis | None:
     """Compatibility helper returning the first exact causal frontier."""
-    hypotheses = _precise_causes(plc, incident, ctx, pilot_touched)
+    hypotheses = _precise_causes(plc, incident, ctx)
     return hypotheses[0] if hypotheses else None
 
 

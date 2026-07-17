@@ -33,7 +33,7 @@ from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, RungId, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
-from pyrung.core.executor import ConditionViewCapture, execute_program
+from pyrung.core.executor import ConditionViewCapture, execute_observed_rung, execute_program
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -818,13 +818,12 @@ class PLC:
         return self._rung_firing_timelines.at(target)
 
     def _node_firings_at(self, scan_id: int | None = None) -> PMap:
-        """Return node-level (subroutine-rung) firings for the given scan.
+        """Return node-level subroutine/synthesis firings for the given scan.
 
         Returns ``PMap[RungId, PMap[str, Any]]`` keyed by
-        ``RungId(subroutine, rung_index)`` — only subroutine rungs appear
-        here (main rungs live in :meth:`rung_firings`).  Consumed by
-        ``recorded_cause`` to name the precise subroutine writer rung
-        instead of the rolled-up call-site main rung.
+        ``RungId(namespace, rung_index)``.  User subroutine nodes and the
+        synthetic ``plant`` / ``PILOT`` namespaces live here; main rungs remain
+        exclusively in :meth:`rung_firings`.
         """
         target = self._playhead if scan_id is None else scan_id
         if (
@@ -834,6 +833,27 @@ class PLC:
         ):
             return self._causal_parent._node_firings_at(target)
         return self._node_firing_timelines.at(target)
+
+    def _resolve_node_rung(self, rung_id: RungId) -> Rung | None:
+        """Resolve a recorded node identity without exposing synthetic indices."""
+        from pyrung.core.synthesis import (
+            PILOT_RUNG_NAMESPACE,
+            PLANT_RUNG_NAMESPACE,
+        )
+
+        if self._synthesis is not None:
+            if rung_id.subroutine == PLANT_RUNG_NAMESPACE:
+                rungs = self._synthesis.plant
+                return rungs[rung_id.rung_index] if rung_id.rung_index < len(rungs) else None
+            if rung_id.subroutine == PILOT_RUNG_NAMESPACE:
+                rungs = self._synthesis.holds
+                return rungs[rung_id.rung_index] if rung_id.rung_index < len(rungs) else None
+        if self._program is None or rung_id.subroutine is None:
+            return None
+        rungs = self._program.subroutines.get(rung_id.subroutine)
+        if rungs is None or rung_id.rung_index >= len(rungs):
+            return None
+        return rungs[rung_id.rung_index]
 
     def diff(self, scan_a: int, scan_b: int) -> dict[str, tuple[Any, Any]]:
         """Return changed tag values between two retained historical scans."""
@@ -1036,6 +1056,7 @@ class PLC:
             scan_log=self._scan_log,
             initial_tags=self._initial_state.tags,
             node_firings_fn=self._node_firings_at,
+            node_rung_fn=self._resolve_node_rung,
             node_views_fn=self._replay_node_views_at,
             node_reads_fn=self._replay_node_reads_at,
             deep=deep,
@@ -2045,7 +2066,7 @@ class PLC:
         # Final scan: run the live program path with a capturing observer.
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
         capture = ConditionViewCapture()
-        ctx, dt = replay._prepare_scan()
+        ctx, dt = replay._prepare_scan(synthesis_observer=capture)
         execute_program(replay._program, ctx, capture_rungs=True, observer=capture)
         replay._commit_scan(ctx, dt)
 
@@ -2750,7 +2771,12 @@ class PLC:
             return dt
         return self._dt
 
-    def _prepare_scan(self, *, fast_reads: bool = False) -> tuple[ScanContext, float]:
+    def _prepare_scan(
+        self,
+        *,
+        fast_reads: bool = False,
+        synthesis_observer: ConditionViewCapture | None = None,
+    ) -> tuple[ScanContext, float]:
         """Create and initialize scan context before logic evaluation."""
         replay_io = getattr(self, "_next_scan_replay_io", None)
         self._next_scan_replay_io = None
@@ -2781,24 +2807,41 @@ class PLC:
             # command lags one scan.  Feedback is an input, read here at the top;
             # the scan boundary is the plant latency.  dt is already in ctx, so
             # the TON/TOF timers ride the native dt knob.
-            self._evaluate_synthesis(ctx, self._synthesis.plant)
+            self._evaluate_synthesis(
+                ctx,
+                self._synthesis.plant,
+                namespace="plant",
+                observer=synthesis_observer,
+            )
             # ``holds`` (pre / input-steer): PILOT pins inputs after the plant lays
             # down feedback but *before* the drain — canonical precedence
             # ``plant < holds < patches < forces`` (a patch overrides a hold, a
             # ``force`` is the hard pin applied in the pre/post force pass).
-            self._evaluate_synthesis(ctx, self._synthesis.holds)
+            self._evaluate_synthesis(
+                ctx,
+                self._synthesis.holds,
+                namespace="PILOT",
+                observer=synthesis_observer,
+            )
+        ctx._read_sink = None
         self._this_scan_drained_patches = self._input_overrides.apply_pre_scan(ctx)
         return ctx, dt
 
-    def _evaluate_synthesis(self, ctx: ScanContext, rungs: list[Rung]) -> None:
+    def _evaluate_synthesis(
+        self,
+        ctx: ScanContext,
+        rungs: list[Rung],
+        *,
+        namespace: str,
+        observer: ConditionViewCapture | None = None,
+    ) -> None:
         """Evaluate synthesis bracket rungs in their own condition scope.
 
         The brackets are scanned like a subroutine body: a fresh condition
         scope (so a user rung's ``.continued()`` can't reach across into a
         bracket, and vice-versa), writes batched into the same ctx/commit as the
-        user rungs.  Writes are intentionally left unattributed (no
-        ``capturing_rung``) — synthesis rungs are not user rungs, so they don't
-        appear in the rung-firing timeline.
+        user rungs.  Each entry records under a synthetic ``RungId`` in the
+        node timeline, leaving the public integer main-rung timeline unchanged.
         """
         if not rungs:
             return
@@ -2807,8 +2850,20 @@ class PLC:
         ctx._condition_snapshot = None
         ctx._condition_scope_token = object()
         try:
-            for rung in rungs:
-                rung.evaluate(ctx)
+            for rung_index, rung in enumerate(rungs):
+                rung_id = RungId(namespace, rung_index)
+                with ctx.capturing_node(rung_id, retain_all_writes=True):
+                    if observer is not None and self._program is not None:
+                        execute_observed_rung(
+                            self._program,
+                            ctx,
+                            rung_index,
+                            rung,
+                            observer=observer,
+                            namespace=namespace,
+                        )
+                    else:
+                        rung.evaluate(ctx)
         finally:
             ctx._condition_snapshot = saved_snapshot
             ctx._condition_scope_token = saved_scope

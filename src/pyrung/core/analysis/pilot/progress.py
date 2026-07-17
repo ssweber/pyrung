@@ -22,7 +22,6 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
     _set_rungs,
 )
-from pyrung.core.analysis.pilot.causal import pilot_touched_tags
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation, _action_sort_key
 from pyrung.core.analysis.pilot.detour import (
     Provisional,
@@ -812,9 +811,6 @@ def _investigate_and_revert(
             replay,
             needed=needed,
             installed_rungs=tuple(state.rungs),
-            pilot_touched=pilot_touched_tags(
-                state.hold_log, state.journey, {r.dest: r.value for r in state.rungs}
-            ),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this

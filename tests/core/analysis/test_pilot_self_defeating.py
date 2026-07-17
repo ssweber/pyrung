@@ -216,7 +216,7 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
         channel_tag=Channel.name,
     )
 
-    hypotheses = _precise_causes(plc, incident, ctx, frozenset({State.name}))
+    hypotheses = _precise_causes(plc, incident, ctx)
     progress_cut = next(h for h in hypotheses if (State.name, 0) in h.holds)
 
     monkeypatch.setattr(
@@ -244,7 +244,6 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
         incident,
         ctx,
         replay,
-        pilot_touched=frozenset({State.name}),
     )
 
     assert replayed == [progress_cut.holds]

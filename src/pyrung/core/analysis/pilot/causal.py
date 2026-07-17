@@ -56,21 +56,18 @@ def _reference_constants(plc: PLC) -> frozenset[str]:
     return result
 
 
-def _changed_in_window(
+def _program_written_changes(
     plc: PLC,
     start_scan: int,
     end_scan: int,
     relevant: frozenset[str],
 ) -> frozenset[str]:
-    """Subset of *relevant* whose recorded value changed inside the window.
+    """Subset whose transitions have an exact non-PILOT recorded writer.
 
-    Deliberately a history walk, not a receipt read: its sole consumer is
-    :func:`empirical_program_writes` — recorded-run *testimony* about tags the
-    program wrote.  The skiff consults it over the whole run (scan 0..now), a
-    window no coast session covers, and its suspects are arbitrary steerable
-    tags outside any pen universe.  Incident evidence, by contrast, comes off
-    the session timeline (investigate.build_deviation_incident) — do not
-    route new coast-evidence consumers through this function.
+    State changes locate the relevant scans; the rung and node timelines then
+    identify the writer that actually supplied the committed value.  User
+    main/subroutine rungs and ``plant`` count as program-owned evidence.
+    ``PILOT`` writes, patches, forces, and unattributed changes do not.
     """
     if not relevant:
         return frozenset()
@@ -78,12 +75,68 @@ def _changed_in_window(
         states = plc.history.range(start_scan, end_scan + 1)
     except Exception:  # noqa: BLE001
         return frozenset()
-    changed: set[str] = set()
+    written: set[str] = set()
+    log = plc._scan_log.snapshot()
     for prev, cur in zip(states, states[1:], strict=False):
         for tag in relevant:
-            if tag not in changed and not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
-                changed.add(tag)
-    return frozenset(changed)
+            if tag in written or _values_match(prev.tags.get(tag), cur.tags.get(tag)):
+                continue
+            value = cur.tags.get(tag)
+            scan_id = cur.scan_id
+
+            # A force is re-applied after user logic and therefore owns the
+            # committed value even when an earlier rung happened to write it.
+            force_map = plc._replay_force_map_at_scan(scan_id, log)
+            if tag in force_map and _values_match(force_map[tag], value):
+                continue
+
+            # User logic follows patches and both synthesis brackets.
+            main_firings = plc.rung_firings(scan_id)
+            if any(
+                tag in writes and _values_match(writes[tag], value)
+                for writes in main_firings.values()
+            ):
+                written.add(tag)
+                continue
+
+            # A patch drains after synthesis but before user logic.
+            patch = log.patches_by_scan.get(scan_id, {})
+            if tag in patch and _values_match(patch[tag], value):
+                continue
+
+            node_firings = plc._node_firings_at(scan_id)
+            matching_nodes = [
+                rung_id
+                for rung_id, writes in node_firings.items()
+                if tag in writes and _values_match(writes[tag], value)
+            ]
+            if any(rung_id.subroutine == "PILOT" for rung_id in matching_nodes):
+                continue
+            if any(rung_id.subroutine != "PILOT" for rung_id in matching_nodes):
+                written.add(tag)
+                continue
+
+            # Main timelines deliberately filter terminal/unread writes.  The
+            # recorded cause resolver can recover those from an exact
+            # interpreted at-fire replay; consume that writer identity rather
+            # than falling back to a tag-name ownership guess.
+            try:
+                chain = plc.cause(tag, scan=scan_id, deep=False)
+            except Exception:  # noqa: BLE001
+                chain = None
+            if chain is not None:
+                writer = next(
+                    (
+                        step
+                        for step in chain.steps
+                        if step.transition.tag_name == tag
+                        and _values_match(step.transition.to_value, value)
+                    ),
+                    None,
+                )
+                if writer is not None and writer.subroutine != "PILOT":
+                    written.add(tag)
+    return frozenset(written)
 
 
 def empirical_program_writes(
@@ -92,46 +145,21 @@ def empirical_program_writes(
     *,
     start_scan: int,
     end_scan: int,
-    pilot_touched: frozenset[str],
 ) -> frozenset[str]:
     """Steerable *candidates* the RECORDED RUN testifies the PROGRAM wrote.
 
     Static steerability is a *hypothesis*; the recorded run is *testimony*.  This
     is **"Verify is the sole source of CONFIRMED" applied to classification**: a
-    candidate that changed value inside ``[start_scan, end_scan]`` at a scan where
-    the pilot held no hold on it and issued no pulse to it — ``pilot_touched``
-    names every tag the pilot's own fully-known actions (hold_log / applied
-    overlays / journey) could have moved — was moved by the *program*, so it is
-    not a free lever in the live context.
+    candidate that changed value inside ``[start_scan, end_scan]`` is demoted
+    only when its recorded final writer was a user/subroutine rung or ``plant``.
+    A recorded ``PILOT`` writer is exact negative evidence, so guarded holds no
+    longer taint later plant/user restoration merely because they share a tag.
 
-    **Fail-safe: positive evidence only.**  A candidate the pilot touched, or one
-    that never changed in the window, keeps its static verdict unchanged.  The
-    function only ever *demotes* (returns a subset of ``candidates``); it never
-    promotes anything, and no recorded evidence returns the empty set.
+    **Fail-safe: positive evidence only.**  A candidate with no attributable
+    non-PILOT transition keeps its static verdict unchanged.  The function only
+    ever demotes; it never promotes anything.
     """
-    suspects = frozenset(candidates) - frozenset(pilot_touched)
-    return _changed_in_window(plc, start_scan, end_scan, suspects)
-
-
-def pilot_touched_tags(
-    hold_log: Any = (),
-    journey: Any = (),
-    rungs: Any = (),
-) -> frozenset[str]:
-    """Every tag the pilot's own actions could have moved.
-
-    The union of held tags (``hold_log`` entries' ``.tags`` + the live
-    ``rungs`` keys) and pulsed / applied inputs (each ``journey`` step's
-    ``.inputs``).  Consumed by :func:`empirical_program_writes` as the exclusion
-    set so a demotion never mistakes the pilot's own write for the program's.
-    """
-    touched: set[str] = set(rungs or ())
-    for entry in hold_log or ():
-        for pair in getattr(entry, "tags", ()):
-            touched.add(pair[0])
-    for step in journey or ():
-        touched.update(getattr(step, "inputs", {}) or {})
-    return frozenset(touched)
+    return _program_written_changes(plc, start_scan, end_scan, frozenset(candidates))
 
 
 def chase_cause_roots(

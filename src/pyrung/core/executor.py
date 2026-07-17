@@ -305,6 +305,38 @@ def execute_program(
             )
 
 
+def execute_observed_rung(
+    program: Program,
+    ctx: ScanContext,
+    rung_index: int,
+    rung: Rung,
+    *,
+    observer: ExecutionObserver,
+    namespace: str,
+) -> None:
+    """Execute one synthetic node through the observer-aware rung path.
+
+    Synthesis brackets are runtime overlays rather than members of
+    ``program.rungs``.  Historical at-fire replay still needs their exact
+    condition view and instruction-read footprint, so the runner supplies the
+    overlay rung directly while retaining the user program as the subroutine
+    resolution environment.
+    """
+    _execute_rung(
+        program,
+        ctx,
+        rung_index,
+        rung,
+        mode="natural",
+        observer=observer,
+        kind="subroutine",
+        depth=0,
+        parent_enabled=True,
+        subroutine_name=namespace,
+        call_stack=(namespace,),
+    )
+
+
 def _execute_program_natural(
     program: Program,
     ctx: ScanContext,

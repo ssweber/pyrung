@@ -60,6 +60,26 @@ def _build_stranded():
     return logic, Sensor, Fault, Alarm
 
 
+def test_synthesis_rungs_do_not_enter_public_coverage_universe() -> None:
+    """Synthetic node identities never shift or extend user coverage labels."""
+    Enable = Bool("CoverageEnable")
+    Output = Bool("CoverageOutput")
+    with Program() as program:
+        with Rung(Enable):
+            out(Output)
+
+    plc = PLC(program)
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    plc._synthesis = Synthesis(
+        holds=[copy_hold_rung(value=True, dest=Enable)],
+    )
+    plc.step()
+
+    assert plc.query.hot_rungs() == ["1"]
+    assert plc.query.cold_rungs() == []
+
+
 # ---------------------------------------------------------------------------
 # G1: recovers()
 # ---------------------------------------------------------------------------

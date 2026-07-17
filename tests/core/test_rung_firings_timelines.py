@@ -20,6 +20,7 @@ from __future__ import annotations
 from pyrsistent import pmap
 
 from pyrung.core import PLC, Bool, Int, Program, Rung, out
+from pyrung.core.context import RungId
 from pyrung.core.rung_firings import (
     _FIRED_ONLY_THRESHOLD,
     AlternatingRun,
@@ -50,6 +51,26 @@ def test_stable_rung_single_range() -> None:
     assert range_.end_scan_id == 100
     assert isinstance(range_.payload, PatternRef)
     assert range_.payload.pattern == pattern
+
+
+def test_false_synthesis_guard_records_no_node_firing() -> None:
+    """A disabled synthesis rung is not a firing merely because it was scanned."""
+    Guard = Bool("FalseSynthesisGuard")
+    Held = Bool("FalseSynthesisHeld")
+    Seen = Bool("FalseSynthesisSeen")
+    with Program() as program:
+        with Rung(Held):
+            out(Seen)
+
+    plc = PLC(program, record_all_tags=True)
+    from pyrung.core.synthesis import Synthesis, copy_hold_rung
+
+    plc._synthesis = Synthesis(
+        holds=[copy_hold_rung(value=True, dest=Held, guard=Guard)],
+    )
+    plc.step()
+
+    assert RungId("PILOT", 0) not in plc._node_firings_at(plc.state.scan_id)
 
 
 def test_mutable_capture_dict_uses_same_stable_range() -> None:
