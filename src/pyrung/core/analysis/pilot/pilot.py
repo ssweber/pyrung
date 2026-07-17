@@ -1,21 +1,17 @@
 """Public entry points and outer orchestration for PILOT drives.
 
-This module builds the static and runtime context, prepares any user-selected
-trace route, and runs the event-producing iteration loop. For each iteration it
-requests candidates, invokes the execution/verification wrappers, applies
-their transition observations, commits eligible forks, and delegates
-post-commit retention or recovery to ``progress.py``.
-
-It also owns terminal diagnostics and conversion of the event stream into the
-public plan/drive results. Static reading, candidate construction, trial gates,
-and recovery mechanics remain in their respective modules.
+This module builds static/runtime context, prepares the user-selected trace
+route, and dispatches ``Bearing | NeedProbe | Stuck`` results from ``Compass``.
+It invokes execution, applies observations, commits eligible forks, delegates
+post-commit recovery, and converts the event stream into public results.  It
+does not synthesize a navigation decision.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -39,21 +35,31 @@ from pyrung.core.analysis.pilot._ops import (
     _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.accumulators import iter_profiles
-from pyrung.core.analysis.pilot.candidates import (
-    _build_candidates,
-    _Candidate,
-    _candidate_applied,
-    _co_actions,
-)
 from pyrung.core.analysis.pilot.charts import (
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.compass import (
+    ActionNogoodObservation,
+    CoastObservation,
     Compass,
+    NavigationCatalog,
+    ProbeExhaustedObservation,
     _action_sort_key,
 )
 from pyrung.core.analysis.pilot.gauge import build_gauge
+from pyrung.core.analysis.pilot.navigation import (
+    Bearing,
+    Coast,
+    Dwell,
+    NavigationConstraints,
+    NeedProbe,
+    OrientationWorld,
+    Pulse,
+    Stuck,
+    TargetSpec,
+    act_identity,
+)
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import (
@@ -62,17 +68,9 @@ from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
-from pyrung.core.analysis.pilot.steer import (
-    _try_candidate,
-    _try_prescribed_batch,
-    _try_terminal_dwell,
-    _try_terminal_letrun,
-    _try_widening,
-    _try_zoom,
-)
+from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
-    TraceAction,
     TraceChoice,
     TraceNode,
     _all_nodes,
@@ -88,7 +86,6 @@ from pyrung.core.analysis.pilot.trace import (
     route_rung_order,
     target_reached,
     trace_back,
-    trace_relational,
     writer_route_eligible,
 )
 from pyrung.core.analysis.pilot.types import (
@@ -111,7 +108,7 @@ from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.charts import CompassGraph, CompassPlan
+    from pyrung.core.analysis.pilot.charts import StaticPath, StaticTransitionGraph
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.runner import PLC
 
@@ -209,16 +206,20 @@ def _make_pilot_context(
     pipeline_internal_tags = frozenset(
         tag for role in pipeline_roles for tag in role.trace_internal_tags
     )
-    compass = influence or Compass()
-    compass.set_graphs(
-        _build_compass_graphs_for_context(
-            pipeline_roles,
-            pdg,
-            program,
-            steerable,
-            opaque_loop,
-            evidence,
-        )
+    prior_compass = influence or Compass()
+    compass = Compass(
+        catalog=NavigationCatalog(
+            slices=prior_compass.catalog.slices,
+            graphs=_build_static_transition_graphs_for_context(
+                pipeline_roles,
+                pdg,
+                program,
+                steerable,
+                opaque_loop,
+                evidence,
+            ),
+        ),
+        knowledge=prior_compass.knowledge,
     )
     # Domain prior for trace's inequality resolution: nd_domains (free-input
     # value spaces) + affine func-deps (derived-tag → steerable source).  Both
@@ -280,154 +281,25 @@ def _infer_pipeline_roles_for_context(
     return tuple(roles)
 
 
-def _build_compass_graphs_for_context(
+def _build_static_transition_graphs_for_context(
     pipeline_roles: tuple[PipelineRoles, ...],
     pdg: ProgramGraph,
     program: Any,
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     evidence: TransitionEvidence | None,
-) -> tuple[CompassGraph, ...]:
+) -> tuple[StaticTransitionGraph, ...]:
     if not pipeline_roles:
         return ()
-    from pyrung.core.analysis.pilot.charts import build_compass_graphs
+    from pyrung.core.analysis.pilot.charts import build_static_transition_graphs
 
-    return build_compass_graphs(
+    return build_static_transition_graphs(
         pipeline_roles,
         pdg,
         program,
         steerable,
         opaque_loop,
         evidence,
-    )
-
-
-def _ensure_state_key_config(
-    state: _PilotState,
-    tree: Any,
-    target_tag: str,
-) -> _StateKeyConfig:
-    """Install the trace-tree fallback key config when prover context is absent."""
-    if state.key_config is None:
-        tree_tags = tree.pivot_tags() | {target_tag}
-        tree_tags.update(
-            n.tag
-            for n in tree.leaves()
-            if not n.is_steerable and not getattr(n, "pipeline_internal", False)
-        )
-        state.key_config = _StateKeyConfig(
-            stateful_names=tuple(sorted(tree_tags)),
-            done_specs=(),
-            threshold_vector_specs=(),
-            acc_indices=frozenset(),
-        )
-    return state.key_config
-
-
-def _expand_and_seed(
-    tree: Any,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> None:
-    """Expand static routes for newly-discovered pivot tags and seed the compass."""
-    from pyrung.core.analysis.pilot.evidence import expand_routes
-
-    candidates = (tree.pivot_tags() | ctx.opaque_loop | {ctx.target_tag}) - state.expanded_tags
-    for tag in sorted(candidates):
-        routes = expand_routes(
-            tag,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            ctx.opaque_loop,
-            ctx.evidence,
-        )
-        if routes:
-            ctx.compass.seed_routes(tag, routes)
-        state.expanded_tags.add(tag)
-
-
-def _prepare_iteration(
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _IterationFrame:
-    snap = dict(state.work.state.tags)
-    if ctx.target_predicate is not None:
-        # Relational target (A op B): trace the live predicate so the target
-        # gets the same relational frontier, reactive levers, and coast
-        # disposition as a relational prerequisite.
-        tree = trace_relational(
-            ctx.target_predicate,
-            snap,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=ctx.domain_prior,
-            avoid_pred=ctx.avoid_pred,
-            via_pred=ctx.via_pred,
-            harness=getattr(state.work, "_harness", None),
-        )
-    else:
-        tree = trace_back(
-            ctx.target_tag,
-            ctx.target_value,
-            snap,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=ctx.domain_prior,
-            avoid_pred=ctx.avoid_pred,
-            via_pred=ctx.via_pred,
-            harness=getattr(state.work, "_harness", None),
-        )
-    _expand_and_seed(tree, state, ctx)
-    key_config = _ensure_state_key_config(state, tree, ctx.target_tag)
-    if not state.watch_tags:
-        state.watch_tags.extend(sorted(tree.pivot_tags()))
-        dbg(f"# watch_tags ({len(state.watch_tags)}): {state.watch_tags[:8]}...")
-
-    key = _pilot_world_key(snap, key_config, state.rungs)
-    distance_before = tree.unsatisfied_count()
-    action_details = tuple(
-        TraceAction(
-            tag=action.tag,
-            value=action.value,
-            provenance=action.provenance,
-            wake=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
-            until=action.until,
-            oscillate=action.oscillate,
-            establish=action.establish,
-            heuristic=action.heuristic,
-            note=action.note,
-            availability=action.availability,
-        )
-        for action in tree.ordered_action_details()
-    )
-    # Harvest relational lever reports (last-write-wins) so the plan journal can
-    # attach them to the matching force/pulse/command steps at finished time.
-    for action in action_details:
-        if action.note:
-            state.lever_notes[action.tag] = action.note
-    if state.best_trend is None:
-        state.best_trend = distance_before
-        state.seen_keys.add(key)
-
-    return _IterationFrame(
-        snap=snap,
-        tree=tree,
-        key=key,
-        distance_before=distance_before,
-        raw_trace_actions=tuple(action.pair for action in action_details),
-        raw_trace_action_details=action_details,
     )
 
 
@@ -485,17 +357,15 @@ def _debug_iteration(
     if still_need:
         dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
 
-    dbg(
-        "# nogoods for key: "
-        f"{sorted(state.nogoods.get(frame.key, set()), key=_action_sort_key) or '(none)'}"
-    )
+    nogoods = ctx.compass.knowledge.nogood_pairs(frame.key)
+    dbg(f"# nogoods for key: {sorted(nogoods, key=_action_sort_key) or '(none)'}")
     dbg(f"# rungs: {state.rungs if state.rungs else '(none)'}")
     dbg(f"# seen_keys: {len(state.seen_keys)}  checkpoints: {len(state.checkpoints)}")
     dbg(f"# trace ordered_actions (raw, {len(frame.raw_trace_actions)}):")
     for t, v in frame.raw_trace_actions:
         cur = frame.snap.get(t)
         edge = " [EDGE]" if t in ctx.edge_tags else ""
-        ng = " [NOGOOD]" if (t, v) in state.nogoods.get(frame.key, ()) else ""
+        ng = " [NOGOOD]" if (t, v) in nogoods else ""
         already = " [ALREADY]" if _values_match(cur, v) and t not in ctx.edge_tags else ""
         dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
@@ -520,6 +390,14 @@ def _with_avoid_reason(
         # to the target silently).  Re-derive which avoid conditions forced those
         # routes so the decline still names them.
         named.update(_avoid_route_names(frame, ctx))
+    if not named and frame is not None:
+        # Opaque writer cuts can prevent route enumeration from reconstructing
+        # the pruned Or arms.  In that case, name only avoid conditions that are
+        # structurally upstream of the outstanding frontier.
+        related: set[str] = set()
+        for tag, _value in frontier_pairs(frame.tree, frame.snap):
+            related.update(ctx.pdg.upstream_slice(tag, follow_calls=True))
+        named.update(set(getattr(ctx.avoid_pred, "names", ())) & related)
     names = sorted(named)
     if not names:
         return base
@@ -618,14 +496,16 @@ def _record_attempt(
     # The commit point: apply() returns the next compass value; this single
     # assignment replaces the context's compass (a value, never a shared
     # mutable advanced behind readers' backs).
-    ctx.compass, _ = ctx.compass.apply(attempt.observations)
+    knowledge_observations = [
+        *attempt.observations,
+        *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
+    ]
+    ctx.compass, _ = ctx.compass.apply(knowledge_observations)
     if attempt.excursion_holds:
         scope = _target_unresolved_condition(
             state.work, ctx.target_tag, ctx.target_value, ctx.target_predicate
         )
-        excursion_rungs = _rungs_from_proposals(
-            state.work, list(attempt.excursion_holds), scope
-        )
+        excursion_rungs = _rungs_from_proposals(state.work, list(attempt.excursion_holds), scope)
         state.rungs = _append_rungs(
             state.work,
             excursion_rungs,
@@ -639,8 +519,6 @@ def _record_attempt(
                 rungs=tuple(excursion_rungs),
             )
         )
-    if attempt.nogood_pairs:
-        state.nogoods.setdefault(frame.key, set()).update(attempt.nogood_pairs)
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.
         state.avoid_names.update(attempt.avoid_names)
@@ -991,7 +869,7 @@ def _iteration_payload(
         "still_need": tuple(still_need),
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
-        "nogoods": frozenset(state.nogoods.get(frame.key, set())),
+        "nogoods": ctx.compass.knowledge.nogood_pairs(frame.key),
         "rungs": tuple(state.rungs),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
@@ -1020,7 +898,7 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
     }
 
 
-def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
+def _candidate_payload(candidate: Any) -> dict[str, Any]:
     return {
         "tag": candidate.tag,
         "value": candidate.value,
@@ -1054,6 +932,7 @@ def _candidate_payload(candidate: _Candidate) -> dict[str, Any]:
 
 def _knowledge_payload(
     state: _PilotState,
+    compass: Compass,
     *,
     skiff_decline: str | None = None,
 ) -> dict[str, Any]:
@@ -1069,10 +948,11 @@ def _knowledge_payload(
         # the terminal frame; unrelated-world captions never leak onto the Plan.
         "skiff_decline": skiff_decline,
         "avoid_names": tuple(sorted(state.avoid_names)),
+        "compass": compass,
     }
 
 
-def _route_plan_payload(plan: CompassPlan | None) -> dict[str, Any] | None:
+def _route_plan_payload(plan: StaticPath | None) -> dict[str, Any] | None:
     if plan is None:
         return None
     from pyrung.core.analysis.pilot.charts import ANY_FROM
@@ -1146,7 +1026,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
 
 
 def _accepted_payload(
-    candidate: _Candidate,
+    candidate: Any,
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
@@ -1167,11 +1047,13 @@ def _accepted_payload(
         ),
     }
     return {
-        "index": None,
+        # Every fresh orientation presents one immediate act; its local
+        # diagnostic index is therefore always zero.
+        "index": 0,
         "candidate": trial.candidate,
         "candidate_detail": _candidate_payload(candidate),
         "applied": trial.applied,
-        "co_actions": _co_actions(candidate, trial.applied),
+        "co_actions": tuple(pair for pair in trial.applied if pair != candidate.pair),
         "gates": trial.gate_events,
         "accepted_because": {
             "gate_events": trial.gate_events,
@@ -1196,49 +1078,6 @@ def _accepted_payload(
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
     }
-
-
-# A stuck state key earns a bounded number of skiff probe laps before
-# the loop stops honestly.  One lap is enough for a small-domain live-guard frontier
-# (the skiff gate learns its pair edge in a single round); the budget only bounds
-# the pathological case — a huge free-word / config-word probe space that would
-# otherwise accumulate fresh probe marks forever while the world never moves.
-_SKIFF_KEY_BUDGET = 2
-
-
-def _orient_escalate_skiff(
-    reason: str,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> Generator[PilotEvent, None, bool]:
-    """Probe unreadable frontiers before either stuck exit becomes terminal.
-
-    When static reading and ordinary attempts cannot produce a usable action,
-    run isolated fork-pin-step experiments over the unreadable live-guard
-    frontier and apply any resulting transition observations.
-
-    The helper owns this decision for both no-bearing and all-rejected exits. It
-    yields a ``skiff`` event when knowledge changed and returns whether the
-    caller should begin another iteration.
-
-    Another iteration is allowed only when ``Compass.apply`` reports new
-    knowledge and the per-world-key skiff budget remains. The budget survives
-    world reverts and bounds repeated probing at the same state.
-    """
-    skiff_obs = probe_live_guard_frontiers(frame, state, ctx)
-    before = ctx.compass
-    ctx.compass, changed = before.apply(skiff_obs)
-    laps = state.stuck_keys.get(frame.key, 0)
-    if skiff_obs and changed and laps < _SKIFF_KEY_BUDGET:
-        state.stuck_keys[frame.key] = laps + 1
-        yield PilotEvent(
-            "skiff",
-            state.work.state.scan_id,
-            {"observations": len(skiff_obs), "reason": reason},
-        )
-        return True
-    return False
 
 
 def _pilot_loop_events(
@@ -1312,7 +1151,6 @@ def _pilot_loop_events(
         ),
         key_config=key_config,
         seen_keys=set(),
-        nogoods={},
         checkpoints=[],
         watch_tags=[],
     )
@@ -1372,6 +1210,7 @@ def _pilot_loop_events(
     # the accepted-coast dwell credit (see ``_World.dwell_scans``).  An armed
     # self-advancing dwell — a 39k-scan dry timer the coast rides — is the
     # machine doing its own work, not the pilot spending effort.
+    last_frame: _IterationFrame | None = None
     while state.work.state.scan_id - state.dwell_scans < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
@@ -1394,7 +1233,7 @@ def _pilot_loop_events(
                     "reached": True,
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
-                    "knowledge": _knowledge_payload(state),
+                    "knowledge": _knowledge_payload(state, ctx.compass),
                     "work": state.work,
                     "reason": "target reached",
                     "plan_journal": _build_plan_journal(
@@ -1404,13 +1243,40 @@ def _pilot_loop_events(
             )
             return
 
-        # ═══════════════════════ READ CURRENT WORLD ═══════════════════════
-        # Read as hard as the charts require, along the reading-escalation ladder:
-        # trace transparent → trace opaque-but-constant value graph (both inside
-        # _prepare_iteration) → let-run dwell (an Act tier, below) → skiff
-        # (_orient_escalate_skiff, this loop's two stuck exits).  Then consult the
-        # compass for a fresh bearing → ranked candidates (_build_candidates).
-        frame = _prepare_iteration(state, ctx, _dbg)
+        # Compass owns the current-world read and returns one world-bound result.
+        raw_world = OrientationWorld(
+            world_key=(),
+            snapshot=dict(state.work.state.tags),
+            frame=None,
+            state=state,
+            context=ctx,
+            debug=_dbg,
+            key_config=state.key_config,
+        )
+        target = TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate)
+        constraints = NavigationConstraints(
+            blocked_actions=ctx.blocked_route_actions,
+            avoid_predicate=ctx.avoid_pred,
+        )
+        result = ctx.compass.orient(raw_world, target, constraints)
+        trace = result.trace
+        if trace is None or len(trace.readings) < 2:
+            raise RuntimeError("Compass orientation omitted its current-world reading")
+        orientation_world = trace.readings[0]
+        candidates = trace.readings[1]
+        frame = orientation_world.frame
+        last_frame = frame
+        if state.key_config is None:
+            state.key_config = orientation_world.key_config
+        if not state.watch_tags:
+            state.watch_tags.extend(sorted(frame.tree.pivot_tags()))
+            _dbg(f"# watch_tags ({len(state.watch_tags)}): {state.watch_tags[:8]}...")
+        for action in frame.raw_trace_action_details:
+            if action.note:
+                state.lever_notes[action.tag] = action.note
+        if state.best_trend is None:
+            state.best_trend = frame.distance_before
+            state.seen_keys.add(frame.key)
         if not state.checkpoints:
             # Seed an entry checkpoint so the first regression — or a terminal
             # let-run ejection from a pre-positioned start (e.g. dropped straight
@@ -1429,32 +1295,35 @@ def _pilot_loop_events(
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
         )
-        candidates = _build_candidates(frame, state, ctx, _dbg)
-        # Carry the completion re-read's frontier onto the frame so every terminal
-        # ``_frontier_clause(frame)`` in this iteration names the true blocker
-        # behind a prescribed wait (candidates.py owns the merge decision; the
-        # frame is only its carrier).
         if candidates.completion_frontier:
             frame = replace(frame, completion_frontier=candidates.completion_frontier)
+            orientation_world = replace(orientation_world, frame=frame)
         yield PilotEvent(
             "candidates_built",
             state.work.state.scan_id,
             _candidates_built_payload(candidates),
         )
 
-        # ── Stuck: instruments can't read the bearing ──
-        if candidates.stuck_reason is not None:
-            # Escalate to the skiff before declaring terminal: on live-guard
-            # frontiers (unreadable writer guards) run isolated probes and feed
-            # observed edges into the compass — bearings only; the next iteration
-            # proposes them as candidates and the verify pipeline confirms live.
-            # Zero new observations -> genuinely stuck.
-            if (yield from _orient_escalate_skiff(candidates.stuck_reason, frame, state, ctx)):
-                continue
-            skiff_decline = state.skiff_declines.get(frame.key)
+        if isinstance(result, NeedProbe):
+            observations = probe_live_guard_frontiers(frame, state, ctx)
+            ctx.compass, changed = ctx.compass.apply(observations)
+            ctx.compass, _ = ctx.compass.apply((ProbeExhaustedObservation(frame.key),))
+            yield PilotEvent(
+                "skiff",
+                state.work.state.scan_id,
+                {
+                    "observations": len(observations),
+                    "reason": result.request.reason,
+                    "changed": changed,
+                },
+            )
+            continue
+
+        if isinstance(result, Stuck):
+            skiff_decline = ctx.compass.knowledge.probe_decline(frame.key)
             terminal_reason = (
                 skiff_decline
-                or ("stuck: " + _with_avoid_reason(candidates.stuck_reason, state, ctx, frame))
+                or ("stuck: " + _with_avoid_reason(result.reason_code, state, ctx, frame))
             ) + _frontier_clause(frame)
             yield PilotEvent(
                 "stuck",
@@ -1462,9 +1331,10 @@ def _pilot_loop_events(
                 {
                     "reason": terminal_reason,
                     "distance": frame.distance_before,
-                    "candidate_count": 0,
-                    "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
+                    "candidate_count": len(candidates.candidates) if candidates is not None else 0,
+                    "nogoods_at_key": len(ctx.compass.knowledge.nogood_identities(frame.key)),
                     "terminal": True,
+                    "diagnosis": result,
                 },
             )
             if state.checkpoints:
@@ -1476,7 +1346,11 @@ def _pilot_loop_events(
                     "reached": False,
                     "steps": tuple(state.steps),
                     "journey": tuple(state.journey),
-                    "knowledge": _knowledge_payload(state, skiff_decline=skiff_decline),
+                    "knowledge": _knowledge_payload(
+                        state,
+                        ctx.compass,
+                        skiff_decline=skiff_decline,
+                    ),
                     "work": state.work,
                     "reason": terminal_reason,
                     "plan_journal": _build_plan_journal(
@@ -1486,287 +1360,117 @@ def _pilot_loop_events(
             )
             return
 
-        # ═══════════════════════ TRY EXECUTION MODES ═══════════════════════
-        # Steer toward the bearing (steer.py), trying each Act in turn until one is
-        # accepted: zoom → skiff-prescribed batch → command candidates → widening →
-        # terminal let-run/dwell. Every _try_* wrapper runs trial verification
-        # internally; the loop then records its observations and, on acceptance,
-        # commits and delegates post-commit handling to progress.py.
-        accepted = False
-
-        # ── Establish prerequisites (level holds — steerable inputs, not state) ──
-        if candidates.prerequisite_rungs:
-            state.rungs = _append_rungs(
-                state.work, list(candidates.prerequisite_rungs), state.rungs
+        assert isinstance(result, Bearing)
+        act = result.act
+        if isinstance(act, Pulse):
+            candidate = act.option
+            yield PilotEvent(
+                "candidate_try",
+                state.work.state.scan_id,
+                {
+                    "index": 0,
+                    "total": 1,
+                    "candidate": _candidate_payload(candidate),
+                    "applied": act.applied,
+                    "co_actions": tuple(pair for pair in act.applied if pair != act.action),
+                },
             )
-            state.hold_log.append(
-                _HoldLogEntry(
-                    scan=state.work.state.scan_id,
-                    tags=tuple((r.dest, r.value) for r in candidates.prerequisite_rungs),
-                    source="prerequisite",
-                    rungs=tuple(candidates.prerequisite_rungs),
-                )
-            )
-
-        # ── Act: zoom (timer-gated frontier) ──
-        if candidates.wait_prescribed:
+        elif isinstance(act, (Coast, Dwell)):
             yield PilotEvent(
                 "zoom",
                 state.work.state.scan_id,
                 {
                     "prescribed": True,
-                    "reason": candidates.wait_reason,
-                    "prerequisite_rungs": candidates.prerequisite_rungs,
+                    "reason": result.rationale,
+                    "prerequisite_rungs": result.prerequisites,
                     "channel_tag": (
-                        candidates.route_plan.role.channel_tag
-                        if candidates.route_plan is not None
-                        else None
+                        act.channel_tag
+                        if isinstance(act, Coast)
+                        and act.mode == "bearing"
+                        and act.channel_tag is not None
+                        else ctx.target_tag
                     ),
                 },
             )
-            attempt = _try_zoom(candidates, frame, state, ctx, _dbg)
-            _record_attempt(attempt, frame, state, ctx)
-            if attempt.trial is not None:
-                trial = attempt.trial
-                yield PilotEvent(
-                    "zoom_accepted",
-                    trial.fork.state.scan_id,
-                    _zoom_accepted_payload(trial),
+
+        attempt = execute(result, orientation_world)
+        _record_attempt(attempt, frame, state, ctx)
+
+        if isinstance(act, Coast) and act.mode == "terminal":
+            stop_reason = (
+                attempt.stall_receipt.stop_reason
+                if attempt.stall_receipt is not None
+                else (
+                    attempt.trial.coast_receipt.stop_reason
+                    if attempt.trial is not None and attempt.trial.coast_receipt is not None
+                    else "terminal-coast"
                 )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                accepted = True
-            else:
+            )
+            ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
+
+        if attempt.trial is None:
+            # A rejected act is durable empirical evidence scoped to this exact
+            # world.  The next loop turn recomputes before selecting anything.
+            ctx.compass, _ = ctx.compass.apply(
+                (ActionNogoodObservation(frame.key, act_identity(act)),)
+            )
+            if isinstance(act, Pulse):
+                yield PilotEvent(
+                    "candidate_rejected",
+                    state.work.state.scan_id,
+                    {
+                        "index": 0,
+                        "candidate": _candidate_payload(act.option),
+                        "applied": act.applied,
+                        "co_actions": tuple(pair for pair in act.applied if pair != act.action),
+                        "gates": attempt.gate_events,
+                    },
+                )
+            elif isinstance(act, (Coast, Dwell)):
                 yield PilotEvent(
                     "zoom_rejected",
                     state.work.state.scan_id,
                     {"gates": attempt.gate_events},
                 )
-
-        # ── Act: skiff-prescribed batch (composite learned edge) ──
-        if not accepted and candidates.prescribed_batch:
-            attempt = _try_prescribed_batch(candidates.prescribed_batch, frame, state, ctx, _dbg)
-            _record_attempt(attempt, frame, state, ctx)
-            if attempt.trial is not None:
-                trial = attempt.trial
+            else:
                 yield PilotEvent(
-                    "batch_accepted",
-                    trial.fork.state.scan_id,
-                    {
-                        "candidate": trial.candidate,
-                        "applied": trial.applied,
-                        "gates": trial.gate_events,
-                        "new_key": trial.new_key,
-                        "trend": trial.trend,
-                        "snapshot": trial.fork_snap,
-                        "scan_before": trial.scan_before,
-                        "scan_after": trial.fork.state.scan_id,
-                    },
-                )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                accepted = True
-
-        # ── Act: command candidates ──
-        if not accepted:
-            for ci, candidate in enumerate(candidates.candidates):
-                applied = _candidate_applied(candidate, candidates, ctx)
-                yield PilotEvent(
-                    "candidate_try",
+                    "batch_rejected" if act.source == "learned" else "widening_rejected",
                     state.work.state.scan_id,
-                    {
-                        "index": ci,
-                        "total": len(candidates.candidates),
-                        "candidate": _candidate_payload(candidate),
-                        "applied": applied,
-                        "co_actions": _co_actions(candidate, applied),
-                    },
+                    {"actions": act.actions, "gates": attempt.gate_events},
                 )
-                attempt = _try_candidate(candidate, candidates, frame, state, ctx, _dbg)
-                _record_attempt(attempt, frame, state, ctx)
-                if attempt.trial is None:
-                    yield PilotEvent(
-                        "candidate_rejected",
-                        state.work.state.scan_id,
-                        {
-                            "index": ci,
-                            "candidate": _candidate_payload(candidate),
-                            "applied": applied,
-                            "co_actions": _co_actions(candidate, applied),
-                            "gates": attempt.gate_events,
-                        },
-                    )
-                    continue
-                trial = attempt.trial
-                accepted_payload = _accepted_payload(candidate, trial, frame, state)
-                accepted_payload["index"] = ci
-                yield PilotEvent(
-                    "candidate_accepted",
-                    trial.fork.state.scan_id,
-                    accepted_payload,
-                )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                accepted = True
-                break
-
-        # ── Widening fallback ──
-        if (
-            not accepted
-            and not candidates.wait_prescribed
-            and len(candidates.active_trace_actions) >= 2
-        ):
-            attempt = _try_widening(candidates.active_trace_actions, frame, state, ctx, _dbg)
-            _record_attempt(attempt, frame, state, ctx)
-            if attempt.trial is not None:
-                trial = attempt.trial
-                yield PilotEvent(
-                    "widening_accepted",
-                    trial.fork.state.scan_id,
-                    {
-                        "candidate": trial.candidate,
-                        "applied": trial.applied,
-                        "gates": trial.gate_events,
-                        "new_key": trial.new_key,
-                        "trend": trial.trend,
-                        "snapshot": trial.fork_snap,
-                        "scan_before": trial.scan_before,
-                        "scan_after": trial.fork.state.scan_id,
-                    },
-                )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                accepted = True
-
-        if accepted:
-            state.last_wait_log = None
             continue
 
-        # ── Terminal let-run (generalized: hold macro-state, coast to target) ──
-        # No route, no candidate, no widening — but the cone is still live.  Hold
-        # the current macro-state and let the program's self-advancing frontier
-        # coast toward the global target.  Reached -> CONFIRMED; the program
-        # leaving the held macro-state -> AMBIENT_DRIFT, handed to investigation.
-        if frame.key in state.letrun_memo:
-            # A trusted receipt already covers this world key: the coast ejected
-            # here (deterministic re-eject — the world key includes the rung
-            # overlay, so only a new hold re-opens it) or stalled quiescent (no
-            # pending effects, so the masked key genuinely captured the world).
-            # Re-running its ejection-guard coast would only re-eject and
-            # re-investigate.  Do ONE verified
-            # cone-settle dwell instead: a self-advancing frontier that crosses the
-            # target during the dwell is CONFIRMED through the shared verify target
-            # gate; anything else is a legible terminal stall that falls through to
-            # the skiff / stuck exit below.  (This replaces a bare _settle_cone on
-            # state.work — the one execution that skipped verify.)
+        trial = attempt.trial
+        if isinstance(act, Pulse):
             yield PilotEvent(
-                "zoom",
-                state.work.state.scan_id,
-                {
-                    "prescribed": True,
-                    "reason": "terminal dwell (re-coast skip: let-run already tried at key)",
-                    "prerequisite_rungs": (),
-                    "channel_tag": ctx.target_tag,
-                },
+                "candidate_accepted",
+                trial.fork.state.scan_id,
+                _accepted_payload(act.option, trial, frame, state),
             )
-            attempt = _try_terminal_dwell(frame, state, ctx, _dbg)
-            _record_attempt(attempt, frame, state, ctx)
-            if attempt.trial is not None:
-                trial = attempt.trial
-                yield PilotEvent(
-                    "zoom_accepted",
-                    trial.fork.state.scan_id,
-                    _zoom_accepted_payload(trial),
-                )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                state.last_wait_log = None
-                continue
-            # No new input is possible here, so a dwell that settled short of the
-            # target is terminal — fall through to the shared skiff / stuck exit
-            # rather than looping (the dwell forked, so state.work is unchanged).
+        elif isinstance(act, (Coast, Dwell)):
             yield PilotEvent(
-                "zoom_rejected",
-                state.work.state.scan_id,
-                {"gates": attempt.gate_events},
+                "zoom_accepted",
+                trial.fork.state.scan_id,
+                _zoom_accepted_payload(trial),
             )
         else:
             yield PilotEvent(
-                "zoom",
-                state.work.state.scan_id,
+                "batch_accepted" if act.source == "learned" else "widening_accepted",
+                trial.fork.state.scan_id,
                 {
-                    "prescribed": True,
-                    "reason": "terminal let-run (hold macro-state, coast to target)",
-                    "prerequisite_rungs": (),
-                    "channel_tag": ctx.target_tag,
+                    "candidate": trial.candidate,
+                    "applied": trial.applied,
+                    "gates": trial.gate_events,
+                    "new_key": trial.new_key,
+                    "trend": trial.trend,
+                    "snapshot": trial.fork_snap,
+                    "scan_before": trial.scan_before,
+                    "scan_after": trial.fork.state.scan_id,
                 },
             )
-            attempt = _try_terminal_letrun(frame, state, ctx, _dbg)
-            _record_attempt(attempt, frame, state, ctx)
-            if attempt.trial is not None:
-                trial = attempt.trial
-                # A committed coast (ejection handed to investigation, or target
-                # reached) is deterministic at this pre-coast world key: memo it
-                # so a post-revert re-arrival dwells instead of re-ejecting.
-                state.letrun_memo[frame.key] = (
-                    trial.coast_receipt.stop_reason
-                    if trial.coast_receipt is not None
-                    else "committed"
-                )
-                yield PilotEvent(
-                    "zoom_accepted",
-                    trial.fork.state.scan_id,
-                    _zoom_accepted_payload(trial),
-                )
-                yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
-                state.last_wait_log = None
-                continue
-            # Stall: memoize only a *quiescent* stall.  A stall with pending
-            # effects (a timer mid-flight when the budget ran out) stays
-            # re-runnable — the world key masks accumulators, and a same-key
-            # world could complete where this one timed out (audit C2).  The
-            # re-run cost is bounded by the skiff key budget.
-            if attempt.stall_receipt is not None and not attempt.stall_pending:
-                state.letrun_memo[frame.key] = attempt.stall_receipt.stop_reason
-            yield PilotEvent(
-                "zoom_rejected",
-                state.work.state.scan_id,
-                {"gates": attempt.gate_events},
-            )
-
-        # ── Stuck: all candidates rejected, terminal let-run failed ──
-        # Same skiff escalation as the no-bearing exit above: unreadable-guard frontiers get one
-        # round of isolated probes before the loop gives up.
-        if (yield from _orient_escalate_skiff("all_rejected", frame, state, ctx)):
-            continue
-        stuck_reason = _diagnose_stuck(frame, candidates, state, ctx)
-        # A free-word decline discovered while the skiff surveyed the remaining
-        # tree is useful world-scoped knowledge, but it is not the cause of an
-        # all-rejected exit.  Keep the actual rejection class as the headline;
-        # the applicable decline remains available on Plan.skiff_decline.
-        skiff_decline = state.skiff_declines.get(frame.key)
-        terminal_reason = f"stuck: {stuck_reason}" + _frontier_clause(frame)
-        yield PilotEvent(
-            "stuck",
-            state.work.state.scan_id,
-            {
-                "reason": terminal_reason,
-                "distance": frame.distance_before,
-                "candidate_count": len(candidates.candidates),
-                "nogoods_at_key": len(state.nogoods.get(frame.key, set())),
-                "terminal": True,
-            },
-        )
-        if state.checkpoints:
-            state.load_world(state.checkpoints[-1].world)
-        yield PilotEvent(
-            "finished",
-            state.work.state.scan_id,
-            {
-                "reached": False,
-                "steps": tuple(state.steps),
-                "journey": tuple(state.journey),
-                "knowledge": _knowledge_payload(state, skiff_decline=skiff_decline),
-                "work": state.work,
-                "reason": terminal_reason,
-            },
-        )
-        return
+        yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
+        state.last_wait_log = None
+        continue
 
     # ── Budget exhausted: the work fork ran past max_scans ──
     # A dwell that drains the budget is a stall, not a wrap-up: route the
@@ -1779,11 +1483,7 @@ def _pilot_loop_events(
     if reached:
         reason = "target reached"
     else:
-        frame = None
-        try:
-            frame = _prepare_iteration(state, ctx, _dbg)
-        except Exception:  # noqa: BLE001 — terminal diagnostics never mask the exit
-            logger.debug("budget terminal: frontier trace raised", exc_info=True)
+        frame = last_frame
         reason = _with_avoid_reason(
             f"budget exhausted ({ctx.max_scans} scans searched + {state.dwell_scans} waited)",
             state,
@@ -1791,7 +1491,7 @@ def _pilot_loop_events(
             frame,
         ) + _frontier_clause(frame)
         if frame is not None:
-            terminal_skiff_decline = state.skiff_declines.get(frame.key)
+            terminal_skiff_decline = ctx.compass.knowledge.probe_decline(frame.key)
         yield PilotEvent(
             "stuck",
             state.work.state.scan_id,
@@ -1800,7 +1500,9 @@ def _pilot_loop_events(
                 "distance": frame.distance_before if frame is not None else None,
                 "candidate_count": 0,
                 "nogoods_at_key": (
-                    len(state.nogoods.get(frame.key, set())) if frame is not None else 0
+                    len(ctx.compass.knowledge.nogood_identities(frame.key))
+                    if frame is not None
+                    else 0
                 ),
                 "terminal": True,
             },
@@ -1816,6 +1518,7 @@ def _pilot_loop_events(
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(
                 state,
+                ctx.compass,
                 skiff_decline=terminal_skiff_decline,
             ),
             "work": state.work,
@@ -2408,7 +2111,7 @@ def pilot_events(
         program, dict(fork.state.tags)
     )
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(opaque_slices)
+    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
     opaque_loop = detect_opaque_loop(pdg, program)
     route_lock, blocked_route_actions, _route_taken = _prepare_route(
         fork,
@@ -2497,7 +2200,7 @@ def pilot_how(
     diag_snapshot = dict(fork.state.tags)
     nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(opaque_slices)
+    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
     opaque_loop = detect_opaque_loop(pdg, program)
     route_lock, blocked_route_actions, route_taken = _prepare_route(
         fork,
@@ -2606,7 +2309,7 @@ def _pilot_how_multi(
     diag_snapshot = dict(fork.state.tags)
     nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(opaque_slices)
+    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
     opaque_loop = detect_opaque_loop(pdg, program)
 
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
@@ -2671,6 +2374,7 @@ def _pilot_how_multi(
             via_pred=via_pred,
             target_predicate=t_pred,
         )
+        inf = last_knowledge.get("compass", inf)
         last_journey = tuple(_journey)
         journal_steps.extend(journal_leg)
         if not reached:
@@ -2747,7 +2451,7 @@ def pilot_drive(
     diag_snapshot = dict(plc.state.tags)
     nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
     opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(opaque_slices)
+    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
     opaque_loop = detect_opaque_loop(pdg, program)
     route_lock, blocked_route_actions, route_taken = _prepare_route(
         plc,

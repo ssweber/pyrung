@@ -13,8 +13,6 @@ consumer and applies the conservative policy for unknown departures.
 from __future__ import annotations
 
 import logging
-from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -24,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
+from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -140,66 +139,21 @@ def _reset_blocked_values(
     return frozenset(blocked), all_resolved
 
 
-def _clean_route(
-    graph: Any,
-    start: Any,
-    goals: tuple[Any, ...],
-    blocked_values: frozenset[Any],
+def _edge_resurrects(
+    edge: Any,
     discharged: set[tuple[str, Any, Any]],
-    edge_allowed: Callable[[Any], bool] | None = None,
-) -> tuple[tuple[Any, ...], Any] | None:
-    """BFS for a route to a goal avoiding reset values and resurrected debt.
-
-    An edge is unusable when its destination hosts an enabled reset, or when
-    its command action replicates a discharged ``(action, context)`` pair.
-    Returns ``(route_values, reentry_value)`` or None.
-    """
-
-    def _edge_resurrects(edge: Any, at_value: Any) -> bool:
-        if edge.action is None:
-            return False
-        tag, value = edge.action
-        for a_tag, a_value, a_context in discharged:
-            if a_tag != tag or not _values_match(a_value, value):
-                continue
-            if a_context is None or edge.from_value is ANY_FROM:
-                return True
-            if _values_match(a_context, at_value):
-                return True
+) -> bool:
+    if edge.action is None:
         return False
-
-    def _key(v: Any) -> str:
-        return f"{type(v).__name__}:{v!r}"
-
-    # Settlement can itself land on a goal (the terminal coast pauses at
-    # Completing, then the departure settle reaches Completed).  That is the
-    # strongest possible clean road: zero remaining edges, hence no eraser or
-    # resurrected obligation to cross.
-    if any(_values_match(start, goal) for goal in goals):
-        return (start,), start
-
-    queue: deque[tuple[Any, tuple[Any, ...]]] = deque([(start, (start,))])
-    visited = {_key(start)}
-    while queue:
-        value, path = queue.popleft()
-        for edge in graph.edges:
-            if edge_allowed is not None and not edge_allowed(edge):
-                continue
-            if edge.from_value is not ANY_FROM and not _values_match(edge.from_value, value):
-                continue
-            if any(_values_match(edge.to_value, b) for b in blocked_values):
-                continue
-            if _edge_resurrects(edge, value):
-                continue
-            k = _key(edge.to_value)
-            if k in visited:
-                continue
-            next_path = (*path, edge.to_value)
-            if any(_values_match(edge.to_value, g) for g in goals):
-                return next_path, edge.to_value
-            visited.add(k)
-            queue.append((edge.to_value, next_path))
-    return None
+    tag, value = edge.action
+    for action_tag, action_value, action_context in discharged:
+        if action_tag != tag or not _values_match(action_value, value):
+            continue
+        if action_context is None or edge.from_value is ANY_FROM:
+            return True
+        if _values_match(action_context, edge.from_value):
+            return True
+    return False
 
 
 def classify_departure(
@@ -261,46 +215,44 @@ def classify_departure(
     discharged = _discharged_actions(state, channel_tag)
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
     route_allowed = getattr(ctx, "route_allowed", lambda _action: True)
-    saw_graph = False
-    for graph in graphs:
-        if graph.role.channel_tag != channel_tag:
-            continue
-        saw_graph = True
-        found = _clean_route(
-            graph,
-            settled_value,
-            tuple(goals),
-            blocked_values,
-            discharged,
-            edge_allowed=lambda edge: (
+    continuation = NavigationEvidence.channel_continuation(
+        tuple(graphs),
+        channel_tag,
+        settled_value,
+        tuple(goals),
+        edge_allowed=lambda edge: (
+            ctx.compass.knowledge.static_overlays.get(edge.identity)
+            not in {"contradicted", "no_change"}
+            and not any(_values_match(edge.to_value, blocked) for blocked in blocked_values)
+            and not _edge_resurrects(edge, discharged)
+            and (
                 edge.action is None
                 or (
                     route_allowed(edge.action)
                     and not _avoid_forces(ctx, [edge.action], dict(fork.state.tags))
                 )
-            ),
-        )
-        if found is not None:
-            route, reentry = found
-            return _v(
-                "provisional",
-                f"clean forward route {' -> '.join(repr(v) for v in route)} "
-                "(no reset, no resurrected obligation)",
-                reentry,
-                route,
             )
+        ),
+    )
+    saw_graph = any(graph.role.channel_tag == channel_tag for graph in graphs)
+    if isinstance(continuation, Reachable):
+        return _v(
+            "provisional",
+            "constrained navigation evidence has a clean forward continuation "
+            "(no reset, no resurrected obligation)",
+        )
 
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
     # progress is structural (state + command handshake) and exposes no gauge.
-    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
 
     current_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
     if not all(hasattr(ctx, name) for name in current_context):
         qualifier = "chart has no clean route" if saw_graph else "no chart or current evidence"
         return _v("unknown", qualifier)
 
-    current = operator_action_for_state(
+    readings = current_readings(
         WorldView(
             snapshot=dict(fork.state.tags),
             pdg=ctx.pdg,
@@ -311,9 +263,15 @@ def classify_departure(
         ),
         channel_tag,
         ctx.pipeline_roles,
-        avoid_pred=getattr(ctx, "avoid_pred", None),
     )
-    if current is not None:
+    legal_readings = tuple(
+        reading
+        for reading in readings
+        if route_allowed(reading.action)
+        and not _avoid_forces(ctx, [reading.action], dict(fork.state.tags))
+    )
+    if len(legal_readings) == 1:
+        current = legal_readings[0]
         return _v("provisional", current.note, current.to_state, (settled_value,))
     return _v(
         "unknown",

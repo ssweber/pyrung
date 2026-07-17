@@ -275,46 +275,43 @@ def test_free_word_solves_under_declared_choices():
 
 def test_compass_contradict_falsifies_seeded_edge():
     """Live no-change evidence removes a learned edge; the probe mark stays."""
-    from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
     compass = Compass()
-    compass.record("State", ("Cmd", True), 1, 6)
+    compass, _ = compass.apply((CompassObservation("edge", "State", ("Cmd", True), 1, 6),))
     assert compass.find_path("State", 1, 6) == [("Cmd", True)]
 
-    assert compass.contradict("State", ("Cmd", True), 1) is True
+    compass, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
+    assert changed is True
     assert compass.find_path("State", 1, 6) is None
     assert compass.unprobed_actions("State", 1, {("Cmd", True)}) == []
-    # Idempotent: no entry left, probe mark preserved.
-    assert compass.contradict("State", ("Cmd", True), 1) is False
+    # Idempotent: the tombstone stays and no new knowledge is reported.
+    same, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
+    assert same is compass
+    assert changed is False
 
 
 def test_confirmed_provenance_only_from_outcome_factory():
     """CONFIRMED is minted solely by ``outcome.confirmed_entry``.
 
-    The general write path (``Compass.record``) rejects the CONFIRMED
-    provenance, so "verify is the sole source of CONFIRMED" is structural: the
-    only way a CONFIRMED entry reaches the table is a prebuilt entry from the
-    factory handed to ``commit_confirmed``.
+    The observation application path records runtime evidence as OBSERVED and
+    exposes no mutation API that can forge CONFIRMED.
     """
-    from pyrung.core.analysis.pilot.compass import Compass, Provenance
+    from pyrung.core.analysis.pilot.compass import Compass, CompassObservation, Provenance
     from pyrung.core.analysis.pilot.outcome import confirmed_entry
 
     compass = Compass()
 
-    # record() structurally cannot forge CONFIRMED.
-    rejected = False
-    try:
-        compass.record("State", ("Cmd", True), 1, 6, provenance=Provenance.CONFIRMED)
-    except ValueError:
-        rejected = True
-    assert rejected, "record() must reject CONFIRMED provenance"
+    assert not hasattr(compass, "record")
+    assert not hasattr(compass, "commit_confirmed")
 
-    # The factory is the sole minter; commit_confirmed installs it as a live edge.
+    # The factory remains the sole minter.
     entry = confirmed_entry("State", 1, ("Cmd", True), 6)
     assert entry.provenance is Provenance.CONFIRMED
     assert entry.is_live
-    compass.commit_confirmed(entry)
-    assert compass.find_path("State", 1, 6) == [("Cmd", True)]
+    compass, _ = compass.apply((CompassObservation("edge", "State", ("Cmd", True), 1, 6),))
+    stored = tuple(compass.knowledge.tag_entries("State"))[0][2]
+    assert stored.provenance is Provenance.OBSERVED
 
 
 def test_is_composite_action_shapes():

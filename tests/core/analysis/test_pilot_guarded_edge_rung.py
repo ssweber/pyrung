@@ -7,8 +7,8 @@ from types import SimpleNamespace
 from pyrung import PLC, Bool, Int, Program, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung, _append_rungs, _set_rungs
-from pyrung.core.analysis.pilot.candidates import _build_candidates
 from pyrung.core.analysis.pilot.compass import Compass
+from pyrung.core.analysis.pilot.options import _build_candidates
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
     trace_back,
@@ -99,7 +99,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         raw_trace_actions=actions,
         raw_trace_action_details=details,
     )
-    pilot_state = SimpleNamespace(work=plc, nogoods={}, rungs=rungs)
+    pilot_state = SimpleNamespace(work=plc, rungs=rungs)
     ctx = SimpleNamespace(
         compass=Compass(),
         blocked_route_actions=frozenset(),

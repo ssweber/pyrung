@@ -1336,8 +1336,7 @@ def _holds_defeat_needed(
     if not held_values:
         return False
     if any(
-        tag in needed_first
-        and any(not _values_match(value, needed_first[tag]) for value in values)
+        tag in needed_first and any(not _values_match(value, needed_first[tag]) for value in values)
         for tag, values in held_values.items()
     ):
         return True
@@ -1414,8 +1413,7 @@ def _precise_causes(
                 event.scan
                 for event in reversed(incident.timeline)
                 if any(
-                    tag == incident.channel_tag
-                    and not _values_match(before, after)
+                    tag == incident.channel_tag and not _values_match(before, after)
                     for tag, before, after in getattr(event, "transitions", ())
                 )
             ),
@@ -1423,11 +1421,7 @@ def _precise_causes(
         )
         if channel_scan is not None:
             desired = next(
-                (
-                    value
-                    for tag, value in incident.bearing
-                    if tag == incident.channel_tag
-                ),
+                (value for tag, value in incident.bearing if tag == incident.channel_tag),
                 incident.before_snap.get(incident.channel_tag),
             )
             seeds = [BearingDeparture(incident.channel_tag, desired, channel_scan)]
@@ -1452,11 +1446,7 @@ def _precise_causes(
 
         # Anything with an observed writer in this chain is an intermediate,
         # even if the broad static classifier calls it steerable.
-        effective_steerable = (
-            frozenset(steerable)
-            - empirical_writes
-            - frozenset(steps_by_tag)
-        )
+        effective_steerable = frozenset(steerable) - empirical_writes - frozenset(steps_by_tag)
 
         origin_memo: dict[str, frozenset[str]] = {}
 
@@ -1482,10 +1472,7 @@ def _precise_causes(
             return result
 
         def _step_label(step: Any) -> str:
-            return (
-                f"{step.subroutine + ':' if step.subroutine else ''}"
-                f"R{step.rung_index + 1}"
-            )
+            return f"{step.subroutine + ':' if step.subroutine else ''}R{step.rung_index + 1}"
 
         # The undesired path is the trigger spine from the effect. Deep enabler
         # expansion supplies origins for conditions on that spine, but those
@@ -1609,10 +1596,7 @@ def _precise_causes(
                 # to their instruction-specific correction machinery.
                 from pyrung.core.instruction.coils import OutInstruction
 
-                if not (
-                    isinstance(writer, OutInstruction)
-                    and step.transition.to_value is True
-                ):
+                if not (isinstance(writer, OutInstruction) and step.transition.to_value is True):
                     continue
             guard_reads = set(getattr(node, "condition_reads", ())) & set(direct_values)
             fixed: dict[str, Any] = {}
@@ -1629,9 +1613,7 @@ def _precise_causes(
                 steerable=effective_steerable,
             )
             holds_filtered = tuple(
-                pair
-                for pair in _dedupe_pairs(holds or ())
-                if _hold_allowed(ctx, pair)
+                pair for pair in _dedupe_pairs(holds or ()) if _hold_allowed(ctx, pair)
             )
             if not holds_filtered:
                 continue

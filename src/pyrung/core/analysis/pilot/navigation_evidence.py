@@ -1,0 +1,172 @@
+"""Constrained, non-action-selecting navigation evidence queries."""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass
+from typing import Any
+
+from pyrung.core.analysis.pilot._ops import _avoid_forces, wait_edge_nogood
+from pyrung.core.analysis.pilot.charts import _best_static_path
+from pyrung.core.analysis.pilot.compass import (
+    WAIT,
+    CompassKnowledge,
+    is_action,
+)
+from pyrung.core.analysis.pilot.navigation import (
+    NavigationConstraints,
+    OrientationWorld,
+    TargetSpec,
+)
+from pyrung.core.analysis.sp_values import _values_match
+
+
+@dataclass(frozen=True)
+class Reachable:
+    """At least one fully constrained continuation is known."""
+
+    provenance: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Unknown:
+    """No continuation is currently known and the evidence is incomplete."""
+
+    reason: str
+    frontier: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class NoRoute:
+    """Complete evidence proves no constrained continuation exists."""
+
+    proof: str
+
+
+FrontierStatus = Reachable | Unknown | NoRoute
+
+
+def _learned_reachable(
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+    knowledge: CompassKnowledge,
+) -> bool:
+    current = world.snapshot.get(target.tag)
+    if _values_match(current, target.value):
+        return True
+    live = {
+        (from_value, cause): entry.to_val
+        for (tag, from_value, cause), entry in knowledge.entries.items()
+        if tag == target.tag and entry.is_live
+    }
+    queue: deque[Any] = deque([current])
+    visited = {repr(current)}
+    pair_nogoods = knowledge.nogood_pairs(world.world_key)
+    while queue:
+        state = queue.popleft()
+        for (from_value, cause), destination in live.items():
+            if not _values_match(from_value, state):
+                continue
+            if is_action(cause):
+                if cause in constraints.blocked_actions or cause in pair_nogoods:
+                    continue
+                if _avoid_forces(world.context, [cause], world.snapshot):
+                    continue
+            elif cause is WAIT:
+                identity = wait_edge_nogood(target.tag, from_value, destination)
+                if identity in pair_nogoods:
+                    continue
+            if _values_match(destination, target.value):
+                return True
+            key = repr(destination)
+            if key not in visited:
+                visited.add(key)
+                queue.append(destination)
+    return False
+
+
+class NavigationEvidence:
+    """Shared constrained evidence layer for orientation and verification."""
+
+    @staticmethod
+    def frontier_status(
+        world: OrientationWorld,
+        target: TargetSpec,
+        constraints: NavigationConstraints,
+        knowledge: CompassKnowledge,
+    ) -> FrontierStatus:
+        compass = world.context.compass
+        pair_nogoods = knowledge.nogood_pairs(world.world_key)
+
+        def edge_allowed(edge: Any) -> bool:
+            if knowledge.static_overlays.get(edge.identity) in {
+                "contradicted",
+                "no_change",
+            }:
+                return False
+            if edge.action is None:
+                return (
+                    wait_edge_nogood(
+                        edge.role.channel_tag,
+                        edge.from_value,
+                        edge.to_value,
+                    )
+                    not in pair_nogoods
+                )
+            return (
+                edge.action not in constraints.blocked_actions
+                and edge.action not in pair_nogoods
+                and not _avoid_forces(world.context, [edge.action], world.snapshot)
+            )
+
+        static = _best_static_path(
+            target.tag,
+            target.value,
+            world.snapshot,
+            compass.catalog.graphs,
+            edge_allowed=edge_allowed,
+        )
+        learned = _learned_reachable(world, target, constraints, knowledge)
+        provenance: list[str] = []
+        if static is not None:
+            provenance.append("static")
+        if learned:
+            provenance.append("empirical")
+        if provenance:
+            return Reachable(tuple(provenance))
+
+        frontier = tuple(
+            (node.tag, node.value) for node in world.frame.tree.leaves() if not node.satisfied
+        )
+        if frontier:
+            return Unknown("no constrained route is currently established", frontier)
+        return NoRoute("complete trace has no outstanding reachable frontier")
+
+    @staticmethod
+    def channel_continuation(
+        graphs: tuple[Any, ...],
+        channel_tag: str,
+        start: Any,
+        goals: tuple[Any, ...],
+        *,
+        edge_allowed: Any,
+    ) -> FrontierStatus:
+        """Whether any static channel graph has a caller-constrained continuation.
+
+        The inspected path is intentionally discarded: recovery may classify
+        the evidence, but it cannot execute or retain a suffix.
+        """
+
+        if any(_values_match(start, goal) for goal in goals):
+            return Reachable(("already-at-goal",))
+        saw_graph = False
+        for graph in graphs:
+            if graph.role.channel_tag != channel_tag:
+                continue
+            saw_graph = True
+            if graph.find_path(start, goals, edge_allowed=edge_allowed) is not None:
+                return Reachable(("static-channel",))
+        if saw_graph:
+            return NoRoute("all constrained channel continuations are excluded")
+        return Unknown("no transition graph exists for the channel")

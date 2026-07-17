@@ -82,7 +82,8 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
-- Per-iteration modes and candidate order: `candidates.py::_build_candidates`
+- Current-world navigation result: `compass.py::Compass.orient`
+- Option materialization and ranking evidence: `options.py::_build_candidates`
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
@@ -92,35 +93,34 @@ should consume the first owner's result.
 
 ## Actual control flow
 
-The loop is nested; do not describe it as a linear
-ORIENT → ACT → VERIFY → RECORD → ASSESS pipeline.
-
-1. `pilot.py` prepares an iteration frame from the current world.
-2. `candidates.py` returns executable candidates, prerequisite holds, wait
-   modes, and any no-bearing diagnosis.
-3. Each `_try_*` wrapper in `steer.py` executes on a fork and calls
-   `verify.verify_gates` before returning an attempt.
-4. `pilot.py::_record_attempt` applies the attempt's observations whether the
-   trial passed or failed. Negative knowledge must survive rejection and world
-   reverts.
-5. If the trial passed its local gates, the loop commits its fork and
-   `progress.py` decides whether to checkpoint, continue provisionally, or
-   investigate and revert.
-6. At either stuck exit, the loop may run one bounded skiff round. It starts a
-   new iteration only if that round changed transition knowledge.
+1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
+2. Compass reads trace, catalog, currents, constraints, and knowledge, then
+   returns exactly one `Bearing`, `NeedProbe`, or `Stuck`.
+3. `steer.execute` rejects stale bearings, installs their declarative
+   prerequisites, and executes exactly one act through `verify.verify_gates`.
+4. `pilot.py::_record_attempt` applies all observations, including rejected
+   attempts, before any further orientation.
+5. An accepted fork is committed and `progress.py` decides retention,
+   provisional continuation, investigation, or revert.
+6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
+   exhaustion mark are applied before orientation runs again.
+7. `Stuck` is terminal. No candidate list or route suffix survives an
+   observation.
 
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
 
 ## World and knowledge
 
-`types.py` separates state that a revert may undo from knowledge that must
-survive:
+`types.py` and `compass.py` separate state that a revert may undo from
+knowledge that must survive:
 
 - `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
   dwell accounting.
-- `_PilotState` knowledge: seen keys, nogoods, checkpoints, skiff budgets and
-  declines, provisional receipts, gauge, and diagnostic history.
+- `_PilotState` orchestration knowledge: seen keys, checkpoints, provisional
+  recovery, gauge, and diagnostic history.
+- `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
+  budgets/declines, coast receipts, and static-edge evidence overlays.
 - `_PilotContext`: static program analysis plus the current persistent
   `Compass` value.
 
@@ -163,21 +163,24 @@ changes, it returns the same object. Runtime instruments return
 - `physical.py` — harness installation and feedback-tag exclusion.
 - `multitarget.py` — conservative incompatibility proof and target ordering.
 
-### Static reading and candidate construction
+### Static reading and orientation
 
 - `trace.py` — backward requirement tree, route enumeration, steerability, and
   writer ranking.
 - `availability.py` — current-state writer availability used for ordering.
 - `evidence.py` — pipeline-role inference and static transition-route expansion.
 - `tide_tables.py` — finite constant-backed table and calculation preimages.
-- `charts.py` — static transition-graph construction, path search, and opaque
-  pipeline detection.
-- `compass.py` — static graph references plus persistent seeded/observed
-  transition knowledge.
-- `routes.py` — current-constraint filtering before static path selection.
-- `currents.py` — unique program-awaited actions and producer-family evidence.
-- `candidates.py` — per-iteration action, hold, and wait-mode construction and
-  ordering.
+- `charts.py` — immutable static transition graphs, constrained path evidence,
+  and opaque pipeline detection.
+- `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
+- `orientation.py` — sole result synthesis and terminal/probe policy.
+- `options.py` — private evidence-rich option materialization and ranking.
+- `navigation_evidence.py` — narrow constrained reachability evidence shared
+  with verification and recovery; never returns an action.
+- `currents.py` — structural program-awaited-action readings and producer
+  families; Compass owns filtering and ambiguity policy.
+- `navigation.py` — immutable evidence, act, result, target, constraint, and
+  world-view contracts.
 
 ### Execution and observation
 

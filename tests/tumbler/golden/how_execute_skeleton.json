@@ -368,13 +368,9 @@
    ]
   ],
   "kind": "provisional_started",
-  "reason": "clean forward route 2 -> 8 -> 9 (no reset, no resurrected obligation)",
+  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
   "requested_value": 1,
-  "route": [
-   2,
-   8,
-   9
-  ],
+  "route": [],
   "settled_value": 2
  },
  {

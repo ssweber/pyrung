@@ -1,4 +1,4 @@
-"""Build the actions and wait modes available for one PILOT iteration.
+"""Materialize and rank the action and wait options for one orientation.
 
 ``_build_candidates`` combines the current trace tree, constrained static
 routes, learned transitions, program-awaited actions, existing corrections,
@@ -24,7 +24,6 @@ from pyrung.core.analysis.pilot._ops import (
     wait_edge_nogood,
 )
 from pyrung.core.analysis.pilot.compass import (
-    _action_sort_key,
     is_action,
     is_composite_action,
 )
@@ -38,7 +37,7 @@ from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.charts import CompassPlan
+    from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.trace import TraceAction
 
 _DebugFn = Callable[[str], None]
@@ -93,7 +92,7 @@ class _CandidateList:
     route_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     wake_cap: int
-    route_plan: CompassPlan | None = None
+    route_plan: StaticPath | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
     # A composite learned edge (skiff pair probe): the whole action set must
@@ -185,6 +184,28 @@ def _diagnose_stuck_reason(
 # ---------------------------------------------------------------------------
 
 
+def _learned_edge_allowed(
+    tag: str,
+    source: Any,
+    cause: Any,
+    destination: Any,
+    frame: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> bool:
+    """Apply every live constraint before a learned edge enters any path query."""
+
+    if is_action(cause):
+        members = cast(tuple[_ActionPair, ...], cause) if is_composite_action(cause) else (cause,)
+        return all(
+            pair not in key_nogoods
+            and ctx.route_allowed(pair)
+            and not _avoid_forces(ctx, (pair,), frame.snap)
+            for pair in members
+        )
+    return wait_edge_nogood(tag, source, destination) not in key_nogoods
+
+
 def _compass_score(
     pair: _ActionPair,
     frame: Any,
@@ -205,6 +226,7 @@ def _compass_score(
     best_regression: tuple[int, int] | None = None
     saw_known = False
     saw_no_change = False
+    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
@@ -222,11 +244,30 @@ def _compass_score(
         if _values_match(dest, n.value):
             score = (0, 0)
         else:
-            forward = ctx.compass.find_path(n.tag, dest, n.value)
+            edge_allowed = lambda source, cause, destination, tag=n.tag: _learned_edge_allowed(
+                tag,
+                source,
+                cause,
+                destination,
+                frame,
+                ctx,
+                key_nogoods,
+            )
+            forward = ctx.compass.find_path(
+                n.tag,
+                dest,
+                n.value,
+                cause_allowed=edge_allowed,
+            )
             if forward:
                 score = (1, len(forward))
             else:
-                back = ctx.compass.find_path(n.tag, dest, cur_val)
+                back = ctx.compass.find_path(
+                    n.tag,
+                    dest,
+                    cur_val,
+                    cause_allowed=edge_allowed,
+                )
                 if not back:
                     continue
                 score = (150, len(back))
@@ -280,15 +321,20 @@ def _compass_route_plan(
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair] | None = None,
-) -> CompassPlan | None:
+) -> StaticPath | None:
     if not ctx.compass.graphs:
         return None
 
-    from pyrung.core.analysis.pilot.routes import live_compass_plan
+    from pyrung.core.analysis.pilot.charts import _best_static_path
 
     nogoods = key_nogoods if key_nogoods is not None else set()
 
     def _edge_open(edge: Any) -> bool:
+        if ctx.compass.knowledge.static_overlays.get(edge.identity) in {
+            "contradicted",
+            "no_change",
+        }:
+            return False
         if edge.action is None:
             # A completion edge proven sterile at this world (a rejected wait)
             # is walked around, exactly like a nogood press — BFS then returns
@@ -299,7 +345,7 @@ def _compass_route_plan(
             )
         return ctx.route_allowed(edge.action) and not _avoid_forces(ctx, [edge.action], frame.snap)
 
-    plans: list[CompassPlan] = []
+    plans: list[StaticPath] = []
     for n in _all_nodes(frame.tree):
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
@@ -307,7 +353,7 @@ def _compass_route_plan(
             continue
         if _values_match(frame.snap.get(n.tag), n.value):
             continue
-        plan = live_compass_plan(
+        plan = _best_static_path(
             n.tag,
             n.value,
             frame.snap,
@@ -345,7 +391,7 @@ def _fmt_from(value: Any) -> str:
     return "*" if value is ANY_FROM else repr(value)
 
 
-def _plan_ungrounded(plan: CompassPlan) -> int:
+def _plan_ungrounded(plan: StaticPath) -> int:
     """1 when *plan*'s first edge rides a wildcard (``ANY_FROM``) from-value.
 
     A wildcard edge is a *stateless* claim — the writer's condition never named
@@ -362,7 +408,7 @@ def _plan_ungrounded(plan: CompassPlan) -> int:
     return 0 if _edge_grounded(plan.first_edge) else 1
 
 
-def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
+def _plan_off_target(plan: StaticPath, ctx: Any) -> int:
     """0 when *plan* drives the overall target, 1 otherwise.
 
     The trace can surface other requirements on the same channel register as
@@ -381,13 +427,13 @@ def _plan_off_target(plan: CompassPlan, ctx: Any) -> int:
     return 0 if on_target else 1
 
 
-def _route_plan_score(plan: CompassPlan) -> tuple[int, int, str]:
+def _route_plan_score(plan: StaticPath) -> tuple[int, int, str]:
     direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
     return (len(plan.edges), direct, plan.role.channel_tag)
 
 
 def _compass_route_actions(
-    plan: CompassPlan | None,
+    plan: StaticPath | None,
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
@@ -518,13 +564,13 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
 
     Consulted only when the target register is an opaque-loop pipeline channel
     (the shape a program-owned command detour lives on).  Delegates to the
-    read-side recognizer ``currents.operator_action_for_state`` over a
+    read-side recognizer ``currents.current_readings`` over a
     ``WalkContext`` assembled from the live frame; fail-closed everywhere else.
     """
     channel = ctx.target_tag
     if channel not in ctx.opaque_loop:
         return None
-    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
 
     world = WorldView(
         snapshot=frame.snap,
@@ -534,12 +580,18 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
         opaque_loop=ctx.opaque_loop,
         prior=ctx.domain_prior,
     )
-    return operator_action_for_state(
+    readings = current_readings(
         world,
         channel,
         ctx.pipeline_roles,
-        avoid_pred=ctx.avoid_pred,
     )
+    legal = tuple(
+        reading
+        for reading in readings
+        if ctx.route_allowed(reading.action)
+        and not _avoid_forces(ctx, [reading.action], frame.snap)
+    )
+    return legal[0] if len(legal) == 1 else None
 
 
 def _completion_reread(
@@ -550,7 +602,7 @@ def _completion_reread(
 ) -> tuple[tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
     """Re-trace a completion edge's charted gate pairs against the live world.
 
-    The wait's bearing (``CompassEdge.completion`` — charts.py) is ordinary
+    The wait's bearing (``StaticTransitionEdge.completion`` — charts.py) is ordinary
     transparent ladder below the pipeline boundary: each recorded ``(tag,
     value)`` is traced back with a fresh walk (clean ancestry, so the
     opaque-loop feedback guard admits the one-hop descent), and its steerable
@@ -678,7 +730,7 @@ def _build_candidates(
     ctx: Any,
     dbg: _DebugFn,
 ) -> _CandidateList:
-    key_nogoods = state.nogoods.get(frame.key, set())
+    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
     # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
     # program clears them every scan, so their idiom is pulse-and-release.  Holding
     # one steady as a prerequisite would assert a momentary command (a mode-change
@@ -894,18 +946,29 @@ def _build_candidates(
             continue
         probed_leaf_states.add(leaf_state)
 
-        off_path = ctx.compass.off_path_actions(n.tag, cur_val, n.value)
-        if off_path:
-            route_off_path = {action for action in off_path if ctx.route_allowed(action)}
-            state.nogoods.setdefault(frame.key, set()).update(route_off_path)
-            key_nogoods = state.nogoods.get(frame.key, set())
-            if route_off_path:
-                dbg(
-                    "# influence masking off-path for "
-                    f"{n.tag}: {sorted(route_off_path, key=_action_sort_key)}"
-                )
+        def _learned_edge_open(
+            source: Any,
+            cause: Any,
+            destination: Any,
+            *,
+            tag: str = n.tag,
+        ) -> bool:
+            return _learned_edge_allowed(
+                tag,
+                source,
+                cause,
+                destination,
+                frame,
+                ctx,
+                key_nogoods,
+            )
 
-        path = ctx.compass.find_path(n.tag, cur_val, n.value)
+        path = ctx.compass.find_path(
+            n.tag,
+            cur_val,
+            n.value,
+            cause_allowed=_learned_edge_open,
+        )
         if path:
             first_step = path[0]
             if not is_action(first_step):
@@ -1031,6 +1094,8 @@ def _build_candidates(
                     _candidate_for(pair),
                     current_prescribed=True,
                     current_note=current_action.note,
+                    bearing_channel_tag=ctx.target_tag,
+                    bearing_channel_value=current_action.to_state,
                 )
             )
     # Writer-availability demotion (never veto): a command leaf whose writer chain
@@ -1147,8 +1212,12 @@ def _candidate_applied(
 
     # A convergence-pipeline command (CtrlCmd-style) co-pulses the remaining
     # trace actions so a level prerequisite and the command land together.
-    if candidate.tag in ctx.compass.action_tags and candidates.trace_actions:
-        for ta in candidates.trace_actions:
+    if candidate.tag in ctx.compass.action_tags and candidates.active_trace_actions:
+        # A pair rejected as a standalone act remains valid context for a
+        # different atomic act.  Fresh orientation therefore keeps it out of
+        # the candidate queue while still allowing the joint pulse to be
+        # judged under its own Bearing identity.
+        for ta in candidates.active_trace_actions:
             if ta[0] not in seen:
                 actions.append(ta)
                 seen.add(ta[0])

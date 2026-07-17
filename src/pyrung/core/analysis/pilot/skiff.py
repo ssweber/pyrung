@@ -17,7 +17,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.causal import empirical_program_writes, pilot_touched_tags
-from pyrung.core.analysis.pilot.compass import CompassObservation, _action_sort_key
+from pyrung.core.analysis.pilot.compass import (
+    CompassObservation,
+    NavigationObservation,
+    ProbeDeclinedObservation,
+    _action_sort_key,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -185,7 +190,7 @@ def probe_live_guard_frontiers(
     *,
     scans: int = _SKIFF_SCANS,
     max_probes: int = _SKIFF_MAX_PROBES,
-) -> tuple[CompassObservation, ...]:
+) -> tuple[NavigationObservation, ...]:
     """Probe each unreadable frontier in the current trace tree.
 
     A frontier is unreadable when the static walk punted on it: a
@@ -253,11 +258,12 @@ def probe_live_guard_frontiers(
     # word (steerable, no declared complete domain) has no sound probe values.
     # Name the tag and nudge a ``choices=`` declaration so the miss is specific,
     # not a generic ``stuck: <reason>``.  The terminal stuck exit prefers this.
+    decline_observation: ProbeDeclinedObservation | None = None
     for node in frontiers:
         free_words = _frontier_free_words(node.tag, ctx, empirical_writes)
         if free_words:
             word = free_words[0]
-            state.skiff_declines.setdefault(
+            decline_observation = ProbeDeclinedObservation(
                 frame.key,
                 f"pilot: unreachable — frontier {node.tag}={node.value!r} is gated by "
                 f"free word {word!r} (external, no declared domain); the skiff has no "
@@ -274,7 +280,9 @@ def probe_live_guard_frontiers(
         if tag in ctx.steerable and ctx.route_allowed((tag, value)):
             context.setdefault(tag, value)
 
-    observations: list[CompassObservation] = []
+    observations: list[NavigationObservation] = []
+    if decline_observation is not None:
+        observations.append(decline_observation)
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         # Canonical key: a frontier can surface probe pairs whose values mix types
@@ -309,9 +317,9 @@ def probe_live_guard_frontiers(
             edge_found |= obs.kind == "edge"
             observations.append(obs)
 
-        # Pass 2: pairs — only when no single action moved the frontier.  The
-        # composite cause is the sorted pair tuple; candidates propose it as a
-        # batch and the verify pipeline confirms it live like any other trial.
+        # Pass 2/3: small joint actions — only when no narrower action moved the
+        # frontier.  The composite cause is the sorted tuple; Compass proposes
+        # it as one atomic BatchPulse and live verification remains authoritative.
         if not edge_found and budget > 0:
             pairs = [
                 tuple(sorted(pair))
@@ -319,19 +327,47 @@ def probe_live_guard_frontiers(
                 if pair[0][0] != pair[1][0]
             ]
             for composite in ctx.compass.unprobed_actions(node.tag, cur_val, set(pairs))[:budget]:
-                observations.append(
-                    _send_probe(
-                        node.tag,
-                        cur_val,
-                        tuple(composite),
-                        composite,
-                        context,
-                        allowed,
-                        state,
-                        ctx,
-                        scans,
-                    )
+                observation = _send_probe(
+                    node.tag,
+                    cur_val,
+                    tuple(composite),
+                    composite,
+                    context,
+                    allowed,
+                    state,
+                    ctx,
+                    scans,
                 )
+                observations.append(observation)
+                budget -= 1
+                if observation.kind == "edge":
+                    edge_found = True
+                    break
+        if not edge_found and budget > 0:
+            triples = [
+                tuple(sorted(group))
+                for group in itertools.combinations(singles, 3)
+                if len({pair[0] for pair in group}) == 3
+            ]
+            for composite in ctx.compass.unprobed_actions(
+                node.tag,
+                cur_val,
+                set(triples),
+            )[:budget]:
+                observation = _send_probe(
+                    node.tag,
+                    cur_val,
+                    tuple(composite),
+                    composite,
+                    context,
+                    allowed,
+                    state,
+                    ctx,
+                    scans,
+                )
+                observations.append(observation)
+                if observation.kind == "edge":
+                    break
     return tuple(observations)
 
 

@@ -1,4 +1,4 @@
-"""PILOT wait-edge arc, Part 1: ``CompassEdge.completion`` records the wait's
+"""PILOT wait-edge arc, Part 1: ``StaticTransitionEdge.completion`` records the wait's
 bearing — the route's charted gate pairs, verbatim.
 
 The tumbler's Starting(3)→Execute(6) transition is a wait edge: Starting stands
@@ -16,7 +16,7 @@ import importlib
 
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.charts import build_compass_graphs, detect_opaque_loop
+from pyrung.core.analysis.pilot.charts import build_static_transition_graphs, detect_opaque_loop
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pilot import (
     _build_pilot_context,
@@ -35,7 +35,7 @@ def _compass_graphs(logic, plc):
     opaque_loop = detect_opaque_loop(pdg, logic)
     _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
     roles = _infer_pipeline_roles_for_context(pdg, logic, steerable, opaque_loop, evidence)
-    return build_compass_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
+    return build_static_transition_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
 
 
 def test_tumbler_starting_to_execute_records_state_complete_bearing() -> None:

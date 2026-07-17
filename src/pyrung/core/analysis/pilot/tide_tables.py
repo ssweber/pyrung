@@ -377,7 +377,7 @@ def guard_verdict(
     trivial ``(False, True)`` domain via ``_guard_operand_domain``, everything else
     to a finite integer domain (or ``None`` → punt).
     """
-    from pyrung.core.analysis.pilot.trace import _simplified_expr_tags
+    from pyrung.core.analysis.pilot.availability import _simplified_expr_tags
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 
     domains = domains or {}
@@ -544,7 +544,7 @@ def table_from_indirect_src(
     ``trace._invert_indirect`` (the single-table value-jump inverter): the two are
     the same primitive at different arities, so the extraction lives in one place.
     """
-    from pyrung.core.analysis.pilot.trace import _single_calc_source
+    from pyrung.core.analysis.pilot.static_expressions import single_calc_source
     from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
     from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
@@ -566,7 +566,7 @@ def table_from_indirect_src(
         return None
 
     for _ in range(3):
-        defn = _single_calc_source(idx_tag, pdg, program)
+        defn = single_calc_source(idx_tag, pdg, program)
         if defn is None:
             break
         cexpr, hop_src = defn
@@ -584,7 +584,7 @@ def table_from_indirect_src(
         # cannot be fully resolved within the supported hop count.  Punt cleanly
         # rather than model a table indexed by a still-computed pointer — a
         # partially-resolved ``eval_addr`` would fabricate a lookup.
-        if _single_calc_source(idx_tag, pdg, program) is not None:
+        if single_calc_source(idx_tag, pdg, program) is not None:
             return None
 
     return _TableOperand(index_tag=idx_tag, eval_addr=eval_addr, block=src.block)
@@ -665,9 +665,9 @@ def _index_domain(
     if producible:
         return tuple(sorted(producible))
 
-    from pyrung.core.analysis.pilot.trace import _index_values
+    from pyrung.core.analysis.pilot.static_expressions import index_values
 
-    vals = _index_values(idx_tag, snapshot, pdg, program)
+    vals = index_values(idx_tag, snapshot, pdg, program)
     return tuple(vals) or None
 
 

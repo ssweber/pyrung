@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from pyrung import (
     PLC,
     Bool,
@@ -106,16 +104,18 @@ def test_pilot_reaches_counter_gated_target_across_channel_revisits() -> None:
     assert final[count.name] == 3
 
 
-def test_clean_route_accepts_a_departure_already_settled_on_the_goal() -> None:
-    """A terminal departure has a valid zero-edge route at its settled target."""
-    from pyrung.core.analysis.pilot.detour import _clean_route
-
-    found = _clean_route(
-        SimpleNamespace(edges=()),
-        start=17,
-        goals=(6, 17),
-        blocked_values=frozenset(),
-        discharged=set(),
+def test_continuation_evidence_accepts_departure_already_at_goal() -> None:
+    """A terminal departure has valid zero-edge continuation evidence."""
+    from pyrung.core.analysis.pilot.navigation_evidence import (
+        NavigationEvidence,
+        Reachable,
     )
 
-    assert found == ((17,), 17)
+    status = NavigationEvidence.channel_continuation(
+        (),
+        "State",
+        17,
+        (6, 17),
+        edge_allowed=lambda _edge: True,
+    )
+    assert isinstance(status, Reachable)

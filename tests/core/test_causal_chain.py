@@ -446,9 +446,7 @@ class TestEdgeCases:
         chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
         assert chain is not None
         assert any(step.transition.tag_name == "Starting" for step in chain.steps)
-        starting_step = next(
-            step for step in chain.steps if step.transition.tag_name == "Starting"
-        )
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
 
     def test_deep_enabler_uses_observed_subroutine_writer_on_first_fork_scan(
@@ -479,9 +477,7 @@ class TestEdgeCases:
 
         chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
         assert chain is not None
-        starting_step = next(
-            step for step in chain.steps if step.transition.tag_name == "Starting"
-        )
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_state"
         assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
 
@@ -519,13 +515,11 @@ class TestEdgeCases:
         child.step()
         # Reproduce an execution backend that retained the at-fire replay
         # views but omitted the repeated subroutine write from its node timeline.
-    child._node_firings_at = lambda _scan: {}  # type: ignore[invalid-assignment]
+        child._node_firings_at = lambda _scan: {}  # ty: ignore[invalid-assignment]
 
         chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
         assert chain is not None
-        starting_step = next(
-            step for step in chain.steps if step.transition.tag_name == "Starting"
-        )
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_block_state"
         assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
 
@@ -560,13 +554,11 @@ class TestEdgeCases:
         parent.step()
         child = parent.fork(history_budget=float("inf"))
         child.step()
-    child._node_firings_at = lambda _scan: {}  # type: ignore[invalid-assignment]
+        child._node_firings_at = lambda _scan: {}  # ty: ignore[invalid-assignment]
 
         chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
         assert chain is not None
-        starting_steps = [
-            step for step in chain.steps if step.transition.tag_name == "Starting"
-        ]
+        starting_steps = [step for step in chain.steps if step.transition.tag_name == "Starting"]
         assert [(step.subroutine, step.rung_index) for step in starting_steps] == [
             ("called_map", 0)
         ]
@@ -608,9 +600,7 @@ class TestEdgeCases:
 
         chain = child.cause("Alarm", scan=child.state.scan_id, deep=True)
         assert chain is not None
-        starting_step = next(
-            step for step in chain.steps if step.transition.tag_name == "Starting"
-        )
+        starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.transition.scan_id == child.state.scan_id - 1
         assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
 
@@ -702,9 +692,9 @@ class TestEdgeCases:
         chain = plc.cause("ReplayHeldOutput")
 
         assert chain is not None
-        assert [
-            (t.tag_name, t.from_value, t.to_value) for t in chain.steps[0].triggers
-        ] == [("ReplayHeldInput", False, True)]
+        assert [(t.tag_name, t.from_value, t.to_value) for t in chain.steps[0].triggers] == [
+            ("ReplayHeldInput", False, True)
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1112,9 +1102,7 @@ class TestSubroutineWriters:
 
         # 2b: the consumed command remains the exact at-fire transition.
         assert any(
-            trigger.tag_name == "Cmd"
-            and trigger.from_value is False
-            and trigger.to_value is True
+            trigger.tag_name == "Cmd" and trigger.from_value is False and trigger.to_value is True
             for trigger in step.triggers
         )
 

@@ -269,9 +269,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
         hold
         for event in events
         if event.kind == "trend_regression"
-        for hypothesis in (event.data.get("investigation") or {}).get(
-            "confirmed_detail", ()
-        )
+        for hypothesis in (event.data.get("investigation") or {}).get("confirmed_detail", ())
         if hypothesis.get("kind") == "latch-exposure"
         for hold in hypothesis.get("holds", ())
         if isinstance(hold, PilotRung)
@@ -287,8 +285,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 
     # The later complement-reset watchdog is a separate causal era.
     liveness_dest_sets = [
-        {_hold_dest(hold) for hold in holds}
-        for holds in _confirmed_holds(skeleton, "liveness")
+        {_hold_dest(hold) for hold in holds} for holds in _confirmed_holds(skeleton, "liveness")
     ]
     assert {"x_RotateSensor"} in liveness_dest_sets
 

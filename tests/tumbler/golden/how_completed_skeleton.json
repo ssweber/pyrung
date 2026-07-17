@@ -350,7 +350,7 @@
   "co_actions": [],
   "index": 0,
   "kind": "candidate_try",
-  "total": 2
+  "total": 1
  },
  {
   "applied": [
@@ -396,153 +396,30 @@
   "kind": "candidate_rejected"
  },
  {
-  "applied": [
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "candidate": {
-   "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
-   "compass_score": [
-    50,
-    0
-   ],
-   "current_note": "",
-   "current_prescribed": false,
-   "influence_prescribed": false,
-   "over_wake": false,
-   "pair": [
-    "Cmd_Mode_Production",
-    true
-   ],
-   "prescribed": false,
-   "provenance": [
-    "ModeChange:R200"
-   ],
-   "route_prescribed": false,
-   "scored": true,
-   "tag": "Cmd_Mode_Production",
-   "value": true
-  },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "index": 1,
-  "kind": "candidate_try",
-  "total": 2
- },
- {
-  "accepted_because": {
-   "gate_events": [
-    {
-     "__type__": "PilotGateEvent",
-     "detail": "distance 5 -> 2",
-     "event": "confirmed"
-    }
-   ],
-   "novel_key": true,
-   "state_key_changed": true,
-   "target_reached": false,
-   "trend_after": 2,
-   "trend_before": 5
-  },
-  "applied": [
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "candidate_detail": {
-   "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
-   "compass_score": [
-    50,
-    0
-   ],
-   "current_note": "",
-   "current_prescribed": false,
-   "influence_prescribed": false,
-   "over_wake": false,
-   "pair": [
-    "Cmd_Mode_Production",
-    true
-   ],
-   "prescribed": false,
-   "provenance": [
-    "ModeChange:R200"
-   ],
-   "route_prescribed": false,
-   "scored": true,
-   "tag": "Cmd_Mode_Production",
-   "value": true
-  },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "gates": [
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "distance 5 -> 2",
-    "event": "confirmed"
-   }
-  ],
-  "index": 1,
-  "kind": "candidate_accepted",
-  "watched_changes": [
-   {
-    "__type__": "TagChange",
-    "after": 1,
-    "before": 3,
-    "tag": "Sts_UnitModeCurrent"
-   }
-  ]
- },
- {
-  "applied": [
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "candidate": {
-   "Cmd_Mode_Production": true
-  },
-  "kind": "trial_committed"
- },
- {
-  "kind": "trend_checkpoint",
-  "trend": 2
- },
- {
-  "distance": 2,
+  "distance": 5,
   "kind": "iteration",
-  "nogoods": [],
-  "raw_trace_actions": [],
+  "nogoods": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ]
+  ],
+  "raw_trace_actions": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
   "still_need": [
    "Sts_StateCurrent=17 (have 9)",
-   "Sts_StateRequested=17 (have 0)"
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_UnitModeCurrent=1 (have 3)",
+   "Cmd_UnitModeChgReqBool=1 (have 0)",
+   "Cmd_UnitMode=1 (have 0)"
   ],
   "target": [
    "Sts_StateCurrent",
@@ -557,7 +434,286 @@
   ]
  },
  {
-  "active_trace_actions": [],
+  "active_trace_actions": [
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "candidates": [
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": null,
+    "bearing_channel_value": null,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": true,
+    "pair": [
+     "Cmd_Mode_Production",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ModeChange:R200"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "Cmd_Mode_Production",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Clear",
+      true
+     ],
+     "enablers": [],
+     "from": 9,
+     "request": [
+      "Sts_StateRequested",
+      1
+     ],
+     "to": 1
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 1,
+     "request": [
+      "Sts_StateRequested",
+      2
+     ],
+     "to": 2
+    },
+    {
+     "action": [
+      "Cmd_State_Reset",
+      true
+     ],
+     "enablers": [],
+     "from": 2,
+     "request": [
+      "Sts_StateRequested",
+      15
+     ],
+     "to": 15
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 15,
+     "request": [
+      "Sts_StateRequested",
+      4
+     ],
+     "to": 4
+    },
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": [
+      "Cmd_State_Complete",
+      true
+     ],
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 2,
+   "bearing_channel_tag": null,
+   "bearing_channel_value": null,
+   "compass_score": [
+    50,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": true,
+   "pair": [
+    "Cmd_Mode_Production",
+    true
+   ],
+   "prescribed": false,
+   "provenance": [
+    "ModeChange:R200"
+   ],
+   "route_prescribed": false,
+   "scored": true,
+   "tag": "Cmd_Mode_Production",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "applied": [
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 2,
+   "bearing_channel_tag": null,
+   "bearing_channel_value": null,
+   "compass_score": [
+    50,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": true,
+   "pair": [
+    "Cmd_Mode_Production",
+    true
+   ],
+   "prescribed": false,
+   "provenance": [
+    "ModeChange:R200"
+   ],
+   "route_prescribed": false,
+   "scored": true,
+   "tag": "Cmd_Mode_Production",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "no new frontier, no trend improvement",
+    "event": "lateral"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_rejected"
+ },
+ {
+  "distance": 5,
+  "kind": "iteration",
+  "nogoods": [
+   [
+    "Cmd_Mode_Production",
+    true
+   ],
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ]
+  ],
+  "raw_trace_actions": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 9)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_UnitModeCurrent=1 (have 3)",
+   "Cmd_UnitModeChgReqBool=1 (have 0)",
+   "Cmd_UnitMode=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
   "candidates": [
    {
     "avail_tier": 0,
@@ -702,6 +858,14 @@
    [
     "Cmd_State_Clear",
     true
+   ],
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
    ]
   ],
   "candidate": {
@@ -727,7 +891,16 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [],
+  "co_actions": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
   "index": 0,
   "kind": "candidate_try",
   "total": 1
@@ -737,7 +910,7 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 2",
+     "detail": "distance 5 -> 2",
      "event": "ambient"
     }
    ],
@@ -745,11 +918,19 @@
    "state_key_changed": true,
    "target_reached": false,
    "trend_after": 2,
-   "trend_before": 2
+   "trend_before": 5
   },
   "applied": [
    [
     "Cmd_State_Clear",
+    true
+   ],
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
     true
    ]
   ],
@@ -776,11 +957,20 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [],
+  "co_actions": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 2",
+    "detail": "distance 5 -> 2",
     "event": "ambient"
    }
   ],
@@ -792,6 +982,12 @@
     "after": 2,
     "before": 9,
     "tag": "Sts_StateCurrent"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 1,
+    "before": 3,
+    "tag": "Sts_UnitModeCurrent"
    }
   ]
  },
@@ -799,6 +995,14 @@
   "applied": [
    [
     "Cmd_State_Clear",
+    true
+   ],
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
     true
    ]
   ],
@@ -828,13 +1032,9 @@
    ]
   ],
   "kind": "provisional_started",
-  "reason": "clean forward route 2 -> 8 -> 9 (no reset, no resurrected obligation)",
+  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
   "requested_value": 1,
-  "route": [
-   2,
-   8,
-   9
-  ],
+  "route": [],
   "settled_value": 2
  },
  {
@@ -1388,7 +1588,7 @@
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": true,
@@ -1848,7 +2048,7 @@
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": true,
@@ -2154,28 +2354,15 @@
     "accelerators": [],
     "inputs": [
      [
-      "Cmd_Mode_Production",
+      "Cmd_State_Clear",
       true
      ],
      [
       "Cmd_UnitModeChgRequest",
       true
-     ]
-    ],
-    "kind": "command",
-    "label": "Cmd_Mode_Production",
-    "notes": [],
-    "pulsing_holds": [],
-    "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX 8191 → 0",
-    "waiting_for": []
-   },
-   {
-    "__type__": "PlanStep",
-    "accelerators": [],
-    "inputs": [
+     ],
      [
-      "Cmd_State_Clear",
+      "Cmd_Mode_Production",
       true
      ]
     ],
@@ -2184,7 +2371,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 0 → 9",
+    "transition": "A_CurDisabledStates_HEX 8191 → 0",
     "waiting_for": []
    },
    {

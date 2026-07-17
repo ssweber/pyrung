@@ -160,8 +160,7 @@ def _causal_channel_guard(
                 (
                     current.scan_id
                     for previous, current in zip(states, states[1:], strict=False)
-                    if previous.tags.get(source) is not True
-                    and current.tags.get(source) is True
+                    if previous.tags.get(source) is not True and current.tags.get(source) is True
                 ),
                 None,
             )
@@ -623,9 +622,7 @@ def _resolve_steerable_driver(
     nearest steerable driver (e.g. the ``i_DoorClosed`` PIVOT to physical
     ``x_DoorClosed``).  Shared by the oscillation and cannot-hold sub-cases.
     """
-    steerable = (
-        getattr(ctx, "steerable", frozenset()) if steerable is None else steerable
-    )
+    steerable = getattr(ctx, "steerable", frozenset()) if steerable is None else steerable
     if read_tag in steerable:
         return (read_tag, value)
     pdg = getattr(ctx, "pdg", None)
@@ -763,9 +760,7 @@ def _minimal_forcing_sets(
 
     def _eval(assignment: dict[str, Any]) -> bool | None:
         try:
-            return bool(
-                satisfies(condition.evaluate(_SnapView({**base_values, **assignment})))
-            )
+            return bool(satisfies(condition.evaluate(_SnapView({**base_values, **assignment}))))
         except Exception:  # noqa: BLE001
             return None
 

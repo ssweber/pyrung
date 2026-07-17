@@ -11,7 +11,7 @@ it does not guarantee that later assessment will retain the committed world.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
@@ -24,10 +24,16 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
-from pyrung.core.analysis.pilot.outcome import (
-    _has_compass_frontier,
-    assess_outcome,
+from pyrung.core.analysis.pilot.navigation import (
+    NavigationConstraints,
+    OrientationWorld,
+    TargetSpec,
 )
+from pyrung.core.analysis.pilot.navigation_evidence import (
+    NavigationEvidence,
+    Reachable,
+)
+from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
@@ -298,7 +304,21 @@ def _gate_dead_end(
     new_actions = set(new_tree.ordered_actions())
     old_actions = set(frame.tree.ordered_actions())
     action_inputs = set(action_pairs)
-    influence_frontier = _has_compass_frontier(new_tree, trial.snap, ctx.opaque_loop, ctx.compass)
+    post_frame = replace(frame, snap=trial.snap, tree=new_tree, key=trial.key)
+    frontier_status = NavigationEvidence.frontier_status(
+        OrientationWorld(
+            world_key=trial.key,
+            snapshot=trial.snap,
+            frame=post_frame,
+            state=state,
+            context=ctx,
+            debug=dbg,
+        ),
+        TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate),
+        NavigationConstraints(ctx.blocked_route_actions, ctx.avoid_pred),
+        ctx.compass.knowledge,
+    )
+    influence_frontier = isinstance(frontier_status, Reachable)
     pending = _has_pending_effects(trial.fork)
 
     if not new_actions and not influence_frontier and not pending:
@@ -590,7 +610,8 @@ def verify_gates(
         zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
         zoom_progressed=(
-            getattr(state, "gauge", None) is not None
+            motion.is_coast
+            and getattr(state, "gauge", None) is not None
             and state.gauge.ordinal_advanced(frame.snap, trial.snap)
         ),
         zoom_stop_reason=(

@@ -27,6 +27,12 @@ from pyrung.core.analysis.pilot.availability import (
     _writer_availability,
     _WriterAvailability,
 )
+from pyrung.core.analysis.pilot.static_expressions import (
+    index_values as _index_values,
+)
+from pyrung.core.analysis.pilot.static_expressions import (
+    single_calc_source as _single_calc_source,
+)
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
 from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
@@ -48,7 +54,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
 
 # The availability-layer names imported above are re-exported *by that import* —
-# external importers (``candidates.py``, ``tide_tables.py``, the pilot tests
+# external importers (``options.py``, ``tide_tables.py``, the pilot tests
 # that reach for these ``_``-prefixed names directly) keep importing them from
 # ``trace``.  The recursion core below calls them by their bare names.
 
@@ -212,12 +218,12 @@ class TraceAction:
     guard_atoms: tuple[Any, ...] = ()
     # True when this action drives an edge-gated accumulator: a steady hold fires
     # the edge only once, so the action must *oscillate* (toggle each scan) to keep
-    # the accumulator advancing.  candidates.py turns it into a ``PilotRung``.
+    # the accumulator advancing.  options.py turns it into a ``PilotRung``.
     oscillate: bool = False
     # True when this action sits under an unsatisfied ``data_flow=="enable"`` node —
     # it *establishes* a table-enablement precondition (e.g. the mode that unblocks
     # a mask-disabled state) whose effect is a settled cross-register recompute.  It
-    # cannot fire in the same scan as the command it gates, so candidates.py makes
+    # cannot fire in the same scan as the command it gates, so options.py makes
     # it the sole bearing (stage 0) and defers the gated commands.
     establish: bool = False
     # Stage-3 heuristic boundary proposal on a steerable free word: the value is
@@ -227,7 +233,7 @@ class TraceAction:
     note: str = ""
     # Worst writer availability on this leaf's path from the target (worst-wins,
     # matching the And-rule): the chain producing this leaf's need is only as
-    # reachable-from-here as its least-available writer.  candidates.py demotes
+    # reachable-from-here as its least-available writer.  options.py demotes
     # (never drops) leaves serving UNKNOWN / UNAVAILABLE chains below AVAILABLE /
     # AFTER_PREREQ ones so command-leaf sprawl on a cyclic state machine sinks
     # the counterfactual commands.  Availability orders, it never rejects.
@@ -1163,7 +1169,7 @@ def _counter_driver_leaf(
     A counter advances once per scan its ``advance`` condition holds.  A plain
     level (``BitCondition``) driver is held steady; an edge (``rise``/``fall``)
     driver fires only once when held, so the leaf is flagged ``oscillate`` and
-    candidates.py turns it into a toggling ``PilotRung``.  ``None`` when the
+    options.py turns it into a toggling ``PilotRung``.  ``None`` when the
     advance has no single steerable read.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
@@ -3061,9 +3067,6 @@ def _decompose_sum(
     return children
 
 
-_IDX_CHASE_CAP = 32
-
-
 _FORM_TO_CMP_OP = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
 
 
@@ -3407,70 +3410,6 @@ def _invert_indirect(
     if not inverting:
         return None
     return table.index_tag, inverting
-
-
-def _single_calc_source(idx_tag: str, pdg: ProgramGraph, program: Any) -> tuple[Any, str] | None:
-    """``(expression, source_tag)`` when *idx_tag* has a single calc writer.
-
-    Handles ``calc(S_StateRequested + 150, sm__jump_target_ds_idx)`` —
-    the pointer register is computed from one other tag.
-    """
-    from pyrung.core.instruction.calc import CalcInstruction
-
-    writers = pdg.writers_of.get(idx_tag, frozenset())
-    if len(writers) != 1:
-        return None
-    ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
-    if ro is None:
-        return None
-    for instr in ro._instructions:
-        if isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == idx_tag:
-            names = _expr_tag_names(instr.expression)
-            if not names:
-                return None
-            mutable = {n for n in names if pdg.writers_of.get(n)} - {idx_tag}
-            if len(mutable) != 1:
-                return None
-            src = next(iter(mutable))
-            return instr.expression, src
-    return None
-
-
-def _index_values(
-    idx_tag: str,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-) -> list[int]:
-    """Plausible values for an index register, current value first."""
-    from pyrung.core.crossing import Literal as _Literal
-
-    rest: set[int] = set()
-    current = snapshot.get(idx_tag)
-    for ri in sorted(pdg.writers_of.get(idx_tag, frozenset())):
-        ro = resolve_rung(program, pdg.rung_nodes[ri])
-        if ro is None:
-            continue
-        wv = _written_value_for_tag(ro, idx_tag)
-        if isinstance(wv, _Literal):
-            v = wv.value
-            if isinstance(v, int) and not isinstance(v, bool):
-                rest.add(v)
-        else:
-            from pyrung.core.analysis.sp_values import _named_copy_source, _writer_for_tag
-
-            _instr = _writer_for_tag(ro, idx_tag)
-            src_name = _named_copy_source(_instr) if _instr is not None else None
-            if src_name is not None and src_name != idx_tag:
-                v = snapshot.get(src_name)
-                if isinstance(v, int) and not isinstance(v, bool):
-                    rest.add(v)
-    out: list[int] = []
-    if isinstance(current, int) and not isinstance(current, bool):
-        out.append(current)
-        rest.discard(current)
-    out.extend(sorted(rest))
-    return out[:_IDX_CHASE_CAP]
 
 
 def _visit_key(tag: str, value: Any) -> tuple[str, Any]:

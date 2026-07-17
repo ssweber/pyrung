@@ -320,7 +320,7 @@ class _PilotContext:
     avoid_pred: Any = None
     via_pred: Any = None
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
-    # Kept off prerequisite holds (candidates.py) and off preferred init/reset
+    # Kept off prerequisite holds (options.py) and off preferred init/reset
     # writer selection (trace._rank_writers): a momentary command, never a hold.
     clear_only: frozenset[str] = frozenset()
 
@@ -380,10 +380,8 @@ class _PilotState:
     # ── Knowledge (commits — never rolled back on revert) ──
     key_config: _StateKeyConfig | None
     seen_keys: set[_StateKey]
-    nogoods: dict[_StateKey, set[_ActionPair]]
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
-    expanded_tags: set[str] = field(default_factory=set)
     last_wait_log: tuple[Any, ...] | None = None
     # The target-relative progress gauge (gauge.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
@@ -394,38 +392,12 @@ class _PilotState:
     # gauge advances, regressed only when that gauge moves behind, and otherwise
     # rolled back on expiry without manufacturing a nogood.
     provisional: Any = None
-    # World key -> stop_reason of the terminal let-run that already ran there.
-    # A receipt-backed memo (the audit's C2): an entry is recorded only when it
-    # can be trusted — the coast ejected (deterministic re-eject after a revert
-    # restores the identical world), or it stalled *quiescent* (no pending
-    # harness feedback / running accumulator, so the masked state key genuinely
-    # captures the world).  A stall with pending effects is deliberately NOT
-    # memoized: the key masks accumulators, and a same-key world with a timer
-    # mid-flight might complete where this one timed out.  The world key
-    # already includes the rung overlay, so a newly installed hold re-fires
-    # the let-run naturally.
-    letrun_memo: dict[_StateKey, str] = field(default_factory=dict)
-    # State key -> number of skiff probe escalations spent there. The
-    # skiff is the reading-ladder's last tier; a stuck key gets a bounded number of
-    # skiff laps and then the loop STOPS honestly instead of alternating forever.
-    # Knowledge: the world reverts between laps but this does not, so re-arriving
-    # stuck at the same key is recognized as "the skiff's probe-mark churn is not
-    # moving the world" (Legibility — a stall you can dump and point at).  Owned by
-    # ``_orient_escalate_skiff`` (the escalation table's skiff row).
-    stuck_keys: dict[_StateKey, int] = field(default_factory=dict)
     # Append-only log of every committed step, including attempts later reverted.
     # ``steps`` (the world) is the clean, sequentially-replayable path (restored
     # to the checkpoint's on revert); ``journey`` keeps the full "tried this,
     # ejected, learned, retried" record surfaced by ``how(..., debug=True)``.
     journey: list[_Step] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
-    # Named honest-decline reasons the skiff produced when it met an unreadable
-    # frontier gated by a free word with no declared complete domain.  This is
-    # committed Knowledge (an experiment survives rollback), but it is scoped by
-    # executable world key: a decline learned in world A cannot explain a stop in
-    # world B.  The terminal Plan exposes only the entry applicable to its final
-    # world through the legacy singular ``Plan.skiff_decline`` field.
-    skiff_declines: dict[_StateKey, str] = field(default_factory=dict)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
     # in the drive (Knowledge side — commits, never reverted).  A terminal stuck
     # or budget-exhausted decline reads this so the miss names the violated avoid
@@ -519,7 +491,7 @@ class _IterationFrame:
     distance_before: int
     raw_trace_actions: tuple[_ActionPair, ...]
     raw_trace_action_details: tuple[TraceAction, ...]
-    # The completion re-read's unmet frontier (candidates.py), stamped by the
+    # The completion re-read's unmet frontier (options.py), stamped by the
     # loop after reading so ``_frontier_clause`` names the pressable lever behind
     # a prescribed wait (``x_RotateFB``) instead of the target tree's post-cut
     # interior.  Empty unless this iteration prescribed a wait with completion.

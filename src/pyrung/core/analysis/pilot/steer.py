@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
+    _append_rungs,
     _avoid_violations,
     _coast_holding_state,
     _coast_to_value,
@@ -27,18 +28,24 @@ from pyrung.core.analysis.pilot._ops import (
     fork_with_rungs,
     wait_edge_nogood,
 )
-from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
-
-if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.candidates import _Candidate, _CandidateList
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
+from pyrung.core.analysis.pilot.navigation import (
+    BatchPulse,
+    Bearing,
+    Coast,
+    Dwell,
+    OrientationWorld,
+    Pulse,
+)
+from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
+    _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -58,6 +65,10 @@ if TYPE_CHECKING:
 
 _SETTLE_CONE_CEILING = LIMITS.cone_ceiling
 _LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
+
+
+class StaleBearingError(RuntimeError):
+    """The world changed after orientation and before execution."""
 
 
 def _settle_cone(
@@ -242,7 +253,7 @@ def _compass_observations(
         # pipeline_internal nodes are included: the learned table is the
         # pipeline instrument's own memory, and a live trial is the strongest
         # evidence there is — both for new edges and for falsifying stale
-        # statically-seeded ones.
+        # static-catalog ones.
         if n.satisfied or n.is_steerable:
             continue
         old_v = before_snap.get(n.tag)
@@ -258,7 +269,7 @@ def _compass_observations(
         elif contradict_no_change:
             # The cause fired from old_v under a full settle window and the
             # register did not move — falsify any learned edge claiming it
-            # would (a statically-seeded route ignores unreadable enablers),
+            # would (a static-catalog route ignores unreadable enablers),
             # and mark the probe so it is not re-sent.
             observations.append(CompassObservation("contradict", n.tag, cause, old_v))
     return tuple(observations)
@@ -368,114 +379,98 @@ def _try_action_batch(
     return replace(result, observations=tuple(observations))
 
 
-def _try_candidate(
-    candidate: _Candidate,
-    candidates: _CandidateList,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    from pyrung.core.analysis.pilot.candidates import _candidate_applied
+def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
+    """Execute exactly the act declared by a current-world bearing.
 
-    pair = candidate.pair
-    applied = _candidate_applied(candidate, candidates, ctx)
-    if len(applied) > 1:
-        dbg(f"#     INFLUENCE-CONTEXT: +{len(candidates.trace_actions)} trace actions")
-
-    return _try_action_batch(
-        (pair,),
-        applied,
-        frame,
-        state,
-        ctx,
-        dbg,
-        observe_label="accept",
-        target_observe_label="target",
-        debug_name=_label_action((pair,)),
-        influence_prescribed=candidate.influence_prescribed,
-        route_prescribed=candidate.route_prescribed,
-        nogood_pair=pair,
-        regression_nogoods=frozenset({pair}),
-        chase_regression_causes=True,
-        record_influence_action=pair,
-        bearing_channel_tag=candidate.bearing_channel_tag,
-        bearing_channel_value=candidate.bearing_channel_value,
-    )
-
-
-def _try_prescribed_batch(
-    batch: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    """Try a skiff-prescribed composite edge as one live batch trial.
-
-    The isolated experiment identified this action *set* as the joint cause of
-    a frontier edge; the members must fire in the same window, so they ride
-    one batch through the same gate pipeline as any candidate — the learned
-    edge stays a bearing until the live verify confirms it.
+    This is deliberately narrower than orientation: it validates the world
+    binding, installs declared prerequisites, and dispatches one act through
+    the existing verification pipeline.  It never selects a fallback.
     """
-    dbg(f"# --- Skiff batch ({len(batch)} actions) ---")
-    return _try_action_batch(
-        batch,
-        batch,
-        frame,
-        state,
-        ctx,
-        dbg,
-        observe_label="batch",
-        target_observe_label="batch-target",
-        debug_name="SKIFF-BATCH",
-        influence_prescribed=True,
-        route_prescribed=False,
-        nogood_pair=None,
-        regression_nogoods=frozenset(batch),
-        chase_regression_causes=False,
-    )
 
+    frame = world.frame
+    state = world.state
+    ctx = world.context
+    dbg = world.debug
+    key_config = state.key_config
+    if key_config is None:
+        raise StaleBearingError("cannot execute a bearing before the world key is configured")
+    live_key = _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
+    if live_key != bearing.world_key:
+        raise StaleBearingError(
+            f"bearing world {bearing.world_key!r} is stale; current world is {live_key!r}"
+        )
 
-def _try_widening(
-    active_trace_actions: tuple[_ActionPair, ...],
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> _AttemptResult:
-    all_nogoods: list[_ActionPair] = []
-    all_observations: list[CompassObservation] = []
-    for width in range(2, len(active_trace_actions) + 1):
-        batch = active_trace_actions[:width]
-        dbg(f"# --- Width {width} ({len(batch)} actions) ---")
-        attempt = _try_action_batch(
-            batch,
-            batch,
+    if bearing.prerequisites:
+        state.rungs = _append_rungs(state.work, list(bearing.prerequisites), state.rungs)
+        state.hold_log.append(
+            _HoldLogEntry(
+                scan=state.work.state.scan_id,
+                tags=tuple((r.dest, r.value) for r in bearing.prerequisites),
+                source="prerequisite",
+                rungs=tuple(bearing.prerequisites),
+            )
+        )
+
+    act = bearing.act
+    if isinstance(act, Pulse):
+        option = act.option
+        if len(act.applied) > 1:
+            dbg(f"#     INFLUENCE-CONTEXT: +{len(act.applied) - 1} co-actions")
+        return _try_action_batch(
+            (act.action,),
+            act.applied,
             frame,
             state,
             ctx,
             dbg,
-            observe_label="width",
-            target_observe_label="width-target",
-            debug_name=f"WIDTH-{width}",
-            influence_prescribed=False,
+            observe_label="accept",
+            target_observe_label="target",
+            debug_name=_label_action((act.action,)),
+            influence_prescribed=option.influence_prescribed,
+            # A structural program-owned current is also an explicit bearing:
+            # if it opens a new frontier, commit it so progress monitoring can
+            # investigate and learn the corrective holds.  It is not a static
+            # route suffix and never bypasses the live avoid gate.
+            route_prescribed=option.route_prescribed or option.current_prescribed,
+            nogood_pair=act.action,
+            regression_nogoods=frozenset({act.action}),
+            chase_regression_causes=True,
+            record_influence_action=act.action,
+            bearing_channel_tag=option.bearing_channel_tag,
+            bearing_channel_value=option.bearing_channel_value,
+        )
+    if isinstance(act, BatchPulse):
+        return _try_action_batch(
+            act.actions,
+            act.actions,
+            frame,
+            state,
+            ctx,
+            dbg,
+            observe_label="batch" if act.source == "learned" else "width",
+            target_observe_label=("batch-target" if act.source == "learned" else "width-target"),
+            debug_name="SKIFF-BATCH" if act.source == "learned" else "WIDENING",
+            influence_prescribed=act.source == "learned",
             route_prescribed=False,
             nogood_pair=None,
-            regression_nogoods=frozenset(batch),
+            regression_nogoods=frozenset(act.actions),
             chase_regression_causes=False,
         )
-        all_nogoods.extend(attempt.nogood_pairs)
-        all_observations.extend(attempt.observations)
-        if attempt.trial is not None:
-            # Earlier (rejected) widths executed too — their observations ride
-            # along so the drive loop applies them with the accepted width's.
-            return replace(attempt, observations=tuple(all_observations))
-    return _AttemptResult(
-        trial=None,
-        nogood_pairs=frozenset(all_nogoods),
-        observations=tuple(all_observations),
-    )
+    if isinstance(act, Coast):
+        if act.mode == "bearing":
+            return _try_zoom(
+                act.channel_tag,
+                act.target_value,
+                act.route_prescribed,
+                frame,
+                state,
+                ctx,
+                dbg,
+            )
+        return _try_terminal_letrun(frame, state, ctx, dbg)
+    if isinstance(act, Dwell):
+        return _try_terminal_dwell(frame, state, ctx, dbg)
+    raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +479,9 @@ def _try_widening(
 
 
 def _try_zoom(
-    candidates: _CandidateList,
+    channel_tag: str | None,
+    target_value: Any,
+    route_prescribed: bool,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -502,13 +499,6 @@ def _try_zoom(
     investigation layer should own bounded incident analysis and replay-tested
     corrective holds.
     """
-    channel_tag = (
-        candidates.route_plan.role.channel_tag if candidates.route_plan is not None else None
-    )
-    target_value = (
-        candidates.route_plan.first_edge.to_value if candidates.route_plan is not None else None
-    )
-
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
@@ -578,7 +568,7 @@ def _try_zoom(
         target_observe_label="zoom-target",
         debug_name="ZOOM",
         influence_prescribed=False,
-        route_prescribed=candidates.route_plan is not None,
+        route_prescribed=route_prescribed,
         nogood_pair=wait_nogood,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
@@ -733,8 +723,8 @@ def _try_terminal_dwell(
 ) -> _AttemptResult:
     """Run one bounded repeated dwell through the shared trial gates.
 
-    Reached only when terminal let-run already ran at this key with these holds
-    (``key in letrun_memo``). The coast is deterministic under the held inputs,
+    Reached only when Compass knowledge carries a terminal-coast receipt for
+    this world key. The coast is deterministic under the held inputs,
     so repeating the full ejection-guarded let-run would reproduce the same
     departure.
 

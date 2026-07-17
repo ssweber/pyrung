@@ -1390,7 +1390,7 @@ def test_harness_feedback_excluded_from_steerable():
 
 def test_compass_bfs_shortest_path():
     """BFS finds the shortest action sequence through a transition table."""
-    from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
     inf = Compass()
     tag = "State"
@@ -1398,10 +1398,15 @@ def test_compass_bfs_shortest_path():
     action_b = ("Cmd", 2)
     action_c = ("Cmd", 3)
     action_d = ("Recipe", 7)
-    inf.record(tag, action_a, 0, 1)
-    inf.record(tag, action_b, 1, 2)
-    inf.record(tag, action_c, 2, 3)
-    inf.record(tag, action_d, 0, 3)  # direct shortcut
+    inf, changed = inf.apply(
+        (
+            CompassObservation("edge", tag, action_a, 0, 1),
+            CompassObservation("edge", tag, action_b, 1, 2),
+            CompassObservation("edge", tag, action_c, 2, 3),
+            CompassObservation("edge", tag, action_d, 0, 3),
+        )
+    )
+    assert changed
 
     path = inf.find_path(tag, 0, 3)
     assert path == [action_d], f"BFS should find direct path, got {path}"
@@ -1414,17 +1419,21 @@ def test_compass_bfs_shortest_path():
 
 def test_compass_paths_include_wait_transitions():
     """WAIT is a transition cause, but not a candidate action."""
-    from pyrung.core.analysis.pilot.compass import WAIT, Compass
+    from pyrung.core.analysis.pilot.compass import WAIT, Compass, CompassObservation
 
     inf = Compass()
     tag = "State"
     action_a = ("Cmd", "clear")
     action_b = ("Cmd", "start")
     action_bad = ("Cmd", "abort")
-    inf.record(tag, action_a, 9, 1)
-    inf.record(tag, WAIT, 1, 2)
-    inf.record(tag, action_b, 2, 6)
-    inf.record(tag, action_bad, 1, 9)
+    inf, _ = inf.apply(
+        (
+            CompassObservation("edge", tag, action_a, 9, 1),
+            CompassObservation("edge", tag, WAIT, 1, 2),
+            CompassObservation("edge", tag, action_b, 2, 6),
+            CompassObservation("edge", tag, action_bad, 1, 9),
+        )
+    )
 
     assert inf.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
     assert inf.find_path(tag, 1, 6) == [WAIT, action_b]
@@ -1439,7 +1448,7 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     (a ``tuple``), which used to raise ``TypeError`` (crash observed live
     during skiff pair-probing at a Held state).
     """
-    from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
     inf = Compass()
     tag = "State"
@@ -1447,8 +1456,12 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
 
     flat_probed = ("Cmd", 1)
     composite_probed = (("C_Start", True), ("InterlockAck", True))
-    inf.record(tag, flat_probed, from_val, 1)
-    inf.record(tag, composite_probed, from_val, 2)
+    inf, _ = inf.apply(
+        (
+            CompassObservation("edge", tag, flat_probed, from_val, 1),
+            CompassObservation("edge", tag, composite_probed, from_val, 2),
+        )
+    )
 
     flat_unprobed = ("Cmd", 2)
     composite_unprobed = (("C_Start", True), ("InterlockAck", False))
@@ -1477,7 +1490,7 @@ def test_detect_opaque_pipeline():
     """detect_opaque_pipelines finds indirect-copy targets and their steerable inputs."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.compass import detect_opaque_pipelines
+    from pyrung.core.analysis.pilot.charts import detect_opaque_pipelines
     from pyrung.core.analysis.steerable import compute_steerable
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -2014,11 +2027,16 @@ def test_skiff_scan_suppresses_non_participants():
     assert not result.suppressed_changes
 
 
-def test_seed_compass_from_static_routes():
-    """Static routes pre-populate the compass with a complete BFS path."""
+def test_static_routes_remain_in_catalog_not_learned_knowledge():
+    """Static paths are queryable without copying them into learned entries."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.compass import Compass
-    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.pilot.charts import (
+        _best_static_path,
+        build_static_transition_graphs,
+        detect_opaque_loop,
+    )
+    from pyrung.core.analysis.pilot.compass import Compass, NavigationCatalog
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _Output = _packml_program()
@@ -2027,15 +2045,28 @@ def test_seed_compass_from_static_routes():
     pdg = build_program_graph(prog)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
 
-    routes = expand_routes("StateCurrent", pdg, prog, steerable, frozenset())
-    inf = Compass()
-    seeded = inf.seed_routes("StateCurrent", routes)
+    opaque = detect_opaque_loop(pdg, prog)
+    role = infer_pipeline_roles("StateCurrent", pdg, prog, steerable, opaque)
+    graphs = build_static_transition_graphs(
+        (role,),
+        pdg,
+        prog,
+        steerable,
+        opaque,
+        None,
+    )
+    compass = Compass(NavigationCatalog(graphs=graphs))
+    assert len(compass.knowledge.entries) == 0
 
-    assert seeded >= 3, f"Expected >=3 seeded entries, got {seeded}"
-
-    path = inf.find_path("StateCurrent", 9, 6)
-    assert path is not None, "BFS should find path 9→6"
-    assert len(path) == 3, f"Path should be 3 hops, got {len(path)}: {path}"
+    path = _best_static_path(
+        "StateCurrent",
+        6,
+        {"StateCurrent": 9},
+        compass.catalog.graphs,
+        edge_allowed=lambda _edge: True,
+    )
+    assert path is not None, "static reader should find path 9→6"
+    assert len(path.edges) == 3, f"path should be 3 hops, got {len(path.edges)}"
 
 
 def test_expand_routes_direct_writer():

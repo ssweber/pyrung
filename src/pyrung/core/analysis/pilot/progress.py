@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
 )
 from pyrung.core.analysis.pilot.causal import pilot_touched_tags
-from pyrung.core.analysis.pilot.compass import _action_sort_key
+from pyrung.core.analysis.pilot.compass import ActionNogoodObservation, _action_sort_key
 from pyrung.core.analysis.pilot.detour import (
     Provisional,
     classify_departure,
@@ -36,7 +36,12 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_eject_latches,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.outcome import BearingEffect, Outcome
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    Outcome,
+    ProgressEffect,
+)
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
@@ -514,6 +519,17 @@ def _finish_provisional(
     outcome = (
         gauge.compare(anchor, now_snap) if gauge is not None and gauge.components else "unknown"
     )
+    # A gauge may advance on the same scan that a pilot act drives the machine
+    # into a worse target-relative world (for example, a recipe step increments
+    # while an unsafe Unhold enters Aborted). Trial attribution is the narrower
+    # causal fact and must win over that incidental ordinal movement.
+    if (
+        trial.assessment is not None
+        and trial.assessment.agency is Agency.PILOT
+        and trial.assessment.bearing is BearingEffect.DEPARTED
+        and trial.assessment.progress is ProgressEffect.BEHIND
+    ):
+        outcome = "behind"
     if outcome == "advanced" or reached:
         state.provisional = None
         # Collapse all provisional checkpoints into the promoted rejoin.
@@ -878,7 +894,10 @@ def _investigate_and_revert(
     # action is naturally eligible there without deleting valid history.
     regression_nogoods = set(investigation_nogoods)
     regression_nogoods.update(trial.regression_nogoods)
-    state.nogoods.setdefault(cp_key, set()).update(regression_nogoods)
+    if regression_nogoods:
+        ctx.compass, _ = ctx.compass.apply(
+            tuple(ActionNogoodObservation(cp_key, ("pair", pair)) for pair in regression_nogoods)
+        )
     dbg(
         f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods, key=_action_sort_key)}"
     )

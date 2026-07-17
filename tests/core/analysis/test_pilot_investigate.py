@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt, CoastSession
+from pyrung.core.analysis.pilot.coast import BumpEvent, CoastSession
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
@@ -42,7 +42,7 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_deviation,
     investigate_excursion,
 )
-from pyrung.core.analysis.pilot.types import BearingDeparture, _AttemptResult
+from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -804,8 +804,7 @@ class TestPreciseCause:
         chain = plc.cause("OutCut_State", scan=scan)
         assert chain is not None
         assert any(
-            step.transition.tag_name == "OutCut_Image"
-            and step.transition.to_value is False
+            step.transition.tag_name == "OutCut_Image" and step.transition.to_value is False
             for step in chain.steps
         )
         assert all(("OutCut_Door", False) not in h.holds for h in hypotheses)
@@ -897,10 +896,7 @@ class TestLatchExposureHypotheses:
         conjunction = [h for h in hyps if len(h.holds) == 2]
 
         def _pairs(holds):
-            return {
-                (h.dest, h.value) if isinstance(h, PilotRung) else h
-                for h in holds
-            }
+            return {(h.dest, h.value) if isinstance(h, PilotRung) else h for h in holds}
 
         assert {frozenset(_pairs(h.holds)) for h in per_latch} == {
             frozenset({("G1", True)}),
@@ -1912,41 +1908,14 @@ class TestBuildDeviationIncident:
 
 
 # ---------------------------------------------------------------------------
-# Terminal let-run memo — a trusted (quiescent) stall is memoized, a pending
-# stall is not (the pilot loop's rule; audit C2).
+# Terminal coast receipts are ordinary durable Compass knowledge.
 # ---------------------------------------------------------------------------
 
 
-def _record_letrun_memo(memo: dict, key: tuple, attempt: _AttemptResult) -> None:
-    """The pilot loop's memo rule (pilot.py, the terminal-letrun stall arm):
-    a stall is trustworthy memo material only when its receipt is present AND no
-    harness effect was pending — a pending stall stays re-runnable at that key."""
-    if attempt.stall_receipt is not None and not attempt.stall_pending:
-        memo[key] = attempt.stall_receipt.stop_reason
+def test_terminal_coast_receipt_is_typed_navigation_knowledge() -> None:
+    from pyrung.core.analysis.pilot.compass import CoastObservation, Compass
 
-
-class TestLetrunMemo:
-    """``_AttemptResult.stall_receipt`` / ``stall_pending`` drive whether a
-    terminal-letrun stall is recorded into ``letrun_memo``."""
-
-    def _stall(self, pending: bool) -> _AttemptResult:
-        receipt = CoastReceipt(
-            kind="letrun",
-            start_scan=0,
-            end_scan=5,
-            stop_reason="quiescent",
-            fired=(),
-            events=(),
-            budget=5,
-        )
-        return _AttemptResult(trial=None, stall_receipt=receipt, stall_pending=pending)
-
-    def test_quiescent_stall_records_memo(self):
-        memo: dict = {}
-        _record_letrun_memo(memo, ("world-key",), self._stall(pending=False))
-        assert memo == {("world-key",): "quiescent"}
-
-    def test_pending_stall_not_memoized(self):
-        memo: dict = {}
-        _record_letrun_memo(memo, ("world-key",), self._stall(pending=True))
-        assert memo == {}
+    key = ("world-key",)
+    compass, changed = Compass().apply((CoastObservation(key, "quiescent"),))
+    assert changed
+    assert compass.knowledge.coast_receipt(key) == "quiescent"

@@ -85,7 +85,6 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         "world": world,
         "key_config": None,
         "seen_keys": set(),
-        "nogoods": {},
         "checkpoints": checkpoints,
         "watch_tags": [],
     }
@@ -436,6 +435,8 @@ class TestRegression:
         assert state.work.state.tags["A"] is False
 
     def test_regression_nogoods_recorded(self):
+        from pyrung.core.analysis.pilot.compass import Compass
+
         cp_fork = _oneshot_plc()
         cp_fork.step()
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
@@ -445,9 +446,10 @@ class TestRegression:
             chase_regression_causes=False,
             regression_nogoods=frozenset({("X", True)}),
         )
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        ctx = SimpleNamespace(compass=Compass())
+        events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
 
-        assert ("X", True) in state.nogoods[("cpk",)]
+        assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("cpk",))
         assert ("X", True) in events[0].data["regression_nogoods"]
 
 

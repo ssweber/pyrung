@@ -1,62 +1,44 @@
-"""Static transition graphs and accumulated transition knowledge for PILOT.
-
-``Compass`` combines immutable references to the graphs built by ``charts.py``
-with a persistent table of seeded and observed transitions. Instruments return
-``CompassObservation`` values; :meth:`Compass.apply` is the value-semantic
-update path used by the drive loop.
-
-This module stores and queries transition knowledge. It does not choose the
-current candidate or commit a trial world.
-"""
+"""Thin immutable navigation facade and accumulated knowledge for PILOT."""
 
 from __future__ import annotations
 
-import logging
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Literal, TypeGuard
 
-from pyrsistent import PMap, PRecord, field, pmap
+from pyrsistent import PMap, PRecord, pmap
+from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.charts import (
     ANY_FROM,
     Action,
     ActionPair,
-    CompassEdge,
-    CompassGraph,
-    CompassPlan,
     PipelineSlice,
-    best_compass_plan,
-    build_compass_graphs,
-    detect_opaque_loop,
-    detect_opaque_pipelines,
+    StaticTransitionGraph,
 )
-from pyrung.core.analysis.pilot.evidence import TransitionRoute
+from pyrung.core.analysis.pilot.navigation import (
+    NavigationConstraints,
+    OrientationResult,
+    OrientationWorld,
+    TargetSpec,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
-logger = logging.getLogger(__name__)
-
 __all__ = [
-    "ANY_FROM",
     "WAIT",
     "Action",
     "ActionPair",
+    "ActionNogoodObservation",
     "Compass",
-    "CompassEdge",
+    "CompassKnowledge",
     "CompassEntry",
-    "CompassGraph",
     "CompassObservation",
-    "CompassPlan",
-    "PipelineSlice",
+    "NavigationCatalog",
     "Provenance",
     "TransitionCause",
     "WaitCause",
-    "best_compass_plan",
-    "build_compass_graphs",
-    "detect_opaque_loop",
-    "detect_opaque_pipelines",
     "is_action",
     "is_composite_action",
 ]
@@ -93,9 +75,9 @@ class CompassObservation:
 
     ``kind`` selects the write:
 
-    - ``"edge"``       → :meth:`Compass.record` — a learned transition
-    - ``"no_change"``  → :meth:`Compass.record_no_change` — probe mark only
-    - ``"contradict"`` → :meth:`Compass.contradict` — falsify + probe mark
+    - ``"edge"``       → a learned transition
+    - ``"no_change"``  → a probe mark only
+    - ``"contradict"`` → a falsified edge plus probe mark
     """
 
     kind: Literal["edge", "no_change", "contradict"]
@@ -103,6 +85,55 @@ class CompassObservation:
     cause: TransitionCause
     from_val: Any
     to_val: Any = None
+
+
+@dataclass(frozen=True)
+class ActionNogoodObservation:
+    """Empirical rejection of one act in one executable world."""
+
+    world_key: tuple[Any, ...]
+    identity: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class ProbeExhaustedObservation:
+    """One bounded probe round was consumed for this executable world."""
+
+    world_key: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class ProbeDeclinedObservation:
+    """A probe frontier is not soundly enumerable in this world."""
+
+    world_key: tuple[Any, ...]
+    reason: str
+
+
+@dataclass(frozen=True)
+class CoastObservation:
+    """A terminal coast/dwell receipt that affects future orientation."""
+
+    world_key: tuple[Any, ...]
+    stop_reason: str
+
+
+@dataclass(frozen=True)
+class StaticEdgeObservation:
+    """Runtime evidence overlay for one immutable static edge identity."""
+
+    edge_id: tuple[Any, ...]
+    status: Literal["confirmed", "contradicted", "no_change"]
+
+
+NavigationObservation = (
+    CompassObservation
+    | ActionNogoodObservation
+    | ProbeExhaustedObservation
+    | ProbeDeclinedObservation
+    | CoastObservation
+    | StaticEdgeObservation
+)
 
 
 # ===========================================================================
@@ -113,12 +144,11 @@ class CompassObservation:
 class Provenance(Enum):
     """How a compass entry was established and whether it remains traversable.
 
-    SEEDED, OBSERVED, and CONFIRMED entries carry destinations. NO_CHANGE and
+    OBSERVED and CONFIRMED entries carry destinations. NO_CHANGE and
     CONTRADICTED entries are nontraversable tombstones, but still count as probe
     marks so a disproved or ineffective action is not sent again.
     """
 
-    SEEDED = "seeded"  # statically-seeded route (seed_routes); unconfirmed
     OBSERVED = "observed"  # a runtime motion applied by the drive loop
     CONFIRMED = "confirmed"  # minted only by outcome.confirmed_entry (verify)
     NO_CHANGE = "no_change"  # probe mark: the cause was tried and nothing moved
@@ -128,7 +158,7 @@ class Provenance(Enum):
 # Live (traversable) provenances — the edges find_path/off_path/transition_dest
 # walk.  A CONTRADICTED or NO_CHANGE entry is a tombstone: still a probe mark,
 # never a destination.
-_LIVE_PROVENANCE = frozenset({Provenance.SEEDED, Provenance.OBSERVED, Provenance.CONFIRMED})
+_LIVE_PROVENANCE = frozenset({Provenance.OBSERVED, Provenance.CONFIRMED})
 
 
 def _canon(value: Any) -> Any:
@@ -149,18 +179,18 @@ class CompassEntry(PRecord):
     The persistent record keeps learned knowledge independent from revertible
     PLC worlds. A live entry has a destination; a NO_CHANGE or CONTRADICTED
     tombstone is skipped during traversal but remains evidence that the cause
-    was tried. ``contradict`` demotes rather than deletes an entry.
+    was tried. Contradictory evidence demotes rather than deletes an entry.
 
     A CONFIRMED entry is minted only by ``outcome.confirmed_entry``; the
-    general write path (:meth:`Compass.record`) rejects that provenance, so
+    general observation write path rejects that provenance, so
     confirmation cannot be asserted by a general observation writer.
     """
 
-    tag = field(type=str)
-    from_val = field()
-    cause = field()
-    to_val = field()
-    provenance = field(type=Provenance)
+    tag = _precord_field(type=str)
+    from_val = _precord_field()
+    cause = _precord_field()
+    to_val = _precord_field()
+    provenance = _precord_field(type=Provenance)
 
     @property
     def is_live(self) -> bool:
@@ -250,8 +280,7 @@ def _table_no_change(
     """Probe mark only.
 
     Leaves any existing entry alone (a live edge must NOT be demoted by a
-    no-change probe — the old ``record_no_change`` never touched
-    ``_transitions``); creates a NO_CHANGE tombstone only where nothing was
+    no-change probe); creates a NO_CHANGE tombstone only where nothing was
     tried before.  Returns ``(next_table, changed)`` — ``changed`` is True only
     when a fresh probe mark was added.
     """
@@ -305,107 +334,280 @@ def _table_contradict(
 
 
 # ===========================================================================
-# The unified graph — static value graph + learned transitions in one object
-# (absorbs the former InfluenceMap)
+# Immutable static catalog and accumulated navigation knowledge
 # ===========================================================================
 
 
-class Compass:
-    """One transition graph for a program, navigated by PILOT.
+@dataclass(frozen=True)
+class NavigationCatalog:
+    """Immutable static readings for one program."""
 
-    Holds the static per-register value graph (``CompassGraph`` per role) and a
-    learned transition table seeded at startup from static routes and extended
-    by runtime observations.  An ``Action`` cause is a ``(tag, value)`` pair; a
-    ``WaitCause`` is a let-run (time-passing) transition.
-    """
-
-    def __init__(self, slices: list[PipelineSlice] | None = None) -> None:
-        self._slices: list[PipelineSlice] = list(slices or [])
-        self._action_tags: frozenset[str] = (
-            frozenset().union(*(s.action_tags for s in self._slices))
-            if self._slices
-            else frozenset()
-        )
-        # One entry per (tag, from_val, cause), a persistent PMap of PRecords
-        # advanced by the observation-application path. A live entry is a learned edge; a
-        # tombstone (NO_CHANGE / CONTRADICTED) is a probe mark with no
-        # destination.  Replaces the former parallel _transitions / _probed.
-        #
-        # NOT a perf lever: the table is tiny and off the hot path — the PMap is
-        # here for the *value* semantics (knowledge is a shared persistent value
-        # the world's revert never touches), not for speed.  Do not "optimize"
-        # it back to a plain dict.
-        self._entries: PMap = pmap()
-        self._graphs: tuple[CompassGraph, ...] = ()
-
-    # -- static value-graph side --------------------------------------------
-
-    @property
-    def graphs(self) -> tuple[CompassGraph, ...]:
-        return self._graphs
-
-    def set_graphs(self, graphs: tuple[CompassGraph, ...]) -> None:
-        self._graphs = graphs
-
-    def best_plan(
-        self,
-        needed_tag: str,
-        needed_value: Any,
-        snapshot: dict[str, Any],
-    ) -> CompassPlan | None:
-        """Best static value-graph path for a need, if any."""
-        return best_compass_plan(needed_tag, needed_value, snapshot, self._graphs)
-
-    def seed_routes(self, target_tag: str, routes: list[TransitionRoute]) -> int:
-        """Seed learned transitions from statically-known routes.
-
-        Only seeds routes where both a source constraint on *target_tag*
-        (giving the ``from_val``) and a steerable action tag in the enablers
-        (giving the ``cause``) are known.  Returns the number of entries seeded.
-        """
-        seeded = 0
-        for route in routes:
-            if route.destination_value is None:
-                continue
-            from_val: Any = None
-            for tag, value in route.source_constraints:
-                if tag == target_tag:
-                    from_val = value
-                    break
-            if from_val is None:
-                continue
-            for action_tag in sorted(route.action_tags):
-                for tag, value in route.enablers:
-                    if tag == action_tag:
-                        self.record(
-                            target_tag,
-                            (action_tag, value),
-                            from_val,
-                            route.destination_value,
-                            provenance=Provenance.SEEDED,
-                        )
-                        seeded += 1
-                        break
-        if seeded:
-            logger.info("compass: seeded %d transitions for %s", seeded, target_tag)
-        return seeded
-
-    # -- learned transition side (was InfluenceMap) -------------------------
+    slices: tuple[PipelineSlice, ...] = ()
+    graphs: tuple[StaticTransitionGraph, ...] = ()
 
     @property
     def action_tags(self) -> frozenset[str]:
-        return self._action_tags
+        if not self.slices:
+            return frozenset()
+        return frozenset().union(*(s.action_tags for s in self.slices))
 
-    def _tag_entries(self, tag: str) -> Iterable[tuple[Any, TransitionCause, CompassEntry]]:
-        """The ``(from_val, cause, entry)`` triples recorded for *tag*.
 
-        The entry table is a flat PMap keyed by ``(tag, from_val, cause)``; this
-        projects out one tag.  Tables are tiny, so the scan is free — see the
-        "NOT a perf lever" note on ``_entries``.
-        """
-        for (t, fv, cause), entry in self._entries.items():
-            if t == tag:
-                yield fv, cause, entry
+@dataclass(frozen=True)
+class CompassKnowledge:
+    """Durable navigation-only evidence.
+
+    Every field is persistent and survives PLC world reverts.  Static graphs
+    and routes are intentionally absent: they belong to
+    :class:`NavigationCatalog`.
+    """
+
+    entries: PMap = field(default_factory=pmap)
+    act_nogoods: PMap = field(default_factory=pmap)
+    probe_counts: PMap = field(default_factory=pmap)
+    probe_declines: PMap = field(default_factory=pmap)
+    coast_receipts: PMap = field(default_factory=pmap)
+    static_overlays: PMap = field(default_factory=pmap)
+
+    def nogood_identities(self, world_key: tuple[Any, ...]) -> frozenset[tuple[Any, ...]]:
+        return self.act_nogoods.get(world_key, frozenset())
+
+    def nogood_pairs(self, world_key: tuple[Any, ...]) -> frozenset[ActionPair]:
+        pairs: set[ActionPair] = set()
+        for identity in self.nogood_identities(world_key):
+            if len(identity) == 2 and identity[0] == "pair":
+                pairs.add(identity[1])
+            elif len(identity) >= 2 and identity[0] == "pulse":
+                applied = identity[1]
+                if applied:
+                    pairs.add(applied[0])
+        return frozenset(pairs)
+
+    def act_is_nogood(self, world_key: tuple[Any, ...], identity: tuple[Any, ...]) -> bool:
+        return identity in self.nogood_identities(world_key)
+
+    def probe_count(self, world_key: tuple[Any, ...]) -> int:
+        return int(self.probe_counts.get(world_key, 0))
+
+    def probe_decline(self, world_key: tuple[Any, ...]) -> str | None:
+        return self.probe_declines.get(world_key)
+
+    def coast_receipt(self, world_key: tuple[Any, ...]) -> str | None:
+        return self.coast_receipts.get(world_key)
+
+    def tag_entries(self, tag: str) -> Iterable[tuple[Any, TransitionCause, CompassEntry]]:
+        for (entry_tag, from_value, cause), entry in self.entries.items():
+            if entry_tag == tag:
+                yield from_value, cause, entry
+
+    def live_edges(self, tag: str) -> dict[tuple[Any, TransitionCause], Any]:
+        return {
+            (from_value, cause): entry.to_val
+            for from_value, cause, entry in self.tag_entries(tag)
+            if entry.is_live
+        }
+
+    def has_transitions(self, tag: str) -> bool:
+        return any(
+            entry.provenance is not Provenance.NO_CHANGE
+            for _from_value, _cause, entry in self.tag_entries(tag)
+        )
+
+    def find_path(
+        self,
+        tag: str,
+        from_value: Any,
+        to_value: Any,
+        *,
+        cause_allowed: Any = None,
+    ) -> list[TransitionCause] | None:
+        live = self.live_edges(tag)
+        if not live:
+            return None
+        if _values_match(from_value, to_value):
+            return []
+        queue: deque[tuple[Any, list[TransitionCause]]] = deque([(from_value, [])])
+        visited: set[Any] = {from_value}
+        while queue:
+            state, path = queue.popleft()
+            for (source, cause), destination in live.items():
+                if (
+                    not _values_match(source, state)
+                    or destination in visited
+                    or (cause_allowed is not None and not cause_allowed(source, cause, destination))
+                ):
+                    continue
+                next_path = [*path, cause]
+                if _values_match(destination, to_value):
+                    return next_path
+                visited.add(destination)
+                queue.append((destination, next_path))
+        return None
+
+    def probed_actions(self, tag: str, from_value: Any) -> set[Action]:
+        return {
+            cause
+            for candidate_from, cause, _entry in self.tag_entries(tag)
+            if candidate_from == from_value and is_action(cause)
+        }
+
+    def unprobed_actions(
+        self,
+        tag: str,
+        from_value: Any,
+        available_actions: set[Action] | frozenset[Action],
+    ) -> list[Action]:
+        return sorted(
+            available_actions - self.probed_actions(tag, from_value),
+            key=_action_sort_key,
+        )
+
+    def transition_dest(
+        self,
+        tag: str,
+        from_value: Any,
+        cause: TransitionCause,
+    ) -> Any | None:
+        for (candidate_from, candidate_cause), destination in self.live_edges(tag).items():
+            if candidate_cause == cause and _values_match(candidate_from, from_value):
+                return destination
+        return None
+
+    def off_path_actions(self, tag: str, from_value: Any, to_value: Any) -> set[Action]:
+        path = self.find_path(tag, from_value, to_value)
+        if not path:
+            return set()
+        good_cause = path[0]
+        table = self.live_edges(tag)
+        on_path: set[Any] = {from_value}
+        state = from_value
+        for cause in path:
+            destination = table.get((state, cause))
+            if destination is not None:
+                on_path.add(destination)
+                state = destination
+        return {
+            cause
+            for (candidate_from, cause), destination in table.items()
+            if _values_match(candidate_from, from_value)
+            and cause != good_cause
+            and is_action(cause)
+            and destination not in on_path
+        }
+
+    def apply(
+        self,
+        observations: Iterable[NavigationObservation],
+    ) -> tuple[CompassKnowledge, bool]:
+        """Fold runtime observations into a new durable knowledge value."""
+
+        table = self.entries
+        act_nogoods = self.act_nogoods
+        probe_counts = self.probe_counts
+        probe_declines = self.probe_declines
+        coast_receipts = self.coast_receipts
+        static_overlays = self.static_overlays
+        changed = False
+        for observation in observations:
+            if isinstance(observation, ActionNogoodObservation):
+                current = act_nogoods.get(observation.world_key, frozenset())
+                if observation.identity not in current:
+                    act_nogoods = act_nogoods.set(
+                        observation.world_key,
+                        current | {observation.identity},
+                    )
+                    changed = True
+            elif isinstance(observation, ProbeExhaustedObservation):
+                count = int(probe_counts.get(observation.world_key, 0))
+                probe_counts = probe_counts.set(observation.world_key, count + 1)
+                changed = True
+            elif isinstance(observation, ProbeDeclinedObservation):
+                if probe_declines.get(observation.world_key) != observation.reason:
+                    probe_declines = probe_declines.set(
+                        observation.world_key,
+                        observation.reason,
+                    )
+                    changed = True
+            elif isinstance(observation, CoastObservation):
+                if coast_receipts.get(observation.world_key) != observation.stop_reason:
+                    coast_receipts = coast_receipts.set(
+                        observation.world_key,
+                        observation.stop_reason,
+                    )
+                    changed = True
+            elif isinstance(observation, StaticEdgeObservation):
+                if static_overlays.get(observation.edge_id) != observation.status:
+                    static_overlays = static_overlays.set(
+                        observation.edge_id,
+                        observation.status,
+                    )
+                    changed = True
+            elif observation.kind == "edge":
+                table, touched = _table_record(
+                    table,
+                    observation.tag,
+                    observation.cause,
+                    observation.from_val,
+                    observation.to_val,
+                    Provenance.OBSERVED,
+                )
+                changed |= touched
+            elif observation.kind == "contradict":
+                table, touched, _ = _table_contradict(
+                    table,
+                    observation.tag,
+                    observation.cause,
+                    observation.from_val,
+                )
+                changed |= touched
+            else:
+                table, touched = _table_no_change(
+                    table,
+                    observation.tag,
+                    observation.cause,
+                    observation.from_val,
+                )
+                changed |= touched
+        if not changed:
+            return self, False
+        return (
+            replace(
+                self,
+                entries=table,
+                act_nogoods=act_nogoods,
+                probe_counts=probe_counts,
+                probe_declines=probe_declines,
+                coast_receipts=coast_receipts,
+                static_overlays=static_overlays,
+            ),
+            True,
+        )
+
+
+@dataclass(frozen=True)
+class Compass:
+    """Thin immutable facade over static readings and accumulated knowledge."""
+
+    catalog: NavigationCatalog = field(default_factory=NavigationCatalog)
+    knowledge: CompassKnowledge = field(default_factory=CompassKnowledge)
+
+    @property
+    def graphs(self) -> tuple[StaticTransitionGraph, ...]:
+        return self.catalog.graphs
+
+    @property
+    def action_tags(self) -> frozenset[str]:
+        return self.catalog.action_tags
+
+    def orient(
+        self,
+        world: OrientationWorld,
+        target: TargetSpec,
+        constraints: NavigationConstraints,
+    ) -> OrientationResult:
+        """Read the current world and return exactly one navigation result."""
+        from pyrung.core.analysis.pilot.orientation import orient
+
+        return orient(self, world, target, constraints)
 
     def has_transitions(self, tag: str) -> bool:
         # True iff a real edge was ever recorded for *tag* (a CONTRADICTED
@@ -413,114 +615,64 @@ class Compass:
         # ``tag in self._transitions`` (which stayed True after contradict
         # emptied the per-tag dict).  A tag carrying only NO_CHANGE probe marks
         # never had a transition, so it reads False as it did before.
-        return any(
-            entry.provenance is not Provenance.NO_CHANGE
-            for _fv, _cause, entry in self._tag_entries(tag)
-        )
+        return self.knowledge.has_transitions(tag)
 
-    def record(
-        self,
-        tag: str,
-        cause: TransitionCause,
-        from_val: Any,
-        to_val: Any,
-        provenance: Provenance = Provenance.OBSERVED,
-    ) -> None:
-        """In-place advance of the entry table — seeding and direct callers.
+    def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
+        """Return a new facade when observations add durable knowledge."""
 
-        The drive loop does not call this directly: it goes through :meth:`apply`,
-        which returns the next compass as a value.  Semantics live in
-        :func:`_table_record`.
-        """
-        self._entries, _ = _table_record(self._entries, tag, cause, from_val, to_val, provenance)
-
-    def record_no_change(self, tag: str, cause: TransitionCause, from_val: Any) -> None:
-        self._entries, _ = _table_no_change(self._entries, tag, cause, from_val)
-
-    def commit_confirmed(self, entry: CompassEntry) -> None:
-        """Insert a CONFIRMED entry built by ``outcome.confirmed_entry``.
-
-        The only way a CONFIRMED provenance reaches the table.  Callers hand in a
-        prebuilt :class:`CompassEntry`; anything else must go through
-        :meth:`record` (which rejects CONFIRMED).
-        """
-        if entry.provenance is not Provenance.CONFIRMED:
-            raise ValueError("commit_confirmed only accepts CONFIRMED entries")
-        fv = _canon(entry.from_val)
-        self._entries = self._entries.set((entry.tag, fv, entry.cause), entry.set(from_val=fv))
-
-    def apply(self, observations: Iterable[CompassObservation]) -> tuple[Compass, bool]:
-        """Return a compass with the supplied observations folded into it.
-
-        Instruments never call ``record``/``contradict`` themselves — they
-        return :class:`CompassObservation` values and the loop applies them
-        here, once per attempt / skiff round.  The fold advances the persistent
-        entry table observation by observation (sequential, so within-batch
-        evidence ordering is preserved — an edge recorded and then contradicted
-        in one batch ends up demoted, as it did under the mutable table).
-
-        **Contract — the no-new-knowledge signal.** Returns
-        ``(next_compass, changed)``.  ``changed`` is True iff at least one entry
-        was actually written (a fresh probe mark, a demoted edge, or a new/altered
-        edge — re-recording an identical entry does *not* count).  The guarantee
-        comes from the table ops, each of which reports whether it touched the
-        table — **not** a blanket equality scan of the whole table.  When
-        ``changed`` is False the returned compass **is** ``self`` (``x.apply(known)
-        is x``), so a caller can trust identity as the "learned nothing" test.
-        This lets the skiff decline a re-orient lap after a probe round that added
-        nothing (a spin), without an identity side-channel.  ``self`` is never
-        mutated; the caller's single ``ctx.compass, _ = compass.apply(...)``
-        assignment is the commit point.
-        """
-        table = self._entries
-        changed = False
-        for obs in observations:
-            if obs.kind == "edge":
-                table, touched = _table_record(
-                    table, obs.tag, obs.cause, obs.from_val, obs.to_val, Provenance.OBSERVED
-                )
-            elif obs.kind == "contradict":
-                table, touched, _ = _table_contradict(table, obs.tag, obs.cause, obs.from_val)
-            else:
-                table, touched = _table_no_change(table, obs.tag, obs.cause, obs.from_val)
-            changed |= touched
+        supplied = tuple(observations)
+        overlays: list[StaticEdgeObservation] = []
+        for observation in supplied:
+            if not isinstance(observation, CompassObservation):
+                continue
+            # A WAIT no-change is only an intermediate dwell sample. Static
+            # completion edges promise eventual motion, so one quiet scan
+            # cannot falsify them. A changed WAIT destination, or an explicit
+            # contradiction, is still meaningful overlay evidence.
+            if observation.kind == "no_change" and not is_action(observation.cause):
+                continue
+            for graph in self.catalog.graphs:
+                if graph.role.channel_tag != observation.tag:
+                    continue
+                for edge in graph.edges:
+                    # A wildcard source is a context-compressed static claim.
+                    # One runtime world cannot safely confirm or contradict it
+                    # globally; retain it until a grounded edge is available.
+                    if edge.from_value is ANY_FROM:
+                        continue
+                    cause_matches = (
+                        edge.action == observation.cause
+                        if is_action(observation.cause)
+                        else edge.action is None
+                    )
+                    if not (cause_matches and _values_match(edge.from_value, observation.from_val)):
+                        continue
+                    if observation.kind == "edge":
+                        # An alternate observed destination does not globally
+                        # falsify a statically guarded edge: this runtime world
+                        # may simply lack that edge's enablers. Only matching
+                        # motion confirms it; explicit contradiction evidence
+                        # below owns falsification.
+                        if not _values_match(edge.to_value, observation.to_val):
+                            continue
+                        status: Literal["confirmed", "contradicted", "no_change"] = "confirmed"
+                    elif observation.kind == "contradict":
+                        status = "contradicted"
+                    else:
+                        status = "no_change"
+                    overlays.append(StaticEdgeObservation(edge.identity, status))
+        knowledge, changed = self.knowledge.apply((*supplied, *overlays))
         if not changed:
-            # No entry moved: the contract's identity guarantee, established from
-            # the ops' own change flags rather than an equality scan of the table.
             return self, False
-        return self._with_entries(table), True
-
-    def _with_entries(self, entries: PMap) -> Compass:
-        """A compass value carrying *entries*, sharing everything static."""
-        if entries is self._entries:
-            return self
-        new = Compass.__new__(Compass)
-        new._slices = self._slices
-        new._action_tags = self._action_tags
-        new._graphs = self._graphs
-        new._entries = entries
-        return new
-
-    def contradict(self, tag: str, cause: TransitionCause, from_val: Any) -> bool:
-        """Live evidence falsified a learned edge — demote it.
-
-        A statically-seeded route (``seed_routes``) records the writer's edge
-        without its unreadable enablers; when the live trial applies *cause*
-        from *from_val* and the register does NOT reach the recorded
-        destination, the entry is a disproven hypothesis and must not keep
-        shadowing genuine (skiff-learned) edges in ``find_path``.  The edge is
-        *demoted* to a CONTRADICTED tombstone rather than deleted — negative
-        knowledge, not a blank — and stays a probe mark (the cause was genuinely
-        tried).  Returns True if a live edge was demoted.
-        """
-        self._entries, _, removed = _table_contradict(self._entries, tag, cause, from_val)
-        return removed
+        return replace(self, knowledge=knowledge), True
 
     def find_path(
         self,
         tag: str,
         from_val: Any,
         to_val: Any,
+        *,
+        cause_allowed: Any = None,
     ) -> list[TransitionCause] | None:
         """BFS shortest transition-cause sequence through the learned table.
 
@@ -528,41 +680,12 @@ class Compass:
         are skipped, so a falsified edge never shadows a genuine path (they used
         to be deleted; a tombstone that still matched would change behavior).
         """
-        live = self._live_edges(tag)
-        if not live:
-            return None
-        if _values_match(from_val, to_val):
-            return []
-
-        queue: deque[tuple[Any, list[TransitionCause]]] = deque([(from_val, [])])
-        visited: set[Any] = {from_val}
-
-        while queue:
-            state, path = queue.popleft()
-            for (s, cause), dest in live.items():
-                if not _values_match(s, state):
-                    continue
-                if dest in visited:
-                    continue
-                new_path = [*path, cause]
-                if _values_match(dest, to_val):
-                    return new_path
-                visited.add(dest)
-                queue.append((dest, new_path))
-
-        return None
-
-    def _live_edges(self, tag: str) -> dict[tuple[Any, TransitionCause], Any]:
-        """The traversable ``(from_val, cause) -> to_val`` edges for *tag*.
-
-        The live subset of the entry table — the old ``_transitions[tag]``,
-        which only ever held live edges (record added, contradict deleted).
-        """
-        return {
-            (fv, cause): entry.to_val
-            for fv, cause, entry in self._tag_entries(tag)
-            if entry.is_live
-        }
+        return self.knowledge.find_path(
+            tag,
+            from_val,
+            to_val,
+            cause_allowed=cause_allowed,
+        )
 
     def unprobed_actions(
         self,
@@ -577,7 +700,7 @@ class Compass:
         not the bare tuple order, so the two shapes never get compared
         directly (see its docstring for the crash that guards against).
         """
-        return sorted(available_actions - self.probed_actions(tag, from_val), key=_action_sort_key)
+        return self.knowledge.unprobed_actions(tag, from_val, available_actions)
 
     def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
         """Actions already probed from *from_val* for *tag*.
@@ -586,11 +709,7 @@ class Compass:
         reads the whole entry table (the old ``_probed`` set was exactly the
         union of every write's key).
         """
-        return {
-            cause
-            for fv, cause, _entry in self._tag_entries(tag)
-            if fv == from_val and is_action(cause)
-        }
+        return self.knowledge.probed_actions(tag, from_val)
 
     def transition_dest(
         self,
@@ -599,10 +718,7 @@ class Compass:
         cause: TransitionCause,
     ) -> Any | None:
         """Observed destination for one transition cause from *from_val*."""
-        for (fv, candidate_cause), dest in self._live_edges(tag).items():
-            if candidate_cause == cause and _values_match(fv, from_val):
-                return dest
-        return None
+        return self.knowledge.transition_dest(tag, from_val, cause)
 
     def off_path_actions(self, tag: str, from_val: Any, to_val: Any) -> set[Action]:
         """Actions known to move *tag* away from the BFS path toward *to_val*.
@@ -611,27 +727,4 @@ class Compass:
         that goes to a state NOT on that path (or with no path to the
         target) is off-path and should be tried after path actions.
         """
-        path = self.find_path(tag, from_val, to_val)
-        if not path:
-            return set()
-        good_cause = path[0]
-        table = self._live_edges(tag)
-
-        # Compute states on the BFS path
-        on_path: set[Any] = {from_val}
-        state = from_val
-        for cause in path:
-            dest = table.get((state, cause))
-            if dest is not None:
-                on_path.add(dest)
-                state = dest
-
-        off_path: set[Action] = set()
-        for (fv, cause), dest in table.items():
-            if not _values_match(fv, from_val):
-                continue
-            if cause == good_cause or not is_action(cause):
-                continue
-            if dest not in on_path:
-                off_path.add(cause)
-        return off_path
+        return self.knowledge.off_path_actions(tag, from_val, to_val)

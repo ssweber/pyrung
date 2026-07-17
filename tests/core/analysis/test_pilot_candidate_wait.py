@@ -3,12 +3,18 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot.candidates import _build_candidates, _compass_route_plan
-from pyrung.core.analysis.pilot.charts import CompassGraph, _edges_from_routes
-from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
+from pyrung.core.analysis.pilot.charts import (
+    StaticTransitionGraph,
+    _best_static_path,
+    _edges_from_routes,
+)
+from pyrung.core.analysis.pilot.compass import (
+    Compass,
+    CompassObservation,
+    NavigationCatalog,
+)
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
-from pyrung.core.analysis.pilot.pilot import _SKIFF_KEY_BUDGET, _orient_escalate_skiff
-from pyrung.core.analysis.pilot.routes import live_compass_plan
+from pyrung.core.analysis.pilot.options import _build_candidates, _compass_route_plan
 from pyrung.core.analysis.pilot.trace import TraceNode
 
 
@@ -47,7 +53,7 @@ def _action_route(from_value: int, to_value: int, action: str) -> TransitionRout
 def test_live_route_query_filters_avoided_suffix_edges() -> None:
     """A legal first edge cannot smuggle an avoided later command into a plan."""
     role = PipelineRoles("State")
-    graph = CompassGraph(
+    graph = StaticTransitionGraph(
         role,
         (
             _action_route(0, 1, "SafeFirst"),
@@ -55,14 +61,14 @@ def test_live_route_query_filters_avoided_suffix_edges() -> None:
         ),
     )
 
-    allowed = live_compass_plan(
+    allowed = _best_static_path(
         "State",
         2,
         {"State": 0},
         (graph,),
         edge_allowed=lambda _edge: True,
     )
-    blocked = live_compass_plan(
+    blocked = _best_static_path(
         "State",
         2,
         {"State": 0},
@@ -80,9 +86,8 @@ def test_live_route_query_filters_avoided_suffix_edges() -> None:
 
 def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
     role = PipelineRoles("State")
-    graph = CompassGraph(role, (_action_route(0, 2, "Forbidden"),))
-    compass = Compass()
-    compass.set_graphs((graph,))
+    graph = StaticTransitionGraph(role, (_action_route(0, 2, "Forbidden"),))
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
     frame = SimpleNamespace(
         snap={"State": 0, "Forbidden": False},
         tree=TraceNode("State", 2, satisfied=False),
@@ -99,6 +104,22 @@ def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
     assert _compass_route_plan(frame, ctx) is None
 
 
+def test_runtime_no_change_overlays_static_edge_without_mutating_catalog() -> None:
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(role, (_action_route(0, 2, "Start"),))
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
+    edge = graph.edges[0]
+
+    observed, changed = compass.apply(
+        (CompassObservation("no_change", "State", ("Start", True), 0),)
+    )
+
+    assert changed
+    assert compass.knowledge.static_overlays.get(edge.identity) is None
+    assert observed.knowledge.static_overlays[edge.identity] == "no_change"
+    assert observed.catalog is compass.catalog
+
+
 def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     """A rejected wait is remembered at its world key; the next ORIENT's route
     query excludes the sterile automatic edge and falls to the surviving
@@ -106,7 +127,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     from pyrung.core.analysis.pilot._ops import wait_edge_nogood
 
     role = PipelineRoles("State")
-    graph = CompassGraph(
+    graph = StaticTransitionGraph(
         role,
         (
             _route(11, 16),  # automatic completion — recipe-gated, sterile here
@@ -116,8 +137,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
             _route(6, 16),
         ),
     )
-    compass = Compass()
-    compass.set_graphs((graph,))
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
     frame = SimpleNamespace(
         snap={"State": 11},
         tree=TraceNode("State", 17, satisfied=False),
@@ -188,9 +208,8 @@ def test_completion_defaults_empty_without_a_recorded_bearing() -> None:
 
 def test_prescribed_wait_suppresses_stuck_reason():
     role = PipelineRoles("State")
-    graph = CompassGraph(role, (_route(6, 16), _route(16, 17)))
-    compass = Compass()
-    compass.set_graphs((graph,))
+    graph = StaticTransitionGraph(role, (_route(6, 16), _route(16, 17)))
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
 
     tree = TraceNode(
         "State",
@@ -204,7 +223,7 @@ def test_prescribed_wait_suppresses_stuck_reason():
         raw_trace_actions=(),
         raw_trace_action_details=(),
     )
-    state = SimpleNamespace(nogoods={}, rungs=[])
+    state = SimpleNamespace(rungs=[])
     ctx = SimpleNamespace(
         compass=compass,
         blocked_route_actions=frozenset(),
@@ -225,15 +244,6 @@ def test_prescribed_wait_suppresses_stuck_reason():
     assert candidates.wait_prescribed is True
     assert candidates.wait_reason == "let-run State: 6->16"
     assert candidates.stuck_reason is None
-
-
-def _drain(generator):
-    events = []
-    try:
-        while True:
-            events.append(next(generator))
-    except StopIteration as stop:
-        return events, stop.value
 
 
 def test_apply_reports_changed_and_returns_self_when_nothing_new():
@@ -265,62 +275,28 @@ def test_apply_reports_changed_and_returns_self_when_nothing_new():
     assert probe_again is False
 
 
-def test_duplicate_skiff_observations_do_not_reorient(monkeypatch):
+def test_duplicate_probe_evidence_requires_explicit_exhaustion_observation():
+    from pyrung.core.analysis.pilot.compass import ProbeExhaustedObservation
+
     obs = CompassObservation("edge", "State", ("Cmd", True), 6, 8)
     compass, _ = Compass().apply((obs,))
-    ctx = SimpleNamespace(compass=compass)
-    state = SimpleNamespace(
-        work=SimpleNamespace(state=SimpleNamespace(scan_id=815)),
-        stuck_keys={},
-    )
-    frame = SimpleNamespace(key=("state", 6))
+    same, changed = compass.apply((obs,))
+    assert same is compass
+    assert changed is False
 
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.pilot.probe_live_guard_frontiers",
-        lambda _frame, _state, _ctx: (obs,),
-    )
-
-    events, should_continue = _drain(_orient_escalate_skiff("all_rejected", frame, state, ctx))
-
-    # The obs is already known: no knowledge change, so no re-orient lap, no event,
-    # and the compass value is untouched.
-    assert events == []
-    assert should_continue is False
-    assert ctx.compass is compass
-    assert state.stuck_keys == {}
+    key = ("state", 6)
+    exhausted, changed = compass.apply((ProbeExhaustedObservation(key),))
+    assert changed is True
+    assert exhausted.knowledge.probe_count(key) == 1
 
 
-def test_exhausted_key_stops_after_skiff_budget(monkeypatch):
-    """A stuck key that keeps learning fresh-but-useless probe marks stops.
+def test_probe_budget_is_durable_world_scoped_knowledge():
+    from pyrung.core.analysis.pilot.compass import ProbeExhaustedObservation
 
-    Each round returns a *new* probe mark (knowledge changes every time), so the
-    part-2 changed signal alone would never terminate.  The per-key skiff budget
-    caps the laps and then the loop stops honestly (returns ``False`` → the caller
-    falls to the terminal stuck dump), instead of alternating forever.
-    """
-    counter = {"n": 0}
-
-    def fresh_probe(_frame, _state, _ctx):
-        counter["n"] += 1
-        # A brand-new (tag, from, cause) each call — always changes knowledge.
-        return (CompassObservation("no_change", "State", (f"Cmd{counter['n']}", True), 6, None),)
-
-    monkeypatch.setattr("pyrung.core.analysis.pilot.pilot.probe_live_guard_frontiers", fresh_probe)
-
-    ctx = SimpleNamespace(compass=Compass())
-    state = SimpleNamespace(
-        work=SimpleNamespace(state=SimpleNamespace(scan_id=1)),
-        stuck_keys={},
-    )
-    frame = SimpleNamespace(key=("state", 6))
-
-    laps = 0
-    while True:
-        _events, cont = _drain(_orient_escalate_skiff("all_rejected", frame, state, ctx))
-        if not cont:
-            break
-        laps += 1
-        assert laps <= 10, "skiff escalation must terminate at a stuck key"
-
-    assert laps == _SKIFF_KEY_BUDGET
-    assert state.stuck_keys[frame.key] == _SKIFF_KEY_BUDGET
+    key = ("state", 6)
+    compass = Compass()
+    for _ in range(2):
+        compass, changed = compass.apply((ProbeExhaustedObservation(key),))
+        assert changed
+    assert compass.knowledge.probe_count(key) == 2
+    assert compass.knowledge.probe_count(("other",)) == 0

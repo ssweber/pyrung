@@ -1,13 +1,13 @@
 """Read program-owned transitions from the current machine state.
 
-``operator_action_for_state`` recognizes a channel transition that is presently
-waiting on one unique, legal operator action. The module also classifies sibling
+``current_readings`` recognizes channel transitions that are presently waiting
+on operator actions. The module also classifies sibling
 producer families so an automatic producer is not erased when an equivalent
 operator action is disallowed.
 
 These capabilities consume ``WalkContext`` and program structure only. They
-return no suggestion when the channel or action is ambiguous, and they never
-execute the program or retain a route.
+return structural evidence without applying avoid, ambiguity, or precedence
+policy, and they never execute the program or retain a route.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class WorldView:
     """A minimal :class:`WalkContext` a caller assembles from a live frame.
 
     ``_PilotContext`` carries every field a ``WalkContext`` names except the
-    live ``snapshot`` (which lives on the iteration frame), so candidates.py
+    live ``snapshot`` (which lives on the iteration frame), so options.py
     builds one of these from ``frame.snap`` plus the context constants.  It is a
     world-describing view only — no route/recursion control.
     """
@@ -46,8 +46,8 @@ class WorldView:
 
 
 @dataclass(frozen=True)
-class OperatorAction:
-    """The one operator action the program is waiting for at the current state.
+class CurrentReading:
+    """One operator action a program transition is waiting for.
 
     A bearing, not a plan step: ``action`` is the ``(tag, level)`` push, and the
     remaining fields are the recognized ``(state, command, next-state)`` context
@@ -170,37 +170,28 @@ def _request_tags_for(ctx: WalkContext, channel_tag: str, pipeline_roles: Any) -
     return frozenset(tags)
 
 
-def operator_action_for_state(
+def current_readings(
     ctx: WalkContext,
     channel_tag: str,
     pipeline_roles: Any,
-    *,
-    avoid_pred: Any = None,
-) -> OperatorAction | None:
-    """The one operator action the program is dwelling on at the current state.
-
-    Returns ``None`` (today's behavior) unless there is exactly one non-avoided
-    operator button whose rung fires now and drives a live command-gated
-    transition off the current state — the fail-closed / legible contract.
-    """
+) -> tuple[CurrentReading, ...]:
+    """All structural operator-action readings for the current channel state."""
     snapshot = dict(ctx.snapshot)
     state_value = snapshot.get(channel_tag)
     if state_value is None:
-        return None
+        return ()
 
     request_tags = _request_tags_for(ctx, channel_tag, pipeline_roles)
     transitions = _state_transitions(ctx, channel_tag, state_value, request_tags)
     if not transitions:
-        return None
+        return ()
 
-    candidates: list[OperatorAction] = []
+    candidates: list[CurrentReading] = []
     seen_buttons: set[str] = set()
     for button in sorted(ctx.steerable):
         if button in seen_buttons:
             continue
         action = (button, True)
-        if avoid_pred is not None and _action_avoided(action, snapshot, avoid_pred):
-            continue
         writes = _button_writes(ctx, button, snapshot)
         if not writes:
             continue
@@ -214,7 +205,7 @@ def operator_action_for_state(
             command_desc = ", ".join(f"{t}={writes[t]!r}" for t in sorted(writes) if t in writes)
             seen_buttons.add(button)
             candidates.append(
-                OperatorAction(
+                CurrentReading(
                     action=action,
                     command_tag=next(iter(transition.command_guards), ""),
                     command_value=writes.get(next(iter(transition.command_guards), "")),
@@ -228,20 +219,7 @@ def operator_action_for_state(
             )
             break
 
-    # Fail-closed: only a *unique* legal push is a bearing.  Ambiguity punts to
-    # today's behavior (no fabricated choice).
-    if len(candidates) != 1:
-        return None
-    return candidates[0]
-
-
-def _action_avoided(action: tuple[str, Any], snapshot: dict[str, Any], avoid_pred: Any) -> bool:
-    """Whether pressing *action* would trip the avoid predicate on the overlay."""
-    overlay = {**snapshot, action[0]: action[1]}
-    try:
-        return bool(avoid_pred(overlay))
-    except Exception:
-        return False
+    return tuple(candidates)
 
 
 # ---------------------------------------------------------------------------

@@ -270,9 +270,8 @@ def _drive_to(plc, tags, state_value):
 def test_current_recognizes_ack_while_held() -> None:
     """The recognizer surfaces the ONE operator action the program is dwelling on
     at HELD — ``InterlockAck`` — a legal, non-avoided, state-moving push."""
-    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.runner import _compile_avoid
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -282,8 +281,9 @@ def test_current_recognizes_ack_while_held() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    action = operator_action_for_state(
-        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["C_Complete"])
+    readings = current_readings(world, tags["State"].name, (role,))
+    action = next(
+        reading for reading in readings if reading.action != (tags["C_Complete"].name, True)
     )
     assert action is not None
     assert action.action == (tags["InterlockAck"].name, True)
@@ -292,12 +292,10 @@ def test_current_recognizes_ack_while_held() -> None:
     assert action.to_state == tags["Execute"]
 
 
-def test_current_silent_when_program_self_drives() -> None:
-    """At Execute the program issues its own command (a dwell), so no operator
-    push is legal there — the recognizer returns None (WAIT / let the ship sail)."""
-    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+def test_current_reader_returns_structural_execute_readings() -> None:
+    """The reader reports structure without deciding whether PILOT should wait."""
+    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.runner import _compile_avoid
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -313,19 +311,14 @@ def test_current_silent_when_program_self_drives() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    action = operator_action_for_state(
-        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["C_Complete"])
-    )
-    # The only operator push that moves Execute is C_Complete — which is avoided —
-    # so recognition is silent: the program's own Complete dwell drives onward.
-    assert action is None
+    readings = current_readings(world, tags["State"].name, (role,))
+    assert any(reading.action == (tags["C_Complete"].name, True) for reading in readings)
 
 
-def test_current_respects_avoid() -> None:
-    """A legal push that is itself avoided is not surfaced (fail-closed)."""
-    from pyrung.core.analysis.pilot.currents import WorldView, operator_action_for_state
+def test_current_reader_does_not_apply_avoid_policy() -> None:
+    """Avoid filtering belongs to Compass, not the structural reader."""
+    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.runner import _compile_avoid
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -335,11 +328,8 @@ def test_current_respects_avoid() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    # Avoid the ack itself -> no bearing (the only legal HELD push is excluded).
-    action = operator_action_for_state(
-        world, tags["State"].name, (role,), avoid_pred=_compile_avoid(tags["InterlockAck"])
-    )
-    assert action is None
+    readings = current_readings(world, tags["State"].name, (role,))
+    assert any(reading.action == (tags["InterlockAck"].name, True) for reading in readings)
 
 
 def test_current_surfaces_ack_as_candidate() -> None:
@@ -441,7 +431,7 @@ def test_completion_edges_record_program_owned_command_bearings() -> None:
     ``rise(CompleteTmr.Done)`` producers issue them is Part 2's discovery —
     the sibling trace reads it, record time invents nothing.
     """
-    from pyrung.core.analysis.pilot.charts import build_compass_graphs
+    from pyrung.core.analysis.pilot.charts import build_static_transition_graphs
     from pyrung.core.analysis.pilot.pilot import _infer_pipeline_roles_for_context
 
     HOLD_CMD, COMPLETE_CMD = 4, 10
@@ -451,7 +441,7 @@ def test_completion_edges_record_program_owned_command_bearings() -> None:
     plc.step()
     pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
     roles = _infer_pipeline_roles_for_context(pdg, logic, steerable, opaque_loop, evidence)
-    graphs = build_compass_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
+    graphs = build_static_transition_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
 
     completions = {
         edge.to_value: edge.completion

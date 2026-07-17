@@ -428,7 +428,6 @@ def _saboteur_scenario():
         ),
         key_config=None,
         seen_keys=set(),
-        nogoods={},
         checkpoints=[
             _Checkpoint(
                 ("cpk",),

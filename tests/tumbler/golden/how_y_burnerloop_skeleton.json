@@ -450,11 +450,16 @@
   ],
   "index": 0,
   "kind": "candidate_try",
-  "total": 4
+  "total": 1
  },
  {
   "accepted_because": {
    "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "channel ejected",
+     "event": "channel-override-dead-end"
+    },
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 25 -> 19",
@@ -523,6 +528,11 @@
    ]
   ],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel ejected",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 25 -> 19",
@@ -609,13 +619,9 @@
    ]
   ],
   "kind": "provisional_started",
-  "reason": "clean forward route 2 -> 8 -> 9 (no reset, no resurrected obligation)",
+  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
   "requested_value": 1,
-  "route": [
-   2,
-   8,
-   9
-  ],
+  "route": [],
   "settled_value": 2
  },
  {
@@ -797,6 +803,11 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
+     "detail": "channel ejected",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
      "detail": "distance 19 -> 19",
      "event": "ambient"
     }
@@ -838,6 +849,11 @@
   },
   "co_actions": [],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel ejected",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 19 -> 19",
@@ -1033,6 +1049,11 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
      "detail": "distance 19 -> 25",
      "event": "confirmed"
     }
@@ -1074,6 +1095,11 @@
   },
   "co_actions": [],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 19 -> 25",
@@ -1529,6 +1555,11 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
      "detail": "distance 19 -> 25",
      "event": "confirmed"
     }
@@ -1570,6 +1601,11 @@
   },
   "co_actions": [],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 19 -> 25",
@@ -1800,7 +1836,7 @@
   "channel_tag": "y_BurnerLoop",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": true,
@@ -1838,13 +1874,9 @@
    ]
   ],
   "kind": "provisional_started",
-  "reason": "clean forward route 11 -> 12 -> 6 (no reset, no resurrected obligation)",
+  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
   "requested_value": 6,
-  "route": [
-   11,
-   12,
-   6
-  ],
+  "route": [],
   "settled_value": 11
  },
  {
@@ -1983,11 +2015,145 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 19 -> 19",
-    "event": "zoom-stall"
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
    }
   ],
   "kind": "zoom_rejected"
+ },
+ {
+  "distance": 19,
+  "kind": "iteration",
+  "nogoods": [
+   [
+    "wait::Sts_StateCurrent",
+    [
+     11,
+     12
+    ]
+   ]
+  ],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "HeatDelay_Tmr_Done=True (have False)",
+   "Blower_x=True (have False)",
+   "Heat_CurStep=1 (have 0)",
+   "Sts_State_Execute=True (have False)",
+   "Blower__x=1 (have 0)",
+   "Sts_StateCurrent=6 (have 11)",
+   "Blower_xCall=1 (have 0)",
+   "Sts_StateRequested=6 (have 0)",
+   "Sts_State_Starting=True (have False)",
+   "Sts_StateCurrent=3 (have 11)",
+   "Sts_StateRequested=3 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Unhold",
+      true
+     ],
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "Sts_State_Execute: False->True"
  },
  {
   "applied": [
@@ -2027,6 +2193,11 @@
  {
   "accepted_because": {
    "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 19 -> 25",
@@ -2070,6 +2241,11 @@
   },
   "co_actions": [],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 19 -> 25",
@@ -2499,11 +2675,145 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 19 -> 19",
-    "event": "zoom-stall"
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
    }
   ],
   "kind": "zoom_rejected"
+ },
+ {
+  "distance": 19,
+  "kind": "iteration",
+  "nogoods": [
+   [
+    "wait::Sts_StateCurrent",
+    [
+     11,
+     12
+    ]
+   ]
+  ],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "HeatDelay_Tmr_Done=True (have False)",
+   "Blower_x=True (have False)",
+   "Heat_CurStep=1 (have 0)",
+   "Sts_State_Execute=True (have False)",
+   "Blower__x=1 (have 0)",
+   "Sts_StateCurrent=6 (have 11)",
+   "Blower_xCall=1 (have 0)",
+   "Sts_StateRequested=6 (have 0)",
+   "Sts_State_Starting=True (have False)",
+   "Sts_StateCurrent=3 (have 11)",
+   "Sts_StateRequested=3 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Unhold",
+      true
+     ],
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "Sts_State_Execute: False->True"
  },
  {
   "applied": [
@@ -2543,6 +2853,11 @@
  {
   "accepted_because": {
    "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 19 -> 25",
@@ -2586,6 +2901,11 @@
   },
   "co_actions": [],
   "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 19 -> 25",
@@ -2810,7 +3130,7 @@
   "channel_tag": "y_BurnerLoop",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": true,
@@ -2980,7 +3300,7 @@
   "channel_tag": "y_BurnerLoop",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": true,
@@ -3131,7 +3451,7 @@
   "channel_tag": "y_BurnerLoop",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "terminal let-run (hold macro-state, coast to target)"
+  "reason": "hold the current macro-state and allow program motion"
  },
  {
   "ejected": false,

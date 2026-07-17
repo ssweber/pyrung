@@ -1,8 +1,8 @@
 """Build and query PILOT's static transition graphs.
 
-Expanded routes from ``evidence.py`` become per-register ``CompassGraph``
+Expanded routes from ``evidence.py`` become per-register ``StaticTransitionGraph``
 objects whose edges describe source values, destinations, and possible
-drivers. ``best_compass_plan`` searches those graphs without executing the
+drivers. ``_best_static_path`` searches those graphs without executing the
 program. The module also detects opaque transition-pipeline slices used when
 building the analysis context.
 
@@ -36,7 +36,7 @@ ANY_FROM = object()
 
 
 @dataclass(frozen=True)
-class CompassEdge:
+class StaticTransitionEdge:
     """One normalized transition edge for a channel pipeline register.
 
     ``action`` is the primary steerable pulse that fires the edge (the command
@@ -65,23 +65,40 @@ class CompassEdge:
     co_actions: tuple[ActionPair, ...] = ()
     completion: tuple[tuple[str, Any], ...] = ()
 
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """Stable catalog identity independent of object allocation."""
+
+        return (
+            self.role.channel_tag,
+            "*" if self.from_value is ANY_FROM else repr(self.from_value),
+            repr(self.to_value),
+            self.action,
+            self.co_actions,
+            self.request_tag,
+            repr(self.request_value),
+            tuple((tag, repr(value)) for tag, value in self.source_constraints),
+            tuple((tag, repr(value)) for tag, value in self.enablers),
+            tuple((tag, repr(value)) for tag, value in self.completion),
+        )
+
 
 @dataclass(frozen=True)
-class CompassPlan:
+class StaticPath:
     """A BFS route through one pipeline's transition graph."""
 
     needed_tag: str
     needed_value: Any
     role: PipelineRoles
     target_value: Any
-    edges: tuple[CompassEdge, ...]
+    edges: tuple[StaticTransitionEdge, ...]
 
     @property
-    def first_edge(self) -> CompassEdge:
+    def first_edge(self) -> StaticTransitionEdge:
         return self.edges[0]
 
 
-class CompassGraph:
+class StaticTransitionGraph:
     """Value graph for one :class:`PipelineRoles` owner."""
 
     def __init__(
@@ -123,14 +140,14 @@ class CompassGraph:
         from_value: Any,
         target_values: tuple[Any, ...],
         *,
-        edge_allowed: Callable[[CompassEdge], bool] | None = None,
-    ) -> CompassPlan | None:
+        edge_allowed: Callable[[StaticTransitionEdge], bool] | None = None,
+    ) -> StaticPath | None:
         if not target_values:
             return None
         if any(_values_match(from_value, target) for target in target_values):
             return None
 
-        queue: deque[tuple[Any, tuple[CompassEdge, ...]]] = deque([(from_value, ())])
+        queue: deque[tuple[Any, tuple[StaticTransitionEdge, ...]]] = deque([(from_value, ())])
         visited = {_value_key(from_value)}
         while queue:
             state, path = queue.popleft()
@@ -144,7 +161,7 @@ class CompassGraph:
                     continue
                 next_path = (*path, edge)
                 if any(_values_match(edge.to_value, target) for target in target_values):
-                    return CompassPlan(
+                    return StaticPath(
                         needed_tag="",
                         needed_value=None,
                         role=self.role,
@@ -156,15 +173,15 @@ class CompassGraph:
         return None
 
 
-def build_compass_graphs(
+def build_static_transition_graphs(
     roles: tuple[PipelineRoles, ...],
     pdg: Any,
     program: Any,
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     evidence: Any,
-) -> tuple[CompassGraph, ...]:
-    graphs: list[CompassGraph] = []
+) -> tuple[StaticTransitionGraph, ...]:
+    graphs: list[StaticTransitionGraph] = []
     for role in roles:
         routes = tuple(
             expand_routes(
@@ -206,7 +223,7 @@ def build_compass_graphs(
                         route.destination_tag,
                         route.destination_value,
                     )
-        graph = CompassGraph(
+        graph = StaticTransitionGraph(
             role,
             routes,
             action_lookup,
@@ -217,17 +234,17 @@ def build_compass_graphs(
     return tuple(graphs)
 
 
-def best_compass_plan(
+def _best_static_path(
     needed_tag: str,
     needed_value: Any,
     snapshot: dict[str, Any],
-    graphs: tuple[CompassGraph, ...],
+    graphs: tuple[StaticTransitionGraph, ...],
     *,
-    edge_allowed: Callable[[CompassEdge], bool] | None = None,
-) -> CompassPlan | None:
-    """Best known pipeline path for a need, if any."""
+    edge_allowed: Callable[[StaticTransitionEdge], bool],
+) -> StaticPath | None:
+    """Best constrained static path for a need, if any."""
 
-    plans: list[CompassPlan] = []
+    plans: list[StaticPath] = []
     for graph in graphs:
         if needed_tag != graph.role.channel_tag and needed_tag not in graph.role.request_tags:
             continue
@@ -237,7 +254,7 @@ def best_compass_plan(
         if plan is None:
             continue
         plans.append(
-            CompassPlan(
+            StaticPath(
                 needed_tag=needed_tag,
                 needed_value=needed_value,
                 role=plan.role,
@@ -256,8 +273,8 @@ def _edges_from_routes(
     routes: tuple[TransitionRoute, ...],
     action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
     program_owned_enablers: frozenset[tuple[str, str]] = frozenset(),
-) -> tuple[CompassEdge, ...]:
-    edges: list[CompassEdge] = []
+) -> tuple[StaticTransitionEdge, ...]:
+    edges: list[StaticTransitionEdge] = []
     for route in routes:
         if route.destination_value is None:
             continue
@@ -408,8 +425,8 @@ def _edge(
     action: ActionPair | None,
     co_actions: tuple[ActionPair, ...] = (),
     completion: tuple[tuple[str, Any], ...] = (),
-) -> CompassEdge:
-    return CompassEdge(
+) -> StaticTransitionEdge:
+    return StaticTransitionEdge(
         role=role,
         from_value=from_value,
         to_value=route.destination_value,
@@ -424,7 +441,7 @@ def _edge(
     )
 
 
-def _plan_score(plan: CompassPlan) -> tuple[int, int, str]:
+def _plan_score(plan: StaticPath) -> tuple[int, int, str]:
     # Direct channel needs win ties over request-owned needs.
     direct = 0 if plan.needed_tag == plan.role.channel_tag else 1
     return (len(plan.edges), direct, plan.role.channel_tag)
@@ -444,16 +461,16 @@ def _value_key(value: Any) -> str:
     return repr(value)
 
 
-def _edge_matches(edge: CompassEdge, state: Any) -> bool:
+def _edge_matches(edge: StaticTransitionEdge, state: Any) -> bool:
     return edge.from_value is ANY_FROM or _values_match(edge.from_value, state)
 
 
 def _rank_edges_for_state(
-    edges: tuple[CompassEdge, ...],
+    edges: tuple[StaticTransitionEdge, ...],
     state: Any,
-) -> tuple[CompassEdge, ...]:
-    exact: list[CompassEdge] = []
-    wildcard: list[CompassEdge] = []
+) -> tuple[StaticTransitionEdge, ...]:
+    exact: list[StaticTransitionEdge] = []
+    wildcard: list[StaticTransitionEdge] = []
     for edge in edges:
         if edge.from_value is ANY_FROM:
             wildcard.append(edge)
