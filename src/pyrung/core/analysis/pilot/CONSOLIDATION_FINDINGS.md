@@ -47,3 +47,29 @@ The ordinary `Stuck` event reports the current candidate count, while the
 budget-exhausted `stuck` event hardcodes zero. Decide whether these events
 describe attempted candidates, currently admissible candidates, or merely the
 terminal kind.
+
+## Deliberately deferred
+
+### One observation-application point
+
+This consolidation pass does not partially adopt a package-wide
+"instruments return observations; the loop applies once per turn" contract.
+`steer.py` and `skiff.py` already return observations, and the loop applies
+those results. However, the loop also creates terminal-coast, probe-exhaustion,
+and rejected-action observations, while `progress.py` applies regression
+nogoods after investigation.
+
+Moving only some of those sites would make ownership less consistent. A later
+dedicated contract pass must change `steer.py`, `skiff.py`, `progress.py`,
+`pilot.py`, and the `Compass.apply` boundary together, with tests proving that
+rejected attempts, terminal coasts, skiff exhaustion, regression recovery, and
+world reverts retain exactly the same knowledge.
+
+### Phase-specific act event switches
+
+The drive loop retains separate act-type switches for announcement, rejection,
+and acceptance events. A shared formatter was prototyped during consolidation,
+but it increased total code and hid the phases' intentionally different event
+schemas. Consolidating these switches should wait until navigation acts own
+declarative event metadata. Introducing that contract in this
+behavior-preserving pass would be a redesign rather than residue removal.
