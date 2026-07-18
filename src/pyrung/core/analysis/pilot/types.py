@@ -317,6 +317,7 @@ class _PilotContext:
     max_scans: int
     live: bool
     debug: bool
+    key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
     via_pred: Any = None
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.

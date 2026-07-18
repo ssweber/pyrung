@@ -185,6 +185,7 @@ def _make_pilot_context(
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None,
     evidence: TransitionEvidence | None,
+    key_config: _StateKeyConfig | None,
     influence: Compass | None,
     opaque_loop: frozenset[str],
     route: TraceChoice | None,
@@ -245,6 +246,7 @@ def _make_pilot_context(
         nd_domains=nd_domains,
         domain_prior=domain_prior,
         evidence=evidence,
+        key_config=key_config,
         compass=compass,
         opaque_loop=opaque_loop,
         pipeline_roles=pipeline_roles,
@@ -1082,51 +1084,9 @@ def _accepted_payload(
 
 def _pilot_loop_events(
     plc: PLC,
-    target_tag: str,
-    target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    edge_tags: set[str],
-    resting: dict[str, Any],
-    *,
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    evidence: TransitionEvidence | None = None,
-    key_config: _StateKeyConfig | None = None,
-    influence: Compass | None = None,
-    opaque_loop: frozenset[str] = frozenset(),
-    route: TraceChoice | None = None,
-    blocked_route_actions: frozenset[tuple[str, Any]] = frozenset(),
-    max_scans: int = 3000,
-    live: bool = False,
-    debug: bool = False,
-    avoid_pred: Any = None,
-    via_pred: Any = None,
-    target_predicate: Any = None,
+    ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
-    ctx = _make_pilot_context(
-        plc,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        steerable,
-        edge_tags,
-        resting,
-        nd_domains=nd_domains,
-        evidence=evidence,
-        influence=influence,
-        opaque_loop=opaque_loop,
-        route=route,
-        blocked_route_actions=blocked_route_actions,
-        max_scans=max_scans,
-        live=live,
-        debug=debug,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
-        target_predicate=target_predicate,
-    )
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
     # ``channel_tag``) pick the transition label; the accumulator registers
@@ -1138,7 +1098,7 @@ def _pilot_loop_events(
     )
     journal_acc_names = frozenset(
         profile.accumulator.name
-        for profile, _instr in iter_profiles(program, harness=getattr(plc, "_harness", None))
+        for profile, _instr in iter_profiles(ctx.program, harness=getattr(plc, "_harness", None))
     )
     state = _PilotState(
         world=_World(
@@ -1149,7 +1109,7 @@ def _pilot_loop_events(
             rungs=pvector([]),
             dwell_scans=0,
         ),
-        key_config=key_config,
+        key_config=ctx.key_config,
         seen_keys=set(),
         checkpoints=[],
         watch_tags=[],
@@ -1160,13 +1120,13 @@ def _pilot_loop_events(
     # an empty gauge degrades every consumer to its earlier behavior.
     try:
         state.gauge = build_gauge(
-            pdg,
-            program,
-            target_tag,
-            key_config,
-            steerable=steerable,
+            ctx.pdg,
+            ctx.program,
+            ctx.target_tag,
+            ctx.key_config,
+            steerable=ctx.steerable,
             clear_only=ctx.clear_only,
-            edge_tags=frozenset(edge_tags),
+            edge_tags=frozenset(ctx.edge_tags),
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             channel_tags=frozenset(role.channel_tag for role in ctx.pipeline_roles),
             harness=getattr(plc, "_harness", None),
@@ -1529,27 +1489,8 @@ def _pilot_loop_events(
 
 def _pilot_loop(
     plc: PLC,
-    target_tag: str,
-    target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    edge_tags: set[str],
-    resting: dict[str, Any],
+    ctx: _PilotContext,
     *,
-    nd_domains: dict[str, tuple[Any, ...]] | None = None,
-    evidence: TransitionEvidence | None = None,
-    key_config: _StateKeyConfig | None = None,
-    influence: Compass | None = None,
-    opaque_loop: frozenset[str] = frozenset(),
-    route: TraceChoice | None = None,
-    blocked_route_actions: frozenset[tuple[str, Any]] = frozenset(),
-    max_scans: int = 3000,
-    live: bool = False,
-    debug: bool = False,
-    avoid_pred: Any = None,
-    via_pred: Any = None,
-    target_predicate: Any = None,
     on_event: Callable[[PilotEvent], None] | None = None,
 ) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...], str | None, dict[str, Any]]:
     """Run the PILOT loop and return
@@ -1565,29 +1506,7 @@ def _pilot_loop(
     recording only (see :func:`_knowledge_payload`).
     """
     final: PilotEvent | None = None
-    for event in _pilot_loop_events(
-        plc,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        steerable,
-        edge_tags,
-        resting,
-        nd_domains=nd_domains,
-        evidence=evidence,
-        key_config=key_config,
-        influence=influence,
-        opaque_loop=opaque_loop,
-        route=route,
-        blocked_route_actions=blocked_route_actions,
-        max_scans=max_scans,
-        live=live,
-        debug=debug,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
-        target_predicate=target_predicate,
-    ):
+    for event in _pilot_loop_events(plc, ctx):
         if on_event is not None:
             on_event(event)
         if event.kind == "finished":
@@ -2123,7 +2042,7 @@ def pilot_events(
         via_pred=via_pred,
     )
 
-    yield from _pilot_loop_events(
+    ctx = _make_pilot_context(
         fork,
         target_tag,
         target_value,
@@ -2146,6 +2065,7 @@ def pilot_events(
         via_pred=via_pred,
         target_predicate=target_predicate,
     )
+    yield from _pilot_loop_events(fork, ctx)
 
 
 def pilot_how(
@@ -2212,7 +2132,7 @@ def pilot_how(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, journal, loop_reason, knowledge = _pilot_loop(
+    ctx = _make_pilot_context(
         fork,
         target_tag,
         target_value,
@@ -2229,10 +2149,15 @@ def pilot_how(
         route=route_lock,
         blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
+        live=False,
         debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
         target_predicate=target_predicate,
+    )
+    reached, _steps, _journey, work, journal, loop_reason, knowledge = _pilot_loop(
+        fork,
+        ctx,
         on_event=on_event,
     )
 
@@ -2349,7 +2274,7 @@ def _pilot_how_multi(
             avoid_pred=avoid_pred,
             via_pred=via_pred,
         )
-        reached, _steps, _journey, work, journal_leg, loop_reason, last_knowledge = _pilot_loop(
+        ctx = _make_pilot_context(
             work,
             t_tag,
             t_val,
@@ -2366,10 +2291,15 @@ def _pilot_how_multi(
             route=route_lock,
             blocked_route_actions=blocked_route_actions,
             max_scans=work.state.scan_id + max_scans,
+            live=False,
             debug=debug,
             avoid_pred=avoid_pred,
             via_pred=via_pred,
             target_predicate=t_pred,
+        )
+        reached, _steps, _journey, work, journal_leg, loop_reason, last_knowledge = _pilot_loop(
+            work,
+            ctx,
         )
         inf = last_knowledge.get("compass", inf)
         last_journey = tuple(_journey)
@@ -2463,7 +2393,7 @@ def pilot_drive(
         via_pred=via_pred,
     )
 
-    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(
+    ctx = _make_pilot_context(
         plc,
         target_tag,
         target_value,
@@ -2486,6 +2416,7 @@ def pilot_drive(
         via_pred=via_pred,
         target_predicate=target_predicate,
     )
+    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(plc, ctx)
 
     # A live failure without a harness-link explanation falls back to the
     # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
