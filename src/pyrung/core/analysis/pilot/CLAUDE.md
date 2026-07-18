@@ -159,6 +159,8 @@ changes, it returns the same object. Runtime instruments return
 - `pilot.py` — shared drive preparation, target-context construction, user
   route lock, event loop, knowledge application, world commit, terminal
   results, and public drive entry points.
+- `recording.py` — pure event-payload, terminal-frontier, and plan-journal
+  rendering; it does not make drive decisions.
 - `types.py` — cross-module protocols and world, trial, event, and incident
   records.
 - `__init__.py` — package exports.

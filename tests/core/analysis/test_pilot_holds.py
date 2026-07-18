@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from pyrung import Bool, Int, Or, Program, Rung, out, rise
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot._ops import PilotRung
-from pyrung.core.analysis.pilot.pilot import _build_plan_journal
+from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import _HoldLogEntry, _Step
 from pyrung.core.runner import PLC
 

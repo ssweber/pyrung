@@ -553,7 +553,7 @@ def test_zoom_accepted_payload_records_requested_and_landed():
     """An overshooting coast records both the requested bearing and where it
     actually landed, so a zoom that ejected past its target no longer reads as a
     clean advance."""
-    from pyrung.core.analysis.pilot.pilot import _zoom_accepted_payload
+    from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
 
     trial = _make_trial(
         7,

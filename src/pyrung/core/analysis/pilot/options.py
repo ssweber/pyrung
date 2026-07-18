@@ -65,7 +65,7 @@ class _Candidate:
     current_prescribed: bool = False
     current_note: str = ""
     # Rank rationale — recorded at the scoring site (``_build_candidates``) and
-    # surfaced through ``_candidate_payload`` so every candidate event carries why
+    # surfaced through ``recording._candidate_payload`` so every candidate event carries why
     # it sorted where it did.  ``scored`` is False for a prescribed edge (the
     # compass' explicit bearing), which *bypasses* scoring: ``avail_tier`` /
     # ``over_wake`` / ``compass_score`` are then the forced (0, False, (0, 0))

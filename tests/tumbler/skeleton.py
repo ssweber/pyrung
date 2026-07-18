@@ -189,7 +189,7 @@ def _jsonify_dataclass(value: Any) -> Any:
 # Per-event keep-lists
 # ---------------------------------------------------------------------------
 
-#: Candidate payload fields kept (see ``_candidate_payload`` in pilot.py).
+#: Candidate payload fields kept (see ``_candidate_payload`` in recording.py).
 #: ``wake`` (downstream fan-out magnitude) is deliberately dropped.
 _CANDIDATE_KEEP = (
     "tag",
