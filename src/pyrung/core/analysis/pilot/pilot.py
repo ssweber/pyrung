@@ -1070,6 +1070,67 @@ def _knowledge_payload(
     }
 
 
+def _finished_event(
+    state: _PilotState,
+    ctx: _PilotContext,
+    journal_channel_tags: frozenset[str],
+    journal_acc_names: frozenset[str],
+    *,
+    reached: bool,
+    reason: str,
+    skiff_decline: str | None = None,
+) -> PilotEvent:
+    """Build the single terminal recording shape for every loop exit."""
+
+    return PilotEvent(
+        "finished",
+        state.work.state.scan_id,
+        {
+            "reached": reached,
+            "steps": tuple(state.steps),
+            "journey": tuple(state.journey),
+            "knowledge": _knowledge_payload(
+                state,
+                ctx.compass,
+                skiff_decline=skiff_decline,
+            ),
+            "work": state.work,
+            "reason": reason,
+            "plan_journal": _build_plan_journal(
+                state,
+                state.work,
+                journal_channel_tags,
+                journal_acc_names,
+            ),
+        },
+    )
+
+
+def _stuck_event(
+    state: _PilotState,
+    ctx: _PilotContext,
+    frame: _IterationFrame | None,
+    reason: str,
+    *,
+    candidate_count: int,
+    diagnosis: Stuck | None = None,
+) -> PilotEvent:
+    """Build the common terminal-stuck diagnostic shape."""
+
+    data: dict[str, Any] = {
+        "reason": reason,
+        "distance": frame.distance_before if frame is not None else None,
+        "candidate_count": candidate_count,
+        "nogoods_at_key": (
+            len(ctx.compass.knowledge.nogood_identities(frame.key)) if frame is not None else 0
+        ),
+        "terminal": True,
+    }
+    if diagnosis is not None:
+        data["diagnosis"] = diagnosis
+    return PilotEvent("stuck", state.work.state.scan_id, data)
+
+
 def _route_plan_payload(plan: StaticPath | None) -> dict[str, Any] | None:
     if plan is None:
         return None
@@ -1302,20 +1363,13 @@ def _pilot_loop_events(
                 if state.journey and state.journey[-1] is state.steps[-1]:
                     state.journey[-1] = final_step
                 state.steps = state.steps.set(len(state.steps) - 1, final_step)
-            yield PilotEvent(
-                "finished",
-                state.work.state.scan_id,
-                {
-                    "reached": True,
-                    "steps": tuple(state.steps),
-                    "journey": tuple(state.journey),
-                    "knowledge": _knowledge_payload(state, ctx.compass),
-                    "work": state.work,
-                    "reason": "target reached",
-                    "plan_journal": _build_plan_journal(
-                        state, state.work, journal_channel_tags, journal_acc_names
-                    ),
-                },
+            yield _finished_event(
+                state,
+                ctx,
+                journal_channel_tags,
+                journal_acc_names,
+                reached=True,
+                reason="target reached",
             )
             return
 
@@ -1398,38 +1452,24 @@ def _pilot_loop_events(
                 skiff_decline
                 or ("stuck: " + _with_avoid_reason(result.reason_code, state, ctx, frame))
             ) + _frontier_clause(frame)
-            yield PilotEvent(
-                "stuck",
-                state.work.state.scan_id,
-                {
-                    "reason": terminal_reason,
-                    "distance": frame.distance_before,
-                    "candidate_count": len(candidates.candidates) if candidates is not None else 0,
-                    "nogoods_at_key": len(ctx.compass.knowledge.nogood_identities(frame.key)),
-                    "terminal": True,
-                    "diagnosis": result,
-                },
+            yield _stuck_event(
+                state,
+                ctx,
+                frame,
+                terminal_reason,
+                candidate_count=len(candidates.candidates) if candidates is not None else 0,
+                diagnosis=result,
             )
             if state.checkpoints:
                 state.load_world(state.checkpoints[-1].world)
-            yield PilotEvent(
-                "finished",
-                state.work.state.scan_id,
-                {
-                    "reached": False,
-                    "steps": tuple(state.steps),
-                    "journey": tuple(state.journey),
-                    "knowledge": _knowledge_payload(
-                        state,
-                        ctx.compass,
-                        skiff_decline=skiff_decline,
-                    ),
-                    "work": state.work,
-                    "reason": terminal_reason,
-                    "plan_journal": _build_plan_journal(
-                        state, state.work, journal_channel_tags, journal_acc_names
-                    ),
-                },
+            yield _finished_event(
+                state,
+                ctx,
+                journal_channel_tags,
+                journal_acc_names,
+                reached=False,
+                reason=terminal_reason,
+                skiff_decline=skiff_decline,
             )
             return
 
@@ -1565,41 +1605,23 @@ def _pilot_loop_events(
         ) + _frontier_clause(frame)
         if frame is not None:
             terminal_skiff_decline = ctx.compass.knowledge.probe_decline(frame.key)
-        yield PilotEvent(
-            "stuck",
-            state.work.state.scan_id,
-            {
-                "reason": reason,
-                "distance": frame.distance_before if frame is not None else None,
-                "candidate_count": 0,
-                "nogoods_at_key": (
-                    len(ctx.compass.knowledge.nogood_identities(frame.key))
-                    if frame is not None
-                    else 0
-                ),
-                "terminal": True,
-            },
+        yield _stuck_event(
+            state,
+            ctx,
+            frame,
+            reason,
+            candidate_count=0,
         )
         if state.checkpoints:
             state.load_world(state.checkpoints[-1].world)
-    yield PilotEvent(
-        "finished",
-        state.work.state.scan_id,
-        {
-            "reached": reached,
-            "steps": tuple(state.steps),
-            "journey": tuple(state.journey),
-            "knowledge": _knowledge_payload(
-                state,
-                ctx.compass,
-                skiff_decline=terminal_skiff_decline,
-            ),
-            "work": state.work,
-            "reason": reason,
-            "plan_journal": _build_plan_journal(
-                state, state.work, journal_channel_tags, journal_acc_names
-            ),
-        },
+    yield _finished_event(
+        state,
+        ctx,
+        journal_channel_tags,
+        journal_acc_names,
+        reached=reached,
+        reason=reason,
+        skiff_decline=terminal_skiff_decline,
     )
 
 
