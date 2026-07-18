@@ -176,7 +176,8 @@ changes, it returns the same object. Runtime instruments return
 - `static_expressions.py` — low-level static-expression helpers shared by trace
   and tide readers.
 - `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
-- `orientation.py` — sole result synthesis and terminal/probe policy.
+- `orientation.py` — current-world read, complete frame assembly, sole result
+  synthesis, and terminal/probe policy.
 - `options.py` — private evidence-rich option materialization and ranking.
 - `navigation_evidence.py` — narrow constrained reachability evidence shared
   with verification and recovery; never returns an action.

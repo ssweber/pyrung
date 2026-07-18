@@ -113,10 +113,17 @@ NavigationAct = Pulse | BatchPulse | Coast | Dwell
 
 @dataclass(frozen=True)
 class OrientationTrace:
-    """Non-executable diagnostics for one orientation."""
+    """Named current-world readings and diagnostics for one orientation.
+
+    ``world`` carries the fully assembled frame consumed by execution.
+    ``candidates`` is the evidence-rich option reading that explains the
+    selected result. These are named because they cross the orientation /
+    orchestration boundary and have different contracts.
+    """
 
     world_key: _StateKey
-    readings: tuple[Any, ...] = ()
+    world: OrientationWorld
+    candidates: Any
     considered_paths: tuple[Any, ...] = ()
     rankings: tuple[Any, ...] = ()
     exclusions: tuple[Any, ...] = ()

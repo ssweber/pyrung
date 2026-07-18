@@ -91,8 +91,9 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
         lambda option, _options, _context: (option.pair,),
     )
 
+    world = _world(compass)
     result = compass.orient(
-        _world(compass),
+        world,
         TargetSpec("Target", True),
         NavigationConstraints(),
     )
@@ -102,6 +103,10 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert result.act.action == ("First", True)
     assert not hasattr(result, "path")
     assert not hasattr(result, "candidates")
+    assert result.trace is not None
+    assert result.trace.world.frame is world.frame
+    assert result.trace.candidates.candidates == (first,)
+    assert not hasattr(result.trace, "readings")
 
 
 def test_coast_act_carries_only_immediate_heading() -> None:

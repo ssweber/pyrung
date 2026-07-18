@@ -1,4 +1,4 @@
-"""Private option materialization and final Compass orientation policy."""
+"""Current-world reading, complete frame assembly, and orientation policy."""
 
 from __future__ import annotations
 
@@ -145,7 +145,8 @@ def _probe_or_stuck(
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
     trace = OrientationTrace(
         world_key=world.world_key,
-        readings=(world, candidates),
+        world=world,
+        candidates=candidates,
         considered_paths=((candidates.route_plan,) if candidates.route_plan is not None else ()),
         rankings=tuple(candidates.candidates),
         exclusions=exclusions,
@@ -181,7 +182,8 @@ def _bearing(
 ) -> Bearing:
     trace = OrientationTrace(
         world_key=world.world_key,
-        readings=(world, candidates),
+        world=world,
+        candidates=candidates,
         considered_paths=((candidates.route_plan,) if candidates.route_plan is not None else ()),
         rankings=tuple(candidates.candidates),
         exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
@@ -234,6 +236,9 @@ def orient(
     world = read_world
 
     if candidates.completion_frontier:
+        # Candidate construction discovers the completion re-read, but
+        # orientation owns the resulting frame. Consumers receive one complete
+        # world and never have to stitch two readings from this call together.
         world = replace(
             world,
             frame=replace(

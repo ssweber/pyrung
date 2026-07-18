@@ -115,8 +115,8 @@ class _CandidateList:
     # The completion re-read's unmet frontier: a prescribed wait's charted
     # completion condition, re-traced against the live world (``_prescribe_wait``).
     # Names the pressable lever behind the wait (``x_RotateFB``) so the terminal
-    # frontier clause points past the pipeline cut.  The loop stamps it onto the
-    # frame for ``_frontier_clause``; empty when no wait carries completion.
+    # frontier clause points past the pipeline cut. Orientation stamps it onto
+    # its completed frame; empty when no wait carries completion.
     completion_frontier: tuple[_ActionPair, ...] = ()
 
 

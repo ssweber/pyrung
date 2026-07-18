@@ -1260,10 +1260,10 @@ def _pilot_loop_events(
         )
         result = ctx.compass.orient(raw_world, target, constraints)
         trace = result.trace
-        if trace is None or len(trace.readings) < 2:
+        if trace is None:
             raise RuntimeError("Compass orientation omitted its current-world reading")
-        orientation_world = trace.readings[0]
-        candidates = trace.readings[1]
+        orientation_world = trace.world
+        candidates = trace.candidates
         frame = orientation_world.frame
         last_frame = frame
         if state.key_config is None:
@@ -1295,9 +1295,6 @@ def _pilot_loop_events(
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
         )
-        if candidates.completion_frontier:
-            frame = replace(frame, completion_frontier=candidates.completion_frontier)
-            orientation_world = replace(orientation_world, frame=frame)
         yield PilotEvent(
             "candidates_built",
             state.work.state.scan_id,
