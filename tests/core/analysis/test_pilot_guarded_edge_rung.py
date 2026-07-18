@@ -117,7 +117,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         resting={door_closed.name: False},
     )
 
-    candidates = _build_candidates(frame, pilot_state, ctx, lambda _msg: None)
+    candidates = _build_candidates(frame, pilot_state, ctx)
 
     assert candidates.candidates == ()
     assert candidates.stuck_reason is None

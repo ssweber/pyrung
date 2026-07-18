@@ -239,7 +239,7 @@ def test_prescribed_wait_suppresses_stuck_reason():
         target_value=17,
     )
 
-    candidates = _build_candidates(frame, state, ctx, lambda _msg: None)
+    candidates = _build_candidates(frame, state, ctx)
 
     assert candidates.wait_prescribed is True
     assert candidates.wait_reason == "let-run State: 6->16"

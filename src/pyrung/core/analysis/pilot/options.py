@@ -11,7 +11,6 @@ execute a trial, apply observations, or commit state.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -39,9 +38,6 @@ from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.trace import TraceAction
-
-_DebugFn = Callable[[str], None]
-
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -658,7 +654,6 @@ def _prescribe_wait(
     frame: Any,
     state: Any,
     ctx: Any,
-    dbg: _DebugFn,
     *,
     reason: str | None = None,
 ) -> tuple[bool, str | None, tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
@@ -677,10 +672,6 @@ def _prescribe_wait(
     if edge is None:
         return True, reason, (), ()
     if not _edge_grounded(edge):
-        dbg(
-            f"# wait refused: {edge.role.channel_tag} first edge rides a "
-            "wildcard from-value (stateless — not a coastable claim)"
-        )
         return False, None, (), ()
     reason = f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
     details, frontier = _completion_reread(edge, frame, state, ctx) if edge.completion else ((), ())
@@ -728,7 +719,6 @@ def _build_candidates(
     frame: Any,
     state: Any,
     ctx: Any,
-    dbg: _DebugFn,
 ) -> _CandidateList:
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
     # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
@@ -834,7 +824,7 @@ def _build_candidates(
     if _is_zoom:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
         _zoom_wait_prescribed, _zoom_wait_reason, _comp_details, completion_frontier = (
-            _prescribe_wait(route_plan.first_edge, frame, state, ctx, dbg)
+            _prescribe_wait(route_plan.first_edge, frame, state, ctx)
         )
         for detail in _comp_details:
             pair = detail.pair
@@ -895,10 +885,6 @@ def _build_candidates(
                     prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
             elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
-                    dbg(
-                        f"# skip self-defeating hold {tag}={value!r}: forces a write "
-                        f"contradicting needed {list(needed)}"
-                    )
                     continue
                 seen_prereq.add(tag)
                 # Action gate for a prerequisite hold: a hold that drives an
@@ -977,12 +963,7 @@ def _build_candidates(
                     frame,
                     state,
                     ctx,
-                    dbg,
                     reason=f"{n.tag}: {cur_val!r}->{n.value!r}",
-                )
-                dbg(
-                    f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} "
-                    f"begins with {first_step}"
                 )
                 break
             if is_composite_action(first_step):
@@ -994,13 +975,11 @@ def _build_candidates(
                 members = cast("tuple[_ActionPair, ...]", tuple(first_step))
                 if all(pair not in key_nogoods and ctx.route_allowed(pair) for pair in members):
                     prescribed_batch = members
-                    dbg(f"# influence batch for {n.tag}: {cur_val!r}->{n.value!r} = {members}")
                     break
                 continue
             if first_step not in key_nogoods and ctx.route_allowed(first_step):
                 inf_candidates.append(first_step)
                 prescribed_action = first_step
-                dbg(f"# influence path for {n.tag}: {cur_val!r}->{n.value!r} = {path}")
                 break
 
     # Wake is an *ordering* input, never a filter.  An input with an
@@ -1126,7 +1105,7 @@ def _build_candidates(
         and not wait_prescribed
     ):
         wait_prescribed, wait_reason, _cd, _cf = _prescribe_wait(
-            route_plan.first_edge, frame, state, ctx, dbg
+            route_plan.first_edge, frame, state, ctx
         )
         completion_frontier += _cf
 
@@ -1142,31 +1121,6 @@ def _build_candidates(
         and prescribed_batch is None
     ):
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
-
-    if ctx.debug:
-        dbg(f"# trace_actions (filtered, {len(trace_actions)}): {list(trace_actions)}")
-        if prerequisite_rungs:
-            dbg(f"# prerequisite_rungs ({len(prerequisite_rungs)}): {prerequisite_rungs}")
-        if route_candidates:
-            edge = route_plan.first_edge if route_plan is not None else None
-            dbg(
-                "# route_candidates "
-                f"({len(route_candidates)}): {route_candidates}"
-                + (
-                    ""
-                    if edge is None
-                    else (
-                        f" via {edge.role.channel_tag}: "
-                        f"{_fmt_from(edge.from_value)}->{edge.to_value!r}"
-                    )
-                )
-            )
-        if inf_candidates:
-            dbg(f"# influence_candidates ({len(inf_candidates)}): {inf_candidates}")
-        if wait_prescribed:
-            dbg(f"# influence_wait: {wait_reason}")
-        if stuck_reason:
-            dbg(f"# stuck: {stuck_reason}")
 
     return _CandidateList(
         active_trace_actions=active_trace_actions,

@@ -231,7 +231,6 @@ def orient(
         read_world.frame,
         read_world.state,
         read_world.context,
-        read_world.debug,
     )
     world = read_world
 
