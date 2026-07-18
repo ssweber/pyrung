@@ -222,6 +222,15 @@ def _rung_guard(rung: Any) -> str:
     return render_condition(rung.guard)
 
 
+def _format_synthesis_instruction(rung: Any) -> str:
+    """Render the instruction shape used by the synthesis rung factory."""
+    if rung.value is True:
+        return f"latch({rung.dest})"
+    if rung.value is False:
+        return f"reset({rung.dest})"
+    return f"copy({operand_name(rung.value)}, {rung.dest})"
+
+
 def _format_rung_install(
     prefix: str,
     rungs: tuple[Any, ...],
@@ -237,9 +246,7 @@ def _format_rung_install(
     detail: list[str] = []
     for guard, guarded_rungs in by_guard.items():
         detail.append(f"       with rung({guard}):")
-        detail.extend(
-            f"         copy({operand_name(rung.value)}, {rung.dest})" for rung in guarded_rungs
-        )
+        detail.extend(f"         {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
     detail.extend(f"       {note}" for note in notes)
     return line + "\n" + "\n".join(detail)
 

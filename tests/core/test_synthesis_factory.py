@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Real
 from pyrung.core.condition import BitCondition, CompareEq
+from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
 from pyrung.core.instruction.control import FunctionCallInstruction
 from pyrung.core.instruction.data_transfer import CopyInstruction
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
@@ -81,12 +82,23 @@ def test_copy_hold_rung_steady_vs_guarded() -> None:
     steady = copy_hold_rung(value=True, dest=Cmd)
     assert not steady._conditions  # unconditional steady hold
     (instr,) = steady._instructions
-    assert isinstance(instr, CopyInstruction)
-    assert instr.source is True
-    assert instr.dest is Cmd
+    assert isinstance(instr, LatchInstruction)
+    assert instr.target is Cmd
 
-    guarded = copy_hold_rung(value=1, dest=Cmd, guard=CompareEq(Cmd, 0))
+    guarded = copy_hold_rung(value=False, dest=Cmd, guard=CompareEq(Cmd, 0))
     assert guarded._conditions  # gated by the guard
+    (instr,) = guarded._instructions
+    assert isinstance(instr, ResetInstruction)
+    assert instr.target is Cmd
+
+
+def test_copy_hold_rung_keeps_copy_for_non_bool_destinations() -> None:
+    State = Int("State")
+    rung = copy_hold_rung(value=1, dest=State)
+    (instr,) = rung._instructions
+    assert isinstance(instr, CopyInstruction)
+    assert instr.source == 1
+    assert instr.dest is State
 
 
 def test_function_rung_declares_dataflow() -> None:

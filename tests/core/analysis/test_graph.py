@@ -131,7 +131,7 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "with rung(Sts_StateCurrent != 6):" in text
-        assert "copy(True, DoorClosed)" in text
+        assert "latch(DoorClosed)" in text
         assert "(from investigation)" in text
         assert "force DoorClosed" not in text
 
@@ -182,9 +182,9 @@ class TestPlanDisplay:
         text = str(plan)
 
         assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != True)):" in text
-        assert "copy(True, RotateSensor)" in text
+        assert "latch(RotateSensor)" in text
         assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != False)):" in text
-        assert "copy(False, RotateSensor)" in text
+        assert "reset(RotateSensor)" in text
         assert "installed oscillators: RotateSensor (true ↔ false)" in text
         assert "holds: RotateSensor" not in text
 

@@ -230,15 +230,27 @@ def copy_hold_rung(
     dest: Tag,
     guard: Condition | Tag | None = None,
 ) -> Rung:
-    """Build a hold rung that copies *value* into *dest*.
+    """Build a hold rung that drives *dest* to *value*.
 
     ``guard=None`` is a steady hold (drive every scan); a ``guard`` makes it a
     self-releasing hold — drive ``dest`` to ``value`` only while the guard holds
     (the conditional-hold / reactive-re-assert shape).
-    """
-    from pyrung.core.instruction.data_transfer import CopyInstruction
 
-    return _rung_holding(guard, CopyInstruction(value, dest))
+    Boolean constants use their native coil instructions: ``latch(dest)`` for
+    ``True`` and ``reset(dest)`` for ``False``. Other destination/value pairs
+    remain ``copy(value, dest)``.
+    """
+    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.tag import TagType
+
+    if dest.type == TagType.BOOL and value is True:
+        instruction = LatchInstruction(dest)
+    elif dest.type == TagType.BOOL and value is False:
+        instruction = ResetInstruction(dest)
+    else:
+        instruction = CopyInstruction(value, dest)
+    return _rung_holding(guard, instruction)
 
 
 def conditional_hold_rung(
@@ -248,7 +260,7 @@ def conditional_hold_rung(
 ) -> Rung:
     """Build a multi-branch hold: one parallel branch per ``(value, guard)`` rule.
 
-    Each branch copies ``value`` into ``dest`` while its ``guard`` holds.  Because
+    Each branch drives ``value`` into ``dest`` while its ``guard`` holds.  Because
     every branch's guard evaluates against the **rung-entry snapshot** (the frozen
     ``ConditionView``), mutually-exclusive rules — a liveness oscillator's "drive
     True while ``dest != True``" + "drive False while ``dest != False``" — stay
