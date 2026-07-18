@@ -548,7 +548,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
         _stub_investigation([PilotRung("Go", True, scope)]),
     )
 
-    _monitor_trend(trial, frame, state, ctx, lambda _msg: None)
+    _monitor_trend(trial, frame, state, ctx)
 
     installed = next(r for r in state.rungs if r.dest == "Go" and r.value is True)
 

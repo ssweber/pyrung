@@ -27,7 +27,6 @@ from pyrung.core.analysis.graph import (
 from pyrung.core.analysis.pilot._ops import (
     _append_rungs,
     _apply_pulse,
-    _DebugFn,
     _pilot_world_key,
     _rungs_from_proposals,
     _semantic_key,
@@ -45,7 +44,6 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     NavigationCatalog,
     ProbeExhaustedObservation,
-    _action_sort_key,
 )
 from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.navigation import (
@@ -95,7 +93,6 @@ from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
     _HoldLogEntry,
     _IterationFrame,
-    _ObserveFn,
     _PilotContext,
     _PilotState,
     _Step,
@@ -212,7 +209,6 @@ def _make_pilot_context(
     blocked_route_actions: frozenset[_ActionPair],
     max_scans: int,
     live: bool,
-    debug: bool,
     avoid_pred: Any = None,
     via_pred: Any = None,
     target_predicate: Any = None,
@@ -275,7 +271,6 @@ def _make_pilot_context(
         blocked_route_actions=blocked_route_actions,
         max_scans=max_scans,
         live=live,
-        debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
@@ -330,7 +325,6 @@ def _prepare_target_context(
     target_predicate: Any,
     *,
     max_scans: int,
-    debug: bool,
     avoid_pred: Any,
     via_pred: Any,
     influence: Compass | None = None,
@@ -369,7 +363,6 @@ def _prepare_target_context(
         blocked_route_actions=blocked_actions,
         max_scans=max_scans,
         live=setup.live,
-        debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
         target_predicate=target_predicate,
@@ -453,39 +446,6 @@ def _frontier_clause(frame: _IterationFrame | None) -> str:
     head = ", ".join(_fmt_need(t, v, frame.snap) for t, v in needs[:3])
     more = f" (+{len(needs) - 3} more)" if len(needs) > 3 else ""
     return f" — still waiting on {head}{more}"
-
-
-def _debug_iteration(
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    dbg: _DebugFn,
-) -> None:
-    if not ctx.debug:
-        return
-
-    dbg(f"\n{'=' * 60}")
-    dbg(f"# ITERATION  scan={state.work.state.scan_id}  distance={frame.distance_before}")
-    if state.steps:
-        dbg(f"# accomplished ({len(state.steps)}):")
-        for si, step in enumerate(state.steps):
-            dbg(f"#   [{si}] {step.inputs}")
-
-    still_need = [_fmt_need(t, v, frame.snap) for t, v in frontier_pairs(frame.tree, frame.snap)]
-    if still_need:
-        dbg(f"# still need ({len(still_need)}): {still_need[:10]}")
-
-    nogoods = ctx.compass.knowledge.nogood_pairs(frame.key)
-    dbg(f"# nogoods for key: {sorted(nogoods, key=_action_sort_key) or '(none)'}")
-    dbg(f"# rungs: {state.rungs if state.rungs else '(none)'}")
-    dbg(f"# seen_keys: {len(state.seen_keys)}  checkpoints: {len(state.checkpoints)}")
-    dbg(f"# trace ordered_actions (raw, {len(frame.raw_trace_actions)}):")
-    for t, v in frame.raw_trace_actions:
-        cur = frame.snap.get(t)
-        edge = " [EDGE]" if t in ctx.edge_tags else ""
-        ng = " [NOGOOD]" if (t, v) in nogoods else ""
-        already = " [ALREADY]" if _values_match(cur, v) and t not in ctx.edge_tags else ""
-        dbg(f"#   {t}={v!r}  (cur={cur!r}){edge}{ng}{already}")
 
 
 def _with_avoid_reason(
@@ -864,8 +824,6 @@ def _commit_and_monitor(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
-    observe: _ObserveFn,
 ) -> Iterator[PilotEvent]:
     """Commit a gate-approved trial, then run post-commit progress handling.
 
@@ -877,7 +835,7 @@ def _commit_and_monitor(
     # Capture a satisfied bearing's launch world before commit. Its landing
     # is provisional until ordinary progress is banked; an Alarm ejection must
     # replays from this exact source with its PilotRungs, not an older trend CP.
-    _anchor_bearing_receipt(trial, frame, state, dbg)
+    _anchor_bearing_receipt(trial, frame, state)
 
     # Knowledge handling may have installed an excursion correction after verification built the
     # trial.  The accepted world key must describe that effective rung overlay,
@@ -888,7 +846,7 @@ def _commit_and_monitor(
             trial,
             new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
         )
-    _commit_trial(trial, state, ctx, observe, frame.snap)
+    _commit_trial(trial, state, ctx, frame.snap)
     _record_step_context(trial, frame, state)
     yield PilotEvent(
         "trial_committed",
@@ -900,17 +858,15 @@ def _commit_and_monitor(
             "snapshot": dict(state.work.state.tags),
         },
     )
-    yield from _monitor_trend(trial, frame, state, ctx, dbg)
+    yield from _monitor_trend(trial, frame, state, ctx)
 
 
 def _commit_trial(
     trial: _TrialResult,
     state: _PilotState,
     ctx: _PilotContext,
-    observe: _ObserveFn,
     before: dict[str, Any],
 ) -> None:
-    observe(trial.observe_label, before, trial.fork)
     key_was_seen = trial.new_key is not None and trial.new_key in state.seen_keys
     if trial.new_key is not None:
         state.seen_keys.add(trial.new_key)
@@ -1311,12 +1267,6 @@ def _pilot_loop_events(
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: gauge build failed", exc_info=True)
 
-    def _dbg(msg: str) -> None:
-        return None
-
-    def _dbg_observe(label: str, before: dict[str, Any], after: PLC) -> None:
-        return None
-
     # Settle: at scan 0, calc-computed intermediates are still at defaults
     # and may trivially satisfy conditions that fail once rungs execute
     # (e.g. PV >= Lower where Lower is calc'd from SetPoint).
@@ -1399,7 +1349,6 @@ def _pilot_loop_events(
             state.key_config = orientation_world.key_config
         if not state.watch_tags:
             state.watch_tags.extend(sorted(frame.tree.pivot_tags()))
-            _dbg(f"# watch_tags ({len(state.watch_tags)}): {state.watch_tags[:8]}...")
         for action in frame.raw_trace_action_details:
             if action.note:
                 state.lever_notes[action.tag] = action.note
@@ -1419,8 +1368,7 @@ def _pilot_loop_events(
                     frontier=frontier_pairs(frame.tree, frame.snap),
                 )
             )
-        yield from _anchor_provisional(frame, state, _dbg)
-        _debug_iteration(frame, state, ctx, _dbg)
+        yield from _anchor_provisional(frame, state)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
         )
@@ -1580,7 +1528,7 @@ def _pilot_loop_events(
                     "scan_after": trial.fork.state.scan_id,
                 },
             )
-        yield from _commit_and_monitor(trial, frame, state, ctx, _dbg, _dbg_observe)
+        yield from _commit_and_monitor(trial, frame, state, ctx)
         state.last_wait_log = None
         continue
 
@@ -1634,7 +1582,7 @@ def _pilot_loop(
     ``(reached, steps, journey, work, journal, reason, knowledge)``.
 
     ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
-    attempt log (incl. reverted rounds) for ``debug=True``.  ``journal`` is the
+    attempt log (incl. reverted rounds) surfaced on the plan.  ``journal`` is the
     annotated step sequence for the Plan repr.  ``reason`` is the terminal
     diagnostic the loop named on failure (``stuck: …`` / ``budget exhausted``),
     ``None`` when the target was reached — so ``how()`` never returns a silent
@@ -2156,7 +2104,6 @@ def pilot_events(
         target_value,
         target_predicate,
         max_scans=max_scans,
-        debug=False,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
@@ -2167,7 +2114,6 @@ def pilot_how(
     plc: PLC,
     *conditions: Any,
     max_scans: int = 3000,
-    debug: bool = False,
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
@@ -2191,7 +2137,6 @@ def pilot_how(
             plc,
             targets,
             max_scans=max_scans,
-            debug=debug,
             avoid_pred=avoid_pred,
             via_pred=via_pred,
             unlink=unlink,
@@ -2204,7 +2149,6 @@ def pilot_how(
         target_value,
         target_predicate,
         max_scans=max_scans,
-        debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
@@ -2253,7 +2197,6 @@ def _pilot_how_multi(
     targets: list[tuple[str, Any, Any]],
     *,
     max_scans: int = 3000,
-    debug: bool = False,
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
@@ -2314,7 +2257,6 @@ def _pilot_how_multi(
             t_pred,
             influence=inf,
             max_scans=work.state.scan_id + max_scans,
-            debug=debug,
             avoid_pred=avoid_pred,
             via_pred=via_pred,
             work=work,
@@ -2375,7 +2317,6 @@ def pilot_drive(
     plc: PLC,
     *conditions: Any,
     max_scans: int = 3000,
-    debug: bool = False,
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
@@ -2393,7 +2334,6 @@ def pilot_drive(
         target_value,
         target_predicate,
         max_scans=max_scans,
-        debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )

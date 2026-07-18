@@ -119,10 +119,6 @@ def _frame() -> SimpleNamespace:
     )
 
 
-def _noop_dbg(_msg: str) -> None:
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Trend monitoring — checkpoints
 # ---------------------------------------------------------------------------
@@ -134,7 +130,7 @@ class TestCheckpoints:
     def test_trend_improvement_creates_checkpoint(self):
         state = _make_state(best_trend=5, checkpoints=[])
         trial = _make_trial(3, Outcome.CONFIRMED)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["trend"] == 3
@@ -147,7 +143,7 @@ class TestCheckpoints:
         # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(3, Outcome.CONFIRMED)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["flat"] is True
@@ -159,7 +155,7 @@ class TestCheckpoints:
         # pre-frontier checkpoint and high-water mark must survive.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(8, Outcome.FRONTIER)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["frontier"] is True
@@ -177,7 +173,7 @@ class TestCheckpoints:
             fork_snap={"State": 3},
         )
 
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         assert [event.kind for event in events] == ["trend_checkpoint"]
         assert events[0].data["channel"] == "State"
@@ -204,7 +200,7 @@ class TestCheckpoints:
             fork_snap={"State": 3},
         )
 
-        _anchor_bearing_receipt(trial, frame, state, _noop_dbg)
+        _anchor_bearing_receipt(trial, frame, state)
 
         assert len(state.checkpoints) == 2
         receipt = state.checkpoints[-1]
@@ -229,7 +225,7 @@ def test_banked_ordinary_checkpoint_promotes_the_provisional():
     trial = _make_trial(3, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+    events = _monitor_trend(trial, _frame(), state, ctx)
 
     assert [e.kind for e in events] == ["trend_checkpoint", "provisional_promoted"]
     assert events[1].data["outcome"] == "banked ordinary progress"
@@ -254,7 +250,7 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
     trial = _make_trial(5, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+    events = _monitor_trend(trial, _frame(), state, ctx)
 
     assert [e.kind for e in events] == ["provisional_expired"]
     assert state.provisional is None
@@ -300,7 +296,7 @@ def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatc
         target_predicate=None,
     )
 
-    events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+    events = _monitor_trend(trial, _frame(), state, ctx)
 
     assert [event.kind for event in events] == ["letrun_ejection"]
     assert state.provisional is not None
@@ -394,7 +390,7 @@ class TestRegression:
         # chase_regression_causes=True runs the investigation pipeline and
         # attaches its payload to the regression event.
         state, trial, frame, ctx = _seal_in_regression_inputs()
-        events = _monitor_trend(trial, frame, state, ctx, _noop_dbg)
+        events = _monitor_trend(trial, frame, state, ctx)
 
         assert [e.kind for e in events] == ["trend_regression"]
         investigation = events[0].data["investigation"]
@@ -409,7 +405,7 @@ class TestRegression:
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
         work_before = state.work
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         assert [e.kind for e in events] == ["trend_regression"]
         assert events[0].data["from_trend"] == 6
@@ -428,7 +424,7 @@ class TestRegression:
 
         state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        _monitor_trend(trial, _frame(), state, SimpleNamespace())
 
         state.work.step()
         assert not state.rungs
@@ -447,7 +443,7 @@ class TestRegression:
             regression_nogoods=frozenset({("X", True)}),
         )
         ctx = SimpleNamespace(compass=Compass())
-        events = _monitor_trend(trial, _frame(), state, ctx, _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, ctx)
 
         assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("cpk",))
         assert ("X", True) in events[0].data["regression_nogoods"]
@@ -476,7 +472,7 @@ class TestLetrunEjection:
             fork_snap={"S": 2},
             chase_regression_causes=False,
         )
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
         # The ejection is announced, then handed to investigation/revert.
         assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
         announce = events[0]
@@ -498,7 +494,7 @@ class TestLetrunEjection:
             before_snap={"S": 0},
             fork_snap={"S": 2},
         )
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace(), _noop_dbg)
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
         assert [e.kind for e in events] == ["letrun_ejection"]
         assert events[0].data["investigated"] is False
         assert events[0].data["reason"] == "no checkpoint to revert to"
@@ -600,7 +596,7 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
     monkeypatch.setattr("pyrung.core.analysis.pilot.progress.investigate_deviation", _stub)
 
     state, trial, frame, ctx = _seal_in_regression_inputs()
-    events = _monitor_trend(trial, frame, state, ctx, _noop_dbg)
+    events = _monitor_trend(trial, frame, state, ctx)
 
     assert [e.kind for e in events] == ["trend_regression"]
     rejected_detail = events[0].data["investigation"]["rejected_detail"]

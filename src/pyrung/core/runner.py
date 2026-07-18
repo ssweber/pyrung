@@ -1178,7 +1178,6 @@ class PLC:
         avoid: Any = None,
         via: Any = None,
         max_scans: int = 4000,
-        debug: bool = False,
         unlink: list[str] | None = None,
         on_event: Any = None,
     ) -> Any:
@@ -1213,7 +1212,6 @@ class PLC:
             via: Condition(s) the chosen route must pass through.  A tuple/list
                 conjoins (the route must pass through every one).
             max_scans: Scan budget for the search.
-            debug: Emit structured debug events in the returned path.
             unlink: Harness-feedback tag names to free for fault injection.
                 Named tags have their ``link=`` coupling removed so the harness
                 stops driving them and PILOT may steer them directly — the way
@@ -1226,7 +1224,6 @@ class PLC:
         return self._how_via_pilot(
             *conditions,
             max_scans=max_scans,
-            debug=debug,
             avoid=avoid,
             via=via,
             unlink=unlink,
@@ -1237,7 +1234,6 @@ class PLC:
         self,
         *conditions: Any,
         max_scans: int = 4000,
-        debug: bool = False,
         avoid: Any = None,
         via: Any = None,
         unlink: list[str] | None = None,
@@ -1261,7 +1257,6 @@ class PLC:
             self,
             *conditions,
             max_scans=max_scans,
-            debug=debug,
             avoid_pred=_compile_avoid(avoid),
             via_pred=_compile_via(via),
             unlink=unlink,

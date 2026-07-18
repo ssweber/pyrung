@@ -18,11 +18,10 @@ from typing import Any
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
-    _DebugFn,
     _pilot_world_key,
     _set_rungs,
 )
-from pyrung.core.analysis.pilot.compass import ActionNogoodObservation, _action_sort_key
+from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
     Provisional,
     classify_departure,
@@ -64,13 +63,12 @@ def _monitor_trend(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
 ) -> tuple[PilotEvent, ...]:
     # A provisional attempt changes only the rollback boundary. Every trial
     # inside it still passes through the ordinary trend,
     # regression, investigation, and retry machinery below.
     if state.provisional is not None:
-        settlement = _finish_provisional(trial, frame, state, ctx, dbg)
+        settlement = _finish_provisional(trial, frame, state, ctx)
         if settlement is not None:
             return settlement
 
@@ -85,7 +83,6 @@ def _monitor_trend(
     # away, the next verify pass should revert to the pre-frontier checkpoint
     # and chase the PLC-side cause.
     if trial.outcome == Outcome.FRONTIER:
-        dbg(f"#     FRONTIER: trend {state.best_trend} -> {trial.trend}")
         return (
             PilotEvent(
                 "trend_checkpoint",
@@ -144,11 +141,6 @@ def _monitor_trend(
             # No prior checkpoint to anchor the incident or revert to — the
             # ejected state stands committed.  Surface why so the bail is visible
             # in the event stream rather than a silent ``return ()``.
-            dbg(
-                f"#     LETRUN-EJECTION (uninvestigated): {chan} left "
-                f"{departed_from!r} -> {trial.fork_snap.get(chan)!r}; "
-                "no checkpoint to revert to"
-            )
             return (ejection,)
         # Classify BEFORE investigating (detour.py): program-owned motion may
         # preserves the progress gauge and offers a clean forward route —
@@ -161,23 +153,13 @@ def _monitor_trend(
             if state.provisional is None:
                 return (
                     ejection,
-                    *_start_provisional(verdict, trial, state, ctx, dbg, chan),
+                    *_start_provisional(verdict, trial, state, ctx, chan),
                 )
             # A clean program-owned departure inside an existing bounded
             # attempt is just more piloting. Keep the original rollback
             # boundary and budget; do not nest another provisional mechanism
             # or reinterpret the motion as a regression.
-            dbg(
-                f"#     PROVISIONAL-CONTINUES: {chan} {departed_from!r} -> "
-                f"{trial.fork_snap.get(chan)!r} ({verdict.reason})"
-            )
             return (ejection,)
-        dbg(
-            f"#     LETRUN-EJECTION: {chan} left "
-            f"{departed_from!r}; investigating coast span "
-            f"{trial.scan_before}->{state.work.state.scan_id} "
-            f"(departure: {verdict.reason})"
-        )
         checkpoint = state.checkpoints[-1]
         checkpoint_snap = dict(checkpoint.world.work.state.tags)
         # If the latest receipt precedes the channel state this coast launched
@@ -197,7 +179,6 @@ def _monitor_trend(
                 frame,
                 state,
                 ctx,
-                dbg,
                 anchor_scan=incident_anchor,
                 end_scan=state.work.state.scan_id,
                 incident_before_snap=incident_before,
@@ -218,7 +199,6 @@ def _monitor_trend(
         channel_tag = trial.zoom_channel_tag
         previous = state.best_trend
         state.best_trend = trial.trend
-        dbg(f"#     BEARING-LANDING: trend baseline {previous} -> {trial.trend}")
         return (
             PilotEvent(
                 "trend_checkpoint",
@@ -245,7 +225,6 @@ def _monitor_trend(
             )
         )
         state.best_trend = trial.trend
-        dbg(f"#     CHECKPOINT: trend {state.best_trend}")
         checkpoint_event = PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
@@ -263,7 +242,6 @@ def _monitor_trend(
         if state.provisional is not None:
             provisional: Provisional = state.provisional
             state.provisional = None
-            dbg("#     PROVISIONAL-PROMOTED: ordinary progress banked a checkpoint")
             return (
                 checkpoint_event,
                 PilotEvent(
@@ -290,7 +268,6 @@ def _monitor_trend(
                 trial.frontier,
             )
         )
-        dbg(f"#     CHECKPOINT-FLAT: trend {state.best_trend}")
         return (
             PilotEvent(
                 "trend_checkpoint",
@@ -307,13 +284,11 @@ def _monitor_trend(
     if trial.trend <= state.best_trend or not state.checkpoints:
         return ()
 
-    dbg(f"#     REGRESSION: trend {state.best_trend} -> {trial.trend}, reverting to checkpoint")
     return _investigate_and_revert(
         trial,
         frame,
         state,
         ctx,
-        dbg,
         anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
         end_scan=state.work.state.scan_id,
     )
@@ -335,7 +310,6 @@ def _anchor_bearing_receipt(
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
-    dbg: _DebugFn,
 ) -> None:
     """Capture the world immediately before a satisfied channel bearing.
 
@@ -360,9 +334,6 @@ def _anchor_bearing_receipt(
         state.checkpoints[-1] = receipt
     else:
         state.checkpoints.append(receipt)
-    assert trial.zoom_channel_tag is not None
-    channel_tag = trial.zoom_channel_tag
-    dbg(f"#     BEARING-RECEIPT: {channel_tag}={frame.snap.get(channel_tag)!r} before landing")
 
 
 def _start_provisional(
@@ -370,7 +341,6 @@ def _start_provisional(
     trial: _TrialResult,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
     chan: str,
 ) -> tuple[PilotEvent, ...]:
     """Open a bounded provisional attempt at the settled landing."""
@@ -411,10 +381,6 @@ def _start_provisional(
         expires_at=min(ctx.max_scans, scan_before + _PROVISIONAL_SCAN_BUDGET),
         classification=verdict.verdict,
     )
-    dbg(
-        f"#     PROVISIONAL-STARTED: {chan} {departed_from!r} -> "
-        f"{verdict.settled_value!r} ({verdict.reason})"
-    )
     return (
         PilotEvent(
             "provisional_started",
@@ -437,7 +403,6 @@ def _start_provisional(
 def _anchor_provisional(
     frame: _IterationFrame,
     state: _PilotState,
-    dbg: _DebugFn,
 ) -> tuple[PilotEvent, ...]:
     """Assess a newly settled provisional world before choosing another act."""
     provisional = state.provisional
@@ -460,7 +425,6 @@ def _anchor_provisional(
             )
         )
         state.best_trend = frame.distance_before
-        dbg(f"#     PROVISIONAL-PROMOTED: gauge advanced, trend baseline {frame.distance_before}")
         return (
             PilotEvent(
                 "provisional_promoted",
@@ -484,10 +448,6 @@ def _anchor_provisional(
         )
     )
     state.best_trend = frame.distance_before
-    dbg(
-        f"#     PROVISIONAL-CHECKPOINT: {provisional.channel_tag}="
-        f"{frame.snap.get(provisional.channel_tag)!r}, trend {frame.distance_before}"
-    )
     return ()
 
 
@@ -496,7 +456,6 @@ def _finish_provisional(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
 ) -> tuple[PilotEvent, ...] | None:
     """Settle provisional motion from observed progress, never value return.
 
@@ -544,7 +503,6 @@ def _finish_provisional(
                 )
             )
         state.best_trend = promoted_trend
-        dbg(f"#     PROVISIONAL-PROMOTED: gauge {outcome}, trend {promoted_trend}")
         return (
             PilotEvent(
                 "provisional_promoted",
@@ -581,7 +539,6 @@ def _finish_provisional(
             frame,
             state,
             ctx,
-            dbg,
             anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
             end_scan=state.work.state.scan_id,
             incident_before_snap=dict(state.checkpoints[-1].world.work.state.tags),
@@ -591,7 +548,6 @@ def _finish_provisional(
     checkpoint = state.checkpoints[-1]
     state.load_world(checkpoint.world)
     state.best_trend = checkpoint.trend
-    dbg(f"#     PROVISIONAL-EXPIRED: gauge {outcome}; reverted without a nogood")
     return (
         PilotEvent(
             "provisional_expired",
@@ -678,7 +634,6 @@ def _investigate_and_revert(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
     *,
     anchor_scan: int,
     end_scan: int,
@@ -864,11 +819,6 @@ def _investigate_and_revert(
                     rungs=tuple(investigation_rungs),
                 )
             )
-            for proposal in investigation_holds:
-                ht, hv = (
-                    (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
-                )
-                dbg(f"#     HOLD {ht}={hv!r} (from investigation)")
 
     # Legibility (recording only): the channel transition(s) this revert undoes.
     # A destructive move (``S_StateCurrent 6->8`` Aborting) and a program-intended
@@ -879,11 +829,6 @@ def _investigate_and_revert(
     channel_transitions: tuple[tuple[str, Any, Any], ...] = _channel_transitions(
         ctx, cp_fork, trial.fork_snap
     )
-    if channel_transitions:
-        dbg(
-            "#     REGRESSION channel: "
-            + ", ".join(f"{t} {fv!r}->{tv!r}" for t, fv, tv in channel_transitions)
-        )
 
     # Keep the failed action as a nogood in the world where it failed. A
     # replay-confirmed correction creates a different world key, so the same
@@ -894,9 +839,6 @@ def _investigate_and_revert(
         ctx.compass, _ = ctx.compass.apply(
             tuple(ActionNogoodObservation(cp_key, ("pair", pair)) for pair in regression_nogoods)
         )
-    dbg(
-        f"#     REGRESSION-NOGOOD at checkpoint: {sorted(regression_nogoods, key=_action_sort_key)}"
-    )
     # A regression inside provisional motion returns to its local checkpoint
     # and keeps the bounded attempt open. Only an outer revert ends it.
     if state.provisional is not None:

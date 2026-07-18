@@ -30,7 +30,6 @@ if TYPE_CHECKING:
 
 _ActionPair = tuple[str, Any]
 _StateKey = tuple[Any, ...]
-_ObserveFn = Callable[[str, dict[str, Any], Any], None]
 
 
 class MotionKind(Enum):
@@ -316,7 +315,6 @@ class _PilotContext:
     blocked_route_actions: frozenset[_ActionPair]
     max_scans: int
     live: bool
-    debug: bool
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
     via_pred: Any = None
@@ -396,7 +394,7 @@ class _PilotState:
     # Append-only log of every committed step, including attempts later reverted.
     # ``steps`` (the world) is the clean, sequentially-replayable path (restored
     # to the checkpoint's on revert); ``journey`` keeps the full "tried this,
-    # ejected, learned, retried" record surfaced by ``how(..., debug=True)``.
+    # ejected, learned, retried" record surfaced on the resulting plan.
     journey: list[_Step] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere

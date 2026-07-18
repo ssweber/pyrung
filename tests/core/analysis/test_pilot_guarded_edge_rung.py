@@ -108,7 +108,6 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         steerable=steerable,
         pdg=pdg,
         program=logic,
-        debug=False,
         route_allowed=lambda _pair: True,
         opaque_loop=frozenset(),
         target_tag=state_tag.name,

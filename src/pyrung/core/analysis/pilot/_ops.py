@@ -25,8 +25,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DebugFn = Callable[[str], None]
-
 
 @dataclass(frozen=True)
 class PilotRung:

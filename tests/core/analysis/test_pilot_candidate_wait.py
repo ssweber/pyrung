@@ -232,7 +232,6 @@ def test_prescribed_wait_suppresses_stuck_reason():
         steerable=frozenset(),
         pdg=SimpleNamespace(writers_of={}),
         program=object(),
-        debug=False,
         route_allowed=lambda _pair: True,
         opaque_loop=frozenset(),
         target_tag="State",
