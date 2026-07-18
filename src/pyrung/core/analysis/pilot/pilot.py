@@ -151,6 +151,15 @@ class _DriveOutcome:
     knowledge: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _ProverContext:
+    """Best-effort static evidence shared by drive setup and target context."""
+
+    nd_domains: dict[str, tuple[Any, ...]] | None = None
+    key_config: _StateKeyConfig | None = None
+    evidence: TransitionEvidence | None = None
+
+
 # ---------------------------------------------------------------------------
 # Core PILOT loop — layered acceptance (causal momentum)
 # ---------------------------------------------------------------------------
@@ -314,7 +323,7 @@ def _prepare_drive(
     edge_tags = compute_edge_tags(pdg, program)
     resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
     diag_snapshot = dict(work.state.tags)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
+    prover = _build_prover_context(
         program,
         diag_snapshot,
     )
@@ -328,9 +337,9 @@ def _prepare_drive(
         resting=resting,
         anchor_scan=work.state.scan_id,
         diag_snapshot=diag_snapshot,
-        nd_domains=nd_domains,
-        key_config=key_config,
-        evidence=evidence,
+        nd_domains=prover.nd_domains,
+        key_config=prover.key_config,
+        evidence=prover.evidence,
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
         opaque_loop=detect_opaque_loop(pdg, program),
         live=live,
@@ -1485,22 +1494,14 @@ def _prepare_route(
 # ---------------------------------------------------------------------------
 
 
-def _build_pilot_context(
+def _build_prover_context(
     program: Any,
     snapshot: dict[str, Any],
-) -> tuple[
-    dict[str, tuple[Any, ...]] | None,
-    _StateKeyConfig | None,
-    TransitionEvidence | None,
-    tuple[dict[str, list[Any]], dict[str, str]] | None,
-]:
+) -> _ProverContext:
     """Build prover context for nd_domains and state key projection.
 
-    Returns ``(nd_domains, key_config, evidence, semantic)`` where ``semantic``
-    is ``(atom_index, domain_sources)`` for path-render constraint annotation.
-    Values are ``None`` on failure — pilot falls back to Bool-only probing,
-    pivot-tag state keys, local static evidence, and raw (un-annotated) path
-    rendering.
+    Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
+    pivot-tag state keys, and local static evidence.
     """
     try:
         from dataclasses import replace as _replace
@@ -1521,23 +1522,11 @@ def _build_pilot_context(
             allow_partial=True,
         )
         if isinstance(ctx, Intractable):
-            return None, None, None, None
+            return _ProverContext()
         nd = getattr(ctx, "nondeterministic_dims", None)
         evidence = build_transition_evidence(ctx)
         if nd:
             logger.info("pilot: nd_domains ready (%d dims)", len(nd))
-
-        # Semantic metadata for path-render constraint annotations, derived from
-        # the same ctx (no extra kernel compile).  Best-effort: on failure the
-        # path renders with raw representatives instead of (> 75) / A > B.
-        semantic: tuple[dict[str, list[Any]], dict[str, str]] | None
-        try:
-            from pyrung.core.analysis.prove import _build_semantic_metadata
-
-            semantic = _build_semantic_metadata(ctx, program)
-        except Exception:  # noqa: BLE001
-            logger.debug("pilot: semantic metadata build failed", exc_info=True)
-            semantic = None
 
         # Build state key config from ExploreContext.
         #
@@ -1566,7 +1555,7 @@ def _build_pilot_context(
 
         if not stateful_names:
             logger.info("pilot: stateful_names empty, falling back to pivot_tags")
-            return nd, None, evidence, semantic
+            return _ProverContext(nd_domains=nd, evidence=evidence)
 
         key_config = _StateKeyConfig(
             stateful_names=stateful_names,
@@ -1581,10 +1570,14 @@ def _build_pilot_context(
             len(threshold_vector_specs),
             len(acc_indices),
         )
-        return nd, key_config, evidence, semantic
+        return _ProverContext(
+            nd_domains=nd,
+            key_config=key_config,
+            evidence=evidence,
+        )
     except Exception:  # noqa: BLE001
         logger.debug("pilot: context build failed", exc_info=True)
-        return None, None, None, None
+        return _ProverContext()
 
 
 # ---------------------------------------------------------------------------

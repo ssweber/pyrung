@@ -144,7 +144,7 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.pilot import _build_pilot_context, pilot_events
+    from pyrung.core.analysis.pilot.pilot import _build_prover_context, pilot_events
     from pyrung.core.analysis.prove.classify import _compute_stepping_tags
     from pyrung.core.analysis.steerable import compute_steerable
 
@@ -165,13 +165,20 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     assert state_name in opaque_loop, sorted(opaque_loop)
 
     # The pilot-facing consumer agrees (is_stepping is what engages the compass).
-    _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
-    assert evidence is not None
-    assert evidence.is_stepping(state_name)
+    prover = _build_prover_context(logic, dict(plc.state.tags))
+    assert prover.evidence is not None
+    assert prover.evidence.is_stepping(state_name)
 
     # (c) The StateRequested -> State transition pipeline yields a channel role.
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
-    role = infer_pipeline_roles(state_name, pdg, logic, steerable, opaque_loop, evidence)
+    role = infer_pipeline_roles(
+        state_name,
+        pdg,
+        logic,
+        steerable,
+        opaque_loop,
+        prover.evidence,
+    )
     assert role.channel_tag == state_name
     assert req_name in role.request_tags
 

@@ -19,7 +19,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.charts import build_static_transition_graphs, detect_opaque_loop
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pilot import (
-    _build_pilot_context,
+    _build_prover_context,
     _infer_pipeline_roles_for_context,
 )
 from pyrung.core.analysis.pilot.trace import compute_reference_constants
@@ -33,9 +33,22 @@ def _compass_graphs(logic, plc):
     ref = compute_reference_constants(pdg, logic, plc._known_tags_by_name)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic) - harness_fb - ref
     opaque_loop = detect_opaque_loop(pdg, logic)
-    _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
-    roles = _infer_pipeline_roles_for_context(pdg, logic, steerable, opaque_loop, evidence)
-    return build_static_transition_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
+    prover = _build_prover_context(logic, dict(plc.state.tags))
+    roles = _infer_pipeline_roles_for_context(
+        pdg,
+        logic,
+        steerable,
+        opaque_loop,
+        prover.evidence,
+    )
+    return build_static_transition_graphs(
+        roles,
+        pdg,
+        logic,
+        steerable,
+        opaque_loop,
+        prover.evidence,
+    )
 
 
 def test_tumbler_starting_to_execute_records_state_complete_bearing() -> None:

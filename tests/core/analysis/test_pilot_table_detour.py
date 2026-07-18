@@ -249,14 +249,14 @@ def _current_ctx(logic, plc):
     """Build the pdg / steerable / opaque_loop / evidence the recognizer consumes."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
-    from pyrung.core.analysis.pilot.pilot import _build_pilot_context
+    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.steerable import compute_steerable
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     opaque_loop = detect_opaque_loop(pdg, logic)
-    _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
-    return pdg, steerable, opaque_loop, evidence
+    prover = _build_prover_context(logic, dict(plc.state.tags))
+    return pdg, steerable, opaque_loop, prover.evidence
 
 
 def _drive_to(plc, tags, state_value):
@@ -396,7 +396,7 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.pilot import _build_pilot_context
+    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.steerable import compute_steerable
 
     logic, tags = _packml_table_detour_program()
@@ -410,13 +410,20 @@ def test_table_detour_arms_opaque_table_surface() -> None:
 
     # (2) State stays copy-coupled *stepping* (plain copy source), so the compass
     #     value-graph is built for it rather than the loop dead-ending immediately.
-    _nd, _key, evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
-    assert evidence is not None
-    assert evidence.is_stepping(state_name)
+    prover = _build_prover_context(logic, dict(plc.state.tags))
+    assert prover.evidence is not None
+    assert prover.evidence.is_stepping(state_name)
 
     # (3) The StateRequested -> State transition pipeline is visible.
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
-    role = infer_pipeline_roles(state_name, pdg, logic, steerable, opaque_loop, evidence)
+    role = infer_pipeline_roles(
+        state_name,
+        pdg,
+        logic,
+        steerable,
+        opaque_loop,
+        prover.evidence,
+    )
     assert role.channel_tag == state_name
     assert tags["StateRequested"].name in role.request_tags
 

@@ -338,7 +338,7 @@ def test_stepper_is_a_gauge_component() -> None:
     recipe stepper must classify (family B, self-limiting +2 advances)."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.gauge import build_gauge
-    from pyrung.core.analysis.pilot.pilot import _build_pilot_context
+    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
     logic, tags = _door_cycle_program()
@@ -347,13 +347,13 @@ def test_stepper_is_a_gauge_component() -> None:
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    _nd, cfg, _evidence, _sem = _build_pilot_context(logic, dict(plc.state.tags))
-    assert cfg is not None
+    prover = _build_prover_context(logic, dict(plc.state.tags))
+    assert prover.key_config is not None
     gauge = build_gauge(
         pdg,
         logic,
         tags["State"].name,
-        cfg,
+        prover.key_config,
         steerable=steerable,
         clear_only=clear_only,
         edge_tags=frozenset(),
