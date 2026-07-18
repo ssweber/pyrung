@@ -77,6 +77,7 @@
 
 ### Fixes
 
+- `reset()` now clears targets to their type's OFF/zero value (`False`, numeric `0`, or empty text) instead of restoring a tag's configured initialization default, with matching behavior in simulation, CircuitPython codegen, synthesis, and static analysis.
 - Codegen no longer silently drops a source contact wired to no output — a malformed OR-branch stacked on a continuation row without the tee/down-wiring a Click OR needs, which the analyzer pruned as a dead-end edge. `ladder_to_pyrung(..., validate=True)` (default) now raises `ValueError` naming the dropped contact and rung; a non-validating import warns instead of discarding it silently.
 - Codegen no longer omits the `Field` import when a `named_array`/`udt` declares a field whose retentive policy differs from its type default (e.g. a non-retentive `Int`), and no longer re-emits a single-field, stride-1 `named_array` as a duplicate plain `Block` (which mapped the same hardware twice and raised a duplicate-name conflict when the generated file ran).
 - Multi-file project codegen (`ladder_to_pyrung_project`, used by `pyrung dap`) now imports `auto` in the generated `tags.py` when a structure default emits `default=auto()`, and derives the `Field` import from the same check as single-file codegen — previously the project's `tags.py` could emit `auto()`/`Field(…)` without importing them, so loading it raised `NameError: name 'auto' is not defined` (surfacing as a DAP launch failure).

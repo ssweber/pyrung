@@ -1,6 +1,6 @@
 """Steerability inference for *clear-only* (ack-cleared) command interfaces.
 
-A tag the program only ever **resets to its rest/default value** — ``reset()`` on
+A tag the program only ever **clears to its OFF/rest value** — ``reset()`` on
 a Bool, ``copy(0, flag)`` on an Int/Word — is an operator/field command: the
 program never asserts the active value, so that value must come from outside.
 Such a tag is steerable regardless of ``external`` (the operator "sets" it, the
@@ -77,6 +77,20 @@ def test_bool_reset_unconditional_is_steerable():
             reset(Cmd)
 
     assert "Momentary" in _steerable(logic)
+
+
+def test_bool_reset_default_true_is_still_clear_only():
+    """A Bool's initialization default does not change reset-to-OFF semantics."""
+    Cmd = Bool("DefaultOnCommand", default=True)
+    Ack = Bool("Ack")
+
+    with Program(strict=False) as logic:
+        with rung(Cmd):
+            out(Ack)
+        with rung(Ack):
+            reset(Cmd)
+
+    assert "DefaultOnCommand" in _steerable(logic)
 
 
 def test_int_flag_clear_to_zero_is_steerable():

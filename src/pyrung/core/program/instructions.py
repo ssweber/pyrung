@@ -168,7 +168,8 @@ def latch(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | Immedia
 def reset(target: Tag | BlockRange | ImmediateRef) -> Tag | BlockRange | ImmediateRef:
     """Reset/Unlatch instruction (RST).
 
-    Sets target to its default value (False for bits, 0 for ints).
+    Clears targets to their type's OFF/zero value, independent of their
+    initialization default.
 
     Example:
         with Rung(StopButton):

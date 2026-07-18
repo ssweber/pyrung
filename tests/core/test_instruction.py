@@ -100,11 +100,23 @@ class TestResetInstruction:
 
         assert new_state.tags["Motor"] is False
 
-    def test_reset_uses_tag_default(self):
-        """RESET sets to tag's default value (0 for int)."""
+    def test_reset_sets_default_true_bit_false(self):
+        """RESET turns a bit OFF regardless of its initialization default."""
         from pyrung.core.instruction import ResetInstruction
 
-        Counter = Int("Counter")
+        Motor = Bool("Motor", default=True)
+        instr = ResetInstruction(Motor)
+
+        state = SystemState().with_tags({"Motor": True})
+        new_state = execute(instr, state)
+
+        assert new_state.tags["Motor"] is False
+
+    def test_reset_sets_int_zero_independent_of_default(self):
+        """RESET clears a numeric target rather than restoring its initialization default."""
+        from pyrung.core.instruction import ResetInstruction
+
+        Counter = Int("Counter", default=7)
         instr = ResetInstruction(Counter)
 
         state = SystemState().with_tags({"Counter": 100})
@@ -112,8 +124,8 @@ class TestResetInstruction:
 
         assert new_state.tags["Counter"] == 0
 
-    def test_reset_sets_block_range_defaults(self):
-        """RESET applies default values across all selected tags."""
+    def test_reset_sets_block_range_zero_values(self):
+        """RESET clears every selected numeric tag to zero."""
         from pyrung.core.instruction import ResetInstruction
 
         DS = Block("DS", TagType.INT, 1, 100)

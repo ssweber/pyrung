@@ -14,7 +14,7 @@ can.
   ``coil == False`` can only be *held* (the latch never drives it false) — a
   single ``Prior``.  That "SET can't drive False" is the value-polarity oracle:
   a latch is never the writer that cleared a bit.
-- **RST** is the mirror about the target's default value.
+- **RST** clears the target to its type's OFF/zero value.
 
 The held branch is a :class:`Prior` so the recorded resolver reads the prior
 scan and the projected resolver recurses — one constraint, two resolvers.
@@ -39,7 +39,13 @@ from pyrung.core.crossing import (
     single,
     unsatisfiable,
 )
-from pyrung.core.instruction.coils import LatchInstruction, OutInstruction, ResetInstruction
+from pyrung.core.instruction.coils import (
+    LatchInstruction,
+    OutInstruction,
+    ResetInstruction,
+    reset_value_for_type,
+)
+from pyrung.core.tag import TagType
 
 
 def _eq_single(target: Constraint) -> tuple[str, Any] | None:
@@ -90,12 +96,20 @@ class LatchCrossing(BaseCrossing):
 
 
 class ResetCrossing(BaseCrossing):
-    """RST: the default value is fired-or-held; any other value can only be held."""
+    """RST: the reset value is fired-or-held; any other value can only be held."""
+
+    @staticmethod
+    def _reset_value(instr: Any) -> Any:
+        target = getattr(instr, "target", None)
+        tag_type = getattr(target, "type", None)
+        if isinstance(tag_type, TagType):
+            return reset_value_for_type(tag_type)
+        return None
 
     def forward(self, instr: Any, ctx: CrossingContext) -> Any:
-        default = getattr(getattr(instr, "target", None), "default", None)
-        if default is not None:
-            return Literal(default)
+        reset_value = self._reset_value(instr)
+        if reset_value is not None:
+            return Literal(reset_value)
         return UNKNOWN
 
     def reverse(
@@ -105,12 +119,12 @@ class ResetCrossing(BaseCrossing):
         if st is None:
             return REVERSE_FALLTHROUGH
         tag, value = st
-        default = getattr(getattr(instr, "target", None), "default", None)
-        if default is None:
+        reset_value = self._reset_value(instr)
+        if reset_value is None:
             return REVERSE_FALLTHROUGH  # block / indirect target -> defer
-        if value == default:
+        if value == reset_value:
             return disjoint((CondAttr(expected=True),), (_held(tag),), exact=True)
-        return single(_held(tag), exact=True)  # RST never drives a non-default value
+        return single(_held(tag), exact=True)  # RST never drives a non-reset value
 
 
 register(OutInstruction, OutCrossing())

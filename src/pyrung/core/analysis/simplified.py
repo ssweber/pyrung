@@ -347,7 +347,7 @@ def _try_factored_branches(
 def _resets_only(rung: Rung, tag: str) -> bool:
     """True when *rung* writes *tag* only via reset/unlatch.
 
-    A reset drives the tag to its default (False), never True, so such a writer
+    A reset drives a Boolean tag OFF, never True, so such a writer
     must not define the tag's simplified *True* form.  Out/latch and value
     writers do drive it true and are kept.
     """

@@ -101,6 +101,13 @@ def test_copy_hold_rung_keeps_copy_for_non_bool_destinations() -> None:
     assert instr.dest is State
 
 
+def test_false_bool_hold_resets_default_true_target_off() -> None:
+    Cmd = Bool("Cmd", default=True)
+    rung = copy_hold_rung(value=False, dest=Cmd)
+    (instr,) = rung._instructions
+    assert isinstance(instr, ResetInstruction)
+
+
 def test_function_rung_declares_dataflow() -> None:
     cur = Real("cur")
     out = Real("out")

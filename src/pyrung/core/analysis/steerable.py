@@ -35,7 +35,11 @@ __all__ = ["compute_clear_only", "compute_steerable"]
 
 def _literal_write(ro: Any, tag: str) -> Any | None:
     """The literal value rung *ro* writes to *tag*, or ``None``."""
-    from pyrung.core.instruction.coils import LatchInstruction, ResetInstruction
+    from pyrung.core.instruction.coils import (
+        LatchInstruction,
+        ResetInstruction,
+        reset_value_for_type,
+    )
     from pyrung.core.instruction.data_transfer import CopyInstruction, FillInstruction
 
     for instr in ro._instructions:
@@ -54,7 +58,13 @@ def _literal_write(ro: Any, tag: str) -> Any | None:
         if tag not in names:
             continue
         if isinstance(instr, ResetInstruction):
-            return False
+            if getattr(target, "type", None) is not None:
+                return reset_value_for_type(target.type)
+            if hasattr(target, "tags"):
+                for member in target.tags():
+                    if getattr(member, "name", None) == tag:
+                        return reset_value_for_type(member.type)
+            return None
         if isinstance(instr, LatchInstruction):
             return True
         if isinstance(instr, CopyInstruction):
@@ -112,7 +122,7 @@ def _is_bulk_fill_reset(ro: Any, tag: str) -> bool:
 
 
 def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bool:
-    """Every writer merely resets *tag* to its rest/default — the ack-cleared idiom.
+    """Every writer merely clears *tag* to its OFF/rest value — the ack-cleared idiom.
 
     ``reset()`` on a Bool, ``copy(0, flag)`` / ``fill(0, flag)`` on an Int/Word: the
     program never asserts the active value, so it must come from outside — a
@@ -131,7 +141,12 @@ def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bo
     writers = pdg.writers_of.get(tag, frozenset())
     if not writers or not pdg.readers_of.get(tag, frozenset()):
         return False
-    default = getattr(t, "default", None)
+    from pyrung.core.instruction.coils import reset_value_for_type
+
+    tag_ref = t if t is not None else pdg.tags.get(tag)
+    if tag_ref is None:
+        return False
+    rest_value = reset_value_for_type(tag_ref.type)
     for ri in writers:
         rung_node = pdg.rung_nodes[ri]
         if tag in rung_node.ote_writes:
@@ -144,7 +159,7 @@ def _clear_only_command(tag: str, t: Any, pdg: ProgramGraph, program: Any) -> bo
             # own housekeeping, not an operator ack of this specific register.
             return False
         lw = _literal_write(ro, tag)
-        if lw is None or not _values_match(lw, default):
+        if lw is None or not _values_match(lw, rest_value):
             return False
     return True
 
@@ -164,8 +179,8 @@ def _operator_interface(
     * **never program-written** — a pure input; its value comes from outside the
       program (operator / field / patch / force).  Steerable in any type, provided
       it is read somewhere (a wholly-unused declaration is not a lever).
-    * **clear-only (ack-cleared)** — every writer merely *resets it to its
-      rest/default* value (``reset()`` on a Bool, ``copy(0, flag)`` on an Int/Word).
+    * **clear-only (ack-cleared)** — every writer merely clears it to its
+      OFF/rest value (``reset()`` on a Bool, ``copy(0, flag)`` on an Int/Word).
       The program never asserts the active value, so that value must come from
       outside — the acknowledge pattern (PackML command bits like ``C_Clear`` /
       ``C_UnitModeChgRequest``).  Steerable in any type regardless of ``external``,

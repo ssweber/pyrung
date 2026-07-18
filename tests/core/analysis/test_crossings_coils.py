@@ -54,22 +54,35 @@ def test_latch_false_can_only_be_held() -> None:
     assert r.exact is True
 
 
-# --- RST (mirror about the default) -------------------------------------------
+# --- RST (type OFF/zero) -----------------------------------------------------
 
 
-def test_reset_default_value_is_fired_or_held() -> None:
+def test_reset_value_is_fired_or_held() -> None:
     r = ResetCrossing().reverse(ResetInstruction(Bool("M")), None, eq_target("M", False), _ctx())
     assert r.branches == ((CondAttr(expected=True),), (Prior("M", "M", 1, 0),))
 
 
-def test_reset_non_default_value_can_only_be_held() -> None:
+def test_reset_non_reset_value_can_only_be_held() -> None:
     r = ResetCrossing().reverse(ResetInstruction(Bool("M")), None, eq_target("M", True), _ctx())
-    assert r.branches == ((Prior("M", "M", 1, 0),),)  # RST never drives a non-default value
+    assert r.branches == ((Prior("M", "M", 1, 0),),)  # RST never drives a non-reset value
 
 
-def test_reset_int_target_default_zero() -> None:
-    # RST of an INT clears to 0; chasing == 0 is fired-or-held, == 5 is held-only.
-    instr = ResetInstruction(Int("Counter"))
+def test_reset_default_true_bool_still_drives_false() -> None:
+    instr = ResetInstruction(Bool("M", default=True))
+    assert ResetCrossing().forward(instr, _ctx()).value is False
+    fired_or_held = ResetCrossing().reverse(instr, None, eq_target("M", False), _ctx())
+    assert fired_or_held.branches == (
+        (CondAttr(expected=True),),
+        (Prior("M", "M", 1, 0),),
+    )
+    held = ResetCrossing().reverse(instr, None, eq_target("M", True), _ctx())
+    assert held.branches == ((Prior("M", "M", 1, 0),),)
+
+
+def test_reset_int_target_zero() -> None:
+    # RST of an INT clears to 0 even when its initialization default is nonzero.
+    instr = ResetInstruction(Int("Counter", default=7))
+    assert ResetCrossing().forward(instr, _ctx()).value == 0
     fired_or_held = ResetCrossing().reverse(instr, None, eq_target("Counter", 0), _ctx())
     assert fired_or_held.branches == (
         (CondAttr(expected=True),),

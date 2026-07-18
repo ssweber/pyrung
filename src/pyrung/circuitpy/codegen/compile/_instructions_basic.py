@@ -9,7 +9,7 @@ from pyrung.circuitpy.codegen._constants import (
 )
 from pyrung.circuitpy.codegen._util import (
     _bool_literal,
-    _coil_target_default,
+    _coil_reset_value,
     _indent_body,
     _optional_value_type_name,
     _store_coerce_expr,
@@ -84,9 +84,9 @@ def _compile_reset_instruction(
     ctx: CodegenContext,
     indent: int,
 ) -> list[str]:
-    default_expr = _coil_target_default(instr.target, ctx)
+    reset_expr = _coil_reset_value(instr.target, ctx)
     lines = [f"{' ' * indent}if {enabled_expr}:"]
-    lines.extend(_compile_target_write_lines(instr.target, default_expr, ctx, indent + 4))
+    lines.extend(_compile_target_write_lines(instr.target, reset_expr, ctx, indent + 4))
     return lines
 
 

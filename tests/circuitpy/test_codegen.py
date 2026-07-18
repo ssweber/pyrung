@@ -50,6 +50,7 @@ from pyrung.core import (
     pack_bits,
     pack_text,
     pack_words,
+    reset,
     return_early,
     run_enabled_function,
     run_function,
@@ -1126,6 +1127,28 @@ class TestIOMappingAndBranching:
         b_idx = next(i for i, line in enumerate(lines) if f"{b_sym} = True" in line)
         c_idx = next(i for i, line in enumerate(lines) if f"{c_sym} = True" in line)
         assert branch_idx < a_idx < b_idx < c_idx
+
+    @pytest.mark.parametrize(
+        ("target", "expected"),
+        [
+            (Bool("ResetBool", default=True), "False"),
+            (Int("ResetInt", default=7), "0"),
+            (Real("ResetReal", default=2.5), "0.0"),
+            (Char("ResetChar", default="A"), repr("")),
+        ],
+    )
+    def test_reset_emits_type_zero_independent_of_default(self, target, expected):
+        enable = Bool("Enable")
+        hw = P1AM()
+        hw.slot(1, "P1-08SIM")
+        with Program(strict=False) as prog:
+            with Rung(enable):
+                reset(target)
+
+        ctx = _context_for_program(prog, hw)
+        lines = compile_rung(prog.rungs[0], "_run_main_rungs", ctx, indent=0)
+        target_sym = ctx.symbol_for_tag(target)
+        assert any(f"{target_sym} = {expected}" in line for line in lines)
 
 
 class TestBoardPeripheralsAndRunStop:

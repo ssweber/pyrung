@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 from .base import Instruction, OneShotMixin
 from .resolvers import (
@@ -14,6 +14,21 @@ from .resolvers import (
 if TYPE_CHECKING:
     from pyrung.core.context import ScanContext
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
+
+
+_RESET_VALUES: dict[TagType, bool | int | float | str] = {
+    TagType.BOOL: False,
+    TagType.INT: 0,
+    TagType.DINT: 0,
+    TagType.REAL: 0.0,
+    TagType.WORD: 0,
+    TagType.CHAR: "",
+}
+
+
+def reset_value_for_type(tag_type: TagType) -> bool | int | float | str:
+    """Return the OFF/zero value written by a RESET instruction."""
+    return _RESET_VALUES[tag_type]
 
 
 class OutInstruction(OneShotMixin, Instruction):
@@ -87,7 +102,8 @@ class LatchInstruction(Instruction):
 class ResetInstruction(Instruction):
     """Reset/Unlatch instruction (RST).
 
-    Sets the target to its default value (False for bits, 0 for ints).
+    Clears the target to its type's OFF/zero value, independent of its
+    initialization default.
     """
 
     _reads = ()
@@ -102,4 +118,4 @@ class ResetInstruction(Instruction):
         if not enabled:
             return
         for target in resolve_coil_targets_ctx(self.target, ctx):
-            ctx.set_tag(target.name, target.default)
+            ctx.set_tag(target.name, reset_value_for_type(target.type))

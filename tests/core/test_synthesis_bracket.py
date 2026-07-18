@@ -124,6 +124,19 @@ def test_single_rule_conditional_hold_self_releases() -> None:
     assert seq == [True, True, True]
 
 
+def test_false_hold_turns_default_true_bool_off() -> None:
+    W = Bool("W", default=True)
+    with Program() as prog:
+        with Rung(W):
+            copy(1, Int("Seen"))
+    plc = PLC(prog, dt=0.1)
+    plc._synthesis = Synthesis(holds=[copy_hold_rung(value=False, dest=W)])
+
+    plc.step()
+
+    assert plc.state.tags["W"] is False
+
+
 def test_holds_bracket_steers_input_before_program_reads_it() -> None:
     # A steady hold copies True into Enable each scan *before* user logic, so the
     # program sees the held input the same scan.  The pre-logic plant reads the
