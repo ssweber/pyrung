@@ -139,6 +139,18 @@ class _DriveSetup:
     live: bool
 
 
+@dataclass(frozen=True)
+class _DriveOutcome:
+    """Named result assembled from the terminal event of one drive loop."""
+
+    reached: bool
+    work: PLC
+    journal: tuple[PlanStep, ...]
+    journey: tuple[_Step, ...]
+    reason: str | None
+    knowledge: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Core PILOT loop — layered acceptance (causal momentum)
 # ---------------------------------------------------------------------------
@@ -1154,18 +1166,12 @@ def _pilot_loop(
     ctx: _PilotContext,
     *,
     on_event: Callable[[PilotEvent], None] | None = None,
-) -> tuple[bool, list[_Step], list[_Step], PLC, tuple[PlanStep, ...], str | None, dict[str, Any]]:
-    """Run the PILOT loop and return
-    ``(reached, steps, journey, work, journal, reason, knowledge)``.
+) -> _DriveOutcome:
+    """Run the PILOT loop and assemble its terminal event as a named result.
 
-    ``steps`` is the clean, sequentially-replayable path; ``journey`` is the full
-    attempt log (incl. reverted rounds) surfaced on the plan.  ``journal`` is the
-    annotated step sequence for the Plan repr.  ``reason`` is the terminal
-    diagnostic the loop named on failure (``stuck: …`` / ``budget exhausted``),
-    ``None`` when the target was reached — so ``how()`` never returns a silent
-    unreachable.  ``knowledge`` is the Knowledge half threaded onto :class:`Plan`
-    (``hold_log`` / ``lever_notes`` / ``skiff_decline`` / ``avoid_names``) —
-    recording only (see :func:`_knowledge_payload`).
+    ``journey`` is the full attempt log, including reverted rounds. ``reason``
+    is the terminal diagnostic on failure and ``None`` when reached.
+    ``knowledge`` carries the recording fields that survive a world revert.
     """
     final: PilotEvent | None = None
     for event in _pilot_loop_events(plc, ctx):
@@ -1175,16 +1181,22 @@ def _pilot_loop(
             final = event
 
     if final is None:
-        return False, [], [], plc, (), None, {}
+        return _DriveOutcome(
+            reached=False,
+            work=plc,
+            journal=(),
+            journey=(),
+            reason=None,
+            knowledge={},
+        )
     reached = bool(final.data["reached"])
-    return (
-        reached,
-        list(final.data["steps"]),
-        list(final.data.get("journey", ())),
-        final.data["work"],
-        tuple(final.data.get("plan_journal", ())),
-        None if reached else final.data.get("reason"),
-        dict(final.data.get("knowledge", {})),
+    return _DriveOutcome(
+        reached=reached,
+        work=final.data["work"],
+        journal=tuple(final.data.get("plan_journal", ())),
+        journey=tuple(final.data.get("journey", ())),
+        reason=None if reached else final.data.get("reason"),
+        knowledge=dict(final.data.get("knowledge", {})),
     )
 
 
@@ -1729,7 +1741,7 @@ def pilot_how(
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
-    reached, _steps, _journey, work, journal, loop_reason, knowledge = _pilot_loop(
+    outcome = _pilot_loop(
         setup.work,
         ctx,
         on_event=on_event,
@@ -1737,7 +1749,7 @@ def pilot_how(
 
     reason = (
         None
-        if reached
+        if outcome.reached
         else _linked_feedback_block(
             target_tag,
             target_value,
@@ -1750,22 +1762,22 @@ def pilot_how(
         # Fall back to the loop's own terminal diagnostic (``stuck: …`` /
         # ``budget exhausted``) so an unreachable target always carries a reason
         # rather than surfacing as a silent ``reachable=False, reason=None``.
-        or loop_reason
+        or outcome.reason
     )
     return Plan(
-        reachable=reached,
+        reachable=outcome.reached,
         target_tag=target_tag,
         target_value=target_value,
-        fork=work if reached else None,
+        fork=outcome.work if outcome.reached else None,
         reason=reason,
-        route=route_taken if reached else None,
-        journal=journal,
+        route=route_taken if outcome.reached else None,
+        journal=outcome.journal,
         anchor_scan=setup.anchor_scan,
-        journey=tuple(_journey),
-        hold_log=knowledge.get("hold_log", ()),
-        lever_notes=knowledge.get("lever_notes", {}),
-        skiff_decline=knowledge.get("skiff_decline"),
-        avoid_names=knowledge.get("avoid_names", ()),
+        journey=outcome.journey,
+        hold_log=outcome.knowledge.get("hold_log", ()),
+        lever_notes=outcome.knowledge.get("lever_notes", {}),
+        skiff_decline=outcome.knowledge.get("skiff_decline"),
+        avoid_names=outcome.knowledge.get("avoid_names", ()),
     )
 
 
@@ -1838,15 +1850,14 @@ def _pilot_how_multi(
             via_pred=via_pred,
             work=work,
         )
-        reached, _steps, _journey, work, journal_leg, loop_reason, last_knowledge = _pilot_loop(
-            work,
-            ctx,
-        )
-        inf = last_knowledge.get("compass", inf)
-        last_journey = tuple(_journey)
-        journal_steps.extend(journal_leg)
-        if not reached:
-            detail = f" — {loop_reason}" if loop_reason else ""
+        outcome = _pilot_loop(work, ctx)
+        work = outcome.work
+        last_knowledge = outcome.knowledge
+        inf = outcome.knowledge.get("compass", inf)
+        last_journey = outcome.journey
+        journal_steps.extend(outcome.journal)
+        if not outcome.reached:
+            detail = f" — {outcome.reason}" if outcome.reason else ""
             return Plan(
                 reachable=False,
                 target_tag=label,
@@ -1914,17 +1925,14 @@ def pilot_drive(
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
-    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(
-        setup.work,
-        ctx,
-    )
+    outcome = _pilot_loop(setup.work, ctx)
 
     # A live failure without a harness-link explanation falls back to the
     # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
     # an unreachable target always carries a reason ("How we fail" #2).
     reason = (
         None
-        if reached
+        if outcome.reached
         else (
             _linked_feedback_block(
                 target_tag,
@@ -1935,20 +1943,20 @@ def pilot_drive(
                 setup.steerable,
                 _harness_couplings(setup.work),
             )
-            or loop_reason
+            or outcome.reason
         )
     )
     return Plan(
-        reachable=reached,
+        reachable=outcome.reached,
         target_tag=target_tag,
         target_value=target_value,
-        fork=work if reached else None,
+        fork=outcome.work if outcome.reached else None,
         reason=reason,
-        route=route_taken if reached else None,
+        route=route_taken if outcome.reached else None,
         anchor_scan=setup.anchor_scan,
-        journey=tuple(_journey),
-        hold_log=knowledge.get("hold_log", ()),
-        lever_notes=knowledge.get("lever_notes", {}),
-        skiff_decline=knowledge.get("skiff_decline"),
-        avoid_names=knowledge.get("avoid_names", ()),
+        journey=outcome.journey,
+        hold_log=outcome.knowledge.get("hold_log", ()),
+        lever_notes=outcome.knowledge.get("lever_notes", {}),
+        skiff_decline=outcome.knowledge.get("skiff_decline"),
+        avoid_names=outcome.knowledge.get("avoid_names", ()),
     )
