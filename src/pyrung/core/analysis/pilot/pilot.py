@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Callable, Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
@@ -113,6 +113,26 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _DriveSetup:
+    """Static/runtime preparation shared by every target driven on one PLC."""
+
+    work: PLC
+    program: Any
+    pdg: ProgramGraph
+    steerable: frozenset[str]
+    edge_tags: set[str]
+    resting: dict[str, Any]
+    anchor_scan: int
+    diag_snapshot: dict[str, Any]
+    nd_domains: dict[str, tuple[Any, ...]] | None
+    key_config: _StateKeyConfig | None
+    evidence: TransitionEvidence | None
+    compass: Compass
+    opaque_loop: frozenset[str]
+    live: bool
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +279,102 @@ def _make_pilot_context(
         avoid_pred=avoid_pred,
         via_pred=via_pred,
     )
+
+
+def _prepare_drive(
+    plc: PLC,
+    *,
+    live: bool,
+    unlink: list[str] | None,
+) -> _DriveSetup:
+    """Build the shared program/runtime analysis for one public drive."""
+
+    from pyrung.core.analysis.pdg import build_program_graph
+
+    work = plc if live else plc.fork(history_budget=math.inf)
+    program = plc._program
+    pdg = build_program_graph(program)
+    harness_fb = install_harness(work, unlink=unlink)
+    ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
+    steerable = compute_steerable(pdg, work._known_tags_by_name, program) - harness_fb - ref_consts
+    edge_tags = compute_edge_tags(pdg, program)
+    resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
+    diag_snapshot = dict(work.state.tags)
+    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
+        program,
+        diag_snapshot,
+    )
+    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
+    return _DriveSetup(
+        work=work,
+        program=program,
+        pdg=pdg,
+        steerable=steerable,
+        edge_tags=edge_tags,
+        resting=resting,
+        anchor_scan=work.state.scan_id,
+        diag_snapshot=diag_snapshot,
+        nd_domains=nd_domains,
+        key_config=key_config,
+        evidence=evidence,
+        compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
+        opaque_loop=detect_opaque_loop(pdg, program),
+        live=live,
+    )
+
+
+def _prepare_target_context(
+    setup: _DriveSetup,
+    target_tag: str,
+    target_value: Any,
+    target_predicate: Any,
+    *,
+    max_scans: int,
+    debug: bool,
+    avoid_pred: Any,
+    via_pred: Any,
+    influence: Compass | None = None,
+    work: PLC | None = None,
+) -> tuple[_PilotContext, RouteTaken | None]:
+    """Bind one target and route choice to a prepared drive."""
+
+    target_work = setup.work if work is None else work
+    route, blocked_actions, route_taken = _prepare_route(
+        target_work,
+        target_tag,
+        target_value,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.opaque_loop,
+        target_predicate=target_predicate,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
+    )
+    ctx = _make_pilot_context(
+        target_work,
+        target_tag,
+        target_value,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        setup.edge_tags,
+        setup.resting,
+        nd_domains=setup.nd_domains,
+        evidence=setup.evidence,
+        key_config=setup.key_config,
+        influence=influence or setup.compass,
+        opaque_loop=setup.opaque_loop,
+        route=route,
+        blocked_route_actions=blocked_actions,
+        max_scans=max_scans,
+        live=setup.live,
+        debug=debug,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
+        target_predicate=target_predicate,
+    )
+    return ctx, route_taken
 
 
 def _infer_pipeline_roles_for_context(
@@ -2011,61 +2127,19 @@ def pilot_events(
     :func:`pilot_how`).  ``avoid_pred``/``via_pred`` constrain the route the same
     way ``how(avoid=...)`` / ``how(via=...)`` do.
     """
-    from pyrung.core.analysis.pdg import build_program_graph
-
     target_tag, target_value, target_predicate = _parse_target(*conditions)
-    program = plc._program
-
-    fork = plc.fork(history_budget=math.inf)
-    pdg = build_program_graph(program)
-    harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
-    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
-    edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(
-        program, dict(fork.state.tags)
-    )
-    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
-    opaque_loop = detect_opaque_loop(pdg, program)
-    route_lock, blocked_route_actions, _route_taken = _prepare_route(
-        fork,
+    setup = _prepare_drive(plc, live=False, unlink=unlink)
+    ctx, _route_taken = _prepare_target_context(
+        setup,
         target_tag,
         target_value,
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        target_predicate=target_predicate,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
-    )
-
-    ctx = _make_pilot_context(
-        fork,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        steerable,
-        edge_tags,
-        resting,
-        nd_domains=nd_domains,
-        evidence=evidence,
-        key_config=key_config,
-        influence=inf,
-        opaque_loop=opaque_loop,
-        route=route_lock,
-        blocked_route_actions=blocked_route_actions,
+        target_predicate,
         max_scans=max_scans,
-        live=False,
         debug=False,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
-        target_predicate=target_predicate,
     )
-    yield from _pilot_loop_events(fork, ctx)
+    yield from _pilot_loop_events(setup.work, ctx)
 
 
 def pilot_how(
@@ -2090,8 +2164,6 @@ def pilot_how(
     PILOT can reach faults that the intact physical link would otherwise hold
     out of reach (e.g. a dead flow sensor with the valve open).
     """
-    from pyrung.core.analysis.pdg import build_program_graph
-
     targets = _parse_targets(*conditions)
     if len(targets) > 1:
         return _pilot_how_multi(
@@ -2104,59 +2176,19 @@ def pilot_how(
             unlink=unlink,
         )
     target_tag, target_value, target_predicate = targets[0]
-    program = plc._program
-
-    fork = plc.fork(history_budget=math.inf)
-    pdg = build_program_graph(program)
-    harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
-    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
-    edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    anchor_scan = fork.state.scan_id
-    diag_snapshot = dict(fork.state.tags)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
-    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
-    opaque_loop = detect_opaque_loop(pdg, program)
-    route_lock, blocked_route_actions, route_taken = _prepare_route(
-        fork,
+    setup = _prepare_drive(plc, live=False, unlink=unlink)
+    ctx, route_taken = _prepare_target_context(
+        setup,
         target_tag,
         target_value,
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        target_predicate=target_predicate,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
-    )
-
-    ctx = _make_pilot_context(
-        fork,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        steerable,
-        edge_tags,
-        resting,
-        nd_domains=nd_domains,
-        evidence=evidence,
-        key_config=key_config,
-        influence=inf,
-        opaque_loop=opaque_loop,
-        route=route_lock,
-        blocked_route_actions=blocked_route_actions,
+        target_predicate,
         max_scans=max_scans,
-        live=False,
         debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
-        target_predicate=target_predicate,
     )
     reached, _steps, _journey, work, journal, loop_reason, knowledge = _pilot_loop(
-        fork,
+        setup.work,
         ctx,
         on_event=on_event,
     )
@@ -2167,11 +2199,11 @@ def pilot_how(
         else _linked_feedback_block(
             target_tag,
             target_value,
-            diag_snapshot,
-            pdg,
-            program,
-            steerable,
-            _harness_couplings(fork),
+            setup.diag_snapshot,
+            setup.pdg,
+            setup.program,
+            setup.steerable,
+            _harness_couplings(setup.work),
         )
         # Fall back to the loop's own terminal diagnostic (``stuck: …`` /
         # ``budget exhausted``) so an unreachable target always carries a reason
@@ -2186,7 +2218,7 @@ def pilot_how(
         reason=reason,
         route=route_taken if reached else None,
         journal=journal,
-        anchor_scan=anchor_scan,
+        anchor_scan=setup.anchor_scan,
         journey=tuple(_journey),
         hold_log=knowledge.get("hold_log", ()),
         lever_notes=knowledge.get("lever_notes", {}),
@@ -2214,29 +2246,20 @@ def _pilot_how_multi(
     prove ME it falls open to this drive; the final all-targets check is the
     honest oracle (the drive loop is execution truth, never a skiff probe).
     """
-    from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
 
-    program = plc._program
     label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
-
-    fork = plc.fork(history_budget=math.inf)
-    pdg = build_program_graph(program)
-    harness_fb = install_harness(fork, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, fork._known_tags_by_name)
-    steerable = compute_steerable(pdg, fork._known_tags_by_name, program) - harness_fb - ref_consts
-    edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, fork._known_tags_by_name, pdg, program)
-    anchor_scan = fork.state.scan_id
-    diag_snapshot = dict(fork.state.tags)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
-    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
-    opaque_loop = detect_opaque_loop(pdg, program)
+    setup = _prepare_drive(plc, live=False, unlink=unlink)
 
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
 
-    ok, reason, ordered = _mt.analyze(diag_snapshot, pdg, program, steerable, targets)
+    ok, reason, ordered = _mt.analyze(
+        setup.diag_snapshot,
+        setup.pdg,
+        setup.program,
+        setup.steerable,
+        targets,
+    )
     if not ok:
         return Plan(
             reachable=False,
@@ -2244,10 +2267,11 @@ def _pilot_how_multi(
             target_value=True,
             targets=goal_pairs,
             reason=reason,
-            anchor_scan=anchor_scan,
+            anchor_scan=setup.anchor_scan,
         )
 
-    work = fork
+    work = setup.work
+    inf = setup.compass
     last_knowledge: dict[str, Any] = {}
     last_journey: tuple[Any, ...] = ()
     # The per-target drives run sequentially on ONE fork, so their journals are already
@@ -2262,40 +2286,17 @@ def _pilot_how_multi(
         # ``avoid=``/``via=`` are route predicates over tag values, not tied to any
         # one target, so they constrain every target's route selection uniformly —
         # a route (for any target) that forces the avoided predicate is pruned.
-        route_lock, blocked_route_actions, _route_taken = _prepare_route(
-            work,
+        ctx, _route_taken = _prepare_target_context(
+            setup,
             t_tag,
             t_val,
-            pdg,
-            program,
-            steerable,
-            opaque_loop,
-            target_predicate=t_pred,
-            avoid_pred=avoid_pred,
-            via_pred=via_pred,
-        )
-        ctx = _make_pilot_context(
-            work,
-            t_tag,
-            t_val,
-            pdg,
-            program,
-            steerable,
-            edge_tags,
-            resting,
-            nd_domains=nd_domains,
-            evidence=evidence,
-            key_config=key_config,
+            t_pred,
             influence=inf,
-            opaque_loop=opaque_loop,
-            route=route_lock,
-            blocked_route_actions=blocked_route_actions,
             max_scans=work.state.scan_id + max_scans,
-            live=False,
             debug=debug,
             avoid_pred=avoid_pred,
             via_pred=via_pred,
-            target_predicate=t_pred,
+            work=work,
         )
         reached, _steps, _journey, work, journal_leg, loop_reason, last_knowledge = _pilot_loop(
             work,
@@ -2315,7 +2316,7 @@ def _pilot_how_multi(
                     f"pilot: could not establish {t_tag}={t_val!r} while holding the "
                     f"other target(s){detail}"
                 ),
-                anchor_scan=anchor_scan,
+                anchor_scan=setup.anchor_scan,
             )
 
     final = dict(work.state.tags)
@@ -2329,7 +2330,7 @@ def _pilot_how_multi(
             targets=goal_pairs,
             reason=f"pilot: reached each target individually but {names} did not hold "
             "simultaneously (clobbered during co-establishment).",
-            anchor_scan=anchor_scan,
+            anchor_scan=setup.anchor_scan,
         )
     # recording: threaded from the LAST target's drive only (multi runs the loop
     # sequentially per target; the last drive's Knowledge is what survives on ``work``).
@@ -2339,7 +2340,7 @@ def _pilot_how_multi(
         target_value=True,
         targets=goal_pairs,
         fork=work,
-        anchor_scan=anchor_scan,
+        anchor_scan=setup.anchor_scan,
         journal=tuple(journal_steps),
         journey=last_journey,
         hold_log=last_knowledge.get("hold_log", ()),
@@ -2363,60 +2364,22 @@ def pilot_drive(
     ``unlink`` frees the named harness-feedback tags for fault injection (see
     :func:`pilot_how`).
     """
-    from pyrung.core.analysis.pdg import build_program_graph
-
     target_tag, target_value, target_predicate = _parse_target(*conditions)
-    program = plc._program
-
-    pdg = build_program_graph(program)
-    harness_fb = install_harness(plc, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, plc._known_tags_by_name)
-    steerable = compute_steerable(pdg, plc._known_tags_by_name, program) - harness_fb - ref_consts
-    edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, plc._known_tags_by_name, pdg, program)
-    anchor_scan = plc.state.scan_id
-    diag_snapshot = dict(plc.state.tags)
-    nd_domains, key_config, evidence, _semantic = _build_pilot_context(program, diag_snapshot)
-    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    inf = Compass(NavigationCatalog(slices=tuple(opaque_slices)))
-    opaque_loop = detect_opaque_loop(pdg, program)
-    route_lock, blocked_route_actions, route_taken = _prepare_route(
-        plc,
+    setup = _prepare_drive(plc, live=True, unlink=unlink)
+    ctx, route_taken = _prepare_target_context(
+        setup,
         target_tag,
         target_value,
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        target_predicate=target_predicate,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
-    )
-
-    ctx = _make_pilot_context(
-        plc,
-        target_tag,
-        target_value,
-        pdg,
-        program,
-        steerable,
-        edge_tags,
-        resting,
-        nd_domains=nd_domains,
-        evidence=evidence,
-        key_config=key_config,
-        influence=inf,
-        opaque_loop=opaque_loop,
-        route=route_lock,
-        blocked_route_actions=blocked_route_actions,
+        target_predicate,
         max_scans=max_scans,
-        live=True,
         debug=debug,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
-        target_predicate=target_predicate,
     )
-    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(plc, ctx)
+    reached, _steps, _journey, work, _journal, loop_reason, knowledge = _pilot_loop(
+        setup.work,
+        ctx,
+    )
 
     # A live failure without a harness-link explanation falls back to the
     # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
@@ -2428,11 +2391,11 @@ def pilot_drive(
             _linked_feedback_block(
                 target_tag,
                 target_value,
-                diag_snapshot,
-                pdg,
-                program,
-                steerable,
-                _harness_couplings(plc),
+                setup.diag_snapshot,
+                setup.pdg,
+                setup.program,
+                setup.steerable,
+                _harness_couplings(setup.work),
             )
             or loop_reason
         )
@@ -2444,7 +2407,7 @@ def pilot_drive(
         fork=work if reached else None,
         reason=reason,
         route=route_taken if reached else None,
-        anchor_scan=anchor_scan,
+        anchor_scan=setup.anchor_scan,
         journey=tuple(_journey),
         hold_log=knowledge.get("hold_log", ()),
         lever_notes=knowledge.get("lever_notes", {}),

@@ -156,8 +156,9 @@ changes, it returns the same object. Runtime instruments return
 
 ### Orchestration and package surface
 
-- `pilot.py` — context construction, user route lock, event loop, knowledge
-  application, world commit, terminal results, and public drive entry points.
+- `pilot.py` — shared drive preparation, target-context construction, user
+  route lock, event loop, knowledge application, world commit, terminal
+  results, and public drive entry points.
 - `types.py` — cross-module protocols and world, trial, event, and incident
   records.
 - `__init__.py` — package exports.
