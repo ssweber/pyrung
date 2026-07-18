@@ -21,7 +21,6 @@ from pyrung.core.analysis.pilot._ops import (
     _avoid_violations,
     _coast_holding_state,
     _coast_to_value,
-    _DebugFn,
     _has_pending_effects,
     _pilot_world_key,
     _settle_delayed_effects,
@@ -280,24 +279,15 @@ def _compass_observations(
 # ---------------------------------------------------------------------------
 
 
-def _label_action(action_pairs: tuple[_ActionPair, ...]) -> str:
-    if len(action_pairs) == 1:
-        t, v = action_pairs[0]
-        return f"({t}={v!r})"
-    return f"({', '.join(f'{t}={v!r}' for t, v in action_pairs)})"
-
-
 def _try_action_batch(
     action_pairs: tuple[_ActionPair, ...],
     applied: tuple[_ActionPair, ...],
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
     *,
     observe_label: str,
     target_observe_label: str,
-    debug_name: str,
     influence_prescribed: bool,
     route_prescribed: bool,
     nogood_pair: _ActionPair | None,
@@ -317,7 +307,6 @@ def _try_action_batch(
     # can point at what excluded the path.
     avoid_names = _avoid_violations(ctx, applied, frame.snap)
     if avoid_names:
-        dbg(f"#     AVOID-ACTION {debug_name}: would enter {', '.join(avoid_names)}")
         return _AttemptResult(
             trial=None,
             gate_events=(
@@ -364,10 +353,8 @@ def _try_action_batch(
         frame,
         state,
         ctx,
-        dbg,
         observe_label=observe_label,
         target_observe_label=target_observe_label,
-        debug_name=debug_name,
         influence_prescribed=influence_prescribed,
         route_prescribed=route_prescribed,
         nogood_pair=nogood_pair,
@@ -390,7 +377,6 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     frame = world.frame
     state = world.state
     ctx = world.context
-    dbg = world.debug
     key_config = state.key_config
     if key_config is None:
         raise StaleBearingError("cannot execute a bearing before the world key is configured")
@@ -414,18 +400,14 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     act = bearing.act
     if isinstance(act, Pulse):
         option = act.option
-        if len(act.applied) > 1:
-            dbg(f"#     INFLUENCE-CONTEXT: +{len(act.applied) - 1} co-actions")
         return _try_action_batch(
             (act.action,),
             act.applied,
             frame,
             state,
             ctx,
-            dbg,
             observe_label="accept",
             target_observe_label="target",
-            debug_name=_label_action((act.action,)),
             influence_prescribed=option.influence_prescribed,
             # A structural program-owned current is also an explicit bearing:
             # if it opens a new frontier, commit it so progress monitoring can
@@ -446,10 +428,8 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
             frame,
             state,
             ctx,
-            dbg,
             observe_label="batch" if act.source == "learned" else "width",
             target_observe_label=("batch-target" if act.source == "learned" else "width-target"),
-            debug_name="SKIFF-BATCH" if act.source == "learned" else "WIDENING",
             influence_prescribed=act.source == "learned",
             route_prescribed=False,
             nogood_pair=None,
@@ -465,11 +445,10 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 frame,
                 state,
                 ctx,
-                dbg,
             )
-        return _try_terminal_letrun(frame, state, ctx, dbg)
+        return _try_terminal_letrun(frame, state, ctx)
     if isinstance(act, Dwell):
-        return _try_terminal_dwell(frame, state, ctx, dbg)
+        return _try_terminal_dwell(frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
@@ -485,7 +464,6 @@ def _try_zoom(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
 ) -> _AttemptResult:
     """Let-run zoom through the verify pipeline — same shape as _try_candidate.
 
@@ -563,10 +541,8 @@ def _try_zoom(
         frame=frame,
         state=state,
         ctx=ctx,
-        dbg=dbg,
         observe_label="zoom",
         target_observe_label="zoom-target",
-        debug_name="ZOOM",
         influence_prescribed=False,
         route_prescribed=route_prescribed,
         nogood_pair=wait_nogood,
@@ -583,7 +559,6 @@ def _try_terminal_letrun(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
 ) -> _AttemptResult:
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
@@ -699,10 +674,8 @@ def _try_terminal_letrun(
         frame=frame,
         state=state,
         ctx=ctx,
-        dbg=dbg,
         observe_label="letrun",
         target_observe_label="letrun-target",
-        debug_name="TERMINAL-LETRUN",
         influence_prescribed=False,
         route_prescribed=False,
         nogood_pair=None,
@@ -719,7 +692,6 @@ def _try_terminal_dwell(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    dbg: _DebugFn,
 ) -> _AttemptResult:
     """Run one bounded repeated dwell through the shared trial gates.
 
@@ -767,7 +739,6 @@ def _try_terminal_dwell(
         # No new input is possible here and the cone quiesced without crossing the
         # target: a true terminal stall.  Do not classify a self-ejection as an
         # advance — return dead-end so the caller routes to the skiff / stuck exit.
-        dbg("#     TERMINAL-DWELL: settled without reaching target")
         return _AttemptResult(
             trial=None,
             gate_events=(PilotGateEvent("dead-end", "terminal dwell settled short of target"),),
@@ -798,10 +769,8 @@ def _try_terminal_dwell(
         frame=frame,
         state=state,
         ctx=ctx,
-        dbg=dbg,
         observe_label="letrun",
         target_observe_label="letrun-target",
-        debug_name="TERMINAL-DWELL",
         influence_prescribed=False,
         route_prescribed=False,
         nogood_pair=None,

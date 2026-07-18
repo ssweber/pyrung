@@ -1380,7 +1380,6 @@ def _pilot_loop_events(
             frame=None,
             state=state,
             context=ctx,
-            debug=_dbg,
             key_config=state.key_config,
         )
         target = TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate)

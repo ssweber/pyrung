@@ -72,7 +72,6 @@ class OrientationWorld:
     frame: Any
     state: Any
     context: Any
-    debug: Any
     key_config: Any = None
 
 

@@ -6,6 +6,7 @@ and dead ends, then delegates motion attribution and progress classification to
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
+Gate diagnostics are recorded as ``PilotGateEvent`` values on the attempt.
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _avoid_snap_names,
-    _DebugFn,
     _has_pending_effects,
     _pilot_world_key,
     _rungs_from_proposals,
@@ -68,9 +68,7 @@ class _DeadEndResult:
 # ---------------------------------------------------------------------------
 
 
-def _gate_debug(
-    dbg: _DebugFn,
-    name: str,
+def _record_gate(
     event: str,
     detail: str = "",
     gate_events: list[PilotGateEvent] | None = None,
@@ -85,10 +83,6 @@ def _gate_debug(
                 evidence=evidence or {},
             )
         )
-    if name.startswith("WIDTH-"):
-        dbg(f"# {name}-{event}{detail}")
-    else:
-        dbg(f"#     {event} {name}{detail}")
 
 
 def _gate_spin(
@@ -97,9 +91,7 @@ def _gate_spin(
     frame: Any,
     state: Any,
     ctx: Any,
-    dbg: _DebugFn,
     *,
-    debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -118,7 +110,7 @@ def _gate_spin(
     # work, not a spin.
     gauge = getattr(state, "gauge", None)
     if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
-        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
+        _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return trial
 
     if trial.post_pulse_key != frame.key:
@@ -156,9 +148,7 @@ def _gate_spin(
                 ),
             )
             retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
-            _gate_debug(
-                dbg,
-                debug_name,
+            _record_gate(
                 "EXCURSION-RETRY-OK",
                 f": reverted={result.reverted}, holds={result.confirmed_holds}",
                 gate_events,
@@ -178,16 +168,14 @@ def _gate_spin(
                 timeline=result.retry_timeline,
             )
         if result.reverted:
-            _gate_debug(dbg, debug_name, "EXCURSION-NO-HOLDS", gate_events=gate_events)
+            _record_gate("EXCURSION-NO-HOLDS", gate_events=gate_events)
         else:
-            _gate_debug(dbg, debug_name, "EXCURSION-RETRY-FAIL", gate_events=gate_events)
+            _record_gate("EXCURSION-RETRY-FAIL", gate_events=gate_events)
         return None
 
     if nogood_pair is not None:
         collected_nogoods.append(nogood_pair)
-    _gate_debug(
-        dbg,
-        debug_name,
+    _record_gate(
         "SPIN",
         gate_events=gate_events,
         evidence={
@@ -206,11 +194,9 @@ def _gate_cycle(
     trial: _PulseState,
     frame: Any,
     state: Any,
-    dbg: _DebugFn,
     *,
     pending: bool,
     influence_prescribed: bool,
-    debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -222,14 +208,12 @@ def _gate_cycle(
     # the threshold-masked projection (see _gate_spin's twin check).
     gauge = getattr(state, "gauge", None)
     if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
-        _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
+        _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
-        _gate_debug(
-            dbg,
-            debug_name,
+        _record_gate(
             "CYCLE",
             gate_events=gate_events,
             evidence={
@@ -241,9 +225,7 @@ def _gate_cycle(
             },
         )
         return False
-    _gate_debug(
-        dbg,
-        debug_name,
+    _record_gate(
         "INFLUENCE-OVERRIDE-CYCLE",
         ": influence-prescribed",
         gate_events,
@@ -257,10 +239,8 @@ def _gate_dead_end(
     frame: Any,
     state: Any,
     ctx: Any,
-    dbg: _DebugFn,
     *,
     influence_prescribed: bool,
-    debug_name: str,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -312,7 +292,6 @@ def _gate_dead_end(
             frame=post_frame,
             state=state,
             context=ctx,
-            debug=dbg,
         ),
         TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate),
         NavigationConstraints(ctx.blocked_route_actions, ctx.avoid_pred),
@@ -325,9 +304,7 @@ def _gate_dead_end(
         if not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
-            _gate_debug(
-                dbg,
-                debug_name,
+            _record_gate(
                 "DEAD-END",
                 ": empty frontier, no pending effects",
                 gate_events,
@@ -343,9 +320,7 @@ def _gate_dead_end(
                 },
             )
             return None
-        _gate_debug(
-            dbg,
-            debug_name,
+        _record_gate(
             "CHANNEL-OVERRIDE-DEAD-END"
             if (channel_reached or channel_moved)
             else "INFLUENCE-OVERRIDE-DEAD-END",
@@ -366,13 +341,11 @@ def _gate_dead_end(
         # the action set unchanged, yet the trial did a third of the work.
         gauge = getattr(state, "gauge", None)
         if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
-            _gate_debug(dbg, debug_name, "ORDINAL-ADVANCE", ": gauge earned", gate_events)
+            _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
-            _gate_debug(
-                dbg,
-                debug_name,
+            _record_gate(
                 "LATERAL",
                 ": no new frontier, no trend improvement",
                 gate_events,
@@ -389,9 +362,7 @@ def _gate_dead_end(
             )
             return None
         else:
-            _gate_debug(
-                dbg,
-                debug_name,
+            _record_gate(
                 "CHANNEL-OVERRIDE-LATERAL"
                 if (channel_reached or channel_moved)
                 else "INFLUENCE-OVERRIDE-LATERAL",
@@ -425,11 +396,9 @@ def verify_gates(
     frame: Any,
     state: Any,
     ctx: Any,
-    dbg: _DebugFn,
     *,
     observe_label: str,
     target_observe_label: str,
-    debug_name: str,
     influence_prescribed: bool,
     route_prescribed: bool,
     nogood_pair: _ActionPair | None,
@@ -513,8 +482,6 @@ def verify_gates(
         frame,
         state,
         ctx,
-        dbg,
-        debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -560,10 +527,8 @@ def verify_gates(
         trial,
         frame,
         state,
-        dbg,
         pending=pending,
         influence_prescribed=influence_prescribed,
-        debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -581,9 +546,7 @@ def verify_gates(
         frame,
         state,
         ctx,
-        dbg,
         influence_prescribed=influence_prescribed,
-        debug_name=debug_name,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -623,9 +586,7 @@ def verify_gates(
     if not assessment.accepted:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
-        _gate_debug(
-            dbg,
-            debug_name,
+        _record_gate(
             "ZOOM-STALL" if zoom_channel_tag is not None else "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
@@ -651,14 +612,6 @@ def verify_gates(
             excursion_holds=tuple(excursion_holds),
         )
 
-    outcome_tag = outcome.value.upper()
-    if debug_name.startswith("WIDTH-"):
-        dbg(f"# {debug_name}-{outcome_tag}: distance {frame.distance_before} -> {dead_end.trend}")
-    else:
-        dbg(
-            f"#     {outcome_tag} {debug_name}: "
-            f"distance {frame.distance_before} -> {dead_end.trend}"
-        )
     gate_events.append(
         PilotGateEvent(outcome.value, f"distance {frame.distance_before} -> {dead_end.trend}")
     )

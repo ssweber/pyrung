@@ -75,7 +75,6 @@ def _world(compass: Compass) -> OrientationWorld:
         ),
         state=SimpleNamespace(),
         context=context,
-        debug=lambda _message: None,
     )
 
 
@@ -228,7 +227,6 @@ def test_stale_bearing_cannot_execute() -> None:
         frame=SimpleNamespace(),
         state=state,
         context=SimpleNamespace(),
-        debug=lambda _message: None,
     )
     bearing = Bearing(
         world_key=("stale",),
