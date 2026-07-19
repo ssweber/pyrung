@@ -13,6 +13,7 @@ gate acceptance.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import (
@@ -23,6 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
+    DepartureVerdict,
     Provisional,
     classify_departure,
 )
@@ -151,6 +153,45 @@ def _monitor_trend(
         verdict = classify_departure(state, ctx, chan, departed_from, trial.before_snap)
         if verdict.is_provisional:
             if state.provisional is None:
+                prescribed_departure = (
+                    trial.route_prescribed
+                    and trial.assessment is not None
+                    and trial.assessment.agency is Agency.PILOT
+                )
+                if verdict.progress.effect == "preserved" and not prescribed_departure:
+                    # A clean route says the landing is usable, but a known-
+                    # preserved progress receipt says this occurrence earned
+                    # no program work. For ambient motion it may therefore be
+                    # a preventable ejection. A Compass/current edge earns
+                    # tide-table credit only when causal attribution says the
+                    # pilot actually produced this departure; program-caused
+                    # motion encountered during a prescribed coast remains
+                    # ambient. Investigate that occurrence, retaining its proven
+                    # continuation when no receipt-preserving correction survives.
+                    checkpoint = state.checkpoints[-1]
+                    checkpoint_snap = dict(checkpoint.world.work.state.tags)
+                    replay_from_checkpoint = not _values_match(
+                        checkpoint_snap.get(chan), departed_from
+                    )
+                    incident_anchor = (
+                        checkpoint.world.work.state.scan_id
+                        if replay_from_checkpoint
+                        else trial.scan_before
+                    )
+                    incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
+                    return (
+                        ejection,
+                        *_investigate_and_revert(
+                            trial,
+                            frame,
+                            state,
+                            ctx,
+                            anchor_scan=incident_anchor,
+                            end_scan=state.work.state.scan_id,
+                            incident_before_snap=incident_before,
+                            retain_if_unresolved=verdict,
+                        ),
+                    )
                 return (
                     ejection,
                     *_start_provisional(verdict, trial, state, ctx, chan),
@@ -380,6 +421,7 @@ def _start_provisional(
         started_at=scan_before,
         expires_at=min(ctx.max_scans, scan_before + _PROVISIONAL_SCAN_BUDGET),
         classification=verdict.verdict,
+        entry_progress=verdict.progress,
     )
     return (
         PilotEvent(
@@ -394,6 +436,7 @@ def _start_provisional(
                 "route": verdict.route,
                 "settle_scans": verdict.settle_scans,
                 "gauge_at_source": gauge_at_source,
+                "entry_progress": verdict.progress,
                 "classification": verdict.verdict,
             },
         ),
@@ -406,16 +449,21 @@ def _anchor_provisional(
 ) -> tuple[PilotEvent, ...]:
     """Assess a newly settled provisional world before choosing another act."""
     provisional = state.provisional
-    if provisional is None or len(state.checkpoints) != provisional.checkpoint_depth:
+    if (
+        provisional is None
+        or provisional.entry_banked
+        or len(state.checkpoints) != provisional.checkpoint_depth
+    ):
         return ()
     gauge = state.gauge
-    outcome = (
-        gauge.compare(dict(provisional.gauge_at_source), frame.snap)
-        if gauge is not None and gauge.components
-        else "unknown"
-    )
+    outcome = provisional.entry_progress.effect
+    if outcome not in {"advanced", "behind"}:
+        outcome = (
+            gauge.compare(dict(provisional.gauge_at_source), frame.snap)
+            if gauge is not None and gauge.components
+            else "unknown"
+        )
     if outcome == "advanced":
-        state.provisional = None
         state.checkpoints.append(
             _Checkpoint(
                 frame.key,
@@ -425,6 +473,15 @@ def _anchor_provisional(
             )
         )
         state.best_trend = frame.distance_before
+        landing_mark = gauge.mark(frame.snap) if gauge is not None else ()
+        # Bank the work without closing the corridor.  The Held checkpoint is
+        # now the rollback floor, while the provisional still gives the next
+        # Unhold/rejoin transaction its ordinary local recovery semantics.
+        state.provisional = replace(
+            provisional,
+            gauge_at_source=landing_mark,
+            entry_banked=True,
+        )
         return (
             PilotEvent(
                 "provisional_promoted",
@@ -433,9 +490,11 @@ def _anchor_provisional(
                     "channel_tag": provisional.channel_tag,
                     "from_value": provisional.from_value,
                     "gauge_at_source": provisional.gauge_at_source,
-                    "landing_mark": gauge.mark(frame.snap) if gauge is not None else (),
+                    "entry_progress": provisional.entry_progress,
+                    "landing_mark": landing_mark,
                     "trend": frame.distance_before,
                     "checkpoint_count": len(state.checkpoints),
+                    "corridor_open": True,
                 },
             ),
         )
@@ -522,6 +581,11 @@ def _finish_provisional(
         return None
 
     state.provisional = None
+    banked_checkpoint = (
+        state.checkpoints[provisional.checkpoint_depth]
+        if provisional.entry_banked and len(state.checkpoints) > provisional.checkpoint_depth
+        else None
+    )
     del state.checkpoints[provisional.checkpoint_depth :]
     if outcome == "behind":
         event = PilotEvent(
@@ -545,6 +609,8 @@ def _finish_provisional(
         )
         return (event, *regression)
 
+    if banked_checkpoint is not None:
+        state.checkpoints.append(banked_checkpoint)
     checkpoint = state.checkpoints[-1]
     state.load_world(checkpoint.world)
     state.best_trend = checkpoint.trend
@@ -638,6 +704,7 @@ def _investigate_and_revert(
     anchor_scan: int,
     end_scan: int,
     incident_before_snap: dict[str, Any] | None = None,
+    retain_if_unresolved: DepartureVerdict | None = None,
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident over ``[anchor_scan, end_scan]``, replay-test
     corrective holds, install the confirmed ones, and revert to the last
@@ -766,6 +833,12 @@ def _investigate_and_revert(
             replay,
             needed=needed,
             installed_rungs=tuple(state.rungs),
+            correction_progress_mark=(
+                retain_if_unresolved.progress.source_mark
+                if retain_if_unresolved is not None
+                and retain_if_unresolved.progress.effect == "preserved"
+                else ()
+            ),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this
@@ -819,6 +892,33 @@ def _investigate_and_revert(
                     rungs=tuple(investigation_rungs),
                 )
             )
+
+    if retain_if_unresolved is not None and not investigation_rungs:
+        # The departure earned no gauge credit, but investigation also found no
+        # executable correction that preserves the target frontier.  The
+        # independently-proven continuation therefore receives the ordinary
+        # bounded provisional loan.
+        assert trial.zoom_channel_tag is not None
+        return (
+            PilotEvent(
+                "departure_investigated",
+                state.work.state.scan_id,
+                {
+                    "channel_tag": trial.zoom_channel_tag,
+                    "from_value": trial.before_snap.get(trial.zoom_channel_tag),
+                    "retained": True,
+                    "progress": retain_if_unresolved.progress,
+                    "investigation": investigation_payload,
+                },
+            ),
+            *_start_provisional(
+                retain_if_unresolved,
+                trial,
+                state,
+                ctx,
+                trial.zoom_channel_tag,
+            ),
+        )
 
     # Legibility (recording only): the channel transition(s) this revert undoes.
     # A destructive move (``S_StateCurrent 6->8`` Aborting) and a program-intended

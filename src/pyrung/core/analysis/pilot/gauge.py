@@ -64,6 +64,20 @@ class GaugeComponent:
 
 
 @dataclass(frozen=True)
+class GaugeReceipt:
+    """Target-relative work observed across one world transition.
+
+    The marks make the comparison auditable and reusable by later policy.
+    ``unknown`` means the gauge had no trustworthy coordinate or could not
+    compare one; it is never silently treated as preserved work.
+    """
+
+    source_mark: tuple[tuple[str, Any], ...]
+    landing_mark: tuple[tuple[str, Any], ...]
+    effect: str  # "advanced" | "preserved" | "behind" | "unknown"
+
+
+@dataclass(frozen=True)
 class Gauge:
     components: tuple[GaugeComponent, ...]
 
@@ -74,6 +88,13 @@ class Gauge:
     def mark(self, snap: Any) -> tuple[tuple[str, Any], ...]:
         """The gauge receipt for one snapshot."""
         return tuple((c.tag, snap.get(c.tag)) for c in self.components)
+
+    def receipt(self, source: Any, landing: Any) -> GaugeReceipt:
+        """Freeze the target-relative work comparison for one transition."""
+        source_mark = self.mark(source)
+        landing_mark = self.mark(landing)
+        effect = self.compare(source, landing) if self.components else "unknown"
+        return GaugeReceipt(source_mark, landing_mark, effect)
 
     def compare(self, anchor: Any, now: Any) -> str:
         """``advanced`` / ``preserved`` / ``behind`` / ``unknown``.

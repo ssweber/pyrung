@@ -62,6 +62,23 @@ def test_knock_count_is_an_ordinal_component() -> None:
     assert not gauge.ordinal_advanced({count.name: 2}, {count.name: 0})
 
 
+def test_gauge_receipt_keeps_source_landing_and_progress_order() -> None:
+    """A consumer receives the evidence, not only a transient comparison."""
+    from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
+
+    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+
+    advanced = gauge.receipt({"Step": 101}, {"Step": 103})
+    assert advanced.source_mark == (("Step", 101),)
+    assert advanced.landing_mark == (("Step", 103),)
+    assert advanced.effect == "advanced"
+
+    assert gauge.receipt({"Step": 103}, {"Step": 103}).effect == "preserved"
+    assert gauge.receipt({"Step": 103}, {"Step": 101}).effect == "behind"
+    assert gauge.receipt({}, {"Step": 103}).effect == "unknown"
+    assert Gauge(()).receipt({}, {}).effect == "unknown"
+
+
 def _step_chain_program():
     """A discrete stepper with a reset — the recipe-coordinate shape.
 

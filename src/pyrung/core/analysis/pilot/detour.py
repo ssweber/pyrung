@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
+from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -45,6 +46,7 @@ class DepartureVerdict:
     settle_scans: int
     reentry_value: Any = None  # where the clean route re-enters, if found
     route: tuple[Any, ...] = ()  # channel values along the clean route
+    progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
 
     @property
     def is_provisional(self) -> bool:
@@ -69,6 +71,8 @@ class Provisional:
     started_at: int
     expires_at: int
     classification: str
+    entry_progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
+    entry_banked: bool = False
 
 
 def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastReceipt]:
@@ -168,6 +172,12 @@ def classify_departure(
     fork, receipt = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
     settle_scans = receipt.end_scan - receipt.start_scan
+    gauge = getattr(state, "gauge", None)
+    progress = (
+        gauge.receipt(anchor_snap, dict(fork.state.tags))
+        if gauge is not None and getattr(gauge, "components", ())
+        else GaugeReceipt((), (), "unknown")
+    )
 
     def _v(verdict: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
         logger.debug(
@@ -188,6 +198,7 @@ def classify_departure(
             settle_scans=settle_scans,
             reentry_value=reentry,
             route=route,
+            progress=progress,
         )
 
     if receipt.stop_reason != "quiescent":
@@ -196,11 +207,8 @@ def classify_departure(
         # could not — a timeout is not a settlement).
         return _v("unknown", f"landing did not settle within cap ({receipt.stop_reason})")
 
-    gauge = getattr(state, "gauge", None)
-    if gauge is not None and getattr(gauge, "components", ()):
-        observed = gauge.compare(anchor_snap, dict(fork.state.tags))
-        if observed == "behind":
-            return _v("regression", "settled world is behind the exact source receipt")
+    if progress.effect == "behind":
+        return _v("regression", "settled world is behind the exact source receipt")
 
     goals: list[Any] = [from_value]
     target_tag = getattr(ctx, "target_tag", None)

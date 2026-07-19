@@ -48,7 +48,10 @@ from pyrung import (
 _DWELL_MS = 100
 
 
-def _door_cycle_program() -> tuple[Program, dict[str, object]]:
+def _door_cycle_program(
+    *,
+    premature_door_hold: bool = False,
+) -> tuple[Program, dict[str, object]]:
     IDLE, EXECUTE, ABORTED, HOLDING, HELD, UNHOLDING, RESETTING, COMPLETING, COMPLETED = (
         4,
         6,
@@ -110,6 +113,7 @@ def _door_cycle_program() -> tuple[Program, dict[str, object]]:
     Trans = Bool("HRel_Trans")
 
     PhaseTmr = Timer.clone("HRel_PhaseTmr")
+    PrematureHoldTmr = Timer.clone("HRel_PrematureHoldTmr")
     FinishTmr = Timer.clone("HRel_FinishTmr")
 
     MaskIdx = Int("HRel_MaskIdx")
@@ -165,9 +169,21 @@ def _door_cycle_program() -> tuple[Program, dict[str, object]]:
             copy(CmdUnholdRef, Cmd)
             copy(1, CmdReq)
 
-        # Recipe phase 1: the Execute dwell needs the door CLOSED.
-        with rung(State == EXECUTE, At101, i_Door):
-            on_delay(PhaseTmr, _DWELL_MS, "ms")
+        # Recipe phase 1: the normal fixture needs the door CLOSED.  The
+        # two-Held policy fixture below lets the recipe clock advance
+        # independently so a shorter missing-door watchdog can first produce
+        # a premature Held occurrence.
+        if premature_door_hold:
+            with rung(State == EXECUTE, At101):
+                on_delay(PhaseTmr, _DWELL_MS, "ms")
+            with rung(State == EXECUTE, At101, ~i_Door):
+                on_delay(PrematureHoldTmr, 30, "ms")
+            with rung(PrematureHoldTmr.Done):
+                copy(CmdHoldRef, Cmd)
+                copy(1, CmdReq)
+        else:
+            with rung(State == EXECUTE, At101, i_Door):
+                on_delay(PhaseTmr, _DWELL_MS, "ms")
         with rung(At101, PhaseTmr.Done):
             latch(Trans)
 
@@ -368,6 +384,168 @@ def test_stepper_is_a_gauge_component() -> None:
     # would classify as family B (stepper). Either carries the detour.
     assert by_tag[tags["Step"].name].kind in ("ordinal", "stepper")
     assert by_tag[tags["Step"].name].direction == 1
+
+
+def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
+    """Fast BurnerLoop decision smoke from an executable scan checkpoint.
+
+    Capture the later, recipe-owned HELD world (Step 103 was earned before the
+    program issued Hold), then ask PILOT for only its next decision.  Future
+    work may teach recovery that an earlier door-caused Held is a pointless
+    detour; it must not erase this Current or perturb the established choice:
+    open the door for the recipe transition and issue Unhold, never Complete.
+
+    ``PLC.fork()`` is the checkpoint seam: it preserves the exact timer, edge,
+    tag, and history state at this scan without replaying the full tumbler
+    drive.
+    """
+    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _door_cycle_program()
+    plc = PLC(logic, dt=0.010)
+    plc.patch({tags["Door"].name: True, tags["State"].name: tags["Execute"]})
+    plc.step()
+    plc.run(cycles=20)
+
+    assert plc.state.tags[tags["State"].name] == tags["Held"]
+    assert plc.state.tags[tags["Step"].name] == 103
+    held_checkpoint = plc.fork()
+
+    built = None
+    tried = None
+    for event in pilot_events(
+        held_checkpoint,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=100,
+    ):
+        if event.kind == "candidates_built":
+            built = event.data["candidates"]
+        elif event.kind == "candidate_try":
+            tried = event.data
+            break
+
+    assert built is not None
+    assert [(candidate["tag"], candidate["value"]) for candidate in built] == [
+        (tags["C_Unhold"].name, True),
+        (tags["Door"].name, False),
+    ]
+    assert built[0]["route_prescribed"] is True
+    assert tried is not None
+    assert tried["applied"] == (
+        (tags["C_Unhold"].name, True),
+        (tags["Door"].name, False),
+    )
+    assert all(tag != tags["C_Complete"].name for tag, _value in tried["applied"])
+
+
+def test_clean_detour_is_investigated_before_retention_without_poisoning_later_current() -> None:
+    """One PILOT session distinguishes two target-relative Held occurrences.
+
+    The first Held is only structurally on-route: a missing-door watchdog
+    caused it before the recipe earned its hold point.  Clean continuation is
+    therefore not permission to skip investigation; PILOT must install the
+    non-self-defeating Execute-era door correction and revert.
+
+    The second Held is the recipe's Current at Step 103.  Preventing that
+    program-owned Hold would defeat earned recipe progress, so PILOT retains
+    the detour and still chooses its established next act: Unhold plus the
+    open-door recipe transition, never the avoided Complete button.
+    """
+    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.runner import _compile_avoid
+
+    logic, tags = _door_cycle_program(premature_door_hold=True)
+    plc = PLC(logic, dt=0.010)
+    # Begin at the clean Execute receipt.  This keeps the first watchdog
+    # departure out of Start's pulse-settlement transaction and mirrors the
+    # real drive's already-accepted Starting -> Execute bearing.
+    plc.patch({tags["State"].name: tags["Execute"]})
+    plc.step()
+
+    events = []
+    last_committed = {}
+    departures = []
+    provisional_step = None
+    later_build = None
+    later_candidates = None
+    later_prerequisite_rungs = ()
+    later_snapshot = None
+    iteration_snapshot = {}
+    for event in pilot_events(
+        plc,
+        tags["State"] == tags["Completed"],
+        avoid_pred=_compile_avoid(tags["C_Complete"]),
+        max_scans=3000,
+    ):
+        events.append(event)
+        if event.kind == "trial_committed":
+            last_committed = dict(event.data["snapshot"])
+        elif event.kind == "iteration":
+            iteration_snapshot = dict(event.data["snapshot"])
+        elif event.kind == "letrun_ejection":
+            departures.append((len(events) - 1, dict(last_committed)))
+        elif event.kind == "provisional_started":
+            provisional_step = last_committed.get(tags["Step"].name)
+        elif event.kind == "candidates_built" and provisional_step == 103:
+            later_build = event.data
+            later_candidates = event.data["candidates"]
+            later_prerequisite_rungs = event.data["prerequisite_rungs"]
+            later_snapshot = iteration_snapshot
+            break
+
+    assert departures, [event.kind for event in events]
+    initial_index, initial_landing = next(
+        departure for departure in departures if departure[1].get(tags["Step"].name) == 101
+    )
+    assert initial_landing[tags["State"].name] != tags["Execute"]
+
+    resolution = next(
+        event
+        for event in events[initial_index + 1 :]
+        if event.kind in {"trend_regression", "provisional_started"}
+    )
+    assert resolution.kind == "trend_regression", [
+        (event.kind, event.data)
+        for event in events[initial_index + 1 :]
+        if event.kind in {"departure_investigated", "trend_regression", "provisional_started"}
+    ]
+    assert resolution.data["investigation"]["confirmed"] > 0
+    assert any(rung.dest == tags["Door"].name for rung in resolution.data["rungs"])
+
+    recipe_index, _recipe_landing = next(
+        departure for departure in departures if departure[1].get(tags["Step"].name) == 103
+    )
+    recipe_started = next(
+        event for event in events[recipe_index + 1 :] if event.kind == "provisional_started"
+    )
+    assert recipe_started.data["entry_progress"].effect == "advanced"
+    recipe_promoted = next(
+        event for event in events[recipe_index + 1 :] if event.kind == "provisional_promoted"
+    )
+    assert recipe_promoted.data["entry_progress"].effect == "advanced"
+    assert recipe_promoted.data["corridor_open"] is True
+    assert not any(event.kind == "departure_investigated" for event in events[recipe_index + 1 :])
+
+    assert later_candidates is not None, [
+        (event.kind, event.data.get("settled_value"))
+        for event in events
+        if event.kind in {"letrun_ejection", "provisional_started", "finished"}
+    ]
+    assert later_snapshot is not None
+    later_pairs = [(candidate["tag"], candidate["value"]) for candidate in later_candidates]
+    assert later_pairs[0] == (tags["C_Unhold"].name, True)
+    assert later_candidates[0]["current_prescribed"] or later_candidates[0]["route_prescribed"]
+    assert (
+        (tags["Door"].name, False) in later_pairs
+        or later_snapshot[tags["Door"].name] is False
+        or any(
+            rung.dest == tags["Door"].name and rung.value is False
+            for rung in later_prerequisite_rungs
+        )
+    ), later_build
+    assert all(candidate["tag"] != tags["C_Complete"].name for candidate in later_candidates)
 
 
 def test_provisional_departure_keeps_the_ordinary_pilot_loop_active() -> None:

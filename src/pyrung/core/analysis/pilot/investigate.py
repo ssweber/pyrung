@@ -188,6 +188,7 @@ def _scoped_correction_rungs(
     incident: DeviationIncident,
     outcome: ReplayOutcome,
     ctx: Any,
+    progress_mark: tuple[tuple[str, Any], ...] = (),
 ) -> tuple[PilotRung, ...]:
     """Give a replay-successful correction its evidence-derived lifetime.
 
@@ -200,6 +201,11 @@ def _scoped_correction_rungs(
     * maintaining the source channel -> remain active while that source
       context holds;
     * no channel evidence -> the target-unresolved outer boundary.
+
+    When the caller has an exact progress receipt, its source mark further
+    narrows that lifetime.  A correction proved while the recipe sat at Step
+    101, for example, cannot keep owning the same input after the recipe earns
+    Step 103 without a new proof for that occurrence.
 
     Existing :class:`PilotRung` proposals already own their guards and pass
     through unchanged.
@@ -229,6 +235,16 @@ def _scoped_correction_rungs(
             ctx.target_value,
             getattr(ctx, "target_predicate", None),
         )
+    if progress_mark:
+        from pyrung.core.condition import AllCondition, CompareEq
+
+        coordinates = []
+        for tag_name, value in progress_mark:
+            tag = plc._known_tags_by_name.get(tag_name)
+            if tag is None:
+                raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
+            coordinates.append(CompareEq(tag, value))
+        scope = AllCondition(scope, *coordinates)
     return tuple(_rungs_from_proposals(plc, list(proposals), scope))
 
 
@@ -1053,6 +1069,7 @@ def investigate_deviation(
     *,
     needed: Sequence[tuple[str, Any]] = (),
     installed_rungs: Sequence[Any] = (),
+    correction_progress_mark: tuple[tuple[str, Any], ...] = (),
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -1176,7 +1193,14 @@ def investigate_deviation(
             continue
         outcome = replay(hypothesis.holds)
         if outcome.accepted:
-            scoped = _scoped_correction_rungs(plc, hypothesis.holds, incident, outcome, ctx)
+            scoped = _scoped_correction_rungs(
+                plc,
+                hypothesis.holds,
+                incident,
+                outcome,
+                ctx,
+                correction_progress_mark,
+            )
             required_progress = (*incident.bearing, *needed)
             if (
                 pdg is not None

@@ -537,6 +537,11 @@ class _TrialResult:
     post_pulse_snap: dict[str, Any]
     fork_snap: dict[str, Any]
     observe_label: str
+    # The act followed an explicit Compass/current bearing. Preserve this
+    # intent through verification so post-commit departure policy can
+    # distinguish a prescribed tide-table edge from merely ambient motion
+    # that happens to have a clean continuation.
+    route_prescribed: bool = False
     motion: MotionKind = MotionKind.INTERVENTION
     new_key: _StateKey | None = None
     trend: int | None = None

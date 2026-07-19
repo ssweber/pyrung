@@ -28,7 +28,14 @@ from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict, Provisional
-from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    Outcome,
+    ProgressEffect,
+    TrialAssessment,
+)
 from pyrung.core.analysis.pilot.progress import _anchor_bearing_receipt, _monitor_trend
 from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
@@ -307,6 +314,72 @@ def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatc
 # ---------------------------------------------------------------------------
 # Trend monitoring — regression
 # ---------------------------------------------------------------------------
+
+
+def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
+    """A tide-table edge is progress in its own channel.
+
+    The selected recipe gauge may remain flat while a prescribed state/mode
+    transition crosses an intermediate channel value. That is not an ambient
+    ejection to diagnose, even when the landing has a clean continuation.
+    """
+    checkpoint = _cp(("source",), _oneshot_plc(), 2)
+    trial = _make_trial(
+        2,
+        Outcome.AMBIENT_DRIFT,
+        before_snap={"State": 9},
+        fork_snap={"State": 2},
+        zoom_channel_tag="State",
+        zoom_target_value=1,
+        route_prescribed=True,
+        assessment=TrialAssessment(
+            agency=Agency.PILOT,
+            bearing=BearingEffect.DEPARTED,
+            progress=ProgressEffect.PRESERVED,
+            new_frontier=True,
+            accepted=True,
+        ),
+    )
+    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
+    verdict = DepartureVerdict(
+        verdict="provisional",
+        reason="clean prescribed continuation",
+        settled_fork=trial.fork,
+        settled_value=2,
+        settle_scans=0,
+        progress=GaugeReceipt(
+            source_mark=(("RecipeStep", 101),),
+            landing_mark=(("RecipeStep", 101),),
+            effect="preserved",
+        ),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.classify_departure",
+        lambda *_args, **_kwargs: verdict,
+    )
+
+    def _unexpected_investigation(*_args, **_kwargs):
+        raise AssertionError("a prescribed tide-table edge must not be investigated")
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress._investigate_and_revert",
+        _unexpected_investigation,
+    )
+    ctx = SimpleNamespace(
+        target_tag="State",
+        target_value=17,
+        target_predicate=None,
+        max_scans=100,
+    )
+
+    events = _monitor_trend(trial, _frame(), state, ctx)
+
+    assert [event.kind for event in events] == [
+        "letrun_ejection",
+        "provisional_started",
+    ]
+    assert state.provisional is not None
+    assert state.provisional.entry_progress.effect == "preserved"
 
 
 def _seal_in_regression_inputs():
