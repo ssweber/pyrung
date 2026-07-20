@@ -36,6 +36,26 @@ def test_replay_capture_uses_state_slab_and_restores_force_map(
     assert views[RungId(None, 0)].get_tag("Enable") is True
 
 
+def test_replay_capture_reuses_source_pdg(monkeypatch: pytest.MonkeyPatch) -> None:
+    enable = Bool("Enable")
+    light = Bool("Light")
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            out(light)
+
+    source = PLC(program)
+    source.step()
+    source._ensure_pdg()
+
+    def _unexpected_rebuild(_program: Program):
+        raise AssertionError("reconstructed replay should reuse the source PDG")
+
+    monkeypatch.setattr("pyrung.core.analysis.pdg.build_program_graph", _unexpected_rebuild)
+
+    assert source._replay_node_views_at(1)
+
+
 def test_replay_capture_preserves_repeated_subroutine_occurrences() -> None:
     source = Int("Source")
     result = Int("Result")

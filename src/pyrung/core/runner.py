@@ -1735,6 +1735,11 @@ class PLC:
         fork._playhead = state.scan_id
         fork._set_time_mode(TimeMode.FIXED_STEP, dt=self._dt)
         fork._set_rtc_internal(rtc_at_state, state.timestamp)
+        # The reconstructed fork executes the exact same Program object. Reuse
+        # its immutable dependency graph and capture filter instead of rebuilding
+        # both for every historical scan replay.
+        fork._pdg_cache = self._ensure_pdg()
+        fork._pdg_consumed_tags = self._pdg_consumed_tags
         fork._input_overrides._forces.clear()
         fork._input_overrides._forces.update(forces)
         if self._synthesis is not None:
