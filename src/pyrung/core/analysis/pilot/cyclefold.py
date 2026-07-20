@@ -45,6 +45,7 @@ def detect_cycle(
     snaps: Sequence[Mapping[str, Any]],
     *,
     monotone_allowed: frozenset[str] | None = None,
+    significant_keys: frozenset[str] | None = None,
     period_multiple_of: int = 1,
     max_period: int = 64,
     min_repeats: int = 2,
@@ -76,6 +77,11 @@ def detect_cycle(
     trusts any constant-delta numeric — for tests / callers that have already
     bounded the input — and is **not** safe against modular tags.
 
+    *significant_keys* restricts classification to a fixed, caller-proven tag
+    surface.  This lets callers retain immutable full-state snapshots instead
+    of materializing a filtered dictionary per scan.  When omitted, the
+    historical union-of-snapshot-keys behavior is preserved.
+
     Returns the :class:`_Cycle` for the smallest accepted P, or ``None`` if the
     data is too short or no clean cycle exists at any P ≤ *max_period*.
 
@@ -94,9 +100,13 @@ def detect_cycle(
         if period * min_repeats >= n:
             break  # too short for this P — and for every larger P, so stop.
         anchors = [snaps[n - 1 - period * r] for r in range(min_repeats + 1)]
-        keys: set[str] = set()
-        for a in anchors:
-            keys.update(a.keys())
+        if significant_keys is None:
+            discovered_keys: set[str] = set()
+            for a in anchors:
+                discovered_keys.update(a.keys())
+            keys = discovered_keys
+        else:
+            keys = significant_keys
 
         monotone: dict[str, float] = {}
         ok = True
@@ -336,7 +346,8 @@ def cycle_fold_until(
     # unread churn, harness feedback) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
-    ring: list[dict[str, Any]] = []
+    significant_keys = frozenset(plc.state.tags) - ignore
+    ring: list[Mapping[str, Any]] = []
     ring_cap = max_period * (min_repeats + 2) + 4
     real_scans = 0
     folds = 0
@@ -388,7 +399,11 @@ def cycle_fold_until(
         if predicate(plc.state) or paused:
             return _finish(bool(predicate(plc.state)))
 
-        ring.append({k: v for k, v in plc.state.tags.items() if k not in ignore})
+        # SystemState tag maps are immutable persistent maps. Retain them
+        # directly and let the detector read only the precomputed significant
+        # surface instead of allocating a filtered full-state dictionary after
+        # every scan.
+        ring.append(plc.state.tags)
         if len(ring) > ring_cap:
             del ring[0]
 
@@ -400,6 +415,7 @@ def cycle_fold_until(
         cyc = detect_cycle(
             ring,
             monotone_allowed=monotone_allowed,
+            significant_keys=significant_keys,
             period_multiple_of=period_multiple_of,
             max_period=max_period,
             min_repeats=min_repeats,

@@ -79,6 +79,26 @@ class TestDetectCycle:
         assert cyc is not None
         assert cyc.period == 2
 
+    def test_fixed_significant_surface_matches_prefiltered_snapshots(self) -> None:
+        noise = (0, 1, 1, 0, 1, 0, 0, 1, 1, 1)
+        full = [
+            {"osc": i % 2, "acc": i, "ignored": noise[i]}
+            for i in range(len(noise))
+        ]
+        filtered = [{"osc": snap["osc"], "acc": snap["acc"]} for snap in full]
+
+        expected = detect_cycle(
+            filtered,
+            monotone_allowed=frozenset({"acc"}),
+        )
+        retained = detect_cycle(
+            full,
+            monotone_allowed=frozenset({"acc"}),
+            significant_keys=frozenset({"osc", "acc"}),
+        )
+
+        assert retained == expected == _Cycle(period=2, monotone={"acc": 2.0})
+
 
 # ---------------------------------------------------------------------------
 # Bit-equal coast: cycle-fold landing == scan-by-scan landing

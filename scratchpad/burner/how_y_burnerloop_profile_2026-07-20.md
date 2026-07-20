@@ -419,6 +419,25 @@ set. That removes the per-scan full-map copy and its allocation traffic while
 preserving the ignored-tag boundary. It should be benchmarked end-to-end after
 the concurrent `pilot/` work lands.
 
+### Retained cycle snapshots
+
+The retained-snapshot change followed the same 64-event route to scan 2,110.
+Against the immediately preceding instrumented baseline:
+
+| Measurement | Filtered dict per scan | Retained PMap | Improvement |
+|---|---:|---:|---:|
+| Total CPU | 34.656 s | 32.203 s | 2.453 s (7.1%) |
+| Wall time | 35.071 s | 32.640 s | 2.431 s (6.9%) |
+| Cycle control excluding committed scans | 4.500 s | 1.594 s | 2.906 s (64.6%) |
+| Unattributed cycle loop/snapshot work | 3.953 s | 0.109 s | 3.844 s |
+
+The net saving is smaller than the copy-only estimate because cycle detection
+now reads values from PMaps rather than temporary plain dictionaries:
+`detect_cycle` increased from 0.188 to 0.922 seconds. Avoiding 5,016 full
+3,665-entry copies still wins comfortably, removes their allocation traffic,
+and keeps the change local: the detector accepts an optional fixed significant
+key set while preserving its union-of-snapshot-keys behavior for other callers.
+
 The other possible caches were not supported:
 
 - 134 of 172 trace roots repeated the same tag/value, but only nine repeated
