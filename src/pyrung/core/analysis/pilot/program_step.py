@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot._ops import fork_with_rungs
 from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceNode, trace_back
@@ -103,6 +104,66 @@ def _input_split(
     return required, tuple(context)
 
 
+def _run_snapshot(run: Any, fallback: Mapping[str, Any], ctx: Any) -> dict[str, Any]:
+    """Materialize the exact tag image one producer occurrence read."""
+    names = set(fallback) | set(getattr(ctx.pdg, "tags", {}))
+    return {name: run.view.get_tag(name, fallback.get(name)) for name in names}
+
+
+def _action_channel_barriers(
+    trace: TraceNode,
+    snapshot: Mapping[str, Any],
+    ctx: Any,
+) -> dict[tuple[str, Any], frozenset[str]]:
+    """Pipeline channels crossed on the way from each input to the producer."""
+    channels = {
+        role.channel_tag
+        for role in getattr(ctx, "pipeline_roles", ())
+        if role.channel_tag in getattr(ctx, "opaque_loop", frozenset())
+    }
+    barriers: dict[tuple[str, Any], set[str]] = {}
+
+    def _walk(node: TraceNode, above: frozenset[str]) -> None:
+        current = above
+        if (
+            node.tag in channels
+            and not node.satisfied
+            and not _values_match(snapshot.get(node.tag), node.value)
+        ):
+            current = above | {node.tag}
+        if node.is_steerable and not node.satisfied:
+            barriers.setdefault((node.tag, node.value), set()).update(current)
+        for child in node.children:
+            _walk(child, current)
+
+    _walk(trace, frozenset())
+    return {pair: frozenset(tags) for pair, tags in barriers.items()}
+
+
+def _input_moves_live_channel(
+    action: TraceAction,
+    channels: frozenset[str],
+    ctx: Any,
+    plc: Any,
+    rungs: Sequence[Any],
+) -> bool:
+    """Whether one real controlled scan accepts *action* at a crossed channel."""
+    if not channels:
+        return True
+    fork = fork_with_rungs(plc, rungs)
+    before = dict(fork.state.tags)
+    fork.patch({action.tag: action.value})
+    fork.step()
+    after = fork.state.tags
+    for role in getattr(ctx, "pipeline_roles", ()):
+        if role.channel_tag not in channels:
+            continue
+        watched = {role.channel_tag, *role.request_tags}
+        if any(not _values_match(before.get(tag), after.get(tag)) for tag in watched):
+            return True
+    return False
+
+
 def read_program_step(
     ctx: Any,
     producer: Any,
@@ -120,20 +181,37 @@ def read_program_step(
 
     before = dict(ctx.snapshot)
     fork = fork_with_rungs(plc, rungs)
-    trace_snapshot = before
-    consumed_scans = 0
-    if rungs:
-        # Installed holds are part of the unchanged controlled world. Let their
-        # overlay take effect before asking which exact producer boundary is
-        # current; otherwise an already-established timer enable still looks
-        # idle in the backward trace.
-        fork.step()
-        trace_snapshot = dict(fork.state.tags)
-        consumed_scans = 1
+    # One real projected scan is the observation primitive.  Its interpreted
+    # replay preserves the exact view of every producer occurrence, including
+    # earlier same-scan writes and installed PILOT holds.
+    fork.step()
+    consumed_scans = 1
+    projected_frame = dict(fork.state.tags)
+    runs = fork._replay_rung_runs_at(fork.state.scan_id)
+    producer_runs = runs_for_node(ctx.pdg, ctx.program, producer.rung_index, runs)
+    repeated_producer = len(producer_runs) > 1
+    trace_snapshot = (
+        _run_snapshot(producer_runs[0], projected_frame, ctx)
+        if len(producer_runs) == 1
+        else projected_frame
+    )
 
     trace = _trace_exact(ctx, producer, trace_snapshot)
     boundary = _first_boundary(trace)
     required, context_actions = _input_split(trace, trace_snapshot, resting or {})
+    barriers = _action_channel_barriers(trace, trace_snapshot, ctx)
+    inputs_blocked_here = tuple(
+        action
+        for action in required
+        if barriers.get(action.pair)
+        and not _input_moves_live_channel(
+            action,
+            barriers[action.pair],
+            ctx,
+            plc,
+            rungs,
+        )
+    )
 
     index = build_advance_index(ctx.program, getattr(fork, "_harness", None))
     owner = index.resolve(boundary.tag) if boundary is not None else None
@@ -165,6 +243,14 @@ def read_program_step(
                 break
 
     after = dict(fork.state.tags)
+    writer_runs = writer_runs_for_node(
+        ctx.pdg,
+        ctx.program,
+        producer.rung_index,
+        producer.command_tag,
+        producer.command_value,
+        runs,
+    )
     next_trace = _trace_exact(ctx, producer, after)
     relevant = {node.tag for node in (*_nodes(trace), *_nodes(next_trace))} | {
         producer.command_tag,
@@ -176,20 +262,31 @@ def read_program_step(
         if not _values_match(before.get(tag), after.get(tag))
     )
 
-    if _values_match(after.get(producer.command_tag), producer.command_value):
-        command_boundary = Eq(
-            producer.command_tag,
-            frozenset((producer.command_value,)),
-        )
+    if inputs_blocked_here:
+        names = ", ".join(action.tag for action in inputs_blocked_here)
         return ProgramStep(
-            ProgramStepStatus.KEEP_RUNNING,
+            ProgramStepStatus.UNCLEAR,
             producer,
-            command_boundary,
-            producer.command_tag,
+            boundary,
+            boundary.tag if boundary is not None else producer.command_tag,
             projected_changes=projected_changes,
             trace=trace,
             next_trace=next_trace,
-            reason="the selected producer reaches its commanded value",
+            reason=f"{names} is not accepted by the current program state",
+        )
+
+    if repeated_producer:
+        return ProgramStep(
+            ProgramStepStatus.UNCLEAR,
+            producer,
+            boundary,
+            boundary.tag if boundary is not None else producer.command_tag,
+            required_inputs=required,
+            context_actions=context_actions,
+            projected_changes=projected_changes,
+            trace=trace,
+            next_trace=next_trace,
+            reason="the selected producer ran more than once with occurrence-specific state",
         )
 
     if boundary is not None:
@@ -228,6 +325,34 @@ def read_program_step(
                 next_trace=next_trace,
                 reason="the boundary was ready but the selected result did not survive the scan",
             )
+
+    if _values_match(after.get(producer.command_tag), producer.command_value):
+        command_boundary = Eq(
+            producer.command_tag,
+            frozenset((producer.command_value,)),
+        )
+        return ProgramStep(
+            ProgramStepStatus.KEEP_RUNNING,
+            producer,
+            command_boundary,
+            producer.command_tag,
+            projected_changes=projected_changes,
+            trace=trace,
+            next_trace=next_trace,
+            reason="the selected producer reaches its commanded value",
+        )
+
+    if writer_runs:
+        return ProgramStep(
+            ProgramStepStatus.UNCLEAR,
+            producer,
+            boundary,
+            boundary.tag if boundary is not None else producer.command_tag,
+            projected_changes=projected_changes,
+            trace=trace,
+            next_trace=next_trace,
+            reason="the selected producer wrote its value but it did not survive a later write",
+        )
 
     if required:
         return ProgramStep(

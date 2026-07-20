@@ -448,6 +448,9 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 frame,
                 state,
                 ctx,
+                route_channel_tag=act.route_channel_tag,
+                route_from_value=act.route_from_value,
+                route_target_value=act.route_target_value,
             )
         return _try_terminal_letrun(frame, state, ctx)
     if isinstance(act, Dwell):
@@ -467,6 +470,10 @@ def _try_zoom(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    route_channel_tag: str | None = None,
+    route_from_value: Any = None,
+    route_target_value: Any = None,
 ) -> _AttemptResult:
     """Let-run zoom through the verify pipeline — same shape as _try_candidate.
 
@@ -488,9 +495,14 @@ def _try_zoom(
     # here (a recipe-gated automatic transition, a dwell that never arms).
     # Record it as a world-keyed nogood so the next iteration's route query walks
     # around the edge instead of re-burning the same sterile coast.
+    wait_channel = route_channel_tag or channel_tag
     wait_nogood = (
-        wait_edge_nogood(channel_tag, snap_before.get(channel_tag), target_value)
-        if channel_tag is not None
+        wait_edge_nogood(
+            wait_channel,
+            route_from_value if route_channel_tag is not None else snap_before.get(channel_tag),
+            route_target_value if route_channel_tag is not None else target_value,
+        )
+        if wait_channel is not None
         else None
     )
 

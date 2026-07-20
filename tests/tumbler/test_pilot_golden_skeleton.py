@@ -31,6 +31,8 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.condition import CompareEq
 from pyrung.core.runner import _compile_avoid
+from tests.fixtures.tumbler import enter_production
+from tests.tumbler.bench import Bench
 from tests.tumbler.skeleton import divergence_message, dump_skeleton, extract_skeleton
 
 pytestmark = pytest.mark.tumbler
@@ -295,6 +297,96 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 # ---------------------------------------------------------------------------
 # Internal-route gate: how(Sts_StateCurrent == 17) avoiding the Complete button
 # ---------------------------------------------------------------------------
+
+
+def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
+    """A possible future Complete producer cannot invent an inapplicable Start."""
+    bench = Bench(tumbler_logic)
+    bench.force_physical()
+    bench.step()
+    enter_production(bench.plc)
+    bench.scan = bench.plc.state.scan_id
+    for command in ("Cmd_State_Clear", "Cmd_State_Reset", "Cmd_State_Start"):
+        bench.pulse(command)
+    assert bench.step_until(
+        lambda: bench.get("Sts_StateCurrent") == 6,
+        4_000,
+    )
+    assert bench.step_until(lambda: bench.get("Internal__Step") == 101, 4_000)
+
+    bench.pulse("Cmd_State_Hold")
+    assert bench.step_until(
+        lambda: bench.get("Sts_StateCurrent") == 11,
+        800,
+    )
+    assert bench.get("Internal__Step") == 101
+
+    tags = bench.plc._known_tags_by_name
+    avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
+    last_snapshot = None
+    for event in pilot_events(
+        bench.plc,
+        tags["Sts_StateCurrent"] == 17,
+        max_scans=bench.plc.state.scan_id + 100,
+        avoid_pred=avoid_pred,
+    ):
+        if event.kind == "iteration":
+            last_snapshot = event.data["snapshot"]
+            continue
+        if event.kind != "candidates_built":
+            continue
+        assert last_snapshot["Sts_StateCurrent"] == 11
+        assert last_snapshot["Internal__Step"] == 101
+        pairs = tuple(candidate["pair"] for candidate in event.data["candidates"])
+        assert pairs[0] == ("Cmd_State_Unhold", True)
+        assert ("Cmd_State_Start", True) not in pairs
+        route = event.data["route_plan"]
+        assert route["path"][0]["from"] == 11
+        assert route["path"][0]["to"] == 12
+        return
+    pytest.fail("PILOT did not produce a HELD/Step101 candidate reading")
+
+
+def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
+    """Lock the cold avoided-Complete drive through its first honest Unhold."""
+    plc = PLC(tumbler_logic)
+    plc.step()
+    tags = plc._known_tags_by_name
+    avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
+    events = []
+    unhold_read = None
+    deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
+    for event in pilot_events(
+        plc,
+        tags["Sts_StateCurrent"] == 17,
+        max_scans=INTERNAL_ROUTE_MAX_SCANS,
+        avoid_pred=avoid_pred,
+    ):
+        events.append(event)
+        if event.kind == "candidates_built":
+            candidates = event.data["candidates"]
+            route = event.data["route_plan"]
+            if (
+                candidates
+                and candidates[0]["pair"] == ("Cmd_State_Unhold", True)
+                and route is not None
+                and route["path"][0]["from"] == 11
+                and route["path"][0]["to"] == 12
+            ):
+                unhold_read = event
+                break
+        if time.monotonic() > deadline:
+            pytest.fail("cold avoided-Complete drive did not reach its Unhold reading")
+
+    assert unhold_read is not None
+    pairs = tuple(candidate["pair"] for candidate in unhold_read.data["candidates"])
+    assert ("Cmd_State_Start", True) not in pairs
+    skeleton = extract_skeleton(events)
+    _assert_zoom_tripwire(skeleton)
+    _assert_matches_golden(
+        skeleton,
+        GOLDEN_DIR / "how_completed_avoid_complete_progress_skeleton.json",
+    )
 
 
 def _all_action_tags(skeleton: list[dict]) -> set[str]:

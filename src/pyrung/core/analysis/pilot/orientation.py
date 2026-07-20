@@ -33,6 +33,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import _IterationFrame
+from pyrung.core.analysis.sp_values import _values_match
 
 _PROBE_BUDGET = 2
 
@@ -249,23 +250,55 @@ def orient(
     if candidates.wait_prescribed:
         route_plan = candidates.route_plan
         advance_boundary = candidates.advance_boundary
+        program_step = candidates.program_step
+        program_heading = (
+            next(
+                (
+                    (tag, after)
+                    for tag, before, after in reversed(program_step.projected_changes)
+                    if tag == program_step.channel and not _values_match(before, after)
+                ),
+                None,
+            )
+            if program_step is not None
+            else None
+        )
         act = Coast(
             "bearing",
             channel_tag=(
-                route_plan.role.channel_tag
+                program_heading[0]
+                if program_heading is not None
+                else route_plan.role.channel_tag
                 if route_plan is not None
                 else advance_boundary[0]
                 if advance_boundary is not None
                 else None
             ),
             target_value=(
-                route_plan.first_edge.to_value
+                program_heading[1]
+                if program_heading is not None
+                else route_plan.first_edge.to_value
                 if route_plan is not None
                 else advance_boundary[1]
                 if advance_boundary is not None
                 else None
             ),
             route_prescribed=route_plan is not None,
+            route_channel_tag=(
+                route_plan.role.channel_tag
+                if route_plan is not None and program_heading is not None
+                else None
+            ),
+            route_from_value=(
+                route_plan.first_edge.from_value
+                if route_plan is not None and program_heading is not None
+                else None
+            ),
+            route_target_value=(
+                route_plan.first_edge.to_value
+                if route_plan is not None and program_heading is not None
+                else None
+            ),
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _bearing(
@@ -274,7 +307,9 @@ def orient(
                 candidates,
                 rationale=candidates.wait_reason or "charted completion edge",
                 immediate_goal=(
-                    candidates.route_plan.first_edge.to_value
+                    program_heading[1]
+                    if program_heading is not None
+                    else candidates.route_plan.first_edge.to_value
                     if candidates.route_plan is not None
                     else advance_boundary[1]
                     if advance_boundary is not None
@@ -304,6 +339,7 @@ def orient(
             candidates,
             rationale=(
                 option.current_note
+                or getattr(option, "program_note", None)
                 or ("static route edge" if option.route_prescribed else "")
                 or ("learned transition" if option.influence_prescribed else "")
                 or "ranked trace action"

@@ -430,6 +430,22 @@ class ScanContext:
         if writes is not None:
             self._rung_firings[rung_index] = writes
 
+    def _finish_observed_capture(self, journal: dict[str, Any]) -> dict[str, Any]:
+        """Close an observer journal and retain every attempted tag write.
+
+        Ordinary firing capture stores effective writes compactly.  An observed
+        scan answers a different question: which value did this exact rung
+        occurrence attempt to write, even when an earlier writer had already
+        placed the same value in the pending scan image?  The journal keys are
+        the exact write footprint, so reading their final pending values keeps
+        that evidence without changing the normal firing timelines.
+        """
+        popped = self._capture_stack.pop()
+        if popped is not journal:
+            raise RuntimeError("observer capture scopes closed out of order")
+        pending = self._tags_pending
+        return {name: pending[name] for name in journal}
+
     def _begin_node_capture(self, rung_id: RungId) -> tuple[dict[str, Any], RungId | None]:
         """Open a hot-path subroutine journal and publish its node identity."""
         journal = self._begin_capture()

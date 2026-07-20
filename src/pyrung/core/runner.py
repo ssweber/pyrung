@@ -33,7 +33,12 @@ from pyrung.core.condition_trace import ConditionTraceEngine
 from pyrung.core.context import ConditionView, RungId, ScanContext
 from pyrung.core.debug_trace import RungTrace, RungTraceEvent, TraceEvent
 from pyrung.core.debugger import PLCDebugger
-from pyrung.core.executor import ConditionViewCapture, execute_observed_rung, execute_program
+from pyrung.core.executor import (
+    ConditionViewCapture,
+    RungRun,
+    execute_observed_rung,
+    execute_program,
+)
 from pyrung.core.history import History
 from pyrung.core.input_overrides import InputOverrideManager
 from pyrung.core.kernel import CompiledKernel
@@ -1058,6 +1063,7 @@ class PLC:
             node_firings_fn=self._node_firings_at,
             node_rung_fn=self._resolve_node_rung,
             node_views_fn=self._replay_node_views_at,
+            node_runs_fn=self._replay_rung_runs_at,
             node_reads_fn=self._replay_node_reads_at,
             deep=deep,
         )
@@ -2084,6 +2090,22 @@ class PLC:
             return self._causal_parent._replay_node_views_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
         return capture.views if capture is not None else {}
+
+    def _replay_rung_runs_at(self, target_scan_id: int) -> tuple[RungRun, ...]:
+        """Every rung occurrence from one historical scan, in execution order.
+
+        Unlike the compact node timelines and ``_replay_node_views_at`` map,
+        this preserves repeated calls of the same subroutine rung separately.
+        It is reconstructed on demand and never retained per scan.
+        """
+        if (
+            self._causal_parent is not None
+            and target_scan_id <= self._initial_scan_id
+            and self._causal_parent.history.contains(target_scan_id)
+        ):
+            return self._causal_parent._replay_rung_runs_at(target_scan_id)
+        capture = self._replay_capture_at(target_scan_id)
+        return capture.runs if capture is not None else ()
 
     def _replay_node_reads_at(self, target_scan_id: int) -> dict[RungId, set[str]]:
         """Per-node data-read footprint for a historical scan (Crossings Tier 2).

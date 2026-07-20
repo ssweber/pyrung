@@ -1043,7 +1043,7 @@ def _pilot_loop_events(
                     "reason": result.rationale,
                     "prerequisite_rungs": result.prerequisites,
                     "channel_tag": (
-                        act.channel_tag
+                        act.route_channel_tag or act.channel_tag
                         if isinstance(act, Coast)
                         and act.mode == "bearing"
                         and act.channel_tag is not None

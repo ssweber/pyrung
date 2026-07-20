@@ -64,6 +64,12 @@ class _Candidate:
     # it is the fallback, never overriding an available route.
     current_prescribed: bool = False
     current_note: str = ""
+    # An external input required by the exact program producer selected for an
+    # automatic route edge. It is a current-world bearing below an established
+    # route/current and above an unrelated trace action.
+    program_prescribed: bool = False
+    program_note: str = ""
+    program_context_actions: tuple[_ActionPair, ...] = ()
     # Rank rationale — recorded at the scoring site (``_build_candidates``) and
     # surfaced through ``recording._candidate_payload`` so every candidate event carries why
     # it sorted where it did.  ``scored`` is False for a prescribed edge (the
@@ -117,6 +123,21 @@ class _CandidateList:
     # frontier clause points past the pipeline cut. Orientation stamps it onto
     # its completed frame; empty when no wait carries completion.
     completion_frontier: tuple[_ActionPair, ...] = ()
+    # Exact-producer reading behind this iteration's automatic edge. The
+    # orientation layer consumes its witnessed local boundary; recording keeps
+    # the same value available for diagnostics.
+    program_step: Any = None
+
+
+@dataclass(frozen=True)
+class _WaitPrescription:
+    """One grounded wait decision and the evidence that justified it."""
+
+    prescribed: bool
+    reason: str | None = None
+    details: tuple[TraceAction, ...] = ()
+    frontier: tuple[_ActionPair, ...] = ()
+    program_step: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +341,7 @@ def _compass_route_plan(
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair] | None = None,
+    excluded_edges: frozenset[tuple[Any, ...]] = frozenset(),
 ) -> StaticPath | None:
     if not ctx.compass.graphs:
         return None
@@ -329,6 +351,8 @@ def _compass_route_plan(
     nogoods = key_nogoods if key_nogoods is not None else set()
 
     def _edge_open(edge: Any) -> bool:
+        if edge.identity in excluded_edges:
+            return False
         if ctx.compass.knowledge.static_overlays.get(edge.identity) in {
             "contradicted",
             "no_change",
@@ -658,7 +682,7 @@ def _prescribe_wait(
     ctx: Any,
     *,
     reason: str | None = None,
-) -> tuple[bool, str | None, tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
+) -> _WaitPrescription:
     """Mint a prescribed-wait bearing and re-read its charted completion.
 
     The single owner of "a wait is prescribed" for all three mint sites.  A
@@ -668,16 +692,96 @@ def _prescribe_wait(
     (:func:`_completion_reread`): the steerable leaves feed the candidate
     ranking and the unmet frontier names the true blocker.  An influence-path
     wait passes ``edge=None`` with an explicit ``reason`` — always coastable,
-    nothing charted to re-read.  Returns ``(prescribed, reason,
-    completion_details, completion_frontier)``.
+    nothing charted to re-read. Automatic sibling edges instead carry one
+    exact-producer ``ProgramStep`` reading in the returned prescription.
     """
     if edge is None:
-        return True, reason, (), ()
+        return _WaitPrescription(True, reason)
     if not _edge_grounded(edge):
-        return False, None, (), ()
-    reason = f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
+        return _WaitPrescription(False)
+
+    route_reason = (
+        f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
+    )
+    if edge.program_producers:
+        from pyrung.core.analysis.pilot.currents import WorldView
+        from pyrung.core.analysis.pilot.program_step import (
+            ProgramStepStatus,
+            read_program_step,
+        )
+
+        producers = tuple(
+            {producer.rung_index: producer for producer in edge.program_producers}.values()
+        )
+        if len(producers) != 1:
+            return _WaitPrescription(
+                False,
+                f"{route_reason}; exact program producer is ambiguous",
+            )
+        world = WorldView(
+            snapshot=frame.snap,
+            pdg=ctx.pdg,
+            program=ctx.program,
+            steerable=ctx.steerable,
+            opaque_loop=ctx.opaque_loop,
+            prior=ctx.domain_prior,
+            clear_only=ctx.clear_only,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            pipeline_roles=ctx.pipeline_roles,
+            avoid_pred=ctx.avoid_pred,
+            via_pred=ctx.via_pred,
+            harness=getattr(state.work, "_harness", None),
+        )
+        step = read_program_step(
+            world,
+            producers[0],
+            state.work,
+            state.rungs,
+            resting=ctx.resting,
+        )
+        if step.status is ProgramStepStatus.KEEP_RUNNING:
+            movement = next(
+                (
+                    (tag, before, after)
+                    for tag, before, after in reversed(step.projected_changes)
+                    if tag == step.channel and not _values_match(before, after)
+                ),
+                None,
+            )
+            if movement is None:
+                return _WaitPrescription(
+                    False,
+                    f"{route_reason}; producer proof has no executable boundary",
+                    program_step=step,
+                )
+            tag, before, after = movement
+            return _WaitPrescription(
+                True,
+                f"{route_reason} ({tag}: {before!r}->{after!r})",
+                frontier=((tag, after),),
+                program_step=step,
+            )
+        if step.status is ProgramStepStatus.NEEDS_INPUT:
+            frontier = tuple(
+                action.pair
+                for action in step.required_inputs
+                if action.pulse or not _values_match(frame.snap.get(action.tag), action.value)
+            )
+            return _WaitPrescription(
+                False,
+                f"{route_reason}; {step.reason}",
+                details=step.required_inputs,
+                frontier=frontier,
+                program_step=step,
+            )
+        return _WaitPrescription(
+            False,
+            f"{route_reason}; {step.reason}",
+            program_step=step,
+        )
+
     details, frontier = _completion_reread(edge, frame, state, ctx) if edge.completion else ((), ())
-    return True, reason, details, frontier
+    return _WaitPrescription(True, route_reason, details, frontier)
 
 
 def _rank_candidates(
@@ -694,13 +798,15 @@ def _rank_candidates(
     availability, then wake, then compass progress.  ``index`` breaks every tie
     so the candidate object itself is never compared.
     """
-    scored: list[tuple[tuple[int, int, int, int], int, _Candidate]] = []
+    scored: list[tuple[tuple[int, int, int, int, int], int, _Candidate]] = []
     for index, candidate in enumerate(cands):
-        prescribed = (
+        established = (
             candidate.route_prescribed
             or candidate.influence_prescribed
             or candidate.current_prescribed
         )
+        prescribed = established or candidate.program_prescribed
+        prescription_tier = 0 if established else 1 if candidate.program_prescribed else 2
         base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
         avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
         over_wake = (
@@ -713,7 +819,13 @@ def _rank_candidates(
             compass_score=(base[0], base[1]),
             scored=not prescribed,
         )
-        scored.append(((avail_tier, over_wake, base[0], base[1]), index, candidate))
+        scored.append(
+            (
+                (prescription_tier, avail_tier, over_wake, base[0], base[1]),
+                index,
+                candidate,
+            )
+        )
     return [candidate for _score, _index, candidate in sorted(scored)]
 
 
@@ -804,6 +916,36 @@ def _build_candidates(
     _is_zoom = (
         not establish_pending and route_plan is not None and route_plan.first_edge.action is None
     )
+    # An automatic chart edge is only a possible route until its exact program
+    # producer is checked in this controlled world. If that producer offers no
+    # executable wait or live input, remove just that edge from this read and
+    # ask the same graph for the next route. This is how HELD walks around a
+    # structurally possible Complete edge to the currently conductive Unhold
+    # edge, without retaining a route suffix or poisoning another world.
+    preflight_wait: _WaitPrescription | None = None
+    excluded_edges: set[tuple[Any, ...]] = set()
+    while _is_zoom:
+        assert route_plan is not None
+        preflight_wait = _prescribe_wait(route_plan.first_edge, frame, state, ctx)
+        if (
+            preflight_wait.prescribed
+            or preflight_wait.details
+            or not route_plan.first_edge.program_producers
+        ):
+            break
+        excluded_edges.add(route_plan.first_edge.identity)
+        alternate = _compass_route_plan(
+            frame,
+            ctx,
+            key_nogoods,
+            frozenset(excluded_edges),
+        )
+        if alternate is None:
+            break
+        route_plan = alternate
+        preflight_wait = None
+        _is_zoom = not establish_pending and route_plan.first_edge.action is None
+
     if _is_zoom or establish_pending:
         route_candidates: tuple[_ActionPair, ...] = ()
     else:
@@ -819,6 +961,8 @@ def _build_candidates(
     wait_prescribed = False
     wait_reason: str | None = None
     completion_frontier: tuple[_ActionPair, ...] = ()
+    program_step: Any = None
+    program_pairs: set[_ActionPair] = set()
     # The next iteration re-reads the wait: when the zoom's grounded completion edge carries a
     # charted condition (charts.py), :func:`_prescribe_wait` re-traces it as
     # ordinary transparent ladder and returns its producers + unmet frontier.  The
@@ -831,9 +975,14 @@ def _build_candidates(
     _zoom_wait_reason: str | None = None
     if _is_zoom:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
-        _zoom_wait_prescribed, _zoom_wait_reason, _comp_details, completion_frontier = (
-            _prescribe_wait(route_plan.first_edge, frame, state, ctx)
-        )
+        zoom_wait = preflight_wait or _prescribe_wait(route_plan.first_edge, frame, state, ctx)
+        _zoom_wait_prescribed = zoom_wait.prescribed
+        _zoom_wait_reason = zoom_wait.reason
+        _comp_details = zoom_wait.details
+        completion_frontier = zoom_wait.frontier
+        program_step = zoom_wait.program_step
+        if program_step is not None:
+            program_pairs = {detail.pair for detail in program_step.required_inputs}
         for detail in _comp_details:
             pair = detail.pair
             if (
@@ -989,13 +1138,15 @@ def _build_candidates(
         if path:
             first_step = path[0]
             if not is_action(first_step):
-                wait_prescribed, wait_reason, _cd, _cf = _prescribe_wait(
+                influence_wait = _prescribe_wait(
                     None,
                     frame,
                     state,
                     ctx,
                     reason=f"{n.tag}: {cur_val!r}->{n.value!r}",
                 )
+                wait_prescribed = influence_wait.prescribed
+                wait_reason = influence_wait.reason
                 break
             if is_composite_action(first_step):
                 # A skiff-learned joint edge: the whole action set must fire in
@@ -1054,10 +1205,30 @@ def _build_candidates(
             ),
             route_prescribed=pair in route_candidate_set,
             bearing_channel_tag=(
-                prescribed_edge.role.channel_tag if prescribed_edge is not None else None
+                prescribed_edge.role.channel_tag
+                if prescribed_edge is not None
+                else route_plan.role.channel_tag
+                if pair in program_pairs and route_plan is not None
+                else None
             ),
             bearing_channel_value=(
-                prescribed_edge.to_value if prescribed_edge is not None else None
+                prescribed_edge.to_value
+                if prescribed_edge is not None
+                else route_plan.first_edge.to_value
+                if pair in program_pairs and route_plan is not None
+                else None
+            ),
+            program_prescribed=pair in program_pairs,
+            program_note=(
+                f"exact program producer rung {program_step.producer.rung_index} "
+                f"currently needs {pair[0]}={pair[1]!r}"
+                if pair in program_pairs and program_step is not None
+                else ""
+            ),
+            program_context_actions=(
+                tuple(program_step.context_actions)
+                if pair in program_pairs and program_step is not None
+                else ()
             ),
         )
 
@@ -1139,10 +1310,12 @@ def _build_candidates(
         and not trace_actions
         and not wait_prescribed
     ):
-        wait_prescribed, wait_reason, _cd, _cf = _prescribe_wait(
-            route_plan.first_edge, frame, state, ctx
-        )
-        completion_frontier += _cf
+        fallback_wait = _prescribe_wait(route_plan.first_edge, frame, state, ctx)
+        wait_prescribed = fallback_wait.prescribed
+        wait_reason = fallback_wait.reason
+        completion_frontier += fallback_wait.frontier
+        if fallback_wait.program_step is not None:
+            program_step = fallback_wait.program_step
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
     # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and
@@ -1175,6 +1348,7 @@ def _build_candidates(
         deferred_commands=deferred_commands,
         held_command_tags=held_command_tags,
         completion_frontier=completion_frontier,
+        program_step=program_step,
     )
 
 
@@ -1196,6 +1370,14 @@ def _candidate_applied(
     # they must fire in the same scan or the command rung never executes.
     if candidate.route_prescribed:
         for co in candidates.route_co_actions:
+            if co[0] not in seen:
+                actions.append(co)
+                seen.add(co[0])
+
+    if candidate.program_prescribed:
+        for co in candidate.program_context_actions:
+            # A pulse's own release/assert sequence is handled by _apply_pulse;
+            # only independent context belongs in the atomic action set.
             if co[0] not in seen:
                 actions.append(co)
                 seen.add(co[0])

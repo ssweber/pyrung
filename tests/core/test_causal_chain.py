@@ -1157,6 +1157,40 @@ class TestSubroutineWriters:
         assert chain2.steps[0].subroutine == "SharedSub"
         assert chain2.steps[0].rung_index == 0
 
+    def test_repeated_call_uses_the_occurrence_that_actually_wrote(self) -> None:
+        """A later disabled call must not replace the firing call's view."""
+        Gate = Bool("RepeatedCallGate")
+        Output = Int("RepeatedCallOutput")
+
+        @subroutine("RepeatedCallSub")
+        def shared_sub():
+            with rung(Gate):
+                copy(1, Output)
+
+        with Program(strict=False) as prog:
+            with Rung():
+                latch(Gate)
+                call(shared_sub)
+            with Rung():
+                reset(Gate)
+                call(shared_sub)
+
+        plc = PLC(prog)
+        plc.step()
+
+        chain = plc.cause(Output)
+
+        assert chain is not None
+        assert (chain.steps[0].subroutine, chain.steps[0].rung_index) == (
+            "RepeatedCallSub",
+            0,
+        )
+        assert chain.steps[0].caller_rung_index == 0
+        assert [
+            (trigger.tag_name, trigger.from_value, trigger.to_value)
+            for trigger in chain.steps[0].triggers
+        ] == [(Gate.name, False, True)]
+
     def test_subroutine_intra_scan_transient_and_caller_gate(self) -> None:
         """Subroutine writer named + at-fire-time gate + caller-gate lever.
 

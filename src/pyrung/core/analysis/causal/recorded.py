@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_node
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
@@ -65,6 +66,7 @@ def recorded_cause(
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
     node_rung_fn: Any = None,  # Callable[[RungId], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
+    node_runs_fn: Any = None,  # Callable[[int], tuple[RungRun, ...]] | None
     node_reads_fn: Any = None,  # Callable[[int], dict[RungId, set[str]]] | None
     deep: bool = True,
 ) -> CausalChain | None:
@@ -116,6 +118,7 @@ def recorded_cause(
     # a transition, and across recursion may revisit a scan repeatedly;
     # one replay per distinct scan is enough.
     node_views_cache: dict[int, dict[RungId, Any]] = {}
+    node_runs_cache: dict[int, tuple[Any, ...]] = {}
     # Companion cache for the Tier-2 per-node data reads — same replay, same
     # per-scan memoization as ``node_views_cache``.
     node_reads_cache: dict[int, dict[RungId, Any]] = {}
@@ -140,6 +143,8 @@ def recorded_cause(
         node_rung_fn=node_rung_fn,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
+        node_runs_fn=node_runs_fn,
+        node_runs_cache=node_runs_cache,
         node_reads_fn=node_reads_fn,
         node_reads_cache=node_reads_cache,
         deep=deep_state,
@@ -210,6 +215,22 @@ def _node_reads_at(
     if node_reads_cache is not None:
         node_reads_cache[scan_id] = reads
     return reads
+
+
+def _node_runs_at(
+    scan_id: int,
+    node_runs_fn: Any,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None,
+) -> tuple[Any, ...]:
+    """Per-occurrence rung runs for ``scan_id``, memoized."""
+    if node_runs_fn is None:
+        return ()
+    if node_runs_cache is not None and scan_id in node_runs_cache:
+        return node_runs_cache[scan_id]
+    runs = tuple(node_runs_fn(scan_id) or ())
+    if node_runs_cache is not None:
+        node_runs_cache[scan_id] = runs
+    return runs
 
 
 def _cross_opaque_data_reads(
@@ -455,6 +476,8 @@ def _walk_backward(
     node_rung_fn: Any = None,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
+    node_runs_fn: Any = None,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
     deep: _DeepSupport | None = None,
@@ -570,6 +593,8 @@ def _walk_backward(
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
+                        node_runs_fn=node_runs_fn,
+                        node_runs_cache=node_runs_cache,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -633,6 +658,8 @@ def _walk_backward(
                 scan_id=scan_id,
                 node_views_fn=node_views_fn,
                 node_views_cache=node_views_cache,
+                node_runs_fn=node_runs_fn,
+                node_runs_cache=node_runs_cache,
             )
         if not observed_writers:
             # The consumer can run before a later rung changes the alias in the
@@ -651,6 +678,8 @@ def _walk_backward(
                     scan_id=prior_scan,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
+                    node_runs_fn=node_runs_fn,
+                    node_runs_cache=node_runs_cache,
                 )
                 if prior_writers:
                     writer_scan = prior_scan
@@ -679,6 +708,8 @@ def _walk_backward(
             node_rung_fn=node_rung_fn,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
+            node_runs_fn=node_runs_fn,
+            node_runs_cache=node_runs_cache,
             node_reads_fn=node_reads_fn,
             node_reads_cache=node_reads_cache,
             deep=deep,
@@ -714,6 +745,8 @@ def _walk_backward(
             scan_id=scan_id,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
+            node_runs_fn=node_runs_fn,
+            node_runs_cache=node_runs_cache,
         )
 
     indirect_crossings: dict[
@@ -748,12 +781,25 @@ def _walk_backward(
         # downstream).  Reconstruct the writer rung's entry-time
         # ConditionView via on-demand replay so triggers/enablers reflect
         # what the rung *actually read* — not end-of-scan state.
-        fire_view = _writer_fire_view(
-            sub_name,
-            rung_idx,
-            scan_id,
-            node_views_fn=node_views_fn,
-            node_views_cache=node_views_cache,
+        fire_run = latest_writer_run(
+            rung,
+            tag_name,
+            transition.to_value,
+            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+        )
+        fire_view = (
+            fire_run.view
+            if fire_run is not None
+            else _writer_fire_view(
+                sub_name,
+                rung_idx,
+                scan_id,
+                node_views_fn=node_views_fn,
+                node_views_cache=node_views_cache,
+            )
+        )
+        caller_rung_index = (
+            fire_run.caller_rung if fire_run is not None and fire_run.kind == "subroutine" else None
         )
 
         if indirect_crossings and (rung_idx, sub_name) in indirect_crossings:
@@ -766,7 +812,14 @@ def _walk_backward(
                 subroutine=sub_name,
                 fidelity="full",
             )
-            wrapped = _with_caller_gate(step, sub_name, fire_view, pdg, program)
+            wrapped = _with_caller_gate(
+                step,
+                sub_name,
+                fire_view,
+                pdg,
+                program,
+                caller_rung_index=caller_rung_index,
+            )
             steps.append(wrapped)
             for p in triggers:
                 _walk_backward(
@@ -788,6 +841,8 @@ def _walk_backward(
                     node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
+                    node_runs_fn=node_runs_fn,
+                    node_runs_cache=node_runs_cache,
                     node_reads_fn=node_reads_fn,
                     node_reads_cache=node_reads_cache,
                     deep=deep,
@@ -825,7 +880,14 @@ def _walk_backward(
                     enablers=enablers,
                     subroutine=sub_name,
                 )
-                wrapped = _with_caller_gate(step, sub_name, fire_view, pdg, program)
+                wrapped = _with_caller_gate(
+                    step,
+                    sub_name,
+                    fire_view,
+                    pdg,
+                    program,
+                    caller_rung_index=caller_rung_index,
+                )
                 steps.append(wrapped)
                 for p in triggers:
                     _walk_backward(
@@ -847,6 +909,8 @@ def _walk_backward(
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
+                        node_runs_fn=node_runs_fn,
+                        node_runs_cache=node_runs_cache,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -861,7 +925,14 @@ def _walk_backward(
                 enablers=(),
                 subroutine=sub_name,
             )
-            wrapped = _with_caller_gate(step, sub_name, fire_view, pdg, program)
+            wrapped = _with_caller_gate(
+                step,
+                sub_name,
+                fire_view,
+                pdg,
+                program,
+                caller_rung_index=caller_rung_index,
+            )
             steps.append(wrapped)
             conjunctive_roots.append(transition)
             _mirror_root(transition)
@@ -942,7 +1013,16 @@ def _walk_backward(
                 enablers=tuple(enabling),
                 subroutine=sub_name,
             )
-            steps.append(_with_caller_gate(step, sub_name, fire_view, pdg, program))
+            steps.append(
+                _with_caller_gate(
+                    step,
+                    sub_name,
+                    fire_view,
+                    pdg,
+                    program,
+                    caller_rung_index=caller_rung_index,
+                )
+            )
             step_idx = len(steps) - 1
         elif initial_tags is not None and timelines is not None and pdg is not None:
             # Timeline-resolved attribution: reconstruct tag values from
@@ -1105,6 +1185,8 @@ def _walk_backward(
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
+                        node_runs_fn=node_runs_fn,
+                        node_runs_cache=node_runs_cache,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -1138,6 +1220,8 @@ def _walk_backward(
                     node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
+                    node_runs_fn=node_runs_fn,
+                    node_runs_cache=node_runs_cache,
                     node_reads_fn=node_reads_fn,
                     node_reads_cache=node_reads_cache,
                     deep=deep,
@@ -1158,6 +1242,8 @@ def _replayed_writers_from_pdg(
     scan_id: int,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
+    node_runs_fn: Any = None,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
     """Resolve writers omitted by the effective-write timeline from replay evidence.
 
@@ -1183,6 +1269,8 @@ def _replayed_writers_from_pdg(
         candidates=candidates,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
+        node_runs_fn=node_runs_fn,
+        node_runs_cache=node_runs_cache,
     )
 
 
@@ -1463,8 +1551,13 @@ def _writer_fire_view(
     rung_idx: int,
     scan_id: int,
     *,
+    rung: Rung | None = None,
+    tag_name: str | None = None,
+    to_value: Any = None,
     node_views_fn: Any,
     node_views_cache: dict[int, dict[RungId, Any]] | None,
+    node_runs_fn: Any = None,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> Any:
     """Return the writer rung's at-fire-time ``ConditionView``, or ``None``.
 
@@ -1477,6 +1570,15 @@ def _writer_fire_view(
     end-of-scan state) when there is no replay — a logic-list PLC with no
     Program, or a scan out of replay range.  Memoized per distinct scan.
     """
+    if rung is not None and tag_name is not None:
+        run = latest_writer_run(
+            rung,
+            tag_name,
+            to_value,
+            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+        )
+        if run is not None:
+            return run.view
     if node_views_fn is None:
         return None
     if node_views_cache is not None and scan_id in node_views_cache:
@@ -1494,6 +1596,8 @@ def _with_caller_gate(
     fire_view: Any,
     pdg: ProgramGraph | None,
     program: Program | None,
+    *,
+    caller_rung_index: int | None = None,
 ) -> ChainStep:
     """Surface the call-site caller gate as a lever on a subroutine writer.
 
@@ -1501,17 +1605,18 @@ def _with_caller_gate(
     caller gate is a first-class enabler of every write the subroutine
     makes: reversing it disables the whole subtree.  Adds the caller
     rung's condition contacts (held True at fire time) as enablers and
-    records ``caller_rung_index`` for traceability.  Only applies to
-    subroutine writers with a single unambiguous call site.
+    records ``caller_rung_index`` for traceability.  Per-occurrence replay
+    names the actual caller; older evidence falls back only when one call site
+    is structurally unambiguous.
     """
     if sub_name is None or pdg is None or program is None:
         return step
     call_sites = pdg.call_site_rung_indices().get(sub_name, frozenset())
-    if len(call_sites) != 1:
+    if caller_rung_index is None and len(call_sites) != 1:
         # Zero (can't happen for a fired sub) or several (ambiguous without
         # per-call attribution) — leave the proximate writer alone.
         return step
-    caller_idx = next(iter(call_sites))
+    caller_idx = caller_rung_index if caller_rung_index is not None else next(iter(call_sites))
     if caller_idx >= len(program.rungs):
         return step
     caller_rung = program.rungs[caller_idx]
@@ -1546,10 +1651,13 @@ def _executed_writers_from_pdg(
     candidates: frozenset[int],
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
+    node_runs_fn: Any = None,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
     """Return PDG writers proven executed and conductive by replay."""
 
     writers: list[tuple[int, Rung, str | None]] = []
+    observed_runs = _node_runs_at(scan_id, node_runs_fn, node_runs_cache)
     for node_idx in sorted(candidates):
         node = pdg.rung_nodes[node_idx]
         if program is not None:
@@ -1560,12 +1668,27 @@ def _executed_writers_from_pdg(
             rung = None
         if rung is None:
             continue
+        if program is not None and writer_runs_for_node(
+            pdg,
+            program,
+            node_idx,
+            tag_name,
+            to_value,
+            observed_runs,
+        ):
+            writers.append((node.rung_index, rung, node.subroutine))
+            continue
         fire_view = _writer_fire_view(
             node.subroutine,
             node.rung_index,
             scan_id,
+            rung=rung,
+            tag_name=tag_name,
+            to_value=to_value,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
+            node_runs_fn=node_runs_fn,
+            node_runs_cache=node_runs_cache,
         )
         if fire_view is None:
             continue

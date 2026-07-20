@@ -94,12 +94,21 @@ class BatchPulse:
 
 @dataclass(frozen=True)
 class Coast:
-    """One coast act, carrying only its immediate execution heading."""
+    """One coast act with an executable boundary and optional route heading.
+
+    ``channel_tag`` / ``target_value`` are the immediate value the executor
+    must witness. ``route_*`` names the outer chart edge that the local proof
+    serves; it is presentation and nogood context, never permission to coast
+    past the witnessed boundary.
+    """
 
     mode: Literal["bearing", "terminal"]
     channel_tag: str | None = None
     target_value: Any = None
     route_prescribed: bool = False
+    route_channel_tag: str | None = None
+    route_from_value: Any = None
+    route_target_value: Any = None
 
 
 @dataclass(frozen=True)
@@ -185,5 +194,13 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     if isinstance(act, BatchPulse):
         return ("batch", act.source, act.actions)
     if isinstance(act, Coast):
-        return ("coast", act.mode, act.channel_tag, repr(act.target_value))
+        identity = ("coast", act.mode, act.channel_tag, repr(act.target_value))
+        if act.route_channel_tag is not None:
+            return (
+                *identity,
+                act.route_channel_tag,
+                repr(act.route_from_value),
+                repr(act.route_target_value),
+            )
+        return identity
     return ("dwell",)

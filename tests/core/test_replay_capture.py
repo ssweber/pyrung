@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, out
+from pyrung.core import PLC, Bool, Int, Program, Rung, call, copy, out, subroutine
 from pyrung.core.context import RungId
 
 
@@ -34,3 +34,38 @@ def test_replay_capture_uses_state_slab_and_restores_force_map(
     views = source._replay_node_views_at(2)
 
     assert views[RungId(None, 0)].get_tag("Enable") is True
+
+
+def test_replay_capture_preserves_repeated_subroutine_occurrences() -> None:
+    source = Int("Source")
+    result = Int("Result")
+
+    @subroutine("Shared")
+    def shared():
+        with Rung():
+            copy(source, result)
+
+    with Program(strict=False) as program:
+        with Rung():
+            copy(1, source)
+            call(shared)
+            copy(2, source)
+            call(shared)
+
+    plc = PLC(program)
+    plc.step()
+
+    runs = [
+        run
+        for run in plc._replay_rung_runs_at(plc.state.scan_id)
+        if run.rung_id == RungId("Shared", 0)
+    ]
+
+    assert len(runs) == 2
+    assert [run.caller_rung for run in runs] == [0, 0]
+    assert [run.view.get_tag(source.name) for run in runs] == [1, 2]
+    assert [dict(run.writes)[result.name] for run in runs] == [1, 2]
+    # The compact compatibility view intentionally remains last-occurrence.
+    assert (
+        plc._replay_node_views_at(plc.state.scan_id)[RungId("Shared", 0)].get_tag(source.name) == 2
+    )

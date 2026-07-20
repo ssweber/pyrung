@@ -43,6 +43,12 @@ class WorldView:
     steerable: frozenset[str]
     opaque_loop: frozenset[str]
     prior: Any = None
+    clear_only: frozenset[str] = frozenset()
+    pipeline_internal_tags: frozenset[str] = frozenset()
+    pipeline_roles: tuple[Any, ...] = ()
+    avoid_pred: Any = None
+    via_pred: Any = None
+    harness: Any = None
 
 
 @dataclass(frozen=True)

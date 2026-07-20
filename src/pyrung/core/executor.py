@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from pyrung.core.context import ConditionView, RungId
@@ -21,7 +22,35 @@ if TYPE_CHECKING:
 
 
 ExecutionMode = Literal["natural", "forced_on", "forced_off"]
-ExecutionKind = Literal["rung", "branch", "subroutine"]
+ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic"]
+
+
+@dataclass(frozen=True)
+class RungRun:
+    """One exact rung occurrence from an observed scan."""
+
+    rung_id: RungId
+    rung: Rung
+    kind: ExecutionKind
+    caller_rung: int
+    depth: int
+    call_stack: tuple[str, ...]
+    view: ConditionView
+    enabled: bool
+    writes: tuple[tuple[str, object], ...]
+
+
+@dataclass
+class _RungRunBuilder:
+    slot: int
+    rung_id: RungId
+    rung: Rung
+    kind: ExecutionKind
+    caller_rung: int
+    depth: int
+    call_stack: tuple[str, ...]
+    journal: dict[str, object]
+    view: ConditionView | None = None
 
 
 class ExecutionObserver(Protocol):
@@ -38,6 +67,19 @@ class ExecutionObserver(Protocol):
         call_stack: tuple[str, ...],
     ) -> None:
         """Called before a rung or rung-like branch is evaluated."""
+
+    def end_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+        enabled: bool,
+    ) -> None:
+        """Called after a rung occurrence finishes executing."""
 
     def begin_condition(
         self,
@@ -109,6 +151,19 @@ class _NoopExecutionObserver:
     ) -> None:
         pass
 
+    def end_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+        enabled: bool,
+    ) -> None:
+        pass
+
     def begin_condition(
         self,
         ctx: ScanContext,
@@ -170,7 +225,7 @@ NOOP_OBSERVER: ExecutionObserver = _NoopExecutionObserver()
 
 
 class ConditionViewCapture(_NoopExecutionObserver):
-    """Observer that records each rung's at-entry ``ConditionView`` and reads.
+    """Observer that records each rung occurrence, at-entry view, and reads.
 
     Used by an on-demand replay (``PLC._replay_node_views_at`` /
     ``_replay_node_reads_at``) to reconstruct the exact intra-scan state each
@@ -200,11 +255,18 @@ class ConditionViewCapture(_NoopExecutionObserver):
     recorded ``cause()`` prefers this over the static (union) PDG footprint.
     """
 
-    __slots__ = ("views", "reads")
+    __slots__ = ("views", "reads", "_runs", "_active_runs")
 
     def __init__(self) -> None:
         self.views: dict[RungId, ConditionView] = {}
         self.reads: dict[RungId, set[str]] = {}
+        self._runs: list[RungRun | None] = []
+        self._active_runs: list[_RungRunBuilder] = []
+
+    @property
+    def runs(self) -> tuple[RungRun, ...]:
+        """Rung occurrences in scan-entry order."""
+        return tuple(run for run in self._runs if run is not None)
 
     def begin_rung(
         self,
@@ -220,6 +282,51 @@ class ConditionViewCapture(_NoopExecutionObserver):
         # begin_condition), and those contact reads — plus any inter-rung reads —
         # must not land in the previous rung's last instruction's bucket.
         ctx._read_sink = None
+        rung_id = ctx._current_node_id or RungId(None, rung_index)
+        slot = len(self._runs)
+        self._runs.append(None)
+        self._active_runs.append(
+            _RungRunBuilder(
+                slot=slot,
+                rung_id=rung_id,
+                rung=rung,
+                kind=kind,
+                caller_rung=rung_index,
+                depth=depth,
+                call_stack=call_stack,
+                journal=ctx._begin_capture(),
+            )
+        )
+
+    def end_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+        enabled: bool,
+    ) -> None:
+        ctx._read_sink = None
+        active = self._active_runs.pop()
+        if active.rung is not rung:
+            raise RuntimeError("observed rung scopes closed out of order")
+        writes = ctx._finish_observed_capture(active.journal)
+        if active.view is None:
+            raise RuntimeError("observed rung finished without a condition view")
+        self._runs[active.slot] = RungRun(
+            rung_id=active.rung_id,
+            rung=active.rung,
+            kind=active.kind,
+            caller_rung=active.caller_rung,
+            depth=active.depth,
+            call_stack=active.call_stack,
+            view=active.view,
+            enabled=enabled,
+            writes=tuple(writes.items()),
+        )
 
     def begin_condition(
         self,
@@ -231,9 +338,11 @@ class ConditionViewCapture(_NoopExecutionObserver):
         subroutine_name: str | None,
         call_stack: tuple[str, ...],
     ) -> None:
+        view = ctx._condition_snapshot
+        if view is not None:
+            self._active_runs[-1].view = view
         if kind == "branch":
             return
-        view = ctx._condition_snapshot
         if view is not None:
             key = ctx._current_node_id or RungId(None, rung_index)
             self.views[key] = view
@@ -329,7 +438,7 @@ def execute_observed_rung(
         rung,
         mode="natural",
         observer=observer,
-        kind="subroutine",
+        kind="synthetic",
         depth=0,
         parent_enabled=True,
         subroutine_name=namespace,
@@ -533,19 +642,31 @@ def _execute_rung(
     if kind == "branch":
         observer.begin_branch(ctx, rung_index, rung, depth, enabled, call_stack)
 
-    _execute_rung_body(
-        program,
-        ctx,
-        rung_index,
-        rung,
-        enabled,
-        condition_view,
-        mode=mode,
-        observer=observer,
-        depth=depth,
-        subroutine_name=subroutine_name,
-        call_stack=call_stack,
-    )
+    try:
+        _execute_rung_body(
+            program,
+            ctx,
+            rung_index,
+            rung,
+            enabled,
+            condition_view,
+            mode=mode,
+            observer=observer,
+            depth=depth,
+            subroutine_name=subroutine_name,
+            call_stack=call_stack,
+        )
+    finally:
+        observer.end_rung(
+            ctx,
+            rung_index,
+            rung,
+            kind,
+            depth,
+            subroutine_name,
+            call_stack,
+            enabled,
+        )
 
 
 def _execute_rung_body(

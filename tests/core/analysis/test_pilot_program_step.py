@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, Rung, Timer, copy, on_delay
+from pyrung import (
+    PLC,
+    Bool,
+    Int,
+    Program,
+    Rung,
+    Timer,
+    call,
+    copy,
+    latch,
+    on_delay,
+    reset,
+    subroutine,
+)
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung
-from pyrung.core.analysis.pilot.currents import WorldView, sibling_producer_family
+from pyrung.core.analysis.pilot.currents import Producer, WorldView, sibling_producer_family
 from pyrung.core.analysis.pilot.program_step import (
     ProgramStepStatus,
     read_program_step,
@@ -99,3 +112,70 @@ def test_later_writer_clobber_is_not_reported_as_forward_motion() -> None:
 
     assert result.status is ProgramStepStatus.UNCLEAR
     assert "did not" in result.reason or "survive" in result.reason
+
+
+def test_projection_traces_the_exact_producer_occurrence_view() -> None:
+    gate = Bool("Gate")
+    command = Int("Command")
+
+    @subroutine("IssueCommand")
+    def issue_command():
+        with Rung(gate):
+            copy(1, command)
+
+    with Program(strict=False) as program:
+        with Rung():
+            latch(gate)
+            call(issue_command)
+            reset(gate)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    rung_index = next(iter(world.pdg.writers_of[command.name]))
+    producer = Producer(
+        rung_index=rung_index,
+        kind="program",
+        guard_tags=frozenset((gate.name,)),
+        co_writes=frozenset(),
+        command_tag=command.name,
+        command_value=1,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.KEEP_RUNNING
+    assert result.trace is not None
+    assert result.trace.children[0].tag == gate.name
+    assert result.trace.children[0].satisfied is True
+    assert plc.state.tags.get(gate.name, False) is False
+
+
+def test_repeated_producer_occurrences_decline_instead_of_using_the_last_view() -> None:
+    command = Int("RepeatedCommand")
+
+    @subroutine("RepeatedProducer")
+    def repeated_producer():
+        with Rung():
+            copy(1, command)
+
+    with Program(strict=False) as program:
+        with Rung():
+            call(repeated_producer)
+            call(repeated_producer)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    rung_index = next(iter(world.pdg.writers_of[command.name]))
+    producer = Producer(
+        rung_index=rung_index,
+        kind="program",
+        guard_tags=frozenset(),
+        co_writes=frozenset(),
+        command_tag=command.name,
+        command_value=1,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.UNCLEAR
+    assert "more than once" in result.reason

@@ -241,6 +241,35 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "prerequisite_rungs": candidates.prerequisite_rungs,
         "stuck_reason": candidates.stuck_reason,
         "completion_frontier": candidates.completion_frontier,
+        "program_step": _program_step_payload(candidates.program_step),
+    }
+
+
+def _program_step_payload(step: Any) -> dict[str, Any] | None:
+    """Compact, dumpable view of an exact-producer current-world reading."""
+    if step is None:
+        return None
+    boundary = step.boundary
+    return {
+        "status": step.status.value,
+        "producer": {
+            "rung_index": step.producer.rung_index,
+            "command": (step.producer.command_tag, step.producer.command_value),
+        },
+        "boundary": (
+            {
+                "tag": boundary.tag,
+                "op": getattr(boundary, "op", "=="),
+                "bound": getattr(boundary, "bound", getattr(boundary, "values", None)),
+            }
+            if boundary is not None
+            else None
+        ),
+        "channel": step.channel,
+        "required_inputs": tuple(action.pair for action in step.required_inputs),
+        "context_actions": step.context_actions,
+        "projected_changes": step.projected_changes,
+        "reason": step.reason,
     }
 
 
@@ -255,12 +284,16 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
         "bearing_channel_value": candidate.bearing_channel_value,
         "current_prescribed": candidate.current_prescribed,
         "current_note": candidate.current_note,
+        "program_prescribed": candidate.program_prescribed,
+        "program_note": candidate.program_note,
+        "program_context_actions": candidate.program_context_actions,
         "provenance": candidate.provenance,
         "wake": candidate.wake,
         "prescribed": (
             candidate.route_prescribed
             or candidate.influence_prescribed
             or candidate.current_prescribed
+            or candidate.program_prescribed
         ),
         "scored": candidate.scored,
         "avail_tier": candidate.avail_tier,
