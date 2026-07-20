@@ -505,3 +505,24 @@ first-on-target requests), while dynamic node reads initiate only four and node
 views 25–26. Any observed-execution optimization must therefore retain complete
 per-occurrence run evidence; selectively omitting runs is not available.
 
+### Lazy dynamic-read capture decision
+
+A capability-aware replay-cache prototype omitted per-instruction read tracking
+from the common runs/views capture and upgraded the cached target with a
+read-capable replay only when `_replay_node_reads_at()` requested it.
+
+Both A/B runs followed the identical 64-event route to scan 2,110. The
+prototype added 15 observed target executions (1,121 versus 1,106). Against the
+two-run settled baseline averages:
+
+| Measurement | Eager reads | Lazy reads | Improvement |
+|---|---:|---:|---:|
+| Replay-capture envelope | 6.531 s | 6.352 s | 0.180 s |
+| Full `cause()` envelope | 8.102 s | 7.899 s | 0.203 s |
+| Observed program execution | 5.641 s | 5.555 s | 0.086 s |
+
+The replay-specific saving is only approximately 0.5% of total CPU. Larger
+total-time movement came from unrelated committed-scan and analysis variance.
+The prototype was therefore backed out: 0.18–0.20 seconds does not justify a
+read-capability cache contract and extra target executions.
+
