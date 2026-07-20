@@ -148,8 +148,8 @@
   "candidates": [
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -173,8 +173,8 @@
    },
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -324,8 +324,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -361,8 +361,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -443,8 +443,8 @@
   "candidates": [
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -590,8 +590,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -627,8 +627,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -1581,24 +1581,206 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "channel_tag": "Rotate_tmr_Acc",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 15 -> 2",
+    "event": "zoom-stall"
+   }
+  ],
+  "kind": "zoom_rejected"
+ },
+ {
+  "distance": 15,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)",
+   "i_BlowerFB=True (have False)",
+   "i_RotateFB=True (have False)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "candidates": [
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_BlowerFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_BlowerFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R305"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_BlowerFB",
+    "value": true
+   },
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_RotateFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_RotateFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R304"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_RotateFB",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": [
+      "Cmd_State_Complete",
+      true
+     ],
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "hold the current macro-state and allow program motion"
+  "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
-  "observe_label": "letrun",
+  "observe_label": "zoom",
   "outcome": "ambient",
   "trend": 6,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 3
+  "zoom_target_value": 6
  },
  {
   "applied": [],
@@ -1610,9 +1792,9 @@
   "from_value": 3,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "letrun",
+  "observe_label": "zoom",
   "reason": null,
-  "requested_value": 3,
+  "requested_value": 6,
   "to_value": 8
  },
  {
@@ -1715,7 +1897,7 @@
    "rejected_detail": [
     {
      "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1725,7 +1907,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm14_DoorOpen_Trig",
       "x_DoorClosed"
@@ -1733,7 +1915,7 @@
     },
     {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1743,7 +1925,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm15_LintOpen_Trig",
       "x_LintDoorClosed"
@@ -2041,24 +2223,25 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
+  "channel_tag": "Rotate_tmr_Acc",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "hold the current macro-state and allow program motion"
+  "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
-  "ejected": true,
+  "bearing_stop_reason": "reached",
+  "ejected": false,
   "kind": "zoom_accepted",
-  "observe_label": "letrun",
-  "outcome": "ambient",
-  "trend": 2,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 3
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 10,
+  "zoom_actual_value": 5,
+  "zoom_channel_tag": "Rotate_tmr_Acc",
+  "zoom_target_value": 4
  },
  {
   "applied": [],
@@ -2066,19 +2249,230 @@
   "kind": "trial_committed"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 3,
-  "investigated": true,
-  "kind": "letrun_ejection",
-  "observe_label": "letrun",
-  "reason": null,
-  "requested_value": 3,
-  "to_value": 6
+  "kind": "trend_checkpoint",
+  "trend": 10
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "from_value": 3,
-  "kind": "departure_investigated"
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "trend": 10
+ },
+ {
+  "distance": 10,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": [
+      "Cmd_State_Complete",
+      true
+     ],
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 4,
+  "zoom_actual_value": 3,
+  "zoom_channel_tag": "Blower_tmr_Acc",
+  "zoom_target_value": 2
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 4
+ },
+ {
+  "distance": 4,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": [
+      "Cmd_State_Complete",
+      true
+     ],
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 2,
+  "zoom_actual_value": 6,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 2
  },
  {
   "distance": 2,
@@ -2284,25 +2678,6 @@
   "kind": "trial_committed"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "terminal": true,
-  "trend": 0
- },
- {
   "kind": "finished",
   "knowledge": {
    "avoid_names": [],
@@ -2460,7 +2835,30 @@
     "accelerators": [],
     "inputs": [],
     "kind": "coast",
-    "label": "Sts_StateCurrent",
+    "label": "Rotate_tmr_Acc",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB"
+    ],
+    "transition": "",
+    "waiting_for": [
+     "Blower_xInit",
+     "Rotate_tmr_Acc",
+     "Blower_tmr_Acc",
+     "Blower_CurStep",
+     "Ref_State_EXECUTE"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Blower_tmr_Acc",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [
@@ -2472,9 +2870,27 @@
     "transition": "Blower_xCall 0 → 1",
     "waiting_for": [
      "Blower_xInit",
-     "Rotate_tmr_Acc",
      "Blower_tmr_Acc",
      "Blower_CurStep",
+     "Ref_State_EXECUTE"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Sts_StateCurrent",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB"
+    ],
+    "transition": "Sts_StateCurrent 3 → 6",
+    "waiting_for": [
      "Ref_State_EXECUTE"
     ]
    },

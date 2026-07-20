@@ -100,6 +100,7 @@ class _CandidateList:
     # An instruction-owned frontier's immediate observable boundary. This is
     # one coast heading, not a route: after it lands PILOT retraces.
     advance_boundary: _ActionPair | None = None
+    advance_condition: Any = None
     # A composite learned edge (skiff pair probe): the whole action set must
     # fire in one window.  Tried as a single batch trial before the singles —
     # verified live through the same gate pipeline as any candidate.
@@ -138,6 +139,7 @@ class _WaitPrescription:
     details: tuple[TraceAction, ...] = ()
     frontier: tuple[_ActionPair, ...] = ()
     program_step: Any = None
+    boundary: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +179,16 @@ def _diagnose_stuck_reason(
         return None
 
     # Writer found, all conditions satisfied (empty children) — the output
-    # instruction just hasn't fired yet.  Let the loop coast one scan.
-    if tree.writer_rung is not None and not tree.children:
+    # instruction just hasn't fired yet. This readiness has the same meaning at
+    # every trace depth: a timer result can make a nested Step writer ready one
+    # scan before the outer target writer observes Step. Let the loop coast.
+    if any(
+        node.writer_rung is not None
+        and not node.children
+        and not node.satisfied
+        and not node.is_steerable
+        for node in _all_nodes(tree)
+    ):
         return None
 
     dead_ends = [
@@ -534,6 +544,15 @@ def _managed_boolean_rungs(
         source = state.work._known_tags_by_name.get(tag)
         if source is None:
             continue
+        if value is False:
+            # The shared Boolean overlay already lowers every managed
+            # destination to False before applying its active True rules. A
+            # second False PilotRung duplicates that owner and, because it is
+            # appended last, can override a later incident-scoped correction.
+            # The current pulse/co-action still supplies the requested edge;
+            # subsequent scans inherit the overlay's ordinary release value.
+            lowered.add(detail.pair)
+            continue
         active_owner = next(
             (
                 rung
@@ -703,6 +722,27 @@ def _completion_reread(
     return tuple(details), tuple(frontier)
 
 
+def _advance_heading(boundary: Any, frame: Any, state: Any) -> _ActionPair | None:
+    """Lower an owned relational boundary to an exact observable heading."""
+    from pyrung.core.analysis.pilot.advance import build_advance_index
+    from pyrung.core.crossing import Cmp, Eq
+
+    if isinstance(boundary, Eq) and len(boundary.values) == 1:
+        return (boundary.tag, next(iter(boundary.values)))
+    if not isinstance(boundary, Cmp) or boundary.op not in {">=", "<="}:
+        return None
+    owner = build_advance_index(
+        state.work.program,
+        getattr(state.work, "_harness", None),
+    ).resolve(boundary.tag)
+    if owner is None:
+        return None
+    target = frame.snap.get(str(boundary.bound)) if boundary.bound_is_tag else boundary.bound
+    if target is None:
+        return None
+    return (boundary.tag, target)
+
+
 def _prescribe_wait(
     edge: Any,
     frame: Any,
@@ -788,8 +828,43 @@ def _prescribe_wait(
                 f"{route_reason} ({tag}: {before!r}->{after!r})",
                 frontier=((tag, after),),
                 program_step=step,
+                boundary=step.boundary,
             )
         if step.status is ProgramStepStatus.NEEDS_INPUT:
+            handoff_by_action = {handoff.action: handoff for handoff in step.input_handoffs}
+            if step.required_inputs and all(
+                action.pair in handoff_by_action for action in step.required_inputs
+            ):
+                handoffs = tuple(handoff_by_action[action.pair] for action in step.required_inputs)
+                boundary = handoffs[0].boundary
+                if all(handoff.boundary == boundary for handoff in handoffs):
+                    heading = _advance_heading(boundary, frame, state)
+                    if heading is None:
+                        return _WaitPrescription(
+                            False,
+                            f"{route_reason}; owned boundary has no exact coast heading",
+                            details=step.required_inputs,
+                            program_step=step,
+                        )
+                    # Compose the exact-producer read with the ordinary
+                    # prerequisite/coast path. ``until`` gives each input the
+                    # same scoped lifetime trace uses for any self-advancing
+                    # operation; coast owns and verifies the resolved boundary.
+                    details = tuple(
+                        replace(
+                            action,
+                            until=handoff_by_action[action.pair].boundary,
+                        )
+                        for action in step.required_inputs
+                    )
+                    return _WaitPrescription(
+                        True,
+                        (f"{route_reason}; supply its current input and hand off to {heading[0]}"),
+                        details=details,
+                        frontier=(heading,),
+                        program_step=step,
+                        boundary=boundary,
+                    )
             frontier = tuple(
                 action.pair
                 for action in step.required_inputs
@@ -997,6 +1072,7 @@ def _build_candidates(
     completion_frontier: tuple[_ActionPair, ...] = ()
     program_step: Any = None
     program_pairs: set[_ActionPair] = set()
+    advance_condition: Any = None
     # The next iteration re-reads the wait: when the zoom's grounded completion edge carries a
     # charted condition (charts.py), :func:`_prescribe_wait` re-traces it as
     # ordinary transparent ladder and returns its producers + unmet frontier.  The
@@ -1015,10 +1091,24 @@ def _build_candidates(
         _comp_details = zoom_wait.details
         completion_frontier = zoom_wait.frontier
         program_step = zoom_wait.program_step
+        advance_condition = zoom_wait.boundary
         if program_step is not None:
             program_pairs = {detail.pair for detail in program_step.required_inputs}
         for detail in _comp_details:
             pair = detail.pair
+            existing_detail = detail_by_pair.get(pair)
+            if (
+                existing_detail is not None
+                and existing_detail.until is None
+                and detail.until is not None
+            ):
+                # The completion re-read may discover the lifetime that the
+                # broader target trace could not see. Preserve the original
+                # action evidence while composing in that owned boundary.
+                detail_by_pair[pair] = replace(
+                    existing_detail,
+                    until=detail.until,
+                )
             if (
                 pair in active_trace_actions
                 or pair in ctx.blocked_route_actions
@@ -1045,28 +1135,27 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
     )
-    advance_boundary: _ActionPair | None = None
+    advance_boundary: _ActionPair | None = (
+        completion_frontier[0]
+        if advance_condition is not None and len(completion_frontier) == 1
+        else None
+    )
     if _is_coast:
-        from pyrung.core.crossing import Cmp, Eq
-        from pyrung.core.tag import TagType
-
         for node in frame.tree.leaves():
             step = getattr(node, "advance", None)
-            if step is None or node.satisfied or not getattr(node, "stage_boundary", False):
+            if step is None or node.satisfied:
                 continue
-            until = step.until
-            if isinstance(until, Eq) and len(until.values) == 1:
-                advance_boundary = (until.tag, next(iter(until.values)))
-                break
-            tag = state.work._known_tags_by_name.get(getattr(until, "tag", ""))
-            if (
-                isinstance(until, Cmp)
-                and until.op in {">=", "<="}
-                and not until.bound_is_tag
-                and tag is not None
-                and tag.type in {TagType.INT, TagType.DINT}
-            ):
-                advance_boundary = (until.tag, until.bound)
+            advance_boundary = (
+                getattr(node, "owner_boundary", None)
+                if getattr(node, "linear_boundary", False)
+                else None
+            ) or _advance_heading(step.until, frame, state)
+            if advance_boundary is not None:
+                advance_condition = (
+                    getattr(node, "owner_condition", None)
+                    if getattr(node, "linear_boundary", False)
+                    else None
+                ) or step.until
                 break
     prerequisite_rungs = list(managed_boolean_rungs)
     if _is_zoom or _is_coast:
@@ -1239,14 +1328,18 @@ def _build_candidates(
             ),
             route_prescribed=pair in route_candidate_set,
             bearing_channel_tag=(
-                prescribed_edge.role.channel_tag
+                detail.operation_boundary[0]
+                if detail is not None and detail.operation_boundary is not None
+                else prescribed_edge.role.channel_tag
                 if prescribed_edge is not None
                 else route_plan.role.channel_tag
                 if pair in program_pairs and route_plan is not None
                 else None
             ),
             bearing_channel_value=(
-                prescribed_edge.to_value
+                detail.operation_boundary[1]
+                if detail is not None and detail.operation_boundary is not None
+                else prescribed_edge.to_value
                 if prescribed_edge is not None
                 else route_plan.first_edge.to_value
                 if pair in program_pairs and route_plan is not None
@@ -1350,6 +1443,8 @@ def _build_candidates(
         completion_frontier += fallback_wait.frontier
         if fallback_wait.program_step is not None:
             program_step = fallback_wait.program_step
+        if fallback_wait.boundary is not None:
+            advance_condition = fallback_wait.boundary
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
     # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and
@@ -1375,6 +1470,7 @@ def _build_candidates(
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
         advance_boundary=advance_boundary,
+        advance_condition=advance_condition,
         prescribed_batch=prescribed_batch,
         prerequisite_rungs=tuple(prerequisite_rungs),
         stuck_reason=stuck_reason,

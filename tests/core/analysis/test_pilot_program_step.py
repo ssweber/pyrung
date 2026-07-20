@@ -18,7 +18,7 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot._ops import PilotRung, _settle_delayed_effects
 from pyrung.core.analysis.pilot.currents import Producer, WorldView, sibling_producer_family
 from pyrung.core.analysis.pilot.evidence import PipelineRoles
 from pyrung.core.analysis.pilot.program_step import (
@@ -79,7 +79,7 @@ def test_running_timer_proves_progress_at_the_immediate_boundary() -> None:
 
 
 def test_stopped_timer_surfaces_its_current_external_input() -> None:
-    program, run, _command, _timer = _timer_producer_program()
+    program, run, _command, timer = _timer_producer_program()
     plc = PLC(program, dt=0.010)
     plc.step()
     world = _world(program, plc)
@@ -88,6 +88,40 @@ def test_stopped_timer_surfaces_its_current_external_input() -> None:
 
     assert result.status is ProgramStepStatus.NEEDS_INPUT
     assert tuple(action.pair for action in result.required_inputs) == ((run.name, True),)
+    assert len(result.input_handoffs) == 1
+    assert result.input_handoffs[0].action == (run.name, True)
+    assert result.input_handoffs[0].channel == timer.Acc.name
+    assert result.input_handoffs[0].boundary.tag == timer.Acc.name
+
+
+def test_supplied_input_hands_the_timer_back_to_the_exact_producer_reader() -> None:
+    """Generic pulse settlement must not consume the next owned operation."""
+    program, run, _command, timer = _timer_producer_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+    stopped_world = _world(program, plc)
+    stopped = read_program_step(stopped_world, _producer(stopped_world), plc)
+    assert stopped.input_handoffs[0].channel == timer.Acc.name
+    before = dict(plc.state.tags)
+    plc.patch({run.name: True})
+    plc.step()
+    scan_at_handoff = plc.state.scan_id
+
+    receipts = _settle_delayed_effects(
+        plc,
+        before,
+        cfg=None,
+        scan_budget=500,
+    )
+    world = _world(program, plc)
+    result = read_program_step(world, _producer(world), plc)
+
+    assert receipts == []
+    assert plc.state.scan_id == scan_at_handoff
+    assert plc.state.tags[timer.TT.name] is True
+    assert result.status is ProgramStepStatus.KEEP_RUNNING
+    assert result.boundary is not None
+    assert result.boundary.tag == timer.Acc.name
 
 
 def test_projection_rebuilds_already_installed_pilot_holds() -> None:

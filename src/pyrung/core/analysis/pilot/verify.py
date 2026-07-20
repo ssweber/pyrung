@@ -58,6 +58,28 @@ class _DeadEndResult:
     has_new_frontier: bool = False
 
 
+def _owned_bearing_stop_reason(
+    trial: _PulseState,
+    channel_tag: str | None,
+    target_value: Any,
+) -> str | None:
+    """Interpret a raw coast receipt against verification's selected owner.
+
+    An inner advance seek arms the outer route channel as its departure bump.
+    When that outer channel lands exactly on its requested value, the raw inner
+    receipt necessarily says ``departed`` even though the selected outer
+    operation was reached.  Rebase that one observation here; relational inner
+    boundaries retain their own ``reached`` receipt even when their scalar
+    heading was crossed rather than equalled.
+    """
+    receipt = trial.coast_receipt
+    if receipt is None:
+        return None
+    if channel_tag is not None and _values_match(trial.snap.get(channel_tag), target_value):
+        return "reached"
+    return receipt.stop_reason
+
+
 # ---------------------------------------------------------------------------
 # Gate helpers — excursion diagnosis and retry
 # ---------------------------------------------------------------------------
@@ -416,6 +438,11 @@ def verify_gates(
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     excursion_holds: list[_ActionPair] = []
+    bearing_stop_reason = _owned_bearing_stop_reason(
+        trial,
+        zoom_channel_tag,
+        zoom_target_value,
+    )
 
     # ── Scan gate (avoid=) ────────────────────────────────────────────────
     # Settled state first (the original veto: never rest in the avoided region).
@@ -471,6 +498,7 @@ def verify_gates(
                 gate_events=tuple(gate_events),
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
+                bearing_stop_reason=bearing_stop_reason,
                 coast_receipt=trial.coast_receipt,
                 timeline=trial.timeline,
             ),
@@ -516,6 +544,7 @@ def verify_gates(
                 gate_events=tuple(gate_events),
                 zoom_channel_tag=zoom_channel_tag,
                 zoom_target_value=zoom_target_value,
+                bearing_stop_reason=bearing_stop_reason,
                 coast_receipt=trial.coast_receipt,
                 timeline=trial.timeline,
             ),
@@ -575,13 +604,10 @@ def verify_gates(
         zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
         zoom_progressed=(
-            motion.is_coast
-            and getattr(state, "gauge", None) is not None
+            getattr(state, "gauge", None) is not None
             and state.gauge.ordinal_advanced(frame.snap, trial.snap)
         ),
-        zoom_stop_reason=(
-            trial.coast_receipt.stop_reason if trial.coast_receipt is not None else None
-        ),
+        zoom_stop_reason=(bearing_stop_reason),
     )
 
     outcome = assessment.legacy_outcome
@@ -643,6 +669,7 @@ def verify_gates(
             gate_events=tuple(gate_events),
             zoom_channel_tag=zoom_channel_tag,
             zoom_target_value=zoom_target_value,
+            bearing_stop_reason=bearing_stop_reason,
             coast_receipt=trial.coast_receipt,
             timeline=trial.timeline,
         ),

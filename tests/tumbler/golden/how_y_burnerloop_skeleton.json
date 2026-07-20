@@ -192,10 +192,6 @@
    [
     "Cmd_Mode_Production",
     true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
    ]
   ],
   "candidates": [
@@ -224,8 +220,8 @@
    },
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -249,8 +245,8 @@
    },
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -271,31 +267,6 @@
     "scored": true,
     "tag": "Cmd_Mode_Production",
     "value": true
-   },
-   {
-    "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
-    "compass_score": [
-     50,
-     0
-    ],
-    "current_note": "",
-    "current_prescribed": false,
-    "influence_prescribed": false,
-    "over_wake": false,
-    "pair": [
-     "S_DryerTemp_F",
-     -1
-    ],
-    "prescribed": false,
-    "provenance": [
-     "ProductionExecuteSteps:R255"
-    ],
-    "route_prescribed": false,
-    "scored": true,
-    "tag": "S_DryerTemp_F",
-    "value": -1
    }
   ],
   "kind": "candidates_built",
@@ -383,10 +354,6 @@
    [
     "Cmd_Mode_Production",
     true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
    ]
   ],
   "wait_prescribed": false,
@@ -1240,6 +1207,7 @@
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
   "observe_label": "zoom",
@@ -1358,7 +1326,7 @@
    "rejected_detail": [
     {
      "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 6 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1368,7 +1336,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm14_DoorOpen_Trig",
       "x_DoorClosed"
@@ -1376,7 +1344,7 @@
     },
     {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 6 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1386,7 +1354,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm15_LintOpen_Trig",
       "x_LintDoorClosed"
@@ -1746,6 +1714,132 @@
   "reason": "i_BlowerFB: False->True"
  },
  {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 22,
+  "zoom_actual_value": 5,
+  "zoom_channel_tag": "Rotate_tmr_Acc",
+  "zoom_target_value": 4
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 22
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "trend": 22
+ },
+ {
+  "distance": 22,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "HeatDelay_Tmr_Done=True (have False)",
+   "Blower_x=True (have False)",
+   "Heat_CurStep=1 (have 0)",
+   "Sts_State_Execute=True (have False)",
+   "Blower__x=1 (have 0)",
+   "Sts_StateCurrent=6 (have 3)",
+   "Blower_xCall=1 (have 0)",
+   "Sts_StateRequested=6 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "zoom_accepted",
   "observe_label": "zoom",
@@ -1762,18 +1856,6 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
   "trend": 10
  },
  {
@@ -1829,8 +1911,88 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+ },
+ {
+  "channel_tag": "HeatDelay_Tmr_Done",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+ },
+ {
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
+   }
+  ],
+  "kind": "zoom_rejected"
+ },
+ {
+  "distance": 10,
+  "kind": "iteration",
+  "nogoods": [
+   [
+    "wait::HeatDelay_Tmr_Done",
+    [
+     false,
+     true
+    ]
+   ]
+  ],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "HeatDelay_Tmr_Done=True (have False)",
+   "Heat_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
  {
   "channel_tag": "y_BurnerLoop",
@@ -1839,6 +2001,7 @@
   "reason": "hold the current macro-state and allow program motion"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
   "observe_label": "letrun",
@@ -1870,30 +2033,36 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
+     "detail": "ProductionStates:R5 fired at scan <N>; minimal conductive cut",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
      "kind": "precise-cause",
      "sources": [
+      "Cmd_CtrlCmd",
+      "Ref_Cmd_Hold",
       "Sts_StateCurrent",
+      "Sts_State_Execute",
+      "Sts_UnitModeCurrent",
+      "i_DoorClosed",
+      "i_LintDoorClosed",
       "x_DoorClosed",
       "x_LintDoorClosed"
      ]
     }
    ],
-   "hypotheses": 1,
+   "hypotheses": 2,
    "hypothesis_detail": [
     {
      "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
@@ -1913,10 +2082,61 @@
       "x_DoorClosed",
       "x_LintDoorClosed"
      ]
+    },
+    {
+     "detail": "ProductionStates:R5 fired at scan <N>; minimal conductive cut",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "value": true
+      }
+     ],
+     "kind": "precise-cause",
+     "sources": [
+      "Cmd_CtrlCmd",
+      "Ref_Cmd_Hold",
+      "Sts_StateCurrent",
+      "Sts_State_Execute",
+      "Sts_UnitModeCurrent",
+      "i_DoorClosed",
+      "i_LintDoorClosed",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
     }
    ],
-   "rejected": 0,
-   "rejected_detail": [],
+   "rejected": 1,
+   "rejected_detail": [
+    {
+     "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): Cmd_CtrlCmd, Sts_State_Execute, Sts_UnitModeCurrent",
+     "holds": [
+      [
+       "x_DoorClosed",
+       true
+      ],
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ],
+     "kind": "precise-cause",
+     "slug": "sibling-regression",
+     "sources": [
+      "Sts_StateCurrent",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
    "unresolved": []
   },
   "kind": "trend_regression",
@@ -1976,8 +2196,160 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+ },
+ {
+  "channel_tag": "HeatDelay_Tmr_Done",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 5,
+  "zoom_actual_value": true,
+  "zoom_channel_tag": "HeatDelay_Tmr_Done",
+  "zoom_target_value": true
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 5
+ },
+ {
+  "distance": 5,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 1)",
+   "Heat_CurStep=2 (have 1)",
+   "Heat_Trans=1 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "advance Heat_tmr_Acc to its next boundary 1"
+ },
+ {
+  "channel_tag": "Heat_tmr_Acc",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance Heat_tmr_Acc to its next boundary 1"
+ },
+ {
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
+   }
+  ],
+  "kind": "zoom_rejected"
+ },
+ {
+  "distance": 5,
+  "kind": "iteration",
+  "nogoods": [
+   [
+    "wait::Heat_tmr_Acc",
+    [
+     0,
+     1
+    ]
+   ]
+  ],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 1)",
+   "Heat_CurStep=2 (have 1)",
+   "Heat_Trans=1 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "advance Heat_tmr_Acc to its next boundary 1"
  },
  {
   "channel_tag": "y_BurnerLoop",
@@ -1986,6 +2358,7 @@
   "reason": "hold the current macro-state and allow program motion"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
   "observe_label": "letrun",
@@ -2147,37 +2520,42 @@
   "wait_reason": "HeatDelay_Tmr_Acc: 0->10"
  },
  {
-  "channel_tag": "y_BurnerLoop",
+  "channel_tag": "HeatDelay_Tmr_Done",
   "kind": "zoom",
   "prescribed": true,
   "reason": "HeatDelay_Tmr_Acc: 0->10"
  },
  {
-  "gates": [
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "empty frontier, no pending effects",
-    "event": "dead-end"
-   }
-  ],
-  "kind": "zoom_rejected"
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 5,
+  "zoom_actual_value": true,
+  "zoom_channel_tag": "HeatDelay_Tmr_Done",
+  "zoom_target_value": true
  },
  {
-  "distance": 10,
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 5
+ },
+ {
+  "distance": 5,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
    "y_BurnerLoop=True (have False)",
    "o_BurnerLoop=True (have False)",
-   "Heat_CurStep=3 (have 0)",
-   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
-   "Heat__x=1 (have 0)",
-   "Heat_CurStep=2 (have 0)",
-   "Heat_xCall=1 (have 0)",
-   "Heat_Trans=1 (have 0)",
-   "HeatDelay_Tmr_Done=True (have False)",
-   "Heat_CurStep=1 (have 0)"
+   "Heat_CurStep=3 (have 1)",
+   "Heat_CurStep=2 (have 1)",
+   "Heat_Trans=1 (have 0)"
   ],
   "target": [
    "y_BurnerLoop",
@@ -2216,7 +2594,82 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "HeatDelay_Tmr_Acc: 0->10"
+  "wait_reason": "advance Heat_tmr_Acc to its next boundary 1"
+ },
+ {
+  "channel_tag": "Heat_tmr_Acc",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance Heat_tmr_Acc to its next boundary 1"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 3,
+  "zoom_actual_value": 2,
+  "zoom_channel_tag": "Heat_tmr_Acc",
+  "zoom_target_value": 1
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 3
+ },
+ {
+  "distance": 3,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 2)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
  },
  {
   "channel_tag": "y_BurnerLoop",
@@ -2225,6 +2678,7 @@
   "reason": "hold the current macro-state and allow program motion"
  },
  {
+  "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "zoom_accepted",
   "observe_label": "letrun-target",
@@ -2244,6 +2698,16 @@
   "knowledge": {
    "avoid_names": [],
    "hold_log": [
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "prerequisite",
+     "tags": [
+      [
+       "S_DryerTemp_F",
+       -1
+      ]
+     ]
+    },
     {
      "__type__": "_HoldLogEntry",
      "source": "prerequisite",
@@ -2321,6 +2785,25 @@
    "skiff_decline": null
   },
   "plan_journal": [
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "S_DryerTemp_F",
+      -1
+     ]
+    ],
+    "kind": "force",
+    "label": "S_DryerTemp_F",
+    "notes": [
+     "held S_DryerTemp_F < S_ValLowBandTemp_F (e.g., S_DryerTemp_F = -1)"
+    ],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
+    "waiting_for": []
+   },
    {
     "__type__": "PlanStep",
     "accelerators": [],
@@ -2433,16 +2916,17 @@
     "accelerators": [],
     "inputs": [],
     "kind": "coast",
-    "label": "Sts_StateCurrent",
+    "label": "Rotate_tmr_Acc",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [
+     "S_DryerTemp_F",
      "x_BlowerFB",
      "x_DoorClosed",
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "",
     "waiting_for": [
      "Blower_Trans",
      "Blower__x",
@@ -2461,6 +2945,36 @@
      "Blower_xInit",
      "Blower_xCall",
      "i_RotateFB"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Sts_StateCurrent",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "S_DryerTemp_F",
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB"
+    ],
+    "transition": "Blower_xCall 0 → 1",
+    "waiting_for": [
+     "Blower_Trans",
+     "Blower__x",
+     "Blower_CurStep",
+     "Heat_xInit",
+     "Sts_StateCompleteBool",
+     "Heat_tmr_Acc",
+     "Blower__init",
+     "Heat_CurStep",
+     "Blower_tmr_Acc",
+     "Blower_xInit",
+     "Blower_xCall"
     ]
    },
    {
@@ -2535,10 +3049,11 @@
     ],
     "inputs": [],
     "kind": "coast",
-    "label": "",
+    "label": "HeatDelay_Tmr_Done",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [
+     "S_DryerTemp_F",
      "x_BlowerFB",
      "x_DoorClosed",
      "x_LintDoorClosed",
@@ -2552,6 +3067,46 @@
      "Heat_tmr_Acc",
      "Heat_CurStep"
     ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Heat_tmr_Acc",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "S_DryerTemp_F",
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB",
+     "x_RotateSensor"
+    ],
+    "transition": "",
+    "waiting_for": [
+     "Heat_tmr_Acc"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "S_DryerTemp_F",
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB",
+     "x_RotateSensor"
+    ],
+    "transition": "",
+    "waiting_for": []
    }
   ],
   "reached": true,

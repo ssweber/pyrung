@@ -38,6 +38,7 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
+    _channel_tenure_checkpoint_index,
     _deviation_bearing,
     _monitor_trend,
 )
@@ -220,6 +221,23 @@ class TestCheckpoints:
         assert receipt.trend == 2
         assert receipt.world.work.state.scan_id == source_scan
 
+    def test_channel_tenure_ignores_nested_progress_checkpoints(self):
+        entered = _oneshot_plc()
+        entered._state = entered.state.with_tags({"A": True})
+        nested = entered.fork()
+        later = entered.fork()
+        state = _make_state(
+            best_trend=1,
+            checkpoints=[
+                _cp(("before",), _oneshot_plc(), 4),
+                _cp(("entered",), entered, 3),
+                _cp(("timer",), nested, 2),
+                _cp(("step",), later, 1),
+            ],
+        )
+
+        assert _channel_tenure_checkpoint_index(state, "A", True) == 1
+
 
 def test_banked_ordinary_checkpoint_promotes_the_provisional():
     """Improved-trend work banked inside a provisional discharges its doubt:
@@ -271,7 +289,7 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
 
 
 def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
-    """An open corridor changes rollback policy, not whether a departure is read."""
+    """Even expired corridor policy cannot bypass a concrete departure receipt."""
     checkpoint = _cp(("source",), _oneshot_plc(), 2)
     trial = _make_trial(
         2,
@@ -288,7 +306,7 @@ def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
         gauge_at_source=(),
         checkpoint_depth=1,
         started_at=0,
-        expires_at=1000,
+        expires_at=0,
         classification="provisional",
     )
     verdict = DepartureVerdict(
@@ -660,6 +678,21 @@ def test_zoom_accepted_payload_records_requested_and_landed():
     assert payload["zoom_target_value"] == 6  # requested bearing
     assert payload["zoom_actual_value"] == 8  # where the world actually landed
     assert payload["ejected"] is True
+
+
+def test_zoom_accepted_payload_records_owned_bearing_receipt():
+    from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
+
+    trial = _make_trial(
+        7,
+        Outcome.CONFIRMED,
+        zoom_channel_tag="Acc",
+        zoom_target_value=4,
+        bearing_stop_reason="reached",
+        fork_snap={"Acc": 5},
+    )
+
+    assert _zoom_accepted_payload(trial)["bearing_stop_reason"] == "reached"
 
 
 def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():

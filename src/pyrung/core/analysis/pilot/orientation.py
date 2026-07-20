@@ -105,6 +105,7 @@ def _read_world(
             until=action.until,
             pulse=action.pulse,
             establish=action.establish,
+            operation_boundary=action.operation_boundary,
             heuristic=action.heuristic,
             note=action.note,
             availability=action.availability,
@@ -283,35 +284,39 @@ def orient(
             channel_tag=(
                 program_heading[0]
                 if program_heading is not None
-                else route_plan.role.channel_tag
-                if route_plan is not None
                 else advance_boundary[0]
                 if advance_boundary is not None
+                else route_plan.role.channel_tag
+                if route_plan is not None
                 else None
             ),
             target_value=(
                 program_heading[1]
                 if program_heading is not None
-                else route_plan.first_edge.to_value
-                if route_plan is not None
                 else advance_boundary[1]
                 if advance_boundary is not None
+                else route_plan.first_edge.to_value
+                if route_plan is not None
                 else None
             ),
+            boundary=candidates.advance_condition,
             route_prescribed=route_plan is not None,
             route_channel_tag=(
                 route_plan.role.channel_tag
-                if route_plan is not None and program_heading is not None
+                if route_plan is not None
+                and (program_heading is not None or advance_boundary is not None)
                 else None
             ),
             route_from_value=(
                 route_plan.first_edge.from_value
-                if route_plan is not None and program_heading is not None
+                if route_plan is not None
+                and (program_heading is not None or advance_boundary is not None)
                 else None
             ),
             route_target_value=(
                 route_plan.first_edge.to_value
-                if route_plan is not None and program_heading is not None
+                if route_plan is not None
+                and (program_heading is not None or advance_boundary is not None)
                 else None
             ),
         )
@@ -324,10 +329,10 @@ def orient(
                 immediate_goal=(
                     program_heading[1]
                     if program_heading is not None
-                    else candidates.route_plan.first_edge.to_value
-                    if candidates.route_plan is not None
                     else advance_boundary[1]
                     if advance_boundary is not None
+                    else candidates.route_plan.first_edge.to_value
+                    if candidates.route_plan is not None
                     else target.value
                 ),
             )

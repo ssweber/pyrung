@@ -12,7 +12,7 @@ record transition knowledge, or choose the iteration's final candidate order.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis import steerable as _steerable
@@ -234,6 +234,11 @@ class TraceAction:
     # cannot fire in the same scan as the command it gates, so options.py makes
     # it the sole bearing (stage 0) and defers the gated commands.
     establish: bool = False
+    # Exact nearest program-owned transition this action serves. Backward trace
+    # used to retain the lever but discard the output that made it useful;
+    # verification then depended on a later frontier or ambient settling. Keep
+    # the selected trace branch intact and carry its observable handoff boundary.
+    operation_boundary: tuple[str, Any] | None = None
     # Stage-3 heuristic boundary proposal on a steerable free word: the value is
     # an example that satisfies a relation, not a sound derivation.  ``note`` is
     # the relational report threaded to ``PlanStep.notes``.
@@ -308,6 +313,12 @@ class TraceNode:
     provenance: tuple[str, ...] = ()
     pipeline_internal: bool = False
     advance: Any = None
+    # Public result requested from the advance owner, distinct from the
+    # internal crossing in ``advance.until`` (a timer's Done=True versus
+    # Acc>=preset). Coast heads to and verifies this result; the profile keeps
+    # the internal crossing as folding metadata.
+    owner_boundary: tuple[str, Any] | None = None
+    owner_condition: Any = None
     # A non-linear profile's boundary is itself the next stage heading. Linear
     # profiles keep the existing gauge/terminal-coast path.
     stage_boundary: bool = False
@@ -412,12 +423,21 @@ class TraceNode:
         path_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW,
         until: Any = None,
         guard_atoms: tuple[Any, ...] = (),
+        operation_boundary: tuple[str, Any] | None = None,
     ) -> None:
-        # A steerable leaf inherits ``establish`` from the nearest unsatisfied
-        # ``enable`` ancestor: it stands in stage 0 (precondition), not stage 1
-        # (the command it gates).  Once the gate is satisfied the node drops out
-        # of the tree, so the flag is re-derived every trace.
+        # Stage ordering remains structural: an unsatisfied enable ancestor puts
+        # its leaves in stage 0. The exact operation boundary is broader than
+        # that category: every chosen writer node names the local output its
+        # descendant lever is meant to establish. A deeper writer owns the nearer
+        # receipt, and retracing hands off to the next operation.
         child_enable = under_enable or (self.data_flow == "enable" and not self.satisfied)
+        child_operation_boundary = (
+            (self.tag, self.value)
+            if not self.satisfied
+            and not self.is_steerable
+            and (self.writer_rung is not None or self.data_flow == "enable")
+            else operation_boundary
+        )
         # Worst-wins: a leaf is only as available as the least-available writer on
         # the path from the target down to it (the And-rule — every writer in the
         # chain must fire).  Neutral (AVAILABLE_NOW) for nodes with no writer.
@@ -425,11 +445,25 @@ class TraceNode:
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
         child_until = until
+        unsatisfied_children = [child for child in self.children if not child.satisfied]
+        if (
+            child_until is None
+            and self.writer_rung is not None
+            and len(unsatisfied_children) > 1
+            and any(
+                any(node.advance is not None and not node.satisfied for node in child.leaves())
+                for child in unsatisfied_children
+            )
+        ):
+            # A writer with concurrent prerequisites owns their shared lifetime.
+            # Nested timers/profiles provide headings, but completing one cannot
+            # release a sibling needed for the outer result (rendezvous).
+            child_until = self.predicate or Atom(self.tag, "eq", self.value)
         advance_child = next(
             (child for child in self.children if child.advance is not None and not child.satisfied),
             None,
         )
-        if advance_child is not None:
+        if advance_child is not None and child_until is None:
             child_until = (
                 self.predicate or Atom(self.tag, "eq", self.value)
                 if advance_child.linear_boundary
@@ -450,25 +484,40 @@ class TraceNode:
                 node_availability,
                 child_until,
                 tuple(child_guard_atoms),
+                child_operation_boundary,
             )
         if self.is_steerable:
             key = (self.tag, self.value)
-            if key not in seen:
-                seen.add(key)
-                out.append(
-                    TraceAction(
-                        tag=self.tag,
-                        value=self.value,
-                        provenance=self.provenance,
-                        until=until,
-                        guard_atoms=guard_atoms,
-                        pulse=self.pulse,
-                        establish=under_enable,
-                        heuristic=self.heuristic,
-                        note=self.note,
-                        availability=node_availability,
-                    )
+            detail = TraceAction(
+                tag=self.tag,
+                value=self.value,
+                provenance=self.provenance,
+                until=until,
+                guard_atoms=guard_atoms,
+                pulse=self.pulse,
+                establish=under_enable,
+                operation_boundary=operation_boundary,
+                heuristic=self.heuristic,
+                note=self.note,
+                availability=node_availability,
+            )
+            if key in seen:
+                index = next(i for i, existing in enumerate(out) if existing.pair == key)
+                existing = out[index]
+                out[index] = replace(
+                    existing,
+                    until=existing.until if existing.until is not None else detail.until,
+                    guard_atoms=tuple(dict.fromkeys((*existing.guard_atoms, *detail.guard_atoms))),
+                    pulse=existing.pulse or detail.pulse,
+                    establish=existing.establish or detail.establish,
+                    operation_boundary=(existing.operation_boundary or detail.operation_boundary),
+                    heuristic=existing.heuristic or detail.heuristic,
+                    note=existing.note or detail.note,
+                    availability=max(existing.availability, detail.availability),
                 )
+            else:
+                seen.add(key)
+                out.append(detail)
 
     def pivot_tags(self) -> set[str]:
         """Tags in the trace tree that are gate conditions — the pivots.
@@ -1307,6 +1356,14 @@ def _advance_frontier(
         relational=isinstance(step.until, Cmp) and stage_boundary,
         predicate=atom if stage_boundary else None,
         advance=step,
+        owner_boundary=(
+            (constraint.tag, constraint.bound)
+            if isinstance(constraint, Cmp) and not constraint.bound_is_tag
+            else (constraint.tag, next(iter(constraint.values)))
+            if isinstance(constraint, Eq) and len(constraint.values) == 1
+            else None
+        ),
+        owner_condition=constraint,
         stage_boundary=stage_boundary,
         linear_boundary=not stage_boundary,
     )
@@ -1324,17 +1381,6 @@ def _advance_frontier(
         return boundary
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
     running_linear = owner.profile.linear is not None and owner.profile.active is not None
-    if running_linear and (
-        gate_nodes
-        or any(not _demand_holds(demand, env.snapshot) for demand in step.holds)
-        or (step.pulse is not None and not _demand_holds(step.pulse, env.snapshot))
-    ):
-        # A linear owner with an active role (a timer-shaped owner) is a coast
-        # frontier only after its current operation is already running.  While
-        # its enable or call path is closed, the ordinary writer trace exposes
-        # that nearer prerequisite.  Retracing after it lands then reveals the
-        # accumulator boundary.
-        return None
     demand_nodes: list[TraceNode] = []
     for demand in step.holds:
         if running_linear and _demand_holds(demand, env.snapshot):

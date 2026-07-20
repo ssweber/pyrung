@@ -253,7 +253,6 @@ def _iteration_payload(
 
 def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
     return {
-        "candidate_list": candidates,
         "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
         "trace_actions": candidates.trace_actions,
         "trace_action_details": candidates.trace_action_details,
@@ -292,6 +291,22 @@ def _program_step_payload(step: Any) -> dict[str, Any] | None:
         ),
         "channel": step.channel,
         "required_inputs": tuple(action.pair for action in step.required_inputs),
+        "input_handoffs": tuple(
+            {
+                "action": handoff.action,
+                "channel": handoff.channel,
+                "boundary": {
+                    "tag": handoff.boundary.tag,
+                    "op": getattr(handoff.boundary, "op", "=="),
+                    "bound": getattr(
+                        handoff.boundary,
+                        "bound",
+                        getattr(handoff.boundary, "values", None),
+                    ),
+                },
+            }
+            for handoff in step.input_handoffs
+        ),
         "context_actions": step.context_actions,
         "projected_changes": step.projected_changes,
         "reason": step.reason,
@@ -396,6 +411,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "zoom_channel_tag": trial.zoom_channel_tag,
         "zoom_target_value": trial.zoom_target_value,
         "zoom_actual_value": landed,
+        "bearing_stop_reason": trial.bearing_stop_reason,
         "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,

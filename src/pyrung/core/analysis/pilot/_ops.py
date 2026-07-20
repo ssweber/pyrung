@@ -99,7 +99,11 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
             raise ValueError(f"advance predicate {atom.op!r} cannot scope a PilotRung")
         return inverse(tag, operand)
     form = atom.form
-    operand = atom.operand
+    operand = (
+        plc._known_tags_by_name.get(atom.operand, atom.operand)
+        if isinstance(atom.operand, str)
+        else atom.operand
+    )
     if form in ("xic", "truthy"):
         return CompareEq(tag, False)
     if form == "xio":
@@ -133,7 +137,11 @@ def _atom_condition(plc: PLC, atom: Any) -> Any:
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
     form = atom.form
-    operand = atom.operand
+    operand = (
+        plc._known_tags_by_name.get(atom.operand, atom.operand)
+        if isinstance(atom.operand, str)
+        else atom.operand
+    )
     if form in ("xic", "truthy"):
         return tag
     if form == "xio":
@@ -563,23 +571,24 @@ def _settle_delayed_effects(
     scan_budget: int = 2000,
     session: Any = None,
 ) -> list[CoastReceipt]:
-    """Fast-forward *fork* past pending timers and harness feedback.
+    """Settle environment-owned latency after an intervention.
 
-    Two chained seeks on one session (each with an honest stop_reason),
-    plus the one-scan plant-latency dwell between them:
-
-    Phase 1 — harness feedback: if the harness has scheduled patches
+    If the harness has scheduled patches
     (Physical on_delay/off_delay), seek harness quiescence
     (``pending_count == 0``), then dwell one scan — the plant commits
     feedback the scan it settles; the program that reads it reacts the
     *next* scan (the scan boundary is the plant latency).
 
-    Phase 2 — timer accumulation: if any Timer/Counter done-bit moved
-    ``False → PENDING``, seek every pending timing (TT) bit clear (folding
-    past the ticks).
+    Program instruction progress is deliberately not settled here. A newly
+    armed timer/counter/drum is a distinct operation owned by its
+    :class:`AdvanceProfile`; trace/program-step must re-read that owner and
+    prescribe the observable boundary as an ordinary coast. Fast-forwarding
+    timing bits here used to execute that operation a second time, invisibly,
+    before option ordering or correction lifecycle could observe it.
     """
     from pyrung.core.analysis.pilot.coast import QUIESCENT, CoastSession, predicate_bump
 
+    del before_snap, cfg
     budget = scan_budget
     receipts: list[CoastReceipt] = []
     if session is None:
@@ -602,42 +611,6 @@ def _settle_delayed_effects(
         receipts.append(receipt)
         if harness.pending_count == 0 and fork.state.scan_id - scan_before < budget:
             session.dwell(1)
-        budget -= fork.state.scan_id - scan_before
-
-    if cfg is not None and budget > 0:
-        from pyrung.core.analysis.pilot.advance import iter_advance_owners
-
-        program = fork.program
-        cur_snap = dict(fork.state.tags)
-        pending_tts: list[str] = []
-        if program is not None:
-            for owner in iter_advance_owners(program, harness):
-                # Resolve the timing (TT) register semantically off the owning
-                # instruction's profile — never by name surgery on the done bit,
-                # which silently misses any timer not named ``<base>_Done``.
-                active = owner.profile.active
-                tt_name = getattr(active, "name", None)
-                if (
-                    tt_name is not None
-                    and cur_snap.get(tt_name) is True
-                    and before_snap.get(tt_name) is not True
-                ):
-                    pending_tts.append(tt_name)
-
-        if pending_tts:
-            receipts.append(
-                session.seek(
-                    [
-                        predicate_bump(
-                            "tt_clear",
-                            QUIESCENT,
-                            lambda s: all(not s.tags.get(tt) for tt in pending_tts),
-                            watched=tuple(pending_tts),
-                        )
-                    ],
-                    budget=budget,
-                )
-            )
     return receipts
 
 

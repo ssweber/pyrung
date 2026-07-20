@@ -241,13 +241,8 @@ def test_timer_done_running_yields_coast():
     assert not coast[0].is_steerable
 
 
-def test_timer_done_idle_keeps_enable_walk():
-    """An idle timer's Done bit is unchanged: the enable surfaces as a steerable.
-
-    The enable-unsatisfied arm belongs to the ordinary hold-and-coast walk — the
-    coast helper returns ``None`` and today's shape (``x_Start`` steerable, no
-    self-advancing leaf) is byte-identical.
-    """
+def test_timer_done_idle_keeps_owner_boundary_on_enable():
+    """An idle timer carries its operation boundary onto the enabling action."""
     x_Start = Bool("x_Start", external=True)
     timer = Timer.clone("T1")
 
@@ -260,18 +255,15 @@ def test_timer_done_idle_keeps_enable_walk():
 
     tree = trace_back("T1_Done", True, {"x_Start": False}, pdg, logic, steerable)
     leaves = _leaves(tree)
-    assert not any(lf.advance is not None for lf in leaves)
+    coast = next(lf for lf in leaves if lf.advance is not None)
     assert "x_Start" in _steerable_names(tree)
+    action = next(a for a in tree.ordered_action_details() if a.tag == "x_Start")
+    assert coast.advance.until.tag == timer.Acc.name
+    assert action.until == Atom(timer.Done.name, "eq", True)
 
 
-def test_timer_done_running_honors_call_gate():
-    """The enable includes the subroutine call gate, mirroring the ordinary walk.
-
-    A running timer inside a subroutine coasts only when the call gate
-    (``Mode == 1``) is satisfied too; with the gate unsatisfied the helper
-    returns ``None`` and the ordinary walk surfaces the gate as the steerable
-    blocker rather than a coast.
-    """
+def test_timer_done_owner_boundary_reaches_call_gate():
+    """A subroutine call gate remains a prerequisite of the owned operation."""
     Mode = Int("Mode", external=True)
     Step = Bool("Step", external=True)
     timer = Timer.clone("T1")
@@ -295,8 +287,52 @@ def test_timer_done_running_honors_call_gate():
     assert (coast[0].tag, coast[0].value) == ("T1_Acc", 100)
 
     blocked = trace_back("T1_Done", True, {"Step": True, "Mode": 2}, pdg, logic, steerable)
-    assert not any(lf.advance is not None for lf in _leaves(blocked))
+    blocked_coast = next(lf for lf in _leaves(blocked) if lf.advance is not None)
     assert "Mode" in _steerable_names(blocked)
+    action = next(a for a in blocked.ordered_action_details() if a.tag == "Mode")
+    assert blocked_coast.advance.until.tag == timer.Acc.name
+    assert action.until == Atom(timer.Done.name, "eq", True)
+
+
+def test_enable_action_retains_its_exact_transition_boundary():
+    """Stage ordering carries the operation receipt, not only a boolean flag."""
+    action = TraceNode("EntrySensor", True, is_steerable=True)
+    enable = TraceNode(
+        "State",
+        1,
+        children=[action],
+        data_flow="enable",
+    )
+    target = TraceNode("DetTimer_Done", True, children=[enable])
+
+    detail = target.ordered_action_details()[0]
+
+    assert detail.establish is True
+    assert detail.operation_boundary == ("State", 1)
+
+
+def test_duplicate_action_merges_owned_lifetime_evidence():
+    """One lever reached by two branches keeps the advance owner's lifetime."""
+    direct = TraceNode("Enable", True, is_steerable=True)
+    held = TraceNode("Enable", True, is_steerable=True)
+    boundary = TraceNode(
+        "Temp",
+        5.0,
+        advance=object(),
+        linear_boundary=True,
+    )
+    ramp = TraceNode(
+        "Temp",
+        5.0,
+        predicate=Atom("Temp", "ge", 5.0),
+        children=[boundary, held],
+    )
+    target = TraceNode("Stage", 1, writer_rung=0, children=[direct, ramp])
+
+    details = target.ordered_action_details()
+
+    assert len(details) == 1
+    assert details[0].until == Atom("Stage", "eq", 1)
 
 
 def _program_advance_counter():

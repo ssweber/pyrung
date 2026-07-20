@@ -678,6 +678,145 @@ def test_regression_witness_does_not_confuse_a_shared_executor_with_its_owner():
     )
 
 
+def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
+    """A later fault is a new incident when the proposal did not cause it."""
+    Inhibit = Bool("ReplayOwner_Inhibit", external=True)
+    Harmful = Bool("ReplayOwner_Harmful", external=True)
+    Primary = Timer.clone("ReplayOwner_Primary")
+    Alternate = Timer.clone("ReplayOwner_Alternate")
+    Request = Int("ReplayOwner_Request")
+    State = Int("ReplayOwner_State", default=6)
+
+    with Program() as prog:
+        with Rung(State == 6):
+            on_delay(Primary, 100, "ms").reset(Inhibit)
+        with Rung(State == 6):
+            on_delay(Alternate, 150, "ms")
+        with Rung(Primary.Done):
+            copy(8, Request)
+        with Rung(Alternate.Done):
+            copy(8, Request)
+        with Rung(Harmful):
+            copy(8, Request)
+        with Rung(Request == 8):
+            copy(Request, State)
+            copy(0, Request)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    session = CoastSession(recorded, kind="recorded-regression")
+    session.arm_pens((State.name,))
+    session.dwell(20)
+    assert recorded.state.tags[State.name] == 8
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=(),
+        bearing=((State.name, 6),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+
+    replay = build_replay_fn(
+        cp,
+        99,
+        (),
+        (ReplayStep(inputs=(), scans=20, kind="dwell"),),
+        **_make_replay_context(prog, plc, State.name, 17),
+        zoom_channel_tag=State.name,
+        zoom_target_value=16,
+        regression_witness=witness,
+    )
+
+    unrelated = replay(((Inhibit.name, True),))
+    assert unrelated.snapshot[State.name] == 8
+    assert unrelated.accepted
+    assert unrelated.justification is ReplayJustification.NEUTRALIZED
+    assert "later unrelated operation" in unrelated.reason
+    assert not unrelated.landed
+
+    proposal_owned = replay(((Harmful.name, True),))
+    assert proposal_owned.snapshot[State.name] == 8
+    assert not proposal_owned.accepted
+    assert proposal_owned.justification is None
+
+
+def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
+    """A write signature can span two operations without transferring ownership.
+
+    The release timer and both executor rungs are identical in the recorded and
+    replayed departures. The recorded branch is selected by ``PrimaryFault``;
+    after that branch is corrected, a later timer selects the same writer for a
+    different operation. Changed-write matching alone deliberately reports a
+    replay, so the two causal-spine receipts must disambiguate ownership.
+    """
+    PrimaryFault = Bool("ReplaySpine_PrimaryFault", external=True)
+    Harmful = Bool("ReplaySpine_Harmful", external=True)
+    Release = Timer.clone("ReplaySpine_Release")
+    Alternate = Timer.clone("ReplaySpine_Alternate")
+    Request = Int("ReplaySpine_Request")
+    State = Int("ReplaySpine_State", default=6)
+
+    with Program() as prog:
+        with Rung(State == 6):
+            on_delay(Release, 100, "ms")
+            on_delay(Alternate, 150, "ms")
+        with Rung(Release.Done, Or(PrimaryFault, Alternate.Done, Harmful)):
+            copy(8, Request)
+        with Rung(Request == 8):
+            copy(Request, State)
+            copy(0, Request)
+
+    plc = PLC(prog, dt=0.010)
+    plc.patch({PrimaryFault.name: True})
+    plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    session = CoastSession(recorded, kind="recorded-regression")
+    session.arm_pens((State.name,))
+    session.dwell(12)
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=(),
+        bearing=((State.name, 6),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+    assert PrimaryFault.name in witness.causal_spine
+
+    replay = build_replay_fn(
+        cp,
+        99,
+        (),
+        (ReplayStep(inputs=(), scans=20, kind="dwell"),),
+        **_make_replay_context(prog, plc, State.name, 17),
+        zoom_channel_tag=State.name,
+        zoom_target_value=16,
+        regression_witness=witness,
+    )
+
+    unrelated = replay(((PrimaryFault.name, False),))
+    assert unrelated.snapshot[State.name] == 8
+    assert unrelated.accepted
+    assert unrelated.justification is ReplayJustification.NEUTRALIZED
+    assert PrimaryFault.name not in unrelated.replacement_cause
+    assert Alternate.Done.name in unrelated.replacement_cause
+
+    proposal_owned = replay(((Harmful.name, True),))
+    assert not proposal_owned.accepted
+
+
 def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
     """Correction scope comes from automatic motion beyond the incident window."""
     DoorA = Bool("Landing_DoorA", external=True)
@@ -1028,11 +1167,14 @@ class TestPreciseCause:
 
         assert hypothesis is not None
         assert hypothesis.kind == "precise-cause"
-        assert set(hypothesis.holds) == {
+        assert {(hold.dest, hold.value) for hold in hypothesis.holds} == {
             ("Precise_DoorClosed", True),
             ("Precise_LintDoorClosed", True),
         }
-        assert all(tag != "Precise_FirstScan" for tag, _value in hypothesis.holds)
+        assert all(isinstance(hold, PilotRung) for hold in hypothesis.holds)
+        assert all(hold.guard.tag.name == "Precise_State" for hold in hypothesis.holds)
+        assert all(hold.guard.value == 6 for hold in hypothesis.holds)
+        assert all(hold.dest != "Precise_FirstScan" for hold in hypothesis.holds)
         assert "R3 fired" in hypothesis.detail
         assert "minimal conductive cut" in hypothesis.detail
 

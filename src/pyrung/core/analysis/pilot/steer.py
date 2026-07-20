@@ -448,6 +448,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 frame,
                 state,
                 ctx,
+                boundary=act.boundary,
                 route_channel_tag=act.route_channel_tag,
                 route_from_value=act.route_from_value,
                 route_target_value=act.route_target_value,
@@ -471,6 +472,7 @@ def _try_zoom(
     state: _PilotState,
     ctx: _PilotContext,
     *,
+    boundary: Any = None,
     route_channel_tag: str | None = None,
     route_from_value: Any = None,
     route_target_value: Any = None,
@@ -512,7 +514,13 @@ def _try_zoom(
     session = CoastSession(fork, kind="zoom")
     session.arm_pens(_pen_tags(state, ctx))
     dwell, zoom_receipt = _letrun_zoom(
-        fork, channel_tag, target_value, cone=_cone_tags(frame, ctx), session=session
+        fork,
+        channel_tag,
+        target_value,
+        cone=_cone_tags(frame, ctx),
+        session=session,
+        boundary=boundary,
+        route_channel_tag=route_channel_tag,
     )
 
     snap_after = dict(fork.state.tags)
@@ -549,6 +557,13 @@ def _try_zoom(
         timeline=session.events,
     )
 
+    departed_route = (
+        zoom_receipt is not None
+        and zoom_receipt.stop_reason == "departed"
+        and route_channel_tag is not None
+    )
+    verify_channel = route_channel_tag if departed_route else channel_tag
+    verify_target = route_target_value if departed_route else target_value
     result = verify_gates(
         trial,
         action_pairs=(),
@@ -563,8 +578,8 @@ def _try_zoom(
         nogood_pair=wait_nogood,
         regression_nogoods=frozenset(),
         chase_regression_causes=True,
-        zoom_channel_tag=channel_tag,
-        zoom_target_value=target_value,
+        zoom_channel_tag=verify_channel,
+        zoom_target_value=verify_target,
         motion=MotionKind.COAST_TO_BEARING,
     )
     return replace(result, observations=tuple(observations))
@@ -804,6 +819,9 @@ def _letrun_zoom(
     target_value: Any,
     cone: frozenset[str],
     session: CoastSession | None = None,
+    *,
+    boundary: Any = None,
+    route_channel_tag: str | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -825,5 +843,38 @@ def _letrun_zoom(
             None,
         )
 
-    receipt = _coast_to_value(work, channel_tag, target_value, budget=_ZOOM_BUDGET, session=session)
+    budget = _ZOOM_BUDGET
+    if boundary is not None:
+        from pyrung.core.analysis.pilot.advance import build_advance_index
+        from pyrung.core.instruction.advance import constraint_holds
+
+        owner = build_advance_index(
+            work.program,
+            getattr(work, "_harness", None),
+        ).resolve(getattr(boundary, "tag", ""))
+        if owner is not None and owner.profile.linear is not None:
+            estimate = owner.profile.linear.estimate_scans(
+                boundary,
+                work.state.tags,
+                work._dt,
+            )
+            if estimate is not None:
+                budget = max(budget, estimate + 2)
+        receipt = _coast_holding_state(
+            work,
+            channel_tag,
+            target_value,
+            ((route_channel_tag,) if route_channel_tag is not None else ()),
+            budget=budget,
+            reached_fn=lambda state: constraint_holds(boundary, state.tags) is True,
+            session=session,
+        )
+    else:
+        receipt = _coast_to_value(
+            work,
+            channel_tag,
+            target_value,
+            budget=budget,
+            session=session,
+        )
     return [dict(work.state.tags)], receipt

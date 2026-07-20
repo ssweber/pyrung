@@ -41,7 +41,11 @@ from pyrung.core.analysis.pilot.causal import (
     chase_chain_tags,
     empirical_program_writes,
 )
-from pyrung.core.analysis.pilot.corrections import break_guard_holds, correct_enablers
+from pyrung.core.analysis.pilot.corrections import (
+    break_guard_holds,
+    correct_enablers,
+    guard_correction_holds,
+)
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
@@ -156,9 +160,10 @@ class RegressionWitness:
 
     The witness is operation-shaped, not behavior-shaped. It retains the
     concrete changed writes on the recorded ``cause()`` chain, bounded to the
-    incident. A shared state executor may therefore run later for an unrelated
-    request without reproducing this regression; replay has to reproduce the
-    recorded causal branch, not merely reuse its final writer.
+    incident, plus the full causal spine that owns those writes. A shared state
+    executor may therefore run later for an unrelated request without
+    reproducing this regression; replay has to reproduce the recorded causal
+    branch, not merely reuse its final writer.
     """
 
     channel_tag: str
@@ -166,6 +171,7 @@ class RegressionWitness:
     departed: Any
     departure_scan: int
     cause: tuple[CausalOccurrence, ...]
+    causal_spine: frozenset[str]
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +213,11 @@ class ReplayOutcome:
     # snapshot is where the budget ran out, not a destination, and channel
     # scoping must not derive a lifetime from it.
     landed: bool = True
+    # Causal spine of a replacement channel departure after the recorded
+    # regression was suppressed. Investigation composes this receipt with its
+    # sibling hypotheses; replay itself does not know the incident's full
+    # proposal set.
+    replacement_cause: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -373,6 +384,7 @@ def incident_regression_witness(
         departed=effect.to_value,
         departure_scan=departure.scan,
         cause=tuple(cause),
+        causal_spine=frozenset(chase_chain_tags(plc, channel, scan=departure.scan)),
     )
 
 
@@ -432,6 +444,114 @@ def _regression_cause_replayed(
     return False
 
 
+def _replacement_departure_cause(
+    plc: PLC,
+    witness: RegressionWitness,
+    events: Sequence[Any],
+) -> frozenset[str] | None:
+    """Return the causal spine of the first replacement channel departure."""
+    departure_scan = next(
+        (
+            event.scan
+            for event in events
+            for tag, before, after in event.transitions
+            if tag == witness.channel_tag
+            and _values_match(before, witness.source)
+            and not _values_match(after, witness.source)
+        ),
+        None,
+    )
+    if departure_scan is None:
+        return None
+    chain_tags = chase_chain_tags(
+        plc,
+        witness.channel_tag,
+        scan=departure_scan,
+    )
+    if not chain_tags:
+        return None
+    return frozenset(chain_tags)
+
+
+@dataclass(frozen=True)
+class _RegressionOwnership:
+    """Current replay evidence about one recorded regression branch."""
+
+    source_preserved: bool
+    cause_silenced: bool
+    replacement_cause: frozenset[str] | None
+    replacement_owned: bool | None
+    replacement_replays_recorded: bool | None
+    unrelated_departure: bool
+    neutralized: bool
+
+
+def _regression_ownership(
+    plc: PLC,
+    witness: RegressionWitness,
+    events: Sequence[Any],
+    proposal_tags: set[str],
+    *,
+    start_scan: int,
+    end_scan: int,
+    prior_neutralized: bool = False,
+) -> _RegressionOwnership:
+    """Compose channel, firing, and causal-spine receipts at one horizon.
+
+    The changed-write signature detects masking while the source channel is
+    still the operation under test. A replacement departure is separate when
+    its causal spine no longer contains the recorded spine and the correction
+    did not itself cause that replacement. After local neutralization has
+    already been proved, automatic correction-owned progress may also land on
+    a new spine. This comparison permits two operations to share every
+    downstream executor write without transferring ownership between them.
+    """
+    bounded_events = tuple(event for event in events if event.scan <= end_scan)
+    source_preserved = _values_match(
+        plc.state.tags.get(witness.channel_tag), witness.source
+    ) and not any(
+        tag == witness.channel_tag and not _values_match(after, witness.source)
+        for event in bounded_events
+        for tag, _before, after in event.transitions
+    )
+    cause_silenced = not _regression_cause_replayed(
+        plc,
+        witness,
+        start_scan=start_scan,
+        end_scan=end_scan,
+    )
+    replacement_cause = (
+        _replacement_departure_cause(plc, witness, bounded_events) if not source_preserved else None
+    )
+    replacement_owned = (
+        bool(proposal_tags & replacement_cause) if replacement_cause is not None else None
+    )
+    replacement_replays_recorded = (
+        witness.causal_spine.issubset(replacement_cause) if replacement_cause is not None else None
+    )
+    unrelated_departure = (
+        replacement_cause is not None
+        and replacement_replays_recorded is False
+        and replacement_owned is False
+    )
+    replacement_after_neutralization = (
+        prior_neutralized
+        and replacement_cause is not None
+        and replacement_replays_recorded is False
+    )
+    return _RegressionOwnership(
+        source_preserved=source_preserved,
+        cause_silenced=cause_silenced,
+        replacement_cause=replacement_cause,
+        replacement_owned=replacement_owned,
+        replacement_replays_recorded=replacement_replays_recorded,
+        unrelated_departure=unrelated_departure,
+        neutralized=(source_preserved and cause_silenced)
+        or unrelated_departure
+        or replacement_after_neutralization,
+    )
+
+
 def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
@@ -458,6 +578,7 @@ def build_replay_fn(
     regression_witness: RegressionWitness | None = None,
     progress_gauge: Any = None,
     progress_anchor: Mapping[str, Any] | None = None,
+    regression_progress_floor: Mapping[str, Any] | None = None,
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
@@ -535,37 +656,51 @@ def build_replay_fn(
                     session=session,
                 )
             elif step.kind == "zoom" and step.channel_tag is not None:
-                # Coast to the step's recorded bearing under the ejection
-                # guard.  Do NOT bound this by the recorded span: the requested
-                # value is the immediate goal but a full channel coast away,
-                # and the guard already stops at the first ejection.
+                # Reproduce the recorded incident, not the rest of its route.
+                # A correction only has to neutralize the causal regression
+                # inside this bounded step; extending replay to the zoom's
+                # distant destination lets a later unrelated fault reuse the
+                # same state executor and falsely refute the correction.
                 eject_receipt = _coast_to_value(
-                    probe, step.channel_tag, step.channel_target, session=session
+                    probe,
+                    step.channel_tag,
+                    step.channel_target,
+                    budget=(max(1, step.scans) if regression_witness is not None else _ZOOM_BUDGET),
+                    session=session,
                 )
             else:
                 session.dwell(max(1, step.scans))
         incident_replay_end = probe.state.scan_id
         snap = dict(probe.state.tags)
-        source_preserved = (
-            regression_witness is not None
-            and zoom_channel_tag == regression_witness.channel_tag
-            and _values_match(snap.get(zoom_channel_tag), regression_witness.source)
-            and not any(
-                event.scan <= incident_replay_end
-                and tag == zoom_channel_tag
-                and not _values_match(after, regression_witness.source)
-                for event in session.events
-                for tag, _before, after in event.transitions
+        proposal_tags = {_proposal_pair(hold)[0] for hold in holds}
+        ownership = (
+            _regression_ownership(
+                probe,
+                regression_witness,
+                session.events,
+                proposal_tags,
+                start_scan=cp_fork.state.scan_id,
+                end_scan=incident_replay_end,
             )
+            if regression_witness is not None
+            else None
         )
-        cause_silenced = regression_witness is not None and not _regression_cause_replayed(
-            probe,
-            regression_witness,
-            start_scan=cp_fork.state.scan_id,
-            end_scan=incident_replay_end,
+        progress_erased = (
+            ownership is not None
+            and ownership.neutralized
+            and progress_gauge is not None
+            and regression_progress_floor is not None
+            and progress_gauge.compare(regression_progress_floor, snap) == "behind"
         )
-        neutralized = source_preserved and cause_silenced
+        # A correction owns the recorded operation, not merely its outer
+        # channel. Keeping Execute while erasing the Step/phase receipt that
+        # identified this incident is suppression by rollback, not
+        # neutralization. Check the floor at the bounded incident horizon;
+        # later stable-landing observation may encounter a separate operation.
+        neutralized = ownership is not None and ownership.neutralized and not progress_erased
         if terminal_letrun_role_tags is not None and zoom_channel_tag is not None and neutralized:
+            assert regression_witness is not None
+            incident_neutralized = neutralized
             _observe_stable_channel_landing(
                 probe,
                 zoom_channel_tag,
@@ -573,17 +708,24 @@ def build_replay_fn(
                 session=session,
             )
             snap = dict(probe.state.tags)
-            # A correction that merely delays the same causal branch beyond the
-            # bounded incident did not solve it. Include the landing-observation
-            # scans in the exact cause check while retaining the separately
-            # recorded proof that the source held throughout the incident.
-            cause_silenced = regression_witness is not None and not _regression_cause_replayed(
+            # Extending the observation changes every ownership fact, not just
+            # the firing receipt. Recompose the channel and causal-spine
+            # evidence at the new horizon so a later operation cannot inherit
+            # the recorded incident merely by reusing its executor.
+            ownership = _regression_ownership(
                 probe,
                 regression_witness,
+                session.events,
+                proposal_tags,
                 start_scan=cp_fork.state.scan_id,
                 end_scan=probe.state.scan_id,
+                prior_neutralized=incident_neutralized,
             )
-            neutralized = source_preserved and cause_silenced
+            neutralized = ownership.neutralized and not progress_erased
+        source_preserved = ownership is not None and ownership.source_preserved
+        cause_silenced = ownership is not None and ownership.cause_silenced
+        replacement_cause = ownership.replacement_cause if ownership is not None else None
+        unrelated_departure = ownership is not None and ownership.unrelated_departure
         if logger.isEnabledFor(logging.DEBUG):
             roles = terminal_letrun_role_tags or ()
             logger.debug(
@@ -614,6 +756,14 @@ def build_replay_fn(
                     "recorded regression neutralized: "
                     f"preserved {zoom_channel_tag}={regression_witness.source!r} "
                     f"and suppressed its {len(regression_witness.cause)}-write causal branch"
+                    if source_preserved
+                    else (
+                        "recorded regression neutralized before a later unrelated "
+                        "operation reused the channel executor"
+                        if unrelated_departure
+                        else "recorded regression neutralized before correction-owned "
+                        "progress landed on a distinct causal spine"
+                    )
                 )
             progressed = neutralized_reason
             if (
@@ -628,20 +778,25 @@ def build_replay_fn(
                 regression_witness is not None and source_preserved and not cause_silenced
             )
             rejection_reason = (
-                "recorded regression cause replayed; correction masked its result"
-                if cause_repeated
+                "correction erased the recorded incident's progress receipt"
+                if progress_erased
                 else (
-                    f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}"
-                    + (
-                        f" (eject coast: {eject_receipt.stop_reason})"
-                        if eject_receipt is not None
-                        else ""
+                    "recorded regression cause replayed; correction masked its result"
+                    if cause_repeated
+                    else (
+                        f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}"
+                        + (
+                            f" (eject coast: {eject_receipt.stop_reason})"
+                            if eject_receipt is not None
+                            else ""
+                        )
                     )
                 )
             )
             observed_landing = (
                 neutralized
                 and regression_witness is not None
+                and not unrelated_departure
                 and not _values_match(
                     snap.get(zoom_channel_tag),
                     regression_witness.source,
@@ -656,7 +811,11 @@ def build_replay_fn(
                 # snapshot must not seed a channel scope.
                 landed=reached
                 or observed_landing
-                or (eject_receipt is not None and eject_receipt.stop_reason == "departed"),
+                or (
+                    eject_receipt is not None
+                    and eject_receipt.stop_reason == "departed"
+                    and not unrelated_departure
+                ),
                 justification=(
                     ReplayJustification.REACHED
                     if reached
@@ -668,6 +827,7 @@ def build_replay_fn(
                         else None
                     )
                 ),
+                replacement_cause=replacement_cause or frozenset(),
             )
 
         # Terminal let-run without a channel register (no recognized state
@@ -1266,6 +1426,35 @@ def investigate_deviation(
         rejected.append((hyp, detail))
         rejection_slugs.append(slug)
 
+    def _replacement_has_incident_owner(
+        hyp: InvestigationHypothesis,
+        outcome: ReplayOutcome,
+    ) -> tuple[str, ...]:
+        """Sibling sources prove a replacement belongs to this incident.
+
+        Replay can prove that the proposed holds did not cause a replacement
+        departure. Only investigation owns the complete hypothesis set needed
+        to decide whether that owner is genuinely new or an unresolved sibling
+        already recorded in the same incident.
+        """
+        if (
+            outcome.justification is not ReplayJustification.NEUTRALIZED
+            or not outcome.replacement_cause
+        ):
+            return ()
+        current_sources = frozenset(hyp.sources)
+        return tuple(
+            sorted(
+                {
+                    source
+                    for peer in hypotheses
+                    if peer is not hyp
+                    for source in peer.sources
+                    if source not in current_sources and source in outcome.replacement_cause
+                }
+            )
+        )
+
     for hypothesis in hypotheses:
         if not hypothesis.holds:
             _reject(hypothesis, "no-holds", "no holds proposed")
@@ -1322,6 +1511,15 @@ def investigate_deviation(
             continue
         outcome = replay(hypothesis.holds)
         if outcome.accepted:
+            sibling_owners = _replacement_has_incident_owner(hypothesis, outcome)
+            if sibling_owners:
+                _reject(
+                    hypothesis,
+                    "sibling-regression",
+                    "replacement departure belongs to unresolved incident "
+                    f"hypothesis source(s): {', '.join(sibling_owners)}",
+                )
+                continue
             scoped = _scoped_correction_rungs(
                 plc,
                 hypothesis.holds,
@@ -1357,6 +1555,18 @@ def investigate_deviation(
                 continue
             installed_outcome = replay(scoped)
             if installed_outcome.accepted:
+                sibling_owners = _replacement_has_incident_owner(
+                    hypothesis,
+                    installed_outcome,
+                )
+                if sibling_owners:
+                    _reject(
+                        hypothesis,
+                        "sibling-regression",
+                        "guarded replacement departure belongs to unresolved "
+                        "incident hypothesis source(s): " + ", ".join(sibling_owners),
+                    )
+                    continue
                 confirmed_hypothesis = InvestigationHypothesis(
                     kind=hypothesis.kind,
                     holds=scoped,
@@ -1682,11 +1892,18 @@ def _precise_causes(
                 if mover_names <= leaves:
                     common.append((index, step))
             frontier = common[-1][1] if common else chain.steps[0]
+            sources = tuple(sorted(nogoods | mover_names | {departure.tag}))
             hypotheses.append(
                 InvestigationHypothesis(
                     kind="precise-cause",
-                    holds=mover_holds_filtered,
-                    sources=tuple(sorted(nogoods | mover_names | {departure.tag})),
+                    holds=guard_correction_holds(
+                        plc,
+                        mover_holds_filtered,
+                        sources,
+                        incident,
+                        ctx,
+                    ),
+                    sources=sources,
                     detail=(
                         f"{_step_label(frontier)} fired at scan "
                         f"{frontier.transition.scan_id}; revert exact trigger frontier"
@@ -1769,20 +1986,27 @@ def _precise_causes(
             )
             if not holds_filtered:
                 continue
+            sources = tuple(
+                sorted(
+                    {
+                        departure.tag,
+                        step.transition.tag_name,
+                        *direct_values,
+                        *(tag for tag, _value in holds_filtered),
+                    }
+                )
+            )
             hypotheses.append(
                 InvestigationHypothesis(
                     kind="precise-cause",
-                    holds=holds_filtered,
-                    sources=tuple(
-                        sorted(
-                            {
-                                departure.tag,
-                                step.transition.tag_name,
-                                *direct_values,
-                                *(tag for tag, _value in holds_filtered),
-                            }
-                        )
+                    holds=guard_correction_holds(
+                        plc,
+                        holds_filtered,
+                        sources,
+                        incident,
+                        ctx,
                     ),
+                    sources=sources,
                     detail=(
                         f"{_step_label(step)} fired at scan "
                         f"{step.transition.scan_id}; minimal conductive cut"

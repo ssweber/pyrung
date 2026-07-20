@@ -182,8 +182,18 @@ def assess_outcome(
             bearing_reached = zoom_stop_reason == "reached"
             channel_moved = zoom_stop_reason == "departed"
         else:
-            bearing_reached = _values_match(chan_actual, zoom_target_value)
-            channel_moved = not _values_match(chan_actual, chan_before)
+            snapshot_reached = _values_match(chan_actual, zoom_target_value)
+            observed_reached = any(
+                tag == zoom_channel_tag and _values_match(after, zoom_target_value)
+                for event in getattr(trial, "timeline", ())
+                for tag, _before, after in getattr(event, "transitions", ())
+            )
+            bearing_reached = snapshot_reached or (
+                observed_reached and _values_match(chan_actual, chan_before) and zoom_progressed
+            )
+            channel_moved = not _values_match(chan_actual, chan_before) or (
+                observed_reached and not snapshot_reached
+            )
         if bearing_reached:
             # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
             # That is a confirmed advance even when the *global* target's onward

@@ -512,7 +512,7 @@ class TestSettleDelayedEffects:
         # feedback resolved -> the gated copy fired
         assert plc.state.tags["Stage"] == 1
 
-    def test_pending_timer_fast_forwarded(self):
+    def test_pending_timer_is_left_for_its_advance_owner(self):
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
         # snapshot before the timer ever runs: Acc 0, Done False (not PENDING)
@@ -533,12 +533,13 @@ class TestSettleDelayedEffects:
             acc_indices=frozenset(),
         )
         scan_before = plc.state.scan_id
-        _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
-        assert plc.state.tags["Tmr_Done"] is True
-        assert plc.state.tags["Tmr_TT"] is False
-        assert 0 < plc.state.scan_id - scan_before <= 500
+        receipts = _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
+        assert receipts == []
+        assert plc.state.scan_id == scan_before
+        assert plc.state.tags["Tmr_Done"] is False
+        assert plc.state.tags["Tmr_TT"] is True
 
-    def test_timing_bit_resolved_semantically_not_by_name(self):
+    def test_variant_named_timing_is_also_left_for_its_advance_owner(self):
         # A timer whose bits are NOT named ``<base>_Done`` / ``<base>_TT``: the
         # settle must still coast it by resolving the TT register off the
         # instruction's profile.  The old name surgery derived ``TimerReady_TT``
@@ -566,10 +567,11 @@ class TestSettleDelayedEffects:
             acc_indices=frozenset(),
         )
         scan_before = plc.state.scan_id
-        _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
-        assert plc.state.tags["TimerReady"] is True
-        assert plc.state.tags["TimerActive"] is False
-        assert 0 < plc.state.scan_id - scan_before <= 500
+        receipts = _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
+        assert receipts == []
+        assert plc.state.scan_id == scan_before
+        assert plc.state.tags["TimerReady"] is False
+        assert plc.state.tags["TimerActive"] is True
 
 
 # ---------------------------------------------------------------------------

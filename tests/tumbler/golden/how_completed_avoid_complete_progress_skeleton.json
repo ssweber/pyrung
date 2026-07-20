@@ -148,8 +148,8 @@
   "candidates": [
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -173,8 +173,8 @@
    },
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -321,8 +321,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -358,8 +358,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -440,8 +440,8 @@
   "candidates": [
    {
     "avail_tier": 2,
-    "bearing_channel_tag": null,
-    "bearing_channel_value": null,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "compass_score": [
      50,
      0
@@ -584,8 +584,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -621,8 +621,8 @@
   ],
   "candidate": {
    "avail_tier": 2,
-   "bearing_channel_tag": null,
-   "bearing_channel_value": null,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "compass_score": [
     50,
     0
@@ -1566,24 +1566,203 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "channel_tag": "Rotate_tmr_Acc",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 15 -> 2",
+    "event": "zoom-stall"
+   }
+  ],
+  "kind": "zoom_rejected"
+ },
+ {
+  "distance": 15,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)",
+   "i_BlowerFB=True (have False)",
+   "i_RotateFB=True (have False)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "candidates": [
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_BlowerFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_BlowerFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R305"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_BlowerFB",
+    "value": true
+   },
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_RotateFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_RotateFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R304"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_RotateFB",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "hold the current macro-state and allow program motion"
+  "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
-  "observe_label": "letrun",
+  "observe_label": "zoom",
   "outcome": "ambient",
   "trend": 6,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 3
+  "zoom_target_value": 6
  },
  {
   "applied": [],
@@ -1595,9 +1774,9 @@
   "from_value": 3,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "letrun",
+  "observe_label": "zoom",
   "reason": null,
-  "requested_value": 3,
+  "requested_value": 6,
   "to_value": 8
  },
  {
@@ -1700,7 +1879,7 @@
    "rejected_detail": [
     {
      "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1710,7 +1889,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm14_DoorOpen_Trig",
       "x_DoorClosed"
@@ -1718,7 +1897,7 @@
     },
     {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "raw replay rejected: Sts_StateCurrent -> 3 reached=False (eject coast: departed)",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1728,7 +1907,7 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "exploratory-replay-failed",
+     "slug": "sibling-regression",
      "sources": [
       "A_Alm15_LintOpen_Trig",
       "x_LintDoorClosed"
@@ -2023,24 +2202,25 @@
   "route_plan": null,
   "stuck_reason": null,
   "trace_actions": [],
-  "wait_prescribed": false,
-  "wait_reason": null
+  "wait_prescribed": true,
+  "wait_reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
+  "channel_tag": "Rotate_tmr_Acc",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "hold the current macro-state and allow program motion"
+  "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
-  "ejected": true,
+  "bearing_stop_reason": "reached",
+  "ejected": false,
   "kind": "zoom_accepted",
-  "observe_label": "letrun",
-  "outcome": "ambient",
-  "trend": 2,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 3
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 10,
+  "zoom_actual_value": 5,
+  "zoom_channel_tag": "Rotate_tmr_Acc",
+  "zoom_target_value": 4
  },
  {
   "applied": [],
@@ -2048,19 +2228,224 @@
   "kind": "trial_committed"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 3,
-  "investigated": true,
-  "kind": "letrun_ejection",
-  "observe_label": "letrun",
-  "reason": null,
-  "requested_value": 3,
-  "to_value": 6
+  "kind": "trend_checkpoint",
+  "trend": 10
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "from_value": 3,
-  "kind": "departure_investigated"
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "trend": 10
+ },
+ {
+  "distance": 10,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 4,
+  "zoom_actual_value": 3,
+  "zoom_channel_tag": "Blower_tmr_Acc",
+  "zoom_target_value": 2
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 4
+ },
+ {
+  "distance": 4,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 2,
+  "zoom_actual_value": 6,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 2
  },
  {
   "distance": 2,
@@ -2130,6 +2515,7 @@
   "reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its external-input reading is no longer current"
  },
  {
+  "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
   "observe_label": "zoom",
@@ -2137,7 +2523,7 @@
   "trend": 8,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "zoom_target_value": 16
  },
  {
   "applied": [],
@@ -2151,7 +2537,7 @@
   "kind": "letrun_ejection",
   "observe_label": "zoom",
   "reason": null,
-  "requested_value": 6,
+  "requested_value": 16,
   "to_value": 10
  },
  {
@@ -2190,7 +2576,7 @@
      ]
     }
    ],
-   "hypotheses": 1,
+   "hypotheses": 2,
    "hypothesis_detail": [
     {
      "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
@@ -2207,6 +2593,35 @@
      "kind": "precise-cause",
      "sources": [
       "Sts_StateCurrent",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "ProductionStates:R5 fired at scan <N>; minimal conductive cut",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "value": true
+      }
+     ],
+     "kind": "precise-cause",
+     "sources": [
+      "Cmd_CtrlCmd",
+      "Ref_Cmd_Hold",
+      "Sts_StateCurrent",
+      "Sts_State_Execute",
+      "Sts_UnitModeCurrent",
+      "i_DoorClosed",
+      "i_LintDoorClosed",
       "x_DoorClosed",
       "x_LintDoorClosed"
      ]
@@ -2242,39 +2657,8 @@
   ]
  },
  {
-  "active_trace_actions": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
-  "candidates": [
-   {
-    "avail_tier": 0,
-    "bearing_channel_tag": "Sts_StateCurrent",
-    "bearing_channel_value": 16,
-    "compass_score": [
-     0,
-     0
-    ],
-    "current_note": "",
-    "current_prescribed": false,
-    "influence_prescribed": false,
-    "over_wake": false,
-    "pair": [
-     "S_DryerTemp_F",
-     131
-    ],
-    "prescribed": true,
-    "provenance": [
-     "ProductionExecuteSteps:R259"
-    ],
-    "route_prescribed": false,
-    "scored": false,
-    "tag": "S_DryerTemp_F",
-    "value": 131
-   }
-  ],
+  "active_trace_actions": [],
+  "candidates": [],
   "kind": "candidates_built",
   "route_candidates": [],
   "route_plan": {
@@ -2308,127 +2692,30 @@
    "target_value": 17
   },
   "stuck_reason": null,
-  "trace_actions": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
-  "wait_prescribed": false,
-  "wait_reason": "let-run Sts_StateCurrent: 6->16; the exact producer is stopped at an external input"
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
  },
  {
-  "applied": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
-  "candidate": {
-   "avail_tier": 0,
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 16,
-   "compass_score": [
-    0,
-    0
-   ],
-   "current_note": "",
-   "current_prescribed": false,
-   "influence_prescribed": false,
-   "over_wake": false,
-   "pair": [
-    "S_DryerTemp_F",
-    131
-   ],
-   "prescribed": true,
-   "provenance": [
-    "ProductionExecuteSteps:R259"
-   ],
-   "route_prescribed": false,
-   "scored": false,
-   "tag": "S_DryerTemp_F",
-   "value": 131
-  },
-  "co_actions": [],
-  "index": 0,
-  "kind": "candidate_try",
-  "total": 1
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
  },
  {
-  "accepted_because": {
-   "gate_events": [
-    {
-     "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 4",
-     "event": "ambient"
-    }
-   ],
-   "novel_key": true,
-   "state_key_changed": true,
-   "target_reached": false,
-   "trend_after": 4,
-   "trend_before": 2
-  },
-  "applied": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
-  "candidate_detail": {
-   "avail_tier": 0,
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 16,
-   "compass_score": [
-    0,
-    0
-   ],
-   "current_note": "",
-   "current_prescribed": false,
-   "influence_prescribed": false,
-   "over_wake": false,
-   "pair": [
-    "S_DryerTemp_F",
-    131
-   ],
-   "prescribed": true,
-   "provenance": [
-    "ProductionExecuteSteps:R259"
-   ],
-   "route_prescribed": false,
-   "scored": false,
-   "tag": "S_DryerTemp_F",
-   "value": 131
-  },
-  "co_actions": [],
-  "gates": [
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 4",
-    "event": "ambient"
-   }
-  ],
-  "index": 0,
-  "kind": "candidate_accepted",
-  "watched_changes": [
-   {
-    "__type__": "TagChange",
-    "after": 8,
-    "before": 6,
-    "tag": "Sts_StateCurrent"
-   }
-  ]
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 10,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 16
  },
  {
-  "applied": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
-  "candidate": {
-   "S_DryerTemp_F": 131
-  },
+  "applied": [],
+  "candidate": {},
   "kind": "trial_committed"
  },
  {
@@ -2436,7 +2723,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "accept",
+  "observe_label": "zoom",
   "reason": null,
   "requested_value": 16,
   "to_value": 8
@@ -2449,7 +2736,7 @@
     8
    ]
   ],
-  "from_trend": 4,
+  "from_trend": 10,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -2459,13 +2746,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
        "value": false
       },
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2485,13 +2772,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
        "value": false
       },
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2508,7 +2795,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:6>>",
        "value": true
       }
      ],
@@ -2524,12 +2811,7 @@
    "unresolved": []
   },
   "kind": "trend_regression",
-  "regression_nogoods": [
-   [
-    "S_DryerTemp_F",
-    131
-   ]
-  ],
+  "regression_nogoods": [],
   "to_trend": 2
  }
 ]

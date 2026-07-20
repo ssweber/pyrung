@@ -44,6 +44,57 @@ def test_zoom_that_reaches_requested_channel_is_confirmed() -> None:
     assert _zoom(16) is Outcome.CONFIRMED
 
 
+def test_action_receipt_survives_later_program_departure() -> None:
+    """Settlement cannot erase an action's observed operation boundary."""
+    trial = SimpleNamespace(
+        snap={"State": 11},
+        timeline=(SimpleNamespace(transitions=(("State", 11, 16), ("State", 16, 11))),),
+    )
+    frame = SimpleNamespace(snap={"State": 11}, distance_before=2)
+    ctx = SimpleNamespace(opaque_loop=frozenset())
+
+    assessment = assess_outcome(
+        trial,
+        (("Resume", True),),
+        frame,
+        ctx,
+        2,
+        False,
+        lambda *_args, **_kwargs: (set(), []),
+        route_prescribed=False,
+        zoom_channel_tag="State",
+        zoom_target_value=16,
+        zoom_progressed=True,
+    )
+
+    assert assessment.bearing is BearingEffect.SATISFIED
+    assert assessment.accepted is True
+
+
+def test_action_receipt_does_not_hide_a_different_landing() -> None:
+    trial = SimpleNamespace(
+        snap={"State": 9},
+        timeline=(SimpleNamespace(transitions=(("State", 11, 16), ("State", 16, 9))),),
+    )
+    frame = SimpleNamespace(snap={"State": 11}, distance_before=2)
+    ctx = SimpleNamespace(opaque_loop=frozenset())
+
+    assessment = assess_outcome(
+        trial,
+        (("Resume", True),),
+        frame,
+        ctx,
+        2,
+        False,
+        lambda *_args, **_kwargs: (set(), []),
+        route_prescribed=False,
+        zoom_channel_tag="State",
+        zoom_target_value=16,
+    )
+
+    assert assessment.bearing is BearingEffect.DEPARTED
+
+
 def test_zoom_that_really_departs_elsewhere_is_ambient_drift() -> None:
     assert _zoom(10) is Outcome.AMBIENT_DRIFT
 

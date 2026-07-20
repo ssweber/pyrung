@@ -122,8 +122,9 @@ def _assert_zoom_tripwire(skeleton: list[dict]) -> None:
 
     Historical bug: a coast requested 3->6 landed at 8 and was accepted as
     'ambient'.  Every ``zoom_accepted`` must either land exactly on the
-    requested bearing value or be explicitly classified as a departure
-    (``ejected`` — an AMBIENT_DRIFT committed under the ejection guard).
+    requested bearing value, carry a receipt proving its relational boundary
+    was reached, or be explicitly classified as a departure (``ejected`` — an
+    AMBIENT_DRIFT committed under the ejection guard).
     """
     for index, entry in enumerate(skeleton):
         if entry["kind"] != "zoom_accepted":
@@ -132,7 +133,11 @@ def _assert_zoom_tripwire(skeleton: list[dict]) -> None:
         if requested is None:
             continue  # target-terminal let-run: no channel bearing requested
         landed = entry.get("zoom_actual_value")
-        assert landed == requested or entry.get("ejected") is True, (
+        assert (
+            landed == requested
+            or entry.get("bearing_stop_reason") == "reached"
+            or entry.get("ejected") is True
+        ), (
             f"zoom_accepted[{index}] landed at {landed!r} but requested "
             f"{requested!r} without being classified as a departure "
             f"(ejected={entry.get('ejected')!r}): {entry}"

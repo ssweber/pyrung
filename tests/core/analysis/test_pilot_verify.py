@@ -15,12 +15,43 @@ import pytest
 
 from pyrung import Bool, Program, Rung, out
 from pyrung.core.analysis.pilot.types import _PulseState
-from pyrung.core.analysis.pilot.verify import _gate_cycle, _gate_spin
+from pyrung.core.analysis.pilot.verify import (
+    _gate_cycle,
+    _gate_spin,
+    _owned_bearing_stop_reason,
+)
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
 # Gate pipeline
 # ---------------------------------------------------------------------------
+
+
+def test_outer_owner_rebases_inner_departure_receipt_to_reached():
+    trial = SimpleNamespace(
+        snap={"State": 6},
+        coast_receipt=SimpleNamespace(stop_reason="departed"),
+    )
+
+    assert _owned_bearing_stop_reason(trial, "State", 6) == "reached"
+
+
+def test_relational_owner_retains_its_crossing_receipt_after_overshoot():
+    trial = SimpleNamespace(
+        snap={"Acc": 5},
+        coast_receipt=SimpleNamespace(stop_reason="reached"),
+    )
+
+    assert _owned_bearing_stop_reason(trial, "Acc", 4) == "reached"
+
+
+def test_wrong_outer_landing_retains_departure_receipt():
+    trial = SimpleNamespace(
+        snap={"State": 8},
+        coast_receipt=SimpleNamespace(stop_reason="departed"),
+    )
+
+    assert _owned_bearing_stop_reason(trial, "State", 6) == "departed"
 
 
 class TestGateSpin:

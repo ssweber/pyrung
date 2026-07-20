@@ -35,6 +35,15 @@ class ProgramStepStatus(StrEnum):
 
 
 @dataclass(frozen=True)
+class ProgramInputHandoff:
+    """One input's proved handoff to the next instruction-owned operation."""
+
+    action: tuple[str, Any]
+    boundary: Eq | Cmp
+    channel: str
+
+
+@dataclass(frozen=True)
 class ProgramStep:
     """Current-world proof result for one selected producer."""
 
@@ -47,6 +56,7 @@ class ProgramStep:
     projected_changes: tuple[tuple[str, Any, Any], ...] = ()
     trace: TraceNode | None = None
     next_trace: TraceNode | None = None
+    input_handoffs: tuple[ProgramInputHandoff, ...] = ()
     reason: str = ""
     # Pipeline channels that moved in the unchanged projection before this
     # producer could be read as waiting. The executable response is to preserve
@@ -180,6 +190,37 @@ def _input_reaches_exact_producer(
     )
 
 
+def _input_handoffs(
+    required: Sequence[TraceAction],
+    context_actions: Sequence[tuple[str, Any]],
+    ctx: Any,
+    producer: Any,
+    plc: Any,
+    rungs: Sequence[Any],
+) -> tuple[ProgramInputHandoff, ...]:
+    """Project each input only to the next owned boundary, never through it."""
+    index = build_advance_index(ctx.program, getattr(plc, "_harness", None))
+    handoffs: list[ProgramInputHandoff] = []
+    for action in required:
+        fork = fork_with_rungs(plc, rungs)
+        patch = dict(context_actions)
+        patch[action.tag] = action.value
+        fork.patch(patch)
+        fork.step()
+        trace = _trace_exact(ctx, producer, dict(fork.state.tags))
+        boundary = _first_boundary(trace)
+        if boundary is None or index.resolve(boundary.tag) is None:
+            continue
+        handoffs.append(
+            ProgramInputHandoff(
+                action=action.pair,
+                boundary=boundary,
+                channel=boundary.tag,
+            )
+        )
+    return tuple(handoffs)
+
+
 def read_program_step(
     ctx: Any,
     producer: Any,
@@ -215,6 +256,14 @@ def read_program_step(
     trace = _trace_exact(ctx, producer, trace_snapshot)
     boundary = _first_boundary(trace)
     required, context_actions = _input_split(trace, trace_snapshot, resting or {})
+    input_handoffs = _input_handoffs(
+        required,
+        context_actions,
+        ctx,
+        producer,
+        plc,
+        rungs,
+    )
     barriers = _action_channel_barriers(trace, trace_snapshot, ctx)
     inputs_blocked_here = tuple(
         action
@@ -305,6 +354,7 @@ def read_program_step(
             boundary.tag if boundary is not None else producer.command_tag,
             required_inputs=required,
             context_actions=context_actions,
+            input_handoffs=input_handoffs,
             projected_changes=projected_changes,
             trace=trace,
             next_trace=next_trace,
@@ -342,6 +392,7 @@ def read_program_step(
                 boundary.tag,
                 required_inputs=required,
                 context_actions=context_actions,
+                input_handoffs=input_handoffs,
                 projected_changes=projected_changes,
                 trace=trace,
                 next_trace=next_trace,
@@ -401,6 +452,7 @@ def read_program_step(
             boundary.tag if boundary is not None else producer.command_tag,
             required_inputs=required,
             context_actions=context_actions,
+            input_handoffs=input_handoffs,
             projected_changes=projected_changes,
             trace=trace,
             next_trace=next_trace,

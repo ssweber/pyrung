@@ -105,6 +105,9 @@ class Coast:
     mode: Literal["bearing", "terminal"]
     channel_tag: str | None = None
     target_value: Any = None
+    # The owner's original relation. ``target_value`` is its exact observable
+    # heading; execution keeps this proof for progress and coast estimates.
+    boundary: Any = None
     route_prescribed: bool = False
     route_channel_tag: str | None = None
     route_from_value: Any = None
@@ -194,7 +197,13 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     if isinstance(act, BatchPulse):
         return ("batch", act.source, act.actions)
     if isinstance(act, Coast):
-        identity = ("coast", act.mode, act.channel_tag, repr(act.target_value))
+        identity = (
+            "coast",
+            act.mode,
+            act.channel_tag,
+            repr(act.target_value),
+            repr(act.boundary),
+        )
         if act.route_channel_tag is not None:
             return (
                 *identity,

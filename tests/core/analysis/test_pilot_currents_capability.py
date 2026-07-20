@@ -24,8 +24,6 @@ visible beside the avoided operator button (see ``currents.py``):
 
 from __future__ import annotations
 
-import pytest
-
 from pyrung import (
     PLC,
     Block,
@@ -342,13 +340,6 @@ def test_tide_gated_premise() -> None:
     assert plc.state.tags[tags["C_Complete"].name] is False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="channel-punt expansion (piece 3) not yet wired: the trace dead-ends on "
-    "the opaque-loop state register and never surfaces the program-owned producer's "
-    "step-chain prerequisite (the DoorSensor nudge), so the pilot cannot open the "
-    "tide-gated 6->16 edge while avoiding C_Complete.",
-)
 def test_tide_gated_edge_reaches_via_program_current() -> None:
     """PILOT reaches Completed by opening the tide-gated program-owned edge —
     pressing the one external nudge (DoorSensor) at the right step and riding the

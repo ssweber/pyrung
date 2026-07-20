@@ -319,6 +319,7 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
         "zoom_channel_tag",
         "zoom_target_value",
         "zoom_actual_value",
+        "bearing_stop_reason",
         "ejected",
         "trend",
     ),

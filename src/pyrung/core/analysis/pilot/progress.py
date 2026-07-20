@@ -66,16 +66,57 @@ from pyrung.core.analysis.sp_values import _values_match
 _PROVISIONAL_SCAN_BUDGET = 2000
 
 
+def _channel_tenure_checkpoint_index(
+    state: _PilotState,
+    channel_tag: str,
+    channel_value: Any,
+) -> int:
+    """Return the recovery receipt that began the current channel tenure.
+
+    Target-relative progress may bank several checkpoints while an outer
+    operation remains on the same channel value.  A later departure belongs to
+    that whole continuous tenure: selecting only the newest progress checkpoint
+    would discard earlier changed-write evidence (for example a watchdog that
+    fired before a nested timer boundary completed).
+    """
+    index = len(state.checkpoints) - 1
+    while index > 0:
+        previous = state.checkpoints[index - 1]
+        if not _values_match(
+            previous.world.work.state.tags.get(channel_tag),
+            channel_value,
+        ):
+            break
+        index -= 1
+    return index
+
+
 def _monitor_trend(
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> tuple[PilotEvent, ...]:
+    channel_ejection = (
+        trial.zoom_channel_tag is not None
+        and (
+            trial.assessment is not None
+            and trial.assessment.bearing is BearingEffect.DEPARTED
+            or trial.assessment is None
+            and trial.outcome == Outcome.AMBIENT_DRIFT
+        )
+        and not _values_match(
+            trial.fork_snap.get(trial.zoom_channel_tag),
+            trial.before_snap.get(trial.zoom_channel_tag),
+        )
+    )
     # A provisional attempt changes only the rollback boundary. Every trial
     # inside it still passes through the ordinary trend,
-    # regression, investigation, and retry machinery below.
-    if state.provisional is not None:
+    # regression, investigation, and retry machinery below. In particular, an
+    # exact coast-departure receipt outranks the corridor's fallback expiry:
+    # investigation owns that observed operation before provisional lifetime
+    # policy may discard it.
+    if state.provisional is not None and not channel_ejection:
         settlement = _finish_provisional(trial, frame, state, ctx)
         if settlement is not None:
             return settlement
@@ -115,20 +156,9 @@ def _monitor_trend(
     # coast-span window (the fork's own history, ``scan_before -> fork end``) so
     # its exact channel-transition producer and upstream corrective levers are
     # recoverable, then revert to the pre-coast checkpoint.
-    if (
-        trial.zoom_channel_tag is not None
-        and (
-            trial.assessment is not None
-            and trial.assessment.bearing is BearingEffect.DEPARTED
-            or trial.assessment is None
-            and trial.outcome == Outcome.AMBIENT_DRIFT
-        )
-        and not _values_match(
-            trial.fork_snap.get(trial.zoom_channel_tag),
-            trial.before_snap.get(trial.zoom_channel_tag),
-        )
-    ):
+    if channel_ejection:
         chan = trial.zoom_channel_tag
+        assert chan is not None
         departed_from = trial.before_snap.get(chan)
         investigated = bool(state.checkpoints)
         ejection = PilotEvent(
@@ -177,9 +207,17 @@ def _monitor_trend(
                 # provisional corridor changes only the rollback boundary; it
                 # must not suppress understanding the same physical departure.
                 # Investigation therefore runs before retention in both cases.
-                checkpoint = state.checkpoints[-1]
+                checkpoint_index = _channel_tenure_checkpoint_index(
+                    state,
+                    chan,
+                    departed_from,
+                )
+                checkpoint = state.checkpoints[checkpoint_index]
                 checkpoint_snap = dict(checkpoint.world.work.state.tags)
-                replay_from_checkpoint = not _values_match(checkpoint_snap.get(chan), departed_from)
+                replay_from_checkpoint = (
+                    checkpoint.world.work.state.scan_id < trial.scan_before
+                    or not _values_match(checkpoint_snap.get(chan), departed_from)
+                )
                 incident_anchor = (
                     checkpoint.world.work.state.scan_id
                     if replay_from_checkpoint
@@ -197,6 +235,7 @@ def _monitor_trend(
                         end_scan=state.work.state.scan_id,
                         incident_before_snap=incident_before,
                         retain_if_unresolved=verdict,
+                        checkpoint_index=checkpoint_index,
                     ),
                 )
             if state.provisional is None:
@@ -209,14 +248,22 @@ def _monitor_trend(
             # channel transaction) is ordinary piloting. Keep the original
             # rollback boundary and budget; do not nest another provisional.
             return (ejection,)
-        checkpoint = state.checkpoints[-1]
+        checkpoint_index = _channel_tenure_checkpoint_index(
+            state,
+            chan,
+            departed_from,
+        )
+        checkpoint = state.checkpoints[checkpoint_index]
         checkpoint_snap = dict(checkpoint.world.work.state.tags)
         # If the latest receipt precedes the channel state this coast launched
         # from, replay must include earlier motion, including the action that armed the fault;
         # using the post-action frame as "before" would already contain alarm
         # triggers and erase the counterfactual evidence that a permissive
         # clears them.
-        replay_from_checkpoint = not _values_match(checkpoint_snap.get(chan), departed_from)
+        replay_from_checkpoint = (
+            checkpoint.world.work.state.scan_id < trial.scan_before
+            or not _values_match(checkpoint_snap.get(chan), departed_from)
+        )
         incident_anchor = (
             checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
         )
@@ -231,6 +278,7 @@ def _monitor_trend(
                 anchor_scan=incident_anchor,
                 end_scan=state.work.state.scan_id,
                 incident_before_snap=incident_before,
+                checkpoint_index=checkpoint_index,
             ),
         )
 
@@ -900,6 +948,7 @@ def _investigate_and_revert(
     end_scan: int,
     incident_before_snap: dict[str, Any] | None = None,
     retain_if_unresolved: DepartureVerdict | None = None,
+    checkpoint_index: int = -1,
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident over ``[anchor_scan, end_scan]``, replay-test
     corrective holds, install the confirmed ones, and revert to the last
@@ -910,7 +959,8 @@ def _investigate_and_revert(
     (``trial.scan_before``) — the ejecting watchdog fires mid-coast, so the
     post-eject window the regression path would use misses it.
     """
-    checkpoint = state.checkpoints[-1]
+    checkpoint_index %= len(state.checkpoints)
+    checkpoint = state.checkpoints[checkpoint_index]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
     investigation_holds: list[Any] = []
@@ -963,6 +1013,14 @@ def _investigate_and_revert(
             if step.scan_before >= cp_fork.state.scan_id
         )
         role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
+        correction_progress_mark = (
+            retain_if_unresolved.progress.source_mark
+            if retain_if_unresolved is not None
+            and retain_if_unresolved.progress.effect == "preserved"
+            else ()
+        )
+        regression_progress_floor = dict(cp_fork.state.tags)
+        regression_progress_floor.update(correction_progress_mark)
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
@@ -996,6 +1054,9 @@ def _investigate_and_revert(
             regression_witness=incident_regression_witness(trial.fork, incident),
             progress_gauge=state.gauge,
             progress_anchor=dict(cp_fork.state.tags),
+            regression_progress_floor=(
+                regression_progress_floor if correction_progress_mark else None
+            ),
         )
 
         # The register set the target still needs: the checkpoint's *frontier*,
@@ -1014,12 +1075,7 @@ def _investigate_and_revert(
             replay,
             needed=needed,
             installed_rungs=tuple(state.rungs),
-            correction_progress_mark=(
-                retain_if_unresolved.progress.source_mark
-                if retain_if_unresolved is not None
-                and retain_if_unresolved.progress.effect == "preserved"
-                else ()
-            ),
+            correction_progress_mark=correction_progress_mark,
             excluded_corrections=frozenset(state.correction_nogoods.get(cp_key, ())),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
@@ -1143,6 +1199,10 @@ def _investigate_and_revert(
         )
         if not local_checkpoint:
             state.provisional = None
+    # Later checkpoints are target-progress receipts inside the departed
+    # channel tenure. Once the incident requires a correction/revert, they no
+    # longer describe an executable clean world; return to the tenure owner.
+    del state.checkpoints[checkpoint_index + 1 :]
     state.load_world(cp_world)
     revoked_ids = _revoke_corrections(state, revoked_receipts, checkpoint)
     if investigation_rungs and not revoked_ids:

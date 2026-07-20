@@ -125,7 +125,7 @@ def correct_enablers(
 # ---------------------------------------------------------------------------
 
 
-def _causal_channel_guard(
+def causal_channel_guard(
     plc: PLC,
     source_tags: tuple[str, ...],
     incident: DeviationIncident,
@@ -270,6 +270,25 @@ def _causal_channel_guard(
     return terms[0] if len(terms) == 1 else AnyCondition(*terms)
 
 
+def guard_correction_holds(
+    plc: PLC,
+    holds: tuple[ActionPair, ...],
+    source_tags: tuple[str, ...],
+    incident: DeviationIncident,
+    ctx: Any,
+) -> tuple[Any, ...]:
+    """Attach the recorded writer context to a correction when it is readable.
+
+    Causal cuts and instruction-specific corrections are alternative ways to
+    discover the same intervention.  Their lifetime belongs to the harmful
+    writer occurrence, not to the hypothesis category that found it.
+    """
+    guard = causal_channel_guard(plc, source_tags, incident, ctx)
+    if guard is None:
+        return tuple(holds)
+    return tuple(PilotRung(tag, value, guard) for tag, value in holds)
+
+
 # ---------------------------------------------------------------------------
 # Coil arm — latches that fired during the incident  (FLIP a non-state guard)
 # ---------------------------------------------------------------------------
@@ -381,10 +400,7 @@ def _coil_corrections(
         source_tags: tuple[str, ...],
     ) -> tuple[Any, ...]:
         """Wrap holds in the exact recorded conductive context when readable."""
-        guard = _causal_channel_guard(plc, source_tags, incident, ctx)
-        if guard is None:
-            return tuple(holds)
-        return tuple(PilotRung(tag, value, guard) for tag, value in holds)
+        return guard_correction_holds(plc, tuple(holds), source_tags, incident, ctx)
 
     corrections: list[EnablerCorrection] = []
     conjunction: list[ActionPair] = []

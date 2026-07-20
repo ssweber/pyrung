@@ -236,8 +236,8 @@ def test_pilot_reaches_completed_through_program_owned_command_detour() -> None:
     path = plc.how(tags["State"] == tags["Completed"], avoid=tags["C_Complete"], max_scans=300)
 
     assert path.reachable
-    assert path.changes.get(tags["C_Start"].name) is True
-    assert path.changes.get(tags["ResumeAck"].name) is True
+    assert any(inputs.get(tags["C_Start"].name) is True for _scan, inputs in path.ordered_steps)
+    assert any((tags["ResumeAck"].name, True) in step.inputs for step in path.journal)
     assert path.changes.get(tags["C_Complete"].name) is not True
     assert path.replay().state.tags[tags["State"].name] == tags["Completed"]
 

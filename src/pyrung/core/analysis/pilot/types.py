@@ -583,6 +583,10 @@ class _TrialResult:
     gate_events: tuple[PilotGateEvent, ...] = ()
     zoom_channel_tag: str | None = None
     zoom_target_value: Any = None
+    # The coast receipt interpreted against the operation that verification
+    # actually owns.  The raw receipt may say ``departed`` when an inner seek
+    # stopped because its outer route channel reached the requested landing.
+    bearing_stop_reason: str | None = None
     # See _PulseState.coast_receipt — carried through verify onto the result.
     coast_receipt: Any = None
     # See _PulseState.timeline — carried through verify onto the result.

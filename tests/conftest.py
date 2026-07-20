@@ -17,10 +17,10 @@ pytest_plugins = ["pytester"]
 
 # ---------------------------------------------------------------------------
 # Hard memory cap — kills the process before it OOMs the machine.
-# Override with PYTEST_MEMORY_CAP_MB env var (default 2048).
+# Override with PYTEST_MEMORY_CAP_MB env var (default 4096).
 # ---------------------------------------------------------------------------
 
-_MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "2048"))
+_MEMORY_CAP_MB = int(os.environ.get("PYTEST_MEMORY_CAP_MB", "4096"))
 _current_test: str | None = None
 
 
