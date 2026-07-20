@@ -268,3 +268,39 @@ empty pattern, 240 bytes for 1–4 writes, 328 bytes for 8 writes, 520 bytes for
 active-pattern mirror if the implementation stays local; it does not justify
 mirroring every historical or interned pattern.
 
+## Condition-view reuse instrumentation
+
+`scratchpad/burner/probe_condition_view_reuse.py` observed the existing
+executor without changing view or capture results. The instrumented
+BurnerLoop followed the same successful route and finished at scan 2,110.
+
+Across 1,606,546 normal condition-view creations:
+
+- 761,202 preceding views were exactly equal to the pending scan image
+  (47.38%);
+- a conservative "any setter invalidates" generation check identified 761,087
+  reusable views (47.37%);
+- exact dictionary comparison found only 115 additional same-state cases after
+  setter activity;
+- the existing views copied approximately 6.17 GB of shallow dictionary
+  storage cumulatively;
+- the generation-safe reusable views accounted for approximately 3.29 GB
+  (53.34%) of that copy traffic.
+
+The generation check therefore captures essentially the entire opportunity
+without comparing dictionaries or maintaining a cache. A normal rung can reuse
+the preceding `ConditionView` when it is in the same execution scope and no
+setter has run since that view was created. `continued()` retains its existing,
+explicit reuse semantics.
+
+The same run observed 1,610,925 firing-capture finalizations:
+
+- 858,098 journals were empty (53.27%);
+- 858,255 returned `None` because there was no effective write (53.28%);
+- 77,901 retained firing evidence but filtered its writes to `{}` (4.84%);
+- 674,769 returned one or more writes (41.89%).
+
+An immediate empty-journal return can therefore bypass more than half of
+`_finalize_capture` calls without affecting the important distinction between
+`None` (did not fire) and `{}` (fired, but PDG filtering removed its writes).
+
