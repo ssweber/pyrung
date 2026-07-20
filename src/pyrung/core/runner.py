@@ -2072,9 +2072,12 @@ class PLC:
         # Final scan: run the live program path with a capturing observer.
         self._apply_log_entries_for_scan(replay, target_scan_id, log, lifecycle_by_scan)
         capture = ConditionViewCapture()
-        ctx, dt = replay._prepare_scan(synthesis_observer=capture)
+        ctx, _dt = replay._prepare_scan(synthesis_observer=capture)
         execute_program(replay._program, ctx, capture_rungs=True, observer=capture)
-        replay._commit_scan(ctx, dt)
+        # Every ConditionView and RungRun is complete when execute_program
+        # returns. The reconstructed runner is disposable, so publishing its
+        # pending state, firing timelines, history cache, and scan log would do
+        # work that no caller can observe.
 
         self._cached_replay_capture = (target_scan_id, capture)
         return capture

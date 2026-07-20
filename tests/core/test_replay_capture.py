@@ -56,6 +56,32 @@ def test_replay_capture_reuses_source_pdg(monkeypatch: pytest.MonkeyPatch) -> No
     assert source._replay_node_views_at(1)
 
 
+def test_replay_capture_does_not_commit_disposable_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enable = Bool("Enable")
+    light = Bool("Light")
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            out(light)
+
+    source = PLC(program)
+    source.patch({"Enable": True})
+    source.step()
+
+    def _unexpected_commit(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("observed evidence is complete before commit")
+
+    monkeypatch.setattr(PLC, "_commit_scan", _unexpected_commit)
+
+    runs = source._replay_rung_runs_at(1)
+
+    assert len(runs) == 1
+    assert runs[0].enabled is True
+    assert dict(runs[0].writes) == {"Light": True}
+
+
 def test_replay_capture_preserves_repeated_subroutine_occurrences() -> None:
     source = Int("Source")
     result = Int("Result")
