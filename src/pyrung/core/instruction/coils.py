@@ -16,6 +16,21 @@ if TYPE_CHECKING:
     from pyrung.core.memory_block import BlockRange, IndirectBlockRange
 
 
+def _static_coil_targets(
+    target: Tag | BlockRange | IndirectBlockRange | ImmediateRef,
+) -> tuple[Tag, ...] | None:
+    """Resolve immutable direct coil destinations once at construction."""
+    from pyrung.core.memory_block import BlockRange
+
+    if isinstance(target, ImmediateRef):
+        return _static_coil_targets(target.value)
+    if isinstance(target, Tag):
+        return (target,)
+    if isinstance(target, BlockRange):
+        return tuple(target.tags())
+    return None
+
+
 _RESET_VALUES: dict[TagType, bool | int | float | str] = {
     TagType.BOOL: False,
     TagType.INT: 0,
@@ -51,9 +66,12 @@ class OutInstruction(OneShotMixin, Instruction):
     ):
         OneShotMixin.__init__(self, oneshot)
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
-        targets = resolve_coil_targets_ctx(self.target, ctx)
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
         if not enabled:
             self.reset_oneshot()
             if self._oneshot:
@@ -91,11 +109,15 @@ class LatchInstruction(Instruction):
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        for target in resolve_coil_targets_ctx(self.target, ctx):
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
+        for target in targets:
             ctx.set_tag(target.name, True)
 
 
@@ -113,9 +135,13 @@ class ResetInstruction(Instruction):
 
     def __init__(self, target: Tag | BlockRange | IndirectBlockRange | ImmediateRef):
         self.target = target
+        self._static_targets = _static_coil_targets(target)
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
             return
-        for target in resolve_coil_targets_ctx(self.target, ctx):
+        targets = self._static_targets
+        if targets is None:
+            targets = resolve_coil_targets_ctx(self.target, ctx)
+        for target in targets:
             ctx.set_tag(target.name, reset_value_for_type(target.type))

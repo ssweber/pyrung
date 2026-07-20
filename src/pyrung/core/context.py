@@ -309,10 +309,18 @@ class ScanContext:
         if not stack:
             return
         pending = self._tags_pending
-        if len(stack) == 1:
+        stack_len = len(stack)
+        if stack_len == 1:
             journal = stack[0]
             if name not in journal:
                 journal[name] = pending.get(name, _MISSING)
+            return
+        if stack_len == 2:
+            outer, inner = stack
+            if name not in outer:
+                outer[name] = pending.get(name, _MISSING)
+            if name not in inner:
+                inner[name] = pending.get(name, _MISSING)
             return
         for journal in stack:
             if name not in journal:
@@ -425,6 +433,10 @@ class ScanContext:
         such as computing _prev:* for edge detection.
         """
         return self._state
+
+    def _new_condition_view(self) -> ConditionView:
+        """Create the rung-entry view, with an override point for analysis contexts."""
+        return ConditionView(self)
 
     # =========================================================================
     # Rung-scoped firing capture

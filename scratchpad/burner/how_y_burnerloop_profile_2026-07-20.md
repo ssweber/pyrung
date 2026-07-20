@@ -526,3 +526,43 @@ total-time movement came from unrelated committed-scan and analysis variance.
 The prototype was therefore backed out: 0.18–0.20 seconds does not justify a
 read-capability cache contract and extra target executions.
 
+## Shared interpreter execution plans
+
+The next pass stayed below the replay/evidence lifecycle and optimized the
+interpreter machinery used by both normal committed scans and causal observed
+scans.
+
+The retained changes are:
+
+- classify every rung execution item once at program construction, replacing
+  per-scan `Rung` / `CallInstruction` / `ForLoopInstruction` /
+  `ReturnInstruction` type dispatch with compact execution opcodes;
+- bind each call site's immutable subroutine traversal order and `RungId`
+  objects on first use instead of repeating the subroutine lookup, enumeration,
+  and identity construction on every call;
+- make condition-view construction a direct `ScanContext` protocol method,
+  preserving the analysis-context override without per-rung
+  `getattr` / `callable` / result-type checks;
+- resolve direct tag and static block coil targets once when the instruction is
+  built;
+- classify equality/inequality operands once, matching the existing ordered
+  comparison path; and
+- unroll the common two-journal firing-capture case (main caller plus
+  subroutine rung).
+
+Two final instrumented runs followed the same 64-event route to scan 2,110,
+with 7,756 committed scans and 1,106 observed historical target scans:
+
+| Measurement | Settled baseline | After (2-run average) | Improvement |
+|---|---:|---:|---:|
+| Committed program execution | 13.430 s | 10.281 s | 3.149 s (23.4%) |
+| Observed program execution | 5.641 s | 5.016 s | 0.625 s (11.1%) |
+| Combined shared interpretation | 19.071 s | 15.297 s | 3.774 s (19.8%) |
+
+A focused 200-scan cProfile check agreed with the end-to-end result: shared
+program execution fell from 0.636 to 0.487 profiled seconds (23.4%), while
+total recorded calls fell from 2.25 million to 1.84 million. The observed path
+still costs more per scan because it constructs complete per-occurrence
+`RungRun` evidence and invokes observer boundaries, but it now shares the
+cheaper traversal, dispatch, condition-view, coil, and subroutine primitives.
+

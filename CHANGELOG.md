@@ -105,6 +105,7 @@
 
 ### Performance
 
+- Normal and causally observed interpreted scans run about 20% faster on BurnerLoop by sharing precomputed rung dispatch, subroutine traversal, condition-view construction, and direct coil targets.
 - Interpreted scans with full causal history run ≈2.2× faster (1.29 → 0.60 ms/scan on PackML), accelerating pilot trial forks and `run_until()` without dropping firing history.
 - Recompiled PackML replay kernels stay at ≈0.035 ms/scan instead of regressing to ≈0.49 ms/scan, and full state-materializing `CompiledPLC` scans drop from ≈0.49 to 0.16 ms/scan.
 - `cause()` attribution and `how()` planning no longer stall on cold-start over dense state machines: forks reuse the parent index and results are memoized per `(tag, scan)`.

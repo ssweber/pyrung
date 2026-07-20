@@ -10,9 +10,14 @@ from pyrung.core.instruction import (
     CallInstruction,
     ForLoopInstruction,
     Instruction,
-    ReturnInstruction,
     SubroutineReturnSignal,
     resolve_tag_or_value_ctx,
+)
+from pyrung.core.instruction.base import (
+    _EXECUTOR_BRANCH,
+    _EXECUTOR_CALL,
+    _EXECUTOR_FOR_LOOP,
+    _EXECUTOR_RETURN,
 )
 from pyrung.core.rung import Rung
 
@@ -480,19 +485,26 @@ def _execute_rung_natural(
         ctx._condition_snapshot = condition_view
         enabled = parent_enabled and rung._evaluate_local_conditions(condition_view)
 
-    ctx._condition_snapshot = condition_view
-    for item in rung._execution_items:
-        if isinstance(item, Rung):
+    for item_kind, item in rung._execution_plan:
+        if item_kind == _EXECUTOR_BRANCH:
             _execute_rung_natural(
                 program,
                 ctx,
                 rung_index,
-                item,
+                item,  # ty: ignore[invalid-argument-type]
                 parent_enabled=enabled,
                 condition_view=condition_view,
             )
         else:
-            _execute_instruction_natural(program, ctx, rung_index, rung, item, enabled)
+            _execute_instruction_natural(
+                program,
+                ctx,
+                rung_index,
+                rung,
+                item,  # ty: ignore[invalid-argument-type]
+                enabled,
+                item_kind=item_kind,
+            )
 
 
 def _execute_instruction_natural(
@@ -502,12 +514,28 @@ def _execute_instruction_natural(
     rung: Rung,
     instruction: Instruction,
     enabled: bool,
+    *,
+    item_kind: int | None = None,
 ) -> None:
-    if isinstance(instruction, CallInstruction):
-        _execute_call_natural(ctx, rung_index, instruction, enabled)
+    if item_kind is None:
+        item_kind = instruction._executor_kind
+    if item_kind == _EXECUTOR_CALL:
+        _execute_call_natural(
+            ctx,
+            rung_index,
+            instruction,  # ty: ignore[invalid-argument-type]
+            enabled,
+        )
         return
-    if isinstance(instruction, ForLoopInstruction):
-        _execute_for_loop_natural(program, ctx, rung_index, rung, instruction, enabled)
+    if item_kind == _EXECUTOR_FOR_LOOP:
+        _execute_for_loop_natural(
+            program,
+            ctx,
+            rung_index,
+            rung,
+            instruction,  # ty: ignore[invalid-argument-type]
+            enabled,
+        )
         return
     instruction.execute(ctx, enabled)
 
@@ -521,20 +549,17 @@ def _execute_call_natural(
     if not enabled:
         return
 
-    program = instruction._program
-    if instruction.subroutine_name not in program.subroutines:
-        raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+    subroutine_plan = _resolve_subroutine_plan(instruction)
 
     saved_snapshot = ctx._condition_snapshot
     saved_scope_token = ctx._condition_scope_token
     ctx._condition_snapshot = None
-    ctx._condition_scope_token = object()
+    ctx._condition_scope_token = instruction._executor_scope_token
     try:
-        for sub_idx, sub_rung in enumerate(program.subroutines[instruction.subroutine_name]):
-            rung_id = RungId(instruction.subroutine_name, sub_idx)
+        for rung_id, sub_rung in subroutine_plan:
             journal, previous_node_id = ctx._begin_node_capture(rung_id)
             try:
-                _execute_rung_natural(program, ctx, rung_index, sub_rung)
+                _execute_rung_natural(instruction._program, ctx, rung_index, sub_rung)
             finally:
                 ctx._finish_node_capture(rung_id, journal, previous_node_id)
     except SubroutineReturnSignal:
@@ -554,7 +579,15 @@ def _execute_for_loop_natural(
 ) -> None:
     if not enabled:
         for child in instruction.instructions:
-            _execute_instruction_natural(program, ctx, rung_index, rung, child, False)
+            _execute_instruction_natural(
+                program,
+                ctx,
+                rung_index,
+                rung,
+                child,
+                False,
+                item_kind=child._executor_kind,
+            )
         instruction._reset_oneshot_state(ctx)
         return
 
@@ -566,7 +599,34 @@ def _execute_for_loop_natural(
     for i in range(iterations):
         ctx.set_tag(instruction.idx_tag.name, i)
         for child in instruction.instructions:
-            _execute_instruction_natural(program, ctx, rung_index, rung, child, True)
+            _execute_instruction_natural(
+                program,
+                ctx,
+                rung_index,
+                rung,
+                child,
+                True,
+                item_kind=child._executor_kind,
+            )
+
+
+def _resolve_subroutine_plan(
+    instruction: CallInstruction,
+) -> tuple[tuple[RungId, Rung], ...]:
+    """Bind immutable subroutine traversal metadata once per call site."""
+    plan = instruction._executor_subroutine_plan
+    if plan is not None:
+        return plan
+    program = instruction._program
+    rungs = program.subroutines.get(instruction.subroutine_name)
+    if rungs is None:
+        raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+    plan = tuple(
+        (RungId(instruction.subroutine_name, sub_idx), sub_rung)
+        for sub_idx, sub_rung in enumerate(rungs)
+    )
+    instruction._executor_subroutine_plan = plan
+    return plan
 
 
 def _validate_mode(mode: ExecutionMode) -> None:
@@ -582,16 +642,6 @@ def _forced_enabled(mode: ExecutionMode, natural_enabled: bool) -> bool:
     return natural_enabled
 
 
-def _new_condition_view(ctx: ScanContext) -> ConditionView:
-    factory = getattr(ctx, "_new_condition_view", None)
-    if callable(factory):
-        view = factory()
-        if not isinstance(view, ConditionView):
-            raise TypeError("_new_condition_view() must return a ConditionView")
-        return view
-    return ConditionView(ctx)
-
-
 def _resolve_condition_view(ctx: ScanContext, rung: Rung) -> ConditionView:
     if rung._use_prior_snapshot:
         condition_view = ctx._condition_snapshot
@@ -602,7 +652,7 @@ def _resolve_condition_view(ctx: ScanContext, rung: Rung) -> ConditionView:
                 "a program or subroutine, and cannot cross into or out of a subroutine."
             )
     else:
-        condition_view = _new_condition_view(ctx)
+        condition_view = ctx._new_condition_view()
 
     ctx._condition_snapshot = condition_view
     return condition_view
@@ -685,13 +735,13 @@ def _execute_rung_body(
 ) -> None:
     ctx._condition_snapshot = condition_view
 
-    for item in rung._execution_items:
-        if isinstance(item, Rung):
+    for item_kind, item in rung._execution_plan:
+        if item_kind == _EXECUTOR_BRANCH:
             _execute_rung(
                 program,
                 ctx,
                 rung_index,
-                item,
+                item,  # ty: ignore[invalid-argument-type]
                 mode=mode,
                 observer=observer,
                 kind="branch",
@@ -707,12 +757,13 @@ def _execute_rung_body(
                 ctx,
                 rung_index,
                 rung,
-                item,
+                item,  # ty: ignore[invalid-argument-type]
                 enabled,
                 mode=mode,
                 observer=observer,
                 depth=depth,
                 call_stack=call_stack,
+                item_kind=item_kind,
             )
 
 
@@ -728,14 +779,17 @@ def _execute_instruction(
     observer: ExecutionObserver,
     depth: int,
     call_stack: tuple[str, ...],
+    item_kind: int | None = None,
 ) -> None:
     observer.begin_instruction(ctx, rung_index, rung, instruction, depth, enabled, call_stack)
 
-    if isinstance(instruction, CallInstruction):
+    if item_kind is None:
+        item_kind = instruction._executor_kind
+    if item_kind == _EXECUTOR_CALL:
         _execute_call_instruction(
             ctx,
             rung_index,
-            instruction,
+            instruction,  # ty: ignore[invalid-argument-type]
             enabled,
             mode=mode,
             observer=observer,
@@ -744,13 +798,13 @@ def _execute_instruction(
         )
         return
 
-    if isinstance(instruction, ForLoopInstruction):
+    if item_kind == _EXECUTOR_FOR_LOOP:
         _execute_for_loop_instruction(
             program,
             ctx,
             rung_index,
             rung,
-            instruction,
+            instruction,  # ty: ignore[invalid-argument-type]
             enabled,
             mode=mode,
             observer=observer,
@@ -759,7 +813,7 @@ def _execute_instruction(
         )
         return
 
-    if mode == "forced_on" and isinstance(instruction, ReturnInstruction):
+    if mode == "forced_on" and item_kind == _EXECUTOR_RETURN:
         instruction.execute(ctx, False)
         return
 
@@ -782,17 +836,16 @@ def _execute_call_instruction(
         return
 
     program = instruction._program
-    if instruction.subroutine_name not in program.subroutines:
-        raise KeyError(f"Subroutine '{instruction.subroutine_name}' not defined")
+    subroutine_plan = _resolve_subroutine_plan(instruction)
 
     observer.begin_subroutine_call(ctx, rung_index, instruction, depth, call_stack)
     next_stack = (*call_stack, instruction.subroutine_name)
     saved_snapshot = ctx._condition_snapshot
     saved_scope_token = ctx._condition_scope_token
     ctx._condition_snapshot = None
-    ctx._condition_scope_token = object()
+    ctx._condition_scope_token = instruction._executor_scope_token
     try:
-        for sub_idx, sub_rung in enumerate(program.subroutines[instruction.subroutine_name]):
+        for rung_id, sub_rung in subroutine_plan:
             # Capture each subroutine rung's own write slice under its
             # ``RungId`` so the node-level firing log can see subroutine
             # rungs (the enclosing main-rung ``capturing_rung`` scope still
@@ -800,7 +853,6 @@ def _execute_call_instruction(
             # ``capturing_node`` also publishes ``ctx._current_node_id`` so
             # observers (e.g. ConditionViewCapture) key subroutine rungs by
             # the same ``RungId(sub, sub_idx)`` as the firing timeline.
-            rung_id = RungId(instruction.subroutine_name, sub_idx)
             journal, previous_node_id = ctx._begin_node_capture(rung_id)
             try:
                 _execute_rung(
@@ -851,6 +903,7 @@ def _execute_for_loop_instruction(
                 observer=observer,
                 depth=depth + 1,
                 call_stack=call_stack,
+                item_kind=child._executor_kind,
             )
         instruction._reset_oneshot_state(ctx)
         return
@@ -876,4 +929,5 @@ def _execute_for_loop_instruction(
                 observer=observer,
                 depth=depth + 1,
                 call_stack=call_stack,
+                item_kind=child._executor_kind,
             )

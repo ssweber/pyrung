@@ -14,6 +14,7 @@ from pyrung.core.condition import (
     ConditionTerm,
     _as_condition,
 )
+from pyrung.core.instruction.base import _EXECUTOR_BRANCH
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.sp_tree import SPNode
@@ -49,6 +50,7 @@ class Rung:
         self._instructions: list[Instruction] = []
         self._branches: list[Rung] = []  # Nested branches (parallel paths)
         self._execution_items: list[Instruction | Rung] = []  # Source-order execution sequence
+        self._execution_plan: list[tuple[int, Instruction | Rung]] = []
         self._terminal_instruction: Instruction | None = None
         # Branch rungs may include inherited parent conditions first.
         # This index marks where this rung's own local branch conditions begin.
@@ -80,6 +82,7 @@ class Rung:
                 instruction.end_line = end_line
         self._instructions.append(instruction)
         self._execution_items.append(instruction)
+        self._execution_plan.append((instruction._executor_kind, instruction))
         if instruction.is_terminal():
             self._terminal_instruction = instruction
 
@@ -93,6 +96,7 @@ class Rung:
             )
         self._branches.append(branch)
         self._execution_items.append(branch)
+        self._execution_plan.append((_EXECUTOR_BRANCH, branch))
 
     def sp_tree(self) -> SPNode | None:
         """Return this rung's condition structure as an SP tree.

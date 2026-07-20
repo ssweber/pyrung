@@ -79,18 +79,13 @@ class CompareEq(Condition):
     """Equality comparison: tag == value or tag == other_tag."""
 
     def __init__(self, tag: Tag, value: Any):
-        from pyrung.core.tag import Tag as _Tag
-
         self.tag = tag
         self.value = value
-        self._value_is_tag = isinstance(value, _Tag)
+        self._value_kind = _classify_value(value)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag_value = ctx.get_tag(self.tag.name, self.tag.default)
-        if self._value_is_tag:
-            other_value = ctx.get_tag(self.value.name, self.value.default)
-        else:
-            other_value = _resolve_value(self.value, ctx)
+        other_value = _resolve_classified(self.value, self._value_kind, ctx)
         return tag_value == other_value
 
 
@@ -98,18 +93,13 @@ class CompareNe(Condition):
     """Inequality comparison: tag != value or tag != other_tag."""
 
     def __init__(self, tag: Tag, value: Any):
-        from pyrung.core.tag import Tag as _Tag
-
         self.tag = tag
         self.value = value
-        self._value_is_tag = isinstance(value, _Tag)
+        self._value_kind = _classify_value(value)
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         tag_value = ctx.get_tag(self.tag.name, self.tag.default)
-        if self._value_is_tag:
-            other_value = ctx.get_tag(self.value.name, self.value.default)
-        else:
-            other_value = _resolve_value(self.value, ctx)
+        other_value = _resolve_classified(self.value, self._value_kind, ctx)
         return tag_value != other_value
 
 

@@ -7,7 +7,14 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.tag import Tag
 
-from .base import Instruction, OneShotMixin, SubroutineReturnSignal
+from .base import (
+    _EXECUTOR_CALL,
+    _EXECUTOR_FOR_LOOP,
+    _EXECUTOR_RETURN,
+    Instruction,
+    OneShotMixin,
+    SubroutineReturnSignal,
+)
 from .conversions import (
     _store_copy_value_to_tag_type,
 )
@@ -116,6 +123,7 @@ class ForLoopInstruction(OneShotMixin, Instruction):
     _writes = ("idx_tag",)
     _conditions = ()
     _structural_fields = ()
+    _executor_kind = _EXECUTOR_FOR_LOOP
 
     def __init__(
         self,
@@ -184,10 +192,15 @@ class CallInstruction(Instruction):
     _writes = ()
     _conditions = ()
     _structural_fields = ("subroutine_name",)
+    _executor_kind = _EXECUTOR_CALL
 
     def __init__(self, subroutine_name: str, program: Any):
         self.subroutine_name = subroutine_name
         self._program = program  # Reference to Program for subroutine lookup
+        # Filled lazily by the shared executor after Program construction is
+        # complete.  The tuple binds both traversal order and stable RungIds.
+        self._executor_subroutine_plan: tuple[tuple[Any, Any], ...] | None = None
+        self._executor_scope_token = object()
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
         if not enabled:
@@ -202,6 +215,7 @@ class ReturnInstruction(Instruction):
     _writes = ()
     _conditions = ()
     _structural_fields = ()
+    _executor_kind = _EXECUTOR_RETURN
 
     def execute(self, ctx: ScanContext, enabled: bool) -> None:  # noqa: ARG002
         if not enabled:

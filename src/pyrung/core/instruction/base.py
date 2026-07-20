@@ -11,6 +11,16 @@ if TYPE_CHECKING:
     from pyrung.core.instruction.advance import AdvanceProfile
 
 
+# Immutable execution-plan opcodes.  Rungs classify their contents once while
+# the program is built so the scan walker does not repeat concrete-type checks
+# for every instruction on every scan.
+_EXECUTOR_INSTRUCTION = 0
+_EXECUTOR_CALL = 1
+_EXECUTOR_FOR_LOOP = 2
+_EXECUTOR_RETURN = 3
+_EXECUTOR_BRANCH = 4
+
+
 @dataclass(frozen=True)
 class DebugInstructionSubStep:
     """Per-instruction debug step metadata for chained builder methods."""
@@ -42,6 +52,7 @@ class Instruction(ABC):
     _conditions: tuple[str, ...] = ()
     _structural_fields: tuple[str, ...] = ()
     _exclusive_fields: tuple[str, ...] = ()
+    _executor_kind: int = _EXECUTOR_INSTRUCTION
 
     @abstractmethod
     def execute(self, ctx: ScanContext, enabled: bool) -> None:
