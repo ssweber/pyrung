@@ -378,3 +378,51 @@ by state/timeline commit (3.453 seconds). The 13.594-second other-analysis
 bucket is primarily the PILOT/proof/control surface currently being changed
 separately.
 
+## PILOT/proof/control attribution
+
+A second low-overhead pass split the approximately 38.5% analysis/control
+bucket. On the same successful route, 13.344 seconds remained outside committed
+scans and `cause()`:
+
+| Boundary | CPU |
+|---|---:|
+| Cycle-fold control excluding its committed child scans | 4.500 s |
+| Trace-tree construction, 172 roots | 3.688 s |
+| One-time prover-context construction | 2.188 s |
+| Empirical program-write discovery, three calls | 1.391 s |
+| Remaining analysis/control | approximately 1.6 s |
+
+The cycle-fold control cost is not cycle detection. Across 5,016 real scans:
+
+- the armed predicates took 0.359 seconds;
+- 613 `detect_cycle` calls took 0.188 seconds;
+- 75 crossing-surface checks were below timer resolution in aggregate;
+- the remaining loop and snapshot work took 3.953 seconds.
+
+`cycle_fold_until` currently materializes a filtered plain dictionary after
+every scan:
+
+```python
+{k: v for k, v in plc.state.tags.items() if k not in ignore}
+```
+
+The BurnerLoop state contains 3,765 tags; only 100 are ignored, so each of the
+5,016 scans allocates and fills a 3,665-entry dictionary. A focused
+microbenchmark took 0.688 seconds for 1,000 such copies, predicting about 3.45
+seconds over the route and closely matching the measured 3.953-second residual.
+Precomputing retained names and indexing the persistent map was worse (3.156
+seconds per 1,000 copies).
+
+The next high-confidence target is therefore to retain the immutable PMap
+snapshots in the cycle ring and give `detect_cycle` the fixed significant-key
+set. That removes the per-scan full-map copy and its allocation traffic while
+preserving the ignored-tag boundary. It should be benchmarked end-to-end after
+the concurrent `pilot/` work lands.
+
+The other possible caches were not supported:
+
+- 134 of 172 trace roots repeated the same tag/value, but only nine repeated
+  the exact snapshot/tag/value context;
+- the three empirical-write calls used different PLC forks and different scan
+  intervals, so there were no exact repeated call shapes.
+

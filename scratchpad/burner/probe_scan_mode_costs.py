@@ -13,7 +13,8 @@ from __future__ import annotations
 import argparse
 import importlib
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -49,6 +50,22 @@ class ScanMode:
     observed_program_calls: int = 0
 
 
+@dataclass(frozen=True)
+class ProgramWriteCall:
+    plc_id: int
+    start_scan: int
+    end_scan: int
+    candidates: frozenset[str]
+    cpu_ns: int
+    nested_cause_ns: int
+
+
+@dataclass(frozen=True)
+class CycleSnapshotSample:
+    tags: Mapping[str, Any]
+    ignore: frozenset[str]
+
+
 @dataclass
 class ProbeStats:
     modes: dict[str, ScanMode] = field(default_factory=lambda: defaultdict(ScanMode))
@@ -63,6 +80,19 @@ class ProbeStats:
     compiled_kernel: Timing = field(default_factory=Timing)
     compiled_step: Timing = field(default_factory=Timing)
     compiled_step_replay: Timing = field(default_factory=Timing)
+    prover_context: Timing = field(default_factory=Timing)
+    program_written_changes: Timing = field(default_factory=Timing)
+    program_write_calls: list[ProgramWriteCall] = field(default_factory=list)
+    cycle_fold: Timing = field(default_factory=Timing)
+    cycle_fold_scan_ns: int = 0
+    cycle_predicate: Timing = field(default_factory=Timing)
+    cycle_detection: Timing = field(default_factory=Timing)
+    cycle_surface: Timing = field(default_factory=Timing)
+    cycle_snapshot_samples: list[CycleSnapshotSample] = field(default_factory=list)
+    cycle_real_scans: int = 0
+    trace_trees: Timing = field(default_factory=Timing)
+    trace_roots: Counter[tuple[str, str]] = field(default_factory=Counter)
+    trace_contexts: Counter[tuple[int, str, str]] = field(default_factory=Counter)
 
 
 def _scan_mode(plc: PLC) -> str:
@@ -79,6 +109,10 @@ def _print_timing(label: str, timing: Timing, total_cpu: float) -> None:
 
 
 def run_probe(max_scans: int, wall_seconds: float) -> None:
+    causal_module = importlib.import_module("pyrung.core.analysis.pilot.causal")
+    cyclefold_module = importlib.import_module("pyrung.core.analysis.pilot.cyclefold")
+    pilot_module = importlib.import_module("pyrung.core.analysis.pilot.pilot")
+    trace_module = importlib.import_module("pyrung.core.analysis.pilot.trace")
     logic = importlib.import_module("tests.fixtures.tumbler").logic
     plc = PLC(logic, dt=0.010)
     plc.step()
@@ -112,7 +146,17 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     original_compiled_kernel = PLC._compiled_replay_supported_kernel
     original_compiled_step = CompiledPLC.step
     original_compiled_step_replay = CompiledPLC.step_replay
+    original_prover_context = pilot_module._build_prover_context
+    original_program_written_changes = causal_module._program_written_changes
+    original_cycle_fold = cyclefold_module.cycle_fold_until
+    original_detect_cycle = cyclefold_module.detect_cycle
+    original_monotone_surface = cyclefold_module._monotone_read_surface
+    original_trace_back = trace_module._trace_back
     cause_depth = 0
+    trace_depth = 0
+
+    def committed_scan_ns() -> int:
+        return sum(mode.scans.cpu_ns for mode in stats.modes.values())
 
     def observed_run_scan(self: PLC, *, consume_pause_request: bool):
         mode = _scan_mode(self)
@@ -208,6 +252,104 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     def observed_compiled_step_replay(self: CompiledPLC) -> None:
         return timed_call(stats.compiled_step_replay, original_compiled_step_replay, self)
 
+    def observed_prover_context(*args: Any, **kwargs: Any):
+        return timed_call(stats.prover_context, original_prover_context, *args, **kwargs)
+
+    def observed_program_written_changes(
+        self: PLC,
+        start_scan: int,
+        end_scan: int,
+        relevant: frozenset[str],
+    ):
+        cause_before = stats.cause_outer.cpu_ns
+        started = time.process_time_ns()
+        try:
+            return original_program_written_changes(self, start_scan, end_scan, relevant)
+        finally:
+            elapsed = time.process_time_ns() - started
+            nested_cause_ns = stats.cause_outer.cpu_ns - cause_before
+            stats.program_written_changes.calls += 1
+            stats.program_written_changes.cpu_ns += elapsed
+            stats.program_write_calls.append(
+                ProgramWriteCall(
+                    plc_id=id(self),
+                    start_scan=start_scan,
+                    end_scan=end_scan,
+                    candidates=relevant,
+                    cpu_ns=elapsed,
+                    nested_cause_ns=nested_cause_ns,
+                )
+            )
+
+    def observed_cycle_fold(
+        self: PLC,
+        predicate: Callable[[Any], bool],
+        *args: Any,
+        **kwargs: Any,
+    ):
+        scans_before = committed_scan_ns()
+        started = time.process_time_ns()
+        fold_ctx = kwargs.get("fold_ctx")
+        call_stats = kwargs.get("stats")
+
+        def observed_predicate(state: Any) -> bool:
+            return timed_call(stats.cycle_predicate, predicate, state)
+
+        try:
+            return original_cycle_fold(
+                self,
+                observed_predicate,
+                *args,
+                **kwargs,
+            )
+        finally:
+            stats.cycle_fold.add(started)
+            stats.cycle_fold_scan_ns += committed_scan_ns() - scans_before
+            if isinstance(call_stats, dict):
+                stats.cycle_real_scans += call_stats.get("real_scans", 0)
+            if fold_ctx is not None:
+                ignore = (
+                    fold_ctx.frozen_writes
+                    | fold_ctx.churn_excluded
+                    | fold_ctx.profile_fb_names
+                )
+                stats.cycle_snapshot_samples.append(
+                    CycleSnapshotSample(tags=self.state.tags, ignore=ignore)
+                )
+
+    def observed_detect_cycle(*args: Any, **kwargs: Any):
+        return timed_call(stats.cycle_detection, original_detect_cycle, *args, **kwargs)
+
+    def observed_monotone_surface(*args: Any, **kwargs: Any):
+        return timed_call(
+            stats.cycle_surface,
+            original_monotone_surface,
+            *args,
+            **kwargs,
+        )
+
+    def observed_trace_back(
+        env: Any,
+        tag: str,
+        value: Any,
+        *args: Any,
+        **kwargs: Any,
+    ):
+        nonlocal trace_depth
+        outer = trace_depth == 0
+        trace_depth += 1
+        started = time.process_time_ns() if outer else 0
+        if outer:
+            value_key = repr(value)
+            stats.trace_roots[(tag, value_key)] += 1
+            stats.trace_contexts[(id(env.snapshot), tag, value_key)] += 1
+        try:
+            return original_trace_back(env, tag, value, *args, **kwargs)
+        finally:
+            trace_depth -= 1
+            if outer:
+                stats.trace_trees.add(started)
+
     PLC._run_single_scan = observed_run_scan
     PLC._prepare_scan = observed_prepare
     PLC._commit_scan = observed_commit
@@ -220,6 +362,12 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     PLC._compiled_replay_supported_kernel = observed_compiled_kernel
     CompiledPLC.step = observed_compiled_step
     CompiledPLC.step_replay = observed_compiled_step_replay
+    pilot_module._build_prover_context = observed_prover_context
+    causal_module._program_written_changes = observed_program_written_changes
+    cyclefold_module.cycle_fold_until = observed_cycle_fold
+    cyclefold_module.detect_cycle = observed_detect_cycle
+    cyclefold_module._monotone_read_surface = observed_monotone_surface
+    trace_module._trace_back = observed_trace_back
 
     wall_started = time.perf_counter()
     cpu_started = time.process_time()
@@ -248,6 +396,12 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         PLC._compiled_replay_supported_kernel = original_compiled_kernel
         CompiledPLC.step = original_compiled_step
         CompiledPLC.step_replay = original_compiled_step_replay
+        pilot_module._build_prover_context = original_prover_context
+        causal_module._program_written_changes = original_program_written_changes
+        cyclefold_module.cycle_fold_until = original_cycle_fold
+        cyclefold_module.detect_cycle = original_detect_cycle
+        cyclefold_module._monotone_read_surface = original_monotone_surface
+        trace_module._trace_back = original_trace_back
 
     wall = time.perf_counter() - wall_started
     cpu = time.process_time() - cpu_started
@@ -308,6 +462,109 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         f"{stats.cause_outer.cpu_seconds / cpu:7.2%}"
     )
     print(f"other analysis/control:{other_cpu:9.3f}s  {other_cpu / cpu:7.2%}")
+
+    program_write_nested_cause = sum(
+        call.nested_cause_ns for call in stats.program_write_calls
+    )
+    program_write_exclusive = (
+        stats.program_written_changes.cpu_ns - program_write_nested_cause
+    ) / 1e9
+    cycle_fold_exclusive = (
+        stats.cycle_fold.cpu_ns - stats.cycle_fold_scan_ns
+    ) / 1e9
+    print("\nselected analysis/control boundaries")
+    print("operation                         calls        CPU     total")
+    print("--------------------------------  --------  ---------  -------")
+    _print_timing("one-time prover context", stats.prover_context, cpu)
+    _print_timing("trace trees", stats.trace_trees, cpu)
+    _print_timing("empirical program writes", stats.program_written_changes, cpu)
+    print(
+        f"  excluding nested cause(): {program_write_exclusive:.3f}s; "
+        f"nested cause(): {program_write_nested_cause / 1e9:.3f}s"
+    )
+    _print_timing("cycle-fold envelope", stats.cycle_fold, cpu)
+    print(
+        f"  excluding committed scans: {cycle_fold_exclusive:.3f}s; "
+        f"committed scans: {stats.cycle_fold_scan_ns / 1e9:.3f}s"
+    )
+    _print_timing("  cycle predicates", stats.cycle_predicate, cpu)
+    _print_timing("  cycle detection", stats.cycle_detection, cpu)
+    _print_timing("  crossing surface", stats.cycle_surface, cpu)
+    known_cycle_control = (
+        stats.cycle_predicate.cpu_ns
+        + stats.cycle_detection.cpu_ns
+        + stats.cycle_surface.cpu_ns
+    ) / 1e9
+    print(
+        f"  remaining loop/snapshot control: "
+        f"{cycle_fold_exclusive - known_cycle_control:.3f}s over "
+        f"{stats.cycle_real_scans:,} real scans"
+    )
+
+    if stats.program_write_calls:
+        print("\nempirical program-write call shapes")
+        for index, call in enumerate(stats.program_write_calls, start=1):
+            print(
+                f"{index:2d}. plc={call.plc_id} scans={call.start_scan:,}.."
+                f"{call.end_scan:,} ({call.end_scan - call.start_scan + 1:,}) "
+                f"candidates={len(call.candidates):,} "
+                f"cpu={call.cpu_ns / 1e9:.3f}s "
+                f"cause={call.nested_cause_ns / 1e9:.3f}s"
+            )
+        exact_shapes = Counter(
+            (call.plc_id, call.start_scan, call.end_scan, call.candidates)
+            for call in stats.program_write_calls
+        )
+        repeated_shapes = sum(count - 1 for count in exact_shapes.values())
+        print(f"  exact repeated call shapes: {repeated_shapes:,}")
+
+    repeated_roots = sum(count - 1 for count in stats.trace_roots.values())
+    repeated_contexts = sum(count - 1 for count in stats.trace_contexts.values())
+    print("\ntrace reuse evidence")
+    print(
+        f"  root requests / repeated tag-value roots: "
+        f"{stats.trace_trees.calls:,} / {repeated_roots:,}"
+    )
+    print(f"  repeated exact snapshot/tag/value contexts: {repeated_contexts:,}")
+    for (tag, value), count in stats.trace_roots.most_common(8):
+        print(f"  {count:5,d}x {tag}={value}")
+
+    if stats.cycle_snapshot_samples:
+        sample = max(stats.cycle_snapshot_samples, key=lambda item: len(item.tags))
+        tags = sample.tags
+        ignore = sample.ignore
+        keep = tuple(key for key in tags if key not in ignore)
+        iterations = 1_000
+
+        def current_snapshot() -> dict[str, Any]:
+            return {key: value for key, value in tags.items() if key not in ignore}
+
+        def indexed_snapshot() -> dict[str, Any]:
+            return {key: tags[key] for key in keep}
+
+        current_started = time.process_time_ns()
+        for _ in range(iterations):
+            current_snapshot()
+        current_ns = time.process_time_ns() - current_started
+
+        indexed_started = time.process_time_ns()
+        for _ in range(iterations):
+            indexed_snapshot()
+        indexed_ns = time.process_time_ns() - indexed_started
+
+        print("\ncycle snapshot microbenchmark (outside run total)")
+        print(
+            f"  tags / ignored / retained: {len(tags):,} / {len(ignore):,} / "
+            f"{len(keep):,}"
+        )
+        print(
+            f"  current items+filter: {current_ns / 1e9:.3f}s / "
+            f"{iterations:,} copies"
+        )
+        print(
+            f"  precomputed keys:     {indexed_ns / 1e9:.3f}s / "
+            f"{iterations:,} copies"
+        )
 
 
 def main() -> None:
