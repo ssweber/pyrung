@@ -72,15 +72,16 @@ class ConditionView:
         self._state: SystemState = ctx._state
         self._tags: Mapping[str, Any] = ctx._state_tags_read
         self._memory: PMap = ctx._state_memory
-        self._tags_snapshot: dict[str, Any] = dict(ctx._tags_pending)
-        self._memory_snapshot: dict[str, Any] = dict(ctx._memory_pending)
+        self._tags_snapshot: dict[str, Any] = ctx._tags_pending.copy()
+        self._memory_snapshot: dict[str, Any] = ctx._memory_pending.copy()
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
-        if name in snap:
-            return snap[name]
+        value = snap.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._tags[name]
         except KeyError:
@@ -93,8 +94,9 @@ class ConditionView:
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         snap = self._memory_snapshot
-        if key in snap:
-            return snap[key]
+        value = snap.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._memory[key]
         except KeyError:
@@ -102,8 +104,9 @@ class ConditionView:
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
-        if name in snap:
-            return snap[name]
+        value = snap.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._tags[name]
         except KeyError:
@@ -114,8 +117,9 @@ class ConditionView:
 
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
         snap = self._memory_snapshot
-        if key in snap:
-            return snap[key]
+        value = snap.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._memory[key]
         except KeyError:
@@ -261,8 +265,9 @@ class ScanContext:
         if self._read_sink is not None:
             self._read_sink.add(name)
         pending = self._tags_pending
-        if name in pending:
-            return pending[name]
+        value = pending.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._state_tags_read[name]
         except KeyError:
@@ -286,8 +291,9 @@ class ScanContext:
             The memory value from pending writes, original state, or default.
         """
         pending = self._memory_pending
-        if key in pending:
-            return pending[key]
+        value = pending.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._state_memory[key]
         except KeyError:
@@ -303,6 +309,11 @@ class ScanContext:
         if not stack:
             return
         pending = self._tags_pending
+        if len(stack) == 1:
+            journal = stack[0]
+            if name not in journal:
+                journal[name] = pending.get(name, _MISSING)
+            return
         for journal in stack:
             if name not in journal:
                 journal[name] = pending.get(name, _MISSING)
@@ -365,8 +376,9 @@ class ScanContext:
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         """Read tag value without resolver fallback."""
         pending = self._tags_pending
-        if name in pending:
-            return pending[name]
+        value = pending.get(name, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._state_tags_read[name]
         except KeyError:
@@ -379,8 +391,9 @@ class ScanContext:
     def _get_memory_internal(self, key: str, default: Any = None) -> Any:
         """Read memory value without side effects."""
         pending = self._memory_pending
-        if key in pending:
-            return pending[key]
+        value = pending.get(key, _MISSING)
+        if value is not _MISSING:
+            return value
         try:
             return self._state_memory[key]
         except KeyError:

@@ -479,7 +479,10 @@ class AllCondition(Condition):
             raise ValueError("And() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return all(cond.evaluate(ctx) for cond in self.conditions)
+        for cond in self.conditions:
+            if not cond.evaluate(ctx):
+                return False
+        return True
 
 
 class AnyCondition(Condition):
@@ -503,7 +506,10 @@ class AnyCondition(Condition):
             raise ValueError("Or() requires at least one condition")
 
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-        return any(cond.evaluate(ctx) for cond in self.conditions)
+        for cond in self.conditions:
+            if cond.evaluate(ctx):
+                return True
+        return False
 
 
 def _normalize_and_condition(

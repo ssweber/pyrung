@@ -93,6 +93,8 @@ class ProbeStats:
     trace_trees: Timing = field(default_factory=Timing)
     trace_roots: Counter[tuple[str, str]] = field(default_factory=Counter)
     trace_contexts: Counter[tuple[int, str, str]] = field(default_factory=Counter)
+    replay_consumer_calls: Counter[str] = field(default_factory=Counter)
+    replay_consumer_misses: Counter[str] = field(default_factory=Counter)
 
 
 def _scan_mode(plc: PLC) -> str:
@@ -146,6 +148,9 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     original_compiled_kernel = PLC._compiled_replay_supported_kernel
     original_compiled_step = CompiledPLC.step
     original_compiled_step_replay = CompiledPLC.step_replay
+    original_node_views = PLC._replay_node_views_at
+    original_rung_runs = PLC._replay_rung_runs_at
+    original_node_reads = PLC._replay_node_reads_at
     original_prover_context = pilot_module._build_prover_context
     original_program_written_changes = causal_module._program_written_changes
     original_cycle_fold = cyclefold_module.cycle_fold_until
@@ -251,6 +256,42 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
 
     def observed_compiled_step_replay(self: CompiledPLC) -> None:
         return timed_call(stats.compiled_step_replay, original_compiled_step_replay, self)
+
+    def observed_capture_consumer(
+        name: str,
+        original: Any,
+        self: PLC,
+        target_scan_id: int,
+    ):
+        stats.replay_consumer_calls[name] += 1
+        cached = self._cached_replay_capture
+        if cached is None or cached[0] != target_scan_id:
+            stats.replay_consumer_misses[name] += 1
+        return original(self, target_scan_id)
+
+    def observed_node_views(self: PLC, target_scan_id: int):
+        return observed_capture_consumer(
+            "node views",
+            original_node_views,
+            self,
+            target_scan_id,
+        )
+
+    def observed_rung_runs(self: PLC, target_scan_id: int):
+        return observed_capture_consumer(
+            "rung runs",
+            original_rung_runs,
+            self,
+            target_scan_id,
+        )
+
+    def observed_node_reads(self: PLC, target_scan_id: int):
+        return observed_capture_consumer(
+            "node reads",
+            original_node_reads,
+            self,
+            target_scan_id,
+        )
 
     def observed_prover_context(*args: Any, **kwargs: Any):
         return timed_call(stats.prover_context, original_prover_context, *args, **kwargs)
@@ -362,6 +403,9 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     PLC._compiled_replay_supported_kernel = observed_compiled_kernel
     CompiledPLC.step = observed_compiled_step
     CompiledPLC.step_replay = observed_compiled_step_replay
+    PLC._replay_node_views_at = observed_node_views
+    PLC._replay_rung_runs_at = observed_rung_runs
+    PLC._replay_node_reads_at = observed_node_reads
     pilot_module._build_prover_context = observed_prover_context
     causal_module._program_written_changes = observed_program_written_changes
     cyclefold_module.cycle_fold_until = observed_cycle_fold
@@ -396,6 +440,9 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
         PLC._compiled_replay_supported_kernel = original_compiled_kernel
         CompiledPLC.step = original_compiled_step
         CompiledPLC.step_replay = original_compiled_step_replay
+        PLC._replay_node_views_at = original_node_views
+        PLC._replay_rung_runs_at = original_rung_runs
+        PLC._replay_node_reads_at = original_node_reads
         pilot_module._build_prover_context = original_prover_context
         causal_module._program_written_changes = original_program_written_changes
         cyclefold_module.cycle_fold_until = original_cycle_fold
@@ -446,6 +493,10 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     _print_timing("compiled-kernel ensure", stats.compiled_kernel, cpu)
     _print_timing("compiled materialized step", stats.compiled_step, cpu)
     _print_timing("compiled lightweight step", stats.compiled_step_replay, cpu)
+    print("\nreplay capture consumers")
+    for name, calls in stats.replay_consumer_calls.items():
+        misses = stats.replay_consumer_misses[name]
+        print(f"  {name:12} calls={calls:,} first-on-target={misses:,}")
 
     cause_reasoning_cpu = stats.cause_outer.cpu_seconds - stats.replay_capture_outer.cpu_seconds
     print("\ncause envelope")

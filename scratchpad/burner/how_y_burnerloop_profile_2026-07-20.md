@@ -445,3 +445,31 @@ The other possible caches were not supported:
 - the three empirical-write calls used different PLC forks and different scan
   intervals, so there were no exact repeated call shapes.
 
+## Interpreter primitive cleanup
+
+The concurrent PILOT work changed the route during this phase, so the
+interpreter comparison uses the two adjacent runs that both followed the same
+69-event route and finished at scan 909.
+
+The retained changes are deliberately mechanical:
+
+- create condition snapshots with native `dict.copy()`;
+- probe pending dictionaries once with `get(..., sentinel)` rather than
+  `name in mapping` followed by `mapping[name]`;
+- bypass the capture-stack loop when exactly one firing journal is open;
+- evaluate `AllCondition` and `AnyCondition` with direct short-circuiting loops
+  rather than generator expressions.
+
+| Measurement | Before | After | Improvement |
+|---|---:|---:|---:|
+| Total CPU | 36.688 s | 35.516 s | 1.172 s (3.2%) |
+| Wall time | 37.245 s | 35.748 s | 1.497 s (4.0%) |
+| Committed program execution | 10.938 s | 10.594 s | 0.344 s |
+| Observed program execution | 5.891 s | 5.391 s | 0.500 s |
+| Combined interpreted program execution | 16.829 s | 15.985 s | 0.844 s (5.0%) |
+
+The observer-consumer instrumentation also rejected two more complicated
+ideas. `RungRun` evidence initiated almost every historical target replay, so
+runs cannot be collected lazily. Disabling the disposable replay's duplicate
+normal firing journals saved only a few tenths of a second and was not retained.
+
