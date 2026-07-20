@@ -543,6 +543,8 @@ class ScanContext:
         about per-tag values (like ``cause()``'s value-match) see the
         filtered view and fall through cleanly when it's empty.
         """
+        if not journal:
+            return None
         pending = self._tags_pending
         raw_writes = {
             name: pending[name]

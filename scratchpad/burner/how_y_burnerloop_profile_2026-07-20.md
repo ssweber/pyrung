@@ -304,3 +304,20 @@ An immediate empty-journal return can therefore bypass more than half of
 `_finalize_capture` calls without affecting the important distinction between
 `None` (did not fire) and `{}` (fired, but PDG filtering removed its writes).
 
+## Condition-view reuse decision
+
+The generation-based reuse prototype was not retained. Its wall-time results
+were noisy: paired runs ranged from roughly two seconds faster to slightly
+slower. One strict CPU-timed pair saved 0.953 seconds (2.64%), which does not
+justify adding a condition-snapshot invalidation contract to every tag and
+memory setter.
+
+The approximately 3.29 GB figure above is cumulative shallow allocation
+traffic, not retained or peak memory. Python's allocator can reuse that storage,
+so it is evidence of churn rather than a 3.29 GB memory footprint.
+
+The independent empty-journal fast path remains: `_finalize_capture` returns
+immediately when its journal is empty. This avoids pointless dictionary
+construction in 53.27% of observed finalizations without adding state or
+changing the important `None` versus filtered `{}` distinction.
+
