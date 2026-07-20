@@ -281,3 +281,19 @@ Use the focused gate before the full suite when changing a risky invariant:
 
 New mechanisms that can reject, wait, probe, install a hold, or revert need a
 small program that demonstrates both success and an honest failure mode.
+
+When a Tumbler golden changes during a PILOT refactor, find the first changed
+decision without waiting for the whole golden test:
+
+```text
+uv run python devtools/pilot_divergence.py \
+  --target y_BurnerLoop \
+  --golden tests/tumbler/golden/how_y_burnerloop_skeleton.json
+```
+
+Use `--target Sts_StateCurrent=6` for an equality target and `--fixture` for a
+different module that exposes `logic`. The tool stops at the first changed
+event and prints the preceding matching events, the expected event, the actual
+event, elapsed time, and the raw scan. Exit status 0 means the complete
+skeleton matches; 1 means it diverged; 2 means setup or the wall budget failed.
+It is a fast diagnosis loop, not a replacement for `make test-tumbler`.
