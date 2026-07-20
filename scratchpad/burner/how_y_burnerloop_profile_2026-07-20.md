@@ -196,3 +196,41 @@ without monkeypatches or cProfile.
 - [ ] Treat `_prepare_scan`, ladder execution, and `_commit_scan` persistent-map
   traffic as a separate optimization pass.
 
+## Working-tree follow-up
+
+A fresh profile on the repaired tree followed the same successful route as the
+unprofiled drive and reached `y_BurnerLoop` at scan 2,110. It recorded
+364,930,910 calls over 193.1 cProfile seconds (196.8 seconds wall).
+
+The priority changed:
+
+- ordinary `fold_run_until`: 1.58 profiled seconds;
+- ordinary visible-state snapshots/comparisons: 0.20 seconds;
+- deviation investigation: 143.6 seconds;
+- recorded `cause()` replay: 107.4 seconds;
+- `_replay_capture_at`: 100.4 seconds, including 4,376 observed target-scan
+  executions.
+
+The real BurnerLoop probe then established:
+
+- a bounded replay-capture LRU is not useful: sizes 4–32 avoid only 16 of 4,376
+  observed executions;
+- those 4,376 executions cover only 1,096 distinct
+  `(runner, unchanged tip, target scan)` keys;
+- 3,303 executions were repeated across separate `cause()` calls;
+- four identical deep `cause(Sts_StateCurrent, scan=1952)` queries each walked
+  1,044 historical scans.
+
+Measured landings on the same successful 64-event route:
+
+| Change | Wall time | Observed replay executions |
+|---|---:|---:|
+| Accurate fold stats + snapshot cleanup | 73.6 s | not probed |
+| Reuse the source PDG in reconstructed replay | 69.6 s | 4,376 |
+| Skip committing disposable observed replays | 56.0 s | 4,376 |
+| Share explicit-scan causal chains across investigation consumers | 35.9 s | 1,199 |
+
+The causal-chain memo retains the much smaller completed `CausalChain`, not
+thousands of `ConditionViewCapture` objects, and is cleared whenever PILOT
+replaces its synthesis holds.
+
