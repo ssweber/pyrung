@@ -321,3 +321,60 @@ immediately when its journal is empty. This avoids pointless dictionary
 construction in 53.27% of observed finalizations without adding state or
 changing the important `None` versus filtered `{}` distinction.
 
+## Scan-mode CPU attribution
+
+`scratchpad/burner/probe_scan_mode_costs.py` times runner boundaries with
+`process_time_ns` and leaves execution results unchanged. On the current
+working tree it followed the same 64-event route to scan 2,110 in 35.719 CPU
+seconds (36.172 seconds wall).
+
+The additive top-level split was:
+
+| Work | CPU | Share |
+|---|---:|---:|
+| 5,172 committed PILOT-fork scans | 13.578 s | 38.01% |
+| 23 outer `cause()` calls, including replay | 8.547 s | 23.93% |
+| Other analysis and control between scans | 13.594 s | 38.06% |
+
+Committed scans broke down into:
+
+| Phase | CPU |
+|---|---:|
+| Prepare | 0.859 s |
+| Natural program execution | 9.203 s |
+| Commit | 3.453 s |
+| Runner residual | 0.062 s |
+
+The old 5,173 `_run_single_scan` count described committed scans only. Causal
+observation executes additional target scans manually, without committing
+them. In this run, 2,279 replay-capture requests produced 1,165 cache hits and
+1,114 actual observed target executions.
+
+The `cause()` envelope broke down into:
+
+| Work | CPU |
+|---|---:|
+| Replay-capture envelope | 6.859 s |
+| Remaining causal reasoning | 1.688 s |
+
+Within replay capture:
+
+- observed target program execution: 5.922 seconds;
+- observed target preparation: 0.172 seconds;
+- reconstructed-fork construction: 0.266 seconds;
+- three replay-slab fills: 1.281 seconds, including 518 compiled materialized
+  steps taking 0.609 seconds.
+
+An observed target's program phase averaged approximately 5.32 ms, versus
+1.78 ms for a normal committed scan: observation is about 3.0x slower per
+scan. Replay fork construction and state lookup are now secondary.
+
+The largest concrete non-PILOT target is therefore the 5.922-second observed
+execution cost. Retaining compact causal evidence—or making the observer
+collect only the evidence requested by the current causal hop—has a much
+larger ceiling than another context or timeline micro-optimization. General
+interpreter dispatch is next (9.203 seconds across committed scans), followed
+by state/timeline commit (3.453 seconds). The 13.594-second other-analysis
+bucket is primarily the PILOT/proof/control surface currently being changed
+separately.
+
