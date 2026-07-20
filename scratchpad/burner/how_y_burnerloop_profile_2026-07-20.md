@@ -473,3 +473,35 @@ ideas. `RungRun` evidence initiated almost every historical target replay, so
 runs cannot be collected lazily. Disabling the disposable replay's duplicate
 normal firing journals saved only a few tenths of a second and was not retained.
 
+## Settled PILOT re-baseline
+
+After the concurrent PILOT fix settled, two consecutive instrumented runs
+followed the identical intended route: 64 events, target at scan 2,110, 7,756
+committed PILOT-fork scans, and 1,106 actual observed historical target scans.
+
+| Measurement | Run 1 | Run 2 | Average |
+|---|---:|---:|---:|
+| Wall time | 40.307 s | 40.661 s | 40.484 s |
+| CPU time | 39.703 s | 40.047 s | 39.875 s |
+| Committed scans | 20.188 s | 20.344 s | 20.266 s |
+| `cause()`, including replay | 8.219 s | 7.984 s | 8.102 s |
+| Other analysis/control | 11.297 s | 11.719 s | 11.508 s |
+
+The committed scan program phase averaged 13.430 seconds, or approximately
+1.73 ms per scan. Observed historical program execution averaged 5.641 seconds
+across 1,106 scans, or approximately 5.10 ms per scan. The observer path is
+therefore still about 2.95x slower per interpreted scan.
+
+Combined normal and observed program interpretation now consumes approximately
+19.07 seconds, 47.8% of total CPU. The causal envelope remains material:
+
+- 2,251–2,252 capture requests;
+- 1,106 actual target executions;
+- approximately 6.53 seconds in replay capture;
+- approximately 1.57 seconds in remaining causal reasoning.
+
+`RungRun` consumers still initiate essentially every capture miss (1,125–1,126
+first-on-target requests), while dynamic node reads initiate only four and node
+views 25–26. Any observed-execution optimization must therefore retain complete
+per-occurrence run evidence; selectively omitting runs is not available.
+
