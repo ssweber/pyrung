@@ -851,12 +851,10 @@ class TestSettleLandingFolds:
         # The confirmation window's scan-ids elapse in a single folded seek
         # (a quiet 200-scan second, not 200 stepped scans).
         assert receipt.end_scan - start == 200
-        # NOTE: settle_landing does not aggregate the inner seeks' fold /
-        # real-scan diagnostics onto its own receipt (they stay at the
-        # dataclass defaults) — the scan-id delta is the only fold-visible
-        # signal on the outer receipt.
-        assert receipt.real_scans == 0
-        assert receipt.folds == 0
+        # The composite receipt retains the inner seek's actual work.
+        assert 0 < receipt.kernel_scans < receipt.logical_scans
+        assert receipt.macro_folds >= 1
+        assert receipt.skipped_scans == receipt.logical_scans - receipt.kernel_scans
 
 
 # ---------------------------------------------------------------------------

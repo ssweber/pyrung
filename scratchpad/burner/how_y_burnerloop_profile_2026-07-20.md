@@ -155,3 +155,44 @@ dataclass defaults. An opt-in final `how()` diagnostic summary could then
 answer both "real versus advanced scans" and "cyclefold versus no cyclefold"
 without monkeypatches or cProfile.
 
+## Landing task list
+
+### Landed in the first pass
+
+- [x] Populate ordinary `fold_run_until` work statistics instead of discarding
+  its probe scans and macro folds.
+- [x] Give both fold engines the same core diagnostic keys:
+  `logical_scans`, `kernel_scans`, `macro_folds`, and `skipped_scans`.
+- [x] Retain cyclefold's scan-by-scan counterfactual and saved-kernel-scan
+  counts alongside its compatibility keys.
+- [x] Expose correctly named `CoastReceipt` properties while retaining
+  `real_scans` and `folds` for compatibility.
+- [x] Aggregate inner ordinary-fold work through composite landing receipts.
+- [x] Correct coast debug output to report logical scans, kernel scans, skipped
+  scans, and macro folds.
+- [x] Stop rebuilding visible-state dictionaries for every plateau and
+  post-fold comparison; retain one snapshot and compare later states directly.
+
+### Follow-up visibility
+
+- [ ] Aggregate runner-fold and cyclefold breakdowns separately across every
+  composite coast operation.
+- [ ] Add an opt-in final `how()` work summary using the receipt totals.
+- [ ] Decide when the compatibility names `real_scans` and `folds` can be
+  deprecated in favor of the precise names.
+
+### Follow-up performance
+
+- [x] Re-run the full BurnerLoop drive without cProfile. The first post-cleanup
+  run completed in 73.6 seconds and reached `y_BurnerLoop` at scan 2,110.
+  This is an encouraging checkpoint, but not a controlled comparison with the
+  110.2-second unreachable profile run because the search outcome/path changed.
+- [ ] Capture a like-for-like quiet 10,000-scan ordinary-fold coast and compare
+  it with the 25–26 second baseline.
+- [ ] Re-profile after the basic allocation cleanup before changing fold
+  heuristics.
+- [ ] Use the new counters to evaluate whether larger ordinary macro folds are
+  possible without weakening crossing guarantees.
+- [ ] Treat `_prepare_scan`, ladder execution, and `_commit_scan` persistent-map
+  traffic as a separate optimization pass.
+

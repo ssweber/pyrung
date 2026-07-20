@@ -249,8 +249,10 @@ def cycle_fold_until(
 
     *budget* counts **real** scans (the fold spends almost none — a soak of any
     length costs only the warm-up + one landing period).  Returns whether
-    *predicate* holds at exit; ``stats`` (if given) collects ``real_scans``,
-    ``folds``, and ``sterile_cycle`` for diagnostics.
+    *predicate* holds at exit; ``stats`` (if given) collects logical scans,
+    kernel scans, macro folds, skipped scans, and ``sterile_cycle`` for
+    diagnostics.  The original ``real_scans`` / ``folds`` keys remain as
+    compatibility aliases.
 
     **Sterile-cycle proof** (*predicate_reads* required): a certified *exact*
     cycle — every observed tag repeating, no monotone coordinate — on a
@@ -267,7 +269,7 @@ def cycle_fold_until(
     """
     import math
 
-    from pyrung.core.fold import _harness_nearest_scan
+    from pyrung.core.fold import _harness_nearest_scan, fold_run_until
 
     if fold_ctx is None:
         fold_ctx = plc._ensure_fold_context()
@@ -278,7 +280,14 @@ def cycle_fold_until(
     # scan with no periodic timestamp edge to align to — no sound jump exists, so
     # degrade to the runner fold (still skips clean plateaus, just not the cycle).
     if fold_ctx.scan_derived_names or dt <= 0:
-        plc.run_until(predicate, max_cycles=budget, fold=True)
+        fold_run_until(
+            plc,
+            predicate,
+            max_cycles=budget,
+            fold_ctx=fold_ctx,
+            extra_comparisons=extra_comparisons,
+            stats=stats,
+        )
         return bool(predicate(plc.state))
 
     # Align the cycle period to every read system clock's *full* period (in scans)
@@ -299,11 +308,25 @@ def cycle_fold_until(
         r = round(full_scans)
         if r <= 0 or abs(full_scans - r) > 1e-6:
             # A read clock not on the scan grid — no aligned period exists.
-            plc.run_until(predicate, max_cycles=budget, fold=True)
+            fold_run_until(
+                plc,
+                predicate,
+                max_cycles=budget,
+                fold_ctx=fold_ctx,
+                extra_comparisons=extra_comparisons,
+                stats=stats,
+            )
             return bool(predicate(plc.state))
         period_multiple_of = math.lcm(period_multiple_of, r)
     if period_multiple_of > 4096:  # pathological clock LCM — give up on the cycle
-        plc.run_until(predicate, max_cycles=budget, fold=True)
+        fold_run_until(
+            plc,
+            predicate,
+            max_cycles=budget,
+            fold_ctx=fold_ctx,
+            extra_comparisons=extra_comparisons,
+            stats=stats,
+        )
         return bool(predicate(plc.state))
     max_period = max(max_period, period_multiple_of * 4)
 
@@ -328,9 +351,17 @@ def cycle_fold_until(
     # re-observation window.  Every scan would only certify ≤7 scans sooner.
     detect_every = 8
     since_detect = 0
+    start_scan = plc.state.scan_id
 
     def _finish(reached: bool) -> bool:
         if stats is not None:
+            logical_scans = plc.state.scan_id - start_scan
+            stats["logical_scans"] = logical_scans
+            stats["kernel_scans"] = real_scans
+            stats["macro_folds"] = folds
+            stats["skipped_scans"] = logical_scans - real_scans
+            stats["scan_by_scan_counterfactual"] = logical_scans
+            stats["saved_kernel_scans"] = logical_scans - real_scans
             stats["real_scans"] = real_scans
             stats["folds"] = folds
         return reached

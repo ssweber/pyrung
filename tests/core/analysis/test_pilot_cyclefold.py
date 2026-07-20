@@ -144,6 +144,11 @@ class TestCycleFoldBitEqual:
         # And it got there by folding, in a tiny fraction of the real scans.
         assert stats["folds"] >= 1
         assert stats["real_scans"] < ref.state.scan_id // 10
+        assert stats["logical_scans"] == cf.state.scan_id - 1
+        assert stats["kernel_scans"] == stats["real_scans"]
+        assert stats["macro_folds"] == stats["folds"]
+        assert stats["skipped_scans"] == stats["logical_scans"] - stats["kernel_scans"]
+        assert stats["saved_kernel_scans"] == stats["skipped_scans"]
 
     def test_watchdog_never_trips_under_fold(self) -> None:
         # The whole point: folding must NOT let the kept-reset watchdog accumulate.

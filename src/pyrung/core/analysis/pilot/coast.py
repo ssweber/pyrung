@@ -114,6 +114,26 @@ class CoastReceipt:
     def reached(self) -> bool:
         return self.stop_reason == "reached"
 
+    @property
+    def logical_scans(self) -> int:
+        """Logical scan IDs advanced, including scans skipped by folds."""
+        return self.end_scan - self.start_scan
+
+    @property
+    def kernel_scans(self) -> int:
+        """Actual interpreter executions (the legacy ``real_scans`` field)."""
+        return self.real_scans
+
+    @property
+    def macro_folds(self) -> int:
+        """Macro-fold executions (the legacy ``folds`` field)."""
+        return self.folds
+
+    @property
+    def skipped_scans(self) -> int:
+        """Logical scans advanced without an interpreter execution."""
+        return self.logical_scans - self.kernel_scans
+
 
 def _fold_metadata(
     bumps: Iterable[Bump],
@@ -298,13 +318,17 @@ class CoastSession:
                 else:
                     from pyrung.core.fold import fold_run_until
 
+                    stats = {}
                     fold_run_until(
                         plc,
                         _any_pred,
                         max_cycles=remaining,
                         fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
                         extra_comparisons=crossings,
+                        stats=stats,
                     )
+                    real_scans += stats.get("kernel_scans", 0)
+                    folds += stats.get("macro_folds", 0)
 
                 state = plc.state
                 now_fired = [b for b in armed if b.predicate(state)]
@@ -378,13 +402,16 @@ class CoastSession:
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "coast %s: %s at scan %d (%d scan-ids, %d real scans, %d folds) fired=%s%s",
+                "coast %s: %s at scan %d "
+                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds) "
+                "fired=%s%s",
                 self.kind,
                 receipt.stop_reason,
                 receipt.end_scan,
-                receipt.end_scan - receipt.start_scan,
-                receipt.real_scans,
-                receipt.folds,
+                receipt.logical_scans,
+                receipt.kernel_scans,
+                receipt.skipped_scans,
+                receipt.macro_folds,
                 ",".join(receipt.fired) or "-",
                 f" cyclefold={self._last_cyclefold_stats}" if self._last_cyclefold_stats else "",
             )

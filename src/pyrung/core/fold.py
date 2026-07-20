@@ -1230,6 +1230,28 @@ def _visible_items(state: Any, exclude: frozenset[str]) -> dict[str, Any]:
     return {k: v for k, v in state.tags.items() if k not in exclude}
 
 
+def _visible_items_match(
+    state: Any,
+    expected: dict[str, Any],
+    exclude: frozenset[str],
+) -> bool:
+    """Whether *state* has exactly the visible items in *expected*.
+
+    Fold probing needs one retained snapshot, then compares later states to it.
+    Comparing in place avoids rebuilding a second (and, after a macro fold,
+    third) large dictionary on every probe while still detecting added or
+    removed visible tags.
+    """
+    visible_count = 0
+    for name, value in state.tags.items():
+        if name in exclude:
+            continue
+        visible_count += 1
+        if name not in expected or expected[name] != value:
+            return False
+    return visible_count == len(expected)
+
+
 # ── 12. Fold execution ──────────────────────────────────────────────
 
 
@@ -1462,6 +1484,7 @@ def fold_run_until(
     max_cycles: int,
     fold_ctx: _FoldContext,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
+    stats: dict[str, int] | None = None,
 ) -> SystemState:
     """Fold-aware ``run_until`` loop.
 
@@ -1485,6 +1508,8 @@ def fold_run_until(
     inert_soft: set[str] = set()
     inert_run: dict[str, int] = {}
     used = 0
+    kernel_scans = 0
+    macro_folds = 0
     while used < max_cycles:
         # ── Probe: one normal scan ───────────────────────────────
         runner._consume_pause_request()
@@ -1493,6 +1518,7 @@ def fold_run_until(
         before_ts = runner._state.timestamp
         runner._run_single_scan(consume_pause_request=False)
         used += 1
+        kernel_scans += 1
 
         pause_requested = runner._consume_pause_request()
         if predicate(runner._state) or pause_requested:
@@ -1502,8 +1528,7 @@ def fold_run_until(
             break
 
         # ── Plateau test ─────────────────────────────────────────
-        after_vis = _visible_items(runner._state, exclude)
-        if after_vis != before_vis:
+        if not _visible_items_match(runner._state, before_vis, exclude):
             inert_soft.clear()  # window ended — re-confirm soft clocks
             inert_run.clear()
             continue
@@ -1548,12 +1573,14 @@ def fold_run_until(
             pre_fold_ts = runner._state.timestamp
             _do_fold(runner, skip, fold_ctx, before_tot, after_tot)
             used += skip
+            kernel_scans += 1
+            macro_folds += 1
 
             # The fold step runs the edge scan: if it crossed soft-clock edges
             # with no visible change, those clocks are inert for the rest of the
             # window.  A visible change means a real recompute/crossing landed —
             # re-confirm next window.
-            if _visible_items(runner._state, exclude) == after_vis:
+            if _visible_items_match(runner._state, before_vis, exclude):
                 _mark_inert_soft(
                     fold_ctx,
                     inert_soft,
@@ -1570,6 +1597,14 @@ def fold_run_until(
             if predicate(runner._state) or pause_requested:
                 break
 
+    if stats is not None:
+        stats["logical_scans"] = used
+        stats["kernel_scans"] = kernel_scans
+        stats["macro_folds"] = macro_folds
+        stats["skipped_scans"] = used - kernel_scans
+        # Compatibility with cyclefold's original private stats vocabulary.
+        stats["real_scans"] = kernel_scans
+        stats["folds"] = macro_folds
     return runner._state
 
 
@@ -1609,8 +1644,7 @@ def fold_run_for(
             break
 
         # ── Plateau test ─────────────────────────────────────────
-        after_vis = _visible_items(runner._state, exclude)
-        if after_vis != before_vis:
+        if not _visible_items_match(runner._state, before_vis, exclude):
             inert_soft.clear()  # window ended — re-confirm soft clocks
             inert_run.clear()
             continue
@@ -1659,7 +1693,7 @@ def fold_run_for(
             # The fold step runs the edge scan: a crossed soft clock with no
             # visible change is inert for the rest of the window; a visible
             # change means a real recompute/crossing — re-confirm next window.
-            if _visible_items(runner._state, exclude) == after_vis:
+            if _visible_items_match(runner._state, before_vis, exclude):
                 _mark_inert_soft(
                     fold_ctx,
                     inert_soft,
