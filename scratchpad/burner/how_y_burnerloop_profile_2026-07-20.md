@@ -234,3 +234,37 @@ The causal-chain memo retains the much smaller completed `CausalChain`, not
 thousands of `ConditionViewCapture` objects, and is cleared whenever PILOT
 replaces its synthesis holds.
 
+## Rung-firing comparison proof
+
+The repaired-tree profile attributed 4.35 cumulative seconds to
+`rung_firings._same_writes`, across 599,416 calls. A focused benchmark and a
+BurnerLoop call-distribution probe in
+`scratchpad/burner/benchmark_rung_firing_compare.py` separated profiler
+instrumentation overhead from the real opportunity.
+
+The BurnerLoop distribution was:
+
+- 599,416 comparisons;
+- 598,715 successful matches (99.88%);
+- 467,868 one-write matches (78.05% of all calls);
+- 62,288 empty-write matches (10.39%);
+- the remaining 11.56% spread across mostly 2–35 writes.
+
+Weighted by that exact distribution, the isolated comparator loop measured:
+
+| Comparator | Time | Improvement |
+|---|---:|---:|
+| Current per-key `PMap.get` loop | 0.8300 s | baseline |
+| Current tiny-map path + native equality for larger maps | 0.5816 s | 0.2484 s |
+| Cached plain-dict equality | 0.0601 s | 0.7699 s |
+
+The cached mirror therefore removes about 93% of comparison time, but the
+end-to-end ceiling is about 0.77 seconds on the 36.0-second BurnerLoop
+(approximately 2.1%), not the 4.35 seconds suggested by cProfile.
+
+`tracemalloc` measured the retained mirror cost at roughly 120 bytes for an
+empty pattern, 240 bytes for 1–4 writes, 328 bytes for 8 writes, 520 bytes for
+16 writes, and 888 bytes for 32 writes. This supports a small, explicit
+active-pattern mirror if the implementation stays local; it does not justify
+mirroring every historical or interned pattern.
+
