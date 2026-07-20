@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from pyrung import Bool, Int, Program, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.causal import (
+    _shared_cause,
     chase_cause_roots,
     empirical_program_writes,
 )
@@ -194,6 +195,39 @@ def test_chase_steps_behind_steerable_effect_with_recorded_writer() -> None:
 
     assert nogoods == {"Lever"}
     assert holds == [("Lever", False)]
+
+
+def test_explicit_scan_cause_is_shared_across_investigation_passes(
+    monkeypatch,
+) -> None:
+    logic = _chain_program()
+    plc = PLC(logic)
+    plc.step()
+    plc.patch({"Lever": True})
+    plc.step()
+    scan = plc.state.scan_id
+    original = plc.cause
+    calls = 0
+
+    def counted_cause(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(plc, "cause", counted_cause)
+
+    first = _shared_cause(plc, "Out", scan)
+    second = _shared_cause(plc, "Out", scan)
+
+    assert first is not None
+    assert second is first
+    assert calls == 1
+
+    from pyrung.core.analysis.pilot._ops import _set_synth_holds
+
+    _set_synth_holds(plc, [])
+    assert _shared_cause(plc, "Out", scan) is not None
+    assert calls == 2
 
 
 # ---------------------------------------------------------------------------

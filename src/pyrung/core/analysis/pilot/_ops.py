@@ -507,6 +507,11 @@ def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     plc._fold_context_cache = None
     plc._compiled_replay_kernel = None
     plc._soft_exec_program_cache = None
+    # Historical causal replay includes the synthesis brackets. A new hold
+    # world must not reuse a chain or root classification observed under the
+    # previous brackets.
+    plc.__dict__.pop("_pilot_cause_memo", None)
+    plc.__dict__.pop("_pilot_chase_memo", None)
 
 
 def _apply_pulse(

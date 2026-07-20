@@ -34,6 +34,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.causal import (
+    _shared_cause,
     chase_cause_roots,
     chase_chain_tags,
     empirical_program_writes,
@@ -1460,16 +1461,7 @@ def _precise_causes(
             seeds = [BearingDeparture(incident.channel_tag, desired, channel_scan)]
 
     for departure in seeds:
-        try:
-            chain = plc.cause(departure.tag, scan=departure.scan, deep=True)
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "causal-frontier: cause(%s@%s) raised",
-                departure.tag,
-                departure.scan,
-                exc_info=True,
-            )
-            chain = None
+        chain = _shared_cause(plc, departure.tag, departure.scan)
         if chain is None:
             continue
 
@@ -1846,11 +1838,7 @@ def _absence_root_correctives(
         dep = next(iter(incident.departures), None)
     if dep is None:
         return [], frozenset()
-    try:
-        chain = plc.cause(dep.tag, scan=dep.scan)
-    except Exception:  # noqa: BLE001
-        logger.debug("absence-root: cause(%s) raised", dep.tag, exc_info=True)
-        return [], frozenset()
+    chain = _shared_cause(plc, dep.tag, dep.scan)
     if chain is None:
         return [], frozenset()
 

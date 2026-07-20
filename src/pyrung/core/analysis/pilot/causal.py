@@ -223,7 +223,7 @@ def chase_cause_roots(
         if cached is not None:
             return cached
 
-    chain = _cause(plc, tag, scan)
+    chain = _shared_cause(plc, tag, scan)
     if chain is None:
         result: tuple[set[str], list[tuple[str, Any]]] = (set(), [])
     else:
@@ -258,7 +258,7 @@ def chase_chain_tags(
 
     *bridge* is accepted but ignored (see :func:`chase_cause_roots`).
     """
-    chain = _cause(plc, tag, scan)
+    chain = _shared_cause(plc, tag, scan)
     if chain is None:
         return set()
     ref_consts = _reference_constants(plc)
@@ -275,13 +275,13 @@ def chase_chain_tags(
     return tags - ref_consts
 
 
-def _cause(
+def _shared_cause(
     plc: PLC,
     tag: str,
     scan: int | None = None,
     cache: dict[tuple[str, int | None], Any] | None = None,
 ) -> CausalChain | None:
-    """Memoized deep ``cause()`` for one chase.
+    """Shared deep ``cause()`` for PILOT consumers on one fixed fork.
 
     The same ``(tag, scan)`` reappears across overlapping chases, and each call
     can fork+replay a historical view, so a per-chase cache avoids re-resolving
@@ -289,8 +289,23 @@ def _cause(
     ``deep=True`` (the default) recursively explains enablers on fired rungs
     through observed value origins and classifies terminals in ``chain.roots``.
     """
-    if cache is not None and (tag, scan) in cache:
-        return cache[(tag, scan)]
+    key = (tag, scan)
+    if cache is not None and key in cache:
+        return cache[key]
+    # An explicit historical scan is immutable on a fixed fork. Keep the
+    # completed causal chain—not its thousands of replay captures—so separate
+    # investigation passes over the same incident do not reconstruct identical
+    # per-scan RungRun evidence. A tip-relative query remains uncached.
+    shared: dict[tuple[str, int | None], CausalChain | None] | None = None
+    if scan is not None:
+        shared = plc.__dict__.get("_pilot_cause_memo")
+        if shared is None:
+            shared = plc.__dict__["_pilot_cause_memo"] = {}
+        if key in shared:
+            result = shared[key]
+            if cache is not None:
+                cache[key] = result
+            return result
     try:
         if scan is not None:
             result = plc.cause(tag, scan=scan)
@@ -299,8 +314,10 @@ def _cause(
     except Exception:  # noqa: BLE001
         logger.debug("pilot causal: cause(%s) raised", tag, exc_info=True)
         result = None
+    if shared is not None:
+        shared[key] = result
     if cache is not None:
-        cache[(tag, scan)] = result
+        cache[key] = result
     return result
 
 
