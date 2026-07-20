@@ -348,13 +348,22 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 
 
 def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
-    """Lock the cold avoided-Complete drive through its first honest Unhold."""
+    """Lock the cold drive through its first Execute-era liveness correction.
+
+    The former endpoint was an Unhold read at HELD/Step101. That landing was
+    premature safety motion, not recipe progress; the exact-producer bearing
+    now preserves Execute long enough for investigation to identify and install
+    the two door guards. The later watchdog regression must then accept the
+    rotate-sensor oscillator for neutralizing Execute->Abort without requiring
+    it to finish the distant route to State 16.
+    """
     plc = PLC(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     events = []
-    unhold_read = None
+    door_correction = None
+    liveness_correction = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
         plc,
@@ -363,24 +372,54 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
         avoid_pred=avoid_pred,
     ):
         events.append(event)
-        if event.kind == "candidates_built":
-            candidates = event.data["candidates"]
-            route = event.data["route_plan"]
-            if (
-                candidates
-                and candidates[0]["pair"] == ("Cmd_State_Unhold", True)
-                and route is not None
-                and route["path"][0]["from"] == 11
-                and route["path"][0]["to"] == 12
-            ):
-                unhold_read = event
+        if event.kind == "trend_regression":
+            confirmed = (event.data.get("investigation") or {}).get(
+                "confirmed_detail",
+                (),
+            )
+            precise = {
+                rung.dest
+                for hypothesis in confirmed
+                if hypothesis.get("kind") == "precise-cause"
+                for rung in hypothesis.get("holds", ())
+                if hasattr(rung, "dest")
+            }
+            if {"x_DoorClosed", "x_LintDoorClosed"} <= precise:
+                door_correction = event
+            liveness = {
+                rung.dest
+                for hypothesis in confirmed
+                if hypothesis.get("kind") == "liveness"
+                for rung in hypothesis.get("holds", ())
+                if hasattr(rung, "dest")
+            }
+            if "x_RotateSensor" in liveness:
+                liveness_correction = event
                 break
         if time.monotonic() > deadline:
-            pytest.fail("cold avoided-Complete drive did not reach its Unhold reading")
+            pytest.fail(
+                "cold avoided-Complete drive did not correct its Execute watchdog departure"
+            )
 
-    assert unhold_read is not None
-    pairs = tuple(candidate["pair"] for candidate in unhold_read.data["candidates"])
-    assert ("Cmd_State_Start", True) not in pairs
+    assert door_correction is not None
+    assert liveness_correction is not None
+    assert liveness_correction.data["investigation"]["confirmed"] > 0
+    assert any(
+        hypothesis.get("kind") == "liveness"
+        for hypothesis in liveness_correction.data["investigation"]["confirmed_detail"]
+    )
+    assert not any(
+        any(
+            getattr(rung, "dest", None) == "Test_Simulate_1st_Scan"
+            for rung in hypothesis.get("holds", ())
+        )
+        for event in events
+        if event.kind == "trend_regression"
+        for hypothesis in (event.data.get("investigation") or {}).get(
+            "confirmed_detail",
+            (),
+        )
+    )
     skeleton = extract_skeleton(events)
     _assert_zoom_tripwire(skeleton)
     _assert_matches_golden(

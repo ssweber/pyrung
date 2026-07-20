@@ -1,8 +1,8 @@
 """Instrumented how(y_BurnerLoop): dump incident evidence + per-replay judgment.
 
-Wraps build_deviation_incident / incident_eject_dones / build_replay_fn (via the
-names progress.py imported) to print what the investigation actually saw:
-changed_tags, timeline Done pen marks, eject_cause_dones, and each replay's
+Wraps build_deviation_incident / incident_regression_witness / build_replay_fn
+(via the names progress.py imported) to print what the investigation actually
+saw: changed tags, the exact recorded departure cause, and each replay's
 outcome reason.
 
 Run:  PYTHONPATH=. uv run python scratchpad/burner/drive_y_burnerloop_deep.py
@@ -15,12 +15,13 @@ import time
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.causal import _shared_cause
 from pyrung.core.analysis.pilot import progress as prog
 
 WALL_S = 480.0
 
 _real_build_incident = prog.build_deviation_incident
-_real_eject_dones = prog.incident_eject_dones
+_real_regression_witness = prog.incident_regression_witness
 _real_build_replay = prog.build_replay_fn
 
 
@@ -42,9 +43,27 @@ def build_incident(**kw):
     return incident
 
 
-def eject_dones(incident, program):
-    result = _real_eject_dones(incident, program)
-    print(f"    eject_cause_dones={sorted(result)}")
+def regression_witness(plc, incident):
+    result = _real_regression_witness(plc, incident)
+    print(f"    regression_witness={result}")
+    if result is not None:
+        chain = _shared_cause(plc, result.channel_tag, result.departure_scan)
+        for step in chain.steps:
+            transition = step.transition
+            triggers = tuple(
+                (item.tag_name, item.from_value, item.to_value, item.scan_id)
+                for item in step.triggers
+            )
+            enablers = tuple(
+                (item.tag_name, item.value)
+                for item in step.enablers
+            )
+            print(
+                "      chain "
+                f"{step.subroutine or 'main'}:{step.rung_index} "
+                f"{transition.tag_name} {transition.from_value!r}->{transition.to_value!r}"
+                f"@{transition.scan_id} triggers={triggers} enablers={enablers}"
+            )
     return result
 
 
@@ -53,7 +72,8 @@ def build_replay(*args, **kw):
     print(f"    replay specs: {[(s.kind, s.scans, s.channel_tag, s.channel_target) for s in args[3]]}")
     print(f"    replay_watch_roles={kw.get('replay_watch_roles')} "
           f"zoom_chan={kw.get('zoom_channel_tag')}={kw.get('zoom_target_value')!r} "
-          f"letrun_roles={kw.get('terminal_letrun_role_tags')}")
+          f"letrun_roles={kw.get('terminal_letrun_role_tags')} "
+          f"witness={kw.get('regression_witness')}")
 
     def wrapped(holds):
         out = replay(holds)
@@ -82,7 +102,7 @@ def build_replay(*args, **kw):
 
 
 prog.build_deviation_incident = build_incident
-prog.incident_eject_dones = eject_dones
+prog.incident_regression_witness = regression_witness
 prog.build_replay_fn = build_replay
 
 

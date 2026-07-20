@@ -249,10 +249,11 @@ def probe_live_guard_frontiers(
         end_scan=getattr(getattr(state.work, "state", None), "scan_id", 0) or 0,
     )
 
-    # Honest decline: an unreadable frontier whose upstream cone holds a free
-    # word (steerable, no declared complete domain) has no sound probe values.
-    # Name the tag and nudge a ``choices=`` declaration so the miss is specific,
-    # not a generic ``stuck: <reason>``.  The terminal stuck exit prefers this.
+    # Honest decline: an unreadable frontier whose broader upstream cone holds
+    # a free word (steerable, no declared complete domain) has no sound probe
+    # values. This is an instrumentation limit, not causal proof that the word
+    # gates the frontier. Name the tag and nudge a ``choices=`` declaration
+    # without promoting cone membership into the terminal diagnosis.
     decline_observation: ProbeDeclinedObservation | None = None
     for node in frontiers:
         free_words = _frontier_free_words(node.tag, ctx, empirical_writes)
@@ -260,10 +261,12 @@ def probe_live_guard_frontiers(
             word = free_words[0]
             decline_observation = ProbeDeclinedObservation(
                 frame.key,
-                f"pilot: unreachable — frontier {node.tag}={node.value!r} is gated by "
-                f"free word {word!r} (external, no declared domain); the skiff has no "
-                f"sound probe values for it. Declare choices= (or min=/max=) on {word} "
-                f"so the prover, bounds, and skiff can resolve it.",
+                f"pilot: could not probe frontier {node.tag}={node.value!r}: "
+                f"free word {word!r} appears in its broader upstream cone and has "
+                f"no declared domain, so the skiff has no sound probe values for it. "
+                f"This does not establish that {word} blocks the frontier. Declare "
+                f"choices= (or min=/max=) on {word} to make that part of the cone "
+                f"probeable.",
             )
             break
 

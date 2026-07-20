@@ -592,7 +592,11 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
     channel = ctx.target_tag
     if channel not in ctx.opaque_loop:
         return None
-    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
+    from pyrung.core.analysis.pilot.currents import (
+        WorldView,
+        current_readings,
+        sibling_producer_family,
+    )
 
     world = WorldView(
         snapshot=frame.snap,
@@ -607,11 +611,35 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
         channel,
         ctx.pipeline_roles,
     )
+
+    def _awaits_operator(reading: Any) -> bool:
+        """Whether no automatic sibling already owns this command value.
+
+        A current is an operator acknowledgement the program is waiting for.
+        When the same command family has a program/environmental producer, its
+        motion belongs to exact-producer preflight or an observed coast.  Using
+        the equivalent operator button as a fallback would bypass that read and
+        turn an ambient safety detour into a prescribed destination.
+        """
+        signature = reading.command_writes or ((reading.command_tag, reading.command_value),)
+        automatic_owners = []
+        for tag, value in signature:
+            family = sibling_producer_family(world, tag, value)
+            automatic_owners.append(
+                family is not None
+                and any(producer.kind != "operator" for producer in family.producers)
+            )
+        # A shared request strobe may have automatic writers while the command
+        # discriminator remains operator-only. The automatic path subsumes the
+        # push only when it owns every supplied command-gate component.
+        return not automatic_owners or not all(automatic_owners)
+
     legal = tuple(
         reading
         for reading in readings
         if ctx.route_allowed(reading.action)
         and not _avoid_forces(ctx, [reading.action], frame.snap)
+        and _awaits_operator(reading)
     )
     return legal[0] if len(legal) == 1 else None
 
@@ -772,6 +800,12 @@ def _prescribe_wait(
                 f"{route_reason}; {step.reason}",
                 details=step.required_inputs,
                 frontier=frontier,
+                program_step=step,
+            )
+        if step.status is ProgramStepStatus.INTERRUPTED:
+            return _WaitPrescription(
+                True,
+                f"{route_reason}; {step.reason}",
                 program_step=step,
             )
         return _WaitPrescription(

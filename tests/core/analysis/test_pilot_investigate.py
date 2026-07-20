@@ -28,6 +28,7 @@ from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
     InvestigationHypothesis,
+    ReplayJustification,
     ReplayOutcome,
     ReplayStep,
     _dedupe_pairs,
@@ -36,9 +37,11 @@ from pyrung.core.analysis.pilot.investigate import (
     _hold_is_noop,
     _precise_cause,
     _precise_causes,
+    _regression_cause_replayed,
     build_deviation_incident,
     build_replay_fn,
-    incident_eject_latches,
+    correction_identity,
+    incident_regression_witness,
     investigate_deviation,
     investigate_excursion,
 )
@@ -210,6 +213,70 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
     assert result.rejected[1][0] == noop
     assert result.rejected[1][1].startswith("vacuous no-op hold")
     assert result.rejection_slugs == ("no-holds", "vacuous-hold")
+
+
+def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
+    """Correction nogoods select the next explanation, not an opposite overlay."""
+    Bad = Bool("Revoked_Bad", external=True)
+    Good = Bool("Revoked_Good", external=True)
+    with Program(strict=False) as prog:
+        with Rung(Bad):
+            out(Bool("Revoked_BadOut"))
+        with Rung(Good):
+            out(Bool("Revoked_GoodOut"))
+    plc = PLC(prog)
+    ctx = _make_ctx(
+        prog,
+        plc,
+        target_tag="Revoked_GoodOut",
+        target_value=True,
+        target_predicate=None,
+    )
+    bad = InvestigationHypothesis("bad", ((Bad.name, True),), sources=(Bad.name,))
+    good = InvestigationHypothesis("good", ((Good.name, True),), sources=(Good.name,))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([bad, good], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+
+    replayed = []
+
+    def replay(holds):
+        replayed.append(tuple((h.dest, h.value) if isinstance(h, PilotRung) else h for h in holds))
+        return ReplayOutcome(True, None, dict(plc.state.tags), "incident solved")
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        replay,
+        excluded_corrections=frozenset((correction_identity(bad.holds),)),
+    )
+
+    assert result.confirmed and result.confirmed[0].kind == "good"
+    assert replayed
+    assert all(Bad.name not in {tag for tag, _value in attempt} for attempt in replayed)
+    assert result.rejection_slugs == ("correction-revoked",)
 
 
 def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():
@@ -425,6 +492,192 @@ class TestZoomReplay:
         assert outcome.snapshot["State"] == 8
 
 
+def test_route_replay_accepts_local_neutralization_without_reaching_frontier():
+    """A correction owns the recorded regression, not the whole remaining route."""
+    Guard = Bool("Neutralize_Guard", external=True)
+    Detour = Bool("Neutralize_Detour", external=True)
+    Watchdog = Timer.clone("Neutralize_Watchdog")
+    State = Int("Neutralize_State", default=6)
+
+    with Program() as prog:
+        with Rung(State == 6):
+            on_delay(Watchdog, 100, "ms").reset(Guard)
+        with Rung(State == 6, Detour):
+            copy(13, State)
+        with Rung(Watchdog.Done):
+            copy(8, State)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    incident_session = CoastSession(recorded, kind="recorded-regression")
+    incident_session.arm_pens((State.name,))
+    incident_session.dwell(20)
+    assert recorded.state.tags[State.name] == 8
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=(),
+        bearing=((State.name, 6),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=incident_session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+    assert (witness.source, witness.departed) == (6, 8)
+
+    ctx = _make_replay_context(prog, plc, State.name, 17)
+    replay = build_replay_fn(
+        cp,
+        99,
+        (),
+        (ReplayStep(inputs=(), scans=20, kind="dwell"),),
+        **ctx,
+        zoom_channel_tag=State.name,
+        zoom_target_value=16,
+        regression_witness=witness,
+    )
+
+    neutralized = replay(((Guard.name, True),))
+    assert neutralized.accepted
+    assert neutralized.justification is ReplayJustification.NEUTRALIZED
+    assert neutralized.snapshot[State.name] == 6
+    assert "recorded regression neutralized" in neutralized.reason
+
+    harmful = replay(((Detour.name, True),))
+    assert not harmful.accepted
+    assert harmful.snapshot[State.name] == 13
+    assert harmful.justification is None
+
+
+def test_non_timer_regression_witness_distinguishes_suppression_from_masking():
+    """Neutralization owns the recorded cause, not a behavior class."""
+    Trip = Bool("Witness_Trip", external=True)
+    Inhibit = Bool("Witness_Inhibit", external=True)
+    Mask = Bool("Witness_Mask", external=True)
+    State = Int("Witness_State", default=6)
+
+    with Program() as prog:
+        with Rung(Trip, ~Inhibit):
+            copy(8, State)
+        with Rung(Trip, Mask):
+            copy(6, State)
+
+    plc = PLC(prog, dt=0.010)
+    plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    incident_session = CoastSession(recorded, kind="recorded-regression")
+    incident_session.arm_pens((State.name,))
+    recorded.patch({Trip.name: True})
+    recorded.step()
+    incident_session.note_pens()
+    assert recorded.state.tags[State.name] == 8
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=((Trip.name, True),),
+        bearing=((State.name, 6),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=incident_session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+
+    ctx = _make_replay_context(prog, plc, State.name, 17)
+    replay = build_replay_fn(
+        cp,
+        99,
+        (),
+        (ReplayStep(inputs=((Trip.name, True),), scans=1, kind="pulse"),),
+        **ctx,
+        zoom_channel_tag=State.name,
+        zoom_target_value=16,
+        regression_witness=witness,
+    )
+
+    suppressed = replay(((Inhibit.name, True),))
+    assert suppressed.snapshot[State.name] == 6
+    assert suppressed.accepted
+    assert suppressed.justification is ReplayJustification.NEUTRALIZED
+    assert "suppressed its" in suppressed.reason
+
+    masked_probe = cp.fork()
+    _set_rungs(masked_probe, (PilotRung(Mask.name, True, State != 17),))
+    masked_start = masked_probe.state.scan_id
+    masked_probe.patch({Trip.name: True})
+    masked_probe.step()
+    assert masked_probe.state.tags[State.name] == 6
+    assert _regression_cause_replayed(
+        masked_probe,
+        witness,
+        start_scan=masked_start,
+        end_scan=masked_probe.state.scan_id,
+    ), masked_probe.rung_firings(masked_probe.state.scan_id)
+
+    masked = replay(((Mask.name, True),))
+    assert not masked.accepted
+    assert masked.snapshot[State.name] == 6
+    assert "cause replayed" in masked.reason
+
+
+def test_regression_witness_does_not_confuse_a_shared_executor_with_its_owner():
+    """A different cause may reuse the same response pipeline."""
+    Fault = Bool("WitnessOwner_Fault", external=True)
+    Alternate = Bool("WitnessOwner_Alternate", external=True)
+    Request = Int("WitnessOwner_Request")
+    State = Int("WitnessOwner_State", default=6)
+
+    with Program() as prog:
+        with Rung(Fault):
+            copy(8, Request)
+        with Rung(Alternate):
+            copy(8, Request)
+        with Rung(Request == 8):
+            copy(Request, State)
+            copy(0, Request)
+
+    plc = PLC(prog)
+    plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    incident_session = CoastSession(recorded, kind="recorded-regression")
+    incident_session.arm_pens((State.name,))
+    recorded.patch({Fault.name: True})
+    recorded.step()
+    incident_session.note_pens()
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=((Fault.name, True),),
+        bearing=((State.name, 6),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=incident_session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+    assert {item.rung.rung_index for item in witness.cause} == {0, 2}
+
+    alternate = cp.fork()
+    start_scan = alternate.state.scan_id
+    alternate.patch({Alternate.name: True})
+    alternate.step()
+    assert alternate.state.tags[State.name] == 8
+    assert not _regression_cause_replayed(
+        alternate,
+        witness,
+        start_scan=start_scan,
+        end_scan=alternate.state.scan_id,
+    )
+
+
 def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
     """Correction scope comes from automatic motion beyond the incident window."""
     DoorA = Bool("Landing_DoorA", external=True)
@@ -450,9 +703,28 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
 
     plc = PLC(prog, dt=0.010)
     plc.step()
+    cp = plc.fork()
+    recorded = cp.fork()
+    incident_session = CoastSession(recorded, kind="recorded-regression")
+    incident_session.arm_pens((State.name,))
+    incident_session.dwell(12)
+    assert recorded.state.tags[State.name] == 8
+    incident = build_deviation_incident(
+        anchor_scan=cp.state.scan_id,
+        end_scan=recorded.state.scan_id,
+        action=(),
+        bearing=((State.name, 3),),
+        before_snap=dict(cp.state.tags),
+        after_snap=dict(recorded.state.tags),
+        timeline=incident_session.events,
+        channel_tag=State.name,
+    )
+    witness = incident_regression_witness(recorded, incident)
+    assert witness is not None
+
     ctx = _make_replay_context(prog, plc, State.name, 17)
     replay = build_replay_fn(
-        plc.fork(),
+        cp,
         99,
         (),
         (ReplayStep(inputs=(), scans=12, kind="letrun"),),
@@ -461,7 +733,7 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
         zoom_target_value=3,
         terminal_letrun_role_tags=(State.name,),
         replay_watch_roles=(State.name,),
-        eject_latch_baseline=((AlarmA.name, False), (AlarmB.name, False)),
+        regression_witness=witness,
     )
 
     outcome = replay(((DoorA.name, True), (DoorB.name, True)))
@@ -479,75 +751,6 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
     assert guarded.snapshot[State.name] == 6
 
 
-def test_incident_eject_latches_keeps_observed_latches_without_a_complete_cause_chain(
-    monkeypatch,
-):
-    """Exact incident transitions are evidence even when channel inversion truncates."""
-    TriggerA = Bool("Observed_TriggerA", external=True)
-    TriggerB = Bool("Observed_TriggerB", external=True)
-    AlarmA = Bool("Observed_AlarmA")
-    AlarmB = Bool("Observed_AlarmB")
-    AlreadyActive = Bool("Observed_AlreadyActive")
-    Ordinary = Bool("Observed_Ordinary")
-    Channel = Int("Observed_Channel", default=3)
-
-    with Program() as prog:
-        with Rung(Channel == 3, TriggerA):
-            latch(AlarmA)
-            latch(AlreadyActive)
-            out(Ordinary)
-        with Rung(Channel == 3, TriggerB):
-            latch(AlarmB)
-
-    plc = PLC(prog)
-    incident = DeviationIncident(
-        anchor_scan=1,
-        departure_scan=2,
-        end_scan=2,
-        action=(),
-        bearing=((Channel.name, 6),),
-        before_snap={
-            AlarmA.name: False,
-            AlarmB.name: False,
-            AlreadyActive.name: True,
-            Ordinary.name: False,
-            Channel.name: 3,
-        },
-        after_snap={
-            AlarmA.name: True,
-            AlarmB.name: True,
-            AlreadyActive.name: True,
-            Ordinary.name: True,
-            Channel.name: 8,
-        },
-        changed_tags=(AlarmA.name, AlarmB.name, Ordinary.name, Channel.name),
-        departures=(),
-        channel_tag=Channel.name,
-    )
-
-    # The classifier has already distinguished the antagonist latches from its
-    # lever/source image.  Keep the former as the bump fingerprint; the latter
-    # can itself be a newly-true progress latch and must not be protected.
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
-        lambda *_args: (
-            SimpleNamespace(
-                kind="latch-exposure",
-                holds=((TriggerA.name, True),),
-                sources=(AlarmA.name, TriggerA.name),
-            ),
-            SimpleNamespace(
-                kind="latch-exposure",
-                holds=((TriggerB.name, True),),
-                sources=(AlarmB.name, TriggerB.name),
-            ),
-        ),
-    )
-    protected = incident_eject_latches(plc, incident, SimpleNamespace())
-
-    assert set(protected) == {(AlarmA.name, False), (AlarmB.name, False)}
-
-
 # ---------------------------------------------------------------------------
 # Terminal let-run incident — channel register *maintained* at its held value
 # ---------------------------------------------------------------------------
@@ -556,8 +759,8 @@ def test_incident_eject_latches_keeps_observed_latches_without_a_complete_cause_
 def _letrun_hold_program() -> tuple[Program, Timer, Any]:
     """``Phase`` sits at 6 (Execute).  A watchdog ejects it to 8 (Aborting) at its
     preset unless ``Guard`` is held.  ``Goal`` (the global target) is never
-    reached inside the window, so the only signal of a good hold is whether
-    ``Phase`` *stayed* at 6 — the maintained-macro-state judgment.
+    reached inside the window, so replay must prove both that ``Phase`` stayed
+    at 6 and that the recorded 6 -> 8 cause stopped executing.
     """
     Guard = Bool("Guard", external=True)
     Tmr = Timer.clone("Tmr")
@@ -577,9 +780,8 @@ class TestTerminalLetrunReplay:
     """build_replay_fn for a terminal let-run incident.
 
     The coast is *bounded* to the departure window (its global target is far
-    off), but the judgment is the channel register being *maintained* at its
-    held value — not the bounded bearing-held conjunction, which would over-
-    reject the very liveness/precondition hold that keeps the state from ejecting.
+    off). Judgment requires source preservation plus suppression of the exact
+    recorded cause, so a channel override cannot masquerade as maintenance.
     """
 
     def _setup(self):
@@ -594,9 +796,25 @@ class TestTerminalLetrunReplay:
         # so the bad hold ejects inside the bounded coast — the recorded coast
         # span replaces the old departure-window bound.
         steps = [ReplayStep(inputs=(), scans=25, kind="letrun")]
-        return cp, steps, ctx
+        recorded = cp.fork()
+        incident_session = CoastSession(recorded, kind="recorded-regression")
+        incident_session.arm_pens(("Phase",))
+        incident_session.dwell(25)
+        incident = build_deviation_incident(
+            anchor_scan=cp.state.scan_id,
+            end_scan=recorded.state.scan_id,
+            action=(),
+            bearing=(("Phase", 6),),
+            before_snap=dict(cp.state.tags),
+            after_snap=dict(recorded.state.tags),
+            timeline=incident_session.events,
+            channel_tag="Phase",
+        )
+        witness = incident_regression_witness(recorded, incident)
+        assert witness is not None
+        return cp, steps, ctx, witness
 
-    def _build(self, cp, steps, ctx):
+    def _build(self, cp, steps, ctx, witness):
         return build_replay_fn(
             cp,
             99,
@@ -607,19 +825,20 @@ class TestTerminalLetrunReplay:
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
             replay_watch_roles=("Phase",),
+            regression_witness=witness,
         )
 
     def test_letrun_accepts_hold_that_maintains_state(self):
-        cp, steps, ctx = self._setup()
-        replay = self._build(cp, steps, ctx)
+        cp, steps, ctx, witness = self._setup()
+        replay = self._build(cp, steps, ctx, witness)
         outcome = replay((("Guard", True),))  # keep the watchdog satisfied
         assert outcome.accepted
         assert outcome.snapshot["Phase"] == 6
-        assert "Phase -> 6" in outcome.reason
+        assert "suppressed its" in outcome.reason
 
     def test_letrun_rejects_hold_that_ejects(self):
-        cp, steps, ctx = self._setup()
-        replay = self._build(cp, steps, ctx)
+        cp, steps, ctx, witness = self._setup()
+        replay = self._build(cp, steps, ctx, witness)
         outcome = replay(())  # watchdog trips -> Phase ejects to 8
         assert not outcome.accepted
         assert outcome.snapshot["Phase"] == 8

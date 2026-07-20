@@ -35,10 +35,11 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
-from pyrung.core.analysis.pilot.progress import _monitor_trend
+from pyrung.core.analysis.pilot.progress import _investigate_and_revert, _monitor_trend
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
+    CorrectionStatus,
     _Checkpoint,
     _PilotState,
     _TrialResult,
@@ -560,4 +561,64 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
     assert state.work.state.tags["Go"] is True  # guard saw the pre-scan State=6 image
     state.work.step()
     assert state.work.state.tags["Go"] is False
-    assert installed in state.rungs  # append-only: inactive, never deleted
+    assert installed in state.rungs  # benign scoped correction remains recorded
+
+
+def test_causally_opposite_remedy_revokes_harmful_correction(monkeypatch):
+    """A later exact contradiction retracts the attempt instead of layering it."""
+    state, trial, frame, ctx = _saboteur_scenario()
+    scope = CompareEq(state.work._known_tags_by_name["State"], 6)
+    harmful = PilotRung("Go", True, scope)
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _stub_investigation([harmful]),
+    )
+
+    _monitor_trend(trial, frame, state, ctx)
+
+    assert harmful in state.rungs
+    assert len(state.correction_receipts) == 1
+    receipt = state.correction_receipts[0]
+    assert receipt.status is CorrectionStatus.ACTIVE
+
+    opposite = PilotRung("Go", False, scope)
+    remedy = InvestigationHypothesis(
+        kind="precise-cause",
+        holds=(opposite,),
+        sources=("Go",),
+        detail="installed Go=True caused the later departure",
+    )
+
+    def _opposite_investigation(_plc, _incident, _ctx, _replay, **_kwargs):
+        return InvestigationResult(
+            confirmed_holds=(opposite,),
+            hypotheses=(remedy,),
+            confirmed=(remedy,),
+            confirmed_outcomes=(
+                ReplayOutcome(
+                    True,
+                    None,
+                    dict(state.work.state.tags),
+                    "later regression neutralized",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _opposite_investigation,
+    )
+    events = _investigate_and_revert(
+        trial,
+        frame,
+        state,
+        ctx,
+        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
+        end_scan=trial.fork.state.scan_id,
+    )
+
+    assert all(rung.dest != "Go" for rung in state.rungs)
+    assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
+    assert receipt.identity in state.correction_nogoods[receipt.origin_key]
+    assert any(entry.source == "revocation" for entry in state.hold_log)
+    assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)

@@ -251,12 +251,27 @@ def orient(
         route_plan = candidates.route_plan
         advance_boundary = candidates.advance_boundary
         program_step = candidates.program_step
+        preserve_channels = (
+            frozenset(program_step.preserve_channels) if program_step is not None else frozenset()
+        )
+        preferred_channel = (
+            route_plan.role.channel_tag
+            if route_plan is not None and route_plan.role.channel_tag in preserve_channels
+            else next(iter(sorted(preserve_channels)), None)
+        )
         program_heading = (
             next(
                 (
-                    (tag, after)
+                    (
+                        tag,
+                        before if tag in preserve_channels else after,
+                    )
                     for tag, before, after in reversed(program_step.projected_changes)
-                    if tag == program_step.channel and not _values_match(before, after)
+                    if tag
+                    == (
+                        preferred_channel if preferred_channel is not None else program_step.channel
+                    )
+                    and not _values_match(before, after)
                 ),
                 None,
             )

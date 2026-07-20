@@ -292,6 +292,54 @@ def test_current_recognizes_ack_while_held() -> None:
     assert action.to_state == tags["Execute"]
 
 
+def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
+    """Compass must coast/read a program-owned command, not press its twin."""
+    from types import SimpleNamespace
+
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.options import _current_bearing
+
+    logic, tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    _drive_to(plc, tags, tags["Held"])
+    plc.patch({tags["InterlockAck"].name: True})
+    plc.step()
+    plc.patch({tags["InterlockAck"].name: False})
+    plc.run(cycles=2)
+    assert plc.state.tags[tags["State"].name] == tags["Execute"]
+
+    pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
+    role = infer_pipeline_roles(
+        tags["State"].name,
+        pdg,
+        logic,
+        steerable,
+        opaque_loop,
+        evidence,
+    )
+    ctx = SimpleNamespace(
+        target_tag=tags["State"].name,
+        opaque_loop=opaque_loop,
+        pdg=pdg,
+        program=logic,
+        steerable=steerable,
+        domain_prior=None,
+        pipeline_roles=(role,),
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+    )
+
+    # Complete is structurally pressable here, but the program's timer owns an
+    # automatic producer for that same command value.
+    assert (
+        _current_bearing(
+            SimpleNamespace(snap=dict(plc.state.tags)),
+            ctx,
+        )
+        is None
+    )
+
+
 def test_current_reader_returns_structural_execute_readings() -> None:
     """The reader reports structure without deciding whether PILOT should wait."""
     from pyrung.core.analysis.pilot.currents import WorldView, current_readings

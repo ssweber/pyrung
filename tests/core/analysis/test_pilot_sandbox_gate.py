@@ -254,6 +254,8 @@ def test_free_word_declines_naming_the_tag():
     assert path.reason, "unreachable target must always name a reason"
     assert "CfgWord" in path.reason, f"reason must name the offending word: {path.reason}"
     assert "choices" in path.reason, f"reason must nudge a choices= declaration: {path.reason}"
+    assert "is gated by" not in path.reason
+    assert "does not establish" in path.reason
 
 
 def test_free_word_solves_under_declared_choices():

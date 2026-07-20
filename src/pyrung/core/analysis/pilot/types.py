@@ -366,6 +366,26 @@ class _HoldLogEntry:
     rungs: tuple[Any, ...] = ()
 
 
+class CorrectionStatus(Enum):
+    """Whether an investigation correction still owns an active overlay."""
+
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
+@dataclass(frozen=True)
+class _CorrectionReceipt:
+    """Replay proof and lifecycle for one installed investigation correction."""
+
+    receipt_id: int
+    origin_key: _StateKey
+    identity: tuple[tuple[str, Any], ...]
+    rungs: tuple[Any, ...]
+    sources: tuple[str, ...]
+    justification: str
+    status: CorrectionStatus = CorrectionStatus.ACTIVE
+
+
 @dataclass
 class _PilotState:
     # ── The world (reverts) ──
@@ -397,6 +417,14 @@ class _PilotState:
     # ejected, learned, retried" record surfaced on the resulting plan.
     journey: list[_Step] = field(default_factory=list)
     hold_log: list[_HoldLogEntry] = field(default_factory=list)
+    # Investigation corrections are hypotheses with lifecycle, not irrevocable
+    # facts. The receipt journal survives world reverts; active rungs remain in
+    # the world and are removed when a later incident causally revokes a receipt.
+    correction_receipts: list[_CorrectionReceipt] = field(default_factory=list)
+    correction_nogoods: dict[
+        _StateKey,
+        set[tuple[tuple[str, Any], ...]],
+    ] = field(default_factory=dict)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
     # in the drive (Knowledge side — commits, never reverted).  A terminal stuck
     # or budget-exhausted decline reads this so the miss names the violated avoid

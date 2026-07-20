@@ -14,6 +14,7 @@ from pyrung.core.analysis.pilot._ops import _semantic_key
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
+    CorrectionStatus,
     TagChange,
     _IterationFrame,
     _PilotContext,
@@ -153,7 +154,29 @@ def _build_plan_journal(
 
     seen_rungs: set[tuple[Any, ...]] = set()
     seen_legacy_holds: set[tuple[str, str]] = set()
+    correction_receipts = getattr(state, "correction_receipts", ())
+    managed_rungs = {
+        (
+            rung.dest,
+            _semantic_key(rung.value),
+            _semantic_key(rung.guard),
+        )
+        for receipt in correction_receipts
+        for rung in receipt.rungs
+    }
+    active_managed_rungs = {
+        (
+            rung.dest,
+            _semantic_key(rung.value),
+            _semantic_key(rung.guard),
+        )
+        for receipt in correction_receipts
+        if receipt.status is CorrectionStatus.ACTIVE
+        for rung in receipt.rungs
+    }
     for entry in state.hold_log:
+        if entry.source == "revocation":
+            continue
         if entry.scan < path_start or entry.scan > path_end:
             continue
         new_rungs: list[Any] = []
@@ -163,6 +186,8 @@ def _build_plan_journal(
                 _semantic_key(rung.value),
                 _semantic_key(rung.guard),
             )
+            if key in managed_rungs and key not in active_managed_rungs:
+                continue
             if key in seen_rungs:
                 continue
             seen_rungs.add(key)

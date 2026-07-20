@@ -2076,6 +2076,11 @@
   "to_value": 6
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 3,
+  "kind": "departure_investigated"
+ },
+ {
   "distance": 2,
   "kind": "iteration",
   "nogoods": [],

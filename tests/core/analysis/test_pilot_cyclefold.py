@@ -81,10 +81,7 @@ class TestDetectCycle:
 
     def test_fixed_significant_surface_matches_prefiltered_snapshots(self) -> None:
         noise = (0, 1, 1, 0, 1, 0, 0, 1, 1, 1)
-        full = [
-            {"osc": i % 2, "acc": i, "ignored": noise[i]}
-            for i in range(len(noise))
-        ]
+        full = [{"osc": i % 2, "acc": i, "ignored": noise[i]} for i in range(len(noise))]
         filtered = [{"osc": snap["osc"], "acc": snap["acc"]} for snap in full]
 
         expected = detect_cycle(

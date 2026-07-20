@@ -27,11 +27,13 @@ from typing import Any
 
 from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.coast import BumpEvent
 from pyrung.core.analysis.pilot.investigate import (
     ReplayStep,
     _absence_root_correctives,
     build_deviation_incident,
     build_replay_fn,
+    incident_regression_witness,
     investigate_deviation,
 )
 from pyrung.core.analysis.steerable import compute_steerable
@@ -95,6 +97,9 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "route": None,
         "compass": SimpleNamespace(action_tags=frozenset()),
         "pipeline_roles": (),
+        "target_tag": "Phase",
+        "target_value": 17,
+        "target_predicate": None,
     }
     ns.update(overrides)
     return SimpleNamespace(**ns)
@@ -108,6 +113,14 @@ def _incident(plc: PLC, prog: Program, anchor: int, before: dict[str, Any]):
         bearing=(("Phase", 6),),
         before_snap=before,
         after_snap=dict(plc.state.tags),
+        timeline=(
+            BumpEvent(
+                "pen",
+                "pen",
+                plc.state.scan_id,
+                (("Phase", 6, plc.state.tags["Phase"]),),
+            ),
+        ),
         program=prog,
         channel_tag="Phase",
     )
@@ -198,6 +211,14 @@ class TestAnalogAbsenceRoot:
         prog = plc._sail_trap_prog
         incident = _incident(plc, prog, anchor, before)
         ctx = _ctx(prog, plc)
+        witness = incident_regression_witness(plc, incident)
+        assert witness is not None
+        assert (
+            witness.cause[0].rung.subroutine,
+            witness.cause[0].rung.rung_index,
+            witness.cause[0].tag,
+        ) == (None, 5, "Phase")
+        assert len(witness.cause) > 1
 
         pdg = ctx.pdg
         steerable = ctx.steerable
@@ -212,7 +233,7 @@ class TestAnalogAbsenceRoot:
             resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
             edge_tags=set(),
             target_tag="Phase",
-            target_value=6,
+            target_value=17,
             pdg=pdg,
             program=prog,
             steerable=steerable,
@@ -223,6 +244,7 @@ class TestAnalogAbsenceRoot:
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
             replay_watch_roles=("Phase",),
+            regression_witness=witness,
         )
 
         result = investigate_deviation(plc, incident, ctx, replay)
@@ -244,6 +266,14 @@ class TestAbsenceRootConfirmation:
         prog = plc._sail_trap_prog
         incident = _incident(plc, prog, anchor, before)
         ctx = _ctx(prog, plc)
+        witness = incident_regression_witness(plc, incident)
+        assert witness is not None
+        assert (
+            witness.cause[0].rung.subroutine,
+            witness.cause[0].rung.rung_index,
+            witness.cause[0].tag,
+        ) == (None, 5, "Phase")
+        assert len(witness.cause) > 1
 
         pdg = ctx.pdg
         steerable = ctx.steerable
@@ -258,7 +288,7 @@ class TestAbsenceRootConfirmation:
             resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
             edge_tags=set(),
             target_tag="Phase",
-            target_value=6,
+            target_value=17,
             pdg=pdg,
             program=prog,
             steerable=steerable,
@@ -269,8 +299,11 @@ class TestAbsenceRootConfirmation:
             zoom_target_value=6,
             terminal_letrun_role_tags=("Phase",),
             replay_watch_roles=("Phase",),
+            regression_witness=witness,
         )
 
+        raw = replay((("Sail", True),))
+        assert raw.accepted, raw
         result = investigate_deviation(plc, incident, ctx, replay)
         assert any(rung.dest == "Sail" and rung.value is True for rung in result.confirmed_holds)
         assert not any(

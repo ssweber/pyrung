@@ -2,10 +2,12 @@
 
 This is a read-only decision made before Compass chooses an action.  It projects
 the same controlled PLC world for a few scans, writer-locks the backward trace
-to the selected rung, and reports one of three plain outcomes:
+to the selected rung, and reports one of four plain outcomes:
 
 * keep running because a target-relative boundary moved;
 * supply the currently unmet external input;
+* interrupted because the live pipeline moved before the producer could be
+  read as waiting;
 * unclear because no safe forward claim can be made.
 """
 
@@ -28,6 +30,7 @@ from pyrung.core.instruction.advance import constraint_holds
 class ProgramStepStatus(StrEnum):
     KEEP_RUNNING = "keep_running"
     NEEDS_INPUT = "needs_input"
+    INTERRUPTED = "interrupted"
     UNCLEAR = "unclear"
 
 
@@ -45,6 +48,10 @@ class ProgramStep:
     trace: TraceNode | None = None
     next_trace: TraceNode | None = None
     reason: str = ""
+    # Pipeline channels that moved in the unchanged projection before this
+    # producer could be read as waiting. The executable response is to preserve
+    # the live value and observe that motion, not to choose an alternate route.
+    preserve_channels: tuple[str, ...] = ()
 
 
 def _nodes(root: TraceNode) -> list[TraceNode]:
@@ -140,28 +147,37 @@ def _action_channel_barriers(
     return {pair: frozenset(tags) for pair, tags in barriers.items()}
 
 
-def _input_moves_live_channel(
+def _input_reaches_exact_producer(
     action: TraceAction,
     channels: frozenset[str],
     ctx: Any,
+    producer: Any,
     plc: Any,
     rungs: Sequence[Any],
 ) -> bool:
-    """Whether one real controlled scan accepts *action* at a crossed channel."""
+    """Whether one controlled scan carries *action* through its live barrier.
+
+    Movement on a crossed pipeline channel is not enough: an earlier safety or
+    mode transition can move that channel while bypassing the selected
+    producer entirely.  The exact producer owns this read, so acceptance means
+    that producer wrote its selected value in the occurrence replay.
+    """
     if not channels:
         return True
     fork = fork_with_rungs(plc, rungs)
-    before = dict(fork.state.tags)
     fork.patch({action.tag: action.value})
     fork.step()
-    after = fork.state.tags
-    for role in getattr(ctx, "pipeline_roles", ()):
-        if role.channel_tag not in channels:
-            continue
-        watched = {role.channel_tag, *role.request_tags}
-        if any(not _values_match(before.get(tag), after.get(tag)) for tag in watched):
-            return True
-    return False
+    runs = fork._replay_rung_runs_at(fork.state.scan_id)
+    return bool(
+        writer_runs_for_node(
+            ctx.pdg,
+            ctx.program,
+            producer.rung_index,
+            producer.command_tag,
+            producer.command_value,
+            runs,
+        )
+    )
 
 
 def read_program_step(
@@ -204,10 +220,11 @@ def read_program_step(
         action
         for action in required
         if barriers.get(action.pair)
-        and not _input_moves_live_channel(
+        and not _input_reaches_exact_producer(
             action,
             barriers[action.pair],
             ctx,
+            producer,
             plc,
             rungs,
         )
@@ -260,6 +277,11 @@ def read_program_step(
         (tag, before.get(tag), after.get(tag))
         for tag in sorted(relevant)
         if not _values_match(before.get(tag), after.get(tag))
+    )
+    departed_channels = tuple(
+        role.channel_tag
+        for role in getattr(ctx, "pipeline_roles", ())
+        if not _values_match(before.get(role.channel_tag), after.get(role.channel_tag))
     )
 
     if inputs_blocked_here:
@@ -352,6 +374,23 @@ def read_program_step(
             trace=trace,
             next_trace=next_trace,
             reason="the selected producer wrote its value but it did not survive a later write",
+        )
+
+    if required and departed_channels:
+        names = ", ".join(departed_channels)
+        return ProgramStep(
+            ProgramStepStatus.INTERRUPTED,
+            producer,
+            boundary,
+            boundary.tag if boundary is not None else producer.command_tag,
+            projected_changes=projected_changes,
+            trace=trace,
+            next_trace=next_trace,
+            reason=(
+                f"{names} moved while checking the selected producer; "
+                "its external-input reading is no longer current"
+            ),
+            preserve_channels=departed_channels,
         )
 
     if required:

@@ -16,10 +16,13 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from pyrsistent import pvector
+
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
     _pilot_world_key,
+    _semantic_key,
     _set_rungs,
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
@@ -29,11 +32,12 @@ from pyrung.core.analysis.pilot.detour import (
     classify_departure,
 )
 from pyrung.core.analysis.pilot.investigate import (
+    InvestigationResult,
     ReplayStep,
     build_deviation_incident,
     build_replay_fn,
-    incident_eject_dones,
-    incident_eject_latches,
+    correction_identity,
+    incident_regression_witness,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.outcome import (
@@ -44,10 +48,12 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached
 from pyrung.core.analysis.pilot.types import (
+    CorrectionStatus,
     MotionKind,
     PilotEvent,
     _ActionPair,
     _Checkpoint,
+    _CorrectionReceipt,
     _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
@@ -107,8 +113,8 @@ def _monitor_trend(
     # checkpoint the ejection as progress.  It is not progress: the watchdog that
     # ejected fired *during the coast*, not after it.  Investigate over the
     # coast-span window (the fork's own history, ``scan_before -> fork end``) so
-    # the watchdog Done bit is in ``changed_tags`` and the liveness hold is
-    # surfaced, then revert to the pre-coast checkpoint.
+    # its exact channel-transition producer and upstream corrective levers are
+    # recoverable, then revert to the pre-coast checkpoint.
     if (
         trial.zoom_channel_tag is not None
         and (
@@ -152,54 +158,56 @@ def _monitor_trend(
         # the conservative investigate-and-revert arm.
         verdict = classify_departure(state, ctx, chan, departed_from, trial.before_snap)
         if verdict.is_provisional:
-            if state.provisional is None:
-                prescribed_departure = (
-                    trial.route_prescribed
-                    and trial.assessment is not None
-                    and trial.assessment.agency is Agency.PILOT
+            prescribed_departure = (
+                trial.route_prescribed
+                and trial.assessment is not None
+                and trial.assessment.agency is Agency.PILOT
+            )
+            if verdict.progress.effect == "preserved" and not prescribed_departure:
+                # A clean route says the landing is usable, but a known-
+                # preserved progress receipt says this occurrence earned
+                # no program work. For ambient motion it may therefore be
+                # a preventable ejection. A Compass/current edge earns
+                # tide-table credit only when causal attribution says the
+                # pilot actually produced this departure; program-caused
+                # motion encountered during a prescribed coast remains
+                # ambient.
+                #
+                # This decision is occurrence-local. An already-open
+                # provisional corridor changes only the rollback boundary; it
+                # must not suppress understanding the same physical departure.
+                # Investigation therefore runs before retention in both cases.
+                checkpoint = state.checkpoints[-1]
+                checkpoint_snap = dict(checkpoint.world.work.state.tags)
+                replay_from_checkpoint = not _values_match(checkpoint_snap.get(chan), departed_from)
+                incident_anchor = (
+                    checkpoint.world.work.state.scan_id
+                    if replay_from_checkpoint
+                    else trial.scan_before
                 )
-                if verdict.progress.effect == "preserved" and not prescribed_departure:
-                    # A clean route says the landing is usable, but a known-
-                    # preserved progress receipt says this occurrence earned
-                    # no program work. For ambient motion it may therefore be
-                    # a preventable ejection. A Compass/current edge earns
-                    # tide-table credit only when causal attribution says the
-                    # pilot actually produced this departure; program-caused
-                    # motion encountered during a prescribed coast remains
-                    # ambient. Investigate that occurrence, retaining its proven
-                    # continuation when no receipt-preserving correction survives.
-                    checkpoint = state.checkpoints[-1]
-                    checkpoint_snap = dict(checkpoint.world.work.state.tags)
-                    replay_from_checkpoint = not _values_match(
-                        checkpoint_snap.get(chan), departed_from
-                    )
-                    incident_anchor = (
-                        checkpoint.world.work.state.scan_id
-                        if replay_from_checkpoint
-                        else trial.scan_before
-                    )
-                    incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
-                    return (
-                        ejection,
-                        *_investigate_and_revert(
-                            trial,
-                            frame,
-                            state,
-                            ctx,
-                            anchor_scan=incident_anchor,
-                            end_scan=state.work.state.scan_id,
-                            incident_before_snap=incident_before,
-                            retain_if_unresolved=verdict,
-                        ),
-                    )
+                incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
+                return (
+                    ejection,
+                    *_investigate_and_revert(
+                        trial,
+                        frame,
+                        state,
+                        ctx,
+                        anchor_scan=incident_anchor,
+                        end_scan=state.work.state.scan_id,
+                        incident_before_snap=incident_before,
+                        retain_if_unresolved=verdict,
+                    ),
+                )
+            if state.provisional is None:
                 return (
                     ejection,
                     *_start_provisional(verdict, trial, state, ctx, chan),
                 )
             # A clean program-owned departure inside an existing bounded
-            # attempt is just more piloting. Keep the original rollback
-            # boundary and budget; do not nest another provisional mechanism
-            # or reinterpret the motion as a regression.
+            # attempt that earned work (or fulfilled an explicitly prescribed
+            # channel transaction) is ordinary piloting. Keep the original
+            # rollback boundary and budget; do not nest another provisional.
             return (ejection,)
         checkpoint = state.checkpoints[-1]
         checkpoint_snap = dict(checkpoint.world.work.state.tags)
@@ -394,25 +402,7 @@ def _start_provisional(
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
     departed_from = trial.before_snap.get(chan)
-    settled = verdict.settled_fork
-    scan_before = state.work.state.scan_id
-    # Rebuild the overlay from the canonical rung list before adopting the
-    # settled fork as the working PLC.
-    _set_rungs(settled, state.rungs)
-    state.work = settled
-    state.dwell_scans += settled.state.scan_id - scan_before
-    if state.steps:
-        # The coast + settlement is one dwell: extend the recorded step's span
-        # to the settled landing (mirrors the finished-arm rewrite).
-        last = state.steps[-1]
-        final_step = _Step(
-            inputs=last.inputs,
-            scan_before=last.scan_before,
-            scan_after=settled.state.scan_id,
-        )
-        if state.journey and state.journey[-1] is last:
-            state.journey[-1] = final_step
-        state.steps = state.steps.set(len(state.steps) - 1, final_step)
+    scan_before = _adopt_settled_departure(verdict, state)
     state.provisional = Provisional(
         channel_tag=chan,
         from_value=departed_from,
@@ -441,6 +431,61 @@ def _start_provisional(
             },
         ),
     )
+
+
+def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> int:
+    """Adopt the classifier's settled landing without changing corridor policy.
+
+    Settlement is evidence shared by both a newly-opened provisional and an
+    already-open corridor that retained an unresolved departure.  Keeping this
+    operation separate prevents ``_start_provisional`` from becoming the only
+    way to consume the settled fork.
+    Returns the scan at which adoption began.
+    """
+    settled = verdict.settled_fork
+    scan_before = state.work.state.scan_id
+    # Rebuild the overlay from the canonical rung list before adopting the
+    # settled fork as the working PLC.
+    _set_rungs(settled, state.rungs)
+    state.work = settled
+    state.dwell_scans += settled.state.scan_id - scan_before
+    if state.steps:
+        # The coast + settlement is one dwell: extend the recorded step's span
+        # to the settled landing (mirrors the finished-arm rewrite).
+        last = state.steps[-1]
+        final_step = _Step(
+            inputs=last.inputs,
+            scan_before=last.scan_before,
+            scan_after=settled.state.scan_id,
+        )
+        if state.journey and state.journey[-1] is last:
+            state.journey[-1] = final_step
+        state.steps = state.steps.set(len(state.steps) - 1, final_step)
+    return scan_before
+
+
+def _bank_provisional_landing(trial: _TrialResult, state: _PilotState) -> None:
+    """Keep a local recovery receipt inside an existing provisional corridor.
+
+    Retaining an investigated departure is not evidence of earned target
+    progress, so this does not move ``best_trend`` or close the corridor.  It
+    records the actual first landing solely as the rollback/incident anchor for
+    the next recomputed operation.  Provisional promotion or expiry already
+    trims checkpoints at ``checkpoint_depth``, so the receipt cannot escape the
+    corridor that owns it.
+    """
+    if trial.new_key is None or trial.trend is None:
+        return
+    receipt = _Checkpoint(
+        trial.new_key,
+        state.snapshot_world(),
+        trial.trend,
+        trial.frontier,
+    )
+    if state.checkpoints and state.checkpoints[-1].key == trial.new_key:
+        state.checkpoints[-1] = receipt
+    else:
+        state.checkpoints.append(receipt)
 
 
 def _anchor_provisional(
@@ -695,6 +740,156 @@ def _replay_step(step: Any, sc: Any) -> ReplayStep:
     )
 
 
+def _deviation_bearing(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    watch_tags: list[str],
+    frontier: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...]:
+    """Facts the failed operation actually held and then lost.
+
+    A zoom carries two different channel values: the source it launched from
+    and the destination it requested. Only the source can be a departure
+    bearing. Recording the unvisited destination here manufactures an
+    impossible ``departure_scan=None`` and leaves causal ranking without the
+    exact source-to-eject transition.
+    """
+    needed_by_tag: dict[str, list[Any]] = {}
+    for tag, value in frontier:
+        needed_by_tag.setdefault(tag, []).append(value)
+    bearing: list[_ActionPair] = [
+        (tag, frame.snap.get(tag))
+        for tag in watch_tags
+        if not _values_match(frame.snap.get(tag), trial.fork_snap.get(tag))
+        and not any(
+            _values_match(trial.fork_snap.get(tag), needed) for needed in needed_by_tag.get(tag, ())
+        )
+    ]
+    channel = trial.zoom_channel_tag
+    if channel is not None:
+        source = trial.before_snap.get(channel)
+        landed = trial.fork_snap.get(channel)
+        if not _values_match(landed, source):
+            bearing = [(tag, value) for tag, value in bearing if tag != channel]
+            bearing.append((channel, source))
+    return tuple(bearing)
+
+
+def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
+    return (
+        rung.dest,
+        _semantic_key(rung.value),
+        _semantic_key(rung.guard),
+    )
+
+
+def _contradicted_corrections(
+    state: _PilotState,
+    investigation: InvestigationResult,
+) -> tuple[_CorrectionReceipt, ...]:
+    """Active corrections contradicted by the next incident's exact remedy.
+
+    A later hypothesis that causally names an installed destination and needs a
+    value outside the correction's admitted values is evidence that the prior
+    correction caused this regression.  Treating the opposite value as another
+    durable hold would leave two tools arguing in the overlay.
+    """
+    if not investigation.confirmed:
+        return ()
+    remedy = investigation.confirmed[0]
+    sources = set(remedy.sources)
+    remedy_values: dict[str, list[Any]] = {}
+    for proposal in remedy.holds:
+        tag = proposal.dest if isinstance(proposal, PilotRung) else proposal[0]
+        value = proposal.value if isinstance(proposal, PilotRung) else proposal[1]
+        remedy_values.setdefault(tag, []).append(value)
+
+    contradicted: list[_CorrectionReceipt] = []
+    for receipt in state.correction_receipts:
+        if receipt.status is not CorrectionStatus.ACTIVE:
+            continue
+        admitted: dict[str, list[Any]] = {}
+        for rung in receipt.rungs:
+            admitted.setdefault(rung.dest, []).append(rung.value)
+        if any(
+            tag in sources
+            and all(
+                not any(_values_match(remedy_value, old) for old in admitted.get(tag, ()))
+                for remedy_value in values
+            )
+            for tag, values in remedy_values.items()
+            if tag in admitted
+        ):
+            contradicted.append(receipt)
+    return tuple(contradicted)
+
+
+def _revoke_corrections(
+    state: _PilotState,
+    receipts: tuple[_CorrectionReceipt, ...],
+    checkpoint: _Checkpoint,
+) -> tuple[int, ...]:
+    """Revoke causally harmful receipts and rebuild the checkpoint without them."""
+    if not receipts:
+        return ()
+    receipt_ids = {receipt.receipt_id for receipt in receipts}
+    revoked_rung_ids = {_rung_identity(rung) for receipt in receipts for rung in receipt.rungs}
+    state.correction_receipts = [
+        replace(receipt, status=CorrectionStatus.REVOKED)
+        if receipt.receipt_id in receipt_ids
+        else receipt
+        for receipt in state.correction_receipts
+    ]
+    for receipt in receipts:
+        state.correction_nogoods.setdefault(receipt.origin_key, set()).add(receipt.identity)
+        state.hold_log.append(
+            _HoldLogEntry(
+                scan=state.work.state.scan_id,
+                tags=tuple((rung.dest, rung.value) for rung in receipt.rungs),
+                source="revocation",
+                rungs=receipt.rungs,
+            )
+        )
+
+    remaining = [rung for rung in state.rungs if _rung_identity(rung) not in revoked_rung_ids]
+    state.rungs = remaining
+    _set_rungs(state.work, remaining)
+    key_config = state.key_config
+    cleaned_checkpoints: list[_Checkpoint] = []
+    for saved in state.checkpoints:
+        saved_rungs = [
+            rung for rung in saved.world.rungs if _rung_identity(rung) not in revoked_rung_ids
+        ]
+        if len(saved_rungs) == len(saved.world.rungs):
+            cleaned_checkpoints.append(saved)
+            continue
+        saved_work = saved.world.work.fork()
+        _set_rungs(saved_work, saved_rungs)
+        saved_world = saved.world.set(work=saved_work, rungs=pvector(saved_rungs))
+        saved_key = (
+            _pilot_world_key(dict(saved_work.state.tags), key_config, saved_rungs)
+            if key_config is not None
+            else saved.key
+        )
+        cleaned_checkpoints.append(_Checkpoint(saved_key, saved_world, saved.trend, saved.frontier))
+    state.checkpoints = cleaned_checkpoints
+    restored_key = (
+        _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
+        if key_config is not None
+        else checkpoint.key
+    )
+    state.checkpoints[-1] = _Checkpoint(
+        restored_key,
+        state.snapshot_world(),
+        checkpoint.trend,
+        checkpoint.frontier,
+    )
+    # The same machine tags now carry different correction knowledge. Permit
+    # the retry; the revoked correction identity will be excluded explicitly.
+    state.seen_keys.discard(restored_key)
+    return tuple(sorted(receipt_ids))
+
+
 def _investigate_and_revert(
     trial: _TrialResult,
     frame: _IterationFrame,
@@ -720,6 +915,8 @@ def _investigate_and_revert(
     cp_fork = cp_world.work
     investigation_holds: list[Any] = []
     investigation_rungs: list[PilotRung] = []
+    investigation: InvestigationResult | None = None
+    revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
     if trial.chase_regression_causes:
@@ -728,24 +925,12 @@ def _investigate_and_revert(
         # to move it (Heat_CurStep 0->1 en route to 3).  Chasing it spawns
         # corrective holds against the plan itself (lock the enabler of the
         # very advance we wanted).  Only anomalous motion enters the bearing.
-        needed_by_tag: dict[str, list[Any]] = {}
-        for nt, nv in checkpoint.frontier:
-            needed_by_tag.setdefault(nt, []).append(nv)
-        bearing_pairs: list[_ActionPair] = [
-            (wt, frame.snap.get(wt))
-            for wt in state.watch_tags
-            if not _values_match(frame.snap.get(wt), trial.fork_snap.get(wt))
-            and not any(
-                _values_match(trial.fork_snap.get(wt), nv) for nv in needed_by_tag.get(wt, ())
-            )
-        ]
-        if trial.zoom_channel_tag is not None:
-            chan = trial.zoom_channel_tag
-            chan_actual = trial.fork_snap.get(chan)
-            if not _values_match(chan_actual, trial.zoom_target_value):
-                bearing_pairs = [(t, v) for t, v in bearing_pairs if t != chan]
-                bearing_pairs.append((chan, trial.zoom_target_value))
-        bearing = tuple(bearing_pairs)
+        bearing = _deviation_bearing(
+            trial,
+            frame,
+            state.watch_tags,
+            checkpoint.frontier,
+        )
         # The incident's evidence is the recorded step timelines inside the
         # window — the trend recorder's pen marks — never a history re-diff.
         # ``step_contexts`` is world-side, so reverted steps are already gone
@@ -808,13 +993,9 @@ def _investigate_and_revert(
                 (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
             ),
             departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
-            eject_cause_dones=incident_eject_dones(incident, ctx.program),
+            regression_witness=incident_regression_witness(trial.fork, incident),
             progress_gauge=state.gauge,
             progress_anchor=dict(cp_fork.state.tags),
-            # The trial fork contains the incident's recorded transitions.
-            # ``state.work`` is the pre-trial checkpoint and cannot explain a
-            # latch that only fired while the trial was running.
-            eject_latch_baseline=incident_eject_latches(trial.fork, incident, ctx),
         )
 
         # The register set the target still needs: the checkpoint's *frontier*,
@@ -839,12 +1020,18 @@ def _investigate_and_revert(
                 and retain_if_unresolved.progress.effect == "preserved"
                 else ()
             ),
+            excluded_corrections=frozenset(state.correction_nogoods.get(cp_key, ())),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this
         # exact installed form. Post-commit recovery does not reinterpret that proof through
         # a second, globally-steady-hold rule.
         investigation_holds.extend(investigation.confirmed_holds)
+        revoked_receipts = _contradicted_corrections(state, investigation)
+        if revoked_receipts:
+            # The confirmed opposite remedy is evidence against our prior
+            # intervention, not another hold to layer on top of it.
+            investigation_holds.clear()
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -874,6 +1061,7 @@ def _investigate_and_revert(
                 _rejection_detail(rejection, slug)
                 for rejection, slug in zip(investigation.rejected, rejection_slugs, strict=True)
             ),
+            "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
         }
         if investigation_holds:
             # Investigation owns applicability and replayed these exact guarded
@@ -893,24 +1081,31 @@ def _investigate_and_revert(
                 )
             )
 
-    if retain_if_unresolved is not None and not investigation_rungs:
+    if retain_if_unresolved is not None and not investigation_rungs and not revoked_receipts:
         # The departure earned no gauge credit, but investigation also found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary
-        # bounded provisional loan.
+        # bounded provisional loan. If a corridor is already open, retain its
+        # original rollback boundary, budget, and the actual first observed
+        # landing. The classifier's later quiescent fork is evidence, not
+        # permission to skip the next recomputation point.
         assert trial.zoom_channel_tag is not None
+        retained = PilotEvent(
+            "departure_investigated",
+            state.work.state.scan_id,
+            {
+                "channel_tag": trial.zoom_channel_tag,
+                "from_value": trial.before_snap.get(trial.zoom_channel_tag),
+                "retained": True,
+                "progress": retain_if_unresolved.progress,
+                "investigation": investigation_payload,
+            },
+        )
+        if state.provisional is not None:
+            _bank_provisional_landing(trial, state)
+            return (retained,)
         return (
-            PilotEvent(
-                "departure_investigated",
-                state.work.state.scan_id,
-                {
-                    "channel_tag": trial.zoom_channel_tag,
-                    "from_value": trial.before_snap.get(trial.zoom_channel_tag),
-                    "retained": True,
-                    "progress": retain_if_unresolved.progress,
-                    "investigation": investigation_payload,
-                },
-            ),
+            retained,
             *_start_provisional(
                 retain_if_unresolved,
                 trial,
@@ -949,7 +1144,8 @@ def _investigate_and_revert(
         if not local_checkpoint:
             state.provisional = None
     state.load_world(cp_world)
-    if investigation_rungs:
+    revoked_ids = _revoke_corrections(state, revoked_receipts, checkpoint)
+    if investigation_rungs and not revoked_ids:
         state.rungs = _append_rungs(state.work, investigation_rungs, state.rungs)
         # Bank the corrected world onto the checkpoint.  A replay-confirmed
         # correction is knowledge, but rungs live in the revertible World half —
@@ -971,6 +1167,35 @@ def _investigate_and_revert(
             cp_trend,
             checkpoint.frontier,
         )
+        assert investigation is not None
+        confirmed_hypothesis = investigation.confirmed[0] if investigation.confirmed else None
+        proof = investigation.confirmed_outcomes[0] if investigation.confirmed_outcomes else None
+        state.correction_receipts.append(
+            _CorrectionReceipt(
+                receipt_id=(
+                    max(
+                        (receipt.receipt_id for receipt in state.correction_receipts),
+                        default=0,
+                    )
+                    + 1
+                ),
+                origin_key=cp_key,
+                identity=correction_identity(
+                    confirmed_hypothesis.holds
+                    if confirmed_hypothesis is not None
+                    else investigation_rungs
+                ),
+                rungs=tuple(investigation_rungs),
+                sources=(confirmed_hypothesis.sources if confirmed_hypothesis is not None else ()),
+                justification=(
+                    proof.justification.value
+                    if proof is not None and proof.justification is not None
+                    else proof.reason
+                    if proof is not None
+                    else "replay-confirmed"
+                ),
+            )
+        )
     state.best_trend = cp_trend
     return (
         PilotEvent(
@@ -984,6 +1209,7 @@ def _investigate_and_revert(
                 "rungs": tuple(state.rungs),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
+                "revoked_corrections": revoked_ids,
             },
         ),
     )

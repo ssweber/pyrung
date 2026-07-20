@@ -36,8 +36,13 @@ from pyrung.core.analysis.pilot.outcome import (
     ProgressEffect,
     TrialAssessment,
 )
-from pyrung.core.analysis.pilot.progress import _anchor_bearing_receipt, _monitor_trend
+from pyrung.core.analysis.pilot.progress import (
+    _anchor_bearing_receipt,
+    _deviation_bearing,
+    _monitor_trend,
+)
 from pyrung.core.analysis.pilot.types import (
+    PilotEvent,
     _Checkpoint,
     _PilotState,
     _Step,
@@ -265,8 +270,8 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
     assert state.best_trend == 5
 
 
-def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatch):
-    """A second clean state move must not nest or roll back the attempt."""
+def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
+    """An open corridor changes rollback policy, not whether a departure is read."""
     checkpoint = _cp(("source",), _oneshot_plc(), 2)
     trial = _make_trial(
         2,
@@ -292,10 +297,21 @@ def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatc
         settled_fork=trial.fork,
         settled_value=4,
         settle_scans=0,
+        progress=GaugeReceipt((), (), "preserved"),
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
         lambda *_args, **_kwargs: verdict,
+    )
+    investigated = []
+
+    def _investigate(*_args, retain_if_unresolved=None, **_kwargs):
+        investigated.append(retain_if_unresolved)
+        return (PilotEvent("departure_investigated", 0, {"retained": True}),)
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress._investigate_and_revert",
+        _investigate,
     )
     ctx = SimpleNamespace(
         target_tag="State",
@@ -305,7 +321,11 @@ def test_clean_departure_inside_provisional_remains_ordinary_piloting(monkeypatc
 
     events = _monitor_trend(trial, _frame(), state, ctx)
 
-    assert [event.kind for event in events] == ["letrun_ejection"]
+    assert [event.kind for event in events] == [
+        "letrun_ejection",
+        "departure_investigated",
+    ]
+    assert investigated == [verdict]
     assert state.provisional is not None
     assert state.work is trial.fork
     assert len(state.checkpoints) == 1
@@ -640,6 +660,27 @@ def test_zoom_accepted_payload_records_requested_and_landed():
     assert payload["zoom_target_value"] == 6  # requested bearing
     assert payload["zoom_actual_value"] == 8  # where the world actually landed
     assert payload["ejected"] is True
+
+
+def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
+    """A failed 6 -> 16 zoom that ejects to 8 departed Execute (6).
+
+    The navigation destination remains 16 on the trial/replay contract, but it
+    was never held and therefore cannot own a departure timestamp.
+    """
+    trial = _make_trial(
+        7,
+        Outcome.AMBIENT_DRIFT,
+        zoom_channel_tag="State",
+        zoom_target_value=16,
+        before_snap={"State": 6},
+        fork_snap={"State": 8},
+    )
+    frame = SimpleNamespace(snap={"State": 6})
+
+    bearing = _deviation_bearing(trial, frame, ["State"], ())
+
+    assert bearing == (("State", 6),)
 
 
 def test_investigation_event_rejected_detail_carries_slug(monkeypatch):

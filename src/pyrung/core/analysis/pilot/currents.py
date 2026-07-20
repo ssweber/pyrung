@@ -63,6 +63,10 @@ class CurrentReading:
     action: tuple[str, Any]
     command_tag: str
     command_value: Any
+    # Every command-gate write the push supplies. A request strobe alone is
+    # shared by many unrelated commands, so consumers must compare the whole
+    # signature before deciding an automatic producer subsumes this action.
+    command_writes: tuple[tuple[str, Any], ...]
     from_state: Any
     to_state: Any
     note: str
@@ -210,11 +214,15 @@ def current_readings(
                 continue
             command_desc = ", ".join(f"{t}={writes[t]!r}" for t in sorted(writes) if t in writes)
             seen_buttons.add(button)
+            command_writes = tuple(
+                sorted((tag, writes[tag]) for tag in transition.command_guards if tag in writes)
+            )
             candidates.append(
                 CurrentReading(
                     action=action,
                     command_tag=next(iter(transition.command_guards), ""),
                     command_value=writes.get(next(iter(transition.command_guards), "")),
+                    command_writes=command_writes,
                     from_state=state_value,
                     to_state=transition.to_value,
                     note=(

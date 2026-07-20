@@ -38,7 +38,8 @@ Escalate according to what remains unreadable:
 3. An `AdvanceProfile` states one next operation: conditions to hold or pulse,
    and the observable boundary at which PILOT must read the world again.
 4. `program_step.py` checks one exact producer in an unchanged fork and reports
-   keep running, needs input, or unclear. It does not choose an action.
+   keep running, needs input, interrupted pipeline motion, or unclear. It does
+   not choose an action.
 5. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
 
@@ -124,7 +125,7 @@ knowledge that must survive:
 - `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
   dwell accounting.
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, provisional
-  recovery, gauge, and diagnostic history.
+  recovery, gauge, correction receipts/revocations, and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
   budgets/declines, coast receipts, and static-edge evidence overlays.
 - `_PilotContext`: static program analysis plus the current persistent
@@ -150,6 +151,18 @@ changes, it returns the same object. Runtime instruments return
   evidence. Empirical evidence never creates a new lever.
 - A correction is installed only in the exact guarded form that survived
   replay, and only one competing explanation is installed for an incident.
+- A corrective hold may succeed by advancing the target-relative gauge or by
+  neutralizing its recorded regression while preserving the incident's source
+  context. Neutralization means the incident-bounded changed writes on the
+  exact recorded cause chain do not replay. A later fault may share a generic
+  state-transition executor without reproducing the original cause; overwriting
+  the original causal branch's result is masking, not correction. This contract
+  is independent of whether the branch contains timers, latches, edges,
+  comparisons, or ordinary logic. A hold does not have to finish the remaining
+  route.
+- Replay confirmation is probationary knowledge. If a later exact incident
+  causally contradicts an active correction, `progress.py` revokes its receipt,
+  removes its rungs, and excludes that correction at its origin before retrying.
 - Coast predicates decide bump truth. Compiled conditions provide fold metadata
   only. Every reported crossing lands on a real recorded scan.
 - Cycle folding, table inversion, producer recognition, and departure
@@ -194,7 +207,8 @@ changes, it returns the same object. Runtime instruments return
 - `advance.py` — unambiguous instruction-owned channel lookup and boundary
   estimates. Instruction semantics live in each instruction's `AdvanceProfile`.
 - `program_step.py` — read-only unchanged-world proof for one exact producer;
-  reports the immediate boundary or unmet input.
+  reports the immediate boundary, unmet input, or a pipeline interruption that
+  must be observed before another route is selected.
 - `navigation.py` — immutable evidence, act, result, target, constraint, and
   world-view contracts.
 
