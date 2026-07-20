@@ -102,7 +102,7 @@ def _read_world(
             provenance=action.provenance,
             wake=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
             until=action.until,
-            oscillate=action.oscillate,
+            pulse=action.pulse,
             establish=action.establish,
             heuristic=action.heuristic,
             note=action.note,
@@ -248,10 +248,23 @@ def orient(
 
     if candidates.wait_prescribed:
         route_plan = candidates.route_plan
+        advance_boundary = candidates.advance_boundary
         act = Coast(
             "bearing",
-            channel_tag=(route_plan.role.channel_tag if route_plan is not None else None),
-            target_value=(route_plan.first_edge.to_value if route_plan is not None else None),
+            channel_tag=(
+                route_plan.role.channel_tag
+                if route_plan is not None
+                else advance_boundary[0]
+                if advance_boundary is not None
+                else None
+            ),
+            target_value=(
+                route_plan.first_edge.to_value
+                if route_plan is not None
+                else advance_boundary[1]
+                if advance_boundary is not None
+                else None
+            ),
             route_prescribed=route_plan is not None,
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -263,6 +276,8 @@ def orient(
                 immediate_goal=(
                     candidates.route_plan.first_edge.to_value
                     if candidates.route_plan is not None
+                    else advance_boundary[1]
+                    if advance_boundary is not None
                     else target.value
                 ),
             )

@@ -113,18 +113,9 @@ class Rung:
             return None
         if len(self._conditions) == 1:
             return self._conditions[0]
-        # For multiple conditions, we need to create a combined condition
-        # Since there's no AndCondition class, we'll create a lambda-based condition
-        from pyrung.core.condition import Condition as ConditionBase
+        from pyrung.core.condition import AllCondition
 
-        class CombinedCondition(ConditionBase):
-            def __init__(self, conditions: list[Condition]):
-                self.conditions = conditions
-
-            def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
-                return all(cond.evaluate(ctx) for cond in self.conditions)
-
-        return CombinedCondition(self._conditions)
+        return AllCondition(*self._conditions)
 
     def evaluate(self, ctx: ScanContext) -> None:
         """Evaluate this rung within a ScanContext.

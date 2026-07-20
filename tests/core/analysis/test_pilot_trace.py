@@ -14,15 +14,17 @@ from pyrung import (
     call,
     copy,
     count_up,
+    event_drum,
     on_delay,
     out,
     rung,
+    shift,
     subroutine,
+    time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
-    _counter_driver_leaf,
     _env_for,
     _rank_writers,
     _resolve_inequality_target,
@@ -219,7 +221,7 @@ def test_timer_done_running_yields_coast():
 
     When the enable (rung condition) is already satisfied on the snapshot there
     is nothing to hold; reaching ``Done == True`` means letting the accumulator
-    cross ``preset`` on its own — the same ``self_advancing`` accumulator coast
+    cross ``preset`` on its own — the same instruction-owned accumulator coast
     the counter Done branch and the ``Acc > N`` threshold branch emit.
     """
     x_Start = Bool("x_Start", external=True)
@@ -233,7 +235,7 @@ def test_timer_done_running_yields_coast():
     steerable = compute_steerable(pdg, _known(logic), logic)
 
     tree = trace_back("T1_Done", True, {"x_Start": True}, pdg, logic, steerable)
-    coast = [lf for lf in _leaves(tree) if lf.self_advancing]
+    coast = [lf for lf in _leaves(tree) if lf.advance is not None]
     assert len(coast) == 1
     assert (coast[0].tag, coast[0].value) == ("T1_Acc", 100)
     assert not coast[0].is_steerable
@@ -258,7 +260,7 @@ def test_timer_done_idle_keeps_enable_walk():
 
     tree = trace_back("T1_Done", True, {"x_Start": False}, pdg, logic, steerable)
     leaves = _leaves(tree)
-    assert not any(lf.self_advancing for lf in leaves)
+    assert not any(lf.advance is not None for lf in leaves)
     assert "x_Start" in _steerable_names(tree)
 
 
@@ -288,12 +290,12 @@ def test_timer_done_running_honors_call_gate():
     steerable = compute_steerable(pdg, _known(logic), logic)
 
     gated = trace_back("T1_Done", True, {"Step": True, "Mode": 1}, pdg, logic, steerable)
-    coast = [lf for lf in _leaves(gated) if lf.self_advancing]
+    coast = [lf for lf in _leaves(gated) if lf.advance is not None]
     assert len(coast) == 1
     assert (coast[0].tag, coast[0].value) == ("T1_Acc", 100)
 
     blocked = trace_back("T1_Done", True, {"Step": True, "Mode": 2}, pdg, logic, steerable)
-    assert not any(lf.self_advancing for lf in _leaves(blocked))
+    assert not any(lf.advance is not None for lf in _leaves(blocked))
     assert "Mode" in _steerable_names(blocked)
 
 
@@ -325,7 +327,7 @@ def test_counter_done_program_owned_live_advance_yields_coast():
     steerable = compute_steerable(pdg, _known(logic), logic)
 
     tree = trace_back("C1_Done", True, {"Running": True, "x_Run": True}, pdg, logic, steerable)
-    coast = [lf for lf in _leaves(tree) if lf.self_advancing]
+    coast = [lf for lf in _leaves(tree) if lf.advance is not None]
     assert len(coast) == 1
     assert (coast[0].tag, coast[0].value) == ("C1_Acc", 5)
     assert not coast[0].is_steerable
@@ -343,8 +345,120 @@ def test_counter_done_idle_program_advance_keeps_enable_walk():
     steerable = compute_steerable(pdg, _known(logic), logic)
 
     tree = trace_back("C1_Done", True, {"Running": False, "x_Run": False}, pdg, logic, steerable)
-    assert not any(lf.self_advancing for lf in _leaves(tree))
+    assert any(lf.advance is not None for lf in _leaves(tree))
     assert "x_Run" in _steerable_names(tree)
+
+
+def test_event_drum_trace_exposes_one_event_and_one_step_boundary():
+    enable = Bool("DrumEnable", external=True)
+    reset = Bool("DrumReset", external=True)
+    events = [Bool(f"DrumEvent{i}", external=True) for i in range(1, 4)]
+    step = Int("DrumStep")
+    done = Bool("DrumDone")
+    output = Bool("DrumOutput")
+    with Program() as logic:
+        with rung(enable):
+            event_drum(
+                outputs=[output],
+                events=events,
+                pattern=[[1], [0], [1]],
+                current_step=step,
+                completion_flag=done,
+            ).reset(reset)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snapshot = {
+        enable.name: True,
+        reset.name: False,
+        step.name: 1,
+        done.name: False,
+        **{event.name: False for event in events},
+    }
+    tree = trace_back(step.name, 3, snapshot, pdg, logic, steerable)
+
+    frontier = [leaf for leaf in _leaves(tree) if leaf.advance is not None]
+    assert [(leaf.tag, leaf.value) for leaf in frontier] == [(step.name, 2)]
+    assert frontier[0].relational
+    event_action = next(
+        action for action in tree.ordered_action_details() if action.tag == events[0].name
+    )
+    assert event_action.pulse
+
+
+def test_time_drum_trace_stops_at_the_next_step():
+    enable = Bool("TimeDrumEnable", external=True)
+    reset = Bool("TimeDrumReset", external=True)
+    step = Int("TimeDrumStep")
+    acc = Int("TimeDrumAcc")
+    done = Bool("TimeDrumDone")
+    output = Bool("TimeDrumOutput")
+    with Program() as logic:
+        with rung(enable):
+            time_drum(
+                outputs=[output],
+                presets=[10, 20, 30],
+                pattern=[[1], [0], [1]],
+                current_step=step,
+                accumulator=acc,
+                completion_flag=done,
+            ).reset(reset)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    tree = trace_back(
+        step.name,
+        3,
+        {
+            enable.name: True,
+            reset.name: False,
+            step.name: 1,
+            acc.name: 0,
+            done.name: False,
+        },
+        pdg,
+        logic,
+        steerable,
+    )
+
+    frontier = [leaf for leaf in _leaves(tree) if leaf.advance is not None]
+    assert [(leaf.tag, leaf.value) for leaf in frontier] == [(step.name, 2)]
+    assert frontier[0].relational
+
+
+def test_shift_trace_extends_the_matching_prefix_by_one_bit():
+    data = Bool("ShiftData", external=True)
+    clock = Bool("ShiftClock", external=True)
+    reset = Bool("ShiftReset", external=True)
+    bits = Block("TraceShift", TagType.BOOL, 1, 3)
+    with Program() as logic:
+        with rung(data):
+            shift(bits.select(1, 3)).clock(clock).reset(reset)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    tree = trace_back(
+        bits[3].name,
+        True,
+        {
+            data.name: True,
+            clock.name: False,
+            reset.name: False,
+            bits[1].name: True,
+            bits[2].name: False,
+            bits[3].name: False,
+        },
+        pdg,
+        logic,
+        steerable,
+    )
+
+    frontier = [leaf for leaf in _leaves(tree) if leaf.advance is not None]
+    assert [(leaf.tag, leaf.value) for leaf in frontier] == [(bits[2].name, True)]
+    clock_action = next(
+        action for action in tree.ordered_action_details() if action.tag == clock.name
+    )
+    assert clock_action.pulse
 
 
 # -- Test 6: Mixed (copy + guard + subroutine) ------------------------------
@@ -959,36 +1073,41 @@ def test_counter_int_advance_resolves_steerable_value():
     advance never matched and the driver dead-ended.  Enumerating ``Sel``'s
     declared choice domain finds ``Sel == 3``.
     """
-    from pyrung.core.analysis.pilot.accumulators import resolve_profile
-
     Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"})
     logic = _int_advance_counter(Sel)
     plc = PLC(logic)
     plc.step()
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
-    env = _TraceEnv(
-        snapshot=dict(plc.current_state.tags), pdg=pdg, program=logic, steerable=steerable
+    tree = trace_back(
+        "C_Done",
+        True,
+        dict(plc.current_state.tags),
+        pdg,
+        logic,
+        steerable,
     )
-    profile = resolve_profile("C_Done", logic).profile
-    leaf = _counter_driver_leaf(env, profile, ("C_Done",))
-    assert leaf is not None
-    assert (leaf.tag, leaf.value) == ("Sel", 3)
-    assert leaf.is_steerable and not leaf.oscillate
+    action = next(action for action in tree.ordered_action_details() if action.tag == "Sel")
+    assert action.pair == ("Sel", 3)
+    assert not action.pulse
 
 
-def test_prerequisite_action_carries_nearest_self_advancing_frontier():
+def test_prerequisite_action_carries_nearest_advance_frontier():
+    from pyrung.core.crossing import Cmp
+    from pyrung.core.instruction.advance import AdvanceStep
+
+    step = AdvanceStep(Cmp("Acc", ">=", 10))
     tree = TraceNode(
         tag="Done",
         value=True,
         children=[
-            TraceNode(tag="Acc", value=10, self_advancing=True),
+            TraceNode(tag="Acc", value=10, advance=step),
             TraceNode(tag="Enable", value=True, is_steerable=True),
         ],
     )
 
     (action,) = tree.ordered_action_details()
-    assert action.until == Atom("Done", "eq", True)
+    assert action.until == step.until
 
 
 def test_plain_action_has_no_invented_rung_lifetime():
@@ -998,21 +1117,23 @@ def test_plain_action_has_no_invented_rung_lifetime():
     assert action.until is None
 
 
-def test_counter_live_word_advance_punts():
-    """An advance read with no complete finite domain (an unbounded word) punts."""
-    from pyrung.core.analysis.pilot.accumulators import resolve_profile
-
+def test_counter_live_word_equality_resolves_without_domain_guessing():
+    """An exact equality demand does not need an enumerated word domain."""
     Sel = Int("Sel", external=True)  # unbounded — no choices / min-max
     logic = _int_advance_counter(Sel)
     plc = PLC(logic)
     plc.step()
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
-    env = _TraceEnv(
-        snapshot=dict(plc.current_state.tags), pdg=pdg, program=logic, steerable=steerable
+    tree = trace_back(
+        "C_Done",
+        True,
+        dict(plc.current_state.tags),
+        pdg,
+        logic,
+        steerable,
     )
-    profile = resolve_profile("C_Done", logic).profile
-    assert _counter_driver_leaf(env, profile, ("C_Done",)) is None
+    assert ("Sel", 3) in tree.ordered_actions()
 
 
 # -- Test 15: conjunctive compare reversal rewrites onto both source atoms -----

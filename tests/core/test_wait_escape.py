@@ -223,7 +223,7 @@ class TestWaitWithoutEscape:
 
         assert _find(prog) == []
 
-    def test_self_advancing_step_without_external_input_is_not_a_wait(self) -> None:
+    def test_autonomous_step_without_external_input_is_not_a_wait(self) -> None:
         """A step advanced by a real timer is not wait-shaped: it moves on its own.
 
         The timer must be genuine.  ``Int("Acc")`` that nothing writes would be an

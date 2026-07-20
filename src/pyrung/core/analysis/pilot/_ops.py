@@ -54,10 +54,50 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
         CompareLt,
         CompareNe,
     )
+    from pyrung.core.crossing import Cmp, Eq
 
     tag = plc._known_tags_by_name.get(atom.tag)
     if tag is None:
+        # Static block ranges are intentionally lazy in the runner's tag
+        # inventory. An advance profile still owns concrete Tag objects for its
+        # channels, so use that authoritative channel metadata for the guard.
+        from pyrung.core.analysis.pilot.advance import build_advance_index
+
+        owner = build_advance_index(plc.program, getattr(plc, "_harness", None)).resolve(atom.tag)
+        if owner is not None:
+            tag = next(
+                (channel for channel in owner.profile.channels if channel.name == atom.tag),
+                None,
+            )
+    if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
+    if isinstance(atom, Eq):
+        if len(atom.values) != 1:
+            raise ValueError("a multi-value advance boundary cannot scope a PilotRung")
+        return CompareNe(tag, next(iter(atom.values)))
+    if isinstance(atom, Cmp):
+        operand = (
+            plc._known_tags_by_name.get(str(atom.bound), atom.bound)
+            if atom.bound_is_tag
+            else atom.bound
+        )
+        inverse = {
+            "==": CompareNe,
+            "!=": CompareEq,
+            "<": CompareGe,
+            "<=": CompareGt,
+            ">": CompareLe,
+            ">=": CompareLt,
+            "eq": CompareNe,
+            "ne": CompareEq,
+            "lt": CompareGe,
+            "le": CompareGt,
+            "gt": CompareLe,
+            "ge": CompareLt,
+        }.get(atom.op)
+        if inverse is None:
+            raise ValueError(f"advance predicate {atom.op!r} cannot scope a PilotRung")
+        return inverse(tag, operand)
     form = atom.form
     operand = atom.operand
     if form in ("xic", "truthy"):
@@ -559,30 +599,24 @@ def _settle_delayed_effects(
             session.dwell(1)
         budget -= fork.state.scan_id - scan_before
 
-    if cfg is not None and cfg.done_specs and budget > 0:
-        from pyrung.core.analysis.pilot.accumulators import resolve_profile
-        from pyrung.core.analysis.prove.absorb import _done_acc_state
-        from pyrung.core.analysis.prove.results import PENDING
+    if cfg is not None and budget > 0:
+        from pyrung.core.analysis.pilot.advance import iter_advance_owners
 
         program = fork.program
         cur_snap = dict(fork.state.tags)
         pending_tts: list[str] = []
-        for spec in cfg.done_specs:
-            done_name = cfg.stateful_names[spec.index]
-            old = _done_acc_state(
-                spec.kind, before_snap.get(done_name), before_snap.get(spec.acc_name)
-            )
-            new = _done_acc_state(spec.kind, cur_snap.get(done_name), cur_snap.get(spec.acc_name))
-            if new == PENDING and old != PENDING:
+        if program is not None:
+            for owner in iter_advance_owners(program, harness):
                 # Resolve the timing (TT) register semantically off the owning
                 # instruction's profile — never by name surgery on the done bit,
                 # which silently misses any timer not named ``<base>_Done``.
-                match = (
-                    resolve_profile(done_name, program, harness) if program is not None else None
-                )
-                timing = getattr(match.profile, "timing", None) if match is not None else None
-                tt_name = getattr(timing, "name", None)
-                if tt_name is not None and cur_snap.get(tt_name) is True:
+                active = owner.profile.active
+                tt_name = getattr(active, "name", None)
+                if (
+                    tt_name is not None
+                    and cur_snap.get(tt_name) is True
+                    and before_snap.get(tt_name) is not True
+                ):
                     pending_tts.append(tt_name)
 
         if pending_tts:

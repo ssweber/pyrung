@@ -5,9 +5,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
+from pyrung.core.crossing import Cmp, Constraint, Eq
 from pyrung.core.tag import Tag, TagType
 from pyrung.core.time_mode import _parse_time_unit
 
+from .advance import (
+    AdvanceProfile,
+    AdvanceStep,
+    ConditionDemand,
+    Snapshot,
+    constraint_holds,
+    eq,
+    resolve_snapshot_value,
+    scalar_boundary,
+)
 from .base import Instruction
 from .utils import instruction_condition_view, to_condition
 
@@ -103,6 +115,77 @@ def _resolve_preset_value(preset: Tag | int, ctx: ScanContext) -> int:
     if isinstance(preset, Tag):
         return _read_step_tag_value(ctx, preset, fallback=0)
     return int(preset)
+
+
+def _snapshot_int(snapshot: Snapshot, tag: Tag, fallback: int) -> int:
+    try:
+        return int(snapshot.get(tag.name, tag.default))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _condition_step(
+    until: Eq | Cmp,
+    condition: Any,
+    *,
+    holds: tuple[ConditionDemand, ...] = (),
+) -> AdvanceStep:
+    demand = ConditionDemand(condition)
+    if isinstance(condition, (RisingEdgeCondition, FallingEdgeCondition)):
+        return AdvanceStep(until=until, holds=holds, pulse=demand)
+    return AdvanceStep(until=until, holds=(*holds, demand))
+
+
+def _desired_bool(constraint: Constraint) -> bool | None:
+    if not isinstance(constraint, Eq) or len(constraint.values) != 1:
+        return None
+    value = next(iter(constraint.values))
+    return value if isinstance(value, bool) else None
+
+
+def _next_step_boundary(
+    constraint: Constraint,
+    snapshot: Snapshot,
+    *,
+    current_step: Tag,
+    step_count: int,
+) -> Eq | Cmp | None:
+    """Return the next forward step, or step 1 when a restart is needed."""
+
+    current = _snapshot_int(snapshot, current_step, 1)
+    if not 1 <= current <= step_count:
+        return Cmp(current_step.name, ">=", 1)
+    if constraint_holds(constraint, snapshot) is True:
+        return None
+
+    if isinstance(constraint, Eq):
+        numeric = sorted(
+            int(value)
+            for value in constraint.values
+            if isinstance(value, int) and not isinstance(value, bool)
+        )
+        if any(value > current for value in numeric) and current < step_count:
+            return Cmp(current_step.name, ">=", current + 1)
+        if numeric:
+            return eq(current_step, 1)
+        return None
+
+    if not isinstance(constraint, Cmp):
+        return None
+    boundary = scalar_boundary(constraint, snapshot)
+    if boundary is None:
+        return None
+    if constraint.op in {">", ">=", "!=", "=="} and current < step_count:
+        return Cmp(current_step.name, ">=", current + 1)
+    return eq(current_step, 1)
+
+
+def _is_step_one_restart(boundary: Eq | Cmp, current_step: Tag) -> bool:
+    return (
+        isinstance(boundary, Eq)
+        and boundary.tag == current_step.name
+        and boundary.values == frozenset((1,))
+    )
 
 
 class _DrumBaseInstruction(Instruction):
@@ -298,6 +381,61 @@ class EventDrumInstruction(_DrumBaseInstruction):
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
 
+    def advance_profile(self) -> AdvanceProfile:
+        def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
+            if not isinstance(constraint, (Eq, Cmp)):
+                return None
+            if constraint_holds(constraint, snapshot) is True:
+                return None
+            current = _snapshot_int(snapshot, self.current_step, 1)
+            if not 1 <= current <= self.step_count:
+                return _condition_step(
+                    Cmp(self.current_step.name, ">=", 1),
+                    self.reset_condition,
+                )
+
+            if constraint.tag == self.completion_flag.name:
+                desired = _desired_bool(constraint)
+                if desired is None:
+                    return None
+                if not desired:
+                    return _condition_step(
+                        eq(self.completion_flag, False),
+                        self.reset_condition,
+                    )
+                boundary = (
+                    eq(self.completion_flag, True)
+                    if current == self.step_count
+                    else Cmp(self.current_step.name, ">=", current + 1)
+                )
+            elif constraint.tag == self.current_step.name:
+                boundary = _next_step_boundary(
+                    constraint,
+                    snapshot,
+                    current_step=self.current_step,
+                    step_count=self.step_count,
+                )
+                if boundary is None:
+                    return None
+                if _is_step_one_restart(boundary, self.current_step):
+                    return _condition_step(boundary, self.reset_condition)
+                current = _snapshot_int(snapshot, self.current_step, 1)
+            else:
+                return None
+
+            event = self.events[current - 1]
+            return AdvanceStep(
+                until=boundary,
+                holds=(ConditionDemand(self.auto_condition),),
+                pulse=ConditionDemand(event),
+            )
+
+        return AdvanceProfile(
+            channels=(self.current_step, self.completion_flag),
+            plan=plan,
+            done=self.completion_flag,
+        )
+
 
 class TimeDrumInstruction(_DrumBaseInstruction):
     _reads = ("presets", "jump_step", "current_step")
@@ -434,3 +572,72 @@ class TimeDrumInstruction(_DrumBaseInstruction):
             ctx.set_memory(frac_key, frac)
 
         self._write_control_prev_state(ctx, jump_curr=jump_curr, jog_curr=jog_curr)
+
+    def advance_profile(self) -> AdvanceProfile:
+        def _auto(until: Eq | Cmp) -> AdvanceStep:
+            return _condition_step(until, self.auto_condition)
+
+        def _reset(until: Eq | Cmp) -> AdvanceStep:
+            return _condition_step(until, self.reset_condition)
+
+        def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
+            if not isinstance(constraint, (Eq, Cmp)):
+                return None
+            if constraint_holds(constraint, snapshot) is True:
+                return None
+
+            current = _snapshot_int(snapshot, self.current_step, 1)
+            if not 1 <= current <= self.step_count:
+                return _reset(Cmp(self.current_step.name, ">=", 1))
+
+            if constraint.tag == self.current_step.name:
+                boundary = _next_step_boundary(
+                    constraint,
+                    snapshot,
+                    current_step=self.current_step,
+                    step_count=self.step_count,
+                )
+                if boundary is None:
+                    return None
+                return (
+                    _reset(boundary)
+                    if _is_step_one_restart(boundary, self.current_step)
+                    else _auto(boundary)
+                )
+
+            if constraint.tag == self.completion_flag.name:
+                desired = _desired_bool(constraint)
+                if desired is None:
+                    return None
+                if not desired:
+                    return _reset(eq(self.completion_flag, False))
+                if current < self.step_count:
+                    return _auto(Cmp(self.current_step.name, ">=", current + 1))
+                return _auto(eq(self.completion_flag, True))
+
+            if constraint.tag != self.accumulator.name:
+                return None
+            target = scalar_boundary(constraint, snapshot)
+            if target is None:
+                return None
+            acc = _snapshot_int(snapshot, self.accumulator, 0)
+            preset_raw = resolve_snapshot_value(self.presets[current - 1], snapshot)
+            try:
+                preset = int(preset_raw)
+            except (TypeError, ValueError):
+                return None
+
+            # A non-final step clears Acc as it crosses its preset. Treat that
+            # step transition as the observable boundary, then ask again.
+            if current < self.step_count and (target >= preset or target < acc):
+                return _auto(Cmp(self.current_step.name, ">=", current + 1))
+            if current == self.step_count and target < acc:
+                return _reset(eq(self.current_step, 1))
+            return _auto(constraint)
+
+        return AdvanceProfile(
+            channels=(self.current_step, self.accumulator, self.completion_flag),
+            plan=plan,
+            accumulator=self.accumulator,
+            done=self.completion_flag,
+        )

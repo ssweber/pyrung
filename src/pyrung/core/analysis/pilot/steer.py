@@ -105,14 +105,17 @@ def _pen_tags(state: _PilotState, ctx: _PilotContext) -> frozenset[str]:
     would collapse every fold to step-mode, and acc membership in the
     incident's changed set is served by endpoint diff instead.
     """
-    from pyrung.core.analysis.pilot.accumulators import iter_profiles
+    from pyrung.core.analysis.pilot.advance import iter_advance_owners
 
     dones: set[str] = set()
     accs: set[str] = set()
     if ctx.program is not None:
-        for profile, _instr in iter_profiles(ctx.program):
-            dones.add(profile.done.name)
-            accs.add(profile.accumulator.name)
+        for owner in iter_advance_owners(ctx.program):
+            profile = owner.profile
+            if profile.done is not None:
+                dones.add(profile.done.name)
+            if profile.accumulator is not None:
+                accs.add(profile.accumulator.name)
     tags = dones | set(state.watch_tags) | {r.channel_tag for r in ctx.pipeline_roles}
     return frozenset(tags - accs)
 

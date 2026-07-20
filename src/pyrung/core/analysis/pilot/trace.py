@@ -12,7 +12,6 @@ record transition knowledge, or choose the iteration's final candidate order.
 
 from __future__ import annotations
 
-import functools
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -35,20 +34,27 @@ from pyrung.core.analysis.pilot.static_expressions import (
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
-from pyrung.core.analysis.simplified import And, Atom, Or, _negate, _sp_to_expr
+from pyrung.core.analysis.simplified import (
+    And,
+    Atom,
+    Or,
+    _condition_to_expr,
+    _negate,
+    _sp_to_expr,
+)
 from pyrung.core.analysis.sp_values import (
     _FLIP_FORM,
     _chase_inequality_source,
     _expr_tag_names,
     _invert_affine,
     _required_from_atom,
-    _SnapshotView,
     _values_match,
     _writer_projection,
     _written_value_for_tag,
     copy_source_binding,
 )
-from pyrung.core.crossing import Affine, Aggregate, Literal
+from pyrung.core.crossing import Affine, Aggregate, Cmp, Constraint, Eq, Literal
+from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -115,6 +121,7 @@ class _TraceEnv:
     # disposition attach a harness-linked sensor's *driver* (the input that makes
     # it ramp) as a steerable sibling of the coast leaf.  ``None`` off-fork.
     harness: Any = None
+    advance_index: Any = None
     # Per-trace memo for the writer-guard rejection arm (:func:`_writer_guard_verdict`).
     # Pure over the trace-invariant env (frozen snapshot + constant domains), so a
     # verdict is deterministic in ``(rung id, fire-pins, guard route key)`` and can
@@ -148,6 +155,8 @@ def _env_for(
     harness: Any = None,
 ) -> _TraceEnv:
     """Build a trace env, resolving a ``TraceChoice`` route to its lock maps once."""
+    from pyrung.core.analysis.pilot.advance import build_advance_index
+
     if route is not None:
         writer_locks = route.writer_lock_map()
         or_locks = route.or_lock_map()
@@ -166,6 +175,7 @@ def _env_for(
         via_pred=via_pred,
         max_depth=max_depth,
         harness=harness,
+        advance_index=build_advance_index(program, harness),
     )
 
 
@@ -216,10 +226,8 @@ class TraceAction:
     # A rung-managed physical input can reuse them as an honest local guard when
     # trace discovers that the input must be asserted again in a new context.
     guard_atoms: tuple[Any, ...] = ()
-    # True when this action drives an edge-gated accumulator: a steady hold fires
-    # the edge only once, so the action must *oscillate* (toggle each scan) to keep
-    # the accumulator advancing.  options.py turns it into a ``PilotRung``.
-    oscillate: bool = False
+    # True when the current operation needs repeated release/assert edges.
+    pulse: bool = False
     # True when this action sits under an unsatisfied ``data_flow=="enable"`` node —
     # it *establishes* a table-enablement precondition (e.g. the mode that unblocks
     # a mask-disabled state) whose effect is a settled cross-register recompute.  It
@@ -299,10 +307,16 @@ class TraceNode:
     data_flow: str | None = None  # "copy" | "calc" | None
     provenance: tuple[str, ...] = ()
     pipeline_internal: bool = False
-    self_advancing: bool = False  # threshold on a timer/counter Acc — coast, don't steer
+    advance: Any = None
+    # A non-linear profile's boundary is itself the next stage heading. Linear
+    # profiles keep the existing gauge/terminal-coast path.
+    stage_boundary: bool = False
+    # A real linear profile keeps prerequisite holds until its parent producer
+    # settles. Synthetic and non-linear boundaries use ``AdvanceStep.until``.
+    linear_boundary: bool = False
     # Edge-gated accumulator driver: a steerable leaf that must *toggle* each scan
     # (not hold steady) to keep firing the rise/fall that advances the counter.
-    oscillate: bool = False
+    pulse: bool = False
     # Relational frontier: a live predicate (``A op B``) carried past the trace
     # boundary instead of collapsed to ``A == k``.  ``predicate`` is the source
     # ``Atom`` (evaluable via ``_eval_expr_from_state``).  The single-lever
@@ -411,8 +425,16 @@ class TraceNode:
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
         child_until = until
-        if any(child.self_advancing and not child.satisfied for child in self.children):
-            child_until = self.predicate or Atom(self.tag, "eq", self.value)
+        advance_child = next(
+            (child for child in self.children if child.advance is not None and not child.satisfied),
+            None,
+        )
+        if advance_child is not None:
+            child_until = (
+                self.predicate or Atom(self.tag, "eq", self.value)
+                if advance_child.linear_boundary
+                else advance_child.advance.until
+            )
         for child in self.children:
             child_guard_atoms = list(guard_atoms)
             for sibling in self.children:
@@ -440,7 +462,7 @@ class TraceNode:
                         provenance=self.provenance,
                         until=until,
                         guard_atoms=guard_atoms,
-                        oscillate=self.oscillate,
+                        pulse=self.pulse,
                         establish=under_enable,
                         heuristic=self.heuristic,
                         note=self.note,
@@ -492,7 +514,9 @@ class TraceNode:
             # so do not recurse.  ``satisfied`` is set by reconciliation when a
             # sibling concrete demand already covers the predicate (a guard
             # whose value comes from elsewhere); such a frontier is not a goal.
-            if not self.satisfied:
+            # The advance boundary is a receipt for its parent owned result,
+            # not a second logical goal.
+            if not self.satisfied and self.advance is None:
                 seen.add(self._relational_key())
             return
         if (
@@ -1056,18 +1080,6 @@ def _inequality_levers(
     return levers
 
 
-@functools.lru_cache(maxsize=16)
-def _progress_kinds(program: Any) -> dict[str, str]:
-    """Self-advancing accumulators (timer/counter Acc) → kind, cached per program.
-
-    Reused from the prover so the trace can surface a threshold on such an
-    accumulator (``Acc > 2``) as a coast leaf instead of dropping it.
-    """
-    from pyrung.core.analysis.prove.absorb import _collect_progress_source_kinds
-
-    return _collect_progress_source_kinds(program)
-
-
 def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
     """Whether *expr* is definitely satisfied in *snapshot*.
 
@@ -1095,267 +1107,280 @@ def target_reached(
     return _values_match(snapshot.get(target_tag), target_value)
 
 
-def _coupling_driver_leaf(
-    env: _TraceEnv, tag: str, provenance: tuple[str, ...]
-) -> TraceNode | None:
-    """The steerable driver hold that advances an analog harness sensor.
+def _constraint_atom(constraint: Constraint) -> Atom | None:
+    """Render an advance boundary in the trace predicate language."""
 
-    When *tag* is an analog coupling's feedback register, return the input PILOT
-    must hold for it to ramp (e.g. ``Enable=True``) as a steerable ``TraceNode``.
-    Surfaced as a *sibling* of the coast leaf (never a child — a child would hide
-    the ``self_advancing`` leaf from ``leaves()`` and suppress the let-run
-    escalation), so let-run holds the driver while coasting the sensor.  ``None``
-    when *tag* is not a coupling sensor, or its driver is not steerable.
-    """
-    if env.harness is None:
-        return None
-    from pyrung.core.analysis.pilot.accumulators import resolve_profile
-    from pyrung.core.condition import BitCondition, CompareEq
-
-    match = resolve_profile(tag, env.program, env.harness)
-    if match is None or match.via_done:
-        return None
-    advance = match.profile.advance
-    if isinstance(advance, BitCondition):
-        driver_tag, driver_val = advance._resolved_tag.name, True
-    elif isinstance(advance, CompareEq):
-        driver_tag, driver_val = advance.tag.name, advance.value
-    else:
-        return None
-    if driver_tag not in env.steerable:
-        return None
-    return TraceNode(tag=driver_tag, value=driver_val, is_steerable=True, provenance=provenance)
-
-
-def _resolve_preset_value(preset: Any, snapshot: dict[str, Any]) -> int | None:
-    """Resolve a counter preset (``Tag`` or literal) to an int over a snapshot."""
-    name = getattr(preset, "name", None)
-    if name is not None:
-        preset = snapshot.get(name, getattr(preset, "default", None))
-    try:
-        return int(preset)
-    except (TypeError, ValueError):
-        return None
-
-
-def _declared_finite_domain(tag: str, pdg: ProgramGraph) -> tuple[Any, ...] | None:
-    """Complete finite value domain of *tag* from its declaration alone.
-
-    A Bool → ``(True, False)`` (True first, so a Bool advance resolves exactly as
-    the historical ``(True, False)`` scan did); a ``choices=`` tag → its declared
-    keys.  Anything else — an unbounded Int/Real, or a tag absent from
-    ``pdg.tags`` — has no provably-complete finite domain, so this returns
-    ``None`` and the caller punts rather than enumerate a plausible-value set
-    (the same completeness discipline as ``tide_tables._is_complete_domain``).
-    """
-    from pyrung.core.tag import TagType
-
-    tag_ref = pdg.tags.get(tag)
-    if tag_ref is None:
-        return None
-    if getattr(tag_ref, "type", None) is TagType.BOOL:
-        return (True, False)
-    choices = getattr(tag_ref, "choices", None)
-    if choices:
-        return tuple(sorted(choices))
+    if isinstance(constraint, Eq):
+        if len(constraint.values) != 1:
+            return None
+        return Atom(constraint.tag, "eq", next(iter(constraint.values)))
+    if isinstance(constraint, Cmp):
+        form = {
+            "==": "eq",
+            "!=": "ne",
+            "<": "lt",
+            "<=": "le",
+            ">": "gt",
+            ">=": "ge",
+        }.get(constraint.op, constraint.op)
+        return Atom(constraint.tag, form, constraint.bound)
     return None
 
 
-def _counter_driver_leaf(
-    env: _TraceEnv, profile: Any, provenance: tuple[str, ...]
-) -> TraceNode | None:
-    """The steerable input that advances a counter, as a sibling driver leaf.
-
-    A counter advances once per scan its ``advance`` condition holds.  A plain
-    level (``BitCondition``) driver is held steady; an edge (``rise``/``fall``)
-    driver fires only once when held, so the leaf is flagged ``oscillate`` and
-    options.py turns it into a toggling ``PilotRung``.  ``None`` when the
-    advance has no single steerable read.
-    """
-    from pyrung.core.analysis.pdg import _extract_reads_from_condition
-    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
-
-    advance = profile.advance
-    if advance is None:
-        return None
-    reads = _extract_reads_from_condition(advance, {})
-    if len(reads) != 1:
-        return None
-    read_tag = next(iter(reads))
-    if read_tag not in env.steerable:
-        return None
-    if isinstance(advance, (RisingEdgeCondition, FallingEdgeCondition)):
-        return TraceNode(
-            tag=read_tag, value=True, is_steerable=True, oscillate=True, provenance=provenance
-        )
-    # Level advance: hold the read at a value that makes advance == advance_value.
-    # A Bool read enumerates the historical ``(True, False)`` pair; an int/word read
-    # (``Sel == 3``) enumerates its COMPLETE declared finite domain (Bool or
-    # ``choices=``).  A read with no complete finite domain — an unbounded live
-    # word — has no sound candidate set, so punt rather than guess.
-    domain = _declared_finite_domain(read_tag, env.pdg)
-    if domain is None:
-        return None
-    for candidate in domain:
-        try:
-            evaluated = advance.evaluate(_SnapshotView(env.snapshot, {read_tag: candidate}))
-        except Exception:  # noqa: BLE001 — any eval failure → no resolvable driver
-            return None
-        if evaluated == profile.advance_value:
-            return TraceNode(
-                tag=read_tag, value=candidate, is_steerable=True, provenance=provenance
-            )
-    return None
+def _mark_pulse(nodes: list[TraceNode]) -> None:
+    for node in nodes:
+        if node.is_steerable:
+            node.pulse = True
+        _mark_pulse(node.children)
 
 
-def _counter_done_frontier(
-    env: _TraceEnv, done_tag: str, provenance: tuple[str, ...]
-) -> TraceNode | None:
-    """Recognize a counter ``Done`` bit as a self-advancing accumulator frontier.
+def _needs_prior_program_stage(node: TraceNode, env: _TraceEnv) -> bool:
+    """Whether this demand first needs persistent program state to move."""
 
-    Reaching ``Done == True`` means driving the accumulator to ``preset`` — not
-    firing the writer rung once (the naive backward walk surfaces the rung
-    condition as a single steerable leaf and loses the count entirely).  Mirrors
-    the ``Acc > N`` branch (a ``self_advancing`` coast leaf) plus the analog
-    ``_coupling_driver_leaf`` sibling: the coast leaf rides let-run; the driver
-    leaf is held (level) or oscillated (edge).  Scoped to counters — timer ``Done``
-    bits are owned by :func:`_timer_done_frontier` / the enable-condition coast.
-
-    A counter with no resolvable steerable driver (the advance condition is
-    program-owned) gets the coast anyway when that advance is a *level*
-    condition currently satisfied on the snapshot — the counter is provably
-    counting and there is nothing to hold, the running-timer shape.  An
-    edge-gated advance is excluded there ("currently firing" is not a level
-    property a snapshot can witness).  ``None`` when *done_tag* is not a
-    counter ``Done`` bit, its preset can't be resolved, or neither a driver
-    nor a live level advance exists.
-    """
-    from pyrung.core.analysis.pilot.accumulators import resolve_profile
-    from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
-    from pyrung.core.instruction.accumulating import KIND_COUNT_DOWN, KIND_COUNT_UP
-
-    match = resolve_profile(done_tag, env.program)
-    if match is None or not match.via_done:
-        return None
-    profile = match.profile
-    if profile.kind not in (KIND_COUNT_UP, KIND_COUNT_DOWN):
-        return None
-    preset = _resolve_preset_value(profile.preset, env.snapshot)
-    if preset is None:
-        return None
-    coast = TraceNode(
-        tag=profile.accumulator.name,
-        value=profile.done_target(preset),
-        self_advancing=True,
-        provenance=provenance,
-    )
-    driver = _counter_driver_leaf(env, profile, provenance)
-    if driver is None:
-        if isinstance(profile.advance, (RisingEdgeCondition, FallingEdgeCondition)):
-            return None
-        if not _accumulator_running(env, done_tag, profile):
-            return None
-        return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast])
-    return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast, driver])
-
-
-def _timer_done_frontier(
-    env: _TraceEnv, done_tag: str, provenance: tuple[str, ...]
-) -> TraceNode | None:
-    """Recognize a *running* on-delay timer's ``Done`` bit as a coast frontier.
-
-    The counter analog (:func:`_counter_done_frontier`) surfaces the accumulator
-    coast plus a steerable advance driver.  A timer whose enable is *unsatisfied*
-    is already handled by the ordinary walk — it surfaces the enable's steerable
-    inputs, they get held, and the hold's ``until`` powers the coast — so this
-    helper owns only the complementary case that walk cannot represent: an
-    on-delay timer whose enable (writer rung condition AND its call-site gate) is
-    *already satisfied* on the snapshot.  Nothing is left to hold; reaching
-    ``Done == True`` means letting the accumulator cross ``preset`` under the held
-    state, exactly the ``Acc > N`` threshold branch (a lone ``self_advancing``
-    coast leaf).
-
-    Restricted to :data:`KIND_ON_DELAY` — the only kind whose ``Done`` latches by
-    forward accumulation under a *true* enable.  An off-delay accumulates while
-    its rung is *unpowered*, so "enable satisfied" is the opposite condition and
-    this coast would be wrong; it is excluded.  ``None`` (today's enable-condition
-    walk, byte-identical) when *done_tag* is not an on-delay ``Done`` bit, its
-    preset is unresolvable, or its enable is not currently satisfied.
-    """
-    from pyrung.core.analysis.pilot.accumulators import resolve_profile
-    from pyrung.core.instruction.accumulating import KIND_ON_DELAY
-
-    match = resolve_profile(done_tag, env.program)
-    if match is None or not match.via_done:
-        return None
-    profile = match.profile
-    if profile.kind != KIND_ON_DELAY:
-        return None
-    preset = _resolve_preset_value(profile.preset, env.snapshot)
-    if preset is None:
-        return None
-    if not _accumulator_running(env, done_tag, profile):
-        return None
-    coast = TraceNode(
-        tag=profile.accumulator.name,
-        value=profile.done_target(preset),
-        self_advancing=True,
-        provenance=provenance,
-    )
-    return TraceNode(tag=done_tag, value=True, provenance=provenance, children=[coast])
-
-
-def _accumulator_running(env: _TraceEnv, done_tag: str, profile: Any) -> bool:
-    """Whether an accumulator is *currently advancing* on the snapshot.
-
-    Shared by the running on-delay and the program-owned-level-advance counter:
-    the enable is the writer rung condition (``profile.advance`` at its
-    ``advance_value``) AND the call-site gate of the rung's subroutine — the same
-    atoms the ordinary walk attaches as ``Done``-node children.  Edge-gated
-    advances are the caller's job to exclude ("currently firing" is not a level
-    property a snapshot can witness).  Fail-closed: an unreadable advance, or no
-    currently-called writer path, returns ``False`` and the ordinary
-    hold-and-coast walk owns the case.
-    """
-    try:
-        advancing = profile.advance.evaluate(_SnapshotView(env.snapshot, {}))
-    except Exception:  # noqa: BLE001 — unreadable advance → not provably running
-        return False
-    if bool(advancing) != bool(profile.advance_value):
-        return False
-    return _writer_subroutine_reached(env, done_tag)
-
-
-def _writer_subroutine_reached(env: _TraceEnv, tag: str) -> bool:
-    """Whether every writer rung of *tag* sits under a currently-called path.
-
-    Mirrors the ordinary walk's one-level caller-route attachment: a Main-scope
-    writer carries no call gate (trivially reached); a subroutine writer is
-    reached only when some caller rung whose ``calls`` name its subroutine has a
-    satisfied condition on the snapshot.  ``False`` when *tag* has no writers.
-    """
-    writers = env.pdg.writers_of.get(tag, frozenset())
-    if not writers:
-        return False
-    for ri in writers:
-        subroutine = env.pdg.rung_nodes[ri].subroutine
-        if subroutine and not _subroutine_called(env, subroutine):
-            return False
-    return True
-
-
-def _subroutine_called(env: _TraceEnv, subroutine: str) -> bool:
-    """Whether some caller rung invoking *subroutine* has a satisfied condition."""
-    for cn in env.pdg.rung_nodes:
-        if subroutine not in cn.calls:
-            continue
-        call_ro = resolve_rung(env.program, cn)
-        if call_ro is None:
-            continue
-        call_sp = call_ro.sp_tree()
-        if call_sp is None or _expr_satisfied(_sp_to_expr(call_sp), env.snapshot):
+    if node.writer_rung is not None:
+        rung = env.pdg.rung_nodes[node.writer_rung]
+        if (
+            node.tag in rung.all_writes
+            and node.tag not in rung.ote_writes
+            and (rung.condition_reads or node.tag in rung.data_reads)
+        ):
             return True
-    return False
+    return any(_needs_prior_program_stage(child, env) for child in node.children)
+
+
+def _trace_demand(
+    env: _TraceEnv,
+    demand: Any,
+    *,
+    pulse: bool,
+    provenance: tuple[str, ...],
+    depth: int,
+    retain_satisfied: bool,
+) -> list[TraceNode]:
+    """Resolve one profile condition through the ordinary trace machinery."""
+
+    if demand is None or demand.condition is None:
+        return []
+    expression = _condition_to_expr(demand.condition)
+    if not demand.value:
+        expression = _negate(expression)
+    nodes = _trace_expression(
+        env,
+        expression,
+        "",
+        provenance=provenance,
+        _visited=set(),
+        _depth=depth,
+    )
+
+    def _retain_satisfied_steerables(node: TraceNode) -> None:
+        # A profile hold is a lifetime requirement, not merely a value check.
+        # Keep an already-true input in the action details so PILOT can renew
+        # its scoped rung after the previous boundary expires.
+        if node.satisfied and node.tag in env.steerable:
+            node.is_steerable = True
+        for child in node.children:
+            _retain_satisfied_steerables(child)
+
+    if retain_satisfied:
+        for node in nodes:
+            _retain_satisfied_steerables(node)
+    for node in nodes:
+        if (
+            not node.satisfied
+            and not node.is_steerable
+            and (
+                node.tag in env.opaque_loop
+                or node.tag in env.pipeline_internal_tags
+                or _needs_prior_program_stage(node, env)
+            )
+        ):
+            # First move an owned state/pipeline register into the condition
+            # the instruction needs.  The command that establishes that state
+            # is not itself a level hold for the later timer/counter coast.
+            node.data_flow = "enable"
+    if pulse:
+        _mark_pulse(nodes)
+    return nodes
+
+
+def _demand_holds(demand: Any, snapshot: dict[str, Any]) -> bool:
+    """Whether one profile demand already has its requested truth value."""
+
+    if demand is None or demand.condition is None:
+        return True
+    actual = _eval_expr_from_state(_condition_to_expr(demand.condition), snapshot)
+    return actual is bool(demand.value)
+
+
+def _owner_call_gate_nodes(
+    env: _TraceEnv,
+    owner: Any,
+    provenance: tuple[str, ...],
+    depth: int,
+) -> list[TraceNode]:
+    """Trace the call gate when an advance owner lives in a subroutine."""
+
+    instruction = owner.instruction
+    if instruction is None:
+        return []
+    subroutine: str | None = None
+    for rung_node in env.pdg.rung_nodes:
+        rung = resolve_rung(env.program, rung_node)
+        if rung is not None and instruction in getattr(rung, "_instructions", ()):
+            subroutine = rung_node.subroutine
+            break
+    if subroutine is None:
+        return []
+
+    routes: list[list[TraceNode]] = []
+    for caller in env.pdg.rung_nodes:
+        if subroutine not in caller.calls:
+            continue
+        rung = resolve_rung(env.program, caller)
+        sp = rung.sp_tree() if rung is not None else None
+        if sp is None:
+            return []
+        expression = _sp_to_expr(sp)
+        if _expr_satisfied(expression, env.snapshot):
+            return []
+        routes.append(
+            _trace_expression(
+                env,
+                expression,
+                "",
+                provenance=provenance,
+                _visited=set(),
+                _depth=depth + 1,
+            )
+        )
+    if not routes:
+        return []
+    pilotable = [route for route in routes if _route_pilotable(route)]
+    return min(pilotable or routes, key=lambda route: _trace_score(route, env.pdg))
+
+
+def _advance_frontier(
+    env: _TraceEnv,
+    constraint: Constraint,
+    provenance: tuple[str, ...],
+    *,
+    depth: int,
+) -> TraceNode | None:
+    """Return the one generic frontier for an instruction-owned channel."""
+
+    if not isinstance(constraint, (Eq, Cmp)):
+        return None
+    owner = env.advance_index.resolve(constraint.tag)
+    if owner is None:
+        conflict = env.advance_index.conflict_message(constraint.tag)
+        if conflict is None:
+            return None
+        return TraceNode(
+            tag=constraint.tag,
+            value=getattr(constraint, "bound", None),
+            provenance=provenance,
+            note=conflict,
+        )
+
+    step = owner.profile.plan(constraint, env.snapshot)
+    if step is None:
+        return None
+    if (
+        owner.profile.linear is not None
+        and owner.profile.active is not None
+        and owner.profile.done is not None
+        and constraint.tag == owner.profile.done.name
+        and owner.profile.linear.distance(constraint, env.snapshot) is None
+    ):
+        # Restore/clear knowledge is useful to correction handling, but it is
+        # not forward scalar motion and must not make an alternative writer
+        # route look coastable.
+        return None
+    stage_boundary = owner.profile.linear is None
+    atom = _constraint_atom(step.until)
+    boundary = TraceNode(
+        tag=step.until.tag,
+        value=(atom.operand if atom is not None else step.until),
+        satisfied=constraint_holds(step.until, env.snapshot) is True,
+        provenance=provenance,
+        relational=isinstance(step.until, Cmp) and stage_boundary,
+        predicate=atom if stage_boundary else None,
+        advance=step,
+        stage_boundary=stage_boundary,
+        linear_boundary=not stage_boundary,
+    )
+    if (
+        isinstance(constraint, Cmp)
+        and owner.profile.linear is not None
+        and owner.profile.accumulator is not None
+        and constraint.tag == owner.profile.accumulator.name
+        and owner.instruction is not None
+    ):
+        # Keep the established scalar coast shape for an instruction-owned
+        # accumulator threshold. Its enable is traced at the producer that
+        # needs it; expanding that future enable here would add a second
+        # prerequisite and distort route scoring and target distance.
+        return boundary
+    gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
+    running_linear = owner.profile.linear is not None and owner.profile.active is not None
+    if running_linear and (
+        gate_nodes
+        or any(not _demand_holds(demand, env.snapshot) for demand in step.holds)
+        or (step.pulse is not None and not _demand_holds(step.pulse, env.snapshot))
+    ):
+        # A linear owner with an active role (a timer-shaped owner) is a coast
+        # frontier only after its current operation is already running.  While
+        # its enable or call path is closed, the ordinary writer trace exposes
+        # that nearer prerequisite.  Retracing after it lands then reveals the
+        # accumulator boundary.
+        return None
+    demand_nodes: list[TraceNode] = []
+    for demand in step.holds:
+        if running_linear and _demand_holds(demand, env.snapshot):
+            continue
+        demand_nodes.extend(
+            _trace_demand(
+                env,
+                demand,
+                pulse=False,
+                provenance=provenance,
+                depth=depth + 1,
+                retain_satisfied=owner.profile.linear is None,
+            )
+        )
+    if step.pulse is not None:
+        demand_nodes.extend(
+            _trace_demand(
+                env,
+                step.pulse,
+                pulse=True,
+                provenance=provenance,
+                depth=depth + 1,
+                retain_satisfied=owner.profile.linear is None,
+            )
+        )
+    establish_nodes = [
+        node
+        for node in (*gate_nodes, *demand_nodes)
+        if node.data_flow == "enable" and not node.satisfied
+    ]
+    # This instruction is not the next operation while a persistent program
+    # prerequisite is still closed.  Let the ordinary writer trace expose that
+    # nearer state transition; after it lands, retracing will make this profile
+    # the immediate frontier.
+    if establish_nodes:
+        return None
+    children = [boundary, *gate_nodes, *demand_nodes]
+    target_atom = _constraint_atom(constraint)
+    return TraceNode(
+        tag=constraint.tag,
+        value=(target_atom.operand if target_atom is not None else constraint),
+        provenance=provenance,
+        relational=isinstance(constraint, Cmp),
+        predicate=target_atom,
+        children=children,
+    )
 
 
 def trace_relational(
@@ -1462,7 +1487,7 @@ def _is_dead_end_leaf(leaf: TraceNode) -> bool:
         not leaf.children
         and not leaf.satisfied
         and not leaf.is_steerable
-        and not leaf.self_advancing
+        and leaf.advance is None
         and not leaf.pipeline_internal
         and not leaf.relational
     )
@@ -1777,18 +1802,28 @@ def _trace_expression(
         target = _atom_target(expr)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
+                constraint = Cmp(
+                    expr.tag,
+                    {
+                        "lt": "<",
+                        "le": "<=",
+                        "gt": ">",
+                        "ge": ">=",
+                        "ne": "!=",
+                    }[expr.form],
+                    expr.operand,
+                    bound_is_tag=(isinstance(expr.operand, str) and expr.operand in env.pdg.tags),
+                )
+                advance = _advance_frontier(
+                    env,
+                    constraint,
+                    provenance,
+                    depth=_depth,
+                )
+                if advance is not None:
+                    return [advance]
                 # A threshold (Acc > N) on a self-advancing accumulator (timer
                 # or counter) is a coast leaf: wait for it to cross on its own.
-                if expr.tag in _progress_kinds(env.program):
-                    return [
-                        TraceNode(
-                            tag=expr.tag,
-                            value=expr.operand,
-                            self_advancing=True,
-                            satisfied=_expr_satisfied(expr, env.snapshot),
-                            provenance=provenance,
-                        )
-                    ]
                 if _expr_satisfied(expr, env.snapshot):
                     return []
                 # Carry the predicate live as a relational frontier (Stage A)
@@ -1826,23 +1861,6 @@ def _trace_expression(
                 # under the held Enable and crosses on its own).  Without this the
                 # frontier looks like an opaque dead-end and the loop bails before
                 # the coast.
-                if expr.tag not in env.steerable and not env.pdg.writers_of.get(expr.tag):
-                    lever_children.append(
-                        TraceNode(
-                            tag=expr.tag,
-                            value=expr.operand,
-                            self_advancing=True,
-                            provenance=provenance,
-                        )
-                    )
-                    # If this is a harness-linked sensor, attach its driver hold
-                    # (e.g. Enable=True) as a *sibling* so let-run holds the
-                    # input that makes it ramp while coasting the sensor.  The
-                    # bare coast leaf above stays a leaf, so the let-run
-                    # escalation is unchanged.
-                    driver = _coupling_driver_leaf(env, expr.tag, provenance)
-                    if driver is not None:
-                        lever_children.append(driver)
                 if lever_children:
                     return [
                         TraceNode(
@@ -1865,20 +1883,6 @@ def _trace_expression(
             and _values_match(env.snapshot.get(tag), val)
         ):
             return [TraceNode(tag=tag, value=val, is_steerable=True, provenance=provenance)]
-        if (
-            expr.form in ("rise", "fall")
-            and not env.pdg.writers_of.get(tag)
-            and tag not in env.steerable
-        ):
-            return [
-                TraceNode(
-                    tag=tag,
-                    value=val,
-                    self_advancing=True,
-                    satisfied=_expr_satisfied(expr, env.snapshot),
-                    provenance=provenance,
-                )
-            ]
         child = _trace_back(
             env,
             tag,
@@ -2005,18 +2009,20 @@ def _trace_back(
     if tag in env.pipeline_internal_tags:
         return TraceNode(tag=tag, value=value, pipeline_internal=True)
 
+    advance = _advance_frontier(
+        env,
+        Eq(tag, frozenset((value,))),
+        (),
+        depth=_depth,
+    )
+    if advance is not None:
+        return advance
+
     # Counter/timer Done bit: reaching Done==True means driving the accumulator
     # to preset (a coast), not firing the writer rung once.  Surface the
     # accumulator frontier instead of the naive rung-condition walk — the counter
     # branch adds an advance driver; the timer branch owns only the already-running
     # case (enable satisfied, nothing left to hold).
-    if _values_match(value, True):
-        frontier = _counter_done_frontier(env, tag, ())
-        if frontier is None:
-            frontier = _timer_done_frontier(env, tag, ())
-        if frontier is not None:
-            return frontier
-
     _child_ancestry = (*_ancestry, (tag, value))
 
     if env.pdg.tag_roles.get(tag) == TagRole.INPUT:

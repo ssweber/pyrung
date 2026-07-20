@@ -308,7 +308,7 @@ def _caller_guard_ctx(program: Any) -> Any:
     per subroutine, the full symbolic call guard (OR over call sites, each ANDed
     with the caller's own recursive call guard, recursion-cycle guarded).  The
     trace hot path asks for availability per writer per iteration, so the ctx is
-    memoized here (Program is hashable — same pattern as ``_progress_kinds``).
+    memoized here because ``Program`` is hashable.
     """
     from pyrung.core.analysis.simplified import _build_guard_ctx
 

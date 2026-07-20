@@ -13,6 +13,7 @@ from pyrung.core.analysis.pilot.compass import (
     CompassObservation,
     NavigationCatalog,
 )
+from pyrung.core.analysis.pilot.currents import Producer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.options import _build_candidates, _compass_route_plan
 from pyrung.core.analysis.pilot.trace import TraceNode
@@ -164,14 +165,25 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
 def test_program_owned_sibling_preserves_an_automatic_edge() -> None:
     role = PipelineRoles("State")
     route = _action_route(6, 16, "Complete")
+    producer = Producer(
+        rung_index=7,
+        kind="program",
+        guard_tags=frozenset({"FinishDone"}),
+        co_writes=frozenset(),
+        command_tag="Complete",
+        command_value=True,
+    )
     edges = _edges_from_routes(
         role,
         (route,),
         {},
-        frozenset({("Complete", repr(True))}),
+        {("Complete", repr(True)): (producer,)},
     )
 
     assert {edge.action for edge in edges} == {("Complete", True), None}
+    by_action = {edge.action: edge for edge in edges}
+    assert by_action[None].program_producers == (producer,)
+    assert by_action[("Complete", True)].program_producers == ()
 
 
 def test_completion_edge_records_its_bearing_action_edge_does_not() -> None:
@@ -185,11 +197,19 @@ def test_completion_edge_records_its_bearing_action_edge_does_not() -> None:
         _action_route(6, 16, "Complete"),
         enablers=(("Complete", True), ("Tmr_Done", True)),
     )
+    producer = Producer(
+        rung_index=7,
+        kind="program",
+        guard_tags=frozenset({"Tmr_Done"}),
+        co_writes=frozenset(),
+        command_tag="Complete",
+        command_value=True,
+    )
     edges = _edges_from_routes(
         role,
         (route,),
         {},
-        frozenset({("Complete", repr(True))}),
+        {("Complete", repr(True)): (producer,)},
     )
 
     by_action = {edge.action: edge for edge in edges}

@@ -1,5 +1,4 @@
-"""Tests for PILOT's accumulator resolver and the generalized done-boundary
-hypothesis generator (``_done_boundary_hypotheses``).
+"""Tests for PILOT's advance ownership and done-boundary corrections.
 
 The resolver maps an ejecting consumer tag — a Done bit or an ``Acc`` register —
 back to its owning instruction's profile; the generator turns that into the
@@ -12,20 +11,25 @@ from types import SimpleNamespace
 from typing import Any
 
 from pyrung import (
+    Block,
     Bool,
     Counter,
+    Int,
     Program,
     Rung,
+    TagType,
     Timer,
     count_up,
+    event_drum,
     on_delay,
     out,
+    shift,
+    time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.accumulators import (
-    eject_target,
-    resolve_profile,
-    scans_to_eject,
+from pyrung.core.analysis.pilot.advance import (
+    build_advance_index,
+    estimate_scans,
 )
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import DeviationIncident
@@ -61,33 +65,113 @@ def _plain_timer_program() -> Program:
     return prog
 
 
-class TestResolveProfile:
+class TestAdvanceIndex:
     def test_resolves_via_done_bit(self):
         prog = _plain_timer_program()
-        match = resolve_profile("T_Done", prog)
-        assert match is not None
-        assert match.via_done is True
-        assert match.profile.kind == "on_delay"
+        owner = build_advance_index(prog).resolve("T_Done")
+        assert owner is not None
+        assert owner.profile.done is not None
+        assert owner.profile.done.name == "T_Done"
 
     def test_resolves_via_accumulator(self):
         prog = _plain_timer_program()
-        match = resolve_profile("T_Acc", prog)
-        assert match is not None
-        assert match.via_done is False
-        assert match.profile.accumulator.name == "T_Acc"
+        owner = build_advance_index(prog).resolve("T_Acc")
+        assert owner is not None
+        assert owner.profile.accumulator is not None
+        assert owner.profile.accumulator.name == "T_Acc"
 
     def test_unknown_tag_returns_none(self):
-        assert resolve_profile("nope", _plain_timer_program()) is None
+        assert build_advance_index(_plain_timer_program()).resolve("nope") is None
 
-    def test_scans_to_eject_analytic(self):
+    def test_conflicting_owners_are_rejected_loudly(self):
+        run_a = Bool("run_a", external=True)
+        run_b = Bool("run_b", external=True)
+        timer = Timer.clone("Shared")
+        with Program(strict=False) as prog:
+            with Rung(run_a):
+                on_delay(timer, 10, "ms")
+            with Rung(run_b):
+                on_delay(timer, 20, "ms")
+
+        index = build_advance_index(prog)
+
+        assert index.resolve(timer.Acc.name) is None
+        assert len(index.conflict(timer.Acc.name)) == 2
+        assert "ambiguous" in (index.conflict_message(timer.Acc.name) or "")
+
+    def test_estimates_scans_with_explicit_dt(self):
+        from pyrung.core.crossing import Eq
+
         prog = _plain_timer_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
-        match = resolve_profile("T_Done", prog)
-        assert match is not None
+        owner = build_advance_index(prog).resolve("T_Done")
+        assert owner is not None
         # 50 ms / (10 units per 10 ms scan) = 5 scans to Done from acc=0.
-        assert eject_target(match, plc) == 50
-        assert scans_to_eject(match, plc) == 5
+        target = Eq("T_Done", frozenset((True,)))
+        assert estimate_scans(owner, target, plc) == 5
+
+
+class TestSequencerAdvance:
+    def test_event_drum_path_replays_across_event_boundaries(self):
+        enable = Bool("EventAuto", external=True)
+        reset = Bool("EventReset", external=True)
+        events = [Bool(f"Event{i}", external=True) for i in range(1, 4)]
+        step = Int("EventStep")
+        done = Bool("EventDone")
+        output = Bool("EventOutput")
+        with Program() as prog:
+            with Rung(enable):
+                event_drum(
+                    outputs=[output],
+                    events=events,
+                    pattern=[[1], [0], [1]],
+                    current_step=step,
+                    completion_flag=done,
+                ).reset(reset)
+
+        path = PLC(prog).how(step == 3, max_scans=400)
+
+        assert path.reachable, path.reason
+        assert path.replay().state.tags[step.name] == 3
+
+    def test_time_drum_path_replays_across_time_boundaries(self):
+        enable = Bool("TimeAuto", external=True)
+        reset = Bool("TimeReset", external=True)
+        step = Int("TimeStep")
+        acc = Int("TimeAcc")
+        done = Bool("TimeDone")
+        output = Bool("TimeOutput")
+        with Program() as prog:
+            with Rung(enable):
+                time_drum(
+                    outputs=[output],
+                    presets=[20, 20, 20],
+                    unit="ms",
+                    pattern=[[1], [0], [1]],
+                    current_step=step,
+                    accumulator=acc,
+                    completion_flag=done,
+                ).reset(reset)
+
+        path = PLC(prog, dt=0.010).how(step == 3, max_scans=400)
+
+        assert path.reachable, path.reason
+        assert path.replay().state.tags[step.name] == 3
+
+    def test_shift_path_replays_across_clock_boundaries(self):
+        data = Bool("ShiftData", external=True)
+        clock = Bool("ShiftClock", external=True)
+        reset = Bool("ShiftReset", external=True)
+        bits = Block("PilotShift", TagType.BOOL, 1, 3)
+        with Program() as prog:
+            with Rung(data):
+                shift(bits.select(1, 3)).clock(clock).reset(reset)
+
+        path = PLC(prog).how(bits[3], max_scans=400)
+
+        assert path.reachable, path.reason
+        assert path.replay().state.tags[bits[3].name] is True
 
 
 class TestDoneBoundaryHypotheses:

@@ -22,14 +22,14 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _hold_allowed,
 )
-from pyrung.core.analysis.pilot.accumulators import (
-    AccumulatorMatch,
-    iter_profiles,
-    resolve_profile,
-    scans_to_eject,
+from pyrung.core.analysis.pilot.advance import (
+    AdvanceOwner,
+    build_advance_index,
+    iter_advance_owners,
 )
 from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.crossing import Eq
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import DeviationIncident
@@ -97,10 +97,26 @@ def correct_enablers(
     accumulator corrections, matching the former ``_latch_exposure`` →
     ``_done_boundary`` ordering.
     """
-    corrections: list[EnablerCorrection] = [
-        *_coil_corrections(plc, incident, ctx),
-        *_accumulator_corrections(plc, incident, ctx),
-    ]
+    coil = _coil_corrections(plc, incident, ctx)
+    accumulator = _accumulator_corrections(plc, incident, ctx)
+    pulsed_inputs = {
+        getattr(hold, "dest", hold[0] if isinstance(hold, tuple) else None)
+        for correction in accumulator
+        if correction.correction is Correction.OSCILLATE
+        for hold in correction.holds
+    }
+    if pulsed_inputs:
+        coil = [
+            correction
+            for correction in coil
+            if not correction.holds
+            or any(
+                getattr(hold, "dest", hold[0] if isinstance(hold, tuple) else None)
+                not in pulsed_inputs
+                for hold in correction.holds
+            )
+        ]
+    corrections = [*coil, *accumulator]
     return [c for c in corrections if c.correction is not Correction.NONE and c.holds]
 
 
@@ -460,15 +476,56 @@ def _accumulator_corrections(
     #     skipped for having no single unambiguous lever.
     lever_values: dict[str, set[Any]] = {}
     fired_levers: list[tuple[str, tuple[str, ...]]] = []
-    for profile, _instr in iter_profiles(program):
-        reset = profile.reset
-        if reset is None:
+    owners = tuple(iter_advance_owners(program))
+    for owner in owners:
+        profile = owner.profile
+        if profile.done is None:
             continue
+        # Ask how this owner clears an asserted Done bit.  A complementary
+        # watchdog may still be clear in the incident snapshot, but its reset
+        # polarity is part of the same liveness rule.
+        clear_snapshot = {**after, profile.done.name: True}
+        clear_step = profile.plan(
+            Eq(profile.done.name, frozenset((False,))),
+            clear_snapshot,
+        )
+        reset_demands = (
+            (*clear_step.holds, *((clear_step.pulse,) if clear_step.pulse is not None else ()))
+            if clear_step is not None
+            else ()
+        )
+        if len(reset_demands) != 1:
+            continue
+        reset_demand = reset_demands[0]
+        forward_snapshot = {**after, profile.done.name: False}
+        forward_step = profile.plan(
+            Eq(profile.done.name, frozenset((True,))),
+            forward_snapshot,
+        )
+        forward_demands = (
+            (
+                *forward_step.holds,
+                *((forward_step.pulse,) if forward_step.pulse is not None else ()),
+            )
+            if forward_step is not None
+            else ()
+        )
+        if len(forward_demands) == 1 and forward_demands[0].condition is reset_demand.condition:
+            # Ordinary enable-off settlement is the inverse of advancement,
+            # not an independent watchdog reset.
+            continue
+        reset = reset_demand.condition
         reset_reads = _extract_reads_from_condition(reset, {})
         if not reset_reads:
             continue
         # Minimal coordinated levers whose held values *satisfy* the reset.
-        reset_holds = _best_forcing_holds(reset, reset_reads, after, ctx, satisfies=bool)
+        reset_holds = _best_forcing_holds(
+            reset,
+            reset_reads,
+            after,
+            ctx,
+            satisfies=lambda value, wanted=reset_demand.value: bool(value) is wanted,
+        )
         if not reset_holds:
             continue
         if not all(_hold_allowed(ctx, (phys, val)) for phys, val in reset_holds):
@@ -521,37 +578,60 @@ def _accumulator_corrections(
     # steady cannot-hold.
     osc_inputs = set(lever_values)
 
-    def _emit_cannot_hold(match: AccumulatorMatch, *, threshold: int | None, why: str) -> None:
+    def _emit_cannot_hold(
+        owner: AdvanceOwner,
+        constraint: Any,
+        *,
+        why: str,
+    ) -> None:
         # A multi-read advance now yields the coordinated set of levers that
         # *break* advancement (a minimal forcing assignment).  They must ride one
         # correction — for an ``Or``-driven advance no single lever stops it, so
         # splitting them into separate FREEZEs would propose holds that each fail
         # replay alone.
-        holds = [h for h in _cannot_hold_pairs(match.profile, after, ctx) if h[0] not in osc_inputs]
+        step = owner.profile.plan(constraint, incident.before_snap)
+        if step is None:
+            return
+        demands = (*step.holds, *((step.pulse,) if step.pulse is not None else ()))
+        holds: list[tuple[str, Any]] = []
+        for demand in demands:
+            holds.extend(_cannot_hold_pairs(demand, after, ctx))
+            if holds:
+                break
+        holds = [hold for hold in holds if hold[0] not in osc_inputs]
         if not holds or not all(_hold_allowed(ctx, h) for h in holds):
             return
         stops = ", ".join(f"{phys}={value!r}" for phys, value in holds)
         detail = f"stop holding {stops} ({why}"
-        scans = scans_to_eject(match, plc, threshold=threshold)
+        scans = None
+        if owner.profile.linear is not None:
+            scans = owner.profile.linear.estimate_scans(
+                constraint,
+                incident.before_snap,
+                float(getattr(plc, "_dt", 0.01) or 0.01),
+            )
         if scans is not None:
             detail += f" in ~{scans} scans"
+        done_name = owner.profile.done.name if owner.profile.done is not None else constraint.tag
         corrections.append(
             EnablerCorrection(
                 correction=Correction.FREEZE,
                 kind="done-boundary",
                 holds=tuple(holds),
-                sources=(match.profile.done.name, *(phys for phys, _ in holds)),
+                sources=(done_name, *(phys for phys, _ in holds)),
                 detail=detail + ")",
             )
         )
 
     # --- Sub-case B: plain held-advance -> Done ---
-    for profile, instr in iter_profiles(program):
-        if profile.done.name not in changed:
+    for owner in owners:
+        profile = owner.profile
+        if profile.done is None or profile.done.name not in changed:
             continue
+        desired = bool(after.get(profile.done.name))
         _emit_cannot_hold(
-            AccumulatorMatch(profile, instr, via_done=True),
-            threshold=None,
+            owner,
+            Eq(profile.done.name, frozenset((desired,))),
             why=f"drives {profile.done.name} to done",
         )
 
@@ -559,8 +639,15 @@ def _accumulator_corrections(
     # A bearing fact departed because an accumulator crossed a comparison
     # threshold.  trace_back surfaces the accumulator as a self-advancing leaf;
     # resolve it to its owning profile and stop holding whatever advances it.
-    acc_names = {p.accumulator.name for p, _ in iter_profiles(program)}
-    handled_done = {p.done.name for p, _ in iter_profiles(program) if p.done.name in changed}
+    advance_index = build_advance_index(program)
+    acc_names = {
+        owner.profile.accumulator.name for owner in owners if owner.profile.accumulator is not None
+    }
+    handled_done = {
+        owner.profile.done.name
+        for owner in owners
+        if owner.profile.done is not None and owner.profile.done.name in changed
+    }
     seen_acc: set[str] = set()
     for departure in incident.departures:
         if not acc_names:
@@ -582,20 +669,21 @@ def _accumulator_corrections(
         except Exception:  # noqa: BLE001
             continue
         for leaf in tree.leaves():
-            if not getattr(leaf, "self_advancing", False) or leaf.tag not in acc_names:
+            if getattr(leaf, "advance", None) is None or leaf.tag not in acc_names:
                 continue
             if leaf.tag not in changed:
                 continue  # only accumulators that actually advanced this incident
             if leaf.tag in seen_acc:
                 continue
             seen_acc.add(leaf.tag)
-            match = resolve_profile(leaf.tag, program)
-            if match is None or match.profile.done.name in handled_done:
+            owner = advance_index.resolve(leaf.tag)
+            if owner is None or (
+                owner.profile.done is not None and owner.profile.done.name in handled_done
+            ):
                 continue  # done-bit ejection (Sub-case B) already owns this accumulator
-            threshold = leaf.value if isinstance(leaf.value, int) else None
             _emit_cannot_hold(
-                match,
-                threshold=threshold,
+                owner,
+                leaf.advance.until,
                 why=f"{leaf.tag} crossed {leaf.value!r} -> {departure.tag} departed",
             )
 
@@ -667,8 +755,8 @@ def _resolve_steerable_driver(
     return leaves[0] if leaves else None
 
 
-def _cannot_hold_pairs(profile: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
-    """Coordinated steerable holds that *stop* an accumulator from advancing.
+def _cannot_hold_pairs(demand: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
+    """Coordinated steerable holds that stop one demanded condition.
 
     Enumerates the advance condition over its reads' value spaces to find the
     minimal lever assignment that makes it evaluate ``!= advance_value`` (stops
@@ -679,18 +767,17 @@ def _cannot_hold_pairs(profile: Any, snap: Mapping[str, Any], ctx: Any) -> list[
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
-    if profile.advance is None:
+    if demand is None or demand.condition is None:
         return []
-    reads = _extract_reads_from_condition(profile.advance, {})
+    reads = _extract_reads_from_condition(demand.condition, {})
     if not reads:
         return []
-    advance_value = profile.advance_value
     holds = _best_forcing_holds(
-        profile.advance,
+        demand.condition,
         reads,
         snap,
         ctx,
-        satisfies=lambda evaluated: evaluated != advance_value,
+        satisfies=lambda evaluated: bool(evaluated) is not demand.value,
     )
     return holds or []
 

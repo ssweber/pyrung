@@ -320,6 +320,8 @@ class Producer:
     kind: str  # "operator" | "program" | "environmental" | "ambiguous"
     guard_tags: frozenset[str]
     co_writes: frozenset[str]  # other command/request registers this rung writes
+    command_tag: str
+    command_value: Any
 
 
 @dataclass(frozen=True)
@@ -389,7 +391,14 @@ def sibling_producer_family(
             if w != command_tag and (w in ctx.opaque_loop or w in ctx.steerable)
         )
         producers.append(
-            Producer(rung_index=ri, kind=kind, guard_tags=guard_tags, co_writes=co_writes)
+            Producer(
+                rung_index=ri,
+                kind=kind,
+                guard_tags=guard_tags,
+                co_writes=co_writes,
+                command_tag=command_tag,
+                command_value=value,
+            )
         )
     if not producers:
         return None

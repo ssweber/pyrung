@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import _parse_time_unit
 
-from .accumulating import KIND_OFF_DELAY, KIND_ON_DELAY, AccProfile
+from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .utils import (
     instruction_condition_view,
@@ -136,18 +137,28 @@ class OnDelayInstruction(Instruction):
     def is_terminal(self) -> bool:
         return self.has_reset
 
-    def accumulating_profile(self) -> AccProfile:
-        return AccProfile(
-            kind=KIND_ON_DELAY,
-            advance=self.enable_condition,
-            advance_value=True,
+    def advance_profile(self) -> AdvanceProfile:
+        restore = (
+            ConditionDemand(self.reset_condition)
+            if self.reset_condition is not None
+            else ConditionDemand(self.enable_condition, False)
+        )
+        channels = tuple(
+            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+        )
+        return monotone_profile(
+            channels=channels,
             accumulator=self.accumulator,
             done=self.done_bit,
-            timing=self.tt_bit,
+            active=self.tt_bit,
             preset=self.preset,
-            reset=self.reset_condition,
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
+            advance=ConditionDemand(self.enable_condition),
+            restore=restore,
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
         )
 
 
@@ -259,18 +270,19 @@ class OffDelayInstruction(Instruction):
                 }
             )
 
-    def accumulating_profile(self) -> AccProfile:
-        # An off-delay accumulates while its rung is *not* powered, so the value
-        # of ``enable_condition`` that *advances* the accumulator is ``False``.
-        return AccProfile(
-            kind=KIND_OFF_DELAY,
-            advance=self.enable_condition,
-            advance_value=False,
+    def advance_profile(self) -> AdvanceProfile:
+        channels = tuple(
+            tag for tag in (self.accumulator, self.done_bit, self.tt_bit) if tag is not None
+        )
+        return monotone_profile(
+            channels=channels,
             accumulator=self.accumulator,
             done=self.done_bit,
-            timing=self.tt_bit,
+            active=self.tt_bit,
             preset=self.preset,
-            reset=None,
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
+            advance=ConditionDemand(self.enable_condition, False),
+            done_at_boundary=False,
+            restore=ConditionDemand(self.enable_condition, True),
         )

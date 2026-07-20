@@ -30,13 +30,16 @@ learned transition is evidence for the next action only.
 
 Escalate according to what remains unreadable:
 
-1. `trace.py` follows writers, guards, copies, calculations, and accumulators.
+1. `trace.py` follows writers, guards, copies, calculations, and
+   instruction-owned cross-scan state through `advance.py`.
 2. `availability.py`, `evidence.py`, `tide_tables.py`, and `currents.py` extend
    that read with current-state guards, pipeline structure, finite
    constant-backed tables, and program-awaited actions.
-3. A self-advancing timer, counter, or program transition is handled by holding
-   the required inputs and allowing scans to pass.
-4. `skiff.py` runs isolated fork probes only for a genuinely unreadable
+3. An `AdvanceProfile` states one next operation: conditions to hold or pulse,
+   and the observable boundary at which PILOT must read the world again.
+4. `program_step.py` checks one exact producer in an unchanged fork and reports
+   keep running, needs input, or unclear. It does not choose an action.
+5. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
 
 An incomplete static read returns an unresolved requirement. It does not invent
@@ -82,6 +85,8 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
+- Instruction-owned channel lookup: `advance.py::AdvanceIndex`
+- One exact producer's unchanged-world proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
   `compass.py::Compass.orient` facade
 - Option materialization and ranking evidence: `options.py::_build_candidates`
@@ -186,6 +191,10 @@ changes, it returns the same object. Runtime instruments return
   with verification and recovery; never returns an action.
 - `currents.py` — structural program-awaited-action readings and producer
   families; Compass owns filtering and ambiguity policy.
+- `advance.py` — unambiguous instruction-owned channel lookup and boundary
+  estimates. Instruction semantics live in each instruction's `AdvanceProfile`.
+- `program_step.py` — read-only unchanged-world proof for one exact producer;
+  reports the immediate boundary or unmet input.
 - `navigation.py` — immutable evidence, act, result, target, constraint, and
   world-view contracts.
 
@@ -196,7 +205,6 @@ changes, it returns the same object. Runtime instruments return
   and action-admission checks.
 - `coast.py` — bump-driven coasts with exact-scan receipts.
 - `cyclefold.py` — proven active-cycle skipping during long waits.
-- `accumulators.py` — accumulator/profile resolution and scans-to-crossing.
 - `skiff.py` — finite isolated probes of unreadable frontiers.
 
 ### Judgment and recovery

@@ -91,6 +91,9 @@ class _CandidateList:
     route_plan: StaticPath | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
+    # An instruction-owned frontier's immediate observable boundary. This is
+    # one coast heading, not a route: after it lands PILOT retraces.
+    advance_boundary: _ActionPair | None = None
     # A composite learned edge (skiff pair probe): the whole action set must
     # fire in one window.  Tried as a single batch trial before the singles —
     # verified live through the same gate pipeline as any candidate.
@@ -145,7 +148,7 @@ def _diagnose_stuck_reason(
     # a converging frontier (timer/counter Acc, or a harness-linked ramp toward a
     # threshold).  Not stuck: escalate to the terminal let-run rather than bail at
     # a dead-end.  This is the trace -> let-run rung of the compass escalation.
-    if any(getattr(n, "self_advancing", False) and not n.satisfied for n in leaves):
+    if any(getattr(n, "advance", None) is not None and not n.satisfied for n in leaves):
         return None
 
     satisfied = [n for n in leaves if n.satisfied]
@@ -501,8 +504,7 @@ def _managed_boolean_rungs(
         if (
             tag not in managed
             or type(value) is not bool
-            or (tag in ctx.edge_tags and value is not True)
-            or _values_match(frame.snap.get(tag), value)
+            or ((tag in ctx.edge_tags or detail.pulse) and value is not True)
         ):
             continue
         source = state.work._known_tags_by_name.get(tag)
@@ -541,7 +543,7 @@ def _managed_boolean_rungs(
             )
         guard = (
             AllCondition(*context, CompareNe(source, value))
-            if tag in ctx.edge_tags
+            if tag in ctx.edge_tags or detail.pulse
             else AllCondition(*context)
         )
         proposed.append(PilotRung(tag, value, guard))
@@ -738,11 +740,17 @@ def _build_candidates(
         and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
     )
 
+    raw_detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
     active_trace_actions = tuple(
-        (t, v)
-        for t, v in frame.raw_trace_actions
-        if (t, v) not in ctx.blocked_route_actions
-        and (not _values_match(frame.snap.get(t), v) or t in ctx.edge_tags)
+        pair
+        for pair in frame.raw_trace_actions
+        for detail in (raw_detail_by_pair.get(pair),)
+        if pair not in ctx.blocked_route_actions
+        and (
+            not _values_match(frame.snap.get(pair[0]), pair[1])
+            or pair[0] in ctx.edge_tags
+            or (detail is not None and (detail.pulse or detail.until is not None))
+        )
     )
     trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
     detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
@@ -852,8 +860,31 @@ def _build_candidates(
     # and reverted as no-progress commands, and the coast would never ramp.  On
     # plain iterations, all trace actions are commands — pulse-and-judge.
     _is_coast = any(
-        getattr(n, "self_advancing", False) and not n.satisfied for n in frame.tree.leaves()
+        getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
     )
+    advance_boundary: _ActionPair | None = None
+    if _is_coast:
+        from pyrung.core.crossing import Cmp, Eq
+        from pyrung.core.tag import TagType
+
+        for node in frame.tree.leaves():
+            step = getattr(node, "advance", None)
+            if step is None or node.satisfied or not getattr(node, "stage_boundary", False):
+                continue
+            until = step.until
+            if isinstance(until, Eq) and len(until.values) == 1:
+                advance_boundary = (until.tag, next(iter(until.values)))
+                break
+            tag = state.work._known_tags_by_name.get(getattr(until, "tag", ""))
+            if (
+                isinstance(until, Cmp)
+                and until.op in {">=", "<="}
+                and not until.bound_is_tag
+                and tag is not None
+                and tag.type in {TagType.INT, TagType.DINT}
+            ):
+                advance_boundary = (until.tag, until.bound)
+                break
     prerequisite_rungs = list(managed_boolean_rungs)
     if _is_zoom or _is_coast:
         # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
@@ -870,7 +901,7 @@ def _build_candidates(
         from pyrung.core.analysis.pilot.investigate import hold_defeats_needed
 
         needed = frontier_pairs(frame.tree, frame.snap)
-        oscillate_tags = {d.tag for d in trace_action_details if d.oscillate}
+        pulse_tags = {d.tag for d in trace_action_details if d.pulse}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
             if tag in seen_prereq or tag in {r.dest for r in state.rungs}:
@@ -879,7 +910,7 @@ def _build_candidates(
             if detail is None or detail.until is None:
                 continue
             scope = _until_unresolved_condition(state.work, detail.until)
-            if tag in oscillate_tags:
+            if tag in pulse_tags:
                 seen_prereq.add(tag)
                 if ctx.route_allowed((tag, value)):
                     prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
@@ -1092,6 +1123,10 @@ def _build_candidates(
     if _is_zoom and not wait_prescribed:
         wait_prescribed, wait_reason = _zoom_wait_prescribed, _zoom_wait_reason
 
+    if advance_boundary is not None and not candidates and not wait_prescribed:
+        wait_prescribed = True
+        wait_reason = f"advance {advance_boundary[0]} to its next boundary {advance_boundary[1]!r}"
+
     # Fallback: route exists with an action but no candidates surfaced.  A wildcard
     # (ANY_FROM) edge whose action was filtered (nogooded / already at value) has
     # no dwell semantics — ``_prescribe_wait`` refuses it (the loop's stuck
@@ -1132,6 +1167,7 @@ def _build_candidates(
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,
+        advance_boundary=advance_boundary,
         prescribed_batch=prescribed_batch,
         prerequisite_rungs=tuple(prerequisite_rungs),
         stuck_reason=stuck_reason,

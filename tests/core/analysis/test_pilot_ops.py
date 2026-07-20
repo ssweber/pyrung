@@ -34,7 +34,7 @@ from pyrung.core.analysis.pilot._ops import (
     _until_unresolved_condition,
     fork_with_rungs,
 )
-from pyrung.core.analysis.pilot.accumulators import resolve_profile
+from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.prove.absorb import (
     _done_acc_state,
     _ThresholdAtomSpec,
@@ -70,7 +70,7 @@ def _variant_named_timer_program():
     ``<base>_TT`` naming convention.
 
     Fast-forwarding must resolve the timing (TT) register through the
-    instruction's ``accumulating_profile()`` — the old ``done_name.rsplit(
+    instruction's ``advance_profile()`` — the old ``done_name.rsplit(
     "_Done")[0] + "_TT"`` surgery would look for ``TimerReady_TT`` (absent) and
     silently never coast this timer.
     """
@@ -546,10 +546,10 @@ class TestSettleDelayedEffects:
         prog = _variant_named_timer_program()
 
         # The profile carries the timing bit, resolved off the owning instruction.
-        match = resolve_profile("TimerReady", prog, None)
-        assert match is not None
-        assert match.profile.timing is not None
-        assert match.profile.timing.name == "TimerActive"
+        owner = build_advance_index(prog).resolve("TimerReady")
+        assert owner is not None
+        assert owner.profile.active is not None
+        assert owner.profile.active.name == "TimerActive"
 
         plc = PLC(prog, dt=0.010)
         before = dict(plc.state.tags)

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.condition import FallingEdgeCondition, RisingEdgeCondition
 from pyrung.core.tag import Tag
 
-from .accumulating import KIND_COUNT_DOWN, KIND_COUNT_UP, AccProfile
+from .advance import AdvanceProfile, ConditionDemand, monotone_profile
 from .base import Instruction
 from .conversions import (
     _clamp_dint,
@@ -118,21 +119,25 @@ class CountUpInstruction(Instruction):
     def is_terminal(self) -> bool:
         return True
 
-    def accumulating_profile(self) -> AccProfile:
-        # ``up_condition`` held drives the accumulator up toward ``+preset``;
-        # the optional ``down_condition`` only subtracts, so the advancing lever
-        # PILOT cares about is ``up_condition``.
-        return AccProfile(
-            kind=KIND_COUNT_UP,
-            advance=self.up_condition,
-            advance_value=True,
+    def advance_profile(self) -> AdvanceProfile:
+        return monotone_profile(
+            channels=(self.accumulator, self.done_bit),
             accumulator=self.accumulator,
             done=self.done_bit,
-            timing=None,
+            active=None,
             preset=self.preset,
-            reset=self.reset_condition,
             direction=1,
             rate_per_scan=lambda _dt: 1.0,
+            advance=ConditionDemand(self.up_condition),
+            advance_is_pulse=isinstance(
+                self.up_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+            restore=(
+                ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
+            ),
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
         )
 
 
@@ -227,17 +232,23 @@ class CountDownInstruction(Instruction):
     def is_terminal(self) -> bool:
         return True
 
-    def accumulating_profile(self) -> AccProfile:
-        # Counts down once per held ``down_condition`` scan toward ``-preset``.
-        return AccProfile(
-            kind=KIND_COUNT_DOWN,
-            advance=self.down_condition,
-            advance_value=True,
+    def advance_profile(self) -> AdvanceProfile:
+        return monotone_profile(
+            channels=(self.accumulator, self.done_bit),
             accumulator=self.accumulator,
             done=self.done_bit,
-            timing=None,
+            active=None,
             preset=self.preset,
-            reset=self.reset_condition,
             direction=-1,
             rate_per_scan=lambda _dt: 1.0,
+            advance=ConditionDemand(self.down_condition),
+            advance_is_pulse=isinstance(
+                self.down_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
+            restore=(
+                ConditionDemand(self.reset_condition) if self.reset_condition is not None else None
+            ),
+            restore_is_pulse=isinstance(
+                self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
+            ),
         )

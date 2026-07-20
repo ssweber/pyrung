@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from pyrung.core.condition import Condition
-    from pyrung.core.instruction.accumulating import AccProfile
+    from pyrung.core.instruction.advance import AdvanceProfile
     from pyrung.core.program import Program
     from pyrung.core.validation.severity import Severity
 
@@ -220,12 +220,12 @@ def _compares_in(
 # ---------------------------------------------------------------------------
 
 
-def _acc_index(program: Program) -> dict[str, AccProfile]:
-    """Map accumulator tag name → its :class:`AccProfile` (timers + counters)."""
-    index: dict[str, AccProfile] = {}
+def _acc_index(program: Program) -> dict[str, AdvanceProfile]:
+    """Map scalar advance coordinates to their instruction profiles."""
+    index: dict[str, AdvanceProfile] = {}
     for instr in walk_instructions(program):
-        profile = instr.accumulating_profile()
-        if profile is not None:
+        profile = instr.advance_profile()
+        if profile is not None and profile.accumulator is not None and profile.linear is not None:
             index[profile.accumulator.name] = profile
     return index
 
@@ -273,7 +273,7 @@ def _calc_derived_names(program: Program) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _is_dynamic(op: _Operand, written: set[str], acc: dict[str, AccProfile]) -> bool:
+def _is_dynamic(op: _Operand, written: set[str], acc: dict[str, AdvanceProfile]) -> bool:
     """True when the operand is a value the program produces: written or self-advancing."""
     if op.kind == "computed":
         return True
@@ -282,7 +282,7 @@ def _is_dynamic(op: _Operand, written: set[str], acc: dict[str, AccProfile]) -> 
     return False
 
 
-def _is_static(op: _Operand, written: set[str], acc: dict[str, AccProfile]) -> bool:
+def _is_static(op: _Operand, written: set[str], acc: dict[str, AdvanceProfile]) -> bool:
     """True when the operand is not program-produced: a literal or a never-written tag.
 
     Deliberately coarse: an external sensor input and an HMI setpoint both land here
@@ -338,8 +338,8 @@ class CmpConditionReport:
 
 
 def _monotone_side(
-    cmp: _Compare, acc: dict[str, AccProfile]
-) -> tuple[_Operand, _Operand, AccProfile] | None:
+    cmp: _Compare, acc: dict[str, AdvanceProfile]
+) -> tuple[_Operand, _Operand, AdvanceProfile] | None:
     """Return ``(register_operand, comparand, profile)`` when one side is an
     accumulator, else ``None``.  Prefers the left side if both are registers."""
     for reg, other in ((cmp.left, cmp.right), (cmp.right, cmp.left)):
@@ -348,18 +348,17 @@ def _monotone_side(
     return None
 
 
-def _done_hint(profile: AccProfile) -> str:
-    from pyrung.core.instruction.accumulating import _NoDone
-
-    if isinstance(profile.done, _NoDone):
+def _done_hint(profile: AdvanceProfile) -> str:
+    if profile.done is None:
         return ""
     return f" (or the '{profile.done.name}' done bit)"
 
 
 def _eq_display(
-    cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AccProfile
+    cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AdvanceProfile
 ) -> FindingDisplay:
-    order = ">=" if profile.direction > 0 else "<="
+    assert profile.linear is not None
+    order = ">=" if profile.linear.direction > 0 else "<="
     return FindingDisplay(
         code=CMP_EQ_ON_MONOTONE,
         severity="error",
@@ -398,7 +397,9 @@ def _matches_preset(comparand: _Operand, preset: Any) -> bool:
     return False
 
 
-def _true_at_reset_finding(cmp: _Compare, acc: dict[str, AccProfile]) -> CmpConditionFinding | None:
+def _true_at_reset_finding(
+    cmp: _Compare, acc: dict[str, AdvanceProfile]
+) -> CmpConditionFinding | None:
     """A CMP_TRUE_AT_RESET finding when *cmp* is TRUE at ``Acc = 0``, else ``None``.
 
     Gated to up-from-zero accumulators (``direction > 0``) whose comparand matches
@@ -411,13 +412,24 @@ def _true_at_reset_finding(cmp: _Compare, acc: dict[str, AccProfile]) -> CmpCond
     if side is None:
         return None
     reg, comparand, profile = side
-    if profile.direction <= 0:  # up-from-zero only; down-counters aren't reset-true
+    if profile.linear is None or profile.linear.direction <= 0:
         return None
     reg_is_left = cmp.left is reg
     reg_left_op = cmp.op if reg_is_left else _FLIP[cmp.op]
     if reg_left_op not in ("<", "<="):  # must read "Acc below threshold"
         return None
-    if not _matches_preset(comparand, profile.preset):
+    from pyrung.core.crossing import Eq
+
+    if profile.done is None:
+        return None
+    boundary_step = profile.plan(Eq(profile.done.name, frozenset((True,))), {})
+    boundary = boundary_step.until if boundary_step is not None else None
+    preset = getattr(boundary, "bound", None)
+    if getattr(boundary, "bound_is_tag", False):
+        preset_matches = comparand.kind == "tag" and comparand.name == str(preset)
+    else:
+        preset_matches = _matches_preset(comparand, preset)
+    if not preset_matches:
         return None
     return CmpConditionFinding(
         CMP_TRUE_AT_RESET,
@@ -428,9 +440,9 @@ def _true_at_reset_finding(cmp: _Compare, acc: dict[str, AccProfile]) -> CmpCond
 
 
 def _true_at_reset_display(
-    cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AccProfile
+    cmp: _Compare, reg: _Operand, comparand: _Operand, profile: AdvanceProfile
 ) -> FindingDisplay:
-    label = "true at reset" + (" — pulses each restart" if profile.reset is not None else "")
+    label = "true at reset"
     return FindingDisplay(
         code=CMP_TRUE_AT_RESET,
         severity="warning",
@@ -447,7 +459,7 @@ def _true_at_reset_display(
 def _static_on_left_finding(
     cmp: _Compare,
     written: set[str],
-    acc: dict[str, AccProfile],
+    acc: dict[str, AdvanceProfile],
     calc: set[str],
 ) -> CmpConditionFinding | None:
     """The operand-order finding, at a severity set by how sure we are.

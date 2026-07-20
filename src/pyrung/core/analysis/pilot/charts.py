@@ -64,6 +64,7 @@ class StaticTransitionEdge:
     route: TransitionRoute
     co_actions: tuple[ActionPair, ...] = ()
     completion: tuple[tuple[str, Any], ...] = ()
+    program_producers: tuple[Any, ...] = ()
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -80,6 +81,7 @@ class StaticTransitionEdge:
             tuple((tag, repr(value)) for tag, value in self.source_constraints),
             tuple((tag, repr(value)) for tag, value in self.enablers),
             tuple((tag, repr(value)) for tag, value in self.completion),
+            tuple(producer.rung_index for producer in self.program_producers),
         )
 
 
@@ -106,7 +108,7 @@ class StaticTransitionGraph:
         role: PipelineRoles,
         routes: tuple[TransitionRoute, ...],
         action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]] | None = None,
-        program_owned_enablers: frozenset[tuple[str, str]] = frozenset(),
+        program_producers: dict[tuple[str, str], tuple[Any, ...]] | None = None,
     ) -> None:
         self.role = role
         self.routes = routes
@@ -114,7 +116,7 @@ class StaticTransitionGraph:
             role,
             routes,
             action_lookup or {},
-            program_owned_enablers,
+            program_producers or {},
         )
 
     def target_values_for_need(self, needed_tag: str, needed_value: Any) -> tuple[Any, ...]:
@@ -210,12 +212,12 @@ def build_static_transition_graphs(
             steerable=steerable,
             opaque_loop=opaque_loop,
         )
-        program_owned_enablers: set[tuple[str, str]] = set()
+        program_producers: dict[tuple[str, str], tuple[Any, ...]] = {}
         for route in routes:
             for tag, value in (*route.enablers, *route.source_constraints):
                 family = sibling_producer_family(world, tag, value)
                 if family is not None and family.program_owned:
-                    program_owned_enablers.add((tag, _value_key(value)))
+                    program_producers[(tag, _value_key(value))] = family.program_owned
                     logger.debug(
                         "chart automatic producer: %s=%r -> %s=%r",
                         tag,
@@ -227,7 +229,7 @@ def build_static_transition_graphs(
             role,
             routes,
             action_lookup,
-            frozenset(program_owned_enablers),
+            program_producers,
         )
         if graph.edges:
             graphs.append(graph)
@@ -272,7 +274,7 @@ def _edges_from_routes(
     role: PipelineRoles,
     routes: tuple[TransitionRoute, ...],
     action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
-    program_owned_enablers: frozenset[tuple[str, str]] = frozenset(),
+    program_producers: dict[tuple[str, str], tuple[Any, ...]] | None = None,
 ) -> tuple[StaticTransitionEdge, ...]:
     edges: list[StaticTransitionEdge] = []
     for route in routes:
@@ -294,9 +296,10 @@ def _edges_from_routes(
         # satisfied pair contributes nothing — so no producer analysis happens
         # here; the chart's recorded condition is the whole claim.
         completion = _route_completion_pairs(role, route)
-        has_program_owned = any(
-            (tag, _value_key(value)) in program_owned_enablers
+        route_producers = tuple(
+            producer
             for tag, value in (*route.enablers, *route.source_constraints)
+            for producer in (program_producers or {}).get((tag, _value_key(value)), ())
         )
         if not from_values and action_pairs:
             from_values = [ANY_FROM]
@@ -306,8 +309,18 @@ def _edges_from_routes(
             if action_pairs:
                 for action in action_pairs:
                     edges.append(_edge(role, route, from_value, action, co_actions))
-                if has_program_owned:
-                    edges.append(_edge(role, route, from_value, None, (), completion))
+                if route_producers:
+                    edges.append(
+                        _edge(
+                            role,
+                            route,
+                            from_value,
+                            None,
+                            (),
+                            completion,
+                            route_producers,
+                        )
+                    )
             else:
                 edges.append(_edge(role, route, from_value, None, (), completion))
     return tuple(edges)
@@ -425,6 +438,7 @@ def _edge(
     action: ActionPair | None,
     co_actions: tuple[ActionPair, ...] = (),
     completion: tuple[tuple[str, Any], ...] = (),
+    program_producers: tuple[Any, ...] = (),
 ) -> StaticTransitionEdge:
     return StaticTransitionEdge(
         role=role,
@@ -438,6 +452,7 @@ def _edge(
         route=route,
         co_actions=co_actions,
         completion=completion,
+        program_producers=program_producers,
     )
 
 

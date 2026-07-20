@@ -375,13 +375,14 @@ def build_gauge(
     mixed stride directions omit the tag; an empty gauge is a valid answer
     (downstream verdicts then say ``unknown`` instead of guessing).
     """
-    from pyrung.core.analysis.pilot.accumulators import iter_profiles
+    from pyrung.core.analysis.pilot.advance import iter_advance_owners
 
     cone = pdg.upstream_slice(target_tag, follow_calls=True) | {target_tag}
 
     done_names: set[str] = set()
     profile_acc_names: set[str] = set()
-    for profile, _instr in iter_profiles(program, harness=harness):
+    for owner in iter_advance_owners(program, harness=harness):
+        profile = owner.profile
         acc = getattr(profile, "accumulator", None)
         if acc is not None and getattr(acc, "name", None):
             profile_acc_names.add(acc.name)

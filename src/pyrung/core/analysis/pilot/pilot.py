@@ -32,7 +32,7 @@ from pyrung.core.analysis.pilot._ops import (
     _StateKeyConfig,
     _target_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.accumulators import iter_profiles
+from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.charts import (
     detect_opaque_loop,
     detect_opaque_pipelines,
@@ -828,8 +828,9 @@ def _pilot_loop_events(
         role.channel_tag for role in ctx.pipeline_roles
     )
     journal_acc_names = frozenset(
-        profile.accumulator.name
-        for profile, _instr in iter_profiles(ctx.program, harness=getattr(plc, "_harness", None))
+        owner.profile.accumulator.name
+        for owner in iter_advance_owners(ctx.program, harness=getattr(plc, "_harness", None))
+        if owner.profile.accumulator is not None
     )
     state = _PilotState(
         world=_World(

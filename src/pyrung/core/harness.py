@@ -239,8 +239,8 @@ class Harness:
         for c in self._profile_couplings:
             yield Coupling(c.en_name, c.fb_name, c.physical, c.trigger_value)
 
-    def coupling_profiles(self) -> Iterator[Any]:
-        """Yield an :class:`AccProfile` per **analog** profile coupling.
+    def advance_profiles(self) -> Iterator[Any]:
+        """Yield an :class:`AdvanceProfile` per analog profile coupling.
 
         This is the static *reading* of "En drives Fb toward a threshold" that
         PILOT's accumulator resolver consumes exactly like a timer's profile —
@@ -295,7 +295,7 @@ class Harness:
         return rate_per_scan, direction
 
     def _analog_profile(self, c: _ProfileCoupling) -> Any | None:
-        """Build the continuous :class:`AccProfile` for one analog coupling.
+        """Build the continuous :class:`AdvanceProfile` for one analog coupling.
 
         ``accumulator`` is the Fb register itself (the consumer reads
         ``Fb <cmp> threshold``, matched via the accumulator).  A ``Ramp`` yields an
@@ -303,7 +303,10 @@ class Harness:
         ``scans_until`` returns ``None`` and the resolver measures empirically.
         """
         from pyrung.core.condition import BitCondition, CompareEq
-        from pyrung.core.instruction.accumulating import KIND_APPROACH, AccProfile, _NoDone
+        from pyrung.core.instruction.advance import (
+            ConditionDemand,
+            monotone_profile,
+        )
 
         fb_tag = self._plc._known_tags_by_name.get(c.fb_name)
         en_tag = self._plc._known_tags_by_name.get(c.en_name)
@@ -320,17 +323,15 @@ class Harness:
             if c.trigger_value is not None
             else BitCondition(en_tag)
         )
-        return AccProfile(
-            kind=KIND_APPROACH,
-            advance=advance,
-            advance_value=True,
+        return monotone_profile(
+            channels=(fb_tag,),
             accumulator=fb_tag,
-            done=_NoDone(name=f"__analog_nodone__:{c.fb_name}"),
-            timing=None,
+            done=None,
+            active=None,
             preset=0,
-            reset=None,
             direction=direction,
             rate_per_scan=rate_per_scan,
+            advance=ConditionDemand(advance),
         )
 
     def _discover_couplings(self) -> None:

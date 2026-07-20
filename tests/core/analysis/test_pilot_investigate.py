@@ -1915,7 +1915,7 @@ class TestBuildDeviationIncident:
         Timer consumers select their Done/accumulator profile tags locally;
         constructing the incident must not erase unrelated recorded movement.
         """
-        from pyrung.core.analysis.pilot.accumulators import iter_profiles
+        from pyrung.core.analysis.pilot.advance import iter_advance_owners
 
         prog, _tmr = _watchdog_program()
         plc = PLC(prog, dt=0.010)
@@ -1929,7 +1929,11 @@ class TestBuildDeviationIncident:
         before = dict(plc.history.at(anchor).tags)
         after = dict(plc.state.tags)
         end = plc.state.scan_id
-        dones = {p.done.name for p, _ in iter_profiles(prog)}
+        dones = {
+            owner.profile.done.name
+            for owner in iter_advance_owners(prog)
+            if owner.profile.done is not None
+        }
         # Recorded evidence: the watchdog's Done bit fired in the window.
         timeline = tuple(
             BumpEvent("pen", "pen", end, ((name, False, after.get(name)),))
@@ -1957,7 +1961,10 @@ class TestBuildDeviationIncident:
         )
 
         profile_tags = {
-            name for p, _ in iter_profiles(prog) for name in (p.done.name, p.accumulator.name)
+            tag.name
+            for owner in iter_advance_owners(prog)
+            for tag in (owner.profile.done, owner.profile.accumulator)
+            if tag is not None
         }
         # Program metadata does not change the factual incident.
         assert "Alarm" in full.changed_tags

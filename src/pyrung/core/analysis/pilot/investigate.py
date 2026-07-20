@@ -32,7 +32,7 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     _target_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.accumulators import iter_profiles
+from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.causal import (
     chase_cause_roots,
     chase_chain_tags,
@@ -261,7 +261,11 @@ def incident_eject_dones(incident: DeviationIncident, program: Any) -> frozenset
     *different* watchdog is scored as new-cause progress, not a rejection.
     """
     changed = set(incident.changed_tags)
-    return frozenset(p.done.name for p, _ in iter_profiles(program) if p.done.name in changed)
+    return frozenset(
+        owner.profile.done.name
+        for owner in iter_advance_owners(program)
+        if owner.profile.done is not None and owner.profile.done.name in changed
+    )
 
 
 def incident_eject_latches(
@@ -361,7 +365,11 @@ def build_replay_fn(
     and now ejects on a *different* accumulator Done, accept it as progress; the
     complement's ejection is the next round's incident.
     """
-    all_done_tags = frozenset(p.done.name for p, _ in iter_profiles(program))
+    all_done_tags = frozenset(
+        owner.profile.done.name
+        for owner in iter_advance_owners(program)
+        if owner.profile.done is not None
+    )
 
     def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
         from pyrung.core.analysis.pilot.coast import CoastSession
@@ -755,7 +763,11 @@ def investigate_excursion(
     kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in action})
     session = CoastSession(retry, kind="excursion-retry")
     if program is not None:
-        session.arm_pens(p.done.name for p, _ in iter_profiles(program))
+        session.arm_pens(
+            owner.profile.done.name
+            for owner in iter_advance_owners(program)
+            if owner.profile.done is not None
+        )
     _apply_pulse(retry, kickoff, resting, edge_tags, session=session)
     _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget, session=session)
     retry_snap = dict(retry.state.tags)
