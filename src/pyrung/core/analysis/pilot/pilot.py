@@ -572,14 +572,13 @@ def _record_attempt(
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
     if attempt.confirmed_correction is not None:
-        checkpoint_index = _anchor_frame_receipt(frame, state)
+        _anchor_frame_receipt(frame, state)
         _install_confirmed_correction(
             state,
             attempt.confirmed_correction,
             origin_key=frame.key,
             scan=state.work.state.scan_id,
             source="excursion",
-            checkpoint_index=checkpoint_index,
         )
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.

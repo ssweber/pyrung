@@ -153,7 +153,6 @@ def _build_plan_journal(
     path_end = state.steps[-1].scan_after
 
     seen_rungs: set[tuple[Any, ...]] = set()
-    seen_legacy_holds: set[tuple[str, str]] = set()
     correction_receipts = getattr(state, "correction_receipts", ())
     managed_rungs = {
         (
@@ -193,17 +192,7 @@ def _build_plan_journal(
             seen_rungs.add(key)
             new_rungs.append(rung)
 
-        if entry.rungs:
-            hold_inputs = tuple((rung.dest, rung.value) for rung in new_rungs)
-        else:
-            legacy_inputs: list[tuple[str, Any]] = []
-            for tag, value in entry.tags:
-                key = (tag, repr(value))
-                if key in seen_legacy_holds:
-                    continue
-                seen_legacy_holds.add(key)
-                legacy_inputs.append((tag, value))
-            hold_inputs = tuple(legacy_inputs)
+        hold_inputs = tuple((rung.dest, rung.value) for rung in new_rungs)
 
         if hold_inputs:
             entries.append(

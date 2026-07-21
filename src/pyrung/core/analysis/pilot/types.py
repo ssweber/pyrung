@@ -359,11 +359,13 @@ class _HoldLogEntry:
     """One hold installation event — append-only, survives reverts."""
 
     scan: int
-    tags: tuple[_ActionPair, ...]
     source: str
-    # Exact guarded rules installed by this event. ``tags`` remains for
-    # compatibility with old recordings and concise knowledge serialization.
-    rungs: tuple[Any, ...] = ()
+    rungs: tuple[PilotRung, ...]
+
+    @property
+    def tags(self) -> tuple[_ActionPair, ...]:
+        """Concise recording view derived from the installed executable form."""
+        return tuple((rung.dest, rung.value) for rung in self.rungs)
 
 
 class CorrectionStatus(Enum):
@@ -379,11 +381,24 @@ class _CorrectionReceipt:
 
     receipt_id: int
     origin_key: _StateKey
-    identity: tuple[tuple[str, Any], ...]
-    rungs: tuple[PilotRung, ...]
-    sources: tuple[str, ...]
-    justification: str
+    correction: _ConfirmedCorrection
     status: CorrectionStatus = CorrectionStatus.ACTIVE
+
+    @property
+    def identity(self) -> tuple[tuple[str, Any], ...]:
+        return self.correction.identity
+
+    @property
+    def rungs(self) -> tuple[PilotRung, ...]:
+        return self.correction.rungs
+
+    @property
+    def sources(self) -> tuple[str, ...]:
+        return self.correction.sources
+
+    @property
+    def justification(self) -> str:
+        return self.correction.justification
 
 
 @dataclass(frozen=True)

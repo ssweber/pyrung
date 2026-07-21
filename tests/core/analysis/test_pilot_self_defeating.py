@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.progress import (
     _investigate_and_revert,
     _monitor_trend,
 )
+from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
@@ -614,6 +615,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     _record_attempt(attempt, frame, state, ctx)
 
     assert tuple(state.rungs) == (replayed,)
+    assert state.correction_receipts[0].correction is correction
     assert state.correction_receipts[0].rungs == (replayed,)
     assert state.correction_receipts[0].origin_key == frame.key
     assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
@@ -648,7 +650,7 @@ def test_correction_installer_rejects_already_owned_rung():
     state, _trial, frame, _ctx = _saboteur_scenario()
     state_tag = state.work._known_tags_by_name["State"]
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))
-    state.rungs = pvector((rung,))
+    _install_prerequisites(state, (rung,))
     correction = _ConfirmedCorrection(
         identity=correction_identity((rung,)),
         rungs=(rung,),
@@ -666,6 +668,62 @@ def test_correction_installer_rejects_already_owned_rung():
         )
 
     assert state.correction_receipts == []
+    assert state.hold_log[-1].source == "prerequisite"
+
+
+def test_prerequisite_reuses_correction_owned_rung_without_claiming_it():
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        rungs=(rung,),
+        sources=("Go",),
+        justification="replay confirmed",
+    )
+    _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+
+    _install_prerequisites(state, (rung,))
+
+    assert tuple(state.rungs) == (rung,)
+    assert len(state.correction_receipts) == 1
+    assert [entry.source for entry in state.hold_log] == ["investigation"]
+
+
+def test_correction_installer_banks_artifact_into_every_checkpoint():
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    first = state.checkpoints[0]
+    state.checkpoints.insert(
+        0,
+        _Checkpoint(("older",), first.world, first.trend, first.frontier),
+    )
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        rungs=(rung,),
+        sources=("Go",),
+        justification="replay confirmed",
+    )
+
+    _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+
+    assert all(rung in checkpoint.world.rungs for checkpoint in state.checkpoints)
+    state.load_world(state.checkpoints[0].world)
+    assert rung in state.rungs
+    assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
 
 
 def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
@@ -725,6 +783,8 @@ def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
     assert replacement.status is CorrectionStatus.ACTIVE
     assert replacement.rungs == (opposite,)
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
+    assert all(harmful not in checkpoint.world.rungs for checkpoint in state.checkpoints)
+    assert all(opposite in checkpoint.world.rungs for checkpoint in state.checkpoints)
     assert any(entry.source == "revocation" for entry in state.hold_log)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 

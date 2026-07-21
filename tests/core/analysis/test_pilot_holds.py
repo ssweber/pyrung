@@ -76,7 +76,6 @@ def test_shared_gate_journal_retains_hold_values_and_guards() -> None:
         hold_log=[
             _HoldLogEntry(
                 scan=2,
-                tags=(("DoorClosed", True),),
                 source="investigation",
                 rungs=(hold,),
             )

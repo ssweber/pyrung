@@ -17,12 +17,14 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
+    PilotRung,
     _append_rungs,
     _avoid_violations,
     _coast_holding_state,
     _coast_to_value,
     _has_pending_effects,
     _pilot_world_key,
+    _rung_identity,
     _settle_delayed_effects,
     coast_departure_tags,
     fork_with_rungs,
@@ -69,6 +71,24 @@ _LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
 
 class StaleBearingError(RuntimeError):
     """The world changed after orientation and before execution."""
+
+
+def _install_prerequisites(
+    state: _PilotState, prerequisites: tuple[PilotRung, ...]
+) -> None:
+    """Install only prerequisite rungs that do not already have an owner."""
+    existing = {_rung_identity(rung) for rung in state.rungs}
+    new_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
+    if not new_rungs:
+        return
+    state.rungs = _append_rungs(state.work, list(new_rungs), state.rungs)
+    state.hold_log.append(
+        _HoldLogEntry(
+            scan=state.work.state.scan_id,
+            source="prerequisite",
+            rungs=new_rungs,
+        )
+    )
 
 
 def _settle_cone(
@@ -391,15 +411,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         )
 
     if bearing.prerequisites:
-        state.rungs = _append_rungs(state.work, list(bearing.prerequisites), state.rungs)
-        state.hold_log.append(
-            _HoldLogEntry(
-                scan=state.work.state.scan_id,
-                tags=tuple((r.dest, r.value) for r in bearing.prerequisites),
-                source="prerequisite",
-                rungs=tuple(bearing.prerequisites),
-            )
-        )
+        _install_prerequisites(state, tuple(bearing.prerequisites))
 
     act = bearing.act
     if isinstance(act, Pulse):

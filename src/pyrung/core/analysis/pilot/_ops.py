@@ -59,6 +59,16 @@ class PilotRung:
             raise ValueError("PilotRung.guard is required")
 
 
+def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
+    """Exact executable identity used for overlay ownership and deduplication."""
+    return (
+        rung.dest,
+        _semantic_key(rung.value),
+        _semantic_key(rung.guard),
+        _semantic_key(rung.operation),
+    )
+
+
 def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
     """Channels whose departure terminates a coast holding the current world.
 
@@ -305,22 +315,9 @@ def _append_rungs(
     PILOT itself always assigns the returned value into ``_World.rungs``.
     """
     updated_list = list(rungs)
-    seen = {
-        (
-            rung.dest,
-            _semantic_key(rung.value),
-            _semantic_key(rung.guard),
-            _semantic_key(rung.operation),
-        )
-        for rung in updated_list
-    }
+    seen = {_rung_identity(rung) for rung in updated_list}
     for rung in proposed:
-        identity = (
-            rung.dest,
-            _semantic_key(rung.value),
-            _semantic_key(rung.guard),
-            _semantic_key(rung.operation),
-        )
+        identity = _rung_identity(rung)
         if identity not in seen:
             updated_list.append(rung)
             seen.add(identity)

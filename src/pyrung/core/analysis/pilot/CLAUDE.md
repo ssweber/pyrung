@@ -205,8 +205,13 @@ or retention policy is considered.
   consumers do not reconstruct that artifact from parallel result fields.
   Excursion verification additionally rechecks the corrected replay against
   `avoid=`. The shared installer rejects forged identities and already-owned
-  rungs, then records the receipt without recompiling its lifetime. The runner,
-  world key, checkpoint state, and receipt must therefore name the same rungs.
+  rungs, then records a lifecycle receipt containing that correction artifact
+  without copying or recompiling it. Prerequisite installation likewise reuses
+  an identical existing rung without claiming it; the first installer remains
+  its sole owner. Hold-log tag summaries are derived from their exact rungs.
+  Installation banks active correction artifacts into every revert anchor;
+  revocation removes them from every anchor symmetrically. The runner, world
+  key, checkpoint state, and receipt must therefore name the same rungs.
 - A terminal coast consumes the same channel-owner set during execution and
   incident replay. Exact stateful target motion that Gauge does not own is a
   recorded channel departure; it cannot be flattened into a timeout merely

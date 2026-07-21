@@ -53,6 +53,7 @@ def _finished_event(*, reverse: bool):
     tags = [("x_DoorClosed", True), ("x_LintDoorClosed", True)]
     if reverse:
         tags.reverse()
+    holds = tuple(PilotRung(tag, value, object()) for tag, value in tags)
     label = ", ".join(tag for tag, _value in tags)
     return SimpleNamespace(
         kind="finished",
@@ -60,7 +61,9 @@ def _finished_event(*, reverse: bool):
             "reached": True,
             "reason": "target reached",
             "knowledge": {
-                "hold_log": (_HoldLogEntry(scan=10, tags=tuple(tags), source="investigation"),),
+                "hold_log": (
+                    _HoldLogEntry(scan=10, source="investigation", rungs=holds),
+                ),
                 "lever_notes": {},
                 "skiff_decline": None,
                 "avoid_names": (),
