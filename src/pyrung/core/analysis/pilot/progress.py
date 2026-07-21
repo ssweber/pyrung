@@ -459,7 +459,6 @@ def _start_provisional(
         checkpoint_depth=len(state.checkpoints),
         started_at=search_scan,
         expires_at=min(ctx.max_scans, search_scan + _PROVISIONAL_SCAN_BUDGET),
-        classification=verdict.verdict,
         entry_progress=verdict.progress,
     )
     return (

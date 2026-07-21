@@ -43,7 +43,9 @@ Escalate according to what remains unreadable:
    state remains simulator execution state, not public PILOT evidence.
 4. `program_step.py` checks one exact producer in an unchanged fork and reports
    keep running, needs input, interrupted pipeline motion, or unclear. It does
-   not choose an action.
+   not choose an action. Observed pipeline motion makes the reading interrupted
+   even when the producer exposes no external input; the current transition
+   owner must be observed before option ordering may select an alternative.
 5. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
 
@@ -139,6 +141,12 @@ knowledge that must survive:
 `Compass.apply` returns a new compass and a `changed` flag. When no entry
 changes, it returns the same object. Runtime instruments return
 `CompassObservation` values and do not mutate the compass themselves.
+
+`Provisional` is a bounded recovery lease, not a second truth system or an
+exemption from ordinary recovery. `TrialAssessment` and gauge receipts carry
+the evidence; every observed unexpected departure still enters the same
+incident, investigation, correction, and retry lifecycle before lease expiry
+or retention policy is considered.
 
 ## Soundness and behavior invariants
 

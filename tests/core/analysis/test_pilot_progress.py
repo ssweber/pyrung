@@ -250,7 +250,6 @@ def test_banked_ordinary_checkpoint_promotes_the_provisional():
         checkpoint_depth=1,
         started_at=0,
         expires_at=2000,
-        classification="provisional",
     )
     trial = _make_trial(3, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
@@ -275,7 +274,6 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
         checkpoint_depth=1,
         started_at=0,
         expires_at=0,  # already past — the attempt is out of budget
-        classification="provisional",
     )
     trial = _make_trial(5, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
@@ -306,7 +304,6 @@ def test_instruction_owned_dwell_does_not_expire_provisional_search_budget():
         checkpoint_depth=1,
         started_at=0,
         expires_at=50,
-        classification="provisional",
     )
     trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
@@ -337,7 +334,6 @@ def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
         checkpoint_depth=1,
         started_at=0,
         expires_at=0,
-        classification="provisional",
     )
     verdict = DepartureVerdict(
         verdict="provisional",

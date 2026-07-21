@@ -71,7 +71,6 @@ class Provisional:
     checkpoint_depth: int
     started_at: int
     expires_at: int
-    classification: str
     entry_progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
     entry_banked: bool = False
 

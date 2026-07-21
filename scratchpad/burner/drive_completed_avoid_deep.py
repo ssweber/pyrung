@@ -24,7 +24,7 @@ from pyrung.core.analysis.pilot import progress as prog
 from pyrung.core.analysis.pilot import program_step as program_step_module
 from pyrung.core.runner import _compile_avoid
 
-WALL_S = 120.0
+WALL_S = 180.0
 PROCESS = psutil.Process()
 
 _real_build_incident = prog.build_deviation_incident
@@ -114,7 +114,6 @@ def main() -> None:
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     last_landing = None
-    sail_corrected = False
     events = []
     started = time.perf_counter()
 
@@ -182,28 +181,6 @@ def main() -> None:
                         f"{rejected.get('detail')}"
                         f"\n      ground={rejected.get('ground')}"
                     )
-                confirmed = investigation.get("confirmed_detail", ())
-                just_corrected_sail = any(
-                    (
-                        hypothesis.kind
-                        if hasattr(hypothesis, "kind")
-                        else hypothesis.get("kind")
-                    )
-                    == "absence-root"
-                    and any(
-                        getattr(hold, "dest", None) == "x_SailRelay"
-                        for hold in (
-                            hypothesis.holds
-                            if hasattr(hypothesis, "holds")
-                            else hypothesis.get("holds", ())
-                        )
-                    )
-                    for hypothesis in confirmed
-                )
-                if just_corrected_sail:
-                    sail_corrected = True
-                elif sail_corrected:
-                    break
             else:
                 selected = {
                     key: data[key]

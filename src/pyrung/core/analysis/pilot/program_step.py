@@ -446,7 +446,7 @@ def read_program_step(
             reason="the selected producer wrote its value but it did not survive a later write",
         )
 
-    if required and departed_channels:
+    if departed_channels:
         names = ", ".join(departed_channels)
         return ProgramStep(
             ProgramStepStatus.INTERRUPTED,
@@ -458,7 +458,7 @@ def read_program_step(
             next_trace=next_trace,
             reason=(
                 f"{names} moved while checking the selected producer; "
-                "its external-input reading is no longer current"
+                "its operation reading is no longer current"
             ),
             preserve_channels=departed_channels,
         )

@@ -353,7 +353,7 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 
 
 def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
-    """Lock the cold drive through its first two Execute-era fault corrections.
+    """Lock the cold avoided-Complete drive through its solved route.
 
     The former endpoint was an Unhold read at HELD/Step101. That landing was
     premature safety motion, not recipe progress; the exact-producer bearing
@@ -361,8 +361,11 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     the two door guards. Later watchdog regressions must accept the rotate-sensor
     oscillator and then the sail-relay absence root as distinct owners of their
     Execute->Abort incidents. The owner-verified dry dwell must then advance the
-    recipe to Step103, survive the Held/Unhold detour, and expose the next door
-    incident on the reused state-transition executor.
+    recipe through the dry, cool, hold-for-fluff, and fluff operations. Pipeline
+    motion observed while reading a later producer must keep its current owner;
+    it must not introduce a duplicate Hold command. Each later door incident on
+    the reused state-transition executor is corrected in its own causal era,
+    after which the program-owned Complete transition reaches State 17.
     """
     plc = PLC(tumbler_logic)
     plc.step()
@@ -373,6 +376,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     liveness_correction = None
     sail_correction = None
     post_sail_door_correction = None
+    finished = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
         plc,
@@ -425,7 +429,9 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
                 and {"x_DoorClosed", "x_LintDoorClosed"} <= latch_exposure
             ):
                 post_sail_door_correction = event
-                break
+        if event.kind == "finished":
+            finished = event
+            break
         if time.monotonic() > deadline:
             pytest.fail(
                 "cold avoided-Complete drive did not correct its Execute watchdog departure"
@@ -435,6 +441,8 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     assert liveness_correction is not None
     assert sail_correction is not None
     assert post_sail_door_correction is not None
+    assert finished is not None
+    assert finished.data["reached"] is True
     assert liveness_correction.data["investigation"]["confirmed"] > 0
     assert any(
         hypothesis.get("kind") == "liveness"
@@ -451,10 +459,15 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
         for event in events
     )
     assert any(
-        pair[0] == "Internal__Step" and pair[1] >= 103
+        pair[0] == "Internal__Step" and pair[1] >= 109
         for event in events
         if event.kind == "provisional_promoted"
         for pair in event.data.get("landing_mark") or ()
+    )
+    assert not any(
+        event.kind == "candidate_accepted"
+        and ("Cmd_State_Hold", True) in tuple(event.data.get("applied") or ())
+        for event in events
     )
     assert not any(
         any(
@@ -517,15 +530,8 @@ def _recipe_era_evidence(skeleton: list[dict]) -> bool:
     return False
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="step-4 (CoastSession) acceptance gate: with the Complete button avoided "
-    "the pilot must earn the internal route (Dry -> Cool -> program Hold -> door "
-    "cycle -> Unhold -> Fluff -> Fluffing timer issues Complete); today it "
-    "flounders in blind let-run coasts on this fixture",
-)
 def test_pilot_internal_route_gate_completed_avoiding_shortcut(tumbler_logic) -> None:
-    """The internal-route challenge — born as a gate per the shipyard rule.
+    """Earn Completed through the program-owned route, never its operator shortcut.
 
     ``test_pilot_golden_skeleton_completed`` covers the same target unavoided:
     the pilot reaches 17 by pressing ``Cmd_State_Complete`` from Execute (the
@@ -534,18 +540,13 @@ def test_pilot_internal_route_gate_completed_avoiding_shortcut(tumbler_logic) ->
     proves (``test_constructive_route_to_completed``): ProductionExecuteSteps
     issues the Complete command itself via ``rise(S_Fluffing_tmr.Done)``.
 
-    The pilot is NOT currently expected to manage this (a related single-Bool
-    drive, ``how(y_BurnerLoop)``, is known to flounder in blind let-run coasts
-    on this fixture — under separate diagnosis), so per the mechanism-gate rule
-    in ``pilot/CLAUDE.md`` the test is born strict-xfail and flips when the
-    CoastSession mechanism lands. No golden JSON yet — a floundering
-    skeleton would churn; the golden gets recorded when this first
-    legitimately passes.
+    The avoided-Complete golden sibling records the exact structural route.
+    This acceptance gate independently checks the outcome and the essential
+    proof that the pilot never selected the avoided operator action.
 
     Fast-fail: the floundering mode repeats ~900-scan Unhold laps at ~90s
-    wall each, so the drive loop carries a wall-clock deadline
-    (``INTERNAL_ROUTE_WALL_BUDGET_S``) — under strict xfail, tripping it is
-    today's expected failure (~4-5 min worst case, one lap of overshoot).
+    wall each, so the drive loop retains a wall-clock deadline
+    (``INTERNAL_ROUTE_WALL_BUDGET_S``) to report a regression promptly.
     """
     plc = PLC(tumbler_logic)
     plc.step()

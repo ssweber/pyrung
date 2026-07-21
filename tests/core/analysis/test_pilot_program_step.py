@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot.program_step import (
     read_program_step,
 )
 from pyrung.core.analysis.steerable import compute_steerable
+from pyrung.core.crossing import Cmp
 
 
 def _timer_producer_program(
@@ -276,6 +277,48 @@ def test_unrelated_channel_motion_does_not_accept_a_bypassed_producer_input() ->
     assert "State moved" in result.reason
     assert "no longer current" in result.reason
     assert result.preserve_channels == ("State",)
+
+
+def test_pipeline_motion_interrupts_an_owned_boundary_without_external_input() -> None:
+    """An in-flight channel owner outranks a later timer producer reading."""
+    hazard = Bool("OwnedHazard", default=True, external=True)
+    state = Int("OwnedState", default=6)
+    timer = Timer.clone("OwnedTimer")
+    command = Int("OwnedCommand")
+
+    with Program(strict=False) as program:
+        with Rung(And(hazard, state == 6)):
+            copy(11, state)
+        with Rung(state == 6):
+            on_delay(timer, 1, "s")
+        with Rung(timer.Done):
+            copy(10, command)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    world = WorldView(
+        **{
+            **world.__dict__,
+            "opaque_loop": frozenset((state.name,)),
+            "pipeline_roles": (PipelineRoles(state.name, request_tags=frozenset((command.name,))),),
+        }
+    )
+    producer = Producer(
+        rung_index=next(iter(world.pdg.writers_of[command.name])),
+        kind="program",
+        guard_tags=frozenset((timer.Done.name,)),
+        co_writes=frozenset(),
+        command_tag=command.name,
+        command_value=10,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.INTERRUPTED
+    assert result.required_inputs == ()
+    assert result.boundary == Cmp(timer.Acc.name, ">=", 1)
+    assert result.preserve_channels == (state.name,)
+    assert "operation reading is no longer current" in result.reason
 
 
 def test_input_must_reach_the_exact_producer_not_merely_move_its_channel() -> None:
