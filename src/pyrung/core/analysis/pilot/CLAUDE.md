@@ -101,6 +101,10 @@ should consume the first owner's result.
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
+- Coast-departure channel ownership: `_ops.py::coast_departure_tags`; inferred
+  pipeline channels remain sentinels, Gauge retains monotone progress
+  coordinates, and an exact stateful target without a Gauge owner is the
+  discrete fallback channel
 - Post-commit retention, recovery, and correction installation: `progress.py`
 - Corrective hypothesis derivation: `corrections.py`
 - Corrective hypothesis replay and confirmation: `investigate.py`
@@ -189,7 +193,17 @@ or retention policy is considered.
   ordinary logic. A hold does not have to finish the remaining route.
 - Replay confirmation is probationary knowledge. If a later exact incident
   causally contradicts an active correction, `progress.py` revokes its receipt,
-  removes its rungs, and excludes that correction at its origin before retrying.
+  removes its rungs, and excludes that correction at its origin. A
+  replay-confirmed replacement is installed only after that removal, making the
+  change an ownership handoff rather than two competing holds.
+- `PilotRung` is executable form, not correction provenance. Only rungs named by
+  active correction receipts may renegotiate their concrete value from a later
+  incident boundary; prerequisites and route holds cannot enter the correction
+  lifecycle merely because they compile to the same rung type.
+- A terminal coast consumes the same channel-owner set during execution and
+  incident replay. Exact stateful target motion that Gauge does not own is a
+  recorded channel departure; it cannot be flattened into a timeout merely
+  because pipeline inference found no operator-request role.
 - Coast predicates decide bump truth. Compiled conditions provide fold metadata
   only. Every reported crossing lands on a real recorded scan.
 - Cycle folding, table inversion, producer recognition, and departure

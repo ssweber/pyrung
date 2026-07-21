@@ -565,8 +565,8 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
     assert installed in state.rungs  # benign scoped correction remains recorded
 
 
-def test_causally_opposite_remedy_revokes_harmful_correction(monkeypatch):
-    """A later exact contradiction retracts the attempt instead of layering it."""
+def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
+    """A later exact contradiction hands ownership to its proved replacement."""
     state, trial, frame, ctx = _saboteur_scenario()
     scope = CompareEq(state.work._known_tags_by_name["State"], 6)
     harmful = PilotRung("Go", True, scope)
@@ -618,8 +618,12 @@ def test_causally_opposite_remedy_revokes_harmful_correction(monkeypatch):
         end_scan=trial.fork.state.scan_id,
     )
 
-    assert all(rung.dest != "Go" for rung in state.rungs)
+    assert harmful not in state.rungs
+    assert opposite in state.rungs
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
+    replacement = state.correction_receipts[1]
+    assert replacement.status is CorrectionStatus.ACTIVE
+    assert replacement.rungs == (opposite,)
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
     assert any(entry.source == "revocation" for entry in state.hold_log)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)

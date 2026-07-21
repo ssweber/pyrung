@@ -59,6 +59,32 @@ class PilotRung:
             raise ValueError("PilotRung.guard is required")
 
 
+def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
+    """Channels whose departure terminates a coast holding the current world.
+
+    Pipeline analysis owns recognized request/state channels.  Gauge owns
+    monotone progress coordinates.  An exact stateful target with no Gauge
+    owner is itself a discrete channel, even when the program has no inferred
+    operator-request pipeline.  Keeping that arbitration here gives coast,
+    VERIFY replay, and investigation the same channel set.
+    """
+    channels = list(dict.fromkeys(role.channel_tag for role in ctx.pipeline_roles))
+    config = state.key_config
+    target = ctx.target_tag
+    gauge_tags = {
+        component.tag for component in getattr(getattr(state, "gauge", None), "components", ())
+    }
+    if (
+        getattr(ctx, "target_predicate", None) is None
+        and config is not None
+        and target in config.stateful_names
+        and target not in gauge_tags
+        and target not in channels
+    ):
+        channels.append(target)
+    return tuple(channels)
+
+
 def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
     """Lower a trace completion ``Atom`` to its still-unresolved condition."""
     from pyrung.core.condition import (

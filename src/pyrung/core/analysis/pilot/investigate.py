@@ -1363,6 +1363,7 @@ def investigate_deviation(
     *,
     needed: Sequence[tuple[str, Any]] = (),
     installed_rungs: Sequence[Any] = (),
+    correction_rungs: Sequence[Any] = (),
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
     excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
 ) -> InvestigationResult:
@@ -1403,6 +1404,10 @@ def investigate_deviation(
     for _rung in installed_rungs:
         if bool(_rung.guard.evaluate(_before_view)):
             installed_active[_rung.dest] = _rung.value
+    correction_active: dict[str, Any] = {}
+    for _rung in correction_rungs:
+        if bool(_rung.guard.evaluate(_before_view)):
+            correction_active[_rung.dest] = _rung.value
     absence_hyps, absence_tags = _absence_root_correctives(
         plc,
         incident,
@@ -1411,6 +1416,7 @@ def investigate_deviation(
         # Pilot ownership is not causal evidence; deep cause replays the actual
         # installed synthesis and can attribute an active or expired rule.
         exclude=frozenset(tag for tag, _value in incident.action),
+        installed=correction_active,
     )
     raw: list[InvestigationHypothesis] = list(absence_hyps)
     raw.extend(_precise_causes(plc, incident, ctx))
@@ -2164,6 +2170,7 @@ def _absence_root_correctives(
     incident: DeviationIncident,
     ctx: Any,
     exclude: frozenset[str] = frozenset(),
+    installed: Mapping[str, Any] | None = None,
 ) -> tuple[list[InvestigationHypothesis], frozenset[str]]:
     """Corrective holds from the deep walk's never-moved roots.
 
@@ -2181,10 +2188,11 @@ def _absence_root_correctives(
     standing it would rank behind every temporally-nearby bystander whose
     hold merely defers the fault past the bounded replay window.
 
-    *exclude* carries the pilot-touched and installed-hold tags: a tag the
-    pilot itself pinned reads as "held since cold" in the fork's history,
-    but flipping the pilot's own hold is self-investigation, not a program
-    absence.
+    *exclude* carries the action that launched this incident: flipping that
+    input would be self-investigation.  *installed* names values owned by prior
+    confirmed corrections.  Those roots are not blindly flipped, but a wide
+    value may be recomputed from a different ordered boundary on this incident's
+    recorded chain; replay and correction revocation then verify the handoff.
     """
     chan = incident.channel_tag
     dep = None
@@ -2199,6 +2207,7 @@ def _absence_root_correctives(
         return [], frozenset()
 
     steerable = getattr(ctx, "steerable", frozenset())
+    installed = installed or {}
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "absence-root: %s@%s roots=%s",
@@ -2211,13 +2220,26 @@ def _absence_root_correctives(
     for root in chain.ranked_roots():
         if root.kind not in _ABSENCE_ROOT_KINDS:
             continue
-        if root.held_since_scan is not None:
-            continue  # it moved during the run — not an absence
         if root.tag_name in exclude:
-            continue  # the pilot's own hold, not a program absence
+            continue  # the incident-launching action, not a program absence
         if root.tag_name not in steerable:
             continue
-        if isinstance(root.value, bool):
+        installed_owner = root.tag_name in installed and _values_match(
+            installed[root.tag_name], root.value
+        )
+        if root.held_since_scan is not None and not installed_owner:
+            continue  # it moved during the run and has no prior correction owner
+        if installed_owner:
+            # An installed value appearing on the new fault chain is evidence
+            # only when that chain computes a different ordered boundary.  In
+            # particular, never complement a prior Boolean correction merely
+            # because replay made its write visible in history.
+            analog = _analog_boundary_hold(plc, root, chain, ctx)
+            if analog is None:
+                continue
+            hold, note = analog
+            relation_note = f"; recompute installed owner: {note}"
+        elif isinstance(root.value, bool):
             hold = (root.tag_name, not root.value)
             relation_note = ""
         else:
@@ -2240,7 +2262,8 @@ def _absence_root_correctives(
                     holds=(hold,),
                     sources=(root.tag_name,),
                     detail=(
-                        f"{root.tag_name} held {root.value!r} since cold "
+                        f"{root.tag_name} held {root.value!r} "
+                        f"{'by PILOT' if installed_owner else 'since cold'} "
                         f"on {dep.tag}'s deep cause chain [{root.kind}]{relation_note}"
                     ),
                 ),

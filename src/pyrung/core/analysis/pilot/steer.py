@@ -24,6 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
     _has_pending_effects,
     _pilot_world_key,
     _settle_delayed_effects,
+    coast_departure_tags,
     fork_with_rungs,
     wait_edge_nogood,
 )
@@ -607,7 +608,7 @@ def _try_terminal_letrun(
       - stall (budget, no target, no ejection) -> dead-end reject; the caller
         falls back to a bounded cone settle.
     """
-    role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
+    role_tags = coast_departure_tags(state, ctx)
     # fork_with_rungs re-establishes the steady holds on the coast fork: force
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
@@ -659,11 +660,11 @@ def _try_terminal_letrun(
     #   stall    -> nothing reached, no role moved: a true dead end; let the
     #               caller fall back to a bounded cone settle.
     reached = target_reached(snap_after, ctx.target_tag, ctx.target_value, ctx.target_predicate)
-    changed_role = next(
+    changed_channel = next(
         (t for t in role_tags if not _values_match(snap_after.get(t), start_roles[t])),
         None,
     )
-    if not reached and changed_role is None:
+    if not reached and changed_channel is None:
         # Hand the stall's receipt + pending flag to the loop: a quiescent
         # stall is trustworthy memo material (skip the re-coast at this world
         # key); a stall with a timer mid-flight must stay re-runnable.
@@ -679,9 +680,9 @@ def _try_terminal_letrun(
         chan_tag: str | None = None
         chan_val: Any = None
     else:
-        assert changed_role is not None
-        chan_tag = changed_role
-        chan_val = start_roles[changed_role]
+        assert changed_channel is not None
+        chan_tag = changed_channel
+        chan_val = snap_before.get(changed_channel)
 
     trial = _PulseState(
         fork=fork,

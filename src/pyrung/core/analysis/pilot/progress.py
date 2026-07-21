@@ -24,6 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
     _semantic_key,
     _set_rungs,
+    coast_departure_tags,
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
@@ -1027,7 +1028,7 @@ def _investigate_and_revert(
             for step in state.steps
             if step.scan_before >= cp_fork.state.scan_id
         )
-        role_tags = tuple(r.channel_tag for r in ctx.pipeline_roles)
+        role_tags = coast_departure_tags(state, ctx)
         correction_progress_mark = (
             retain_if_unresolved.progress.source_mark
             if retain_if_unresolved is not None
@@ -1090,6 +1091,12 @@ def _investigate_and_revert(
             replay,
             needed=needed,
             installed_rungs=tuple(state.rungs),
+            correction_rungs=tuple(
+                rung
+                for receipt in state.correction_receipts
+                if receipt.status is CorrectionStatus.ACTIVE
+                for rung in receipt.rungs
+            ),
             correction_progress_mark=correction_progress_mark,
             excluded_corrections=frozenset(state.correction_nogoods.get(cp_key, ())),
         )
@@ -1099,10 +1106,6 @@ def _investigate_and_revert(
         # a second, globally-steady-hold rule.
         investigation_holds.extend(investigation.confirmed_holds)
         revoked_receipts = _contradicted_corrections(state, investigation)
-        if revoked_receipts:
-            # The confirmed opposite remedy is evidence against our prior
-            # intervention, not another hold to layer on top of it.
-            investigation_holds.clear()
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -1220,7 +1223,11 @@ def _investigate_and_revert(
     del state.checkpoints[checkpoint_index + 1 :]
     state.load_world(cp_world)
     revoked_ids = _revoke_corrections(state, revoked_receipts, checkpoint)
-    if investigation_rungs and not revoked_ids:
+    if investigation_rungs:
+        # Revocation removes contradicted owners before this append.  The
+        # replay-confirmed remedy is therefore an ownership replacement, not a
+        # second hold layered over the stale correction.
+        correction_origin_key = state.checkpoints[-1].key
         state.rungs = _append_rungs(state.work, investigation_rungs, state.rungs)
         # Bank the corrected world onto the checkpoint.  A replay-confirmed
         # correction is knowledge, but rungs live in the revertible World half —
@@ -1254,7 +1261,7 @@ def _investigate_and_revert(
                     )
                     + 1
                 ),
-                origin_key=cp_key,
+                origin_key=correction_origin_key,
                 identity=correction_identity(
                     confirmed_hypothesis.holds
                     if confirmed_hypothesis is not None
