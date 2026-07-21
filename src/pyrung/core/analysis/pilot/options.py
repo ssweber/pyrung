@@ -495,10 +495,9 @@ def _oscillating_rungs(tag: str, ctx: Any, scope: Any, plc: Any) -> tuple[PilotR
     """A two-rule toggle for an edge-gated accumulator driver.
 
     Drives *tag* to each polarity while it sits at the other, so it alternates
-    every scan — the rising/falling edge train the counter needs.  Mirrors the
-    complement-reset OSCILLATE in ``corrections.py``; the terminal let-run
-    animates it via the same ``PilotRung`` plumbing as the steady
-    prerequisites.
+    every scan — the rising/falling edge train the counter's pulse contract
+    explicitly requests. This is option lowering of an owner-declared pulse,
+    not a corrective behavior-category hypothesis.
     """
     from pyrung.core.condition import AllCondition, CompareNe
 

@@ -2390,25 +2390,18 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "oscillate x_RotateSensor between [False, True] (complement-reset watchdog)",
+     "detail": "reset Rotate_SensorOffWD_tmr_Done: x_RotateSensor=True until Eq(tag='x_RotateSensor', values=frozenset({True}))",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
        "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
-       "value": false
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
        "value": true
       }
      ],
      "kind": "liveness",
      "sources": [
       "Rotate_SensorOffWD_tmr_Done",
-      "x_RotateSensor",
       "x_RotateSensor"
      ]
     }
@@ -2416,35 +2409,28 @@
    "hypotheses": 2,
    "hypothesis_detail": [
     {
-     "detail": "oscillate x_RotateSensor between [False, True] (complement-reset watchdog)",
+     "detail": "reset Rotate_SensorOffWD_tmr_Done: x_RotateSensor=True until Eq(tag='x_RotateSensor', values=frozenset({True}))",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
        "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
-       "value": false
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
        "value": true
       }
      ],
      "kind": "liveness",
      "sources": [
       "Rotate_SensorOffWD_tmr_Done",
-      "x_RotateSensor",
       "x_RotateSensor"
      ]
     },
     {
-     "detail": "oscillate Test_Simulate_1st_Scan between [True] (complement-reset watchdog)",
+     "detail": "reset A_TimeBetween1stScan_tmr_Done: Test_Simulate_1st_Scan=True until Eq(tag='Test_Simulate_1st_Scan', values=frozenset({True}))",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
        "value": true
       }
      ],
@@ -2770,10 +2756,6 @@
      "tags": [
       [
        "x_RotateSensor",
-       false
-      ],
-      [
-       "x_RotateSensor",
        true
       ]
      ]
@@ -3004,15 +2986,11 @@
     "inputs": [
      [
       "x_RotateSensor",
-      false
-     ],
-     [
-      "x_RotateSensor",
       true
      ]
     ],
     "kind": "force",
-    "label": "x_RotateSensor, x_RotateSensor",
+    "label": "x_RotateSensor",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],

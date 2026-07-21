@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class OperationReceipt:
+    """Owner-declared lifetime for one rung-driven operation.
+
+    ``until`` is the observable handoff boundary. ``progress`` is the owner's
+    affirmative receipt that this exact operation is already in flight.  The
+    overlay compiler uses it to preserve current ownership when another rule
+    for the same destination is also waiting to start.
+    """
+
+    until: Any
+    progress: Any = None
+
+
+@dataclass(frozen=True)
 class PilotRung:
     """One scoped piece of PILOT steering.
 
@@ -38,6 +52,7 @@ class PilotRung:
     dest: str
     value: Any
     guard: Any
+    operation: OperationReceipt | None = None
 
     def __post_init__(self) -> None:
         if self.guard is None:
@@ -196,14 +211,59 @@ def _rungs_from_proposals(
 
 def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
     """Replace PILOT's overlay from its ordered, guarded rung records."""
+    from pyrung.core.condition import AllCondition, Condition
     from pyrung.core.synthesis import guarded_copy_rung
 
+    class _DemandActive(Condition):
+        def __init__(self, demand: Any):
+            self.demand = demand
+
+        def evaluate(self, ctx: Any) -> bool:
+            return bool(self.demand.condition.evaluate(ctx)) is bool(self.demand.value)
+
+    class _NoDemandActive(Condition):
+        def __init__(self, demands: tuple[Any, ...]):
+            self.demands = demands
+
+        def evaluate(self, ctx: Any) -> bool:
+            return not any(
+                bool(demand.condition.evaluate(ctx)) is bool(demand.value)
+                for demand in self.demands
+            )
+
+    materialized = list(rungs)
+    progress_by_dest: dict[str, tuple[Any, ...]] = {}
+    for rung in materialized:
+        progress = rung.operation.progress if rung.operation is not None else None
+        if progress is None:
+            continue
+        current = progress_by_dest.get(rung.dest, ())
+        if all(_semantic_key(progress) != _semantic_key(existing) for existing in current):
+            progress_by_dest[rung.dest] = (*current, progress)
+
     rules: list[tuple[Any, Any, Any]] = []
-    for rung in rungs:
+    continuation_rules: list[tuple[Any, Any, Any]] = []
+    for rung in materialized:
         dest = plc._known_tags_by_name.get(rung.dest)
         if dest is None:
             raise KeyError(f"pilot rung destination {rung.dest!r} is not a program tag")
-        rules.append((dest, rung.value, rung.guard))
+        progress = rung.operation.progress if rung.operation is not None else None
+        peers = progress_by_dest.get(rung.dest, ())
+        start_guard = (
+            AllCondition(rung.guard, _NoDemandActive(peers))
+            if progress is not None and peers
+            else rung.guard
+        )
+        rules.append((dest, rung.value, start_guard))
+        if progress is not None:
+            # Continuations come after every start rule. The last active write
+            # therefore belongs to the operation whose owner says it is already
+            # in flight, rather than to a competing value that merely remains
+            # eligible to start.
+            continuation_rules.append(
+                (dest, rung.value, AllCondition(rung.guard, _DemandActive(progress)))
+            )
+    rules.extend(continuation_rules)
     _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
 
 
@@ -220,10 +280,21 @@ def _append_rungs(
     """
     updated_list = list(rungs)
     seen = {
-        (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard)) for rung in updated_list
+        (
+            rung.dest,
+            _semantic_key(rung.value),
+            _semantic_key(rung.guard),
+            _semantic_key(rung.operation),
+        )
+        for rung in updated_list
     }
     for rung in proposed:
-        identity = (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard))
+        identity = (
+            rung.dest,
+            _semantic_key(rung.value),
+            _semantic_key(rung.guard),
+            _semantic_key(rung.operation),
+        )
         if identity not in seen:
             updated_list.append(rung)
             seen.add(identity)
@@ -500,7 +571,13 @@ def _pilot_world_key(
 ) -> tuple[Any, ...]:
     """Identity of an executable PILOT world: PLC projection plus PilotRungs."""
     rung_key = tuple(
-        (rung.dest, _semantic_key(rung.value), _semantic_key(rung.guard)) for rung in rungs
+        (
+            rung.dest,
+            _semantic_key(rung.value),
+            _semantic_key(rung.guard),
+            _semantic_key(rung.operation),
+        )
+        for rung in rungs
     )
     return (_pilot_state_key(snap, cfg), rung_key)
 

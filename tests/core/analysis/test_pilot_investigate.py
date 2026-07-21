@@ -1328,17 +1328,16 @@ class TestLatchExposureHypotheses:
 
 
 # ---------------------------------------------------------------------------
-# _done_boundary_hypotheses — complement-reset watchdog oscillation holds
+# _done_boundary_hypotheses — owner-declared watchdog reset operations
 # ---------------------------------------------------------------------------
 
 
 class TestLivenessHypotheses:
-    """_done_boundary_hypotheses: watchdog-driven oscillation holds.
+    """_done_boundary_hypotheses: watchdog reset operations.
 
-    A complement-reset watchdog (``on_delay`` reset by an input edge) trips if
-    the input sits at either polarity too long.  Only a *changing* input
-    satisfies it — proposed structurally (no dwell) as a :class:`PilotRung`
-    carrying one guarded rule per resetting polarity.
+    A resettable owner reports the operation that clears its recorded
+    completion. Direct contacts complete in one scan; intermediate owners can
+    retain longer boundaries and progress receipts.
     """
 
     def test_complement_reset_watchdog_produces_conditional_hold(self):
@@ -1378,11 +1377,12 @@ class TestLivenessHypotheses:
         (proposal,) = hyps[0].holds
         assert isinstance(proposal, PilotRung)
         assert (proposal.dest, proposal.value) == ("Sensor", False)
+        assert proposal.operation is not None
 
-    def test_complement_pair_yields_both_polarity_rules(self):
-        # Two watchdogs on one sensor reset on OPPOSITE edges — held at either
-        # polarity, one trips.  The hold must carry BOTH polarity rules so the
-        # input oscillates; a single steady value would trip the other watchdog.
+    def test_recorded_watchdog_yields_only_its_reset_operation(self):
+        # The opposite watchdog is structurally present but did not complete in
+        # this incident. Its remedy belongs to a later recorded occurrence, not
+        # to a guessed complementary behavior category.
         Sensor = Bool("Sensor", external=True)
         OffWD = Timer.clone("OffWD")  # resets on Sensor -> counts while False
         OnWD = Timer.clone("OnWD")  # resets on ~Sensor -> counts while True
@@ -1416,11 +1416,10 @@ class TestLivenessHypotheses:
 
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
-        assert all(isinstance(r, PilotRung) for r in hyps[0].holds)
-        assert {(r.dest, r.value) for r in hyps[0].holds} == {
-            ("Sensor", False),
-            ("Sensor", True),
-        }
+        (proposal,) = hyps[0].holds
+        assert isinstance(proposal, PilotRung)
+        assert (proposal.dest, proposal.value) == ("Sensor", False)
+        assert proposal.operation is not None
 
     def test_only_fired_watchdogs_proposed(self):
         S1 = Bool("S1", external=True)
@@ -1544,10 +1543,9 @@ class TestShaftRotateLiveness:
         assert plc2.state.tags["Fault"] is False
         assert plc2.state.tags["Running"] is True
 
-    def test_ejection_synthesizes_both_polarity_hold(self):
-        # Park the sensor off and let it eject (SensorOffWD trips); from that one
-        # incident, _done_boundary_hypotheses reads BOTH watchdogs structurally and
-        # synthesizes an oscillating PilotRung — no dwell, no second round.
+    def test_ejection_synthesizes_the_recorded_owner_operation(self):
+        # Park the sensor off and let SensorOffWD trip. The correction asks only
+        # how that recorded owner resets and retains the resulting operation.
         prog = _shaft_rotate_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
@@ -1557,16 +1555,15 @@ class TestShaftRotateLiveness:
 
         hyps = correct_enablers(plc, incident, ctx)
         assert len(hyps) == 1
-        assert all(isinstance(r, PilotRung) for r in hyps[0].holds)
-        assert {(r.dest, r.value) for r in hyps[0].holds} == {
-            ("x_Rotate", True),
-            ("x_Rotate", False),
-        }
+        (proposal,) = hyps[0].holds
+        assert isinstance(proposal, PilotRung)
+        assert (proposal.dest, proposal.value) == ("x_Rotate", True)
+        assert proposal.operation is not None
 
     def test_synthesized_hold_oscillates_to_target(self):
-        # Drive the coast with the synthesized hold: the two complementary rules
-        # alternate x_Rotate every scan, keeping both watchdogs reset, so RunDelay
-        # counts up and Running is reached with no fault.
+        # A direct assignment operation completes at x_Rotate=True and releases
+        # to the Boolean resting value. Repeating that structural operation
+        # naturally produces the required edges without an OSCILLATE category.
         prog = _shaft_rotate_program()
         plc = PLC(prog, dt=0.010)
         plc.step()
@@ -1581,6 +1578,40 @@ class TestShaftRotateLiveness:
         assert reached.reached is True
         assert fresh.state.tags["Running"] is True
         assert fresh.state.tags["Fault"] is False
+
+    def test_mapped_contact_keeps_its_trace_handoff_as_an_operation(self):
+        """A plain input map must not erase the watchdog reset operation."""
+        physical = Bool("MappedRotate", external=True)
+        contact = Bool("MappedRotateContact")
+        watchdog = Timer.clone("MappedRotateWD")
+        with Program() as program:
+            with Rung(physical):
+                out(contact)
+            with Rung():
+                on_delay(watchdog, 50, "ms").reset(contact)
+
+        plc = PLC(program, dt=0.010)
+        plc.step()
+        before = dict(plc.state.tags)
+        anchor = plc.state.scan_id
+        for _ in range(6):
+            plc.step()
+        incident = build_deviation_incident(
+            anchor_scan=anchor,
+            end_scan=plc.state.scan_id,
+            action=(),
+            bearing=((watchdog.Done.name, False),),
+            before_snap=before,
+            after_snap=dict(plc.state.tags),
+        )
+
+        hypotheses = correct_enablers(plc, incident, _make_ctx(program, plc))
+
+        assert len(hypotheses) == 1
+        (operation,) = hypotheses[0].holds
+        assert (operation.dest, operation.value) == (physical.name, True)
+        assert operation.operation is not None
+        assert operation.operation.until.tag == physical.name
 
 
 # ---------------------------------------------------------------------------

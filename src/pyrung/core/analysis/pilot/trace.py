@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis import steerable as _steerable
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
+from pyrung.core.analysis.pilot._ops import OperationReceipt
 from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.availability import (
     _GUARD_CONTRADICTION,
@@ -223,6 +224,10 @@ class TraceAction:
     # means the trace supplied no honest rung lifetime, so the action stays a
     # patch/pulse candidate.
     until: Any = None
+    # The complete owner receipt behind ``until``. Keeping this distinct from
+    # the flattened action lets correction replay and option ordering preserve
+    # an operation that has already started instead of toggling its lever.
+    operation: OperationReceipt | None = None
     # Conditions from the selected writer path that make this action applicable.
     # A rung-managed physical input can reuse them as an honest local guard when
     # trace discovers that the input must be asserted again in a new context.
@@ -423,6 +428,7 @@ class TraceNode:
         under_enable: bool = False,
         path_availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW,
         until: Any = None,
+        operation: OperationReceipt | None = None,
         guard_atoms: tuple[Any, ...] = (),
         operation_boundary: tuple[str, Any] | None = None,
     ) -> None:
@@ -446,6 +452,7 @@ class TraceNode:
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
         child_until = until
+        child_operation = operation
         unsatisfied_children = [child for child in self.children if not child.satisfied]
         if (
             child_until is None
@@ -470,6 +477,11 @@ class TraceNode:
                 if advance_child.linear_boundary
                 else advance_child.advance.until
             )
+        if advance_child is not None and child_operation is None:
+            child_operation = OperationReceipt(
+                until=child_until or advance_child.advance.until,
+                progress=getattr(advance_child.advance, "progress", None),
+            )
         for child in self.children:
             child_guard_atoms = list(guard_atoms)
             for sibling in self.children:
@@ -484,6 +496,7 @@ class TraceNode:
                 child_enable,
                 node_availability,
                 child_until,
+                child_operation,
                 tuple(child_guard_atoms),
                 child_operation_boundary,
             )
@@ -494,6 +507,7 @@ class TraceNode:
                 value=self.value,
                 provenance=self.provenance,
                 until=until,
+                operation=operation,
                 guard_atoms=guard_atoms,
                 pulse=self.pulse,
                 establish=under_enable,
@@ -508,6 +522,7 @@ class TraceNode:
                 out[index] = replace(
                     existing,
                     until=existing.until if existing.until is not None else detail.until,
+                    operation=(existing.operation or detail.operation),
                     guard_atoms=tuple(dict.fromkeys((*existing.guard_atoms, *detail.guard_atoms))),
                     pulse=existing.pulse or detail.pulse,
                     establish=existing.establish or detail.establish,

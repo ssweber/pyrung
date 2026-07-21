@@ -828,6 +828,7 @@ def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
         rung.dest,
         _semantic_key(rung.value),
         _semantic_key(rung.guard),
+        _semantic_key(rung.operation),
     )
 
 
@@ -846,26 +847,40 @@ def _contradicted_corrections(
         return ()
     remedy = investigation.confirmed[0]
     sources = set(remedy.sources)
-    remedy_values: dict[str, list[Any]] = {}
+    remedy_rungs: dict[str, list[tuple[Any, Any]]] = {}
     for proposal in remedy.holds:
-        tag = proposal.dest if isinstance(proposal, PilotRung) else proposal[0]
-        value = proposal.value if isinstance(proposal, PilotRung) else proposal[1]
-        remedy_values.setdefault(tag, []).append(value)
+        if isinstance(proposal, PilotRung):
+            remedy_rungs.setdefault(proposal.dest, []).append((proposal.value, proposal.operation))
+        else:
+            tag, value = proposal
+            remedy_rungs.setdefault(tag, []).append((value, None))
+
+    def _compatible_phases(new_operation: Any, old: PilotRung) -> bool:
+        """Opposite values with distinct owner boundaries are temporal phases."""
+        return (
+            new_operation is not None
+            and old.operation is not None
+            and _semantic_key(new_operation.until) != _semantic_key(old.operation.until)
+        )
 
     contradicted: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
         if receipt.status is not CorrectionStatus.ACTIVE:
             continue
-        admitted: dict[str, list[Any]] = {}
+        admitted: dict[str, list[PilotRung]] = {}
         for rung in receipt.rungs:
-            admitted.setdefault(rung.dest, []).append(rung.value)
+            admitted.setdefault(rung.dest, []).append(rung)
         if any(
             tag in sources
             and all(
-                not any(_values_match(remedy_value, old) for old in admitted.get(tag, ()))
-                for remedy_value in values
+                not any(
+                    _values_match(remedy_value, old.value)
+                    or _compatible_phases(remedy_operation, old)
+                    for old in admitted.get(tag, ())
+                )
+                for remedy_value, remedy_operation in rungs
             )
-            for tag, values in remedy_values.items()
+            for tag, rungs in remedy_rungs.items()
             if tag in admitted
         ):
             contradicted.append(receipt)

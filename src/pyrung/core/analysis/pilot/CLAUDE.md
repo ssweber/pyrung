@@ -104,6 +104,9 @@ should consume the first owner's result.
 - Post-commit retention, recovery, and correction installation: `progress.py`
 - Corrective hypothesis derivation: `corrections.py`
 - Corrective hypothesis replay and confirmation: `investigate.py`
+- Corrective operation lifetime: the instruction owner, carried through
+  `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
+  receipt and preserves an already-active owner by its progress witness
 
 ## Actual control flow
 
@@ -168,6 +171,11 @@ or retention policy is considered.
   evidence. Empirical evidence never creates a new lever.
 - A correction is installed only in the exact guarded form that survived
   replay, and only one competing explanation is installed for an incident.
+- An accumulator correction asks only the owner that completed in the recorded
+  incident for its reset operation. A plain trace handoff is a one-scan
+  operation; an intermediate instruction contributes its own boundary and
+  progress witness. Later opposite operations compose as temporal phases when
+  their owner boundaries differ; bare contradictory holds still revoke.
 - A corrective hold may succeed by advancing the target-relative gauge or by
   neutralizing its recorded regression while preserving both the incident's
   source context and its earned progress floor. Neutralization composes the

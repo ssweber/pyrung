@@ -1,9 +1,9 @@
 """Derive scoped corrective-hold candidates from writer enablers.
 
-Coil writers produce guard-flip candidates; accumulating instructions produce
-steady or oscillating holds that prevent an unwanted completion. Both paths
-return ``EnablerCorrection`` values with the exposure-derived scope that can be
-proved from program structure.
+Coil writers produce guard-breaking candidates; accumulating instructions ask
+their owner for the operation that prevents or clears an unwanted completion.
+Both paths return ``EnablerCorrection`` values with the exposure-derived scope
+that can be proved from program structure.
 
 These are hypotheses, not installed corrections. ``investigate.py`` replay
 validates them and ``progress.py`` installs at most one confirmed result.
@@ -14,20 +14,21 @@ from __future__ import annotations
 import itertools
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from enum import Enum
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
+    OperationReceipt,
     PilotRung,
     _hold_allowed,
+    _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.advance import (
     AdvanceOwner,
     build_advance_index,
     iter_advance_owners,
 )
-from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace import TraceAction, trace_back
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import Eq
 
@@ -43,40 +44,15 @@ logger = logging.getLogger(__name__)
 ActionPair = tuple[str, Any]
 
 
-# ---------------------------------------------------------------------------
-# Shared output vocabulary — the spine
-# ---------------------------------------------------------------------------
-
-
-class Correction(Enum):
-    """The *shape* of a corrective hold, stable across the reason that proposed it.
-
-    ``FLIP``      — a steady hold at the value that *breaks* an enabling
-                    condition (coil guard-break: ``(lever, not enabling_value)``).
-    ``FREEZE``    — a steady directed hold that *stops* advancement / maintains a
-                    value (accumulator stop-hold: ``(lever, stop_value)``).
-    ``OSCILLATE`` — a guarded toggling hold (:class:`PilotRung`) for a
-                    complement-reset watchdog where no single steady value works.
-    ``NONE``      — diagnostic only; no actionable steerable lever.
-    """
-
-    FREEZE = "freeze"
-    FLIP = "flip"
-    OSCILLATE = "oscillate"
-    NONE = "none"
-
-
 @dataclass(frozen=True)
 class EnablerCorrection:
     """One corrective proposal — the type both dispatch arms converge on.
 
-    ``correction`` is the action shape; ``kind`` is the preserved telemetry
-    label (``"latch-exposure"`` / ``"liveness"`` / ``"done-boundary"``) carried
-    through to :class:`InvestigationHypothesis` so existing consumers are
-    unchanged.
+    ``kind`` is preserved telemetry carried through to
+    :class:`InvestigationHypothesis`. Executable shape belongs to each hold's
+    structural operation receipt, not to a behavior-category enum.
     """
 
-    correction: Correction
     kind: str
     holds: tuple[Any, ...]
     sources: tuple[str, ...]
@@ -99,25 +75,25 @@ def correct_enablers(
     """
     coil = _coil_corrections(plc, incident, ctx)
     accumulator = _accumulator_corrections(plc, incident, ctx)
-    pulsed_inputs = {
+    operation_inputs = {
         getattr(hold, "dest", hold[0] if isinstance(hold, tuple) else None)
         for correction in accumulator
-        if correction.correction is Correction.OSCILLATE
         for hold in correction.holds
+        if isinstance(hold, PilotRung) and hold.operation is not None
     }
-    if pulsed_inputs:
+    if operation_inputs:
         coil = [
             correction
             for correction in coil
             if not correction.holds
             or any(
                 getattr(hold, "dest", hold[0] if isinstance(hold, tuple) else None)
-                not in pulsed_inputs
+                not in operation_inputs
                 for hold in correction.holds
             )
         ]
     corrections = [*coil, *accumulator]
-    return [c for c in corrections if c.correction is not Correction.NONE and c.holds]
+    return [correction for correction in corrections if correction.holds]
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +390,6 @@ def _coil_corrections(
             continue
         corrections.append(
             EnablerCorrection(
-                correction=Correction.FLIP,
                 kind="latch-exposure",
                 holds=_guarded(latch_holds, (tag,)),
                 sources=(tag, *(h[0] for h in latch_holds)),
@@ -430,7 +405,6 @@ def _coil_corrections(
     if len(conjunction) > 1:
         corrections.append(
             EnablerCorrection(
-                correction=Correction.FLIP,
                 kind="latch-exposure",
                 holds=_guarded(conjunction, tuple(conj_latches)),
                 sources=(*conj_latches, *(h[0] for h in conjunction)),
@@ -441,7 +415,7 @@ def _coil_corrections(
 
 
 # ---------------------------------------------------------------------------
-# Accumulator arm — watchdogs that completed during coast  (OSCILLATE / FREEZE)
+# Accumulator arm — owner operations that completed during coast
 # ---------------------------------------------------------------------------
 
 
@@ -455,12 +429,12 @@ def _accumulator_corrections(
     While PILOT coasts, an accumulating instruction (timer/counter) can *complete
     on its own* and eject the bearing — its ``Done`` bit rises, or a rung fires on
     ``Acc > Target``.  The held input *driving* the accumulator is the cause.
-    Three corrective shapes, all replay-validated:
+    Three structural cases, all replay-validated:
 
-    * **Complement-reset watchdog** — reset driven by a single input held at the
-      wrong polarity (``rotate.py`` ``SensorOnWD``/``SensorOffWD``): a steady hold
-      can never satisfy it, so the input must *oscillate*. Emit a guarded
-      :class:`PilotRung`, one rule per resetting polarity.
+    * **Resettable owner** — trace the owner's reset demand to a steerable
+      operation without flattening its intermediate boundary. A direct contact
+      is a one-scan operation; a conditioned contact carries its timer boundary
+      and progress receipt.
     * **Plain held-advance -> Done** — no input-driven reset (or a counter hitting
       ``preset``): the advancing input must not *stay held*.  Emit a steady hold
       driving it off the advancing value.
@@ -479,27 +453,17 @@ def _accumulator_corrections(
     after = dict(incident.after_snap)
     corrections: list[EnablerCorrection] = []
 
-    # --- Sub-case A: complement-reset oscillation (generalized old liveness) ---
-    #   lever_values[phys] — the values each lever must visit across *all*
-    #     watchdogs (a lever shared by a complement pair collects both polarities,
-    #     so its hold oscillates; a lever a conjunction pins collects one, so its
-    #     hold is a steady drive).  Aggregated globally, not per watchdog, because
-    #     the oscillation only emerges from combining complementary resets.
-    #   fired_levers — for each watchdog whose Done actually completed this
-    #     incident, the coordinated set of levers that satisfy *its* reset (a
-    #     minimal forcing assignment over the reset's reads).  A reset gated by a
-    #     conjunction of inputs now yields a multi-lever set instead of being
-    #     skipped for having no single unambiguous lever.
-    lever_values: dict[str, set[Any]] = {}
-    fired_levers: list[tuple[str, tuple[str, ...]]] = []
+    # --- Sub-case A: execute the recorded owner's reset operation ---
+    operation_inputs: set[str] = set()
     owners = tuple(iter_advance_owners(program))
     for owner in owners:
         profile = owner.profile
-        if profile.done is None:
+        if profile.done is None or profile.done.name not in changed:
             continue
-        # Ask how this owner clears an asserted Done bit.  A complementary
-        # watchdog may still be clear in the incident snapshot, but its reset
-        # polarity is part of the same liveness rule.
+        # Ask only the owner that actually completed in this incident how its
+        # asserted Done bit clears. A later opposite fault is a new recorded
+        # occurrence whose operation can compose with this one; it is not a
+        # license to invent an oscillator pre-emptively.
         clear_snapshot = {**after, profile.done.name: True}
         clear_step = profile.plan(
             Eq(profile.done.name, frozenset((False,))),
@@ -534,65 +498,51 @@ def _accumulator_corrections(
         reset_reads = _extract_reads_from_condition(reset, {})
         if not reset_reads:
             continue
-        # Minimal coordinated levers whose held values *satisfy* the reset.
-        reset_holds = _best_forcing_holds(
+        # Minimal coordinated driver operations that satisfy the reset. The
+        # TraceAction retains any intermediate timer owner instead of reducing
+        # it to a bare physical value.
+        reset_actions = _best_forcing_actions(
             reset,
             reset_reads,
             after,
             ctx,
             satisfies=lambda value, wanted=reset_demand.value: bool(value) is wanted,
         )
-        if not reset_holds:
+        if not reset_actions:
             continue
-        if not all(_hold_allowed(ctx, (phys, val)) for phys, val in reset_holds):
+        if not all(_hold_allowed(ctx, action.pair) for action in reset_actions):
             continue  # a required lever is off-limits — the reset is undrivable
-        for phys, val in reset_holds:
-            lever_values.setdefault(phys, set()).add(val)
-        if profile.done.name in changed:
-            fired_levers.append((profile.done.name, tuple(phys for phys, _ in reset_holds)))
+        from pyrung.core.condition import AllCondition, CompareEq
 
-    seen_osc: set[tuple[ActionPair, ...]] = set()
-    for done_name, levers in fired_levers:
-        osc_holds: list[Any] = []
-        from pyrung.core.condition import AllCondition, CompareEq, CompareNe
-
+        done_name = profile.done.name
         done = plc._known_tags_by_name[done_name]
         scope = CompareEq(done, incident.before_snap.get(done_name, False))
-        for phys in levers:
-            vals = sorted(lever_values.get(phys, set()))
-            if not vals:
-                break
-            source = plc._known_tags_by_name[phys]
-            osc_holds.extend(
-                PilotRung(phys, v, AllCondition(scope, CompareNe(source, v))) for v in vals
-            )
-        if not osc_holds:
+        operation_holds: list[PilotRung] = []
+        for action in reset_actions:
+            receipt = action.operation
+            if receipt is None:
+                continue
+            guard = AllCondition(scope, _until_unresolved_condition(plc, receipt.until))
+            operation_holds.append(PilotRung(action.tag, action.value, guard, operation=receipt))
+            operation_inputs.add(action.tag)
+        if not operation_holds:
             continue
-        key = tuple((r.dest, r.value) for r in osc_holds)
-        if key in seen_osc:
-            continue  # a complement pair yields the same coordinated hold twice
-        seen_osc.add(key)
         detail = ", ".join(
-            f"{phys} between {sorted(lever_values[phys])}" for phys in dict.fromkeys(levers)
+            f"{rung.dest}={rung.value!r} until {rung.operation.until!r}"
+            for rung in operation_holds
+            if rung.operation is not None
         )
         corrections.append(
             EnablerCorrection(
-                correction=Correction.OSCILLATE,
                 kind="liveness",
-                holds=tuple(osc_holds),
-                # The fired Done rides in sources: an oscillating input never
-                # *changes* in the incident, so the cause chain of the ejection
-                # can only meet this hypothesis through the watchdog Done it
-                # feeds — that is what lets causal-primacy ranking tell the
-                # ejecting watchdog's lever from a bystander watchdog's.
-                sources=(done_name, *(r.dest for r in osc_holds)),
-                detail=f"oscillate {detail} (complement-reset watchdog)",
+                holds=tuple(operation_holds),
+                # The completed owner rides in sources even when its physical
+                # lever never changed during the incident. Causal ranking can
+                # therefore distinguish this operation from a bystander timer.
+                sources=(done_name, *(r.dest for r in operation_holds)),
+                detail=f"reset {done_name}: {detail}",
             )
         )
-
-    # Inputs already owned by an oscillation rule must not also get a (contrary)
-    # steady cannot-hold.
-    osc_inputs = set(lever_values)
 
     def _emit_cannot_hold(
         owner: AdvanceOwner,
@@ -614,7 +564,7 @@ def _accumulator_corrections(
             holds.extend(_cannot_hold_pairs(demand, after, ctx))
             if holds:
                 break
-        holds = [hold for hold in holds if hold[0] not in osc_inputs]
+        holds = [hold for hold in holds if hold[0] not in operation_inputs]
         if not holds or not all(_hold_allowed(ctx, h) for h in holds):
             return
         stops = ", ".join(f"{phys}={value!r}" for phys, value in holds)
@@ -631,7 +581,6 @@ def _accumulator_corrections(
         done_name = owner.profile.done.name if owner.profile.done is not None else constraint.tag
         corrections.append(
             EnablerCorrection(
-                correction=Correction.FREEZE,
                 kind="done-boundary",
                 holds=tuple(holds),
                 sources=(done_name, *(phys for phys, _ in holds)),
@@ -712,29 +661,36 @@ def _accumulator_corrections(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_steerable_driver(
+def _resolve_steerable_action(
     read_tag: str,
     value: Any,
     snap: Mapping[str, Any],
     ctx: Any,
     *,
     steerable: frozenset[str] | None = None,
-) -> tuple[str, Any] | None:
-    """Steerable ``(phys, polarity)`` that drives ``read_tag == value``.
+) -> TraceAction | None:
+    """Structural action that drives ``read_tag == value``.
 
     Either *read_tag* is itself steerable, or ``trace_back`` bridges it to its
     nearest steerable driver (e.g. the ``i_DoorClosed`` PIVOT to physical
-    ``x_DoorClosed``).  Shared by the oscillation and cannot-hold sub-cases.
+    ``x_DoorClosed``). Unlike the old pair projection, the returned action keeps
+    the intermediate owner's boundary and progress receipt.
     """
     steerable = getattr(ctx, "steerable", frozenset()) if steerable is None else steerable
     if read_tag in steerable:
-        return (read_tag, value)
+        boundary = Eq(read_tag, frozenset((value,)))
+        return TraceAction(
+            read_tag,
+            value,
+            until=boundary,
+            operation=OperationReceipt(boundary),
+        )
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
     if pdg is None or program is None:
         return None
 
-    def _leaves(tag: str, val: Any, view: dict[str, Any]) -> list[tuple[str, Any]]:
+    def _actions(tag: str, val: Any, view: dict[str, Any]) -> list[TraceAction]:
         tree = trace_back(
             tag,
             val,
@@ -748,7 +704,7 @@ def _resolve_steerable_driver(
             route=getattr(ctx, "route", None),
             prior=getattr(ctx, "domain_prior", None),
         )
-        return list(tree.steerable_leaves())
+        return tree.ordered_action_details()
 
     try:
         view = dict(snap)
@@ -761,14 +717,48 @@ def _resolve_steerable_driver(
             # unsatisfied at the original snapshot — then flip read and driver
             # in the view so the wanted-polarity trace walks the writer and
             # does the polarity math itself.
-            probe = _leaves(read_tag, not value, dict(snap))
+            probe = _actions(read_tag, not value, dict(snap))
             view[read_tag] = not value
-            for drv, dval in probe:
-                view[drv] = dval
-        leaves = _leaves(read_tag, value, view)
+            for action in probe:
+                view[action.tag] = action.value
+        actions = _actions(read_tag, value, view)
     except Exception:  # noqa: BLE001
         return None
-    return leaves[0] if leaves else None
+    if not actions:
+        return None
+    action = actions[0]
+    if action.operation is not None:
+        return action
+    # Ordinary trace edges (for example physical input -> mapped contact) have
+    # no intermediate cross-scan owner. Their trace handoff, when present, is
+    # still the honest operation boundary; otherwise the physical assignment
+    # itself is a one-scan boundary. Do not discard these actions merely because
+    # no timer sits between the physical lever and the watchdog reset.
+    boundary = action.until or Eq(action.tag, frozenset((action.value,)))
+    return replace(
+        action,
+        until=boundary,
+        operation=OperationReceipt(boundary),
+    )
+
+
+def _resolve_steerable_driver(
+    read_tag: str,
+    value: Any,
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    steerable: frozenset[str] | None = None,
+) -> tuple[str, Any] | None:
+    """Compatibility projection for callers that genuinely need only a pair."""
+    action = _resolve_steerable_action(
+        read_tag,
+        value,
+        snap,
+        ctx,
+        steerable=steerable,
+    )
+    return None if action is None else action.pair
 
 
 def _cannot_hold_pairs(demand: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
@@ -887,6 +877,37 @@ def _minimal_forcing_sets(
     return minimal
 
 
+def _resolve_partial_actions(
+    partial: dict[str, Any],
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    steerable: frozenset[str] | None = None,
+) -> list[TraceAction] | None:
+    """Resolve each literal without discarding its intermediate operation owner.
+
+    ``None`` if any read resolves to no steerable driver (the assignment is
+    undrivable) or two literals demand conflicting values of one driver.
+    """
+    actions: dict[str, TraceAction] = {}
+    for read, value in partial.items():
+        action = _resolve_steerable_action(
+            read,
+            value,
+            snap,
+            ctx,
+            steerable=steerable,
+        )
+        if action is None:
+            return None
+        existing = actions.get(action.tag)
+        if existing is not None and not _values_match(existing.value, action.value):
+            return None
+        if existing is None or (existing.operation is None and action.operation is not None):
+            actions[action.tag] = action
+    return list(actions.values())
+
+
 def _resolve_partial(
     partial: dict[str, Any],
     snap: Mapping[str, Any],
@@ -894,30 +915,12 @@ def _resolve_partial(
     *,
     steerable: frozenset[str] | None = None,
 ) -> list[ActionPair] | None:
-    """Resolve each ``read == value`` literal to its steerable ``(phys, value)``.
-
-    ``None`` if any read resolves to no steerable driver (the assignment is
-    undrivable) or two literals demand conflicting values of one driver.
-    """
-    holds: dict[str, Any] = {}
-    for read, value in partial.items():
-        resolved = _resolve_steerable_driver(
-            read,
-            value,
-            snap,
-            ctx,
-            steerable=steerable,
-        )
-        if resolved is None:
-            return None
-        phys, polarity = resolved
-        if phys in holds and not _values_match(holds[phys], polarity):
-            return None
-        holds[phys] = polarity
-    return list(holds.items())
+    """Compatibility projection of structural actions to action pairs."""
+    actions = _resolve_partial_actions(partial, snap, ctx, steerable=steerable)
+    return None if actions is None else [action.pair for action in actions]
 
 
-def _best_forcing_holds(
+def _best_forcing_actions(
     condition: Any,
     reads: set[str],
     snap: Mapping[str, Any],
@@ -926,8 +929,8 @@ def _best_forcing_holds(
     satisfies: Callable[[Any], bool],
     base: Mapping[str, Any] | None = None,
     steerable: frozenset[str] | None = None,
-) -> list[ActionPair] | None:
-    """Cheapest drivable coordinated holds that force *condition* to satisfy.
+) -> list[TraceAction] | None:
+    """Cheapest structural driver operations that force *condition* to satisfy.
 
     Enumerates the reads' finite domains (capped like ``tide_tables``), finds
     the minimal forcing assignments, and among the drivable ones prefers (a)
@@ -958,10 +961,33 @@ def _best_forcing_holds(
         return (changes, len(partial))
 
     for partial in sorted(sets, key=_rank):
-        holds = _resolve_partial(partial, snap, ctx, steerable=steerable)
-        if holds:
-            return holds
+        actions = _resolve_partial_actions(partial, snap, ctx, steerable=steerable)
+        if actions:
+            return actions
     return None
+
+
+def _best_forcing_holds(
+    condition: Any,
+    reads: set[str],
+    snap: Mapping[str, Any],
+    ctx: Any,
+    *,
+    satisfies: Callable[[Any], bool],
+    base: Mapping[str, Any] | None = None,
+    steerable: frozenset[str] | None = None,
+) -> list[ActionPair] | None:
+    """Compatibility projection for non-temporal correction consumers."""
+    actions = _best_forcing_actions(
+        condition,
+        reads,
+        snap,
+        ctx,
+        satisfies=satisfies,
+        base=base,
+        steerable=steerable,
+    )
+    return None if actions is None else [action.pair for action in actions]
 
 
 def break_guard_holds(

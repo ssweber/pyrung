@@ -358,9 +358,9 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     The former endpoint was an Unhold read at HELD/Step101. That landing was
     premature safety motion, not recipe progress; the exact-producer bearing
     now preserves Execute long enough for investigation to identify and install
-    the two door guards. Later watchdog regressions must accept the rotate-sensor
-    oscillator and then the sail-relay absence root as distinct owners of their
-    Execute->Abort incidents. The owner-verified dry dwell must then advance the
+        the two door guards. Later watchdog regressions must accept the recorded
+        rotate-sensor reset operation and then the sail-relay absence root as
+        distinct owners of their Execute->Abort incidents. The owner-verified dry dwell must then advance the
     recipe through the dry, cool, hold-for-fluff, and fluff operations. Pipeline
     motion observed while reading a later producer must keep its current owner;
     it must not introduce a duplicate Hold command. Each later door incident on

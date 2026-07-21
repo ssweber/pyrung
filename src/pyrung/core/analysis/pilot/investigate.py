@@ -118,9 +118,23 @@ def _proposal_pair(proposal: Any) -> ActionPair:
     return proposal
 
 
+def _proposal_identity(proposal: Any) -> tuple[str, Any]:
+    if isinstance(proposal, PilotRung):
+        return proposal.dest, (
+            _semantic_key(proposal.value),
+            _semantic_key(proposal.operation),
+        )
+    tag, value = proposal
+    return tag, (_semantic_key(value), None)
+
+
 def correction_identity(proposals: Iterable[Any]) -> CorrectionIdentity:
-    """Stable correction identity, independent of its installed scope guard."""
-    pairs = ((tag, _semantic_key(value)) for tag, value in map(_proposal_pair, proposals))
+    """Stable correction identity, independent of its installed scope guard.
+
+    An owner-issued operation boundary is semantic: the same assignment may be
+    a different corrective operation when it hands off at a different fact.
+    """
+    pairs = map(_proposal_identity, proposals)
     return tuple(sorted(pairs, key=lambda pair: (pair[0], repr(pair[1]))))
 
 
@@ -1175,8 +1189,9 @@ def build_deviation_incident(
     *timeline* is the recorded session evidence for the window (the committed
     steps' pen marks and bump landings): ``changed_tags`` membership and every
     departure scan are read off it, never re-derived from history.  A
-    fire-then-reset watchdog pulse is two recorded transitions — exactly the
-    complement-reset oscillation ``correct_enablers`` looks for.
+    fire-then-reset watchdog pulse is two recorded transitions. That exact
+    evidence identifies which accumulator owner completed; correction then asks
+    that owner for its reset operation.
 
     ``changed_tags`` is factual incident evidence: every recorded transition
     plus every endpoint difference.  Consumers such as the timer correction
@@ -1357,9 +1372,8 @@ def investigate_deviation(
     1. Precise cause walk — single cause()-chain from the first departure
        that reaches a steerable input (the *trigger-found* case).
     2. Enabler correction — when cause finds no steerable trigger, the held
-       enablers are the cause; ``correct_enablers`` dispatches by writer
-       instruction (coil latch -> FLIP guard, accumulator -> OSCILLATE /
-       stop-hold).
+       enablers are the cause; ``correct_enablers`` asks the writer for either
+       a guard-breaking assignment or an owner-declared accumulator operation.
     No upstream cone sweep.
 
     Hypotheses are **competing explanations of one incident, not a bundle of

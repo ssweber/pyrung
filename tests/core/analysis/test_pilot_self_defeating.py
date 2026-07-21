@@ -23,7 +23,7 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot._ops import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
     InvestigationHypothesis,
@@ -46,7 +46,8 @@ from pyrung.core.analysis.pilot.types import (
     _World,
 )
 from pyrung.core.analysis.steerable import compute_steerable
-from pyrung.core.condition import CompareEq
+from pyrung.core.condition import AllCondition, CompareEq, CompareNe
+from pyrung.core.crossing import Eq
 from pyrung.core.memory_block import Block
 
 
@@ -622,3 +623,65 @@ def test_causally_opposite_remedy_revokes_harmful_correction(monkeypatch):
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
     assert any(entry.source == "revocation" for entry in state.hold_log)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
+
+
+def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
+    """Different completion boundaries make opposite values compatible."""
+    state, trial, frame, ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    go = state.work._known_tags_by_name["Go"]
+    scope = CompareEq(state_tag, 6)
+    high_boundary = Eq(go.name, frozenset((True,)))
+    low_boundary = Eq(go.name, frozenset((False,)))
+    high = PilotRung(
+        go.name,
+        True,
+        AllCondition(scope, CompareNe(go, True)),
+        OperationReceipt(high_boundary),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _stub_investigation([high]),
+    )
+    _monitor_trend(trial, frame, state, ctx)
+
+    low = PilotRung(
+        go.name,
+        False,
+        AllCondition(scope, CompareNe(go, False)),
+        OperationReceipt(low_boundary),
+    )
+    remedy = InvestigationHypothesis(
+        kind="liveness",
+        holds=(low,),
+        sources=(go.name,),
+        detail="the opposite owner operation has its own handoff boundary",
+    )
+
+    def _phase_investigation(_plc, _incident, _ctx, _replay, **_kwargs):
+        return InvestigationResult(
+            confirmed_holds=(low,),
+            hypotheses=(remedy,),
+            confirmed=(remedy,),
+            confirmed_outcomes=(
+                ReplayOutcome(True, None, dict(state.work.state.tags), "phase neutralized"),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _phase_investigation,
+    )
+    events = _investigate_and_revert(
+        trial,
+        frame,
+        state,
+        ctx,
+        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
+        end_scan=trial.fork.state.scan_id,
+    )
+
+    assert high in state.rungs
+    assert low in state.rungs
+    assert all(receipt.status is CorrectionStatus.ACTIVE for receipt in state.correction_receipts)
+    assert events[-1].data["revoked_corrections"] == ()

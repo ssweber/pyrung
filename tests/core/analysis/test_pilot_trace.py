@@ -260,6 +260,10 @@ def test_timer_done_idle_keeps_owner_boundary_on_enable():
     action = next(a for a in tree.ordered_action_details() if a.tag == "x_Start")
     assert coast.advance.until.tag == timer.Acc.name
     assert action.until == Atom(timer.Done.name, "eq", True)
+    assert action.operation is not None
+    assert action.operation.until == action.until
+    assert action.operation.progress is not None
+    assert action.operation.progress.condition.tag.name == timer.TT.name
 
 
 def test_timer_done_owner_boundary_reaches_call_gate():
