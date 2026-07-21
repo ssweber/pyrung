@@ -43,7 +43,7 @@ _SPECS: tuple[RuleSpec, ...] = (
     RuleSpec("TAG_CHOICES_VIOLATION", "TAG", "error", "choices", "Choices Violation"),
     RuleSpec("TAG_RANGE_VIOLATION", "TAG", "error", "physical", "Range Violation"),
     RuleSpec(
-        "TAG_FINAL_MULTIPLE_WRITERS", "TAG", "warning", "final", "Final Tag — Multiple Writers"
+        "TAG_FINAL_MULTIPLE_WRITERS", "TAG", "warning", "final", "Final Tag: Multiple Writers"
     ),
     RuleSpec("COIL_CONFLICTING_OUTPUT", "COIL", "error", "conflicting", "Conflicting Output"),
     RuleSpec("COIL_STUCK_HIGH", "COIL", "warning", "stuck", "Stuck High (never reset)"),

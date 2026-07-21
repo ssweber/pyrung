@@ -480,7 +480,7 @@ def _format_pilot_progress(event: Any) -> str | None:
         if span is not None:
             parts[0] = f"  coast accepted  ({span} scans, scan {scan_after})"
         if chan and data.get("zoom_target_value") is not None:
-            parts[0] += f"  {chan}→{data['zoom_target_value']!r}"
+            parts[0] += f"  {chan}->{data['zoom_target_value']!r}"
         return parts[0]
 
     if kind == "trend_checkpoint":
@@ -553,7 +553,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
             "(e.g. how Running, how State == HELD avoid State == FAULTED, "
             "how Burner avoid ProdMode, MaintFault, how Burner via MaintMode).  "
             "Comma-separated targets must all hold at the end of the path.  "
-            "Comma-separated avoid conditions are a union — each is avoided "
+            "Comma-separated avoid conditions are a union; each is avoided "
             "independently."
         )
     expr_str = parts[1].strip()
@@ -603,7 +603,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         if line is not None:
             adapter._send_event("output", {"category": "console", "output": line + "\n"})
 
-    adapter._send_event("output", {"category": "console", "output": "Planning…\n"})
+    adapter._send_event("output", {"category": "console", "output": "Planning...\n"})
     path = runner.how(
         *conditions, avoid=_single("avoid"), via=_single("via"), on_event=_on_pilot_event
     )
@@ -670,7 +670,7 @@ def _cmd_prove(adapter: Any, expression: str) -> ConsoleResult:
     scope = sorted(referenced_tags(expr))
     predicate = compile_for_dict(expr, tags=runner._known_tags_by_name)
 
-    adapter._send_event("output", {"category": "console", "output": "Verifying…\n"})
+    adapter._send_event("output", {"category": "console", "output": "Verifying...\n"})
 
     from pyrung.core.analysis.prove import always as always_fn
 
@@ -1108,7 +1108,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                     elif new is None and old is not None:
                         entries.append(f"  unforce {tag}")
                     else:
-                        entries.append(f"  force {tag} {old!r} → {new!r}")
+                        entries.append(f"  force {tag} {old!r} -> {new!r}")
 
         cur_state = runner.history.at(scan_id)
         if prev_state is not None:
@@ -1116,7 +1116,7 @@ def _cmd_log(adapter: Any, expression: str) -> ConsoleResult:
                 old_v = prev_state.tags.get(key)
                 new_v = cur_state.tags.get(key)
                 if old_v != new_v:
-                    entries.append(f"  {key}: {old_v!r} → {new_v!r}")
+                    entries.append(f"  {key}: {old_v!r} -> {new_v!r}")
         prev_state = cur_state
 
         if entries:

@@ -134,7 +134,7 @@ def validate_pointer_defaults(program: Program) -> PointerDefaultReport:
             code=PTR_DEFAULT_BEFORE_BLOCK_START,
             severity="warning",
             frames=tuple(_location_frame(f.location, target_name, span, label) for f in facts),
-            hint=(f"set {pointer_name} in {block_start}–{block_end} before indexing {block_name}"),
+            hint=(f"set {pointer_name} in {block_start}..{block_end} before indexing {block_name}"),
         )
         findings.append(
             PointerDefaultFinding(

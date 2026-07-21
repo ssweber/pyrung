@@ -316,7 +316,7 @@ def _apply_lifecycle_to_replay(replay: Any, event: LifecycleEvent) -> None:
     elif event.kind == "reboot":
         raise AssertionError(
             "unexpected reboot lifecycle event in replay log "
-            "(reboot() should reset the log — see PLC.reboot())"
+            "(reboot() should reset the log; see PLC.reboot())"
         )
     else:  # pragma: no cover - exhaustive
         raise AssertionError(f"unknown lifecycle kind: {event.kind!r}")

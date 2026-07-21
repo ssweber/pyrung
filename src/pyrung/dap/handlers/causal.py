@@ -86,14 +86,12 @@ def _parse_query(query: str) -> _ParsedQuery:
     q = query.strip()
     if ":" not in q:
         raise ValueError(
-            f"pyrungCausal.query missing ':' — expected cause:Tag, effect:Tag, or recovers:Tag (got {query!r})"
+            f"pyrungCausal.query missing ':'; expected cause:Tag, effect:Tag, or recovers:Tag (got {query!r})"
         )
     cmd, _, rest = q.partition(":")
     cmd_lower = cmd.lower().strip()
     if cmd_lower not in _COMMANDS:
-        raise ValueError(
-            f"pyrungCausal.query unknown command {cmd!r} — expected one of {_COMMANDS}"
-        )
+        raise ValueError(f"pyrungCausal.query unknown command {cmd!r}; expected one of {_COMMANDS}")
     rest = rest.strip()
     if not rest:
         raise ValueError(f"pyrungCausal.query missing tag name (got {query!r})")

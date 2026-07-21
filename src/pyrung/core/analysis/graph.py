@@ -268,7 +268,7 @@ def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
         lines.append(f"       installed holds: {', '.join(steady)}")
     if oscillator_tags:
         oscillators = ", ".join(
-            f"{tag} ({' ↔ '.join(_rung_values(by_tag[tag]))})"
+            f"{tag} ({' <-> '.join(_rung_values(by_tag[tag]))})"
             for tag in dict.fromkeys(rung.dest for rung in rungs if rung.dest in oscillator_tags)
         )
         lines.append(f"       installed oscillators: {oscillators}")

@@ -43,7 +43,7 @@ def try_auto_install(adapter: Any) -> str | None:
         parts.append(f"{n_bool} bool")
     if n_profile:
         parts.append(f"{n_profile} profile")
-    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}) — `harness status` for details"
+    return f"Harness: {total} feedback loop(s) ({', '.join(parts)}); `harness status` for details"
 
 
 def uninstall_harness(adapter: Any) -> None:
@@ -141,12 +141,12 @@ def _harness_status(adapter: Any) -> ConsoleResult:
 
 def _harness_install(adapter: Any) -> ConsoleResult:
     if adapter._harness is not None:
-        return ConsoleResult("Harness already installed — use `harness remove` first")
+        return ConsoleResult("Harness already installed; use `harness remove` first")
 
     adapter._require_runner_locked()
     banner = try_auto_install(adapter)
     if banner is None:
-        return ConsoleResult("No Physical+link= couplings found — nothing to install")
+        return ConsoleResult("No Physical+link= couplings found; nothing to install")
     return ConsoleResult(banner)
 
 

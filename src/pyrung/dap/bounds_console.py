@@ -26,7 +26,7 @@ def _format_violation(v: BoundsViolation, choices_map: dict[Any, str] | None) ->
         lo = v.constraint.min
         hi = v.constraint.max
         if lo is not None and hi is not None:
-            return f"[bounds] {v.tag_name}={v.value!r} (range: {lo}–{hi})"
+            return f"[bounds] {v.tag_name}={v.value!r} (range: {lo}..{hi})"
         if lo is not None:
             return f"[bounds] {v.tag_name}={v.value!r} (min: {lo})"
         return f"[bounds] {v.tag_name}={v.value!r} (max: {hi})"

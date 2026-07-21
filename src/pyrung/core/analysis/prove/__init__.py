@@ -173,12 +173,12 @@ def _validate_split_at(
         is_written = tag_name in graph.writers_of
         is_nd = role == TagRole.INPUT or not is_written
         if is_nd:
-            msg = f"split_at tag {tag_name!r} is an external input — it is already nondeterministic"
+            msg = f"split_at tag {tag_name!r} is an external input; it is already nondeterministic"
             raise ValueError(msg)
 
         if tag_name in edge_sources:
             msg = (
-                f"split_at tag {tag_name!r} appears in rise()/fall() — "
+                f"split_at tag {tag_name!r} appears in rise()/fall(); "
                 f"edge-bearing tags cannot be split"
             )
             raise ValueError(msg)
@@ -191,7 +191,7 @@ def _validate_split_at(
             domain = tuple(sorted(tag.choices.keys()))
         else:
             msg = (
-                f"split_at tag {tag_name!r} has no small enumerable domain — "
+                f"split_at tag {tag_name!r} has no small enumerable domain; "
                 f"only Bool, Done-paired, and choices= tags can be split"
             )
             raise ValueError(msg)
@@ -851,9 +851,9 @@ class _BFSProgress:
 
     def __call__(self, visited: int, queue_size: int, dt: float) -> None:
         if queue_size > self._prev_queue:
-            arrow = "↑"
+            arrow = "+"
         elif queue_size < self._prev_queue:
-            arrow = "↓"
+            arrow = "-"
         else:
             arrow = "="
         self._prev_queue = queue_size

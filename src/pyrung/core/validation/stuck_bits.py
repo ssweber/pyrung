@@ -542,7 +542,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                 subs = ", ".join(sorted({s.subroutine or "Main" for s in held}))
                 hint = (
                     f"an out() in {subs} holds its last value on the scans it does not "
-                    f"run — reset({tag_name}) when it stops running?"
+                    f"run; reset({tag_name}) when it stops running?"
                 )
                 undeclared = _undeclared_domain_tags(
                     held, reach_chains, return_rungs, tag_map, domains
@@ -550,7 +550,7 @@ def validate_stuck_bits(program: Program) -> StuckBitReport:
                 if undeclared:
                     names = ", ".join(undeclared)
                     hint += (
-                        f" the out() rungs do cover every state — declare the domain of "
+                        f" the out() rungs do cover every state; declare the domain of "
                         f"{names} (choices= or min=/max=) and this finding goes away."
                     )
             findings.append(

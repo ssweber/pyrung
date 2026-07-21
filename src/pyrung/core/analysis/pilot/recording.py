@@ -49,7 +49,7 @@ def _frontier_clause(frame: _IterationFrame | None) -> str:
         return ""
     head = ", ".join(_fmt_need(t, v, frame.snap) for t, v in needs[:3])
     more = f" (+{len(needs) - 3} more)" if len(needs) > 3 else ""
-    return f" — still waiting on {head}{more}"
+    return f"; still waiting on {head}{more}"
 
 
 def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
@@ -58,7 +58,7 @@ def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
         before = sc.before_snap.get(tag)
         after = sc.after_snap.get(tag)
         if before != after:
-            return f"{tag} {before} → {after}"
+            return f"{tag} {before} -> {after}"
     return ""
 
 

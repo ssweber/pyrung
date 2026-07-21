@@ -910,7 +910,7 @@ def _heuristic_inequality_target(
             return None  # already at the extreme — no move left, no lever
         value = clamped
 
-    return (value, "heuristic value — relation is the requirement, not this number")
+    return (value, "heuristic value; relation is the requirement, not this number")
 
 
 #: form -> operator symbol, for rendering lever notes.

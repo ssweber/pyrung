@@ -21,6 +21,12 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - Bump `pyrung>=` version in `src/pyrung/click/codegen/project_emitter.py` (generated pyproject.toml template)
 - Update `CHANGELOG.md` — move Unreleased to versioned heading with today's date
 
+## User-Facing Output
+
+- Text authored by pyrung for terminals, logs, exceptions, and `str()` representations must use ASCII only. Use `->`, `<->`, `...`, and `1..100` instead of typographic arrows, ellipses, or dashes.
+- Preserve user-authored Unicode in tag names, choice labels, comments, values, and source excerpts. The ASCII rule applies to pyrung's surrounding text, not user data.
+- Documentation, comments, and generated documentation may use typographic Unicode when their output channel is explicitly UTF-8.
+
 ## Module Map
 
 ```

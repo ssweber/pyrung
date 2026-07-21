@@ -110,7 +110,7 @@ def _me_reason(env: Any, a: TargetSpec, b: TargetSpec, ev_ab: list, ev_ba: list)
         )
 
     return (
-        f"pilot: {at}={av!r} and {bt}={bv!r} are mutually exclusive — "
+        f"pilot: {at}={av!r} and {bt}={bv!r} are mutually exclusive; "
         f"establishing {at} drives {bt} off ({_ev(ev_ab, bt)}); "
         f"establishing {bt} drives {at} off ({_ev(ev_ba, at)})."
     )
@@ -160,7 +160,7 @@ def analyze(
             if ti[0] == tj[0] and not _t._values_match(ti[1], tj[1]):
                 return (
                     False,
-                    f"pilot: {ti[0]} is one register — cannot be both "
+                    f"pilot: {ti[0]} is one register; cannot be both "
                     f"{ti[1]!r} and {tj[1]!r} in the same scan.",
                     list(targets),
                 )

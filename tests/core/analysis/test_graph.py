@@ -185,7 +185,7 @@ class TestPlanDisplay:
         assert "latch(RotateSensor)" in text
         assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != False)):" in text
         assert "reset(RotateSensor)" in text
-        assert "installed oscillators: RotateSensor (true ↔ false)" in text
+        assert "installed oscillators: RotateSensor (true <-> false)" in text
         assert "holds: RotateSensor" not in text
 
 

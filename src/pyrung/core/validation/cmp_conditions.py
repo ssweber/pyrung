@@ -480,7 +480,7 @@ def _static_on_left_finding(
             code=CMP_STATIC_ON_LEFT,
             severity="info",
             frames=(_cmp_frame(cmp, "fixed value on the left"),),
-            hint=f"{_render(cmp.left)} {cmp.op} {_render(cmp.right)} → {flip}",
+            hint=f"{_render(cmp.left)} {cmp.op} {_render(cmp.right)} -> {flip}",
         )
         return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "info")
 
@@ -490,13 +490,13 @@ def _static_on_left_finding(
             code=CMP_STATIC_ON_LEFT,
             severity="warning",
             frames=(_cmp_frame(cmp, f"{_render(cmp.right)} is what changes"),),
-            hint=f"{_render_compare(cmp)} → {flip}",
+            hint=f"{_render_compare(cmp)} -> {flip}",
         )
         return CmpConditionFinding(CMP_STATIC_ON_LEFT, cmp.loc, display, "warning")
 
     # MAYBE: two ordinary tags — cannot prove which is measurement vs threshold.
     label = (
-        f"{_render(cmp.right)} is calculated — likely the mover"
+        f"{_render(cmp.right)} is calculated; likely the mover"
         if _is_calc(cmp.right, calc)
         else "which side is the moving value?"
     )

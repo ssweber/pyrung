@@ -2111,7 +2111,7 @@ def _build_infeasible_hints(
         blocker = blockers.get(name)
         if blocker is not None:
             label = _KIND_LABELS.get(blocker.kind, "accumulator")
-            hints.append(f"  {name}: {label} — threshold abstraction blocked:")
+            hints.append(f"  {name}: {label}; threshold abstraction blocked:")
             for reason in blocker.reasons:
                 hints.append(f"    {reason}")
             continue
@@ -2121,17 +2121,17 @@ def _build_infeasible_hints(
             block_name, start, end = ptr_info
             hints.append(
                 f"  {name}: pointer into {block_name}[{start}..{end}]"
-                f" — add choices=, min={start}/max={end}, or readonly=True"
+                f"; add choices=, min={start}/max={end}, or readonly=True"
             )
         elif tag is not None and tag.min is not None and tag.max is not None:
             hints.append(
                 f"  {name}: range {tag.min}..{tag.max} ({int(tag.max - tag.min + 1)} values)"
-                f" — too wide; add choices=, narrow min=/max=, or readonly=True"
+                f"; too wide; add choices=, narrow min=/max=, or readonly=True"
             )
         else:
             hints.append(
                 f"  {name}: no domain constraint"
-                f" — add choices= for discrete values, or cover with dt= testing"
+                f"; add choices= for discrete values, or cover with dt= testing"
             )
     return hints
 
@@ -2657,7 +2657,7 @@ def _classify_dimensions_from_graph(
     if fn_escape:
         total_dims = len(stateful) + len(nondeterministic) + len(fn_escape)
         hints = [
-            f"  {name}: function output — add choices=, min=/max=, or readonly=True"
+            f"  {name}: function output; add choices=, min=/max=, or readonly=True"
             for name in sorted(fn_escape)
         ]
         done_presets_partial = {d: p for d, p in done_acc_info.presets.items() if d in done_acc}

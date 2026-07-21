@@ -290,7 +290,7 @@ class Harness:
         direction = 1 if target >= fb_now else -1
 
         def rate_per_scan(step_dt: float) -> float:
-            raise ValueError("first-order Approach profile — measure empirically")
+            raise ValueError("first-order Approach profile; measure empirically")
 
         return rate_per_scan, direction
 

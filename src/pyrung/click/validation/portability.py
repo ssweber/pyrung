@@ -633,7 +633,7 @@ def _evaluate_instruction_portability(
                     location=location_text,
                     suggestion=(
                         "Click has no floor-division operator. "
-                        "Use calc(a / b, int_dest) instead — "
+                        "Use calc(a / b, int_dest) instead; "
                         "copying the result to an Int or Dint tag truncates toward zero automatically."
                     ),
                 )

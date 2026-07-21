@@ -82,7 +82,7 @@ def _frames(finding: WaitEscapeFinding) -> tuple[Frame, ...]:
                 f"{scope}{esc.rung_label}",
                 esc.conditions,
                 esc.guard,
-                f"nothing sets this — rests at {esc.resting}",
+                f"nothing sets this; rests at {esc.resting}",
             )
         )
     return tuple(frames)
@@ -108,7 +108,7 @@ def _hint(finding: WaitEscapeFinding) -> str:
         remedies.append(f"make {esc.rung_label} fire on its own (nothing sets {esc.tag})")
     if not remedies:
         return f"give step {finding.step_value} a timeout, or confirm a supervisor upstream owns it"
-    return "no escape fires on its own — " + ", or ".join(remedies)
+    return "no escape fires on its own: " + ", or ".join(remedies)
 
 
 def _display(finding: WaitEscapeFinding) -> FindingDisplay:

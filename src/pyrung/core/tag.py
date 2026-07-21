@@ -260,7 +260,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between Bool tag {self.name!r} and {other!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: Ready | (Speed > 50)"
                 )
         if isinstance(other, CondBase):
@@ -283,7 +283,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise | between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: (Speed > 50) | Ready"
                 )
         if isinstance(other, CondBase):
@@ -484,7 +484,7 @@ class Tag:
             if isinstance(other, (int, float)):
                 raise TypeError(
                     f"Cannot use bitwise & between {other!r} and Bool tag {self.name!r}. "
-                    "This is usually a precedence mistake — "
+                    "This is usually a precedence mistake; "
                     "add parentheses: (Speed > 50) & Ready"
                 )
 

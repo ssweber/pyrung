@@ -1493,7 +1493,7 @@ def test_summary_includes_calc_rename():
     s = bundle.export_summary
     assert s.renames == (("calc", "math"),)
     assert s.added_end is True
-    assert s.summary() == "Renamed: calc \u2192 math\nAdded:   end() on main"
+    assert s.summary() == "Renamed: calc -> math\nAdded:   end() on main"
 
 
 def test_summary_omits_calc_rename_when_unused():
@@ -1537,8 +1537,7 @@ def test_summary_counts_forloop_next():
     assert s.added_next == 2
     assert s.renames == (("forloop", "for"),)
     assert (
-        s.summary()
-        == "Renamed: forloop \u2192 for\nAdded:   next() closing 2 for-loops, end() on main"
+        s.summary() == "Renamed: forloop -> for\nAdded:   next() closing 2 for-loops, end() on main"
     )
 
 
@@ -1630,7 +1629,7 @@ def test_summary_str_format():
     )
     bundle = pyrung_to_ladder(logic, mapping)
     assert str(bundle.export_summary) == (
-        "Renamed: calc \u2192 math, forloop \u2192 for\n"
+        "Renamed: calc -> math, forloop -> for\n"
         "Added:   next() closing 1 for-loop, return() on 1 subroutine, end() on main"
     )
 

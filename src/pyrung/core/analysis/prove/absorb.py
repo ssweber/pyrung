@@ -961,7 +961,7 @@ def _diagnose_unstable_atom(
     }:
         threshold = atom.tag
     else:
-        return "non-comparison form — only comparison atoms can be abstracted"
+        return "non-comparison form; only comparison atoms can be abstracted"
 
     if _is_numeric_literal(threshold):
         return None
@@ -1563,7 +1563,7 @@ def _find_threshold_absorptions(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: has non-owner writes — remove direct assignments",),
+                        (f"{acc_name}: has non-owner writes; remove direct assignments",),
                     )
                 )
                 continue
@@ -1585,7 +1585,7 @@ def _find_threshold_absorptions(
                     _ThresholdBlocker(
                         acc_name,
                         kind,
-                        (f"{acc_name}: read in data-flow — remove copy/calc reads of accumulator",),
+                        (f"{acc_name}: read in data-flow; remove copy/calc reads of accumulator",),
                     )
                 )
                 continue
@@ -1641,7 +1641,7 @@ def _find_threshold_absorptions(
                     acc_name,
                     kind,
                     tuple(
-                        f"{name}: in projection — remove from project= to allow abstraction"
+                        f"{name}: in projection; remove from project= to allow abstraction"
                         for name in projected_thresholds
                     ),
                 )

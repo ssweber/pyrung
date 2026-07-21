@@ -1175,7 +1175,7 @@ def _render_af_token(
         sub = _sub_operand(token, collection, nicknames, structured_map)
         if sub == token and token not in collection.tags:
             raise ValueError(
-                f"Unrecognised AF token {token!r} — not a known instruction or operand. "
+                f"Unrecognised AF token {token!r}; not a known instruction or operand. "
                 f"If this is a new Click instruction, add it to the codegen."
             )
         return sub

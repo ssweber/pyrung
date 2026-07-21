@@ -245,7 +245,7 @@ def _validate_ranges(program: Program, tag_map: dict[str, Tag]) -> list[Physical
                 site_frame(
                     site,
                     caret_token=operand_name(value),
-                    caret_label=f"outside {tag.min}–{tag.max}",
+                    caret_label=f"outside {tag.min}..{tag.max}",
                 ),
             ),
             hint="use a value in range, or widen it",
@@ -280,7 +280,7 @@ def _validate_missing_profiles(tag_map: dict[str, Tag]) -> list[PhysicalRealismF
                     severity="info",
                     frames=(Frame(location=tag.name),),
                     problem=f"{tag.name} has no physical model.",
-                    hint="add physical=Physical(…, profile=…)",
+                    hint="add physical=Physical(..., profile=...)",
                 ),
                 severity="info",
             )

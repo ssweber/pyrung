@@ -177,7 +177,7 @@ def validate_conflicting_outputs(program: Program) -> ConflictingOutputReport:
             severity="error",
             frames=tuple(site_frame(s) for s in conflict_sites),
             problem=f"{target_name} is set by multiple instructions in one scan.",
-            hint="only one should drive it — gate them exclusively",
+            hint="only one should drive it; gate them exclusively",
         )
 
         findings.append(

@@ -192,7 +192,7 @@ def _build_suggestion(code: str, fact: OperandFact | None, tag_map: TagMap) -> s
 
     if code == CLK_CALC_FLOOR_DIV:
         return (
-            "Click has no floor-division operator. Use calc(a / b, int_dest) instead — "
+            "Click has no floor-division operator. Use calc(a / b, int_dest) instead; "
             "copying the result to an Int or Dint tag truncates toward zero automatically."
         )
 

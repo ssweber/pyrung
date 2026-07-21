@@ -139,9 +139,9 @@ def _tautology_display(
     span = caret_of(header, render_condition(taut[0]))
     frame_caret = (0, span[0], span[1]) if span else None
     if residual:
-        hint = f"drop it — the real gate is {render_rung_args(residual)}"
+        hint = f"drop it; the real gate is {render_rung_args(residual)}"
     else:
-        hint = "drop it — nothing else gates this rung"
+        hint = "drop it; nothing else gates this rung"
     return FindingDisplay(
         code=RUNG_TAUTOLOGY,
         severity="warning",

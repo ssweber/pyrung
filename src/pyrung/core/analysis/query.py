@@ -629,7 +629,7 @@ class WaitEscapeFinding:
             )
         if not clauses:
             return head
-        return head + " — " + " and ".join(clauses)
+        return head + ": " + " and ".join(clauses)
 
 
 def wait_edges_without_escape(program: Any) -> list[WaitEscapeFinding]:

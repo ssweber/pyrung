@@ -377,7 +377,7 @@ class CausalChain:
         lines: list[str] = []
 
         if self.mode == "unreachable":
-            lines.append(f"{e.tag_name} → {e.to_value!r}  [unreachable]")
+            lines.append(f"{e.tag_name} -> {e.to_value!r}  [unreachable]")
             for b in self.blockers:
                 lines.append(
                     f"  Rung {b.rung_index + 1} would clear, but {b.blocked_tag} is unreachable"
@@ -393,12 +393,12 @@ class CausalChain:
 
         mode_label = self.mode
         if self.mode == "projected":
-            lines.append(f"{e.tag_name} → {e.to_value!r}  [{mode_label}]")
+            lines.append(f"{e.tag_name} -> {e.to_value!r}  [{mode_label}]")
             for extra in self.effects:
-                lines.append(f"{extra.tag_name} → {extra.to_value!r}")
+                lines.append(f"{extra.tag_name} -> {extra.to_value!r}")
         else:
             lines.append(
-                f"{e.tag_name} {e.from_value!r}→{e.to_value!r} at scan {e.scan_id}  [{mode_label}]"
+                f"{e.tag_name} {e.from_value!r}->{e.to_value!r} at scan {e.scan_id}  [{mode_label}]"
             )
 
         for step in self.steps:
@@ -417,13 +417,13 @@ class CausalChain:
             elif step.fidelity == "structural":
                 fidelity_note = "  (structural)"
             lines.append(
-                f"  Rung {_recorded_rung_label(step)}: {t.tag_name} → {t.to_value!r}{fidelity_note}"
+                f"  Rung {_recorded_rung_label(step)}: {t.tag_name} -> {t.to_value!r}{fidelity_note}"
             )
             for pc in step.triggers:
                 if step.fidelity == "structural":
                     lines.append(f"    trigger:  {pc.tag_name} = {pc.to_value!r}")
                 else:
-                    lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}→{pc.to_value!r}")
+                    lines.append(f"    trigger:  {pc.tag_name} {pc.from_value!r}->{pc.to_value!r}")
             if step.fidelity == "full":
                 for ec in step.enablers:
                     lines.append(f"    enabler:  {ec.tag_name} = {ec.value!r}")

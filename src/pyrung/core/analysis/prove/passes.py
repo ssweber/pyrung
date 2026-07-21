@@ -1191,7 +1191,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
     if infeasible_unclassified:
         tags = sorted(infeasible_unclassified)
         hints = [
-            f"  {name}: unclassified tag with no inferrable domain — "
+            f"  {name}: unclassified tag with no inferrable domain; "
             f"add choices=, min=/max=, or readonly=True"
             for name in tags
         ]
@@ -1205,7 +1205,7 @@ def _pass_elide_scan_local_state(ctx: _PassContext) -> None:
                         "elide_scan_local_state",
                         "classification",
                         "infeasible",
-                        "unclassified tag in observer influence cone — unbounded domain",
+                        "unclassified tag in observer influence cone; unbounded domain",
                     ),
                 )
 

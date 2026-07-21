@@ -273,14 +273,14 @@ class Physical:
 
         if has_timing and has_profile:
             raise ValueError(
-                f"Physical '{self.name}' has both timing and profile — "
+                f"Physical '{self.name}' has both timing and profile; "
                 f"a feedback is either bool (on_delay/off_delay) or "
                 f"analog (profile), not both"
             )
 
         if not has_timing and not has_profile:
             raise ValueError(
-                f"Physical '{self.name}' has neither timing nor profile — "
+                f"Physical '{self.name}' has neither timing nor profile; "
                 f"provide on_delay/off_delay for bool feedback or "
                 f"profile for analog feedback"
             )

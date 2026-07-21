@@ -64,7 +64,7 @@ class ExportSummary:
         """Render a human-readable summary string."""
         lines: list[str] = []
         if self.renames:
-            parts = [f"{dsl} \u2192 {csv}" for dsl, csv in self.renames]
+            parts = [f"{dsl} -> {csv}" for dsl, csv in self.renames]
             lines.append(f"Renamed: {', '.join(parts)}")
         added: list[str] = []
         if self.added_next:

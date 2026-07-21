@@ -181,7 +181,7 @@ def classify_departure(
 
     def _v(verdict: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
         logger.debug(
-            "departure: %s %r->%r (%d settle scans, %s): %s — %s",
+            "departure: %s %r->%r (%d settle scans, %s): %s; %s",
             channel_tag,
             from_value,
             settled_value,
