@@ -17,7 +17,7 @@ from pyrsistent import field as _precord_field
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot._ops import _StateKeyConfig
+    from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
@@ -380,7 +380,7 @@ class _CorrectionReceipt:
     receipt_id: int
     origin_key: _StateKey
     identity: tuple[tuple[str, Any], ...]
-    rungs: tuple[Any, ...]
+    rungs: tuple[PilotRung, ...]
     sources: tuple[str, ...]
     justification: str
     status: CorrectionStatus = CorrectionStatus.ACTIVE
@@ -391,7 +391,7 @@ class _ConfirmedCorrection:
     """One replay-proven correction, including its exact executable lifetime."""
 
     identity: tuple[tuple[str, Any], ...]
-    rungs: tuple[Any, ...]
+    rungs: tuple[PilotRung, ...]
     sources: tuple[str, ...]
     justification: str
 

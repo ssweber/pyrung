@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
@@ -37,7 +38,11 @@ from pyrung.core.analysis.pilot.investigate import (
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.pilot import _record_attempt
-from pyrung.core.analysis.pilot.progress import _investigate_and_revert, _monitor_trend
+from pyrung.core.analysis.pilot.progress import (
+    _install_confirmed_correction,
+    _investigate_and_revert,
+    _monitor_trend,
+)
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
@@ -252,7 +257,7 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
     )
 
     assert replayed == [progress_cut.holds]
-    assert result.confirmed_holds == ()
+    assert result.correction is None
     assert result.rejected[0][0] == progress_cut
     assert result.rejection_slugs == ("self-defeat",)
 
@@ -470,8 +475,18 @@ def _saboteur_scenario():
 
 def _stub_investigation(confirmed_holds):
     def _investigate(_plc, _incident, _ctx, _replay, **_kwargs):
+        rungs = tuple(confirmed_holds)
         return InvestigationResult(
-            confirmed_holds=tuple(confirmed_holds),
+            correction=(
+                _ConfirmedCorrection(
+                    identity=correction_identity(rungs),
+                    rungs=rungs,
+                    sources=tuple(dict.fromkeys(rung.dest for rung in rungs)),
+                    justification="test replay confirmed",
+                )
+                if rungs
+                else None
+            ),
             regression_nogoods=frozenset(),
             hypotheses=(),
             confirmed=(),
@@ -535,7 +550,7 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     )
 
     assert replayed == [(("InitFlag", 1),)]
-    assert result.confirmed_holds == ()
+    assert result.correction is None
     assert result.confirmed == ()
     assert len(result.rejected) == 1
     rejected, ground = result.rejected[0]
@@ -606,6 +621,53 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     assert state.checkpoints[-1].world.rungs == state.world.rungs
 
 
+def test_correction_installer_rejects_forged_identity():
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=(),
+        rungs=(rung,),
+        sources=("Go",),
+        justification="forged proof",
+    )
+
+    with pytest.raises(ValueError, match="identity does not match"):
+        _install_confirmed_correction(
+            state,
+            correction,
+            origin_key=frame.key,
+            scan=state.work.state.scan_id,
+            source="test",
+        )
+
+    assert state.correction_receipts == []
+
+
+def test_correction_installer_rejects_already_owned_rung():
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    state.rungs = pvector((rung,))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        rungs=(rung,),
+        sources=("Go",),
+        justification="duplicate proof",
+    )
+
+    with pytest.raises(ValueError, match="already-owned rung"):
+        _install_confirmed_correction(
+            state,
+            correction,
+            origin_key=frame.key,
+            scan=state.work.state.scan_id,
+            source="test",
+        )
+
+    assert state.correction_receipts == []
+
+
 def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
     """A later exact contradiction hands ownership to its proved replacement."""
     state, trial, frame, ctx = _saboteur_scenario()
@@ -633,17 +695,14 @@ def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
 
     def _opposite_investigation(_plc, _incident, _ctx, _replay, **_kwargs):
         return InvestigationResult(
-            confirmed_holds=(opposite,),
+            correction=_ConfirmedCorrection(
+                identity=correction_identity((opposite,)),
+                rungs=(opposite,),
+                sources=remedy.sources,
+                justification="later regression neutralized",
+            ),
             hypotheses=(remedy,),
             confirmed=(remedy,),
-            confirmed_outcomes=(
-                ReplayOutcome(
-                    True,
-                    None,
-                    dict(state.work.state.tags),
-                    "later regression neutralized",
-                ),
-            ),
         )
 
     monkeypatch.setattr(
@@ -705,12 +764,14 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
 
     def _phase_investigation(_plc, _incident, _ctx, _replay, **_kwargs):
         return InvestigationResult(
-            confirmed_holds=(low,),
+            correction=_ConfirmedCorrection(
+                identity=correction_identity((low,)),
+                rungs=(low,),
+                sources=remedy.sources,
+                justification="phase neutralized",
+            ),
             hypotheses=(remedy,),
             confirmed=(remedy,),
-            confirmed_outcomes=(
-                ReplayOutcome(True, None, dict(state.work.state.tags), "phase neutralized"),
-            ),
         )
 
     monkeypatch.setattr(

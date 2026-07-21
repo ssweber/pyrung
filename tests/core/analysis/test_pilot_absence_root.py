@@ -248,13 +248,14 @@ class TestAnalogAbsenceRoot:
         )
 
         result = investigate_deviation(plc, incident, ctx, replay)
+        assert result.correction is not None
         temp_holds = [
-            (rung.dest, rung.value) for rung in result.confirmed_holds if rung.dest == "Temp"
+            (rung.dest, rung.value) for rung in result.correction.rungs if rung.dest == "Temp"
         ]
         assert temp_holds, "the boundary hold must survive its replay"
         assert temp_holds[0][1] > 130
         assert not any(
-            rung.dest == "Suspend" and rung.value is True for rung in result.confirmed_holds
+            rung.dest == "Suspend" and rung.value is True for rung in result.correction.rungs
         )
 
 
@@ -305,9 +306,10 @@ class TestAbsenceRootConfirmation:
         raw = replay((("Sail", True),))
         assert raw.accepted, raw
         result = investigate_deviation(plc, incident, ctx, replay)
-        assert any(rung.dest == "Sail" and rung.value is True for rung in result.confirmed_holds)
+        assert result.correction is not None
+        assert any(rung.dest == "Sail" and rung.value is True for rung in result.correction.rungs)
         assert not any(
-            rung.dest == "Suspend" and rung.value is True for rung in result.confirmed_holds
+            rung.dest == "Suspend" and rung.value is True for rung in result.correction.rungs
         )
         confirmed_kinds = {h.kind for h in result.confirmed}
         assert "absence-root" in confirmed_kinds

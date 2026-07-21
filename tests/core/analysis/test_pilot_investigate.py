@@ -1925,7 +1925,7 @@ class TestInvestigateExcursion:
         )
         assert result.reverted == ["Out"]
 
-    def test_confirmed_holds_fix_revert(self):
+    def test_confirmed_correction_fixes_revert(self):
         work, fork, pre_snap, post_pulse_snap, pre_key, cfg, steerable = _excursion_inputs()
 
         result = investigate_excursion(

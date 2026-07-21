@@ -755,7 +755,6 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
 
     def _stub(_plc, _incident, _ctx, _replay, **_kwargs):
         return InvestigationResult(
-            confirmed_holds=(),
             hypotheses=(reject_a, reject_b),
             confirmed=(),
             rejected=(

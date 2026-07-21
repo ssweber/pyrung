@@ -853,6 +853,19 @@ def _install_confirmed_correction(
     checkpoint_index: int | None = None,
 ) -> _CorrectionReceipt:
     """Install one replay-proven correction and bank its lifecycle owner."""
+    if not correction.rungs:
+        raise ValueError("a confirmed correction must own at least one rung")
+    if any(not isinstance(rung, PilotRung) for rung in correction.rungs):
+        raise TypeError("a confirmed correction may contain only executable PilotRungs")
+    if correction.identity != correction_identity(correction.rungs):
+        raise ValueError("confirmed correction identity does not match its replayed rungs")
+    existing = {_rung_identity(rung) for rung in state.rungs}
+    duplicate = tuple(rung for rung in correction.rungs if _rung_identity(rung) in existing)
+    if duplicate:
+        raise ValueError(
+            "confirmed correction cannot claim already-owned rung(s): "
+            f"{tuple((rung.dest, rung.value) for rung in duplicate)!r}"
+        )
     state.rungs = _append_rungs(state.work, list(correction.rungs), state.rungs)
     state.hold_log.append(
         _HoldLogEntry(
@@ -906,17 +919,13 @@ def _contradicted_corrections(
     correction caused this regression.  Treating the opposite value as another
     durable hold would leave two tools arguing in the overlay.
     """
-    if not investigation.confirmed:
+    correction = investigation.correction
+    if correction is None:
         return ()
-    remedy = investigation.confirmed[0]
-    sources = set(remedy.sources)
+    sources = set(correction.sources)
     remedy_rungs: dict[str, list[tuple[Any, Any]]] = {}
-    for proposal in remedy.holds:
-        if isinstance(proposal, PilotRung):
-            remedy_rungs.setdefault(proposal.dest, []).append((proposal.value, proposal.operation))
-        else:
-            tag, value = proposal
-            remedy_rungs.setdefault(tag, []).append((value, None))
+    for rung in correction.rungs:
+        remedy_rungs.setdefault(rung.dest, []).append((rung.value, rung.operation))
 
     def _compatible_phases(new_operation: Any, old: PilotRung) -> bool:
         """Opposite values with distinct owner boundaries are temporal phases."""
@@ -1041,8 +1050,6 @@ def _investigate_and_revert(
     checkpoint = state.checkpoints[checkpoint_index]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
-    investigation_holds: list[Any] = []
-    investigation_rungs: list[PilotRung] = []
     confirmed_correction: _ConfirmedCorrection | None = None
     investigation: InvestigationResult | None = None
     revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
@@ -1167,7 +1174,7 @@ def _investigate_and_revert(
         # Investigation has already derived a finite guard and replayed this
         # exact installed form. Post-commit recovery does not reinterpret that proof through
         # a second, globally-steady-hold rule.
-        investigation_holds.extend(investigation.confirmed_holds)
+        confirmed_correction = investigation.correction
         revoked_receipts = _contradicted_corrections(state, investigation)
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
@@ -1200,34 +1207,7 @@ def _investigate_and_revert(
             ),
             "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
         }
-        if investigation_holds:
-            # Investigation owns applicability and replayed these exact guarded
-            # rungs. This module only installs the proved intervention.
-            investigation_rungs = [
-                proposal for proposal in investigation_holds if isinstance(proposal, PilotRung)
-            ]
-            confirmed_hypothesis = investigation.confirmed[0] if investigation.confirmed else None
-            proof = (
-                investigation.confirmed_outcomes[0] if investigation.confirmed_outcomes else None
-            )
-            confirmed_correction = _ConfirmedCorrection(
-                identity=correction_identity(
-                    confirmed_hypothesis.holds
-                    if confirmed_hypothesis is not None
-                    else investigation_rungs
-                ),
-                rungs=tuple(investigation_rungs),
-                sources=(confirmed_hypothesis.sources if confirmed_hypothesis is not None else ()),
-                justification=(
-                    proof.justification.value
-                    if proof is not None and proof.justification is not None
-                    else proof.reason
-                    if proof is not None
-                    else "replay-confirmed"
-                ),
-            )
-
-    if retain_if_unresolved is not None and not investigation_rungs and not revoked_receipts:
+    if retain_if_unresolved is not None and confirmed_correction is None and not revoked_receipts:
         # The departure earned no gauge credit, but investigation also found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary
@@ -1295,7 +1275,7 @@ def _investigate_and_revert(
     del state.checkpoints[checkpoint_index + 1 :]
     state.load_world(cp_world)
     revoked_ids = _revoke_corrections(state, revoked_receipts, checkpoint)
-    if investigation_rungs:
+    if confirmed_correction is not None:
         # Revocation removes contradicted owners before this append.  The
         # replay-confirmed remedy is therefore an ownership replacement, not a
         # second hold layered over the stale correction.

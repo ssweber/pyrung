@@ -242,11 +242,10 @@ class ReplayOutcome:
 class InvestigationResult:
     """Replay-confirmed corrective information."""
 
-    confirmed_holds: tuple[Any, ...] = ()
+    correction: _ConfirmedCorrection | None = None
     regression_nogoods: frozenset[ActionPair] = frozenset()
     hypotheses: tuple[InvestigationHypothesis, ...] = ()
     confirmed: tuple[InvestigationHypothesis, ...] = ()
-    confirmed_outcomes: tuple[ReplayOutcome, ...] = ()
     # Every rejection retains the ground that made it fail.  A rejected
     # hypothesis without its ground is not useful evidence: it forces the
     # operator to reconstruct and re-run the incident.  ``rejected`` carries the
@@ -1445,10 +1444,9 @@ def investigate_deviation(
         plc, _dedupe_hypotheses(raw), incident, ctx, primal_extra=absence_tags
     )
     confirmed: list[InvestigationHypothesis] = []
-    confirmed_outcomes: list[ReplayOutcome] = []
+    confirmed_correction: _ConfirmedCorrection | None = None
     rejected: list[tuple[InvestigationHypothesis, str]] = []
     rejection_slugs: list[str] = []
-    confirmed_holds: list[Any] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
     # A proposed hold at the anchor value is meaningful when the complete
@@ -1611,8 +1609,16 @@ def investigate_deviation(
                     detail=hypothesis.detail,
                 )
                 confirmed.append(confirmed_hypothesis)
-                confirmed_outcomes.append(installed_outcome)
-                confirmed_holds.extend(scoped)
+                confirmed_correction = _ConfirmedCorrection(
+                    identity=correction_identity(scoped),
+                    rungs=scoped,
+                    sources=confirmed_hypothesis.sources,
+                    justification=(
+                        installed_outcome.justification.value
+                        if installed_outcome.justification is not None
+                        else installed_outcome.reason or "replay-confirmed"
+                    ),
+                )
                 break  # first confirmed wins — one intervention per incident
             _reject(
                 hypothesis,
@@ -1628,11 +1634,10 @@ def investigate_deviation(
         )
 
     return InvestigationResult(
-        confirmed_holds=tuple(_dedupe_pairs(confirmed_holds)),
+        correction=confirmed_correction,
         regression_nogoods=frozenset(),
         hypotheses=tuple(hypotheses),
         confirmed=tuple(confirmed),
-        confirmed_outcomes=tuple(confirmed_outcomes),
         rejected=tuple(rejected),
         rejection_slugs=tuple(rejection_slugs),
         unresolved=incident.changed_tags if not confirmed else (),

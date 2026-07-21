@@ -200,9 +200,12 @@ or retention policy is considered.
   active correction receipts may renegotiate their concrete value from a later
   incident boundary; prerequisites and route holds cannot enter the correction
   lifecycle merely because they compile to the same rung type.
-- Excursion replay returns the exact guarded correction it proved. Verification
-  rechecks that corrected replay against `avoid=`, then the shared correction
-  installer records its receipt without recompiling its lifetime. The runner,
+- Every investigation returns one correction artifact containing the exact
+  guarded rungs, causal sources, identity, and replay justification it proved;
+  consumers do not reconstruct that artifact from parallel result fields.
+  Excursion verification additionally rechecks the corrected replay against
+  `avoid=`. The shared installer rejects forged identities and already-owned
+  rungs, then records the receipt without recompiling its lifetime. The runner,
   world key, checkpoint state, and receipt must therefore name the same rungs.
 - A terminal coast consumes the same channel-owner set during execution and
   incident replay. Exact stateful target motion that Gauge does not own is a
