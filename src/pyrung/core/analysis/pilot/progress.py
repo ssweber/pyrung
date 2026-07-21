@@ -65,6 +65,7 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _Step,
+    _StepContext,
     _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -529,15 +530,7 @@ def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> i
     if state.steps:
         # The coast + settlement is one dwell: extend the recorded step's span
         # to the settled landing (mirrors the finished-arm rewrite).
-        last = state.steps[-1]
-        final_step = _Step(
-            inputs=last.inputs,
-            scan_before=last.scan_before,
-            scan_after=settled.state.scan_id,
-        )
-        if state.journey and state.journey[-1] is last:
-            state.journey[-1] = final_step
-        state.steps = state.steps.set(len(state.steps) - 1, final_step)
+        state.extend_last_step(settled.state.scan_id)
     return scan_before
 
 
@@ -787,18 +780,15 @@ def _channel_transitions(
     return tuple(out)
 
 
-def _replay_step(step: Any, sc: Any) -> ReplayStep:
-    """One recorded journey step + its committed context → a replay spec.
+def _replay_step(step: _Step, sc: _StepContext) -> ReplayStep:
+    """One physical step plus its owning operation context → a replay spec.
 
     The kind is the RECORDED motion (pulse / zoom / letrun), never inferred
     from position or input emptiness.  A coast step with no channel register
     (the settle-path zoom) replays as a plain dwell, exactly the shape it ran
-    live.  A step with no surviving context (pre-loop seeding) degrades to
-    pulse-or-dwell by its inputs.
+    live. Every world-side step has an owning context by construction.
     """
     inputs = tuple(step.inputs.items())
-    if sc is None:
-        return ReplayStep(inputs=inputs, scans=step.scans, kind="pulse" if inputs else "dwell")
     kind = {
         MotionKind.INTERVENTION: "pulse",
         MotionKind.COAST_TO_BEARING: "zoom",
@@ -1062,12 +1052,12 @@ def _investigate_and_revert(
         )
         # The incident's evidence is the recorded step timelines inside the
         # window — the trend recorder's pen marks — never a history re-diff.
-        # ``step_contexts`` is world-side, so reverted steps are already gone
-        # and the just-committed trial's context is the last entry.
+        # Committed acts are world-side, so reverted operations are already gone
+        # and every timeline remains attached to its exact physical step group.
         window_timeline = tuple(
             event
-            for sc in state.step_contexts
-            for event in sc.timeline
+            for act in state.committed_acts
+            for event in act.context.timeline
             if origin.anchor_scan <= event.scan <= end_scan
         )
         incident = build_deviation_incident(
@@ -1085,10 +1075,10 @@ def _investigate_and_revert(
         # Replay re-arms each step's RECORDED session spec (kind + channel +
         # target off the committed step context), replacing the old positional
         # "last empty-input step is the eject coast" inference.
-        sc_by_scan = {c.scan_before: c for c in state.step_contexts}
         replay_steps = tuple(
-            _replay_step(step, sc_by_scan.get(step.scan_before))
-            for step in state.steps
+            _replay_step(step, act.context)
+            for act in state.committed_acts
+            for step in act.steps
             if step.scan_before >= cp_fork.state.scan_id
         )
         role_tags = coast_departure_tags(state, ctx)

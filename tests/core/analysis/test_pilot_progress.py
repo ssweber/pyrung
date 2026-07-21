@@ -45,8 +45,10 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _Checkpoint,
+    _CommittedAct,
     _PilotState,
     _Step,
+    _StepContext,
     _TrialResult,
     _World,
 )
@@ -74,8 +76,7 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
         key,
         _World(
             work=fork,
-            steps=pvector([]),
-            step_contexts=pvector([]),
+            committed_acts=pvector([]),
             best_trend=trend,
             rungs=pvector([]),
             dwell_scans=0,
@@ -86,10 +87,17 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
 
 
 def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
+    steps = tuple(over.pop("steps", ()))
+    committed_acts = tuple(over.pop("committed_acts", ())) or tuple(
+        _CommittedAct(
+            steps=(step,),
+            context=_StepContext(candidate=dict(step.inputs)),
+        )
+        for step in steps
+    )
     world = _World(
         work=over.pop("work", None) or _oneshot_plc(),
-        steps=pvector(over.pop("steps", [])),
-        step_contexts=pvector(over.pop("step_contexts", [])),
+        committed_acts=pvector(committed_acts),
         best_trend=best_trend,
         rungs=pvector(over.pop("rungs", [])),
         dwell_scans=over.pop("dwell_scans", 0),

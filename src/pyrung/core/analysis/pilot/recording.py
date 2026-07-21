@@ -69,31 +69,28 @@ def _build_plan_journal(
     acc_names: frozenset[str],
 ) -> tuple[PlanStep, ...]:
     """Build the annotated plan journal from the clean path and hold log."""
-    if not state.steps:
+    if not state.committed_acts:
         return ()
-
-    ctx_by_scan: dict[int, _StepContext] = {c.scan_before: c for c in state.step_contexts}
 
     def _notes_for(inputs: Any) -> tuple[str, ...]:
         return tuple(state.lever_notes[t] for t, _v in inputs if t in state.lever_notes)
 
     entries: list[tuple[int, str, PlanStep]] = []
 
-    for step in state.steps:
-        sc = ctx_by_scan.get(step.scan_before)
-        if sc is None:
-            continue
-
+    for act in state.committed_acts:
+        sc = act.context
+        first_step = act.steps[0]
+        semantic_step = act.steps[-1]
         is_coast = sc.motion.is_coast
         transition = _format_transition(sc, channel_tags)
-        span = step.scan_after - step.scan_before
+        span = semantic_step.scan_after - first_step.scan_before
 
         if is_coast:
             accel: list[tuple[str, Any]] = []
             if fork is not None:
                 snap = fork._scan_log.snapshot()
                 for scan_id in sorted(snap.patches_by_scan):
-                    if scan_id < step.scan_before or scan_id > step.scan_after:
+                    if scan_id < first_step.scan_before or scan_id > semantic_step.scan_after:
                         continue
                     for tag, val in snap.patches_by_scan[scan_id].items():
                         if (
@@ -105,18 +102,17 @@ def _build_plan_journal(
 
             entries.append(
                 (
-                    step.scan_before,
+                    first_step.scan_before,
                     "b_coast",
                     PlanStep(
                         kind="coast",
-                        scan=step.scan_before,
+                        scan=first_step.scan_before,
                         scans=span,
                         inputs=(),
                         label=sc.channel_tag or "",
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
-                        pulsing_holds=sc.pulsing_holds,
                         accelerators=tuple(accel),
                         rungs=sc.control_rungs,
                     ),
@@ -125,7 +121,7 @@ def _build_plan_journal(
         else:
             command_inputs = [
                 (tag, val)
-                for tag, val in step.inputs.items()
+                for tag, val in semantic_step.inputs.items()
                 if not (
                     isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )
@@ -135,11 +131,11 @@ def _build_plan_journal(
                 label = ", ".join(decision_tags) if decision_tags else ""
                 entries.append(
                     (
-                        step.scan_before,
+                        first_step.scan_before,
                         "b_command",
                         PlanStep(
                             kind="command",
-                            scan=step.scan_before,
+                            scan=first_step.scan_before,
                             scans=span,
                             inputs=tuple(command_inputs),
                             label=label,
@@ -149,8 +145,8 @@ def _build_plan_journal(
                     )
                 )
 
-    path_start = state.steps[0].scan_before
-    path_end = state.steps[-1].scan_after
+    path_start = state.committed_acts[0].steps[0].scan_before
+    path_end = state.committed_acts[-1].steps[-1].scan_after
 
     seen_rungs: set[tuple[Any, ...]] = set()
     correction_receipts = getattr(state, "correction_receipts", ())

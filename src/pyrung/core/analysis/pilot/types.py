@@ -8,7 +8,7 @@ data between reading, execution, verification, and recovery modules.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -135,10 +135,9 @@ class _World(PRecord):
     journey, …) survives.  Pilot rungs belong here: they change what the next
     scan means, so the same PLC tags under a different rung overlay are a
     different world.  A ``pyrsistent`` PRecord so the value is
-    persistent: the ``steps`` / ``step_contexts`` PVectors are immutable, so once
-    a checkpoint captures a world (``snapshot_world``) later appends build a fresh
-    world value and never mutate the captured one — the pointer semantics revert
-    relies on.
+    persistent: the ``committed_acts`` PVector is immutable, so once a checkpoint
+    captures a world (``snapshot_world``) later appends build a fresh world value
+    and never mutate the captured one — the pointer semantics revert relies on.
 
     ``work`` is a live runner fork (a mutable object); the world merely holds a
     *reference* to it.  The persistence lives in the structure around it — the
@@ -147,8 +146,7 @@ class _World(PRecord):
     """
 
     work = _precord_field()
-    steps = _precord_field()
-    step_contexts = _precord_field()
+    committed_acts = _precord_field()
     best_trend = _precord_field()
     rungs = _precord_field()
     # Committed scan-ids spent *waiting* — the spans of accepted zoom / let-run
@@ -184,7 +182,7 @@ class _Checkpoint:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class _Step:
     # The inputs physically applied for this step — the candidate plus its
     # co-actions (command button + one-shot edge gate), i.e. ``trial.applied``,
@@ -327,17 +325,13 @@ class _PilotContext:
         return pair not in self.blocked_route_actions
 
 
-@dataclass
+@dataclass(frozen=True)
 class _StepContext:
-    """Metadata captured at commit time for a trial — truncated alongside ``steps``."""
+    """Semantic and evidentiary context owned by one committed operation."""
 
-    scan_before: int
-    observe_label: str
     candidate: dict[str, Any]
     motion: MotionKind = MotionKind.INTERVENTION
     frontier_tags: tuple[str, ...] = ()
-    steady_holds: tuple[str, ...] = ()
-    pulsing_holds: tuple[str, ...] = ()
     # Exact synthesis rules present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
     control_rungs: tuple[Any, ...] = ()
@@ -352,6 +346,28 @@ class _StepContext:
     # The step's session timeline (pen marks + bump landings).  Incident
     # construction reads these instead of re-diffing history windows.
     timeline: tuple[Any, ...] = ()
+
+    @property
+    def steady_holds(self) -> tuple[str, ...]:
+        """Concise view derived from the exact executable rung evidence."""
+        return tuple(dict.fromkeys(rung.dest for rung in self.control_rungs))
+
+
+@dataclass(frozen=True)
+class _CommittedAct:
+    """One accepted operation and every physical replay step it produced.
+
+    A rising-edge intervention may require a release step followed by the
+    requested pulse. Both steps share one operation context; keeping them here
+    prevents consumers from reconstructing that ownership by matching scans.
+    """
+
+    steps: tuple[_Step, ...]
+    context: _StepContext
+
+    def __post_init__(self) -> None:
+        if not self.steps:
+            raise ValueError("a committed act must own at least one replay step")
 
 
 @dataclass(frozen=True)
@@ -414,12 +430,11 @@ class _ConfirmedCorrection:
 @dataclass
 class _PilotState:
     # ── The world (reverts) ──
-    # ``work`` / ``steps`` / ``step_contexts`` / ``best_trend`` live inside a
-    # single persistent :class:`_World` value.  They are still read and written
-    # by their bare names through the properties below (``state.work``,
-    # ``state.steps``, …), so callers never touch ``.world`` directly — but a
-    # checkpoint captures the whole world at once and revert restores it by
-    # assignment (``snapshot_world`` / ``load_world``).
+    # ``work`` / ``committed_acts`` / ``best_trend`` live inside a single
+    # persistent :class:`_World` value. A checkpoint captures the whole world at
+    # once and revert restores it by assignment (``snapshot_world`` /
+    # ``load_world``). Flat steps are a read-only public/replay view derived from
+    # the operation records below.
     world: _World
     # ── Knowledge (commits — never rolled back on revert) ──
     key_config: _StateKeyConfig | None
@@ -471,20 +486,29 @@ class _PilotState:
         self.world = self.world.set(work=value)
 
     @property
-    def steps(self) -> PVector[_Step]:
-        return self.world.steps
+    def committed_acts(self) -> PVector[_CommittedAct]:
+        return self.world.committed_acts
 
-    @steps.setter
-    def steps(self, value: Any) -> None:
-        self.world = self.world.set(steps=pvector(value))
+    @committed_acts.setter
+    def committed_acts(self, value: Any) -> None:
+        self.world = self.world.set(committed_acts=pvector(value))
 
     @property
-    def step_contexts(self) -> PVector[_StepContext]:
-        return self.world.step_contexts
+    def steps(self) -> PVector[_Step]:
+        """Flattened public/replay view derived from committed operation owners."""
+        return pvector(step for act in self.committed_acts for step in act.steps)
 
-    @step_contexts.setter
-    def step_contexts(self, value: Any) -> None:
-        self.world = self.world.set(step_contexts=pvector(value))
+    def extend_last_step(self, scan_after: int) -> None:
+        """Extend the last operation's final physical step to a settled landing."""
+        if not self.committed_acts:
+            return
+        act = self.committed_acts[-1]
+        last = act.steps[-1]
+        final_step = replace(last, scan_after=scan_after)
+        final_act = replace(act, steps=(*act.steps[:-1], final_step))
+        if self.journey and self.journey[-1] is last:
+            self.journey[-1] = final_step
+        self.committed_acts = self.committed_acts.set(len(self.committed_acts) - 1, final_act)
 
     @property
     def best_trend(self) -> int | None:
@@ -529,11 +553,11 @@ class _PilotState:
         """Revert: the checkpoint's world *is* the answer.
 
         Re-fork ``work`` so the checkpoint stays reusable for a repeat revert;
-        ``steps`` / ``step_contexts`` / ``best_trend`` / ``rungs`` restore by
-        assignment.  Rebuild the overlay explicitly on the fresh fork so the
-        runner and the persistent world cannot disagree.  No scan-cutoff
-        reconstruction — the pointer already holds exactly the state that
-        existed when the checkpoint was taken.
+        ``committed_acts`` / ``best_trend`` / ``rungs`` restore by assignment.
+        Rebuild the overlay explicitly on the fresh fork so the runner and the
+        persistent world cannot disagree. No scan-cutoff reconstruction — the
+        pointer already holds exactly the state that existed when the checkpoint
+        was taken.
         """
         self.world = world.set(work=world.work.fork())
         from pyrung.core.analysis.pilot._ops import _set_rungs

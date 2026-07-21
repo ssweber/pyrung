@@ -431,8 +431,7 @@ def _saboteur_scenario():
     state = _PilotState(
         world=_World(
             work=work,
-            steps=pvector([]),
-            step_contexts=pvector([]),
+            committed_acts=pvector([]),
             best_trend=2,
             rungs=pvector([]),
             dwell_scans=0,
@@ -444,8 +443,7 @@ def _saboteur_scenario():
                 ("cpk",),
                 _World(
                     work=cp_fork,
-                    steps=pvector([]),
-                    step_contexts=pvector([]),
+                    committed_acts=pvector([]),
                     best_trend=2,
                     rungs=pvector([]),
                     dwell_scans=0,

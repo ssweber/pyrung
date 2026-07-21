@@ -96,15 +96,14 @@ def _discharged_actions(state: _PilotState, channel_tag: str) -> set[tuple[str, 
     The committed steps are the work the march already did.  A forward plan that
     re-requires one of these presses *in the same channel context* is
     resurrected debt — the mechanical meaning of "undoes our progress".
-    Context comes from each step's before-snapshot (``step_contexts``); a
-    missing context records ``None``, which matches any (conservative)."""
-    before_by_scan = {sc.scan_before: sc.before_snap for sc in state.step_contexts}
+    Context comes from the owning committed operation's before-snapshot; release
+    and pulse steps therefore carry the same exact channel context."""
     out: set[tuple[str, Any, Any]] = set()
-    for step in state.steps:
-        before = before_by_scan.get(step.scan_before) or {}
-        context = before.get(channel_tag)
-        for tag, value in step.inputs.items():
-            out.add((tag, value, context))
+    for act in state.committed_acts:
+        context = act.context.before_snap.get(channel_tag)
+        for step in act.steps:
+            for tag, value in step.inputs.items():
+                out.add((tag, value, context))
     return out
 
 

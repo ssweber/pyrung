@@ -97,6 +97,7 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _ActionPair,
     _Checkpoint,
+    _CommittedAct,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -168,11 +169,10 @@ def _commit_step(
     fork: PLC,
     inputs: dict[str, Any],
     scan_before: int,
-    steps: list[_Step],
     resting: dict[str, Any],
     edge_tags: set[str],
     live: bool,
-) -> PLC:
+) -> tuple[PLC, tuple[_Step, ...]]:
     """Record a step (or release+pulse pair) and swap the work fork.
 
     ``inputs`` is the full applied set (``trial.applied``), not the narrow
@@ -192,28 +192,26 @@ def _commit_step(
         if t in edge_tags and not _values_match(inputs[t], resting.get(t, False))
     }
     if edge_release:
-        steps.append(
-            _Step(inputs=edge_release, scan_before=scan_before, scan_after=scan_before + 1)
-        )
-        steps.append(
+        steps = (
+            _Step(inputs=edge_release, scan_before=scan_before, scan_after=scan_before + 1),
             _Step(
                 inputs=dict(inputs),
                 scan_before=scan_before + 1,
                 scan_after=fork.state.scan_id,
-            )
+            ),
         )
     else:
-        steps.append(
+        steps = (
             _Step(
                 inputs=dict(inputs),
                 scan_before=scan_before,
                 scan_after=fork.state.scan_id,
-            )
+            ),
         )
     if live:
         _apply_pulse(work, list(inputs.items()), resting, edge_tags)
-        return work
-    return fork
+        return work, steps
+    return fork, steps
 
 
 def _make_pilot_context(
@@ -585,17 +583,15 @@ def _record_attempt(
         state.avoid_names.update(attempt.avoid_names)
 
 
-def _record_step_context(
+def _step_context(
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
-) -> None:
-    """Capture raw context for this committed trial — built into journal at finished time."""
+) -> _StepContext:
+    """Build the context owned by one committed operation."""
     is_coast = trial.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()
-    steady_holds: tuple[str, ...] = ()
-    pulsing_holds: tuple[str, ...] = ()
     control_rungs: tuple[Any, ...] = ()
 
     if is_coast:
@@ -611,25 +607,18 @@ def _record_step_context(
                 seen.add(n.tag)
                 frontier.append(n.tag)
         frontier_tags = tuple(frontier)
-        steady_holds = tuple(dict.fromkeys(r.dest for r in state.rungs))
         control_rungs = tuple(state.rungs)
 
-    state.step_contexts = state.step_contexts.append(
-        _StepContext(
-            scan_before=trial.scan_before,
-            observe_label=trial.observe_label,
-            motion=trial.motion,
-            candidate=dict(trial.candidate),
-            frontier_tags=frontier_tags,
-            steady_holds=steady_holds,
-            pulsing_holds=pulsing_holds,
-            control_rungs=control_rungs,
-            channel_tag=trial.zoom_channel_tag,
-            before_snap=dict(trial.before_snap),
-            after_snap=dict(trial.fork_snap),
-            channel_target=trial.zoom_target_value,
-            timeline=trial.timeline,
-        )
+    return _StepContext(
+        motion=trial.motion,
+        candidate=dict(trial.candidate),
+        frontier_tags=frontier_tags,
+        control_rungs=control_rungs,
+        channel_tag=trial.zoom_channel_tag,
+        before_snap=dict(trial.before_snap),
+        after_snap=dict(trial.fork_snap),
+        channel_target=trial.zoom_target_value,
+        timeline=trial.timeline,
     )
 
 
@@ -660,8 +649,7 @@ def _commit_and_monitor(
             trial,
             new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
         )
-    _commit_trial(trial, state, ctx, frame.snap)
-    _record_step_context(trial, frame, state)
+    _commit_trial(trial, frame, state, ctx)
     yield PilotEvent(
         "trial_committed",
         state.work.state.scan_id,
@@ -677,9 +665,9 @@ def _commit_and_monitor(
 
 def _commit_trial(
     trial: _TrialResult,
+    frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    before: dict[str, Any],
 ) -> None:
     key_was_seen = trial.new_key is not None and trial.new_key in state.seen_keys
     if trial.new_key is not None:
@@ -699,24 +687,25 @@ def _commit_trial(
     # them into the recorded inputs so replay re-establishes them.  ``applied``
     # is empty for a let-run, so this is the only place the driver is recorded.
     step_inputs = dict(trial.applied)
-    # ``steps`` is a persistent vector; stage the append on a plain list, then
-    # assign it back through the world (``_commit_step`` appends in place).
-    work_steps = list(state.steps)
-    prev = len(work_steps)
-    state.work = _commit_step(
+    work, steps = _commit_step(
         state.work,
         trial.fork,
         step_inputs,
         trial.scan_before,
-        work_steps,
         ctx.resting,
         ctx.edge_tags,
         ctx.live,
     )
-    state.steps = work_steps
-    # Mirror the freshly-appended step(s) into the append-only journey; ``steps``
-    # (the world) is restored to the checkpoint's on revert, ``journey`` is not.
-    state.journey.extend(work_steps[prev:])
+    act = _CommittedAct(steps=steps, context=_step_context(trial, frame, state))
+    # Adopt the physical fork and its replay evidence in one persistent-world
+    # update. No consumer can observe steps detached from their operation owner.
+    state.world = state.world.set(
+        work=work,
+        committed_acts=state.committed_acts.append(act),
+    )
+    # The world record reverts; the flattened journey is the append-only public
+    # history of every physical step, including later-reverted operations.
+    state.journey.extend(steps)
     # Waiting is not searching: an accepted coast's span is dwell — the machine
     # advancing itself while the pilot holds heading — so it must not drain the
     # search budget (the loop charges ``scan_id - dwell_scans``).  A revert
@@ -735,7 +724,10 @@ def _commit_trial(
                     trial.fork_snap.get(trial.zoom_channel_tag), trial.zoom_target_value
                 )
             )
-            or (state.gauge is not None and state.gauge.ordinal_advanced(before, trial.fork_snap))
+            or (
+                state.gauge is not None
+                and state.gauge.ordinal_advanced(frame.snap, trial.fork_snap)
+            )
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - trial.scan_before
@@ -824,8 +816,7 @@ def _pilot_loop_events(
     state = _PilotState(
         world=_World(
             work=plc,
-            steps=pvector([]),
-            step_contexts=pvector([]),
+            committed_acts=pvector([]),
             best_trend=None,
             rungs=pvector([]),
             dwell_scans=0,
@@ -893,14 +884,7 @@ def _pilot_loop_events(
                 # The terminal let-run's span extends to the actual finish scan;
                 # rewrite the last step (and its journey twin, the same object) so
                 # both the clean path and the journey carry the true coast length.
-                final_step = _Step(
-                    inputs=state.steps[-1].inputs,
-                    scan_before=state.steps[-1].scan_before,
-                    scan_after=state.work.state.scan_id,
-                )
-                if state.journey and state.journey[-1] is state.steps[-1]:
-                    state.journey[-1] = final_step
-                state.steps = state.steps.set(len(state.steps) - 1, final_step)
+                state.extend_last_step(state.work.state.scan_id)
             yield _finished_event(
                 state,
                 ctx,

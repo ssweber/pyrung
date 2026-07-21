@@ -16,6 +16,8 @@ event stream and on :class:`Plan`:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from pyrung import (
     PLC,
     Bool,
@@ -28,6 +30,13 @@ from pyrung import (
     out,
 )
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot.recording import _build_plan_journal
+from pyrung.core.analysis.pilot.types import (
+    MotionKind,
+    _CommittedAct,
+    _Step,
+    _StepContext,
+)
 
 
 def _all_nodes(tree):
@@ -38,6 +47,33 @@ def _all_nodes(tree):
         out_nodes.extend(out_nodes[i].children)
         i += 1
     return out_nodes
+
+
+def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
+    """One edge act owns both physical steps and one semantic recording."""
+    release = _Step(inputs={"Cmd": False}, scan_before=10, scan_after=11)
+    pulse = _Step(inputs={"Cmd": True}, scan_before=11, scan_after=13)
+    act = _CommittedAct(
+        steps=(release, pulse),
+        context=_StepContext(
+            candidate={"Cmd": True},
+            motion=MotionKind.INTERVENTION,
+        ),
+    )
+    state = SimpleNamespace(
+        committed_acts=(act,),
+        lever_notes={},
+        hold_log=(),
+        correction_receipts=(),
+    )
+
+    journal = _build_plan_journal(state, None, frozenset(), frozenset())
+
+    assert len(journal) == 1
+    assert journal[0].kind == "command"
+    assert journal[0].scan == 10
+    assert journal[0].scans == 3
+    assert journal[0].inputs == (("Cmd", True),)
 
 
 # ---------------------------------------------------------------------------

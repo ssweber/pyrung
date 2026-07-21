@@ -14,10 +14,12 @@ from pyrung.core.analysis.pilot._ops import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
+    _CommittedAct,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _HoldLogEntry,
     _Step,
+    _StepContext,
 )
 from pyrung.core.runner import PLC
 
@@ -43,6 +45,14 @@ def _shared_gate_program() -> tuple[Program, Bool]:
 
 def _replay(prog: Program, path) -> PLC:
     return path.replay()
+
+
+def _committed_test_act() -> _CommittedAct:
+    step = _Step(inputs={}, scan_before=0, scan_after=10)
+    return _CommittedAct(
+        steps=(step,),
+        context=_StepContext(candidate={}),
+    )
 
 
 def test_shared_gate_premise() -> None:
@@ -76,8 +86,7 @@ def test_shared_gate_journal_retains_hold_values_and_guards() -> None:
     State = Int("State")
     hold = PilotRung("DoorClosed", True, State != 6)
     state = SimpleNamespace(
-        steps=[_Step(inputs={}, scan_before=0, scan_after=10)],
-        step_contexts=[],
+        committed_acts=(_committed_test_act(),),
         lever_notes={},
         hold_log=[
             _HoldLogEntry(
@@ -123,8 +132,7 @@ def test_journal_distinguishes_correction_operation_ownership() -> None:
         return _CorrectionReceipt(receipt_id, (), correction, status)
 
     state = SimpleNamespace(
-        steps=[_Step(inputs={}, scan_before=0, scan_after=10)],
-        step_contexts=[],
+        committed_acts=(_committed_test_act(),),
         lever_notes={},
         hold_log=[
             _HoldLogEntry(scan=2, source="investigation", rungs=(revoked,)),
