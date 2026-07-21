@@ -19,6 +19,7 @@ objects over real PLC forks, which is both deterministic and precise.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -27,7 +28,7 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.detour import DepartureVerdict, Provisional
+from pyrung.core.analysis.pilot.detour import DepartureVerdict
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
@@ -38,11 +39,13 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
+    _anchor_frame_receipt,
     _channel_recovery_origin,
     _deviation_bearing,
     _monitor_trend,
 )
 from pyrung.core.analysis.pilot.types import (
+    PendingDeparture,
     PilotEvent,
     _Checkpoint,
     _CommittedAct,
@@ -131,10 +134,32 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _TrialResult:
     return _TrialResult(**base)
 
 
+def _pending_departure(
+    state: _PilotState,
+    *,
+    progress_mark: tuple[tuple[str, Any], ...] = (),
+    expires_at: int = 2000,
+    opening_progress: GaugeReceipt | None = None,
+) -> PendingDeparture:
+    return PendingDeparture(
+        channel_tag="State",
+        from_value=9,
+        progress_mark=progress_mark,
+        rollback_owner=state.checkpoints[-1].owner,
+        expires_at=expires_at,
+        opening_progress=opening_progress or GaugeReceipt((), (), "unknown"),
+    )
+
+
 def _frame() -> SimpleNamespace:
     return SimpleNamespace(
         snap={},
-        tree=SimpleNamespace(ordered_actions=lambda: []),
+        tree=SimpleNamespace(
+            children=(),
+            satisfied=True,
+            is_steerable=False,
+            ordered_actions=lambda: [],
+        ),
         key=("f",),
         distance_before=5,
     )
@@ -184,7 +209,7 @@ class TestCheckpoints:
         assert state.best_trend == 3  # NOT advanced to the worse frontier trend
         assert len(state.checkpoints) == 1  # pre-frontier checkpoint preserved
 
-    def test_confirmed_route_landing_starts_a_provisional_corridor(self):
+    def test_confirmed_route_landing_keeps_its_source_checkpoint(self):
         state = _make_state(best_trend=2, checkpoints=[_cp(("idle",), _oneshot_plc(), 2)])
         trial = _make_trial(
             15,
@@ -252,7 +277,7 @@ class TestCheckpoints:
 
         origin = _channel_recovery_origin(state, trial, frame, "A", True)
 
-        assert origin.checkpoint_index == 1
+        assert origin.checkpoint_owner is state.checkpoints[1].owner
         assert origin.anchor_scan == entered.state.scan_id
         assert origin.before_snap["A"] is True
         assert "FrameOnly" not in origin.before_snap
@@ -271,22 +296,18 @@ class TestCheckpoints:
 
         origin = _channel_recovery_origin(state, trial, frame, "A", True)
 
-        assert origin.checkpoint_index == 0
+        assert origin.checkpoint_owner is state.checkpoints[0].owner
         assert origin.anchor_scan == trial.scan_before
         assert origin.before_snap == frame.snap
 
 
-def test_banked_ordinary_checkpoint_promotes_the_provisional():
-    """Improved-trend work banked inside a provisional discharges its doubt:
+def test_banked_ordinary_checkpoint_promotes_the_pending_departure():
+    """Improved-trend work banked while pending discharges its doubt:
     the march is real, so a later expiry must never roll it back."""
     state = _make_state(best_trend=5, checkpoints=[_cp(("src",), _oneshot_plc(), 5)])
-    state.provisional = Provisional(
-        channel_tag="State",
-        from_value=9,
-        gauge_at_source=(("Step", 101),),
-        checkpoint_depth=1,
-        started_at=0,
-        expires_at=2000,
+    state.pending_departure = _pending_departure(
+        state,
+        progress_mark=(("Step", 101),),
     )
     trial = _make_trial(3, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
@@ -295,21 +316,18 @@ def test_banked_ordinary_checkpoint_promotes_the_provisional():
 
     assert [e.kind for e in events] == ["trend_checkpoint", "provisional_promoted"]
     assert events[1].data["outcome"] == "banked ordinary progress"
-    assert state.provisional is None
+    assert state.pending_departure is None
     assert len(state.checkpoints) == 2  # the march is kept, nothing collapsed
 
 
-def test_provisional_expiry_without_banked_progress_rolls_back():
-    """A provisional that never earned anything — no gauge advance, no banked
+def test_pending_expiry_without_saved_progress_rolls_back():
+    """A pending departure that never earned anything — no gauge advance, no saved
     checkpoint — expires by rolling back to its boundary without a nogood."""
     checkpoint = _cp(("src",), _oneshot_plc(), 5)
     state = _make_state(best_trend=5, checkpoints=[checkpoint])
-    state.provisional = Provisional(
-        channel_tag="State",
-        from_value=9,
-        gauge_at_source=(("Step", 101),),
-        checkpoint_depth=1,
-        started_at=0,
+    state.pending_departure = _pending_departure(
+        state,
+        progress_mark=(("Step", 101),),
         expires_at=0,  # already past — the attempt is out of budget
     )
     trial = _make_trial(5, Outcome.CONFIRMED)
@@ -318,12 +336,57 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
     events = _monitor_trend(trial, _frame(), state, ctx)
 
     assert [e.kind for e in events] == ["provisional_expired"]
-    assert state.provisional is None
+    assert state.pending_departure is None
     assert len(state.checkpoints) == 1  # rolled back to the boundary
     assert state.best_trend == 5
 
 
-def test_instruction_owned_dwell_does_not_expire_provisional_search_budget():
+def test_pending_expiry_restores_the_current_checkpoint_artifact():
+    """Correction lifecycle may re-key a receipt without changing its owner."""
+    checkpoint = _cp(("source",), _oneshot_plc(), 5)
+    state = _make_state(best_trend=5, checkpoints=[checkpoint])
+    state.pending_departure = _pending_departure(state, expires_at=0)
+    corrected = replace(checkpoint, key=("corrected",), trend=4)
+    state.checkpoints[0] = corrected
+    trial = _make_trial(5, Outcome.CONFIRMED)
+    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+
+    events = _monitor_trend(trial, _frame(), state, ctx)
+
+    assert [event.kind for event in events] == ["provisional_expired"]
+    assert state.checkpoints == [corrected]
+    assert state.best_trend == 4
+
+
+def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
+    rollback = _cp(("source",), _oneshot_plc(), 5)
+    saved = _cp(("saved",), _oneshot_plc(), 4)
+    state = _make_state(best_trend=4, checkpoints=[rollback, saved])
+    state.pending_departure = replace(
+        _pending_departure(state, expires_at=0),
+        rollback_owner=rollback.owner,
+        saved_progress_owner=saved.owner,
+    )
+    frame = _frame()
+    frame.key = saved.key
+    frame.distance_before = 3
+
+    _anchor_frame_receipt(frame, state)
+
+    refreshed = state.checkpoints[-1]
+    assert refreshed is not saved
+    assert refreshed.owner is saved.owner
+    events = _monitor_trend(
+        _make_trial(4, Outcome.CONFIRMED),
+        frame,
+        state,
+        SimpleNamespace(target_tag="State", target_value=17, target_predicate=None),
+    )
+    assert [event.kind for event in events] == ["provisional_expired"]
+    assert state.checkpoints[-1] is refreshed
+
+
+def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
     """Raw timer scans are waiting; only the shared search coordinate expires."""
     work = _oneshot_plc()
     work.run(cycles=100)
@@ -334,12 +397,8 @@ def test_instruction_owned_dwell_does_not_expire_provisional_search_budget():
         work=work,
         dwell_scans=100,
     )
-    state.provisional = Provisional(
-        channel_tag="State",
-        from_value=9,
-        gauge_at_source=(),
-        checkpoint_depth=1,
-        started_at=0,
+    state.pending_departure = _pending_departure(
+        state,
         expires_at=50,
     )
     trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
@@ -349,11 +408,11 @@ def test_instruction_owned_dwell_does_not_expire_provisional_search_budget():
 
     assert all(event.kind != "provisional_expired" for event in events)
     assert state.search_scan == 0
-    assert state.provisional is not None
+    assert state.pending_departure is not None
 
 
-def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
-    """Even expired corridor policy cannot bypass a concrete departure receipt."""
+def test_preserved_departure_while_pending_is_investigated(monkeypatch):
+    """Even expired pending policy cannot bypass a concrete departure receipt."""
     checkpoint = _cp(("source",), _oneshot_plc(), 2)
     trial = _make_trial(
         2,
@@ -364,16 +423,12 @@ def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
         zoom_target_value=17,
     )
     state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
-    state.provisional = Provisional(
-        channel_tag="State",
-        from_value=9,
-        gauge_at_source=(),
-        checkpoint_depth=1,
-        started_at=0,
+    state.pending_departure = _pending_departure(
+        state,
         expires_at=0,
     )
     verdict = DepartureVerdict(
-        verdict="provisional",
+        decision="continue",
         reason="unique clean current",
         settled_fork=trial.fork,
         settled_value=4,
@@ -407,7 +462,7 @@ def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
         "departure_investigated",
     ]
     assert investigated == [verdict]
-    assert state.provisional is not None
+    assert state.pending_departure is not None
     assert state.work is trial.fork
     assert len(state.checkpoints) == 1
 
@@ -443,7 +498,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
     )
     state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
     verdict = DepartureVerdict(
-        verdict="provisional",
+        decision="continue",
         reason="clean prescribed continuation",
         settled_fork=trial.fork,
         settled_value=2,
@@ -479,8 +534,8 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         "letrun_ejection",
         "provisional_started",
     ]
-    assert state.provisional is not None
-    assert state.provisional.entry_progress.effect == "preserved"
+    assert state.pending_departure is not None
+    assert state.pending_departure.opening_progress.effect == "preserved"
 
 
 def _seal_in_regression_inputs():

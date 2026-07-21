@@ -896,7 +896,7 @@ class TestClassifyDepartureRefusal:
             source_snap={"Chan": 1},
         )
 
-        assert verdict.verdict == "unknown"
+        assert verdict.decision == "unknown"
         assert "did not settle within cap" in verdict.reason
         assert "timeout" in verdict.reason
         # The receipt's landing value is still surfaced, just not trusted.

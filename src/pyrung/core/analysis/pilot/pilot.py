@@ -58,9 +58,9 @@ from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
-    _anchor_provisional,
     _install_confirmed_correction,
     _monitor_trend,
+    _record_pending_landing,
 )
 from pyrung.core.analysis.pilot.recording import (
     _accepted_payload,
@@ -632,11 +632,11 @@ def _commit_and_monitor(
 
     Verification already ran inside the steering wrapper and
     ``_record_attempt`` already committed its knowledge. Here the world advances
-    and ``_monitor_trend`` decides checkpoint, provisional continuation, or
+    and ``_monitor_trend`` decides checkpoint, pending continuation, or
     recovery and revert.
     """
     # Capture a satisfied bearing's launch world before commit. Its landing
-    # is provisional until ordinary progress is banked; an Alarm ejection must
+    # remains pending until ordinary progress is banked; an Alarm ejection must
     # replays from this exact source with its PilotRungs, not an older trend CP.
     _anchor_bearing_receipt(trial, frame, state)
 
@@ -869,7 +869,7 @@ def _pilot_loop_events(
     # Each turn reads the current world and builds candidate modes. Every mode
     # executes and verifies on a fork inside steer.py, after which the loop
     # applies its observations. A gate-approved fork is then committed and sent
-    # to progress.py, which may checkpoint it, continue provisionally, or
+    # to progress.py, which may checkpoint it, keep a departure pending, or
     # investigate and revert it. Rejected modes fall through to the next mode in
     # the same turn.
     # The budget charges *searching*, never *waiting*: committed scan-ids minus
@@ -940,7 +940,7 @@ def _pilot_loop_events(
                     frontier=frontier_pairs(frame.tree, frame.snap),
                 )
             )
-        yield from _anchor_provisional(frame, state)
+        yield from _record_pending_landing(frame, state)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
         )

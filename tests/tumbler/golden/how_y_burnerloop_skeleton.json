@@ -577,7 +577,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 9,
   "gauge_at_source": [
    [
@@ -1743,6 +1743,13 @@
    ]
   ],
   "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "terminal": false,
   "trend": 22
  },
  {

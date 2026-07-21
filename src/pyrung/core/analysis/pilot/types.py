@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
+    from pyrung.core.analysis.pilot.gauge import GaugeReceipt
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -157,6 +158,11 @@ class _World(PRecord):
     dwell_scans = _precord_field()
 
 
+@dataclass(frozen=True, eq=False)
+class _CheckpointOwner:
+    """Stable identity for one rollback receipt as its executable world changes."""
+
+
 @dataclass(frozen=True)
 class _Checkpoint:
     """A revert anchor: a *pointer* to a world value plus the facts the launch knew.
@@ -175,6 +181,50 @@ class _Checkpoint:
     world: _World
     trend: int
     frontier: tuple[_ActionPair, ...] = ()
+    owner: _CheckpointOwner = field(
+        default_factory=_CheckpointOwner,
+        compare=False,
+        repr=False,
+    )
+
+
+@dataclass(frozen=True)
+class _RecoveryOrigin:
+    """Exact rollback owner and bounded incident evidence for one recovery."""
+
+    checkpoint_owner: _CheckpointOwner
+    anchor_scan: int
+    before_snap: Mapping[str, Any]
+
+
+class DepartureAction(Enum):
+    """What progress policy should do with an unresolved departure."""
+
+    WAIT = "wait"
+    PROMOTE = "promote"
+    REGRESS = "regress"
+    EXPIRE = "expire"
+
+
+@dataclass(frozen=True)
+class DepartureDecision:
+    """One evidence-based assessment of a pending departure."""
+
+    action: DepartureAction
+    progress: str
+
+
+@dataclass(frozen=True)
+class PendingDeparture:
+    """A clean departure awaiting target-relative progress evidence."""
+
+    channel_tag: str
+    from_value: Any
+    progress_mark: tuple[tuple[str, Any], ...]
+    rollback_owner: _CheckpointOwner
+    expires_at: int
+    opening_progress: GaugeReceipt
+    saved_progress_owner: _CheckpointOwner | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -447,10 +497,10 @@ class _PilotState:
     # built once at loop init; a None/empty gauge degrades consumers (verify
     # spin/cycle gates, departure classification) to key-only behavior.
     gauge: Any = None
-    # A bounded provisional departure. It is promoted when the target-relative
-    # gauge advances, regressed only when that gauge moves behind, and otherwise
+    # A clean program departure awaiting stronger progress evidence. It is
+    # promoted on advance, regressed only on evidence of loss, and otherwise
     # rolled back on expiry without manufacturing a nogood.
-    provisional: Any = None
+    pending_departure: PendingDeparture | None = None
     # Append-only log of every committed step, including attempts later reverted.
     # ``steps`` (the world) is the clean, sequentially-replayable path (restored
     # to the checkpoint's on revert); ``journey`` keeps the full "tried this,

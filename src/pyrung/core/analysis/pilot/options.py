@@ -1013,11 +1013,11 @@ def _build_candidates(
         active_trace_actions = tuple(p for p in active_trace_actions if p in establish_pairs)
         trace_action_details = establish_details
 
-    # Provisional motion is only a fallback compass destination. A live
+    # Pending departure motion is only a fallback compass destination. A live
     # backward trace remains the stronger, more local bearing; this is what lets
     # PILOT finish work at the stopover before taking the proven return edge.
     live_plan = _compass_route_plan(frame, ctx, key_nogoods)
-    if getattr(state, "provisional", None) is not None and active_trace_actions:
+    if getattr(state, "pending_departure", None) is not None and active_trace_actions:
         route_plan = None
     else:
         route_plan = live_plan

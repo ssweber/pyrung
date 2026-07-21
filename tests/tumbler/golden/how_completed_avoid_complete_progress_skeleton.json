@@ -1014,7 +1014,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 9,
   "gauge_at_source": [
    [
@@ -2241,6 +2241,13 @@
    ]
   ],
   "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "terminal": false,
   "trend": 10
  },
  {
@@ -3143,7 +3150,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 6,
   "gauge_at_source": [
    [
@@ -4010,6 +4017,13 @@
    ]
   ],
   "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    103
+   ]
+  ],
+  "terminal": false,
   "trend": 10
  },
  {
@@ -4586,7 +4600,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 6,
   "gauge_at_source": [
    [
@@ -4967,6 +4981,13 @@
    ]
   ],
   "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    107
+   ]
+  ],
+  "terminal": false,
   "trend": 10
  },
  {
@@ -5268,7 +5289,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 6,
   "gauge_at_source": [
    [
@@ -5649,6 +5670,13 @@
    ]
   ],
   "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    109
+   ]
+  ],
+  "terminal": false,
   "trend": 10
  },
  {

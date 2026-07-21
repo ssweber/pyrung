@@ -1,11 +1,11 @@
-"""Retain, provisionally continue, or revert a committed trial world.
+"""Retain, continue, or revert a committed trial world.
 
 After a trial passes verification, this module compares target distance and
 gauge marks, updates checkpoints, and classifies program-owned departures.
 Regression handling builds an incident, replay-validates corrective hypotheses,
 installs at most one surviving correction, and restores the appropriate
-checkpoint. Provisional motion is bounded and is promoted or rolled back from
-later gauge evidence.
+checkpoint. A clean departure may remain pending until later gauge evidence
+promotes it or requires rollback.
 
 This is the owner of post-commit recovery policy, not trial execution or local
 gate acceptance.
@@ -14,7 +14,7 @@ gate acceptance.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 from pyrsistent import pvector
@@ -31,7 +31,6 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
     DepartureVerdict,
-    Provisional,
     classify_departure,
 )
 from pyrung.core.analysis.pilot.investigate import (
@@ -54,32 +53,41 @@ from pyrung.core.analysis.pilot.outcome import (
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached
 from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
+    DepartureAction,
+    DepartureDecision,
     MotionKind,
+    PendingDeparture,
     PilotEvent,
     _ActionPair,
     _Checkpoint,
+    _CheckpointOwner,
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
     _PilotState,
+    _RecoveryOrigin,
     _Step,
     _StepContext,
     _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
-_PROVISIONAL_SCAN_BUDGET = 2000
+_PENDING_DEPARTURE_SCAN_BUDGET = 2000
 
 
-@dataclass(frozen=True)
-class _RecoveryOrigin:
-    """Checkpoint owner and bounded incident evidence for one recovery."""
+def _checkpoint_index(state: _PilotState, owner: _CheckpointOwner) -> int:
+    """Locate an exact checkpoint owner in the current rollback stack."""
+    for index, checkpoint in enumerate(state.checkpoints):
+        if checkpoint.owner is owner:
+            return index
+    raise ValueError("recovery checkpoint is no longer owned by this world")
 
-    checkpoint_index: int
-    anchor_scan: int
-    before_snap: Mapping[str, Any]
+
+def _refresh_checkpoint(existing: _Checkpoint, receipt: _Checkpoint) -> _Checkpoint:
+    """Refresh one stack slot without transferring its rollback ownership."""
+    return replace(receipt, owner=existing.owner)
 
 
 def _checkpoint_recovery_origin(
@@ -92,7 +100,7 @@ def _checkpoint_recovery_origin(
     checkpoint_index %= len(state.checkpoints)
     checkpoint = state.checkpoints[checkpoint_index]
     return _RecoveryOrigin(
-        checkpoint_index=checkpoint_index,
+        checkpoint_owner=checkpoint.owner,
         anchor_scan=checkpoint.world.work.state.scan_id,
         before_snap=dict(checkpoint.world.work.state.tags if before_snap is None else before_snap),
     )
@@ -134,7 +142,7 @@ def _channel_recovery_origin(
         or not _values_match(checkpoint_snap.get(channel_tag), channel_value)
     )
     return _RecoveryOrigin(
-        checkpoint_index=index,
+        checkpoint_owner=checkpoint.owner,
         anchor_scan=(
             checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
         ),
@@ -161,16 +169,22 @@ def _monitor_trend(
             trial.before_snap.get(trial.zoom_channel_tag),
         )
     )
-    # A provisional attempt changes only the rollback boundary. Every trial
-    # inside it still passes through the ordinary trend,
+    # A pending departure changes only the rollback boundary. Every trial inside
+    # it still passes through the ordinary trend,
     # regression, investigation, and retry machinery below. In particular, an
     # exact coast-departure receipt outranks the corridor's fallback expiry:
-    # investigation owns that observed operation before provisional lifetime
+    # investigation owns that observed operation before pending lifetime
     # policy may discard it.
-    if state.provisional is not None and not channel_ejection:
-        settlement = _finish_provisional(trial, frame, state, ctx)
-        if settlement is not None:
-            return settlement
+    if state.pending_departure is not None and not channel_ejection:
+        applied = _apply_departure_decision(
+            _assess_pending_departure(trial, state, ctx),
+            trial,
+            frame,
+            state,
+            ctx,
+        )
+        if applied is not None:
+            return applied
 
     if trial.new_key is None or trial.trend is None:
         return ()
@@ -235,10 +249,10 @@ def _monitor_trend(
         # preserves the progress gauge and offers a clean forward route —
         # reverting it would throw away the whole march, and investigation
         # would honestly confirm nothing. Affirmative clean-route evidence opens
-        # bounded provisional piloting; regression or unknown evidence follows
+        # bounded pending piloting; regression or unknown evidence follows
         # the conservative investigate-and-revert arm.
         verdict = classify_departure(state, ctx, chan, departed_from, trial.before_snap)
-        if verdict.is_provisional:
+        if verdict.can_continue:
             prescribed_departure = (
                 trial.route_prescribed
                 and trial.assessment is not None
@@ -255,7 +269,7 @@ def _monitor_trend(
                 # ambient.
                 #
                 # This decision is occurrence-local. An already-open
-                # provisional corridor changes only the rollback boundary; it
+                # pending state changes only the rollback boundary; it
                 # must not suppress understanding the same physical departure.
                 # Investigation therefore runs before retention in both cases.
                 origin = _channel_recovery_origin(
@@ -276,15 +290,15 @@ def _monitor_trend(
                         retain_if_unresolved=verdict,
                     ),
                 )
-            if state.provisional is None:
+            if state.pending_departure is None:
                 return (
                     ejection,
-                    *_start_provisional(verdict, trial, state, ctx, chan),
+                    *_open_pending_departure(verdict, trial, state, ctx, chan),
                 )
             # A clean program-owned departure inside an existing bounded
             # attempt that earned work (or fulfilled an explicitly prescribed
             # channel transaction) is ordinary piloting. Keep the original
-            # rollback boundary and budget; do not nest another provisional.
+            # rollback boundary and budget; do not nest another pending departure.
             return (ejection,)
         origin = _channel_recovery_origin(
             state,
@@ -309,7 +323,7 @@ def _monitor_trend(
     # the source world is meaningless: Idle may be two leaves from Start,
     # while the expected Starting landing exposes fifteen production
     # prerequisites. Reset the trend baseline, but keep the source checkpoint
-    # as the outer rollback receipt. The landing is provisional until ordinary
+    # as the outer rollback receipt. The landing remains pending until ordinary
     # progress banks a checkpoint; if later motion ejects into Alarm,
     # investigation must replay the action itself so it can discover the
     # missing hold and retry from the corrected PilotRungs world.
@@ -335,6 +349,27 @@ def _monitor_trend(
         )
 
     if trial.trend < state.best_trend:
+        if state.pending_departure is not None:
+            promoted = _apply_departure_decision(
+                DepartureDecision(DepartureAction.PROMOTE, "banked ordinary progress"),
+                trial,
+                frame,
+                state,
+                ctx,
+            )
+            assert promoted is not None
+            return (
+                PilotEvent(
+                    "trend_checkpoint",
+                    state.work.state.scan_id,
+                    {
+                        "trend": state.best_trend,
+                        "key": trial.new_key,
+                        "checkpoint_count": len(state.checkpoints),
+                    },
+                ),
+                *promoted,
+            )
         state.checkpoints.append(
             _Checkpoint(
                 trial.new_key,
@@ -353,29 +388,6 @@ def _monitor_trend(
                 "checkpoint_count": len(state.checkpoints),
             },
         )
-        # "The landing is provisional until ordinary progress banks a
-        # checkpoint" — this is that checkpoint.  Banked improved-trend work
-        # discharges the open provisional's doubt: the march is real, so its
-        # expiry must never roll it back.  Bearing receipts and the settled
-        # anchor never take this path; only earned progress promotes.
-        if state.provisional is not None:
-            provisional: Provisional = state.provisional
-            state.provisional = None
-            return (
-                checkpoint_event,
-                PilotEvent(
-                    "provisional_promoted",
-                    state.work.state.scan_id,
-                    {
-                        "channel_tag": provisional.channel_tag,
-                        "from_value": provisional.from_value,
-                        "gauge_at_source": provisional.gauge_at_source,
-                        "outcome": "banked ordinary progress",
-                        "trend": state.best_trend,
-                        "checkpoint_count": len(state.checkpoints),
-                    },
-                ),
-            )
         return (checkpoint_event,)
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
@@ -438,7 +450,7 @@ def _anchor_frame_receipt(frame: _IterationFrame, state: _PilotState) -> int:
         frontier_pairs(frame.tree, frame.snap),
     )
     if state.checkpoints and state.checkpoints[-1].key == key:
-        state.checkpoints[-1] = receipt
+        state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
     else:
         state.checkpoints.append(receipt)
     return len(state.checkpoints) - 1
@@ -463,36 +475,36 @@ def _anchor_bearing_receipt(
     _anchor_frame_receipt(frame, state)
 
 
-def _start_provisional(
-    verdict: Any,
+def _open_pending_departure(
+    verdict: DepartureVerdict,
     trial: _TrialResult,
     state: _PilotState,
     ctx: _PilotContext,
     chan: str,
 ) -> tuple[PilotEvent, ...]:
-    """Open a bounded provisional attempt at the settled landing."""
+    """Record a clean departure whose progress is not yet conclusive."""
     gauge = state.gauge
     # The exact pre-coast world remains the replay/rollback receipt. The
-    # provisional gauge starts at the observed departure world so work already
+    # pending progress mark starts at the observed departure world so work already
     # earned during the coast is not counted a second time as side-motion
     # progress (e.g. 101->103 must not prematurely promote before 103->105).
-    gauge_at_source = (
+    progress_mark = (
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
     departed_from = trial.before_snap.get(chan)
     _adopt_settled_departure(verdict, state)
     search_scan = state.search_scan
-    state.provisional = Provisional(
+    state.pending_departure = PendingDeparture(
         channel_tag=chan,
         from_value=departed_from,
-        gauge_at_source=gauge_at_source,
-        checkpoint_depth=len(state.checkpoints),
-        started_at=search_scan,
-        expires_at=min(ctx.max_scans, search_scan + _PROVISIONAL_SCAN_BUDGET),
-        entry_progress=verdict.progress,
+        progress_mark=progress_mark,
+        rollback_owner=state.checkpoints[-1].owner,
+        expires_at=min(ctx.max_scans, search_scan + _PENDING_DEPARTURE_SCAN_BUDGET),
+        opening_progress=verdict.progress,
     )
     return (
         PilotEvent(
+            # Stable diagnostic vocabulary retained for existing consumers.
             "provisional_started",
             state.work.state.scan_id,
             {
@@ -503,20 +515,20 @@ def _start_provisional(
                 "reason": verdict.reason,
                 "route": verdict.route,
                 "settle_scans": verdict.settle_scans,
-                "gauge_at_source": gauge_at_source,
+                "gauge_at_source": progress_mark,
                 "entry_progress": verdict.progress,
-                "classification": verdict.verdict,
+                "classification": verdict.decision,
             },
         ),
     )
 
 
 def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> int:
-    """Adopt the classifier's settled landing without changing corridor policy.
+    """Adopt the classifier's settled landing without changing pending policy.
 
-    Settlement is evidence shared by both a newly-opened provisional and an
-    already-open corridor that retained an unresolved departure.  Keeping this
-    operation separate prevents ``_start_provisional`` from becoming the only
+    Settlement is evidence shared by both a newly-opened pending departure and
+    an already-open one that retained an unresolved departure. Keeping this
+    operation separate prevents ``_open_pending_departure`` from becoming the only
     way to consume the settled fork.
     Returns the scan at which adoption began.
     """
@@ -534,15 +546,14 @@ def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> i
     return scan_before
 
 
-def _bank_provisional_landing(trial: _TrialResult, state: _PilotState) -> None:
-    """Keep a local recovery receipt inside an existing provisional corridor.
+def _bank_pending_landing(trial: _TrialResult, state: _PilotState) -> None:
+    """Keep a local recovery receipt inside an existing pending departure.
 
     Retaining an investigated departure is not evidence of earned target
-    progress, so this does not move ``best_trend`` or close the corridor.  It
+    progress, so this does not move ``best_trend`` or close the pending state. It
     records the actual first landing solely as the rollback/incident anchor for
-    the next recomputed operation.  Provisional promotion or expiry already
-    trims checkpoints at ``checkpoint_depth``, so the receipt cannot escape the
-    corridor that owns it.
+    the next recomputed operation. Promotion or expiry restores the exact
+    checkpoint receipts owned by ``PendingDeparture``.
     """
     if trial.new_key is None or trial.trend is None:
         return
@@ -553,59 +564,60 @@ def _bank_provisional_landing(trial: _TrialResult, state: _PilotState) -> None:
         trial.frontier,
     )
     if state.checkpoints and state.checkpoints[-1].key == trial.new_key:
-        state.checkpoints[-1] = receipt
+        state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
     else:
         state.checkpoints.append(receipt)
 
 
-def _anchor_provisional(
+def _record_pending_landing(
     frame: _IterationFrame,
     state: _PilotState,
 ) -> tuple[PilotEvent, ...]:
-    """Assess a newly settled provisional world before choosing another act."""
-    provisional = state.provisional
+    """Record the first recomputed world after opening a pending departure."""
+    pending = state.pending_departure
     if (
-        provisional is None
-        or provisional.entry_banked
-        or len(state.checkpoints) != provisional.checkpoint_depth
+        pending is None
+        or pending.saved_progress_owner is not None
+        or not state.checkpoints
+        or state.checkpoints[-1].owner is not pending.rollback_owner
     ):
         return ()
     gauge = state.gauge
-    outcome = provisional.entry_progress.effect
+    outcome = pending.opening_progress.effect
     if outcome not in {"advanced", "behind"}:
         outcome = (
-            gauge.compare(dict(provisional.gauge_at_source), frame.snap)
+            gauge.compare(dict(pending.progress_mark), frame.snap)
             if gauge is not None and gauge.components
             else "unknown"
         )
+    receipt = _Checkpoint(
+        frame.key,
+        state.snapshot_world(),
+        frame.distance_before,
+        frontier_pairs(frame.tree, frame.snap),
+    )
+    state.checkpoints.append(receipt)
+    state.best_trend = frame.distance_before
     if outcome == "advanced":
-        state.checkpoints.append(
-            _Checkpoint(
-                frame.key,
-                state.snapshot_world(),
-                frame.distance_before,
-                frontier_pairs(frame.tree, frame.snap),
-            )
-        )
-        state.best_trend = frame.distance_before
         landing_mark = gauge.mark(frame.snap) if gauge is not None else ()
-        # Bank the work without closing the corridor.  The Held checkpoint is
-        # now the rollback floor, while the provisional still gives the next
+        # Save the work without closing the pending departure. The Held
+        # checkpoint is now the rollback floor, while pending state gives the next
         # Unhold/rejoin transaction its ordinary local recovery semantics.
-        state.provisional = replace(
-            provisional,
-            gauge_at_source=landing_mark,
-            entry_banked=True,
+        state.pending_departure = replace(
+            pending,
+            progress_mark=landing_mark,
+            saved_progress_owner=receipt.owner,
         )
         return (
             PilotEvent(
+                # Stable diagnostic vocabulary retained for existing consumers.
                 "provisional_promoted",
                 state.work.state.scan_id,
                 {
-                    "channel_tag": provisional.channel_tag,
-                    "from_value": provisional.from_value,
-                    "gauge_at_source": provisional.gauge_at_source,
-                    "entry_progress": provisional.entry_progress,
+                    "channel_tag": pending.channel_tag,
+                    "from_value": pending.from_value,
+                    "gauge_at_source": pending.progress_mark,
+                    "entry_progress": pending.opening_progress,
                     "landing_mark": landing_mark,
                     "trend": frame.distance_before,
                     "checkpoint_count": len(state.checkpoints),
@@ -613,32 +625,23 @@ def _anchor_provisional(
                 },
             ),
         )
-    state.checkpoints.append(
-        _Checkpoint(
-            frame.key,
-            state.snapshot_world(),
-            frame.distance_before,
-            frontier_pairs(frame.tree, frame.snap),
-        )
-    )
-    state.best_trend = frame.distance_before
     return ()
 
 
-def _finish_provisional(
+def _assess_pending_departure(
     trial: _TrialResult,
-    frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-) -> tuple[PilotEvent, ...] | None:
-    """Settle provisional motion from observed progress, never value return.
+) -> DepartureDecision:
+    """Decide a pending departure from current progress evidence.
 
     Advanced promotes immediately. Behind is a proven regression and enters
     the ordinary investigation/revert arm. Preserved or incomparable evidence
-    may continue until the bounded attempt expires; expiration rolls back but
+    waits until the bounded attempt expires; expiration rolls back but
     creates no regression nogood.
     """
-    provisional: Provisional = state.provisional
+    pending = state.pending_departure
+    assert pending is not None
     now_snap = trial.fork_snap or {}
     reached = target_reached(
         now_snap,
@@ -647,7 +650,7 @@ def _finish_provisional(
         ctx.target_predicate,
     )
     gauge = state.gauge
-    anchor = dict(provisional.gauge_at_source)
+    anchor = dict(pending.progress_mark)
     outcome = (
         gauge.compare(anchor, now_snap) if gauge is not None and gauge.components else "unknown"
     )
@@ -663,9 +666,36 @@ def _finish_provisional(
     ):
         outcome = "behind"
     if outcome == "advanced" or reached:
-        state.provisional = None
-        # Collapse all provisional checkpoints into the promoted rejoin.
-        del state.checkpoints[provisional.checkpoint_depth :]
+        return DepartureDecision(DepartureAction.PROMOTE, outcome)
+    if outcome == "behind":
+        return DepartureDecision(DepartureAction.REGRESS, outcome)
+    if state.search_scan < pending.expires_at:
+        return DepartureDecision(DepartureAction.WAIT, outcome)
+    return DepartureDecision(DepartureAction.EXPIRE, outcome)
+
+
+def _apply_departure_decision(
+    decision: DepartureDecision,
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> tuple[PilotEvent, ...] | None:
+    """Apply one assessment to the exact receipts owned by pending state."""
+    pending = state.pending_departure
+    assert pending is not None
+    if decision.action is DepartureAction.WAIT:
+        return None
+
+    state.pending_departure = None
+    rollback_index = _checkpoint_index(state, pending.rollback_owner)
+    saved_progress = (
+        state.checkpoints[_checkpoint_index(state, pending.saved_progress_owner)]
+        if pending.saved_progress_owner is not None
+        else None
+    )
+    del state.checkpoints[rollback_index + 1 :]
+    if decision.action is DepartureAction.PROMOTE:
         promoted_trend = trial.trend if trial.trend is not None else 0
         if trial.new_key is not None:
             state.checkpoints.append(
@@ -679,38 +709,33 @@ def _finish_provisional(
         state.best_trend = promoted_trend
         return (
             PilotEvent(
+                # Stable diagnostic vocabulary retained for existing consumers.
                 "provisional_promoted",
                 state.work.state.scan_id,
                 {
-                    "channel_tag": provisional.channel_tag,
-                    "from_value": provisional.from_value,
-                    "gauge_at_source": provisional.gauge_at_source,
-                    "landing_mark": gauge.mark(now_snap) if gauge is not None else (),
+                    "channel_tag": pending.channel_tag,
+                    "from_value": pending.from_value,
+                    "gauge_at_source": pending.progress_mark,
+                    "landing_mark": (
+                        state.gauge.mark(trial.fork_snap) if state.gauge is not None else ()
+                    ),
+                    "outcome": decision.progress,
                     "trend": promoted_trend,
                     "checkpoint_count": len(state.checkpoints),
                     "terminal": trial.new_key is None,
                 },
             ),
         )
-    if outcome not in {"behind"} and state.search_scan < provisional.expires_at:
-        return None
-
-    state.provisional = None
-    banked_checkpoint = (
-        state.checkpoints[provisional.checkpoint_depth]
-        if provisional.entry_banked and len(state.checkpoints) > provisional.checkpoint_depth
-        else None
-    )
-    del state.checkpoints[provisional.checkpoint_depth :]
-    if outcome == "behind":
+    if decision.action is DepartureAction.REGRESS:
         event = PilotEvent(
+            # Stable diagnostic vocabulary retained for existing consumers.
             "provisional_regressed",
             state.work.state.scan_id,
             {
-                "channel_tag": provisional.channel_tag,
-                "from_value": provisional.from_value,
-                "outcome": outcome,
-                "gauge_at_source": provisional.gauge_at_source,
+                "channel_tag": pending.channel_tag,
+                "from_value": pending.from_value,
+                "outcome": decision.progress,
+                "gauge_at_source": pending.progress_mark,
             },
         )
         regression = _investigate_and_revert(
@@ -722,20 +747,22 @@ def _finish_provisional(
         )
         return (event, *regression)
 
-    if banked_checkpoint is not None:
-        state.checkpoints.append(banked_checkpoint)
+    assert decision.action is DepartureAction.EXPIRE
+    if saved_progress is not None:
+        state.checkpoints.append(saved_progress)
     checkpoint = state.checkpoints[-1]
     state.load_world(checkpoint.world)
     state.best_trend = checkpoint.trend
     return (
         PilotEvent(
+            # Stable diagnostic vocabulary retained for existing consumers.
             "provisional_expired",
             state.work.state.scan_id,
             {
-                "channel_tag": provisional.channel_tag,
-                "from_value": provisional.from_value,
-                "outcome": outcome,
-                "gauge_at_source": provisional.gauge_at_source,
+                "channel_tag": pending.channel_tag,
+                "from_value": pending.from_value,
+                "outcome": decision.progress,
+                "gauge_at_source": pending.progress_mark,
             },
         ),
     )
@@ -1028,7 +1055,7 @@ def _investigate_and_revert(
     ejection may anchor at the coast start. The origin owns that distinction;
     recovery derives the end from the committed world it is about to revert.
     """
-    checkpoint_index = origin.checkpoint_index
+    checkpoint_index = _checkpoint_index(state, origin.checkpoint_owner)
     checkpoint = state.checkpoints[checkpoint_index]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
@@ -1180,7 +1207,7 @@ def _investigate_and_revert(
         # The departure earned no gauge credit, but investigation also found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary
-        # bounded provisional loan. If a corridor is already open, retain its
+        # bounded pending window. If one is already open, retain its
         # original rollback boundary, budget, and the actual first observed
         # landing. The classifier's later quiescent fork is evidence, not
         # permission to skip the next recomputation point.
@@ -1196,12 +1223,12 @@ def _investigate_and_revert(
                 "investigation": investigation_payload,
             },
         )
-        if state.provisional is not None:
-            _bank_provisional_landing(trial, state)
+        if state.pending_departure is not None:
+            _bank_pending_landing(trial, state)
             return (retained,)
         return (
             retained,
-            *_start_provisional(
+            *_open_pending_departure(
                 retain_if_unresolved,
                 trial,
                 state,
@@ -1229,15 +1256,13 @@ def _investigate_and_revert(
         ctx.compass, _ = ctx.compass.apply(
             tuple(ActionNogoodObservation(cp_key, ("pair", pair)) for pair in regression_nogoods)
         )
-    # A regression inside provisional motion returns to its local checkpoint
+    # A regression inside pending motion returns to its local checkpoint
     # and keeps the bounded attempt open. Only an outer revert ends it.
-    if state.provisional is not None:
-        local_checkpoint = (
-            len(state.checkpoints) > state.provisional.checkpoint_depth
-            and checkpoint is state.checkpoints[-1]
-        )
+    if state.pending_departure is not None:
+        rollback_index = _checkpoint_index(state, state.pending_departure.rollback_owner)
+        local_checkpoint = checkpoint_index > rollback_index
         if not local_checkpoint:
-            state.provisional = None
+            state.pending_departure = None
     # Later checkpoints are target-progress receipts inside the departed
     # channel tenure. Once the incident requires a correction/revert, they no
     # longer describe an executable clean world; return to the tenure owner.

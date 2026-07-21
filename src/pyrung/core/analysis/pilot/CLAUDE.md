@@ -65,21 +65,21 @@ rejection therefore requires a complete finite domain, such as Bool, prover
 `trace._writer_guard_verdict`, which checks domain completeness first.
 
 Failure to make progress is not proof that a transition is impossible.
-Provisional expiry rolls the world back without creating a nogood.
+Pending-departure expiry rolls the world back without creating a nogood.
 
 ### Bound loops and name failures
 
 Every repeated activity must either consume a finite budget or accumulate
 durable knowledge that prevents byte-identical repetition.
 
-- `max_scans` and provisional lifetimes use the same committed `search_scan`
+- `max_scans` and pending-departure lifetimes use the same committed `search_scan`
   coordinate. Accepted instruction-owned coast dwell is credited separately
   and cannot expire either bound.
 - Skiff retries use a per-world-key budget and continue only when
   `Compass.apply` reports new knowledge.
-- Provisional program motion has a finite scan budget and a saved rollback
+- Pending program motion has a finite scan budget and exact rollback
   boundary.
-- Revert cycles outside provisional motion currently rely on accumulating
+- Revert cycles outside pending departure motion currently rely on accumulating
   nogoods or installed corrections rather than a separate counter.
 
 A terminal result must name the outstanding frontier when one can be read.
@@ -122,7 +122,7 @@ should consume the first owner's result.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
    attempts, before any further orientation.
 5. An accepted fork is committed and `progress.py` decides retention,
-   provisional continuation, investigation, or revert.
+   pending continuation, investigation, or revert.
 6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
    exhaustion mark are applied before orientation runs again.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
@@ -138,7 +138,7 @@ knowledge that must survive:
 
 - `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
   dwell accounting.
-- `_PilotState` orchestration knowledge: seen keys, checkpoints, provisional
+- `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
   recovery, gauge, correction receipts/revocations, and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
   budgets/declines, coast receipts, and static-edge evidence overlays.
@@ -149,11 +149,18 @@ knowledge that must survive:
 changes, it returns the same object. Runtime instruments return
 `CompassObservation` values and do not mutate the compass themselves.
 
-`Provisional` is a bounded recovery lease, not a second truth system or an
-exemption from ordinary recovery. `TrialAssessment` and gauge receipts carry
-the evidence; every observed unexpected departure still enters the same
-incident, investigation, correction, and retry lifecycle before lease expiry
-or retention policy is considered.
+`PendingDeparture` records a clean program departure whose progress is not yet
+conclusive. It names the stable owner of its rollback checkpoint, the owner of
+an optional saved-progress checkpoint, and a finite search-scan deadline.
+Correction install/revoke may replace a checkpoint's executable artifact but
+must preserve that owner. `TrialAssessment` and
+gauge receipts carry the evidence; every observed unexpected departure still
+enters the same incident, investigation, correction, and retry lifecycle before
+pending policy is considered. `progress.py` first returns a plain
+`DepartureDecision` (wait, promote, regress, or expire), then applies that
+decision to the receipts owned by the pending record. The retained
+`provisional_*` event names are compatibility vocabulary only; they do not name
+an internal state or policy.
 
 ## Soundness and behavior invariants
 
@@ -278,7 +285,7 @@ or retention policy is considered.
 
 - `verify.py` — avoid, target, spin, cycle, dead-end, and outcome gates.
 - `outcome.py` — agency, bearing, progress, and frontier evidence.
-- `progress.py` — checkpoints, provisional motion, regression recovery,
+- `progress.py` — checkpoints, pending departures, regression recovery,
   correction installation, and reverts.
 - `detour.py` — channel-departure classification for progress handling.
 - `gauge.py` — conservative target-relative earned-work marks and reset

@@ -296,7 +296,7 @@ def test_compass_contradict_falsifies_seeded_edge():
 def test_compass_apply_identity_on_no_new_knowledge():
     """Byte-identical re-application returns the same object with changed=False.
 
-    Loop termination outside provisional motion hinges on ``Compass.apply``
+    Loop termination outside pending departure motion hinges on ``Compass.apply``
     reporting ``changed`` truthfully — skiff retries continue only when new
     knowledge arrives.  A spurious ``changed=True`` on repeated observations
     would turn bounded searches unbounded, so identity return is a liveness

@@ -359,7 +359,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "provisional",
+  "classification": "continue",
   "from_value": 9,
   "gauge_at_source": [
    [

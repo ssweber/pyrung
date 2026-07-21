@@ -1,4 +1,4 @@
-"""PILOT gate: a program departure remains ordinary provisional piloting.
+"""PILOT gate: a pending program departure remains ordinary piloting.
 
 The shape (a miniature of the real tumbler's HoldForSheet handshake):
 
@@ -11,13 +11,13 @@ The shape (a miniature of the real tumbler's HoldForSheet handshake):
   door and advances the recipe from 103 to 105;
 * the clean route supplies ``C_Unhold``. Trying it with the door open enters
   Unholding, latches ``DoorAlarm``, and regresses to Aborted;
-* ordinary investigation from the provisional HELD checkpoint learns the
+* ordinary investigation from the pending HELD checkpoint learns the
   corrective closed-door rung, reverts locally, and retries the same route;
 * with the door closed through Unholding, the detour rejoins Execute and works.
 
 The gate proves there is no second detour controller: normal candidate,
 VERIFY, regression, investigation, PilotRung, checkpoint, and retry mechanics
-remain active while the program departure is provisional.
+remain active while the program departure is pending.
 
 The fixture reuses the armed opaque-loop / constant-mask-table skeleton of
 ``test_pilot_table_detour.py`` (the plain-copy sibling never arms the compass
@@ -467,7 +467,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     events = []
     last_committed = {}
     departures = []
-    provisional_step = None
+    pending_step = None
     later_build = None
     later_candidates = None
     later_prerequisite_rungs = ()
@@ -487,8 +487,8 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
         elif event.kind == "letrun_ejection":
             departures.append((len(events) - 1, dict(last_committed)))
         elif event.kind == "provisional_started":
-            provisional_step = last_committed.get(tags["Step"].name)
-        elif event.kind == "candidates_built" and provisional_step == 103:
+            pending_step = last_committed.get(tags["Step"].name)
+        elif event.kind == "candidates_built" and pending_step == 103:
             later_build = event.data
             later_candidates = event.data["candidates"]
             later_prerequisite_rungs = event.data["prerequisite_rungs"]
@@ -548,7 +548,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     assert all(candidate["tag"] != tags["C_Complete"].name for candidate in later_candidates)
 
 
-def test_provisional_departure_keeps_the_ordinary_pilot_loop_active() -> None:
+def test_pending_departure_keeps_the_ordinary_pilot_loop_active() -> None:
     """PILOT reaches Completed through the HELD door cycle.
 
     The route first falsifies open-door Unholding, ordinary investigation

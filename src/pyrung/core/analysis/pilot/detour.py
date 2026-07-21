@@ -2,9 +2,9 @@
 
 ``classify_departure`` settles the landing under the active holds, compares
 target-relative gauge evidence, and inspects static routes for reset boundaries
-or already-discharged actions that would have to be repeated. It returns
-provisional motion only when a clean continuation is supported, regression
-when earned work is known to have moved backward, and unknown otherwise.
+or already-discharged actions that would have to be repeated. It permits
+continued motion only when a clean continuation is supported, reports regression
+when earned work moved backward, and returns unknown otherwise.
 
 The returned route evidence is not retained as a plan. ``progress.py`` is the
 consumer and applies the conservative policy for unknown departures.
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 class DepartureVerdict:
     """The classification of one channel departure, with its receipts."""
 
-    verdict: str  # "provisional" | "unknown" | "regression"
+    decision: str  # "continue" | "unknown" | "regression"
     reason: str
     settled_fork: Any  # PLC — the settled landing (pilot rungs active)
     settled_value: Any
@@ -49,30 +49,10 @@ class DepartureVerdict:
     progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
 
     @property
-    def is_provisional(self) -> bool:
+    def can_continue(self) -> bool:
         # Unknown is an epistemic classification, not permission to wander.
         # Operationally it follows the conservative rollback/investigation arm.
-        return self.verdict == "provisional"
-
-
-@dataclass(frozen=True)
-class Provisional:
-    """A bounded attempt awaiting target-relative progress evidence.
-
-    ``gauge_at_source`` is captured at the observed settled landing.
-    ``checkpoint_depth`` identifies the exact rollback boundary. ``started_at``
-    and ``expires_at`` use PILOT's search-scan coordinate, so instruction-owned
-    waiting does not consume the bounded exploration lifetime.
-    """
-
-    channel_tag: str
-    from_value: Any
-    gauge_at_source: tuple[tuple[str, Any], ...]
-    checkpoint_depth: int
-    started_at: int
-    expires_at: int
-    entry_progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
-    entry_banked: bool = False
+        return self.decision == "continue"
 
 
 def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastReceipt]:
@@ -178,7 +158,7 @@ def classify_departure(
         else GaugeReceipt((), (), "unknown")
     )
 
-    def _v(verdict: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
+    def _v(decision: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
         logger.debug(
             "departure: %s %r->%r (%d settle scans, %s): %s; %s",
             channel_tag,
@@ -186,11 +166,11 @@ def classify_departure(
             settled_value,
             settle_scans,
             receipt.stop_reason,
-            verdict,
+            decision,
             reason,
         )
         return DepartureVerdict(
-            verdict=verdict,
+            decision=decision,
             reason=reason,
             settled_fork=fork,
             settled_value=settled_value,
@@ -244,7 +224,7 @@ def classify_departure(
     saw_graph = any(graph.role.channel_tag == channel_tag for graph in graphs)
     if isinstance(continuation, Reachable):
         return _v(
-            "provisional",
+            "continue",
             "constrained navigation evidence has a clean forward continuation "
             "(no reset, no resurrected obligation)",
         )
@@ -279,7 +259,7 @@ def classify_departure(
     )
     if len(legal_readings) == 1:
         current = legal_readings[0]
-        return _v("provisional", current.note, current.to_state, (settled_value,))
+        return _v("continue", current.note, current.to_state, (settled_value,))
     return _v(
         "unknown",
         "no clean route is currently proven"
