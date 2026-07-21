@@ -588,6 +588,32 @@ class _PulseState:
 
 
 @dataclass(frozen=True)
+class _AttemptIntent:
+    """Navigation's declared act and the policy verification must preserve."""
+
+    action_pairs: tuple[_ActionPair, ...] = ()
+    applied: tuple[_ActionPair, ...] = ()
+    observe_label: str = "accept"
+    target_observe_label: str = "target"
+    influence_prescribed: bool = False
+    route_prescribed: bool = False
+    nogood_pair: _ActionPair | None = None
+    regression_nogoods: frozenset[_ActionPair] = frozenset()
+    chase_regression_causes: bool = True
+    channel_tag: str | None = None
+    channel_target: Any = None
+    motion: MotionKind = MotionKind.INTERVENTION
+
+
+@dataclass(frozen=True)
+class _ExecutedAttempt:
+    """One declared attempt paired with the exact physical evidence it produced."""
+
+    pulse: _PulseState
+    intent: _AttemptIntent
+
+
+@dataclass(frozen=True)
 class _TrialResult:
     fork: PLC
     scan_before: int

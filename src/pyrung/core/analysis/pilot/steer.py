@@ -46,7 +46,9 @@ from pyrung.core.analysis.pilot.types import (
     MotionKind,
     PilotGateEvent,
     _ActionPair,
+    _AttemptIntent,
     _AttemptResult,
+    _ExecutedAttempt,
     _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
@@ -302,22 +304,12 @@ def _compass_observations(
 
 
 def _try_action_batch(
-    action_pairs: tuple[_ActionPair, ...],
-    applied: tuple[_ActionPair, ...],
+    intent: _AttemptIntent,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
     *,
-    observe_label: str,
-    target_observe_label: str,
-    influence_prescribed: bool,
-    route_prescribed: bool,
-    nogood_pair: _ActionPair | None,
-    regression_nogoods: frozenset[_ActionPair],
-    chase_regression_causes: bool,
     record_influence_action: Action | None = None,
-    bearing_channel_tag: str | None = None,
-    bearing_channel_value: Any = None,
 ) -> _AttemptResult:
     # ── Action gate (avoid=) ──────────────────────────────────────────────
     # Before the pulse: a candidate whose overlaid action makes the avoid
@@ -327,18 +319,20 @@ def _try_action_batch(
     # the predicate.  nogood the choice so the next iteration stops surfacing it
     # (candidates filters nogoods), and record the names so the terminal decline
     # can point at what excluded the path.
-    avoid_names = _avoid_violations(ctx, applied, frame.snap)
+    avoid_names = _avoid_violations(ctx, intent.applied, frame.snap)
     if avoid_names:
         return _AttemptResult(
             trial=None,
             gate_events=(
                 PilotGateEvent("avoid", f"action would enter avoid: {', '.join(avoid_names)}"),
             ),
-            nogood_pairs=frozenset({nogood_pair}) if nogood_pair is not None else frozenset(),
+            nogood_pairs=(
+                frozenset({intent.nogood_pair}) if intent.nogood_pair is not None else frozenset()
+            ),
             avoid_names=tuple(avoid_names),
         )
 
-    trial = _apply_actions(applied, frame, state, ctx)
+    trial = _apply_actions(intent.applied, frame, state, ctx)
 
     observations: list[CompassObservation] = []
     if record_influence_action is not None:
@@ -369,21 +363,10 @@ def _try_action_batch(
         wait_before = wait_after
 
     result = verify_gates(
-        trial,
-        action_pairs,
-        applied,
+        _ExecutedAttempt(pulse=trial, intent=intent),
         frame,
         state,
         ctx,
-        observe_label=observe_label,
-        target_observe_label=target_observe_label,
-        influence_prescribed=influence_prescribed,
-        route_prescribed=route_prescribed,
-        nogood_pair=nogood_pair,
-        regression_nogoods=regression_nogoods,
-        chase_regression_causes=chase_regression_causes,
-        zoom_channel_tag=bearing_channel_tag,
-        zoom_target_value=bearing_channel_value,
     )
     return replace(result, observations=tuple(observations))
 
@@ -415,40 +398,41 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     if isinstance(act, Pulse):
         option = act.option
         return _try_action_batch(
-            (act.action,),
-            act.applied,
+            _AttemptIntent(
+                action_pairs=(act.action,),
+                applied=act.applied,
+                influence_prescribed=option.influence_prescribed,
+                # A structural program-owned current is also an explicit bearing:
+                # if it opens a new frontier, commit it so progress monitoring can
+                # investigate and learn the corrective holds. It is not a static
+                # route suffix and never bypasses the live avoid gate.
+                route_prescribed=option.route_prescribed or option.current_prescribed,
+                nogood_pair=act.action,
+                regression_nogoods=frozenset({act.action}),
+                channel_tag=option.bearing_channel_tag,
+                channel_target=option.bearing_channel_value,
+            ),
             frame,
             state,
             ctx,
-            observe_label="accept",
-            target_observe_label="target",
-            influence_prescribed=option.influence_prescribed,
-            # A structural program-owned current is also an explicit bearing:
-            # if it opens a new frontier, commit it so progress monitoring can
-            # investigate and learn the corrective holds.  It is not a static
-            # route suffix and never bypasses the live avoid gate.
-            route_prescribed=option.route_prescribed or option.current_prescribed,
-            nogood_pair=act.action,
-            regression_nogoods=frozenset({act.action}),
-            chase_regression_causes=True,
             record_influence_action=act.action,
-            bearing_channel_tag=option.bearing_channel_tag,
-            bearing_channel_value=option.bearing_channel_value,
         )
     if isinstance(act, BatchPulse):
         return _try_action_batch(
-            act.actions,
-            act.actions,
+            _AttemptIntent(
+                action_pairs=act.actions,
+                applied=act.actions,
+                observe_label="batch" if act.source == "learned" else "width",
+                target_observe_label=(
+                    "batch-target" if act.source == "learned" else "width-target"
+                ),
+                influence_prescribed=act.source == "learned",
+                regression_nogoods=frozenset(act.actions),
+                chase_regression_causes=False,
+            ),
             frame,
             state,
             ctx,
-            observe_label="batch" if act.source == "learned" else "width",
-            target_observe_label=("batch-target" if act.source == "learned" else "width-target"),
-            influence_prescribed=act.source == "learned",
-            route_prescribed=False,
-            nogood_pair=None,
-            regression_nogoods=frozenset(act.actions),
-            chase_regression_causes=False,
         )
     if isinstance(act, Coast):
         if act.mode == "bearing":
@@ -576,22 +560,21 @@ def _try_zoom(
     verify_channel = route_channel_tag if departed_route else channel_tag
     verify_target = route_target_value if departed_route else target_value
     result = verify_gates(
-        trial,
-        action_pairs=(),
-        applied=(),
-        frame=frame,
-        state=state,
-        ctx=ctx,
-        observe_label="zoom",
-        target_observe_label="zoom-target",
-        influence_prescribed=False,
-        route_prescribed=route_prescribed,
-        nogood_pair=wait_nogood,
-        regression_nogoods=frozenset(),
-        chase_regression_causes=True,
-        zoom_channel_tag=verify_channel,
-        zoom_target_value=verify_target,
-        motion=MotionKind.COAST_TO_BEARING,
+        _ExecutedAttempt(
+            pulse=trial,
+            intent=_AttemptIntent(
+                observe_label="zoom",
+                target_observe_label="zoom-target",
+                route_prescribed=route_prescribed,
+                nogood_pair=wait_nogood,
+                channel_tag=verify_channel,
+                channel_target=verify_target,
+                motion=MotionKind.COAST_TO_BEARING,
+            ),
+        ),
+        frame,
+        state,
+        ctx,
     )
     return replace(result, observations=tuple(observations))
 
@@ -709,22 +692,19 @@ def _try_terminal_letrun(
     )
 
     result = verify_gates(
-        trial,
-        action_pairs=(),
-        applied=(),
-        frame=frame,
-        state=state,
-        ctx=ctx,
-        observe_label="letrun",
-        target_observe_label="letrun-target",
-        influence_prescribed=False,
-        route_prescribed=False,
-        nogood_pair=None,
-        regression_nogoods=frozenset(),
-        chase_regression_causes=True,
-        zoom_channel_tag=chan_tag,
-        zoom_target_value=chan_val,
-        motion=MotionKind.COAST_HOLDING_WORLD,
+        _ExecutedAttempt(
+            pulse=trial,
+            intent=_AttemptIntent(
+                observe_label="letrun",
+                target_observe_label="letrun-target",
+                channel_tag=chan_tag,
+                channel_target=chan_val,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+            ),
+        ),
+        frame,
+        state,
+        ctx,
     )
     return replace(result, observations=observations)
 
@@ -804,22 +784,17 @@ def _try_terminal_dwell(
     # the "letrun" observe labels so commit folds the steady holds into the
     # recorded inputs the same way (the coast's driver is the held context).
     result = verify_gates(
-        trial,
-        action_pairs=(),
-        applied=(),
-        frame=frame,
-        state=state,
-        ctx=ctx,
-        observe_label="letrun",
-        target_observe_label="letrun-target",
-        influence_prescribed=False,
-        route_prescribed=False,
-        nogood_pair=None,
-        regression_nogoods=frozenset(),
-        chase_regression_causes=True,
-        zoom_channel_tag=None,
-        zoom_target_value=None,
-        motion=MotionKind.COAST_HOLDING_WORLD,
+        _ExecutedAttempt(
+            pulse=trial,
+            intent=_AttemptIntent(
+                observe_label="letrun",
+                target_observe_label="letrun-target",
+                motion=MotionKind.COAST_HOLDING_WORLD,
+            ),
+        ),
+        frame,
+        state,
+        ctx,
     )
     return replace(result, observations=observations)
 

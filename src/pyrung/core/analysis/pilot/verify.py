@@ -34,10 +34,10 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
 from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
-    MotionKind,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
+    _ExecutedAttempt,
     _PulseState,
     _TrialResult,
 )
@@ -76,6 +76,38 @@ def _owned_bearing_stop_reason(
     if channel_tag is not None and _values_match(trial.snap.get(channel_tag), target_value):
         return "reached"
     return receipt.stop_reason
+
+
+def _trial_result(
+    attempt: _ExecutedAttempt,
+    frame: Any,
+    observe_label: str,
+    gate_events: list[PilotGateEvent],
+    bearing_stop_reason: str | None,
+) -> _TrialResult:
+    """Preserve one executed attempt as verification's accepted receipt."""
+    trial = attempt.pulse
+    intent = attempt.intent
+    return _TrialResult(
+        fork=trial.fork,
+        scan_before=trial.scan_before,
+        candidate=dict(intent.action_pairs),
+        applied=intent.applied,
+        before_snap=frame.snap,
+        post_pulse_snap=trial.post_pulse_snap,
+        fork_snap=trial.snap,
+        observe_label=observe_label,
+        route_prescribed=intent.route_prescribed,
+        motion=intent.motion,
+        regression_nogoods=intent.regression_nogoods,
+        chase_regression_causes=intent.chase_regression_causes,
+        gate_events=tuple(gate_events),
+        zoom_channel_tag=intent.channel_tag,
+        zoom_target_value=intent.channel_target,
+        bearing_stop_reason=bearing_stop_reason,
+        coast_receipt=trial.coast_receipt,
+        timeline=trial.timeline,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -422,29 +454,22 @@ def _gate_dead_end(
 
 
 def verify_gates(
-    trial: _PulseState,
-    action_pairs: tuple[_ActionPair, ...],
-    applied: tuple[_ActionPair, ...],
+    attempt: _ExecutedAttempt,
     frame: Any,
     state: Any,
     ctx: Any,
-    *,
-    observe_label: str,
-    target_observe_label: str,
-    influence_prescribed: bool,
-    route_prescribed: bool,
-    nogood_pair: _ActionPair | None,
-    regression_nogoods: frozenset[_ActionPair],
-    chase_regression_causes: bool,
-    zoom_channel_tag: str | None = None,
-    zoom_target_value: Any = None,
-    motion: MotionKind = MotionKind.INTERVENTION,
 ) -> _AttemptResult:
     """Apply the shared trial gates to an executed pulse or coast.
 
     Runs avoid and target checks, then spin, cycle, and dead-end gates followed
     by outcome classification. All steering execution modes converge here.
     """
+    trial = attempt.pulse
+    intent = attempt.intent
+    action_pairs = intent.action_pairs
+    nogood_pair = intent.nogood_pair
+    zoom_channel_tag = intent.channel_tag
+    zoom_target_value = intent.channel_target
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     retry_avoid_names: list[str] = []
@@ -492,25 +517,12 @@ def verify_gates(
     if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
         return _AttemptResult(
-            trial=_TrialResult(
-                fork=trial.fork,
-                scan_before=trial.scan_before,
-                candidate=dict(action_pairs),
-                applied=applied,
-                before_snap=frame.snap,
-                post_pulse_snap=trial.post_pulse_snap,
-                fork_snap=trial.snap,
-                observe_label=target_observe_label,
-                route_prescribed=route_prescribed,
-                motion=motion,
-                regression_nogoods=regression_nogoods,
-                chase_regression_causes=chase_regression_causes,
-                gate_events=tuple(gate_events),
-                zoom_channel_tag=zoom_channel_tag,
-                zoom_target_value=zoom_target_value,
-                bearing_stop_reason=bearing_stop_reason,
-                coast_receipt=trial.coast_receipt,
-                timeline=trial.timeline,
+            trial=_trial_result(
+                attempt,
+                frame,
+                intent.target_observe_label,
+                gate_events,
+                bearing_stop_reason,
             ),
             gate_events=tuple(gate_events),
         )
@@ -534,29 +546,17 @@ def verify_gates(
             avoid_names=tuple(retry_avoid_names),
         )
     trial = spun
+    attempt = replace(attempt, pulse=trial)
 
     if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
         gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
         return _AttemptResult(
-            trial=_TrialResult(
-                fork=trial.fork,
-                scan_before=trial.scan_before,
-                candidate=dict(action_pairs),
-                applied=applied,
-                before_snap=frame.snap,
-                post_pulse_snap=trial.post_pulse_snap,
-                fork_snap=trial.snap,
-                observe_label=target_observe_label,
-                route_prescribed=route_prescribed,
-                motion=motion,
-                regression_nogoods=regression_nogoods,
-                chase_regression_causes=chase_regression_causes,
-                gate_events=tuple(gate_events),
-                zoom_channel_tag=zoom_channel_tag,
-                zoom_target_value=zoom_target_value,
-                bearing_stop_reason=bearing_stop_reason,
-                coast_receipt=trial.coast_receipt,
-                timeline=trial.timeline,
+            trial=_trial_result(
+                attempt,
+                frame,
+                intent.target_observe_label,
+                gate_events,
+                bearing_stop_reason,
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
@@ -570,7 +570,7 @@ def verify_gates(
         frame,
         state,
         pending=pending,
-        influence_prescribed=influence_prescribed,
+        influence_prescribed=intent.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -589,7 +589,7 @@ def verify_gates(
         frame,
         state,
         ctx,
-        influence_prescribed=influence_prescribed,
+        influence_prescribed=intent.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -613,7 +613,7 @@ def verify_gates(
         dead_end.trend,
         dead_end.has_new_frontier,
         chase_cause_roots,
-        route_prescribed=route_prescribed,
+        route_prescribed=intent.route_prescribed,
         zoom_channel_tag=zoom_channel_tag,
         zoom_target_value=zoom_target_value,
         zoom_progressed=(
@@ -659,17 +659,14 @@ def verify_gates(
     )
 
     return _AttemptResult(
-        trial=_TrialResult(
-            fork=trial.fork,
-            scan_before=trial.scan_before,
-            candidate=dict(action_pairs),
-            applied=applied,
-            before_snap=frame.snap,
-            post_pulse_snap=trial.post_pulse_snap,
-            fork_snap=trial.snap,
-            observe_label=observe_label,
-            route_prescribed=route_prescribed,
-            motion=motion,
+        trial=replace(
+            _trial_result(
+                attempt,
+                frame,
+                intent.observe_label,
+                gate_events,
+                bearing_stop_reason,
+            ),
             new_key=trial.key,
             trend=dead_end.trend,
             outcome=outcome,
@@ -678,14 +675,6 @@ def verify_gates(
             # post-trial tree's outstanding non-steerable needs, captured here
             # where the tree already exists (it is discarded after this).
             frontier=frontier_pairs(dead_end.tree, trial.snap),
-            regression_nogoods=regression_nogoods,
-            chase_regression_causes=chase_regression_causes,
-            gate_events=tuple(gate_events),
-            zoom_channel_tag=zoom_channel_tag,
-            zoom_target_value=zoom_target_value,
-            bearing_stop_reason=bearing_stop_reason,
-            coast_receipt=trial.coast_receipt,
-            timeline=trial.timeline,
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),

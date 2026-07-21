@@ -21,11 +21,18 @@ from pyrung.core.analysis.pilot._ops import (
     _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
-from pyrung.core.analysis.pilot.types import _ConfirmedCorrection, _PulseState
+from pyrung.core.analysis.pilot.types import (
+    MotionKind,
+    _AttemptIntent,
+    _ConfirmedCorrection,
+    _ExecutedAttempt,
+    _PulseState,
+)
 from pyrung.core.analysis.pilot.verify import (
     _gate_cycle,
     _gate_spin,
     _owned_bearing_stop_reason,
+    verify_gates,
 )
 from pyrung.core.condition import CompareEq
 from pyrung.core.runner import PLC
@@ -290,8 +297,63 @@ class TestGateDeadEnd:
 class TestVerifyGates:
     """Full pipeline: target check -> spin -> cycle -> dead-end -> outcome."""
 
-    @pytest.mark.skip(reason="stub")
-    def test_target_reached_early_exit(self): ...
+    def test_target_reached_preserves_executed_attempt(self):
+        source = Bool("VerifySource", external=True)
+        target = Bool("VerifyTarget")
+        with Program() as program:
+            with Rung(source):
+                out(target)
+        plc = PLC(program, dt=0.010)
+        before = dict(plc.state.tags)
+        after = {**before, target.name: True}
+        pulse = _PulseState(
+            fork=plc,
+            scan_before=3,
+            action_scan=4,
+            action_snap=after,
+            wait_snaps=(),
+            post_pulse_snap=after,
+            post_pulse_key=("post",),
+            snap=after,
+            key=("target",),
+            timeline=("recorded-event",),
+        )
+        intent = _AttemptIntent(
+            action_pairs=((source.name, True),),
+            applied=((source.name, True), ("VerifyCoaction", False)),
+            target_observe_label="bearing-target",
+            route_prescribed=True,
+            regression_nogoods=frozenset({(source.name, True)}),
+            chase_regression_causes=False,
+            channel_tag=target.name,
+            channel_target=True,
+            motion=MotionKind.COAST_TO_BEARING,
+        )
+
+        result = verify_gates(
+            _ExecutedAttempt(pulse=pulse, intent=intent),
+            SimpleNamespace(snap=before),
+            SimpleNamespace(),
+            SimpleNamespace(
+                avoid_pred=None,
+                target_tag=target.name,
+                target_value=True,
+                target_predicate=None,
+            ),
+        )
+
+        assert result.trial is not None
+        assert result.trial.fork is pulse.fork
+        assert result.trial.candidate == dict(intent.action_pairs)
+        assert result.trial.applied == intent.applied
+        assert result.trial.observe_label == intent.target_observe_label
+        assert result.trial.route_prescribed is True
+        assert result.trial.regression_nogoods == intent.regression_nogoods
+        assert result.trial.chase_regression_causes is False
+        assert result.trial.zoom_channel_tag == intent.channel_tag
+        assert result.trial.zoom_target_value is True
+        assert result.trial.motion is MotionKind.COAST_TO_BEARING
+        assert result.trial.timeline == pulse.timeline
 
     @pytest.mark.skip(reason="stub")
     def test_avoid_predicate_rejects(self): ...
