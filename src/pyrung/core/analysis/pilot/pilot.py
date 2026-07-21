@@ -897,7 +897,7 @@ def _pilot_loop_events(
     # self-advancing dwell — a 39k-scan dry timer the coast rides — is the
     # machine doing its own work, not the pilot spending effort.
     last_frame: _IterationFrame | None = None
-    while state.work.state.scan_id - state.dwell_scans < ctx.max_scans:
+    while state.search_scan < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
             if state.steps:

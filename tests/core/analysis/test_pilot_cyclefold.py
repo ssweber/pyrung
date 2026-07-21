@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from pyrung import Bool, Counter, Program, Rung, Timer, count_up, on_delay, out
+from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
 from pyrung.core import system
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
 from pyrung.core.runner import PLC
@@ -175,6 +175,96 @@ class TestCycleFoldBitEqual:
         cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=20000)
         # WD stayed reset throughout (acc never approached its 200 ms preset).
         assert cf.state.tags.get("WD") in (None, False)
+
+    def test_subtick_timer_progress_is_not_misread_as_a_sterile_cycle(self) -> None:
+        Osc = Bool("SubtickOsc", external=True)
+        Soak = Timer.clone("SubtickSoak")
+        Done = Bool("SubtickDone")
+        Mirror = Bool("SubtickMirror")
+        with Program() as program:
+            with Rung(Osc):
+                out(Mirror)
+            with Rung():
+                on_delay(Soak, 2, "s")
+            with Rung(Soak.Done):
+                out(Done)
+
+        ref = PLC(program, dt=0.010)
+        ref.step()
+        _install_oscillator(ref, Osc.name)
+        ref.run_until(lambda s: s.tags.get(Done.name) is True, max_cycles=1_000, fold=False)
+
+        cf = PLC(program, dt=0.010)
+        cf.step()
+        _install_oscillator(cf, Osc.name)
+        stats: dict[str, int] = {}
+        reached = cycle_fold_until(
+            cf,
+            lambda s: s.tags.get(Done.name) is True,
+            budget=1_000,
+            predicate_reads=frozenset((Done.name,)),
+            stats=stats,
+        )
+
+        assert reached is True
+        assert cf.state.tags == ref.state.tags
+        assert cf.state.scan_id == ref.state.scan_id
+        assert stats.get("sterile_cycle", 0) == 0
+        assert stats["folds"] >= 1
+
+    def test_subtick_time_drum_uses_its_current_step_preset(self) -> None:
+        Osc = Bool("DrumOsc", external=True)
+        Auto = Bool("DrumAuto", external=True)
+        Reset = Bool("DrumReset", external=True)
+        Step = Int("DrumStep")
+        Acc = Int("DrumAcc")
+        Done = Bool("DrumDone")
+        Output = Bool("DrumOutput")
+        Mirror = Bool("DrumMirror")
+        with Program() as program:
+            with Rung(Osc):
+                out(Mirror)
+            with Rung(Auto):
+                time_drum(
+                    outputs=[Output],
+                    presets=[1, 2],
+                    unit="s",
+                    pattern=[[1], [0]],
+                    current_step=Step,
+                    accumulator=Acc,
+                    completion_flag=Done,
+                ).reset(Reset)
+
+        def run(*, fold: bool) -> tuple[PLC, dict[str, int]]:
+            plc = PLC(program, dt=0.010)
+            plc.patch({Auto.name: True})
+            plc.step()
+            _install_oscillator(plc, Osc.name)
+            stats: dict[str, int] = {}
+            if fold:
+                cycle_fold_until(
+                    plc,
+                    lambda state: state.tags.get(Done.name) is True,
+                    budget=1_000,
+                    predicate_reads=frozenset((Done.name,)),
+                    stats=stats,
+                )
+            else:
+                plc.run_until(
+                    lambda state: state.tags.get(Done.name) is True,
+                    max_cycles=1_000,
+                    fold=False,
+                )
+            return plc, stats
+
+        ref, _ = run(fold=False)
+        folded, stats = run(fold=True)
+
+        assert folded.state.tags == ref.state.tags
+        assert folded.state.scan_id == ref.state.scan_id
+        assert folded.state.tags[Step.name] == 2
+        assert stats.get("sterile_cycle", 0) == 0
+        assert stats["folds"] >= 1
 
 
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:

@@ -323,15 +323,16 @@ class Harness:
             if c.trigger_value is not None
             else BitCondition(en_tag)
         )
+        demand = ConditionDemand(advance)
         return monotone_profile(
             channels=(fb_tag,),
             accumulator=fb_tag,
             done=None,
-            active=None,
+            progress=demand,
             preset=0,
             direction=direction,
             rate_per_scan=rate_per_scan,
-            advance=ConditionDemand(advance),
+            advance=demand,
         )
 
     def _discover_couplings(self) -> None:

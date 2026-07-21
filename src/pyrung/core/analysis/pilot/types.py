@@ -485,6 +485,12 @@ class _PilotState:
     def dwell_scans(self, value: int) -> None:
         self.world = self.world.set(dwell_scans=value)
 
+    @property
+    def search_scan(self) -> int:
+        """Committed scan coordinate after owner-verified waiting is removed."""
+
+        return self.work.state.scan_id - self.dwell_scans
+
     def snapshot_world(self) -> _World:
         """Freeze the live world for a checkpoint pointer.
 

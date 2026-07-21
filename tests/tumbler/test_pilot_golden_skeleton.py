@@ -353,14 +353,16 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 
 
 def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
-    """Lock the cold drive through its first Execute-era liveness correction.
+    """Lock the cold drive through its first two Execute-era fault corrections.
 
     The former endpoint was an Unhold read at HELD/Step101. That landing was
     premature safety motion, not recipe progress; the exact-producer bearing
     now preserves Execute long enough for investigation to identify and install
-    the two door guards. The later watchdog regression must then accept the
-    rotate-sensor oscillator for neutralizing Execute->Abort without requiring
-    it to finish the distant route to State 16.
+    the two door guards. Later watchdog regressions must accept the rotate-sensor
+    oscillator and then the sail-relay absence root as distinct owners of their
+    Execute->Abort incidents. The owner-verified dry dwell must then advance the
+    recipe to Step103, survive the Held/Unhold detour, and expose the next door
+    incident on the reused state-transition executor.
     """
     plc = PLC(tumbler_logic)
     plc.step()
@@ -369,6 +371,8 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     events = []
     door_correction = None
     liveness_correction = None
+    sail_correction = None
+    post_sail_door_correction = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
         plc,
@@ -400,6 +404,27 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
             }
             if "x_RotateSensor" in liveness:
                 liveness_correction = event
+            absence_roots = {
+                rung.dest
+                for hypothesis in confirmed
+                if hypothesis.get("kind") == "absence-root"
+                for rung in hypothesis.get("holds", ())
+                if hasattr(rung, "dest")
+            }
+            if "x_SailRelay" in absence_roots:
+                sail_correction = event
+            latch_exposure = {
+                rung.dest
+                for hypothesis in confirmed
+                if hypothesis.get("kind") == "latch-exposure"
+                for rung in hypothesis.get("holds", ())
+                if hasattr(rung, "dest")
+            }
+            if (
+                sail_correction is not None
+                and {"x_DoorClosed", "x_LintDoorClosed"} <= latch_exposure
+            ):
+                post_sail_door_correction = event
                 break
         if time.monotonic() > deadline:
             pytest.fail(
@@ -408,10 +433,28 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
 
     assert door_correction is not None
     assert liveness_correction is not None
+    assert sail_correction is not None
+    assert post_sail_door_correction is not None
     assert liveness_correction.data["investigation"]["confirmed"] > 0
     assert any(
         hypothesis.get("kind") == "liveness"
         for hypothesis in liveness_correction.data["investigation"]["confirmed_detail"]
+    )
+    assert any(
+        hypothesis.get("kind") == "absence-root"
+        and any(getattr(rung, "dest", None) == "x_SailRelay" for rung in hypothesis["holds"])
+        for hypothesis in sail_correction.data["investigation"]["confirmed_detail"]
+    )
+    assert any(
+        event.kind == "candidate_accepted"
+        and tuple(event.data.get("applied") or ()) == (("Cmd_State_Unhold", True),)
+        for event in events
+    )
+    assert any(
+        pair[0] == "Internal__Step" and pair[1] >= 103
+        for event in events
+        if event.kind == "provisional_promoted"
+        for pair in event.data.get("landing_mark") or ()
     )
     assert not any(
         any(

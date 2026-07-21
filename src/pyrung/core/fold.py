@@ -48,7 +48,7 @@ _EPS = 1e-9
 
 @dataclass(frozen=True)
 class _AccSource:
-    """A timer/counter whose accumulator a held wait advances.
+    """An accumulating instruction whose held operation advances its scalar.
 
     Also used for linear self-calc tags promoted to fold sources
     (with a sentinel ``done_bit`` that nothing reads).
@@ -60,6 +60,14 @@ class _AccSource:
     kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
     timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
+
+
+@dataclass(frozen=True)
+class _StepPreset:
+    """A staged instruction's preset selected by its current step."""
+
+    step_name: str
+    values: tuple[Any, ...]
 
 
 @dataclass(frozen=True)
@@ -120,6 +128,7 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
         return _SOURCE_REGISTRY
 
     from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
     _SOURCE_REGISTRY = {
@@ -127,13 +136,15 @@ def _ensure_registry() -> dict[type, tuple[str, bool]]:
         OffDelayInstruction: ("up", True),
         CountUpInstruction: ("up", False),
         CountDownInstruction: ("down", False),
+        TimeDrumInstruction: ("up", True),
     }
     return _SOURCE_REGISTRY
 
 
 def _collect_acc_sources(program: Any) -> list[_AccSource]:
-    """Introspect every timer/counter instruction (incl. subroutines)."""
+    """Introspect every registered accumulating instruction, including calls."""
     from pyrung.core.instruction.counters import CountUpInstruction
+    from pyrung.core.instruction.drums import TimeDrumInstruction
     from pyrung.core.tag import Tag
     from pyrung.core.validation._common import walk_instructions
 
@@ -146,10 +157,15 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             continue
         kind, timed = params
         bidir = isinstance(instr, CountUpInstruction) and instr.down_condition is not None
-        preset = instr.preset
+        if isinstance(instr, TimeDrumInstruction):
+            preset = _StepPreset(instr.current_step.name, instr.presets)
+            done_bit = instr.completion_flag.name
+        else:
+            preset = instr.preset
+            done_bit = instr.done_bit.name
         out[instr.accumulator.name] = _AccSource(
             acc_name=instr.accumulator.name,
-            done_bit=instr.done_bit.name,
+            done_bit=done_bit,
             preset=preset.name if isinstance(preset, Tag) else preset,
             kind=kind,
             timed=timed,
@@ -1020,6 +1036,15 @@ def _resolve_num(value: Any, state: Any) -> float | None:
     """Resolve a threshold operand (literal, tag name, or Tag) to a number."""
     from pyrung.core.tag import Tag
 
+    if isinstance(value, _StepPreset):
+        step = state.tags.get(value.step_name)
+        if (
+            isinstance(step, bool)
+            or not isinstance(step, int)
+            or not 1 <= step <= len(value.values)
+        ):
+            return None
+        return _resolve_num(value.values[step - 1], state)
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):

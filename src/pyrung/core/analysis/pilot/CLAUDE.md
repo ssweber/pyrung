@@ -36,7 +36,11 @@ Escalate according to what remains unreadable:
    that read with current-state guards, pipeline structure, finite
    constant-backed tables, and program-awaited actions.
 3. An `AdvanceProfile` states one next operation: conditions to hold or pulse,
-   and the observable boundary at which PILOT must read the world again.
+   the observable boundary at which PILOT must read the world again, and an
+   optional `AdvanceStep.progress` receipt. The receipt is owner-declared
+   evidence that the operation is active when a quantized scalar (for example a
+   seconds accumulator) cannot change on the next scan; fractional accumulator
+   state remains simulator execution state, not public PILOT evidence.
 4. `program_step.py` checks one exact producer in an unchanged fork and reports
    keep running, needs input, interrupted pipeline motion, or unclear. It does
    not choose an action.
@@ -66,8 +70,9 @@ Provisional expiry rolls the world back without creating a nogood.
 Every repeated activity must either consume a finite budget or accumulate
 durable knowledge that prevents byte-identical repetition.
 
-- `max_scans` counts committed search work; accepted coast dwell is credited
-  separately.
+- `max_scans` and provisional lifetimes use the same committed `search_scan`
+  coordinate. Accepted instruction-owned coast dwell is credited separately
+  and cannot expire either bound.
 - Skiff retries use a per-world-key budget and continue only when
   `Compass.apply` reports new knowledge.
 - Provisional program motion has a finite scan budget and a saved rollback
@@ -145,6 +150,10 @@ changes, it returns the same object. Runtime instruments return
   `_expr_availability` compares a guard with the live snapshot.
 - Avoidance is enforced when choosing a route, before applying an action, and
   across every intermediate scan of a trial.
+- Active-cycle detection, crossing arithmetic, and folded jumps read the same
+  timed scalar coordinate: public accumulator plus its fractional remainder.
+  The remainder proves continued execution to the simulator, while the
+  operation's `AdvanceStep.progress` receipt is PILOT's observable evidence.
 - Learned or static route edges are suggestions. A live trial still passes the
   same verification gates.
 - A program-written tag may be removed from the steerable set by recorded
@@ -152,14 +161,16 @@ changes, it returns the same object. Runtime instruments return
 - A correction is installed only in the exact guarded form that survived
   replay, and only one competing explanation is installed for an incident.
 - A corrective hold may succeed by advancing the target-relative gauge or by
-  neutralizing its recorded regression while preserving the incident's source
-  context. Neutralization means the incident-bounded changed writes on the
-  exact recorded cause chain do not replay. A later fault may share a generic
-  state-transition executor without reproducing the original cause; overwriting
-  the original causal branch's result is masking, not correction. This contract
-  is independent of whether the branch contains timers, latches, edges,
-  comparisons, or ordinary logic. A hold does not have to finish the remaining
-  route.
+  neutralizing its recorded regression while preserving both the incident's
+  source context and its earned progress floor. Neutralization composes the
+  incident-bounded changed-write receipt with the recorded and replacement
+  causal spines: replay of the recorded writes while the source is preserved is
+  masking, but a later operation may reuse every generic state-transition
+  executor write when its causal spine no longer contains the recorded owner.
+  Overwriting the original branch's result or erasing the progress coordinate
+  that identified the incident is not correction. This contract is independent
+  of whether the branch contains timers, latches, edges, comparisons, or
+  ordinary logic. A hold does not have to finish the remaining route.
 - Replay confirmation is probationary knowledge. If a later exact incident
   causally contradicts an active correction, `progress.py` revokes its receipt,
   removes its rungs, and excludes that correction at its origin before retrying.

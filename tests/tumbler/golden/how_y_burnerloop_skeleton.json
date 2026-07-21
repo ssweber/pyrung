@@ -3021,32 +3021,7 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_TimeBetween1stScan_tmr_Acc",
-      8
-     ],
-     [
-      "Blower_CurStep_tmr_Acc",
-      9
-     ],
-     [
-      "Blower_tmr_Acc",
-      12
-     ],
-     [
-      "HeatDelay_Tmr_Acc",
-      9
-     ],
-     [
-      "Rotate_CurStep_tmr_Acc",
-      14
-     ],
-     [
-      "Rotate_tmr_Acc",
-      17
-     ]
-    ],
+    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "HeatDelay_Tmr_Done",

@@ -150,7 +150,9 @@ class OnDelayInstruction(Instruction):
             channels=channels,
             accumulator=self.accumulator,
             done=self.done_bit,
-            active=self.tt_bit,
+            progress=(
+                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
+            ),
             preset=self.preset,
             direction=1,
             rate_per_scan=self.unit.dt_to_units,
@@ -278,7 +280,9 @@ class OffDelayInstruction(Instruction):
             channels=channels,
             accumulator=self.accumulator,
             done=self.done_bit,
-            active=self.tt_bit,
+            progress=(
+                ConditionDemand(to_condition(self.tt_bit)) if self.tt_bit is not None else None
+            ),
             preset=self.preset,
             direction=1,
             rate_per_scan=self.unit.dt_to_units,

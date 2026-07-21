@@ -187,9 +187,10 @@ def _monotone_read_surface(
     an unresolvable threshold, or a coordinate with no resolvable surface at
     all).
     """
-    from pyrung.core.fold import _progress_bound, _resolve_num, _scans_to_cross
+    from pyrung.core.fold import _acc_totals, _progress_bound, _resolve_num, _scans_to_cross
 
     sources = {s.acc_name: s for s in fold_ctx.sources}
+    totals = _acc_totals(state, fold_ctx.sources)
     best: int | None = None
     live = 0
     for tag, d in cyc.monotone.items():
@@ -197,7 +198,7 @@ def _monotone_read_surface(
         # v1: only certified up-accumulators (timers / count-up) are foldable.
         if src is None or src.kind != "up" or d <= 0:
             return None
-        cur = state.tags.get(tag)
+        cur = totals.get(tag)
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
             return None
         prog = float(cur)
@@ -279,7 +280,7 @@ def cycle_fold_until(
     """
     import math
 
-    from pyrung.core.fold import _harness_nearest_scan, fold_run_until
+    from pyrung.core.fold import _acc_totals, _harness_nearest_scan, fold_run_until
 
     if fold_ctx is None:
         fold_ctx = plc._ensure_fold_context()
@@ -403,7 +404,13 @@ def cycle_fold_until(
         # directly and let the detector read only the precomputed significant
         # surface instead of allocating a filtered full-state dictionary after
         # every scan.
-        ring.append(plc.state.tags)
+        # Timers can make real sub-tick progress while their integer Acc tag is
+        # unchanged.  The ordinary runner fold already treats ``Acc + _frac``
+        # as the scalar coordinate; retain that same reading here so active
+        # corrective rungs do not turn a live timer into a false sterile cycle.
+        # The persistent-map update keeps the immutable tag image structurally
+        # shared and replaces only the owner-coordinate readings.
+        ring.append(plc.state.tags.update(_acc_totals(plc.state, fold_ctx.sources)))
         if len(ring) > ring_cap:
             del ring[0]
 
@@ -472,9 +479,26 @@ def cycle_fold_until(
         # Patch each monotone acc forward, stamp the skipped scans onto scan_id /
         # timestamp so the acc invariant and every clock phase hold across the gap.
         cur = plc.state.tags
+        progress_now = _acc_totals(plc.state, fold_ctx.sources)
+        sources = {source.acc_name: source for source in fold_ctx.sources}
         jump_scans = periods_to_jump * cyc.period
-        plc.patch({t: cur[t] + round(d * periods_to_jump) for t, d in cyc.monotone.items()})
+        patches: dict[str, int | float] = {}
+        fractions: dict[str, float] = {}
+        for tag, delta in cyc.monotone.items():
+            source = sources.get(tag)
+            if source is not None and source.timed:
+                total = progress_now[tag] + delta * periods_to_jump
+                whole = int(total)
+                patches[tag] = whole
+                fractions[f"_frac:{tag}"] = total - whole
+            else:
+                patches[tag] = cur[tag] + round(delta * periods_to_jump)
+        plc.patch(patches)
+        memory = plc._state.memory
+        for key, value in fractions.items():
+            memory = memory.set(key, value)
         plc._state = plc._state.set(
+            memory=memory,
             scan_id=plc._state.scan_id + jump_scans,
             timestamp=plc._state.timestamp + jump_scans * dt,
         )

@@ -129,11 +129,21 @@ def _condition_step(
     condition: Any,
     *,
     holds: tuple[ConditionDemand, ...] = (),
+    reports_progress: bool = False,
 ) -> AdvanceStep:
     demand = ConditionDemand(condition)
     if isinstance(condition, (RisingEdgeCondition, FallingEdgeCondition)):
-        return AdvanceStep(until=until, holds=holds, pulse=demand)
-    return AdvanceStep(until=until, holds=(*holds, demand))
+        return AdvanceStep(
+            until=until,
+            holds=holds,
+            pulse=demand,
+            progress=demand if reports_progress else None,
+        )
+    return AdvanceStep(
+        until=until,
+        holds=(*holds, demand),
+        progress=demand if reports_progress else None,
+    )
 
 
 def _desired_bool(constraint: Constraint) -> bool | None:
@@ -575,7 +585,11 @@ class TimeDrumInstruction(_DrumBaseInstruction):
 
     def advance_profile(self) -> AdvanceProfile:
         def _auto(until: Eq | Cmp) -> AdvanceStep:
-            return _condition_step(until, self.auto_condition)
+            return _condition_step(
+                until,
+                self.auto_condition,
+                reports_progress=True,
+            )
 
         def _reset(until: Eq | Cmp) -> AdvanceStep:
             return _condition_step(until, self.reset_condition)

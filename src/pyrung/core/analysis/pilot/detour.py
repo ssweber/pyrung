@@ -60,8 +60,9 @@ class Provisional:
     """A bounded attempt awaiting target-relative progress evidence.
 
     ``gauge_at_source`` is captured at the observed settled landing.
-    ``checkpoint_depth`` identifies the exact rollback boundary. ``expires_at``
-    bounds exploration when the gauge remains incomparable or merely preserved.
+    ``checkpoint_depth`` identifies the exact rollback boundary. ``started_at``
+    and ``expires_at`` use PILOT's search-scan coordinate, so instruction-owned
+    waiting does not consume the bounded exploration lifetime.
     """
 
     channel_tag: str

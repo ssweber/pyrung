@@ -114,7 +114,7 @@ def main() -> None:
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     last_landing = None
-    liveness_corrected = False
+    sail_corrected = False
     events = []
     started = time.perf_counter()
 
@@ -138,7 +138,9 @@ def main() -> None:
                 last_landing = landing
         elif event.kind in {
             "candidate_accepted",
+            "zoom",
             "zoom_accepted",
+            "zoom_rejected",
             "letrun_ejection",
             "provisional_started",
             "provisional_promoted",
@@ -181,15 +183,15 @@ def main() -> None:
                         f"\n      ground={rejected.get('ground')}"
                     )
                 confirmed = investigation.get("confirmed_detail", ())
-                just_corrected_liveness = any(
+                just_corrected_sail = any(
                     (
                         hypothesis.kind
                         if hasattr(hypothesis, "kind")
                         else hypothesis.get("kind")
                     )
-                    == "liveness"
+                    == "absence-root"
                     and any(
-                        getattr(hold, "dest", None) == "x_RotateSensor"
+                        getattr(hold, "dest", None) == "x_SailRelay"
                         for hold in (
                             hypothesis.holds
                             if hasattr(hypothesis, "holds")
@@ -198,9 +200,9 @@ def main() -> None:
                     )
                     for hypothesis in confirmed
                 )
-                if just_corrected_liveness:
-                    liveness_corrected = True
-                elif liveness_corrected:
+                if just_corrected_sail:
+                    sail_corrected = True
+                elif sail_corrected:
                     break
             else:
                 selected = {
@@ -222,6 +224,8 @@ def main() -> None:
                 if event.kind == "candidate_accepted":
                     selected["applied"] = data.get("applied")
                     selected["candidate"] = data.get("candidate_detail")
+                if event.kind == "zoom_rejected":
+                    selected["gates"] = data.get("gates")
                 if selected:
                     print(f"  {selected}")
         if event.kind == "finished" or time.perf_counter() - started > WALL_S:

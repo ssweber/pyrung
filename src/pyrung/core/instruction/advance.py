@@ -39,6 +39,9 @@ class AdvanceStep:
     until: Eq | Cmp
     holds: tuple[ConditionDemand, ...] = ()
     pulse: ConditionDemand | None = None
+    # Observable evidence that this exact operation owns continuing motion
+    # even when its scalar channel is quantized and does not change this scan.
+    progress: ConditionDemand | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +66,6 @@ class AdvanceProfile:
     plan: Callable[[Constraint, Snapshot], AdvanceStep | None]
     accumulator: Tag | None = None
     done: Tag | None = None
-    active: Tag | None = None
     linear: LinearProgress | None = None
 
 
@@ -181,7 +183,7 @@ def monotone_profile(
     channels: tuple[Tag, ...],
     accumulator: Tag,
     done: Tag | None,
-    active: Tag | None,
+    progress: ConditionDemand | None,
     preset: Tag | int,
     direction: int,
     rate_per_scan: Callable[[float], float],
@@ -216,10 +218,20 @@ def monotone_profile(
             return None
         return Cmp(accumulator.name, ">=" if sign > 0 else "<=", target)
 
-    def _operation(until: Eq | Cmp, demand: ConditionDemand, pulse: bool) -> AdvanceStep:
+    def _operation(
+        until: Eq | Cmp,
+        demand: ConditionDemand,
+        pulse: bool,
+        *,
+        progress_receipt: ConditionDemand | None = None,
+    ) -> AdvanceStep:
         if pulse:
-            return AdvanceStep(until=until, pulse=demand)
-        return AdvanceStep(until=until, holds=(demand,))
+            return AdvanceStep(until=until, pulse=demand, progress=progress_receipt)
+        return AdvanceStep(
+            until=until,
+            holds=(demand,),
+            progress=progress_receipt,
+        )
 
     def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
         if not isinstance(constraint, (Eq, Cmp)):
@@ -238,7 +250,12 @@ def monotone_profile(
             except (TypeError, ValueError):
                 return None
             if ahead:
-                return _operation(constraint, advance, advance_is_pulse)
+                return _operation(
+                    constraint,
+                    advance,
+                    advance_is_pulse,
+                    progress_receipt=progress,
+                )
             if restore is not None and boundary == 0:
                 return _operation(constraint, restore, restore_is_pulse)
             return None
@@ -259,7 +276,12 @@ def monotone_profile(
             # same operation in place until the requested Done value itself is
             # observable.
             until = constraint if constraint_holds(boundary, snapshot) is True else boundary
-            return _operation(until, advance, advance_is_pulse)
+            return _operation(
+                until,
+                advance,
+                advance_is_pulse,
+                progress_receipt=progress,
+            )
         if restore is not None:
             return _operation(eq(done, desired), restore, restore_is_pulse)
         return None
@@ -303,7 +325,6 @@ def monotone_profile(
         plan=plan,
         accumulator=accumulator,
         done=done,
-        active=active,
         linear=LinearProgress(
             direction=sign,
             distance=distance,

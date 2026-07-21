@@ -28,13 +28,18 @@ from pyrung.core.analysis.pilot.program_step import (
 from pyrung.core.analysis.steerable import compute_steerable
 
 
-def _timer_producer_program(*, clobber: bool = False):
+def _timer_producer_program(
+    *,
+    clobber: bool = False,
+    preset: int = 30,
+    unit: str = "ms",
+):
     run = Bool("Run", external=True)
     command = Int("Command")
     timer = Timer.clone("T")
     with Program(strict=False) as program:
         with Rung(run):
-            on_delay(timer, 30, "ms")
+            on_delay(timer, preset, unit)
         with Rung(timer.Done):
             copy(1, command)
         if clobber:
@@ -76,6 +81,22 @@ def test_running_timer_proves_progress_at_the_immediate_boundary() -> None:
     assert result.boundary is not None
     assert result.boundary.tag == timer.Acc.name
     assert result.projected_changes
+
+
+def test_running_timer_reports_progress_while_quantized_accumulator_stays_zero() -> None:
+    program, run, _command, timer = _timer_producer_program(preset=2, unit="s")
+    plc = PLC(program, dt=0.010)
+    plc.patch({run.name: True})
+    plc.step()
+    world = _world(program, plc)
+
+    result = read_program_step(world, _producer(world), plc)
+
+    assert plc.state.tags[timer.Acc.name] == 0
+    assert result.status is ProgramStepStatus.KEEP_RUNNING
+    assert result.boundary is not None
+    assert result.boundary.tag == timer.Acc.name
+    assert "reports progress" in result.reason
 
 
 def test_stopped_timer_surfaces_its_current_external_input() -> None:

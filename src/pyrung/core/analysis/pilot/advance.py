@@ -13,9 +13,12 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.simplified import _condition_to_expr
 from pyrung.core.instruction.advance import (
     AdvanceProfile,
     AdvanceStep,
+    ConditionDemand,
     Constraint,
     constraint_holds,
 )
@@ -123,6 +126,15 @@ def next_advance(
         return None
     step = owner.profile.plan(constraint, snapshot)
     return None if step is None else (owner, step)
+
+
+def demand_holds(demand: ConditionDemand | None, snapshot: Mapping[str, Any]) -> bool:
+    """Whether an owner-declared demand has its requested truth value."""
+
+    if demand is None or demand.condition is None:
+        return True
+    actual = _eval_expr_from_state(_condition_to_expr(demand.condition), dict(snapshot))
+    return actual is bool(demand.value)
 
 
 def estimate_scans(

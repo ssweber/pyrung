@@ -51,8 +51,9 @@ def test_on_delay_describes_one_hold_to_the_accumulator_boundary() -> None:
     assert profile.channels == (timer.Acc, timer.Done, timer.TT)
     assert profile.accumulator is timer.Acc
     assert profile.done is timer.Done
-    assert profile.active is timer.TT
     assert step is not None
+    assert step.progress is not None
+    assert step.progress.condition.tag is timer.TT
     assert step.until == Cmp(timer.Acc.name, ">=", 2000)
     assert step.holds[0].value is True
     assert step.pulse is None
@@ -219,6 +220,7 @@ def test_time_drum_retraces_at_each_step_boundary() -> None:
     assert operation.until == Cmp(step.name, ">=", 2)
     assert operation.pulse is None
     assert operation.holds[0].value is True
+    assert operation.progress == operation.holds[0]
 
 
 def test_time_drum_uses_the_step_boundary_when_acc_will_reset() -> None:

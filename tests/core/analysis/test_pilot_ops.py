@@ -42,6 +42,7 @@ from pyrung.core.analysis.prove.absorb import (
 )
 from pyrung.core.analysis.prove.events import _StateKeyDoneSpec
 from pyrung.core.analysis.prove.results import PENDING
+from pyrung.core.crossing import Eq
 from pyrung.core.harness import Harness
 from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.physical import Physical
@@ -545,14 +546,19 @@ class TestSettleDelayedEffects:
         # instruction's profile.  The old name surgery derived ``TimerReady_TT``
         # (absent) and left this timer pending forever.
         prog = _variant_named_timer_program()
+        plc = PLC(prog, dt=0.010)
 
-        # The profile carries the timing bit, resolved off the owning instruction.
+        # The operation carries the timing receipt, resolved off its owner.
         owner = build_advance_index(prog).resolve("TimerReady")
         assert owner is not None
-        assert owner.profile.active is not None
-        assert owner.profile.active.name == "TimerActive"
+        operation = owner.profile.plan(
+            Eq("TimerReady", frozenset((True,))),
+            dict(plc.state.tags),
+        )
+        assert operation is not None
+        assert operation.progress is not None
+        assert operation.progress.condition.tag.name == "TimerActive"
 
-        plc = PLC(prog, dt=0.010)
         before = dict(plc.state.tags)
         plc.patch({"Enable": True})
         plc.step()

@@ -288,6 +288,36 @@ def test_provisional_expiry_without_banked_progress_rolls_back():
     assert state.best_trend == 5
 
 
+def test_instruction_owned_dwell_does_not_expire_provisional_search_budget():
+    """Raw timer scans are waiting; only the shared search coordinate expires."""
+    work = _oneshot_plc()
+    work.run(cycles=100)
+    checkpoint = _cp(("src",), _oneshot_plc(), 5)
+    state = _make_state(
+        best_trend=5,
+        checkpoints=[checkpoint],
+        work=work,
+        dwell_scans=100,
+    )
+    state.provisional = Provisional(
+        channel_tag="State",
+        from_value=9,
+        gauge_at_source=(),
+        checkpoint_depth=1,
+        started_at=0,
+        expires_at=50,
+        classification="provisional",
+    )
+    trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
+    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+
+    events = _monitor_trend(trial, _frame(), state, ctx)
+
+    assert all(event.kind != "provisional_expired" for event in events)
+    assert state.search_scan == 0
+    assert state.provisional is not None
+
+
 def test_preserved_departure_inside_provisional_is_investigated(monkeypatch):
     """Even expired corridor policy cannot bypass a concrete departure receipt."""
     checkpoint = _cp(("source",), _oneshot_plc(), 2)

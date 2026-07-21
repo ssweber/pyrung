@@ -20,11 +20,15 @@ from typing import Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot._ops import fork_with_rungs
-from pyrung.core.analysis.pilot.advance import build_advance_index
-from pyrung.core.analysis.pilot.trace import TraceAction, TraceNode, trace_back
+from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
+from pyrung.core.analysis.pilot.trace import (
+    TraceAction,
+    TraceNode,
+    trace_back,
+)
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import Cmp, Eq
-from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.instruction.advance import AdvanceStep, constraint_holds
 
 
 class ProgramStepStatus(StrEnum):
@@ -75,6 +79,13 @@ def _first_boundary(root: TraceNode) -> Eq | Cmp | None:
     for node in _nodes(root):
         if node.advance is not None and not node.satisfied:
             return node.advance.until
+    return None
+
+
+def _first_advance(root: TraceNode) -> AdvanceStep | None:
+    for node in _nodes(root):
+        if node.advance is not None and not node.satisfied:
+            return node.advance
     return None
 
 
@@ -254,7 +265,8 @@ def read_program_step(
     )
 
     trace = _trace_exact(ctx, producer, trace_snapshot)
-    boundary = _first_boundary(trace)
+    advance = _first_advance(trace)
+    boundary = advance.until if advance is not None else None
     required, context_actions = _input_split(trace, trace_snapshot, resting or {})
     input_handoffs = _input_handoffs(
         required,
@@ -289,6 +301,7 @@ def read_program_step(
     boundary_was_reached = (
         constraint_holds(boundary, trace_snapshot) is True if boundary is not None else False
     )
+    progress_receipt = advance.progress if advance is not None else None
 
     scans = max(1, int(projection_scans))
     for _ in range(max(0, scans - consumed_scans)):
@@ -373,7 +386,13 @@ def read_program_step(
             and after_distance is not None
             and after_distance < before_distance
         )
-        if moved_closer or (boundary_reached and not boundary_was_reached):
+        progress_observed = demand_holds(progress_receipt, after)
+        if moved_closer or (boundary_reached and not boundary_was_reached) or progress_observed:
+            reason = (
+                f"the immediate boundary on {boundary.tag} moved closer"
+                if moved_closer or boundary_reached
+                else "the owner reports progress through its operation witness"
+            )
             return ProgramStep(
                 ProgramStepStatus.KEEP_RUNNING,
                 producer,
@@ -382,7 +401,7 @@ def read_program_step(
                 projected_changes=projected_changes,
                 trace=trace,
                 next_trace=next_trace,
-                reason=f"the immediate boundary on {boundary.tag} moved closer",
+                reason=reason,
             )
         if boundary_was_reached:
             return ProgramStep(

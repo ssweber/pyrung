@@ -450,14 +450,15 @@ def _start_provisional(
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
     departed_from = trial.before_snap.get(chan)
-    scan_before = _adopt_settled_departure(verdict, state)
+    _adopt_settled_departure(verdict, state)
+    search_scan = state.search_scan
     state.provisional = Provisional(
         channel_tag=chan,
         from_value=departed_from,
         gauge_at_source=gauge_at_source,
         checkpoint_depth=len(state.checkpoints),
-        started_at=scan_before,
-        expires_at=min(ctx.max_scans, scan_before + _PROVISIONAL_SCAN_BUDGET),
+        started_at=search_scan,
+        expires_at=min(ctx.max_scans, search_scan + _PROVISIONAL_SCAN_BUDGET),
         classification=verdict.verdict,
         entry_progress=verdict.progress,
     )
@@ -670,7 +671,7 @@ def _finish_provisional(
                 },
             ),
         )
-    if outcome not in {"behind"} and state.work.state.scan_id < provisional.expires_at:
+    if outcome not in {"behind"} and state.search_scan < provisional.expires_at:
         return None
 
     state.provisional = None

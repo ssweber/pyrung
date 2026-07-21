@@ -2813,5 +2813,866 @@
   "kind": "trend_regression",
   "regression_nogoods": [],
   "to_trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 6)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 10,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 16
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 16,
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    8
+   ]
+  ],
+  "from_trend": 10,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
+     "detail": "x_SailRelay held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_SailRelay",
+       "guard": "<pyrung.core.condition.CompareNe object at <ADDR:7>>",
+       "value": true
+      }
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "x_SailRelay"
+     ]
+    }
+   ],
+   "hypotheses": 2,
+   "hypothesis_detail": [
+    {
+     "detail": "x_SailRelay held False since cold on Sts_StateCurrent's deep cause chain [external]",
+     "holds": [
+      [
+       "x_SailRelay",
+       true
+      ]
+     ],
+     "kind": "absence-root",
+     "sources": [
+      "x_SailRelay"
+     ]
+    },
+    {
+     "detail": "oscillate Test_Simulate_1st_Scan between [True] (complement-reset watchdog)",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "Test_Simulate_1st_Scan",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:8>>",
+       "value": true
+      }
+     ],
+     "kind": "liveness",
+     "sources": [
+      "A_TimeBetween1stScan_tmr_Done",
+      "Test_Simulate_1st_Scan"
+     ]
+    }
+   ],
+   "rejected": 0,
+   "rejected_detail": [],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 6)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 2,
+  "zoom_actual_value": 60,
+  "zoom_channel_tag": "S_HeatAtTemp_tmr_Acc",
+  "zoom_target_value": 60
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 6)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its external-input reading is no longer current"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its external-input reading is no longer current"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 10,
+  "zoom_actual_value": 10,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 16
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 16,
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "classification": "provisional",
+  "from_value": 6,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    103
+   ]
+  ],
+  "kind": "provisional_started",
+  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
+  "requested_value": 16,
+  "route": [],
+  "settled_value": 11
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    103
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    103
+   ]
+  ],
+  "trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 11)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Unhold",
+      true
+     ],
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 13",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 13,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 13",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 12,
+    "before": 11,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Unhold": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 2,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 12,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 13
+ },
+ {
+  "distance": 13,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 12)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "Blower__init: 0->1"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "Blower__init: 0->1"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 6,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 6,
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    11,
+    8
+   ]
+  ],
+  "from_trend": 6,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "hypotheses": 3,
+   "hypothesis_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "rejected": 2,
+   "rejected_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "sibling-regression",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:9>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "sibling-regression",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 2
  }
 ]

@@ -808,6 +808,13 @@ def _prescribe_wait(
             resting=ctx.resting,
         )
         if step.status is ProgramStepStatus.KEEP_RUNNING:
+            heading = _advance_heading(step.boundary, frame, state)
+            if heading is None:
+                return _WaitPrescription(
+                    False,
+                    f"{route_reason}; owned boundary has no exact coast heading",
+                    program_step=step,
+                )
             movement = next(
                 (
                     (tag, before, after)
@@ -816,17 +823,15 @@ def _prescribe_wait(
                 ),
                 None,
             )
-            if movement is None:
-                return _WaitPrescription(
-                    False,
-                    f"{route_reason}; producer proof has no executable boundary",
-                    program_step=step,
-                )
-            tag, before, after = movement
+            observation = (
+                f" ({movement[0]}: {movement[1]!r}->{movement[2]!r})"
+                if movement is not None
+                else f"; {step.reason}"
+            )
             return _WaitPrescription(
                 True,
-                f"{route_reason} ({tag}: {before!r}->{after!r})",
-                frontier=((tag, after),),
+                f"{route_reason}{observation}",
+                frontier=(heading,),
                 program_step=step,
                 boundary=step.boundary,
             )

@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis import steerable as _steerable
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
+from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.availability import (
     _GUARD_CONTRADICTION,
     _equality_gated_coil,
@@ -1253,15 +1254,6 @@ def _trace_demand(
     return nodes
 
 
-def _demand_holds(demand: Any, snapshot: dict[str, Any]) -> bool:
-    """Whether one profile demand already has its requested truth value."""
-
-    if demand is None or demand.condition is None:
-        return True
-    actual = _eval_expr_from_state(_condition_to_expr(demand.condition), snapshot)
-    return actual is bool(demand.value)
-
-
 def _owner_call_gate_nodes(
     env: _TraceEnv,
     owner: Any,
@@ -1337,10 +1329,10 @@ def _advance_frontier(
         return None
     if (
         owner.profile.linear is not None
-        and owner.profile.active is not None
         and owner.profile.done is not None
         and constraint.tag == owner.profile.done.name
         and owner.profile.linear.distance(constraint, env.snapshot) is None
+        and step.progress is None
     ):
         # Restore/clear knowledge is useful to correction handling, but it is
         # not forward scalar motion and must not make an alternative writer
@@ -1380,10 +1372,10 @@ def _advance_frontier(
         # prerequisite and distort route scoring and target distance.
         return boundary
     gate_nodes = _owner_call_gate_nodes(env, owner, provenance, depth)
-    running_linear = owner.profile.linear is not None and owner.profile.active is not None
+    running_linear = owner.profile.linear is not None and step.progress is not None
     demand_nodes: list[TraceNode] = []
     for demand in step.holds:
-        if running_linear and _demand_holds(demand, env.snapshot):
+        if running_linear and demand_holds(demand, env.snapshot):
             continue
         demand_nodes.extend(
             _trace_demand(
