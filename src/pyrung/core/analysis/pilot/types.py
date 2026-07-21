@@ -386,6 +386,16 @@ class _CorrectionReceipt:
     status: CorrectionStatus = CorrectionStatus.ACTIVE
 
 
+@dataclass(frozen=True)
+class _ConfirmedCorrection:
+    """One replay-proven correction, including its exact executable lifetime."""
+
+    identity: tuple[tuple[str, Any], ...]
+    rungs: tuple[Any, ...]
+    sources: tuple[str, ...]
+    justification: str
+
+
 @dataclass
 class _PilotState:
     # ── The world (reverts) ──
@@ -556,6 +566,10 @@ class _PulseState:
     # pulse, settle, and coast) — stamped onto the committed step context so
     # incident construction reads recorded evidence, not history re-diffs.
     timeline: tuple[Any, ...] = ()
+    # A spin excursion may replace this trial with a replay-corrected fork.
+    # Carry that exact correction with the fork so later gates cannot detach or
+    # reconstruct the operation they are judging.
+    confirmed_correction: _ConfirmedCorrection | None = None
 
 
 @dataclass(frozen=True)
@@ -604,7 +618,7 @@ class _AttemptResult:
     trial: _TrialResult | None
     gate_events: tuple[PilotGateEvent, ...] = ()
     nogood_pairs: frozenset[_ActionPair] = frozenset()
-    excursion_holds: tuple[_ActionPair, ...] = ()
+    confirmed_correction: _ConfirmedCorrection | None = None
     # Compass observations gathered during the Act — applied only at the loop's
     # drive-loop application point (``_record_attempt``), never by the instrument itself.
     observations: tuple[CompassObservation, ...] = ()

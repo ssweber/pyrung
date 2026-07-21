@@ -54,6 +54,7 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _ActionPair,
     _Checkpoint,
+    _ConfirmedCorrection,
     _CorrectionReceipt,
     _HoldLogEntry,
     _IterationFrame,
@@ -404,6 +405,26 @@ def _bearing_satisfied(trial: _TrialResult) -> bool:
     )
 
 
+def _anchor_frame_receipt(frame: _IterationFrame, state: _PilotState) -> int:
+    """Capture the executable source world for an owned operation."""
+    key = (
+        _pilot_world_key(frame.snap, state.key_config, state.rungs)
+        if state.key_config is not None
+        else frame.key
+    )
+    receipt = _Checkpoint(
+        key,
+        state.snapshot_world(),
+        frame.distance_before,
+        frontier_pairs(frame.tree, frame.snap),
+    )
+    if state.checkpoints and state.checkpoints[-1].key == key:
+        state.checkpoints[-1] = receipt
+    else:
+        state.checkpoints.append(receipt)
+    return len(state.checkpoints) - 1
+
+
 def _anchor_bearing_receipt(
     trial: _TrialResult,
     frame: _IterationFrame,
@@ -420,18 +441,7 @@ def _anchor_bearing_receipt(
     """
     if not _bearing_satisfied(trial):
         return
-    receipt = _Checkpoint(
-        frame.key,
-        state.snapshot_world(),
-        frame.distance_before,
-        frontier_pairs(frame.tree, frame.snap),
-    )
-    if state.checkpoints and state.checkpoints[-1].key == frame.key:
-        # Same executable key can recur with a later clean-path receipt. Keep
-        # the exact current world/step boundary without growing duplicate CPs.
-        state.checkpoints[-1] = receipt
-    else:
-        state.checkpoints.append(receipt)
+    _anchor_frame_receipt(frame, state)
 
 
 def _start_provisional(
@@ -833,6 +843,58 @@ def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
     )
 
 
+def _install_confirmed_correction(
+    state: _PilotState,
+    correction: _ConfirmedCorrection,
+    *,
+    origin_key: tuple[Any, ...],
+    scan: int,
+    source: str,
+    checkpoint_index: int | None = None,
+) -> _CorrectionReceipt:
+    """Install one replay-proven correction and bank its lifecycle owner."""
+    state.rungs = _append_rungs(state.work, list(correction.rungs), state.rungs)
+    state.hold_log.append(
+        _HoldLogEntry(
+            scan=scan,
+            tags=tuple((rung.dest, rung.value) for rung in correction.rungs),
+            source=source,
+            rungs=correction.rungs,
+        )
+    )
+    receipt = _CorrectionReceipt(
+        receipt_id=(
+            max(
+                (existing.receipt_id for existing in state.correction_receipts),
+                default=0,
+            )
+            + 1
+        ),
+        origin_key=origin_key,
+        identity=correction.identity,
+        rungs=correction.rungs,
+        sources=correction.sources,
+        justification=correction.justification,
+    )
+    state.correction_receipts.append(receipt)
+    if checkpoint_index is not None:
+        checkpoint_index %= len(state.checkpoints)
+        checkpoint = state.checkpoints[checkpoint_index]
+        key_config = state.key_config
+        banked_key = (
+            _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
+            if key_config is not None
+            else checkpoint.key
+        )
+        state.checkpoints[checkpoint_index] = _Checkpoint(
+            banked_key,
+            state.snapshot_world(),
+            checkpoint.trend,
+            checkpoint.frontier,
+        )
+    return receipt
+
+
 def _contradicted_corrections(
     state: _PilotState,
     investigation: InvestigationResult,
@@ -981,6 +1043,7 @@ def _investigate_and_revert(
     cp_fork = cp_world.work
     investigation_holds: list[Any] = []
     investigation_rungs: list[PilotRung] = []
+    confirmed_correction: _ConfirmedCorrection | None = None
     investigation: InvestigationResult | None = None
     revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
     investigation_nogoods: set[_ActionPair] = set()
@@ -1143,16 +1206,25 @@ def _investigate_and_revert(
             investigation_rungs = [
                 proposal for proposal in investigation_holds if isinstance(proposal, PilotRung)
             ]
-            state.hold_log.append(
-                _HoldLogEntry(
-                    scan=cp_fork.state.scan_id,
-                    tags=tuple(
-                        (p.dest, p.value) if isinstance(p, PilotRung) else p
-                        for p in investigation_holds
-                    ),
-                    source="investigation",
-                    rungs=tuple(investigation_rungs),
-                )
+            confirmed_hypothesis = investigation.confirmed[0] if investigation.confirmed else None
+            proof = (
+                investigation.confirmed_outcomes[0] if investigation.confirmed_outcomes else None
+            )
+            confirmed_correction = _ConfirmedCorrection(
+                identity=correction_identity(
+                    confirmed_hypothesis.holds
+                    if confirmed_hypothesis is not None
+                    else investigation_rungs
+                ),
+                rungs=tuple(investigation_rungs),
+                sources=(confirmed_hypothesis.sources if confirmed_hypothesis is not None else ()),
+                justification=(
+                    proof.justification.value
+                    if proof is not None and proof.justification is not None
+                    else proof.reason
+                    if proof is not None
+                    else "replay-confirmed"
+                ),
             )
 
     if retain_if_unresolved is not None and not investigation_rungs and not revoked_receipts:
@@ -1228,55 +1300,14 @@ def _investigate_and_revert(
         # replay-confirmed remedy is therefore an ownership replacement, not a
         # second hold layered over the stale correction.
         correction_origin_key = state.checkpoints[-1].key
-        state.rungs = _append_rungs(state.work, investigation_rungs, state.rungs)
-        # Bank the corrected world onto the checkpoint.  A replay-confirmed
-        # correction is knowledge, but rungs live in the revertible World half —
-        # a later revert to this same checkpoint would silently drop it, so
-        # round N+1 relearns round N's correction and the restored overlay
-        # re-collides with the letrun memo at the pre-correction key.  Replacing
-        # the checkpoint's world (same tag state, corrected overlay, re-keyed)
-        # is what makes "knowledge accumulates across reverts" true for
-        # installed rungs, the way nogoods already survive outside the world.
-        key_config = state.key_config
-        banked_key = (
-            _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
-            if key_config is not None
-            else cp_key
-        )
-        state.checkpoints[-1] = _Checkpoint(
-            banked_key,
-            state.snapshot_world(),
-            cp_trend,
-            checkpoint.frontier,
-        )
-        assert investigation is not None
-        confirmed_hypothesis = investigation.confirmed[0] if investigation.confirmed else None
-        proof = investigation.confirmed_outcomes[0] if investigation.confirmed_outcomes else None
-        state.correction_receipts.append(
-            _CorrectionReceipt(
-                receipt_id=(
-                    max(
-                        (receipt.receipt_id for receipt in state.correction_receipts),
-                        default=0,
-                    )
-                    + 1
-                ),
-                origin_key=correction_origin_key,
-                identity=correction_identity(
-                    confirmed_hypothesis.holds
-                    if confirmed_hypothesis is not None
-                    else investigation_rungs
-                ),
-                rungs=tuple(investigation_rungs),
-                sources=(confirmed_hypothesis.sources if confirmed_hypothesis is not None else ()),
-                justification=(
-                    proof.justification.value
-                    if proof is not None and proof.justification is not None
-                    else proof.reason
-                    if proof is not None
-                    else "replay-confirmed"
-                ),
-            )
+        assert confirmed_correction is not None
+        _install_confirmed_correction(
+            state,
+            confirmed_correction,
+            origin_key=correction_origin_key,
+            scan=cp_fork.state.scan_id,
+            source="investigation",
+            checkpoint_index=-1,
         )
     state.best_trend = cp_trend
     return (

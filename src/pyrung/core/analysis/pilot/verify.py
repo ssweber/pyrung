@@ -19,8 +19,6 @@ from pyrung.core.analysis.pilot._ops import (
     _avoid_snap_names,
     _has_pending_effects,
     _pilot_world_key,
-    _rungs_from_proposals,
-    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
@@ -117,7 +115,7 @@ def _gate_spin(
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
-    excursion_holds: list[_ActionPair],
+    avoid_names: list[str],
 ) -> _PulseState | None:
     key_config = state.key_config
     assert key_config is not None
@@ -151,28 +149,39 @@ def _gate_spin(
             scan_budget=ctx.max_scans - state.work.state.scan_id,
             pdg=ctx.pdg,
             program=ctx.program,
+            ctx=ctx,
         )
-        if result.retry_fork is not None:
-            excursion_holds.extend(result.confirmed_holds)
+        if result.retry_fork is not None and result.correction is not None:
             retry_snap = dict(result.retry_fork.state.tags)
-            scope = _target_unresolved_condition(
-                state.work,
-                ctx.target_tag,
-                ctx.target_value,
-                ctx.target_predicate,
-            )
-            retry_rungs = (
-                *state.rungs,
-                *_rungs_from_proposals(
-                    state.work,
-                    list(result.confirmed_holds),
-                    scope,
-                ),
-            )
+            retry_rungs = (*state.rungs, *result.correction.rungs)
+            if ctx.avoid_pred is not None:
+                retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
+                if not ctx.avoid_pred(frame.snap):
+                    for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):
+                        retry_violations.extend(
+                            _avoid_snap_names(
+                                ctx.avoid_pred,
+                                result.retry_fork.history.at(scan).tags,
+                            )
+                        )
+                if retry_violations:
+                    names = tuple(dict.fromkeys(retry_violations))
+                    avoid_names.extend(names)
+                    if nogood_pair is not None:
+                        collected_nogoods.append(nogood_pair)
+                    _record_gate(
+                        "AVOID",
+                        f": excursion retry enters avoid: {', '.join(names)}",
+                        gate_events,
+                    )
+                    return None
             retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
             _record_gate(
                 "EXCURSION-RETRY-OK",
-                f": reverted={result.reverted}, holds={result.confirmed_holds}",
+                (
+                    f": reverted={result.reverted}, "
+                    f"rungs={tuple((r.dest, r.value) for r in result.correction.rungs)}"
+                ),
                 gate_events,
             )
             return _PulseState(
@@ -188,6 +197,7 @@ def _gate_spin(
                 # The retry fork replaced the original pulse; its recorded
                 # session is the timeline this trial carries forward.
                 timeline=result.retry_timeline,
+                confirmed_correction=result.correction,
             )
         if result.reverted:
             _record_gate("EXCURSION-NO-HOLDS", gate_events=gate_events)
@@ -437,7 +447,7 @@ def verify_gates(
     """
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
-    excursion_holds: list[_ActionPair] = []
+    retry_avoid_names: list[str] = []
     bearing_stop_reason = _owned_bearing_stop_reason(
         trial,
         zoom_channel_tag,
@@ -514,14 +524,14 @@ def verify_gates(
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
-        excursion_holds=excursion_holds,
+        avoid_names=retry_avoid_names,
     )
     if spun is None:
         return _AttemptResult(
             trial=None,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            excursion_holds=tuple(excursion_holds),
+            avoid_names=tuple(retry_avoid_names),
         )
     trial = spun
 
@@ -550,7 +560,8 @@ def verify_gates(
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            excursion_holds=tuple(excursion_holds),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
         )
 
     pending = _has_pending_effects(trial.fork)
@@ -568,7 +579,8 @@ def verify_gates(
             trial=None,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            excursion_holds=tuple(excursion_holds),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
         )
 
     dead_end = _gate_dead_end(
@@ -589,7 +601,8 @@ def verify_gates(
             trial=None,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            excursion_holds=tuple(excursion_holds),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
         )
 
     assessment = assess_outcome(
@@ -637,7 +650,8 @@ def verify_gates(
             trial=None,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
-            excursion_holds=tuple(excursion_holds),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
         )
 
     gate_events.append(
@@ -675,5 +689,6 @@ def verify_gates(
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),
-        excursion_holds=tuple(excursion_holds),
+        confirmed_correction=trial.confirmed_correction,
+        avoid_names=tuple(retry_avoid_names),
     )

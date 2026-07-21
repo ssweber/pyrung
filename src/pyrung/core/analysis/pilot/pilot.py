@@ -25,12 +25,9 @@ from pyrung.core.analysis.graph import (
     RouteTaken,
 )
 from pyrung.core.analysis.pilot._ops import (
-    _append_rungs,
     _apply_pulse,
     _pilot_world_key,
-    _rungs_from_proposals,
     _StateKeyConfig,
-    _target_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.charts import (
@@ -60,7 +57,9 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
+    _anchor_frame_receipt,
     _anchor_provisional,
+    _install_confirmed_correction,
     _monitor_trend,
 )
 from pyrung.core.analysis.pilot.recording import (
@@ -98,7 +97,6 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _ActionPair,
     _Checkpoint,
-    _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -573,23 +571,15 @@ def _record_attempt(
         *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
-    if attempt.excursion_holds:
-        scope = _target_unresolved_condition(
-            state.work, ctx.target_tag, ctx.target_value, ctx.target_predicate
-        )
-        excursion_rungs = _rungs_from_proposals(state.work, list(attempt.excursion_holds), scope)
-        state.rungs = _append_rungs(
-            state.work,
-            excursion_rungs,
-            state.rungs,
-        )
-        state.hold_log.append(
-            _HoldLogEntry(
-                scan=state.work.state.scan_id,
-                tags=tuple(attempt.excursion_holds),
-                source="excursion",
-                rungs=tuple(excursion_rungs),
-            )
+    if attempt.confirmed_correction is not None:
+        checkpoint_index = _anchor_frame_receipt(frame, state)
+        _install_confirmed_correction(
+            state,
+            attempt.confirmed_correction,
+            origin_key=frame.key,
+            scan=state.work.state.scan_id,
+            source="excursion",
+            checkpoint_index=checkpoint_index,
         )
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.
@@ -1264,7 +1254,7 @@ def _linked_feedback_block(
     names = ", ".join(repr(fb) for _en, fb in blockers)
     return (
         f"pilot: {target_tag}={target_value!r} is blocked by physical link(s) "
-        f"{links} — the harness holds the sensor lockstep with its driver, so it "
+        f"{links}; the harness holds the sensor lockstep with its driver, so it "
         f"cannot rest at the value this route needs. Retry with unlink=[{names}] "
         f"to model a dead sensor (fault injection)."
     )
@@ -1851,7 +1841,7 @@ def _pilot_how_multi(
         last_journey = outcome.journey
         journal_steps.extend(outcome.journal)
         if not outcome.reached:
-            detail = f" — {outcome.reason}" if outcome.reason else ""
+            detail = f"; {outcome.reason}" if outcome.reason else ""
             return Plan(
                 reachable=False,
                 target_tag=label,

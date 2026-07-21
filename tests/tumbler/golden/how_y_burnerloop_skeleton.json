@@ -2814,7 +2814,7 @@
     ],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX 8191 → 0",
+    "transition": "A_CurDisabledStates_HEX 8191 -> 0",
     "waiting_for": []
    },
    {
@@ -2831,7 +2831,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 9 → 1",
+    "transition": "Cmd_CtrlCmd 9 -> 1",
     "waiting_for": []
    },
    {
@@ -2869,7 +2869,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 1 → 2",
+    "transition": "Cmd_CtrlCmd 1 -> 2",
     "waiting_for": []
    },
    {
@@ -2944,7 +2944,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_Trans",
      "Blower__x",
@@ -3013,7 +3013,7 @@
      "x_RotateFB",
      "x_RotateSensor"
     ],
-    "transition": "Heat_xCall 0 → 1",
+    "transition": "Heat_xCall 0 -> 1",
     "waiting_for": [
      "HeatDelay_Tmr_Acc",
      "Heat_xInit",

@@ -48,7 +48,11 @@ from pyrung.core.analysis.pilot.corrections import (
 )
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
-from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
+from pyrung.core.analysis.pilot.types import (
+    BearingDeparture,
+    DeviationIncident,
+    _ConfirmedCorrection,
+)
 from pyrung.core.analysis.sp_values import (
     _SnapshotView,
     _values_match,
@@ -900,10 +904,10 @@ def build_replay_fn(
 
 @dataclass(frozen=True)
 class ExcursionResult:
-    """Replay-confirmed holds from an excursion investigation."""
+    """Replay-confirmed correction from an excursion investigation."""
 
-    confirmed_holds: list[ActionPair]
     reverted: list[str]
+    correction: _ConfirmedCorrection | None = None
     retry_fork: Any = None
     # The retry pulse's recorded session events — the timeline the retry trial
     # carries forward (its Done-bit pen marks must stay visible to a later
@@ -927,6 +931,7 @@ def investigate_excursion(
     scan_budget: int,
     pdg: Any = None,
     program: Any = None,
+    ctx: Any = None,
 ) -> ExcursionResult:
     """Diagnose an excursion and replay-validate candidate holds.
 
@@ -946,6 +951,10 @@ def investigate_excursion(
     Fallback: cause-chain walk and cause() enablers (original path — this is what
     resolves seal-in establishment cases, where the writer *can* still produce the
     desired value so it is not a suppression antagonist).
+
+    The successful result carries the exact guarded rungs used by retry. The
+    caller may admit and install that correction, but must not reconstruct its
+    lifetime from the bare input values.
     """
     from pyrung.core.analysis.pdg import resolve_rung
 
@@ -1027,8 +1036,10 @@ def investigate_excursion(
 
     action_tags = {t for t, _ in action}
     candidate_holds = [(t, v) for t, v in candidate_holds if t not in action_tags]
+    if ctx is not None:
+        candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
     if not candidate_holds:
-        return ExcursionResult(confirmed_holds=[], reverted=reverted)
+        return ExcursionResult(reverted=reverted)
 
     retry = work.fork()
     retry_rungs = list(rungs)
@@ -1038,7 +1049,8 @@ def investigate_excursion(
     preserved_tag = reverted[0]
     preserved = retry._known_tags_by_name[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
-    retry_rungs.extend(_rungs_from_proposals(retry, candidate_holds, scope))
+    confirmed_rungs = tuple(_rungs_from_proposals(retry, candidate_holds, scope))
+    retry_rungs.extend(confirmed_rungs)
     _set_rungs(retry, retry_rungs)
     kickoff = list(action)
     kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in action})
@@ -1056,12 +1068,17 @@ def investigate_excursion(
 
     if retry_key != pre_key:
         return ExcursionResult(
-            confirmed_holds=candidate_holds,
             reverted=reverted,
+            correction=_ConfirmedCorrection(
+                identity=correction_identity(confirmed_rungs),
+                rungs=confirmed_rungs,
+                sources=tuple(dict.fromkeys((*reverted, *(tag for tag, _ in candidate_holds)))),
+                justification="excursion replay preserved the pulse-established state",
+            ),
             retry_fork=retry,
             retry_timeline=session.events,
         )
-    return ExcursionResult(confirmed_holds=[], reverted=reverted)
+    return ExcursionResult(reverted=reverted)
 
 
 def _implicated_writers(plc: PLC, tag: str, pdg: Any, program: Any) -> list[int]:

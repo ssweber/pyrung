@@ -6393,7 +6393,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX 8191 → 0",
+    "transition": "A_CurDisabledStates_HEX 8191 -> 0",
     "waiting_for": []
    },
    {
@@ -6410,7 +6410,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 9 → 1",
+    "transition": "Cmd_CtrlCmd 9 -> 1",
     "waiting_for": []
    },
    {
@@ -6448,7 +6448,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 1 → 2",
+    "transition": "Cmd_CtrlCmd 1 -> 2",
     "waiting_for": []
    },
    {
@@ -6509,7 +6509,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -6531,7 +6531,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Sts_StateCurrent 3 → 6",
+    "transition": "Sts_StateCurrent 3 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -6866,7 +6866,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Heat_xCall 0 → 1",
+    "transition": "Heat_xCall 0 -> 1",
     "waiting_for": []
    },
    {
@@ -6886,7 +6886,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 2 → 4",
+    "transition": "Cmd_CtrlCmd 2 -> 4",
     "waiting_for": []
    },
    {
@@ -6924,7 +6924,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 → 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
@@ -6991,7 +6991,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7016,7 +7016,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 → 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7116,7 +7116,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 → 4",
+    "transition": "Cmd_CtrlCmd 5 -> 4",
     "waiting_for": []
    },
    {
@@ -7133,7 +7133,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 → 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
@@ -7200,7 +7200,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7225,7 +7225,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 → 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7247,7 +7247,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 → 4",
+    "transition": "Cmd_CtrlCmd 5 -> 4",
     "waiting_for": []
    },
    {
@@ -7264,7 +7264,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 → 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
@@ -7310,7 +7310,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 → 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7335,7 +7335,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 → 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7415,7 +7415,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 → 10",
+    "transition": "Cmd_CtrlCmd 5 -> 10",
     "waiting_for": []
    },
    {
@@ -7435,7 +7435,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 1 → 0",
+    "transition": "Blower_xCall 1 -> 0",
     "waiting_for": []
    }
   ],

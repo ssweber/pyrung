@@ -31,16 +31,19 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayOutcome,
     _active_rungs_defeat_needed,
     _precise_causes,
+    correction_identity,
     hold_defeats_needed,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import _investigate_and_revert, _monitor_trend
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     CorrectionStatus,
     _Checkpoint,
+    _ConfirmedCorrection,
     _PilotState,
     _TrialResult,
     _World,
@@ -563,6 +566,44 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
     state.work.step()
     assert state.work.state.tags["Go"] is False
     assert installed in state.rungs  # benign scoped correction remains recorded
+
+
+def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
+    """Verification hands off its exact correction instead of recompiling it."""
+    state, _trial, frame, ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    replayed = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((replayed,)),
+        rungs=(replayed,),
+        sources=("State", "Go"),
+        justification="excursion replay preserved State=6",
+    )
+
+    class _Compass:
+        action_tags = frozenset()
+
+        def apply(self, observations):
+            assert observations == []
+            return self, ()
+
+    ctx.compass = _Compass()
+    attempt = SimpleNamespace(
+        observations=(),
+        nogood_pairs=(),
+        confirmed_correction=correction,
+        avoid_names=(),
+    )
+    frame.tree = SimpleNamespace(children=(), satisfied=True, is_steerable=False)
+
+    _record_attempt(attempt, frame, state, ctx)
+
+    assert tuple(state.rungs) == (replayed,)
+    assert state.correction_receipts[0].rungs == (replayed,)
+    assert state.correction_receipts[0].origin_key == frame.key
+    assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
+    assert state.hold_log[-1].source == "excursion"
+    assert state.checkpoints[-1].world.rungs == state.world.rungs
 
 
 def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):

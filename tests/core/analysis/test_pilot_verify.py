@@ -14,12 +14,20 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung import Bool, Program, Rung, out
-from pyrung.core.analysis.pilot.types import _PulseState
+from pyrung.core.analysis.pilot._ops import (
+    PilotRung,
+    _pilot_world_key,
+    _set_rungs,
+    _StateKeyConfig,
+)
+from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
+from pyrung.core.analysis.pilot.types import _ConfirmedCorrection, _PulseState
 from pyrung.core.analysis.pilot.verify import (
     _gate_cycle,
     _gate_spin,
     _owned_bearing_stop_reason,
 )
+from pyrung.core.condition import CompareEq
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -77,7 +85,7 @@ class TestGateSpin:
             nogood_pair=("SpinSource", False),
             gate_events=gates,
             collected_nogoods=[],
-            excursion_holds=[],
+            avoid_names=[],
         )
         assert result is None
         assert gates[-1].event == "spin"
@@ -90,8 +98,147 @@ class TestGateSpin:
             "actions": (("SpinSource", False),),
         }
 
-    @pytest.mark.skip(reason="stub")
-    def test_excursion_retried_with_holds(self): ...
+    def test_excursion_retried_with_exact_correction(self, monkeypatch):
+        source = Bool("ExcursionSource", external=True)
+        dest = Bool("ExcursionDest")
+        with Program() as program:
+            with Rung(source):
+                out(dest)
+        plc = PLC(program, dt=0.010)
+        plc.step()
+        snap = dict(plc.state.tags)
+        cfg = _StateKeyConfig(
+            stateful_names=(dest.name,),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        frame_key = _pilot_world_key(snap, cfg, ())
+        guard = CompareEq(dest, True)
+        rung = PilotRung(source.name, False, guard)
+        correction = _ConfirmedCorrection(
+            identity=correction_identity((rung,)),
+            rungs=(rung,),
+            sources=(dest.name, source.name),
+            justification="excursion replay",
+        )
+        retry = plc.fork()
+        _set_rungs(retry, correction.rungs)
+        retry.step()
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify.investigate_excursion",
+            lambda *_args, **_kwargs: ExcursionResult(
+                reverted=[dest.name],
+                correction=correction,
+                retry_fork=retry,
+            ),
+        )
+        trial = _PulseState(
+            plc.fork(),
+            plc.state.scan_id,
+            plc.state.scan_id,
+            snap,
+            (),
+            {**snap, dest.name: True},
+            ("post-pulse",),
+            snap,
+            frame_key,
+        )
+        result = _gate_spin(
+            trial,
+            ((source.name, True),),
+            SimpleNamespace(key=frame_key, snap=snap),
+            SimpleNamespace(key_config=cfg, gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(
+                steerable=frozenset((source.name,)),
+                resting={source.name: False},
+                edge_tags=set(),
+                max_scans=50,
+                pdg=None,
+                program=program,
+                avoid_pred=None,
+            ),
+            nogood_pair=(source.name, True),
+            gate_events=[],
+            collected_nogoods=[],
+            avoid_names=[],
+        )
+
+        assert result is not None
+        assert result.fork is retry
+        assert result.confirmed_correction is correction
+        assert result.key == _pilot_world_key(result.snap, cfg, correction.rungs)
+
+    def test_excursion_retry_is_rechecked_against_avoid(self, monkeypatch):
+        source = Bool("AvoidRetrySource", external=True)
+        hazard = Bool("AvoidRetryHazard")
+        with Program() as program:
+            with Rung(source):
+                out(hazard)
+        plc = PLC(program, dt=0.010)
+        plc.step()
+        snap = dict(plc.state.tags)
+        cfg = _StateKeyConfig(
+            stateful_names=(hazard.name,),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        frame_key = _pilot_world_key(snap, cfg, ())
+        rung = PilotRung(source.name, True, CompareEq(hazard, False))
+        correction = _ConfirmedCorrection(
+            identity=correction_identity((rung,)),
+            rungs=(rung,),
+            sources=(hazard.name, source.name),
+            justification="unsafe excursion replay",
+        )
+        retry = plc.fork()
+        retry.patch({source.name: True})
+        retry.step()
+        assert retry.state.tags[hazard.name] is True
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify.investigate_excursion",
+            lambda *_args, **_kwargs: ExcursionResult(
+                reverted=[hazard.name],
+                correction=correction,
+                retry_fork=retry,
+            ),
+        )
+        trial = _PulseState(
+            plc.fork(),
+            plc.state.scan_id,
+            plc.state.scan_id,
+            snap,
+            (),
+            {**snap, hazard.name: True},
+            ("post-pulse",),
+            snap,
+            frame_key,
+        )
+        avoid_names: list[str] = []
+
+        result = _gate_spin(
+            trial,
+            ((source.name, True),),
+            SimpleNamespace(key=frame_key, snap=snap),
+            SimpleNamespace(key_config=cfg, gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(
+                steerable=frozenset((source.name,)),
+                resting={source.name: False},
+                edge_tags=set(),
+                max_scans=50,
+                pdg=None,
+                program=program,
+                avoid_pred=lambda state: bool(state.get(hazard.name)),
+            ),
+            nogood_pair=(source.name, True),
+            gate_events=[],
+            collected_nogoods=[],
+            avoid_names=avoid_names,
+        )
+
+        assert result is None
+        assert avoid_names == ["avoided condition"]
 
     @pytest.mark.skip(reason="stub")
     def test_pending_effects_bypass_spin(self): ...

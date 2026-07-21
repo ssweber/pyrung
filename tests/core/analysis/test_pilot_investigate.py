@@ -46,6 +46,7 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_excursion,
 )
 from pyrung.core.analysis.pilot.types import BearingDeparture
+from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -1943,7 +1944,11 @@ class TestInvestigateExcursion:
         )
         # Sealing Hold=True keeps Out latched across the edge release — the
         # retry key differs from the (reverted) pre key, so the hold is kept.
-        assert ("Hold", True) in result.confirmed_holds
+        assert result.correction is not None
+        assert ("Hold", True) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
+        guard = result.correction.rungs[0].guard
+        assert guard.evaluate(_SnapshotView({"Out": True}, {}))
+        assert not guard.evaluate(_SnapshotView({"Out": False}, {}))
         assert result.retry_fork is not None
 
 
@@ -2087,7 +2092,8 @@ class TestGeneralizedAntagonistExcursion:
             program=prog,
         )
         assert result.reverted == ["State"]
-        assert ("Mode", 1) in result.confirmed_holds
+        assert result.correction is not None
+        assert ("Mode", 1) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
         assert result.retry_fork is not None
         # The suppression preserved the pulse-established value across the settle.
         assert result.retry_fork.state.tags["State"] == 5
@@ -2124,7 +2130,8 @@ class TestGeneralizedAntagonistExcursion:
             program=prog,
         )
         assert result.reverted == ["State"]
-        assert ("Sel", False) in result.confirmed_holds
+        assert result.correction is not None
+        assert ("Sel", False) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
         assert result.retry_fork is not None
         assert result.retry_fork.state.tags["State"] == 5
 
