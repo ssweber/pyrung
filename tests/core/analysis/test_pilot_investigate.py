@@ -28,6 +28,8 @@ from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     DeviationIncident,
     InvestigationHypothesis,
+    InvestigationRejection,
+    ReplayIncident,
     ReplayJustification,
     ReplayOutcome,
     ReplayStep,
@@ -82,18 +84,20 @@ def _make_replay_context(prog: Program, plc: PLC, target_tag: str, target_value:
     """Build the minimal keyword context for build_replay_fn."""
     pdg = build_program_graph(prog)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
-    return {
-        "resting": {t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
-        "edge_tags": set(),
-        "target_tag": target_tag,
-        "target_value": target_value,
-        "pdg": pdg,
-        "program": prog,
-        "steerable": steerable,
-        "opaque_loop": frozenset(),
-        "pipeline_internal_tags": frozenset(),
-        "route": None,
-    }
+    return SimpleNamespace(
+        resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
+        edge_tags=set(),
+        target_tag=target_tag,
+        target_value=target_value,
+        pdg=pdg,
+        program=prog,
+        steerable=steerable,
+        opaque_loop=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        route=None,
+        domain_prior=None,
+        clear_only=frozenset(),
+    )
 
 
 def _ground_test_incident(plc: PLC) -> DeviationIncident:
@@ -163,13 +167,16 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
     result = investigate_deviation(plc, _ground_test_incident(plc), ctx, replay)
 
     assert result.rejected == (
-        (raw_reject, "raw replay rejected: watchdog still fired"),
-        (guarded_reject, "guarded replay rejected: guard released before landing"),
-    )
-    # Each rejection carries an index-aligned machine-readable ground slug.
-    assert result.rejection_slugs == (
-        "exploratory-replay-failed",
-        "guarded-replay-failed",
+        InvestigationRejection(
+            raw_reject,
+            "exploratory-replay-failed",
+            "raw replay rejected: watchdog still fired",
+        ),
+        InvestigationRejection(
+            guarded_reject,
+            "guarded-replay-failed",
+            "guarded replay rejected: guard released before landing",
+        ),
     )
 
 
@@ -210,10 +217,10 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
         lambda _holds: pytest.fail("static rejection must not replay"),
     )
 
-    assert result.rejected[0] == (empty, "no holds proposed")
-    assert result.rejected[1][0] == noop
-    assert result.rejected[1][1].startswith("vacuous no-op hold")
-    assert result.rejection_slugs == ("no-holds", "vacuous-hold")
+    assert result.rejected[0] == InvestigationRejection(empty, "no-holds", "no holds proposed")
+    assert result.rejected[1].hypothesis == noop
+    assert result.rejected[1].slug == "vacuous-hold"
+    assert result.rejected[1].ground.startswith("vacuous no-op hold")
 
 
 def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
@@ -277,7 +284,7 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
     assert result.confirmed and result.confirmed[0].kind == "good"
     assert replayed
     assert all(Bad.name not in {tag for tag, _value in attempt} for attempt in replayed)
-    assert result.rejection_slugs == ("correction-revoked",)
+    assert tuple(rejection.slug for rejection in result.rejected) == ("correction-revoked",)
 
 
 def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():
@@ -378,8 +385,8 @@ class TestBoundedReplay:
             cp_trend,
             {},
             steps,
-            **ctx,
-            departure_bearing=(("Alarm", False),),
+            ctx=ctx,
+            incident=ReplayIncident(departure_bearing=(("Alarm", False),)),
         )
         outcome = replay((("Hold", True),))
         assert outcome.accepted
@@ -394,8 +401,8 @@ class TestBoundedReplay:
             cp_trend,
             {},
             steps,
-            **ctx,
-            departure_bearing=(("Alarm", False),),
+            ctx=ctx,
+            incident=ReplayIncident(departure_bearing=(("Alarm", False),)),
         )
         outcome = replay(())
         assert not outcome.accepted
@@ -410,7 +417,7 @@ class TestBoundedReplay:
             cp_trend,
             {},
             steps,
-            **ctx,
+            ctx=ctx,
         )
         outcome = replay((("Hold", True),))
         assert "trend" in outcome.reason
@@ -472,9 +479,8 @@ class TestZoomReplay:
             99,
             {},
             steps,
-            **ctx,
-            zoom_channel_tag="State",
-            zoom_target_value=6,
+            ctx=ctx,
+            incident=ReplayIncident(channel_tag="State", channel_target=6),
         )
 
     def test_zoom_accepts_hold_that_reaches_corridor_target(self):
@@ -536,10 +542,12 @@ def test_route_replay_accepts_local_neutralization_without_reaching_frontier():
         99,
         (),
         (ReplayStep(inputs=(), scans=20, kind="dwell"),),
-        **ctx,
-        zoom_channel_tag=State.name,
-        zoom_target_value=16,
-        regression_witness=witness,
+        ctx=ctx,
+        incident=ReplayIncident(
+            channel_tag=State.name,
+            channel_target=16,
+            regression_witness=witness,
+        ),
     )
 
     neutralized = replay(((Guard.name, True),))
@@ -596,10 +604,12 @@ def test_non_timer_regression_witness_distinguishes_suppression_from_masking():
         99,
         (),
         (ReplayStep(inputs=((Trip.name, True),), scans=1, kind="pulse"),),
-        **ctx,
-        zoom_channel_tag=State.name,
-        zoom_target_value=16,
-        regression_witness=witness,
+        ctx=ctx,
+        incident=ReplayIncident(
+            channel_tag=State.name,
+            channel_target=16,
+            regression_witness=witness,
+        ),
     )
 
     suppressed = replay(((Inhibit.name, True),))
@@ -729,10 +739,12 @@ def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
         99,
         (),
         (ReplayStep(inputs=(), scans=20, kind="dwell"),),
-        **_make_replay_context(prog, plc, State.name, 17),
-        zoom_channel_tag=State.name,
-        zoom_target_value=16,
-        regression_witness=witness,
+        ctx=_make_replay_context(prog, plc, State.name, 17),
+        incident=ReplayIncident(
+            channel_tag=State.name,
+            channel_target=16,
+            regression_witness=witness,
+        ),
     )
 
     unrelated = replay(((Inhibit.name, True),))
@@ -801,10 +813,12 @@ def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
         99,
         (),
         (ReplayStep(inputs=(), scans=20, kind="dwell"),),
-        **_make_replay_context(prog, plc, State.name, 17),
-        zoom_channel_tag=State.name,
-        zoom_target_value=16,
-        regression_witness=witness,
+        ctx=_make_replay_context(prog, plc, State.name, 17),
+        incident=ReplayIncident(
+            channel_tag=State.name,
+            channel_target=16,
+            regression_witness=witness,
+        ),
     )
 
     unrelated = replay(((PrimaryFault.name, False),))
@@ -868,12 +882,14 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
         99,
         (),
         (ReplayStep(inputs=(), scans=12, kind="letrun"),),
-        **ctx,
-        zoom_channel_tag=State.name,
-        zoom_target_value=3,
-        terminal_letrun_role_tags=(State.name,),
-        replay_watch_roles=(State.name,),
-        regression_witness=witness,
+        ctx=ctx,
+        incident=ReplayIncident(
+            channel_tag=State.name,
+            channel_target=3,
+            terminal_role_tags=(State.name,),
+            watch_roles=(State.name,),
+            regression_witness=witness,
+        ),
     )
 
     outcome = replay(((DoorA.name, True), (DoorB.name, True)))
@@ -960,12 +976,14 @@ class TestTerminalLetrunReplay:
             99,
             {},
             steps,
-            **ctx,
-            zoom_channel_tag="Phase",
-            zoom_target_value=6,
-            terminal_letrun_role_tags=("Phase",),
-            replay_watch_roles=("Phase",),
-            regression_witness=witness,
+            ctx=ctx,
+            incident=ReplayIncident(
+                channel_tag="Phase",
+                channel_target=6,
+                terminal_role_tags=("Phase",),
+                watch_roles=("Phase",),
+                regression_witness=witness,
+            ),
         )
 
     def test_letrun_accepts_hold_that_maintains_state(self):
@@ -1026,8 +1044,8 @@ class TestTerminalLetrunNoChannelRegister:
             99,
             {},
             steps,
-            **ctx,
-            terminal_letrun_role_tags=(),  # no recognized state machine
+            ctx=ctx,
+            incident=ReplayIncident(terminal_role_tags=()),  # no recognized state machine
         )
 
     def test_fallback_accepts_hold_that_reaches_global_target(self):

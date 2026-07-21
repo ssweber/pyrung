@@ -747,6 +747,7 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
     ground slug beside the human detail for every rejected hypothesis."""
     from pyrung.core.analysis.pilot.investigate import (
         InvestigationHypothesis,
+        InvestigationRejection,
         InvestigationResult,
     )
 
@@ -758,10 +759,17 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
             hypotheses=(reject_a, reject_b),
             confirmed=(),
             rejected=(
-                (reject_a, "raw replay rejected: watchdog still fired"),
-                (reject_b, "guarded replay rejected: guard released"),
+                InvestigationRejection(
+                    reject_a,
+                    "exploratory-replay-failed",
+                    "raw replay rejected: watchdog still fired",
+                ),
+                InvestigationRejection(
+                    reject_b,
+                    "guarded-replay-failed",
+                    "guarded replay rejected: guard released",
+                ),
             ),
-            rejection_slugs=("exploratory-replay-failed", "guarded-replay-failed"),
             unresolved=("GroundA",),
         )
 

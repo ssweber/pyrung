@@ -34,7 +34,9 @@ from pyrung.core.analysis.pilot.detour import (
     classify_departure,
 )
 from pyrung.core.analysis.pilot.investigate import (
+    InvestigationRejection,
     InvestigationResult,
+    ReplayIncident,
     ReplayStep,
     build_deviation_incident,
     build_replay_fn,
@@ -1093,36 +1095,27 @@ def _investigate_and_revert(
             cp_trend,
             tuple(state.rungs),
             replay_steps,
-            resting=ctx.resting,
-            edge_tags=ctx.edge_tags,
-            target_tag=ctx.target_tag,
-            target_value=ctx.target_value,
-            pdg=ctx.pdg,
-            program=ctx.program,
-            steerable=ctx.steerable,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=getattr(ctx, "domain_prior", None),
-            clear_only=getattr(ctx, "clear_only", frozenset()),
-            zoom_channel_tag=trial.zoom_channel_tag,
-            zoom_target_value=trial.zoom_target_value,
-            terminal_letrun_role_tags=(
-                role_tags if trial.motion is MotionKind.COAST_HOLDING_WORLD else None
-            ),
-            # The replay reproduces the incident, so its eject watch is the
-            # departed channel alone when one exists (audit I2 — an explicit
-            # caller decision, not buried dispatch); the full role set only
-            # when no channel register is recognized.
-            replay_watch_roles=(
-                (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
-            ),
-            departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
-            regression_witness=incident_regression_witness(trial.fork, incident),
-            progress_gauge=state.gauge,
-            progress_anchor=dict(cp_fork.state.tags),
-            regression_progress_floor=(
-                regression_progress_floor if correction_progress_mark else None
+            ctx=ctx,
+            incident=ReplayIncident(
+                channel_tag=trial.zoom_channel_tag,
+                channel_target=trial.zoom_target_value,
+                terminal_role_tags=(
+                    role_tags if trial.motion is MotionKind.COAST_HOLDING_WORLD else None
+                ),
+                # The replay reproduces the incident, so its eject watch is the
+                # departed channel alone when one exists (audit I2 — an explicit
+                # caller decision, not buried dispatch); the full role set only
+                # when no channel register is recognized.
+                watch_roles=(
+                    (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
+                ),
+                departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
+                regression_witness=incident_regression_witness(trial.fork, incident),
+                progress_gauge=state.gauge,
+                progress_anchor=dict(cp_fork.state.tags),
+                regression_progress_floor=(
+                    regression_progress_floor if correction_progress_mark else None
+                ),
             ),
         )
 
@@ -1166,15 +1159,13 @@ def _investigate_and_revert(
                 "detail": h.detail,
             }
 
-        def _rejection_detail(rejection: tuple[Any, str], slug: str) -> dict[str, Any]:
-            hypothesis, ground = rejection
-            return {**_hyp_detail(hypothesis), "slug": slug, "ground": ground}
+        def _rejection_detail(rejection: InvestigationRejection) -> dict[str, Any]:
+            return {
+                **_hyp_detail(rejection.hypothesis),
+                "slug": rejection.slug,
+                "ground": rejection.ground,
+            }
 
-        # ``rejection_slugs`` is index-aligned with ``rejected``; pad defensively
-        # so a serializer never desyncs even if the two ever diverge in length.
-        rejection_slugs = investigation.rejection_slugs + ("",) * (
-            len(investigation.rejected) - len(investigation.rejection_slugs)
-        )
         investigation_payload = {
             "hypotheses": len(investigation.hypotheses),
             "confirmed": len(investigation.confirmed),
@@ -1182,10 +1173,7 @@ def _investigate_and_revert(
             "unresolved": investigation.unresolved,
             "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
             "confirmed_detail": tuple(_hyp_detail(h) for h in investigation.confirmed),
-            "rejected_detail": tuple(
-                _rejection_detail(rejection, slug)
-                for rejection, slug in zip(investigation.rejected, rejection_slugs, strict=True)
-            ),
+            "rejected_detail": tuple(_rejection_detail(r) for r in investigation.rejected),
             "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
         }
     if retain_if_unresolved is not None and confirmed_correction is None and not revoked_receipts:

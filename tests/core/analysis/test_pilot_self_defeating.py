@@ -259,8 +259,8 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
 
     assert replayed == [progress_cut.holds]
     assert result.correction is None
-    assert result.rejected[0][0] == progress_cut
-    assert result.rejection_slugs == ("self-defeat",)
+    assert result.rejected[0].hypothesis == progress_cut
+    assert result.rejected[0].slug == "self-defeat"
 
 
 def test_conditional_oscillating_hold_reaching_init_value_is_caught():
@@ -554,10 +554,10 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     assert result.correction is None
     assert result.confirmed == ()
     assert len(result.rejected) == 1
-    rejected, ground = result.rejected[0]
-    assert rejected == hypothesis
-    assert "defeats requested progress" in ground
-    assert result.rejection_slugs == ("self-defeat",)
+    rejection = result.rejected[0]
+    assert rejection.hypothesis == hypothesis
+    assert "defeats requested progress" in rejection.ground
+    assert rejection.slug == "self-defeat"
 
 
 def test_letrun_regression_keeps_benign_hold(monkeypatch):

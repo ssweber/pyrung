@@ -73,9 +73,7 @@ class StaleBearingError(RuntimeError):
     """The world changed after orientation and before execution."""
 
 
-def _install_prerequisites(
-    state: _PilotState, prerequisites: tuple[PilotRung, ...]
-) -> None:
+def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, ...]) -> None:
     """Install only prerequisite rungs that do not already have an owner."""
     existing = {_rung_identity(rung) for rung in state.rungs}
     new_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)

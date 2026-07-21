@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import PlanStep
-from pyrung.core.analysis.pilot._ops import _semantic_key
+from pyrung.core.analysis.pilot._ops import _rung_identity
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
@@ -155,20 +155,10 @@ def _build_plan_journal(
     seen_rungs: set[tuple[Any, ...]] = set()
     correction_receipts = getattr(state, "correction_receipts", ())
     managed_rungs = {
-        (
-            rung.dest,
-            _semantic_key(rung.value),
-            _semantic_key(rung.guard),
-        )
-        for receipt in correction_receipts
-        for rung in receipt.rungs
+        _rung_identity(rung) for receipt in correction_receipts for rung in receipt.rungs
     }
     active_managed_rungs = {
-        (
-            rung.dest,
-            _semantic_key(rung.value),
-            _semantic_key(rung.guard),
-        )
+        _rung_identity(rung)
         for receipt in correction_receipts
         if receipt.status is CorrectionStatus.ACTIVE
         for rung in receipt.rungs
@@ -180,11 +170,7 @@ def _build_plan_journal(
             continue
         new_rungs: list[Any] = []
         for rung in entry.rungs:
-            key = (
-                rung.dest,
-                _semantic_key(rung.value),
-                _semantic_key(rung.guard),
-            )
+            key = _rung_identity(rung)
             if key in managed_rungs and key not in active_managed_rungs:
                 continue
             if key in seen_rungs:

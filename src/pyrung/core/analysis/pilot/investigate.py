@@ -62,8 +62,7 @@ from pyrung.core.analysis.sp_values import (
 from pyrung.core.context import RungId
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.trace import DomainPrior, TraceChoice
+    from pyrung.core.analysis.pilot.types import _PilotContext
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -192,6 +191,21 @@ class RegressionWitness:
     causal_spine: frozenset[str]
 
 
+@dataclass(frozen=True)
+class ReplayIncident:
+    """The bounded occurrence and judgment evidence a replay must reproduce."""
+
+    channel_tag: str | None = None
+    channel_target: Any = None
+    terminal_role_tags: tuple[str, ...] | None = None
+    watch_roles: tuple[str, ...] = ()
+    departure_bearing: tuple[ActionPair, ...] = ()
+    regression_witness: RegressionWitness | None = None
+    progress_gauge: Any = None
+    progress_anchor: Mapping[str, Any] | None = None
+    regression_progress_floor: Mapping[str, Any] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Incident / hypothesis / result types
 # ---------------------------------------------------------------------------
@@ -239,6 +253,15 @@ class ReplayOutcome:
 
 
 @dataclass(frozen=True)
+class InvestigationRejection:
+    """One rejected hypothesis and the exact ground that rejected it."""
+
+    hypothesis: InvestigationHypothesis
+    slug: str
+    ground: str
+
+
+@dataclass(frozen=True)
 class InvestigationResult:
     """Replay-confirmed corrective information."""
 
@@ -246,16 +269,9 @@ class InvestigationResult:
     regression_nogoods: frozenset[ActionPair] = frozenset()
     hypotheses: tuple[InvestigationHypothesis, ...] = ()
     confirmed: tuple[InvestigationHypothesis, ...] = ()
-    # Every rejection retains the ground that made it fail.  A rejected
-    # hypothesis without its ground is not useful evidence: it forces the
-    # operator to reconstruct and re-run the incident.  ``rejected`` carries the
-    # human ``(hypothesis, detail)`` pair; ``rejection_slugs`` is the parallel
-    # (index-aligned) list of stable machine-readable ground slugs
-    # ("no-holds", "vacuous-hold", "self-defeat", "exploratory-replay-failed",
-    # "guarded-replay-failed") a consumer can classify without string-matching
-    # the detail.  Built together, so element ``i`` of each always agree.
-    rejected: tuple[tuple[InvestigationHypothesis, str], ...] = ()
-    rejection_slugs: tuple[str, ...] = ()
+    # A rejection is one artifact: its hypothesis, stable machine-readable
+    # classification, and human ground cannot become index-desynchronized.
+    rejected: tuple[InvestigationRejection, ...] = ()
     unresolved: tuple[str, ...] = ()
 
 
@@ -575,27 +591,8 @@ def build_replay_fn(
     rungs: Sequence[Any],
     steps: Sequence[ReplayStep],
     *,
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    target_tag: str,
-    target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    opaque_loop: frozenset[str],
-    pipeline_internal_tags: frozenset[str],
-    route: TraceChoice | None,
-    prior: DomainPrior | None = None,
-    clear_only: frozenset[str] = frozenset(),
-    zoom_channel_tag: str | None = None,
-    zoom_target_value: Any = None,
-    terminal_letrun_role_tags: tuple[str, ...] | None = None,
-    replay_watch_roles: tuple[str, ...] = (),
-    departure_bearing: tuple[tuple[str, Any], ...] = (),
-    regression_witness: RegressionWitness | None = None,
-    progress_gauge: Any = None,
-    progress_anchor: Mapping[str, Any] | None = None,
-    regression_progress_floor: Mapping[str, Any] | None = None,
+    ctx: _PilotContext,
+    incident: ReplayIncident | None = None,
 ) -> ReplayFn:
     """Build a replay callback for ``investigate_deviation``.
 
@@ -627,6 +624,29 @@ def build_replay_fn(
     overwriting that branch's result or replacing the departure with another detour is
     never progress.
     """
+
+    incident = incident or ReplayIncident()
+    resting = ctx.resting
+    edge_tags = ctx.edge_tags
+    target_tag = ctx.target_tag
+    target_value = ctx.target_value
+    pdg = ctx.pdg
+    program = ctx.program
+    steerable = ctx.steerable
+    opaque_loop = ctx.opaque_loop
+    pipeline_internal_tags = ctx.pipeline_internal_tags
+    route = ctx.route
+    prior = getattr(ctx, "domain_prior", None)
+    clear_only = getattr(ctx, "clear_only", frozenset())
+    zoom_channel_tag = incident.channel_tag
+    zoom_target_value = incident.channel_target
+    terminal_letrun_role_tags = incident.terminal_role_tags
+    replay_watch_roles = incident.watch_roles
+    departure_bearing = incident.departure_bearing
+    regression_witness = incident.regression_witness
+    progress_gauge = incident.progress_gauge
+    progress_anchor = incident.progress_anchor
+    regression_progress_floor = incident.regression_progress_floor
 
     def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
         from pyrung.core.analysis.pilot.coast import CoastSession
@@ -1445,8 +1465,7 @@ def investigate_deviation(
     )
     confirmed: list[InvestigationHypothesis] = []
     confirmed_correction: _ConfirmedCorrection | None = None
-    rejected: list[tuple[InvestigationHypothesis, str]] = []
-    rejection_slugs: list[str] = []
+    rejected: list[InvestigationRejection] = []
     pdg = getattr(ctx, "pdg", None)
     program = getattr(ctx, "program", None)
     # A proposed hold at the anchor value is meaningful when the complete
@@ -1455,11 +1474,7 @@ def investigate_deviation(
     recorded_incident_movers = frozenset(incident.changed_tags)
 
     def _reject(hyp: InvestigationHypothesis, slug: str, detail: str) -> None:
-        # Recording only: ``detail`` is the unchanged human ground, ``slug`` the
-        # index-aligned machine-readable classification.  Appending through one
-        # helper keeps ``rejected`` and ``rejection_slugs`` in lock-step.
-        rejected.append((hyp, detail))
-        rejection_slugs.append(slug)
+        rejected.append(InvestigationRejection(hyp, slug, detail))
 
     def _replacement_has_incident_owner(
         hyp: InvestigationHypothesis,
@@ -1639,7 +1654,6 @@ def investigate_deviation(
         hypotheses=tuple(hypotheses),
         confirmed=tuple(confirmed),
         rejected=tuple(rejected),
-        rejection_slugs=tuple(rejection_slugs),
         unresolved=incident.changed_tags if not confirmed else (),
     )
 

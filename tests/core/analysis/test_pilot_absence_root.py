@@ -29,6 +29,7 @@ from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import BumpEvent
 from pyrung.core.analysis.pilot.investigate import (
+    ReplayIncident,
     ReplayStep,
     _absence_root_correctives,
     build_deviation_incident,
@@ -92,6 +93,8 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "pdg": pdg,
         "program": prog,
         "steerable": steerable,
+        "resting": {tag: False for tag in steerable if isinstance(plc.state.tags.get(tag), bool)},
+        "edge_tags": set(),
         "opaque_loop": frozenset(),
         "pipeline_internal_tags": frozenset(),
         "route": None,
@@ -100,6 +103,8 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "target_tag": "Phase",
         "target_value": 17,
         "target_predicate": None,
+        "domain_prior": None,
+        "clear_only": frozenset(),
     }
     ns.update(overrides)
     return SimpleNamespace(**ns)
@@ -220,8 +225,6 @@ class TestAnalogAbsenceRoot:
         ) == (None, 5, "Phase")
         assert len(witness.cause) > 1
 
-        pdg = ctx.pdg
-        steerable = ctx.steerable
         # A recorded let-run step: the coast holds Phase and re-arms toward the
         # channel target, bounded by its own span (the abort window).
         steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
@@ -230,21 +233,14 @@ class TestAnalogAbsenceRoot:
             99,
             {},
             steps,
-            resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
-            edge_tags=set(),
-            target_tag="Phase",
-            target_value=17,
-            pdg=pdg,
-            program=prog,
-            steerable=steerable,
-            opaque_loop=frozenset(),
-            pipeline_internal_tags=frozenset(),
-            route=None,
-            zoom_channel_tag="Phase",
-            zoom_target_value=6,
-            terminal_letrun_role_tags=("Phase",),
-            replay_watch_roles=("Phase",),
-            regression_witness=witness,
+            ctx=ctx,
+            incident=ReplayIncident(
+                channel_tag="Phase",
+                channel_target=6,
+                terminal_role_tags=("Phase",),
+                watch_roles=("Phase",),
+                regression_witness=witness,
+            ),
         )
 
         result = investigate_deviation(plc, incident, ctx, replay)
@@ -276,8 +272,6 @@ class TestAbsenceRootConfirmation:
         ) == (None, 5, "Phase")
         assert len(witness.cause) > 1
 
-        pdg = ctx.pdg
-        steerable = ctx.steerable
         # A recorded let-run step: the coast holds Phase and re-arms toward the
         # channel target, bounded by its own span (the abort window).
         steps = [ReplayStep(inputs=(), scans=incident.end_scan - anchor, kind="letrun")]
@@ -286,21 +280,14 @@ class TestAbsenceRootConfirmation:
             99,
             {},
             steps,
-            resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
-            edge_tags=set(),
-            target_tag="Phase",
-            target_value=17,
-            pdg=pdg,
-            program=prog,
-            steerable=steerable,
-            opaque_loop=frozenset(),
-            pipeline_internal_tags=frozenset(),
-            route=None,
-            zoom_channel_tag="Phase",
-            zoom_target_value=6,
-            terminal_letrun_role_tags=("Phase",),
-            replay_watch_roles=("Phase",),
-            regression_witness=witness,
+            ctx=ctx,
+            incident=ReplayIncident(
+                channel_tag="Phase",
+                channel_target=6,
+                terminal_role_tags=("Phase",),
+                watch_roles=("Phase",),
+                regression_witness=witness,
+            ),
         )
 
         raw = replay((("Sail", True),))
