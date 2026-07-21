@@ -39,6 +39,7 @@ from pyrung.core.analysis.pilot.investigate import (
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
+    _checkpoint_recovery_origin,
     _install_confirmed_correction,
     _investigate_and_revert,
     _monitor_trend,
@@ -772,8 +773,7 @@ def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
         frame,
         state,
         ctx,
-        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
-        end_scan=trial.fork.state.scan_id,
+        origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
     assert harmful not in state.rungs
@@ -843,8 +843,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         frame,
         state,
         ctx,
-        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
-        end_scan=trial.fork.state.scan_id,
+        origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
     assert high in state.rungs

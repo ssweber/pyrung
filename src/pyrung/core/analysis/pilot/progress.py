@@ -13,7 +13,8 @@ gate acceptance.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pyrsistent import pvector
@@ -71,12 +72,39 @@ from pyrung.core.analysis.sp_values import _values_match
 _PROVISIONAL_SCAN_BUDGET = 2000
 
 
-def _channel_tenure_checkpoint_index(
+@dataclass(frozen=True)
+class _RecoveryOrigin:
+    """Checkpoint owner and bounded incident evidence for one recovery."""
+
+    checkpoint_index: int
+    anchor_scan: int
+    before_snap: Mapping[str, Any]
+
+
+def _checkpoint_recovery_origin(
     state: _PilotState,
+    *,
+    checkpoint_index: int = -1,
+    before_snap: Mapping[str, Any] | None = None,
+) -> _RecoveryOrigin:
+    """Use one checkpoint as both rollback owner and incident anchor."""
+    checkpoint_index %= len(state.checkpoints)
+    checkpoint = state.checkpoints[checkpoint_index]
+    return _RecoveryOrigin(
+        checkpoint_index=checkpoint_index,
+        anchor_scan=checkpoint.world.work.state.scan_id,
+        before_snap=dict(checkpoint.world.work.state.tags if before_snap is None else before_snap),
+    )
+
+
+def _channel_recovery_origin(
+    state: _PilotState,
+    trial: _TrialResult,
+    frame: _IterationFrame,
     channel_tag: str,
     channel_value: Any,
-) -> int:
-    """Return the recovery receipt that began the current channel tenure.
+) -> _RecoveryOrigin:
+    """Return the owner and incident anchor for the current channel tenure.
 
     Target-relative progress may bank several checkpoints while an outer
     operation remains on the same channel value.  A later departure belongs to
@@ -93,7 +121,24 @@ def _channel_tenure_checkpoint_index(
         ):
             break
         index -= 1
-    return index
+    checkpoint = state.checkpoints[index]
+    checkpoint_snap = dict(checkpoint.world.work.state.tags)
+    # If the tenure receipt precedes the channel state this coast launched
+    # from, replay must include earlier motion, including the action that armed
+    # the fault. Using the post-action frame as "before" would already contain
+    # alarm triggers and erase the counterfactual evidence that a permissive
+    # clears them.
+    replay_from_checkpoint = (
+        checkpoint.world.work.state.scan_id < trial.scan_before
+        or not _values_match(checkpoint_snap.get(channel_tag), channel_value)
+    )
+    return _RecoveryOrigin(
+        checkpoint_index=index,
+        anchor_scan=(
+            checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
+        ),
+        before_snap=(checkpoint_snap if replay_from_checkpoint else dict(frame.snap)),
+    )
 
 
 def _monitor_trend(
@@ -212,23 +257,13 @@ def _monitor_trend(
                 # provisional corridor changes only the rollback boundary; it
                 # must not suppress understanding the same physical departure.
                 # Investigation therefore runs before retention in both cases.
-                checkpoint_index = _channel_tenure_checkpoint_index(
+                origin = _channel_recovery_origin(
                     state,
+                    trial,
+                    frame,
                     chan,
                     departed_from,
                 )
-                checkpoint = state.checkpoints[checkpoint_index]
-                checkpoint_snap = dict(checkpoint.world.work.state.tags)
-                replay_from_checkpoint = (
-                    checkpoint.world.work.state.scan_id < trial.scan_before
-                    or not _values_match(checkpoint_snap.get(chan), departed_from)
-                )
-                incident_anchor = (
-                    checkpoint.world.work.state.scan_id
-                    if replay_from_checkpoint
-                    else trial.scan_before
-                )
-                incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
                 return (
                     ejection,
                     *_investigate_and_revert(
@@ -236,11 +271,8 @@ def _monitor_trend(
                         frame,
                         state,
                         ctx,
-                        anchor_scan=incident_anchor,
-                        end_scan=state.work.state.scan_id,
-                        incident_before_snap=incident_before,
+                        origin=origin,
                         retain_if_unresolved=verdict,
-                        checkpoint_index=checkpoint_index,
                     ),
                 )
             if state.provisional is None:
@@ -253,26 +285,13 @@ def _monitor_trend(
             # channel transaction) is ordinary piloting. Keep the original
             # rollback boundary and budget; do not nest another provisional.
             return (ejection,)
-        checkpoint_index = _channel_tenure_checkpoint_index(
+        origin = _channel_recovery_origin(
             state,
+            trial,
+            frame,
             chan,
             departed_from,
         )
-        checkpoint = state.checkpoints[checkpoint_index]
-        checkpoint_snap = dict(checkpoint.world.work.state.tags)
-        # If the latest receipt precedes the channel state this coast launched
-        # from, replay must include earlier motion, including the action that armed the fault;
-        # using the post-action frame as "before" would already contain alarm
-        # triggers and erase the counterfactual evidence that a permissive
-        # clears them.
-        replay_from_checkpoint = (
-            checkpoint.world.work.state.scan_id < trial.scan_before
-            or not _values_match(checkpoint_snap.get(chan), departed_from)
-        )
-        incident_anchor = (
-            checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
-        )
-        incident_before = checkpoint_snap if replay_from_checkpoint else frame.snap
         return (
             ejection,
             *_investigate_and_revert(
@@ -280,10 +299,7 @@ def _monitor_trend(
                 frame,
                 state,
                 ctx,
-                anchor_scan=incident_anchor,
-                end_scan=state.work.state.scan_id,
-                incident_before_snap=incident_before,
-                checkpoint_index=checkpoint_index,
+                origin=origin,
             ),
         )
 
@@ -391,8 +407,7 @@ def _monitor_trend(
         frame,
         state,
         ctx,
-        anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
-        end_scan=state.work.state.scan_id,
+        origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
 
@@ -710,9 +725,7 @@ def _finish_provisional(
             frame,
             state,
             ctx,
-            anchor_scan=state.checkpoints[-1].world.work.state.scan_id,
-            end_scan=state.work.state.scan_id,
-            incident_before_snap=dict(state.checkpoints[-1].world.work.state.tags),
+            origin=_checkpoint_recovery_origin(state),
         )
         return (event, *regression)
 
@@ -1014,25 +1027,22 @@ def _investigate_and_revert(
     state: _PilotState,
     ctx: _PilotContext,
     *,
-    anchor_scan: int,
-    end_scan: int,
-    incident_before_snap: dict[str, Any] | None = None,
+    origin: _RecoveryOrigin,
     retain_if_unresolved: DepartureVerdict | None = None,
-    checkpoint_index: int = -1,
 ) -> tuple[PilotEvent, ...]:
-    """Build a bounded incident over ``[anchor_scan, end_scan]``, replay-test
-    corrective holds, install the confirmed ones, and revert to the last
+    """Build a bounded incident from ``origin`` through the current world, replay-test
+    corrective holds, install the confirmed ones, and revert to the selected
     checkpoint.
 
-    The window is a parameter because a *regression* anchors at the checkpoint
-    scan, while a *terminal-letrun ejection* must anchor at the coast start
-    (``trial.scan_before``) — the ejecting watchdog fires mid-coast, so the
-    post-eject window the regression path would use misses it.
+    A regression origin anchors at its checkpoint, while a terminal-let-run
+    ejection may anchor at the coast start. The origin owns that distinction;
+    recovery derives the end from the committed world it is about to revert.
     """
-    checkpoint_index %= len(state.checkpoints)
+    checkpoint_index = origin.checkpoint_index
     checkpoint = state.checkpoints[checkpoint_index]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
     cp_fork = cp_world.work
+    end_scan = state.work.state.scan_id
     confirmed_correction: _ConfirmedCorrection | None = None
     investigation: InvestigationResult | None = None
     revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
@@ -1058,14 +1068,14 @@ def _investigate_and_revert(
             event
             for sc in state.step_contexts
             for event in sc.timeline
-            if anchor_scan <= event.scan <= end_scan
+            if origin.anchor_scan <= event.scan <= end_scan
         )
         incident = build_deviation_incident(
-            anchor_scan=anchor_scan,
+            anchor_scan=origin.anchor_scan,
             end_scan=end_scan,
             action=trial.applied,
             bearing=bearing,
-            before_snap=incident_before_snap or frame.snap,
+            before_snap=origin.before_snap,
             after_snap=trial.fork_snap,
             timeline=window_timeline,
             program=ctx.program,

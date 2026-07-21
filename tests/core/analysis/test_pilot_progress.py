@@ -38,7 +38,7 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
-    _channel_tenure_checkpoint_index,
+    _channel_recovery_origin,
     _deviation_bearing,
     _monitor_trend,
 )
@@ -221,11 +221,14 @@ class TestCheckpoints:
         assert receipt.trend == 2
         assert receipt.world.work.state.scan_id == source_scan
 
-    def test_channel_tenure_ignores_nested_progress_checkpoints(self):
+    def test_channel_recovery_origin_owns_the_whole_tenure(self):
         entered = _oneshot_plc()
         entered._state = entered.state.with_tags({"A": True})
+        entered.step()
         nested = entered.fork()
-        later = entered.fork()
+        nested.step()
+        later = nested.fork()
+        later.step()
         state = _make_state(
             best_trend=1,
             checkpoints=[
@@ -235,8 +238,34 @@ class TestCheckpoints:
                 _cp(("step",), later, 1),
             ],
         )
+        trial = _make_trial(1, Outcome.AMBIENT_DRIFT, scan_before=later.state.scan_id)
+        frame = _frame()
+        frame.snap = {"A": True, "FrameOnly": True}
 
-        assert _channel_tenure_checkpoint_index(state, "A", True) == 1
+        origin = _channel_recovery_origin(state, trial, frame, "A", True)
+
+        assert origin.checkpoint_index == 1
+        assert origin.anchor_scan == entered.state.scan_id
+        assert origin.before_snap["A"] is True
+        assert "FrameOnly" not in origin.before_snap
+
+    def test_current_tenure_receipt_uses_the_coast_frame(self):
+        entered = _oneshot_plc()
+        entered._state = entered.state.with_tags({"A": True})
+        entered.step()
+        state = _make_state(
+            best_trend=1,
+            checkpoints=[_cp(("entered",), entered, 1)],
+        )
+        trial = _make_trial(1, Outcome.AMBIENT_DRIFT, scan_before=entered.state.scan_id)
+        frame = _frame()
+        frame.snap = {"A": True, "FrameOnly": True}
+
+        origin = _channel_recovery_origin(state, trial, frame, "A", True)
+
+        assert origin.checkpoint_index == 0
+        assert origin.anchor_scan == trial.scan_before
+        assert origin.before_snap == frame.snap
 
 
 def test_banked_ordinary_checkpoint_promotes_the_provisional():
