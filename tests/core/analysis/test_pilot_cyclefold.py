@@ -149,8 +149,13 @@ class TestCycleFoldBitEqual:
         cf.step()
         _install_oscillator(cf, "Osc")
         stats: dict[str, int] = {}
+        advances: list[tuple[str, int | float]] = []
         reached = cycle_fold_until(
-            cf, lambda s: s.tags.get("Done") is True, budget=20000, stats=stats
+            cf,
+            lambda s: s.tags.get("Done") is True,
+            budget=20000,
+            stats=stats,
+            advances=advances,
         )
 
         assert reached is True
@@ -166,6 +171,8 @@ class TestCycleFoldBitEqual:
         assert stats["macro_folds"] == stats["folds"]
         assert stats["skipped_scans"] == stats["logical_scans"] - stats["kernel_scans"]
         assert stats["saved_kernel_scans"] == stats["skipped_scans"]
+        assert advances
+        assert any(tag == "Soak_Acc" and value > 0 for tag, value in advances)
 
     def test_watchdog_never_trips_under_fold(self) -> None:
         # The whole point: folding must NOT let the kept-reset watchdog accumulate.

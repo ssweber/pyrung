@@ -7441,12 +7441,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Clear",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX changed from 8191 to 0",
+    "transition": "A_CurDisabledStates_HEX 8191 -> 0",
     "waiting_for": []
    },
    {
@@ -7458,12 +7458,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Reset",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 9 to 1",
+    "transition": "Cmd_CtrlCmd 9 -> 1",
     "waiting_for": []
    },
    {
@@ -7509,12 +7509,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Start",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 1 to 2",
+    "transition": "Cmd_CtrlCmd 1 -> 2",
     "waiting_for": []
    },
    {
@@ -7575,7 +7575,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall changed from 0 to 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7597,7 +7597,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Sts_StateCurrent changed from 3 to 6",
+    "transition": "Sts_StateCurrent 3 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7678,243 +7678,243 @@
     "__type__": "PlanStep",
     "accelerators": [
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       5
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       60
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       299
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       29
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       3598
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       48
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       88
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       300
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       30
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       3599
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       49
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       89
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       303
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       33
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       3602
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       52
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       92
      ],
      [
-      "HeatDelay_Tmr_Acc",
+      "HeatDelay_Tmr.Acc",
       300
      ],
      [
-      "HeatDelay_Tmr_Acc",
+      "HeatDelay_Tmr.Acc",
       30
      ],
      [
-      "HeatDelay_Tmr_Acc",
+      "HeatDelay_Tmr.Acc",
       3599
      ],
      [
-      "HeatDelay_Tmr_Acc",
+      "HeatDelay_Tmr.Acc",
       49
      ],
      [
-      "HeatDelay_Tmr_Acc",
+      "HeatDelay_Tmr.Acc",
       89
      ],
      [
-      "Heat_CurStep_tmr_Acc",
+      "Heat_CurStep_tmr.Acc",
       18
      ],
      [
-      "Heat_CurStep_tmr_Acc",
+      "Heat_CurStep_tmr.Acc",
       248
      ],
      [
-      "Heat_CurStep_tmr_Acc",
+      "Heat_CurStep_tmr.Acc",
       3547
      ],
      [
-      "Heat_CurStep_tmr_Acc",
+      "Heat_CurStep_tmr.Acc",
       37
      ],
      [
-      "Heat_CurStep_tmr_Acc",
+      "Heat_CurStep_tmr.Acc",
       37
      ],
      [
-      "Heat_tmr_Acc",
+      "Heat_tmr.Acc",
       20
      ],
      [
-      "Heat_tmr_Acc",
+      "Heat_tmr.Acc",
       250
      ],
      [
-      "Heat_tmr_Acc",
+      "Heat_tmr.Acc",
       3549
      ],
      [
-      "Heat_tmr_Acc",
+      "Heat_tmr.Acc",
       39
      ],
      [
-      "Heat_tmr_Acc",
+      "Heat_tmr.Acc",
       39
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       305
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       35
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       3604
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       54
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       94
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       308
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       3607
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       38
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       57
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       97
      ],
      [
-      "S_HeatAtTemp_tmr_Acc",
+      "S_HeatAtTemp_tmr.Acc",
       0
      ],
      [
-      "S_HeatAtTemp_tmr_Acc",
+      "S_HeatAtTemp_tmr.Acc",
       0
      ],
      [
-      "S_HeatAtTemp_tmr_Acc",
+      "S_HeatAtTemp_tmr.Acc",
       1
      ],
      [
-      "S_HeatAtTemp_tmr_Acc",
+      "S_HeatAtTemp_tmr.Acc",
       59
      ],
      [
-      "S_HeatAtTemp_tmr_Acc",
+      "S_HeatAtTemp_tmr.Acc",
       5
      ]
     ],
@@ -7932,7 +7932,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Heat_xCall changed from 0 to 1",
+    "transition": "Heat_xCall 0 -> 1",
     "waiting_for": []
    },
    {
@@ -7952,7 +7952,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd changed from 2 to 4",
+    "transition": "Cmd_CtrlCmd 2 -> 4",
     "waiting_for": []
    },
    {
@@ -7998,35 +7998,35 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Unhold",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 4 to 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
     "__type__": "PlanStep",
     "accelerators": [
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       3604
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       3
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       3
      ]
     ],
@@ -8070,7 +8070,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall changed from 0 to 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -8095,7 +8095,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent changed from 12 to 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -8125,39 +8125,39 @@
     "__type__": "PlanStep",
     "accelerators": [
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       15
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       4507
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       899
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       902
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       903
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       907
      ],
      [
-      "S_CoolCycle_tmr_Acc",
+      "S_CoolCycle_tmr.Acc",
       14
      ]
     ],
@@ -8195,7 +8195,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd changed from 5 to 4",
+    "transition": "Cmd_CtrlCmd 5 -> 4",
     "waiting_for": []
    },
    {
@@ -8207,35 +8207,35 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Unhold",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 4 to 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
     "__type__": "PlanStep",
     "accelerators": [
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       4513
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       3
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       3
      ]
     ],
@@ -8279,7 +8279,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall changed from 0 to 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -8304,7 +8304,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent changed from 12 to 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -8326,7 +8326,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd changed from 5 to 4",
+    "transition": "Cmd_CtrlCmd 5 -> 4",
     "waiting_for": []
    },
    {
@@ -8338,12 +8338,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Unhold",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 4 to 5",
+    "transition": "Cmd_CtrlCmd 4 -> 5",
     "waiting_for": []
    },
    {
@@ -8389,7 +8389,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall changed from 0 to 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -8414,7 +8414,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent changed from 12 to 6",
+    "transition": "Sts_StateCurrent 12 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -8444,39 +8444,39 @@
     "__type__": "PlanStep",
     "accelerators": [
      [
-      "A_CTmr_Prd_Execute_Acc",
+      "A_CTmr_Prd_Execute.Acc",
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr_Acc",
+      "A_ModeTimeCurrent_tmr.Acc",
       1
      ],
      [
-      "A_StateTimeCurrent_tmr_Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       30
      ],
      [
-      "A_TimeBetween1stScan_tmr_Acc",
+      "A_TimeBetween1stScan_tmr.Acc",
       6324
      ],
      [
-      "Blower_CurStep_tmr_Acc",
+      "Blower_CurStep_tmr.Acc",
       1799
      ],
      [
-      "Blower_tmr_Acc",
+      "Blower_tmr.Acc",
       1802
      ],
      [
-      "Rotate_CurStep_tmr_Acc",
+      "Rotate_CurStep_tmr.Acc",
       1804
      ],
      [
-      "Rotate_tmr_Acc",
+      "Rotate_tmr.Acc",
       1807
      ],
      [
-      "S_Fluffing_tmr_Acc",
+      "S_Fluffing_tmr.Acc",
       29
      ]
     ],
@@ -8494,7 +8494,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd changed from 5 to 10",
+    "transition": "Cmd_CtrlCmd 5 -> 10",
     "waiting_for": []
    },
    {
@@ -8514,7 +8514,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall changed from 1 to 0",
+    "transition": "Blower_xCall 1 -> 0",
     "waiting_for": []
    }
   ],

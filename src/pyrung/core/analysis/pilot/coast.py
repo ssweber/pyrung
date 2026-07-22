@@ -109,6 +109,9 @@ class CoastReceipt:
     real_scans: int = 0
     folds: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
+    # Exact accumulator destinations written by cycle folding, in execution
+    # order. These are the manual edits needed to reproduce each jump ahead.
+    advances: tuple[tuple[str, Any], ...] = ()
 
     @property
     def reached(self) -> bool:
@@ -267,6 +270,7 @@ class CoastSession:
         active_rungs = bool(plc._synthesis is not None and plc._synthesis.holds)
         real_scans = 0
         folds = 0
+        advances: list[tuple[str, Any]] = []
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
 
@@ -308,6 +312,7 @@ class CoastSession:
                         extra_comparisons=crossings,
                         predicate_reads=protected | clock_reads,
                         stats=stats,
+                        advances=advances,
                     )
                     real_scans += stats.get("real_scans", 0)
                     folds += stats.get("folds", 0)
@@ -399,6 +404,7 @@ class CoastSession:
             budget=budget,
             real_scans=real_scans,
             folds=folds,
+            advances=tuple(advances),
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(

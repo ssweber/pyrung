@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.detour import (
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationRejection,
     InvestigationResult,
+    RegressionWitness,
     ReplayIncident,
     ReplayStep,
     build_deviation_incident,
@@ -72,7 +73,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _TrialResult,
 )
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
 
@@ -1047,6 +1048,68 @@ def _contradicted_corrections(
     return tuple(contradicted)
 
 
+def _causally_harmful_probationary_corrections(
+    state: _PilotState,
+    witness: RegressionWitness | None,
+    snapshot: Mapping[str, Any],
+) -> tuple[_CorrectionReceipt, ...]:
+    """Probationary corrections whose exact PILOT write caused this incident.
+
+    Bounded replay proves only that a proposed rung suppresses one recorded
+    departure.  Until the live run banks progress, the correction remains a
+    hypothesis.  If the next incident's recorded ``cause()`` chain contains
+    the active synthetic write owned by that hypothesis, the live machine has
+    supplied the missing counterexample and the rung must be removed even when
+    investigation cannot yet name a replacement.
+
+    Match the exact PILOT write (destination and value), then resolve the last
+    active rung for that destination using the same ordered-overlay rule as
+    ``_set_rungs``.  This avoids blaming an expired or shadowed correction that
+    merely mentions the same tag.
+    """
+    if witness is None:
+        return ()
+    causal_values = (
+        tuple(
+            (occurrence.tag, occurrence.value)
+            for occurrence in witness.cause
+            if occurrence.rung.subroutine == "PILOT"
+        )
+        + witness.causal_roots
+    )
+    if not causal_values:
+        return ()
+
+    view = _SnapshotView(dict(snapshot), {})
+    active_owner: dict[str, PilotRung] = {}
+    for rung in state.rungs:
+        try:
+            active = bool(rung.guard.evaluate(view))
+        except (AttributeError, KeyError, TypeError, ValueError):
+            active = False
+        if active:
+            active_owner[rung.dest] = rung
+
+    harmful: list[_CorrectionReceipt] = []
+    for receipt in state.correction_receipts:
+        if receipt.status is not CorrectionStatus.PROBATIONARY:
+            continue
+        owns_cause = False
+        for rung in receipt.rungs:
+            owner = active_owner.get(rung.dest)
+            if owner is None or _rung_identity(owner) != _rung_identity(rung):
+                continue
+            if any(
+                tag == rung.dest and _values_match(value, rung.value)
+                for tag, value in causal_values
+            ):
+                owns_cause = True
+                break
+        if owns_cause:
+            harmful.append(receipt)
+    return tuple(harmful)
+
+
 def _revoke_corrections(
     state: _PilotState,
     receipts: tuple[_CorrectionReceipt, ...],
@@ -1169,6 +1232,7 @@ def _investigate_and_revert(
         )
         regression_progress_floor = dict(cp_fork.state.tags)
         regression_progress_floor.update(correction_progress_mark)
+        regression_witness = incident_regression_witness(trial.fork, incident)
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
@@ -1189,7 +1253,7 @@ def _investigate_and_revert(
                     (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
                 ),
                 departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
-                regression_witness=incident_regression_witness(trial.fork, incident),
+                regression_witness=regression_witness,
                 progress_gauge=state.gauge,
                 progress_anchor=dict(cp_fork.state.tags),
                 regression_progress_floor=(
@@ -1228,7 +1292,18 @@ def _investigate_and_revert(
         # exact installed form. Post-commit recovery does not reinterpret that proof through
         # a second, globally-steady-hold rule.
         confirmed_correction = investigation.correction
-        revoked_receipts = _contradicted_corrections(state, investigation)
+        revoked_by_id = {
+            receipt.receipt_id: receipt
+            for receipt in (
+                *_causally_harmful_probationary_corrections(
+                    state,
+                    regression_witness,
+                    incident.before_snap,
+                ),
+                *_contradicted_corrections(state, investigation),
+            )
+        }
+        revoked_receipts = tuple(revoked_by_id.values())
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -1348,6 +1423,9 @@ def _investigate_and_revert(
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
                 "revoked_corrections": revoked_ids,
+                "revoked_rungs": tuple(
+                    rung for receipt in revoked_receipts for rung in receipt.rungs
+                ),
             },
         ),
     )

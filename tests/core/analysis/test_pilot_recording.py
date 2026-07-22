@@ -70,7 +70,7 @@ def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     journal = _build_plan_journal(state, None, frozenset(), frozenset())
 
     assert len(journal) == 1
-    assert journal[0].kind == "command"
+    assert journal[0].kind == "pulse"
     assert journal[0].scan == 10
     assert journal[0].scans == 3
     assert journal[0].inputs == (("Cmd", True),)

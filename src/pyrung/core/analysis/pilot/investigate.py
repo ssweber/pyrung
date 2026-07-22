@@ -149,6 +149,7 @@ class RegressionWitness:
     departure_scan: int
     cause: tuple[CausalOccurrence, ...]
     causal_spine: frozenset[str]
+    causal_roots: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -266,10 +267,10 @@ def _scoped_correction_rungs(
         return tuple(proposals)
 
     channel_tag = incident.channel_tag
-    if channel_tag is not None and (
-        channel := plc._known_tags_by_name.get(channel_tag)
-    ) is not None and (
-        outcome.justification is ReplayJustification.NEUTRALIZED or outcome.landed
+    if (
+        channel_tag is not None
+        and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
+        and (outcome.justification is ReplayJustification.NEUTRALIZED or outcome.landed)
     ):
         from pyrung.core.condition import CompareEq, CompareNe
 
@@ -381,6 +382,7 @@ def incident_regression_witness(
         departure_scan=departure.scan,
         cause=tuple(cause),
         causal_spine=frozenset(chase_chain_tags(plc, channel, scan=departure.scan)),
+        causal_roots=tuple((root.tag_name, root.value) for root in chain.roots),
     )
 
 
@@ -453,6 +455,29 @@ class _RegressionOwnership:
     neutralized: bool
 
 
+def _replacement_departure_cause(
+    plc: PLC,
+    witness: RegressionWitness,
+    events: Sequence[Any],
+) -> frozenset[str] | None:
+    """Causal spine of the first replacement departure in this bounded replay."""
+    departure_scan = next(
+        (
+            event.scan
+            for event in events
+            for tag, before, after in event.transitions
+            if tag == witness.channel_tag
+            and _values_match(before, witness.source)
+            and not _values_match(after, witness.source)
+        ),
+        None,
+    )
+    if departure_scan is None:
+        return None
+    tags = chase_chain_tags(plc, witness.channel_tag, scan=departure_scan)
+    return frozenset(tags) if tags else None
+
+
 def _regression_ownership(
     plc: PLC,
     witness: RegressionWitness,
@@ -463,14 +488,12 @@ def _regression_ownership(
     end_scan: int,
     prior_neutralized: bool = False,
 ) -> _RegressionOwnership:
-    """Judge only whether the recorded incident's changed writes replayed.
+    """Judge the recorded branch and any replacement inside its bounded replay.
 
-    The source-channel receipt remains useful for diagnostics and masking
-    evidence, but a replacement departure is deliberately outside this proof.
-    It becomes a new live incident, where ordinary correction lifecycle can
-    confirm a sibling remedy or revoke a harmful probationary one.  Keeping
-    this judgment at the recorded horizon avoids reconstructing an unbounded
-    future merely to decide one local correction.
+    Replay does not chase a future stable landing. It does own departures
+    already visible inside the recorded horizon: a proposal that replaces one
+    departure with a departure on its own causal spine has disproved itself.
+    A distinct sibling cause remains probationary evidence for the live loop.
     """
     bounded_events = tuple(event for event in events if event.scan <= end_scan)
     source_preserved = _values_match(
@@ -486,15 +509,29 @@ def _regression_ownership(
         start_scan=start_scan,
         end_scan=end_scan,
     )
-    del proposal_tags, prior_neutralized
+    replacement_cause = (
+        _replacement_departure_cause(plc, witness, bounded_events) if not source_preserved else None
+    )
+    replacement_owned = (
+        bool(proposal_tags & replacement_cause) if replacement_cause is not None else None
+    )
+    replacement_replays_recorded = (
+        witness.causal_spine.issubset(replacement_cause) if replacement_cause is not None else None
+    )
+    unrelated_departure = (
+        replacement_cause is not None
+        and replacement_replays_recorded is False
+        and replacement_owned is False
+    )
+    del prior_neutralized
     return _RegressionOwnership(
         source_preserved=source_preserved,
         cause_silenced=cause_silenced,
-        replacement_cause=None,
-        replacement_owned=None,
-        replacement_replays_recorded=None,
-        unrelated_departure=False,
-        neutralized=cause_silenced,
+        replacement_cause=replacement_cause,
+        replacement_owned=replacement_owned,
+        replacement_replays_recorded=replacement_replays_recorded,
+        unrelated_departure=unrelated_departure,
+        neutralized=(source_preserved and cause_silenced) or unrelated_departure,
     )
 
 
@@ -534,8 +571,9 @@ def build_replay_fn(
     regression was a channel departure, suppressing its exact changed-write
     branch inside the recorded incident window is local **neutralization** and
     is sufficient. Merely overwriting that branch's result is not: exact firing
-    testimony still detects masking. Any later departure is judged as a new
-    live incident rather than reconstructed speculatively here.
+    testimony still detects masking. A replacement departure already inside
+    that bounded window is accepted only when its cause is unrelated to the
+    proposal; motion beyond the window belongs to a later live incident.
     """
 
     incident = incident or ReplayIncident()
@@ -680,8 +718,7 @@ def build_replay_fn(
                     f"preserved {zoom_channel_tag}={regression_witness.source!r} "
                     f"and suppressed its {len(regression_witness.cause)}-write causal branch"
                     if source_preserved
-                    else "recorded cause silenced inside its bounded incident; "
-                    "replacement motion is deferred to the next live incident"
+                    else "recorded cause silenced before an unrelated replacement departure"
                 )
             progressed = neutralized_reason
             gauge_advanced = False
@@ -711,30 +748,37 @@ def build_replay_fn(
                     )
                 )
             )
+            accepted = (
+                gauge_advanced or (not cause_repeated and (reached or progressed is not None))
+            ) and not progress_erased
             return ReplayOutcome(
-                accepted=(
-                    gauge_advanced
-                    or (not cause_repeated and (reached or progressed is not None))
-                )
-                and not progress_erased,
+                accepted=accepted,
                 trend=None,
                 snapshot=snap,
-                reason=progressed or rejection_reason,
+                reason=(progressed if accepted else rejection_reason) or rejection_reason,
                 # A coast that timed out mid-journey landed nowhere — its end
                 # snapshot must not seed a channel scope.
                 landed=reached,
                 justification=(
-                    ReplayJustification.REACHED
-                    if reached
-                    else (
-                        ReplayJustification.NEUTRALIZED
-                        if neutralized_reason is not None
-                        else ReplayJustification.ADVANCED
-                        if progressed is not None
-                        else None
+                    (
+                        ReplayJustification.REACHED
+                        if reached
+                        else (
+                            ReplayJustification.NEUTRALIZED
+                            if neutralized_reason is not None
+                            else ReplayJustification.ADVANCED
+                            if progressed is not None
+                            else None
+                        )
                     )
+                    if accepted
+                    else None
                 ),
-                replacement_cause=frozenset(),
+                replacement_cause=(
+                    ownership.replacement_cause or frozenset()
+                    if ownership is not None
+                    else frozenset()
+                ),
             )
 
         # Terminal let-run without a channel register (no recognized state

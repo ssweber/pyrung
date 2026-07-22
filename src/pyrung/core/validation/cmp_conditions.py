@@ -66,7 +66,14 @@ from pyrung.core.validation._common import (
     walk_instructions,
 )
 from pyrung.core.validation.display import FindingDisplay, Frame
-from pyrung.core.validation.render import caret_of, with_rung_line
+from pyrung.core.validation.render import (
+    caret_of,
+    operand_name,
+    with_rung_line,
+)
+from pyrung.core.validation.render import (
+    render_expr as render_source_expr,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -157,6 +164,10 @@ def _operand_of_expr(expr: Expression) -> _Operand:
 
 def _render(op: _Operand) -> str:
     if op.kind == "tag":
+        if isinstance(op.raw, Tag):
+            return operand_name(op.raw)
+        if isinstance(op.raw, TagExpr):
+            return operand_name(op.raw.tag)
         return op.name or "?"
     if op.kind == "literal":
         return str(op.value)
@@ -166,15 +177,7 @@ def _render(op: _Operand) -> str:
 
 
 def _render_expr(expr: Any) -> str:
-    if isinstance(expr, TagExpr):
-        return expr.tag.name
-    if isinstance(expr, LiteralExpr):
-        return str(expr.value)
-    if isinstance(expr, BinaryExpr):
-        return f"({_render_expr(expr.left)} {expr.symbol} {_render_expr(expr.right)})"
-    if isinstance(expr, UnaryExpr):
-        return f"{expr.symbol}{_render_expr(expr.operand)}"
-    return type(expr).__name__
+    return render_source_expr(expr)
 
 
 def _render_compare(cmp: _Compare) -> str:
@@ -351,7 +354,7 @@ def _monotone_side(
 def _done_hint(profile: AdvanceProfile) -> str:
     if profile.done is None:
         return ""
-    return f" (or the '{profile.done.name}' done bit)"
+    return f" (or the '{operand_name(profile.done)}' done bit)"
 
 
 def _eq_display(
@@ -363,7 +366,7 @@ def _eq_display(
         code=CMP_EQ_ON_MONOTONE,
         severity="error",
         frames=(_cmp_frame(cmp, f"can skip past {_render(comparand)}"),),
-        hint=f"use {reg.name} {order} {_render(comparand)}{_done_hint(profile)}",
+        hint=f"use {_render(reg)} {order} {_render(comparand)}{_done_hint(profile)}",
     )
 
 
@@ -447,7 +450,7 @@ def _true_at_reset_display(
         code=CMP_TRUE_AT_RESET,
         severity="warning",
         frames=(_cmp_frame(cmp, label),),
-        hint=f"did you mean {reg.name} >= {_render(comparand)}{_done_hint(profile)}?",
+        hint=f"did you mean {_render(reg)} >= {_render(comparand)}{_done_hint(profile)}?",
     )
 
 

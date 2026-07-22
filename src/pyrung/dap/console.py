@@ -437,136 +437,288 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
     return ConsoleResult(str(chain))
 
 
+def _pilot_value(value: Any) -> str:
+    if value is True:
+        return "True"
+    if value is False:
+        return "False"
+    return repr(value) if isinstance(value, str) and " " in value else str(value)
+
+
+def _pilot_assignments(actions: Any) -> str:
+    ordered = sorted(actions, key=lambda pair: pair[0])
+    return ", ".join(f"{tag}={_pilot_value(value)}" for tag, value in ordered)
+
+
+class _PilotProgressFormatter:
+    """Render Pilot events as a compact transcript, including live fragments.
+
+    A trial or investigation is deliberately an unfinished sentence while the
+    work is running.  The later event supplies ``done``, ``valid``, or the
+    confirmed correction on that same console line.
+    """
+
+    def __init__(self) -> None:
+        self._target: tuple[str, Any] | None = None
+        self._trial_open = False
+        self._retry_open = False
+        self._wait_open = False
+        self._wait_channel: str | None = None
+        self._resuming_open = False
+        self._movement_open = False
+        self._departure_open = False
+        self._investigation_open = False
+        self._after_correction = False
+        self._last_holds: tuple[tuple[str, Any], ...] = ()
+
+    def _confirmed_corrections(self, data: dict[str, Any]) -> list[str]:
+        from pyrung.core.analysis.graph import _format_synthesis_instruction
+        from pyrung.core.validation.render import render_condition
+
+        confirmed = data.get("investigation", {}).get("confirmed_detail", ())
+        steady: list[str] = []
+        by_guard: dict[str, list[str]] = {}
+        for hypothesis in confirmed:
+            for proposal in hypothesis.get("holds", ()):
+                if hasattr(proposal, "dest"):
+                    guard = render_condition(proposal.guard)
+                    instruction = _format_synthesis_instruction(proposal)
+                    instructions = by_guard.setdefault(guard, [])
+                    if instruction not in instructions:
+                        instructions.append(instruction)
+                else:
+                    assignment = f"{proposal[0]}={_pilot_value(proposal[1])}"
+                    if assignment not in steady:
+                        steady.append(assignment)
+        corrections = [
+            f"with rung({guard}): {'; '.join(instructions)}"
+            for guard, instructions in by_guard.items()
+        ]
+        if steady:
+            corrections.insert(0, f"keep {', '.join(steady)}")
+        for tag, value in data.get("released_holds", ()):
+            corrections.append(f"release {tag}={_pilot_value(value)}")
+        return corrections
+
+    def _render_rungs(self, rungs: Any) -> list[str]:
+        """Render exact temporary logic as compact, source-shaped operations."""
+        from pyrung.core.analysis.graph import _format_synthesis_instruction
+        from pyrung.core.validation.render import render_condition
+
+        by_guard: dict[str, list[str]] = {}
+        for rung in rungs:
+            guard = render_condition(rung.guard)
+            instruction = _format_synthesis_instruction(rung)
+            instructions = by_guard.setdefault(guard, [])
+            if instruction not in instructions:
+                instructions.append(instruction)
+        return [
+            f"with rung({guard}): {'; '.join(instructions)}"
+            for guard, instructions in by_guard.items()
+        ]
+
+    def format(self, event: Any) -> str | None:
+        kind = event.kind
+        data = event.data
+
+        if kind == "started":
+            self._target = data["target"]
+            tag, value = self._target
+            return f"Finding a way to reach {tag}={_pilot_value(value)}...\n"
+
+        if kind == "candidates_built":
+            rungs = data.get("prerequisite_rungs", ())
+            holds = tuple(sorted((rung.dest, rung.value) for rung in rungs))
+            if not holds or holds == self._last_holds or self._after_correction:
+                return None
+            self._last_holds = holds
+            reasons = []
+            lever_notes = data.get("lever_notes", {})
+            if lever_notes:
+                from pyrung.core.analysis.graph import _lever_requirement
+
+                reasons = [
+                    _lever_requirement(lever_notes[tag])
+                    for tag, _value in holds
+                    if tag in lever_notes
+                ]
+            why = f" to satisfy {'; '.join(dict.fromkeys(reasons))}" if reasons else ""
+            return f"  Set {_pilot_assignments(holds)}{why}.\n"
+
+        if kind == "candidate_try":
+            actions = data.get("applied", ())
+            if not actions:
+                return None
+            prefix = ""
+            if self._departure_open:
+                self._departure_open = False
+                prefix = " valid.\n"
+            self._trial_open = not self._after_correction
+            self._retry_open = self._after_correction
+            self._after_correction = False
+            if self._retry_open:
+                return prefix + "\nRetrying..."
+            # Prerequisite rungs are already reported as sustained temporary
+            # logic.  Do not mislabel their witness values as momentary pulses.
+            pulsed = tuple(action for action in actions if action not in self._last_holds)
+            return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
+
+        if kind == "candidate_rejected":
+            if self._trial_open:
+                self._trial_open = False
+                return " no useful change.\n"
+            if self._retry_open:
+                self._retry_open = False
+                return " no useful change.\n"
+            return None
+
+        if kind == "candidate_accepted":
+            if self._trial_open:
+                self._trial_open = False
+                return " done.\n"
+            # A retry stays open until its resulting motion is known.
+            return None
+
+        if kind == "zoom":
+            if self._retry_open:
+                return None
+            self._resuming_open = self._after_correction
+            prefix = "\n  Resuming..." if self._resuming_open else "  Waiting"
+            self._after_correction = False
+            if self._wait_open:
+                prefix = "\n" + prefix.lstrip("\n")
+            self._wait_open = True
+            channel = data.get("channel_tag")
+            self._wait_channel = channel
+            if self._resuming_open:
+                return prefix
+            return f"{prefix} for {channel}..." if channel else f"{prefix}..."
+
+        if kind == "zoom_rejected":
+            if self._wait_open:
+                self._wait_open = False
+                self._wait_channel = None
+                self._resuming_open = False
+                return " not ready yet.\n"
+            return None
+
+        if kind == "zoom_accepted":
+            scan_before = data.get("scan_before")
+            scan_after = data.get("scan_after", event.scan)
+            span = scan_after - scan_before if scan_before is not None else None
+            channel = data.get("zoom_channel_tag")
+            before = data.get("zoom_before_value")
+            after = data.get("zoom_actual_value")
+            elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
+            prefix = " " if self._wait_open or self._retry_open else "  "
+            wait_channel = self._wait_channel
+            resuming = self._resuming_open
+            self._wait_open = False
+            self._wait_channel = None
+            self._resuming_open = False
+            self._retry_open = False
+            snapshot = data.get("snapshot", {})
+            if self._target is not None and snapshot.get(self._target[0]) == self._target[1]:
+                tag, value = self._target
+                outcome = f"{tag}={_pilot_value(value)}{elapsed}"
+            elif channel is not None and before != after:
+                tag = "" if channel == wait_channel and not resuming else f"{channel} "
+                if isinstance(before, bool) and isinstance(after, bool):
+                    outcome = f"{tag}-> {_pilot_value(after)}{elapsed}"
+                else:
+                    outcome = f"{tag}{_pilot_value(before)} -> {_pilot_value(after)}{elapsed}"
+            else:
+                outcome = f"advanced{elapsed}"
+            if data.get("ejected"):
+                self._movement_open = True
+                return prefix + outcome
+            return prefix + outcome + ".\n"
+
+        if kind == "letrun_ejection":
+            if self._movement_open:
+                self._movement_open = False
+                return "."
+            tag = data.get("channel_tag")
+            before = data.get("from_value")
+            after = data.get("to_value")
+            prefix = " " if self._retry_open else "  "
+            self._retry_open = False
+            self._movement_open = True
+            if tag is None:
+                return prefix + "The program moved away from the expected path"
+            return f"{prefix}{tag} jumped {_pilot_value(before)} -> {_pilot_value(after)}"
+
+        if kind == "departure_check_started":
+            self._movement_open = False
+            self._departure_open = True
+            return " Checking..."
+
+        if kind in {"provisional_started", "departure_investigated"}:
+            if self._departure_open:
+                self._departure_open = False
+                return " valid.\n"
+            return None
+
+        if kind == "investigation_started":
+            prefix = " unexpected.\n" if self._departure_open else "\n"
+            self._departure_open = False
+            self._investigation_open = True
+            return prefix + "  Preventable?"
+
+        if kind == "trend_regression":
+            corrections = self._confirmed_corrections(data)
+            revoked = self._render_rungs(data.get("revoked_rungs", ()))
+            transitions = data.get("channel_transitions", ())
+            was_investigating = self._investigation_open
+            self._investigation_open = False
+            self._after_correction = True
+            if was_investigating:
+                if revoked:
+                    lines = [" Yes.", f"  Remove temporary logic: {'; '.join(revoked)}."]
+                    if corrections:
+                        lines.append(f"  Replace with: {'; '.join(corrections)}.")
+                    return "\n".join(lines) + "\n"
+                if corrections:
+                    return f" Yes -- {'; '.join(corrections)}.\n"
+                return " Unknown -- no corrective temporary logic was confirmed.\n"
+            moved = ", ".join(
+                f"{tag} {_pilot_value(before)} -> {_pilot_value(after)}"
+                for tag, before, after in transitions
+            )
+            after_move = f" after {moved}" if moved else ""
+            if corrections:
+                correction = "; ".join(corrections)
+                correction = correction[:1].upper() + correction[1:]
+                return f"\n  Returning to the last good state{after_move}. {correction}.\n"
+            return f"\n  Returning to the last good state{after_move}; no correction was found.\n"
+
+        if kind == "stuck":
+            reason = str(data.get("reason") or "No safe next action was found.")
+            reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+            prefix = (
+                "\n"
+                if any(
+                    (
+                        self._trial_open,
+                        self._retry_open,
+                        self._wait_open,
+                        self._departure_open,
+                        self._investigation_open,
+                    )
+                )
+                else ""
+            )
+            return f"{prefix}\nStopping: {reason}\n"
+
+        if kind == "finished":
+            return "\n"
+
+        return None
+
+
 def _format_pilot_progress(event: Any) -> str | None:
-    """Translate one Pilot event into concise technician-facing progress."""
-    kind = event.kind
-    data = event.data
-
-    def _value(value: Any) -> str:
-        if value is True:
-            return "true"
-        if value is False:
-            return "false"
-        return repr(value) if isinstance(value, str) and " " in value else str(value)
-
-    def _assignments(actions: Any) -> str:
-        ordered = sorted(actions, key=lambda pair: pair[0])
-        return ", ".join(f"{tag}={_value(value)}" for tag, value in ordered)
-
-    if kind == "started":
-        tag, value = data["target"]
-        return f"Finding a way to reach {tag}={_value(value)}..."
-
-    if kind == "candidates_built":
-        rungs = data.get("prerequisite_rungs", ())
-        if rungs:
-            holds = ((rung.dest, rung.value) for rung in rungs)
-            return f"  Keeping {_assignments(holds)} while testing the next step."
-        return None
-
-    if kind == "candidate_try":
-        actions = data.get("applied", ())
-        if actions:
-            return f"  Testing if setting {_assignments(actions)} moves the machine..."
-        return None
-
-    if kind == "candidate_accepted":
-        actions = data.get("applied", ())
-        if actions:
-            return f"  Set {_assignments(actions)}."
-        decision = data.get("candidate", {})
-        if decision:
-            return f"  Set {_assignments(decision.items())}."
-        return None
-
-    if kind == "zoom":
-        reason = data.get("reason", "")
-        chan = data.get("channel_tag")
-        if chan:
-            return f"  Waiting for {chan} to change..."
-        return f"  Waiting for the program to advance... ({reason})"
-
-    if kind == "zoom_accepted":
-        scan_before = data.get("scan_before")
-        scan_after = data.get("scan_after", event.scan)
-        span = scan_after - scan_before if scan_before is not None else None
-        chan = data.get("zoom_channel_tag")
-        before = data.get("zoom_before_value")
-        after = data.get("zoom_actual_value")
-        elapsed = f" after {span} scan(s)" if span is not None else ""
-        if chan is not None and before != after:
-            return f"  {chan} changed from {_value(before)} to {_value(after)}{elapsed}."
-        return f"  The program advanced{elapsed}."
-
-    if kind == "trend_checkpoint":
-        return None
-
-    if kind == "letrun_ejection":
-        tag = data.get("channel_tag")
-        before = data.get("from_value")
-        after = data.get("to_value")
-        return (
-            f"  {tag} changed unexpectedly from {_value(before)} to {_value(after)}."
-            if tag is not None
-            else "  The program moved away from the expected path."
-        )
-
-    if kind == "departure_check_started":
-        tag = data.get("channel_tag")
-        after = data.get("to_value")
-        if tag is not None:
-            return f"  Checking whether {tag}={_value(after)} is valid program motion..."
-        return "  Checking whether the unexpected move is valid program motion..."
-
-    if kind == "investigation_started":
-        tag = data.get("channel_tag")
-        before = data.get("from_value")
-        after = data.get("to_value")
-        if tag is not None:
-            return (
-                "  Testing if the unexpected "
-                f"{tag} change from {_value(before)} to {_value(after)} can be prevented..."
-            )
-        return "  Testing what caused the machine to move away from the target..."
-
-    if kind == "trend_regression":
-        investigation = data.get("investigation", {})
-        confirmed = investigation.get("confirmed_detail", ())
-        hold_parts: list[str] = []
-        if confirmed:
-            for hyp in confirmed:
-                for proposal in hyp.get("holds", ()):
-                    if hasattr(proposal, "dest"):
-                        hold_parts.append(f"{proposal.dest}={proposal.value!r}")
-                    else:
-                        ht, hv = proposal
-                        hold_parts.append(f"{ht}={hv!r}")
-        released = data.get("released_holds", ())
-        hold_parts.extend(f"released {ht}={hv!r}" for ht, hv in released)
-        # Channel transition(s) the revert undoes — a destructive move
-        # (``S_StateCurrent 6->8``) vs. a program-intended detour (``6->11``).
-        transitions = data.get("channel_transitions", ())
-        chan_txt = ", ".join(
-            f"{tag} changed from {_value(before)} to {_value(after)}"
-            for tag, before, after in transitions
-        )
-        if chan_txt:
-            correction = (
-                f" Correction: keep {', '.join(hold_parts)}."
-                if hold_parts
-                else " No corrective hold was confirmed."
-            )
-            return f"  Returning to the last good state after {chan_txt}.{correction}"
-        if hold_parts:
-            return f"  Returning to the last good state. Keep {', '.join(hold_parts)}."
-        return "  Returning to the last good state; no corrective hold was confirmed."
-
-    if kind == "stuck":
-        reason = str(data.get("reason") or "No safe next action was found.")
-        reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
-        return f"  Stopping: {reason}"
-
-    return None
+    """Format one standalone event; command streams should reuse a formatter."""
+    return _PilotProgressFormatter().format(event)
 
 
 @register(
@@ -647,10 +799,12 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         conds = _resolve(label, clauses[label])
         return conds if len(conds) != 1 else conds[0]
 
+    progress = _PilotProgressFormatter()
+
     def _on_pilot_event(event: Any) -> None:
-        line = _format_pilot_progress(event)
-        if line is not None:
-            adapter._send_event("output", {"category": "console", "output": line + "\n"})
+        fragment = progress.format(event)
+        if fragment is not None:
+            adapter._send_event("output", {"category": "console", "output": fragment})
 
     path = runner.how(
         *conditions, avoid=_single("avoid"), via=_single("via"), on_event=_on_pilot_event

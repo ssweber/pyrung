@@ -628,6 +628,7 @@ def _step_context(
         after_snap=dict(trial.fork_snap),
         channel_target=trial.zoom_target_value,
         timeline=trial.timeline,
+        accelerators=tuple(getattr(trial.coast_receipt, "advances", ())),
     )
 
 
@@ -952,7 +953,7 @@ def _pilot_loop_events(
         yield PilotEvent(
             "candidates_built",
             state.work.state.scan_id,
-            _candidates_built_payload(candidates),
+            _candidates_built_payload(candidates, state.lever_notes),
         )
 
         if isinstance(result, NeedProbe):

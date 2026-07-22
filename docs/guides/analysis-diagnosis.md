@@ -116,23 +116,26 @@ plc.how(State == RUNNING)
 ```
 
 ```
-Reached State=running in 2 scan(s), about 20ms.
+Reached State=running in 2 scans (~20ms).
 
 Steps:
-  1. Set CmdStart=true.
-     Observed: State changed from idle to running.
+
+1. Pulse CmdStart=True.
+   Observed: State idle -> running.
 ```
 
 From a faulted state, the path is longer:
 
 ```
-Reached State=running in 4 scan(s), about 40ms.
+Reached State=running in 4 scans (~40ms).
 
 Steps:
-  1. Set CmdReset=true, Fault=false.
-     Observed: State changed from faulted to idle.
-  2. Set CmdStart=true.
-     Observed: State changed from idle to running.
+
+1. Pulse CmdReset=True, Fault=False.
+   Observed: State faulted -> idle.
+
+2. Pulse CmdStart=True.
+   Observed: State idle -> running.
 ```
 
 The headline is deliberately specific:
@@ -141,15 +144,15 @@ The headline is deliberately specific:
 - `Cannot reach` means `how()` proved a conflict or physical constraint.
 - `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
 
-The debug console reports long-running work as it happens. An unexpected state transition reads like this:
+The debug console reports long-running work as it happens. Trials and investigations are deliberately streamed as unfinished sentences, then completed by the result event:
 
 ```
-  State changed unexpectedly from 6 to 10.
-  Checking whether State=10 is valid program motion...
-  Testing if the unexpected State change from 6 to 10 can be prevented...
+Pulse CmdStart=True... done.
+  State jumped 6 -> 10 Checking... unexpected.
+  Preventable? Yes -- with rung(State == 3): latch(DoorClosed).
 ```
 
-The first two lines are emitted before stable-landing analysis. The final line is emitted before causal replay, so a long investigation does not look like a hung console.
+`Pulse CmdStart=True...` is emitted before its trial; ` done.` is appended only after acceptance. `Checking...` is emitted before stable-landing analysis. `Preventable?` is emitted before causal replay, and the replay result is appended on the same line when the investigation returns. A long investigation therefore reads as active work instead of a hung console.
 
 ### Condition syntax
 
@@ -196,12 +199,13 @@ When a target can be reached more than one way — two writers, or an `OR` over 
 ```python
 plan = plc.how(Burner)
 print(plan)
-# Reached Burner=true in 3 scan(s), about 30ms.
+# Reached Burner=True in 3 scans (~30ms).
 # Route: via ProdMode
-#   To choose another route: avoid=ProdMode | via=MaintMode
+#   Other routes: avoid=ProdMode | via=MaintMode
 #
 # Steps:
-#   1. Set ProdCmd=true.
+#
+# 1. Pulse ProdCmd=True.
 ```
 
 You already know your machine, so you redirect by naming the route — `avoid=` steers off it, `via=` steers onto another:

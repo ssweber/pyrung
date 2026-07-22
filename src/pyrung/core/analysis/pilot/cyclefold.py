@@ -244,6 +244,7 @@ def cycle_fold_until(
     min_repeats: int = 2,
     predicate_reads: frozenset[str] | None = None,
     stats: dict[str, int] | None = None,
+    advances: list[tuple[str, Any]] | None = None,
 ) -> bool:
     """Coast *plc* until *predicate*, folding active-hold limit cycles.
 
@@ -493,6 +494,10 @@ def cycle_fold_until(
                 fractions[f"_frac:{tag}"] = total - whole
             else:
                 patches[tag] = cur[tag] + round(delta * periods_to_jump)
+        if advances is not None:
+            # Presentation receipt: these are the exact accumulator edits a
+            # technician would make to reproduce the proved-safe jump.
+            advances.extend(patches.items())
         plc.patch(patches)
         memory = plc._state.memory
         for key, value in fractions.items():

@@ -26,9 +26,11 @@ from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.investigate import (
+    CausalOccurrence,
     DeviationIncident,
     InvestigationHypothesis,
     InvestigationResult,
+    RegressionWitness,
     ReplayOutcome,
     _active_rungs_defeat_needed,
     _precise_causes,
@@ -58,6 +60,7 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import AllCondition, CompareEq, CompareNe
+from pyrung.core.context import RungId
 from pyrung.core.crossing import Eq
 from pyrung.core.memory_block import Block
 
@@ -813,6 +816,60 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
 
+def test_later_causal_incident_revokes_probationary_correction_without_remedy(
+    monkeypatch,
+):
+    """A live causal counterexample removes a trial rung before replacement exists."""
+    state, trial, frame, ctx = _saboteur_scenario()
+    scope = CompareEq(state.work._known_tags_by_name["State"], 6)
+    harmful = PilotRung("Go", True, scope)
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((harmful,)),
+        rungs=(harmful,),
+        sources=("Go",),
+        justification="bounded incident replay",
+    )
+    _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+    receipt = state.correction_receipts[0]
+
+    witness = RegressionWitness(
+        channel_tag="State",
+        source=6,
+        departed=8,
+        departure_scan=trial.fork.state.scan_id,
+        cause=(CausalOccurrence(RungId("Program", 0), "State", 8),),
+        causal_spine=frozenset(("Go", "State")),
+        causal_roots=(("Go", True),),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.incident_regression_witness",
+        lambda _plc, _incident: witness,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _stub_investigation([]),
+    )
+
+    events = _investigate_and_revert(
+        trial,
+        frame,
+        state,
+        ctx,
+        origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
+    )
+
+    assert harmful not in state.rungs
+    assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
+    assert receipt.identity in state.correction_nogoods[receipt.origin_key]
+    assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
+
+
 def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
     """Different completion boundaries make opposite values compatible."""
     state, trial, frame, ctx = _saboteur_scenario()
@@ -873,7 +930,6 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
     assert high in state.rungs
     assert low in state.rungs
     assert all(
-        receipt.status is CorrectionStatus.PROBATIONARY
-        for receipt in state.correction_receipts
+        receipt.status is CorrectionStatus.PROBATIONARY for receipt in state.correction_receipts
     )
     assert events[-1].data["revoked_corrections"] == ()

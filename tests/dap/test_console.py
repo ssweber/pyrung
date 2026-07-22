@@ -472,16 +472,243 @@ class TestCausalVerbs:
 
     def test_how_progress_explains_long_investigation(self):
         from pyrung.core.analysis.pilot.types import PilotEvent
-        from pyrung.dap.console import _format_pilot_progress
+        from pyrung.dap.console import _PilotProgressFormatter
 
-        event = PilotEvent(
-            "investigation_started",
-            910,
-            {"channel_tag": "State", "from_value": 6, "to_value": 10},
+        progress = _PilotProgressFormatter()
+        fragments = [
+            progress.format(
+                PilotEvent(
+                    "letrun_ejection",
+                    910,
+                    {"channel_tag": "State", "from_value": 6, "to_value": 10},
+                )
+            ),
+            progress.format(
+                PilotEvent(
+                    "departure_check_started",
+                    910,
+                    {"channel_tag": "State", "from_value": 6, "to_value": 10},
+                )
+            ),
+            progress.format(
+                PilotEvent(
+                    "investigation_started",
+                    910,
+                    {"channel_tag": "State", "from_value": 6, "to_value": 10},
+                )
+            ),
+        ]
+
+        assert fragments == [
+            "  State jumped 6 -> 10",
+            " Checking...",
+            " unexpected.\n  Preventable?",
+        ]
+
+        result = progress.format(
+            PilotEvent(
+                "trend_regression",
+                950,
+                {"investigation": {"confirmed_detail": ({"holds": (("DoorClosed", True),)},)}},
+            )
+        )
+        assert result == " Yes -- keep DoorClosed=True.\n"
+
+    def test_how_progress_streams_trial_result_on_the_same_line(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        trying = progress.format(PilotEvent("candidate_try", 10, {"applied": (("Start", True),)}))
+        accepted = progress.format(
+            PilotEvent("candidate_accepted", 11, {"applied": (("Start", True),)})
         )
 
-        assert _format_pilot_progress(event) == (
-            "  Testing if the unexpected State change from 6 to 10 can be prevented..."
+        assert trying == "\nPulse Start=True..."
+        assert accepted == " done.\n"
+
+    def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
+        from pyrung import Bool, Int
+        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        temperature = Int("ProgressTest_Temperature", external=True)
+        low_band = Int("ProgressTest_LowBand")
+        target = Bool("ProgressTest_Target")
+        progress = _PilotProgressFormatter()
+
+        result = progress.format(
+            PilotEvent(
+                "candidates_built",
+                10,
+                {
+                    "prerequisite_rungs": (PilotRung(temperature.name, -1, ~target),),
+                    "lever_notes": {
+                        temperature.name: (
+                            f"held {temperature.name} < {low_band.name} "
+                            f"(e.g., {temperature.name} = -1)"
+                        )
+                    },
+                },
+            )
+        )
+
+        assert result == (
+            "  Set ProgressTest_Temperature=-1 to satisfy "
+            "ProgressTest_Temperature < ProgressTest_LowBand.\n"
+        )
+
+    def test_how_progress_closes_an_implicit_valid_check_before_the_next_action(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        progress.format(
+            PilotEvent(
+                "departure_check_started",
+                10,
+                {"channel_tag": "State", "from_value": 2, "to_value": 4},
+            )
+        )
+
+        fragment = progress.format(PilotEvent("candidate_try", 11, {"applied": (("Start", True),)}))
+
+        assert fragment == " valid.\n\nPulse Start=True..."
+
+    def test_how_progress_does_not_call_a_sustained_control_a_pulse(self):
+        from pyrung import Bool, Int
+        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        target = Bool("ProgressTest_PulseTarget")
+        temperature = Int("ProgressTest_PulseTemperature", external=True)
+        progress = _PilotProgressFormatter()
+        progress.format(
+            PilotEvent(
+                "candidates_built",
+                10,
+                {
+                    "prerequisite_rungs": (PilotRung(temperature.name, -1, ~target),),
+                },
+            )
+        )
+
+        fragment = progress.format(
+            PilotEvent(
+                "candidate_try",
+                11,
+                {"applied": (("Start", True), (temperature.name, -1))},
+            )
+        )
+
+        assert fragment == "\nPulse Start=True..."
+
+    def test_how_progress_resumes_without_repeating_the_wait_target(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        progress._after_correction = True
+
+        assert (
+            progress.format(PilotEvent("zoom", 10, {"channel_tag": "HeatDelayDone"}))
+            == "\n  Resuming..."
+        )
+
+    def test_how_progress_prints_the_exact_self_guarded_correction(self):
+        from pyrung import Bool
+        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.core.condition import AllCondition
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        watchdog_done = Bool("ProgressTest_WatchdogDone")
+        sensor = Bool("ProgressTest_Sensor", external=True)
+        correction = PilotRung(
+            sensor.name,
+            True,
+            AllCondition(watchdog_done == False, sensor != True),  # noqa: E712
+        )
+        progress = _PilotProgressFormatter()
+        progress.format(PilotEvent("investigation_started", 10))
+
+        result = progress.format(
+            PilotEvent(
+                "trend_regression",
+                20,
+                {"investigation": {"confirmed_detail": ({"holds": (correction,)},)}},
+            )
+        )
+
+        assert result == (
+            " Yes -- with rung(And(~ProgressTest_WatchdogDone, "
+            "~ProgressTest_Sensor)): latch(ProgressTest_Sensor).\n"
+        )
+
+    def test_how_progress_groups_corrections_on_their_exact_rung(self):
+        from pyrung import Bool, Int
+        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        state = Int("ProgressTest_State")
+        door = Bool("ProgressTest_Door", external=True)
+        lint_door = Bool("ProgressTest_LintDoor", external=True)
+        guard = state == 6
+        corrections = (
+            PilotRung(door.name, True, guard),
+            PilotRung(lint_door.name, True, guard),
+        )
+        progress = _PilotProgressFormatter()
+        progress.format(PilotEvent("investigation_started", 10))
+
+        result = progress.format(
+            PilotEvent(
+                "trend_regression",
+                20,
+                {"investigation": {"confirmed_detail": ({"holds": corrections},)}},
+            )
+        )
+
+        assert result == (
+            " Yes -- with rung(ProgressTest_State == 6): "
+            "latch(ProgressTest_Door); latch(ProgressTest_LintDoor).\n"
+        )
+
+    def test_how_progress_names_actual_temporary_logic_revocation_and_replacement(self):
+        from pyrung import Bool, Int
+        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        state = Int("ProgressTest_RevokeState")
+        go = Bool("ProgressTest_RevokeGo", external=True)
+        old = PilotRung(go.name, True, state == 6)
+        replacement = PilotRung(go.name, False, state == 6)
+        progress = _PilotProgressFormatter()
+        progress.format(PilotEvent("investigation_started", 10))
+
+        result = progress.format(
+            PilotEvent(
+                "trend_regression",
+                20,
+                {
+                    "revoked_rungs": (old,),
+                    "investigation": {
+                        "confirmed_detail": ({"holds": (replacement,)},),
+                    },
+                },
+            )
+        )
+
+        assert result == (
+            " Yes.\n"
+            "  Remove temporary logic: with rung(ProgressTest_RevokeState == 6): "
+            "latch(ProgressTest_RevokeGo).\n"
+            "  Replace with: with rung(ProgressTest_RevokeState == 6): "
+            "reset(ProgressTest_RevokeGo).\n"
         )
 
     def test_how_progress_describes_observed_motion(self):
@@ -500,7 +727,7 @@ class TestCausalVerbs:
             },
         )
 
-        assert _format_pilot_progress(event) == ("  State changed from 6 to 7 after 20 scan(s).")
+        assert _format_pilot_progress(event) == "  State 6 -> 7 after 20 scans.\n"
 
 
 # ---------------------------------------------------------------------------

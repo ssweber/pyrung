@@ -198,11 +198,7 @@ def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> 
         for detail in event.data["investigation"]["confirmed_detail"]
     ]
     assert [detail["kind"] for detail in confirmed] == ["liveness", "liveness"]
-    assert {
-        (hold.dest, hold.value)
-        for detail in confirmed
-        for hold in detail["holds"]
-    } == {
+    assert {(hold.dest, hold.value) for detail in confirmed for hold in detail["holds"]} == {
         (tags["sensor"].name, False),
         (tags["sensor"].name, True),
     }

@@ -195,13 +195,12 @@ def test_regression_console_prints_channel_transition() -> None:
     )
     line = _format_pilot_progress(event)
     assert line is not None
-    assert "Returning to the last good state after S_StateCurrent changed from 6 to 8" in line
-    assert "Correction: keep A_Alm16_Status=1" in line
+    assert "Returning to the last good state after S_StateCurrent 6 -> 8" in line
+    assert "Keep A_Alm16_Status=1" in line
     assert "A_Alm16_Status=1" in line  # the cause still rides the same line
 
 
-def test_regression_console_no_transition_is_unchanged() -> None:
-    """Byte-identical to the prior behavior when no channel moved."""
+def test_regression_console_without_a_transition_still_explains_the_revert() -> None:
     from pyrung.core.analysis.pilot.types import PilotEvent
     from pyrung.dap.console import _format_pilot_progress
 
@@ -211,7 +210,7 @@ def test_regression_console_no_transition_is_unchanged() -> None:
         {"channel_transitions": (), "investigation": {}},
     )
     assert _format_pilot_progress(event) == (
-        "  Returning to the last good state; no corrective hold was confirmed."
+        "\n  Returning to the last good state; no correction was found.\n"
     )
 
 

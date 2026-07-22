@@ -145,7 +145,7 @@ class TestTier3Escalation:
         sol = _codes(report, "CMP_STATIC_ON_LEFT")
         assert len(sol) == 1
         assert sol[0].severity == "warning"
-        assert "Tmr_Acc > LoLimit" in sol[0].message
+        assert "Tmr.Acc > LoLimit" in sol[0].message
 
 
 # --- Negative controls ------------------------------------------------------

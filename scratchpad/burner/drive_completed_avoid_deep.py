@@ -1,4 +1,4 @@
-"""Trace incident ownership for how(Sts_StateCurrent == 17, avoid=Complete).
+"""Trace incident ownership for how(Sts_State_Completed, avoid=Complete).
 
 This is the avoided-Complete counterpart to ``drive_y_burnerloop_deep.py``.
 It reports the incident window and the investigation result at each retained
@@ -29,6 +29,7 @@ PROCESS = psutil.Process()
 
 _real_build_incident = prog.build_deviation_incident
 _real_build_replay_fn = prog.build_replay_fn
+_real_incident_witness = prog.incident_regression_witness
 _real_read_program_step = program_step_module.read_program_step
 
 
@@ -83,6 +84,22 @@ def build_replay_fn(*args, **kwargs):
 prog.build_replay_fn = build_replay_fn
 
 
+def incident_witness(*args, **kwargs):
+    witness = _real_incident_witness(*args, **kwargs)
+    if witness is None:
+        print("  WITNESS none")
+    else:
+        print(
+            "  WITNESS"
+            f" cause={[(str(o.rung), o.tag, o.value) for o in witness.cause]}"
+            f" spine={sorted(witness.causal_spine)}"
+        )
+    return witness
+
+
+prog.incident_regression_witness = incident_witness
+
+
 def read_program_step(*args, **kwargs):
     result = _real_read_program_step(*args, **kwargs)
     changes = tuple(
@@ -119,7 +136,7 @@ def main() -> None:
 
     for event in pilot_events(
         plc,
-        tags["Sts_StateCurrent"] == 17,
+        tags["Sts_State_Completed"],
         max_scans=40_000,
         avoid_pred=avoid_pred,
     ):
@@ -147,6 +164,9 @@ def main() -> None:
             "provisional_expired",
             "departure_investigated",
             "trend_regression",
+            "candidates_built",
+            "candidate_rejected",
+            "stuck",
             "finished",
         }:
             print(
@@ -162,12 +182,14 @@ def main() -> None:
                     f" rejected={investigation.get('rejected')}"
                     f" unresolved={investigation.get('unresolved')}"
                     f" retained={data.get('retained')}"
+                    f" revoked={data.get('revoked_corrections')}"
+                    f" revoked_rungs={data.get('revoked_rungs')}"
                 )
                 for hypothesis in investigation.get("hypothesis_detail", ()):
+                    holds = hypothesis.get("holds", ())
                     print(
-                        f"    H {hypothesis.kind}: {hypothesis.detail}"
-                        if hasattr(hypothesis, "kind")
-                        else f"    H {hypothesis.get('kind')}: {hypothesis.get('detail')}"
+                        f"    H {hypothesis.get('kind')}: {hypothesis.get('detail')}"
+                        f" holds={[(getattr(h, 'dest', None), getattr(h, 'value', None), repr(getattr(h, 'guard', None))) for h in holds]}"
                     )
                 for hypothesis in investigation.get("confirmed_detail", ()):
                     print(
@@ -202,6 +224,16 @@ def main() -> None:
                     selected["applied"] = data.get("applied")
                     selected["candidate"] = data.get("candidate_detail")
                 if event.kind == "zoom_rejected":
+                    selected["gates"] = data.get("gates")
+                if event.kind == "candidates_built":
+                    selected["candidates"] = [
+                        (candidate.get("pair"), candidate.get("rank_reason"))
+                        for candidate in data.get("candidates", ())
+                    ]
+                    selected["stuck_reason"] = data.get("stuck_reason")
+                    selected["wait_reason"] = data.get("wait_reason")
+                if event.kind == "candidate_rejected":
+                    selected["candidate"] = data.get("candidate")
                     selected["gates"] = data.get("gates")
                 if selected:
                     print(f"  {selected}")

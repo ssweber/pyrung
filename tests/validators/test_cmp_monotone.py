@@ -47,8 +47,8 @@ class TestEqOnTimer:
     def test_message_suggests_ge_and_done_bit(self):
         report = validate(_timer_eq_program())
         eq = next(f for f in report if f.code == "CMP_EQ_ON_MONOTONE")
-        assert "Tmr_Acc >= 5" in eq.message
-        assert "Tmr_Done" in eq.message
+        assert "Tmr.Acc >= 5" in eq.message
+        assert "Tmr.Done" in eq.message
 
 
 def _reset_floor_program() -> Program:

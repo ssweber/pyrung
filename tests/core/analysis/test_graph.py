@@ -94,7 +94,7 @@ class TestPlanDisplay:
 
     def test_str_unreachable(self):
         plan = Plan(reachable=False, target_tag="X", target_value=True, reason="nope")
-        assert str(plan) == "Cannot reach X=true.\n  Reason: nope."
+        assert str(plan) == "Cannot reach X=True.\n  Reason: nope."
 
     def test_str_stopped(self):
         from pyrung.core.analysis.graph import PlanStatus
@@ -107,7 +107,7 @@ class TestPlanDisplay:
             status=PlanStatus.STOPPED,
         )
         assert str(plan) == (
-            "Stopped before reaching X=true.\n"
+            "Stopped before reaching X=True.\n"
             "  Reason: No safe next action was found.\n"
             "  Waiting for: Guard=True (have False)"
         )
@@ -119,7 +119,7 @@ class TestPlanDisplay:
         plc.step()
         plc.step()
         plan = plc.how(Running)
-        assert "Reached Running=true in 0 scan(s)." in str(plan)
+        assert "Reached Running=True in 0 scans." in str(plan)
 
     def test_guarded_hold_renders_value_scope_and_source(self):
         State = Int("Sts_StateCurrent")
@@ -197,12 +197,140 @@ class TestPlanDisplay:
 
         text = str(plan)
 
-        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != True)):" in text
+        assert "with rung(And(Sts_StateCurrent == 6, ~RotateSensor)):" in text
         assert "latch(RotateSensor)" in text
-        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != False)):" in text
+        assert "with rung(And(Sts_StateCurrent == 6, RotateSensor)):" in text
         assert "reset(RotateSensor)" in text
-        assert "Oscillate: RotateSensor (true <-> false)." in text
+        assert "Temporary logic in effect: step 1." in text
         assert "holds: RotateSensor" not in text
+
+    def test_self_guarded_boolean_is_not_summarized_as_a_steady_hold(self):
+        WatchdogDone = Bool("WatchdogDone")
+        RotateSensor = Bool("RotateSensor", external=True)
+        rung = PilotRung(
+            "RotateSensor",
+            True,
+            AllCondition(WatchdogDone == False, RotateSensor != True),  # noqa: E712
+        )
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep(
+                    kind="force",
+                    scan=2,
+                    scans=0,
+                    inputs=(),
+                    label="",
+                    rungs=(rung,),
+                ),
+                PlanStep(
+                    kind="coast",
+                    scan=3,
+                    scans=5,
+                    inputs=(),
+                    label="",
+                    rungs=(rung,),
+                ),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "with rung(And(~WatchdogDone, ~RotateSensor)):" in text
+        assert "latch(RotateSensor)" in text
+        assert "Temporary logic in effect: step 1." in text
+        assert "Keep: RotateSensor=True" not in text
+        assert "Oscillate: RotateSensor" not in text
+
+    def test_wait_references_every_installation_step_in_effect(self):
+        State = Int("State")
+        first = PilotRung("Door", True, State == 3)
+        second = PilotRung("Feedback", True, State != 6)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(first,)),
+                PlanStep("force", 2, 0, (), "", rungs=(second,)),
+                PlanStep("coast", 3, 5, (), "", rungs=(first, second)),
+                PlanStep("coast", 8, 2, (), "", rungs=(first, second)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "Temporary logic in effect: steps 1 and 2." in text
+        assert "Temporary logic: (same)." in text
+
+    def test_revocation_names_the_removed_temporary_logic_and_installation_step(self):
+        State = Int("State")
+        old = PilotRung("Go", True, State == 6)
+        replacement = PilotRung("Go", False, State == 6)
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=10), _dt=0.010),
+            journal=(
+                PlanStep("force", 1, 0, (), "", rungs=(old,)),
+                PlanStep("revoke", 2, 0, (), "", rungs=(old,)),
+                PlanStep("force", 2, 0, (), "", rungs=(replacement,)),
+                PlanStep("coast", 3, 5, (), "", rungs=(replacement,)),
+            ),
+        )
+
+        text = str(plan)
+
+        assert "2. Remove temporary logic from step 1:" in text
+        assert "with rung(State == 6):\n     latch(Go)" in text
+        assert "3. Install temporary logic" in text
+        assert "with rung(State == 6):\n     reset(Go)" in text
+        assert "Temporary logic in effect: step 3." in text
+
+    def test_wait_lists_the_manual_accumulator_edit_for_a_jump_ahead(self):
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=100), _dt=0.010),
+            journal=(
+                PlanStep(
+                    "coast",
+                    1,
+                    99,
+                    (),
+                    "",
+                    accelerators=(("Soak.Acc", 900),),
+                ),
+            ),
+        )
+
+        assert "Jump ahead: set Soak.Acc=900." in str(plan)
+
+    def test_pulse_keeps_its_observed_transition(self):
+        plan = Plan(
+            reachable=True,
+            target_tag="Target",
+            target_value=True,
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=2), _dt=0.010),
+            journal=(
+                PlanStep(
+                    "pulse",
+                    1,
+                    1,
+                    (("CmdStart", True),),
+                    "CmdStart",
+                    transition="State 2 -> 3",
+                ),
+            ),
+        )
+
+        assert str(plan).endswith("1. Pulse CmdStart=True.\n   Observed: State 2 -> 3.")
 
 
 # ---------------------------------------------------------------------------

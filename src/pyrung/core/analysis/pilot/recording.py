@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot.types import (
     _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.validation.render import operand_name
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
@@ -57,15 +58,15 @@ def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
         before = sc.before_snap.get(tag)
         after = sc.after_snap.get(tag)
         if before != after:
-            return f"{tag} changed from {_display_value(before)} to {_display_value(after)}"
+            return f"{tag} {_display_value(before)} -> {_display_value(after)}"
     return ""
 
 
 def _display_value(value: Any) -> str:
     if value is True:
-        return "true"
+        return "True"
     if value is False:
-        return "false"
+        return "False"
     return str(value)
 
 
@@ -82,6 +83,23 @@ def _build_plan_journal(
     def _notes_for(inputs: Any) -> tuple[str, ...]:
         return tuple(state.lever_notes[t] for t, _v in inputs if t in state.lever_notes)
 
+    hold_log = tuple(state.hold_log)
+
+    def _controlled_at(scan: int, tag: str, value: Any) -> bool:
+        active: dict[tuple[Any, ...], Any] = {}
+        for entry in hold_log:
+            if entry.scan > scan:
+                continue
+            for rung in entry.rungs:
+                key = _rung_identity(rung)
+                if entry.source == "revocation":
+                    active.pop(key, None)
+                else:
+                    active[key] = rung
+        return any(
+            rung.dest == tag and _values_match(rung.value, value) for rung in active.values()
+        )
+
     entries: list[tuple[int, str, PlanStep]] = []
 
     for act in state.committed_acts:
@@ -93,8 +111,11 @@ def _build_plan_journal(
         span = semantic_step.scan_after - first_step.scan_before
 
         if is_coast:
-            accel: list[tuple[str, Any]] = []
-            if fork is not None:
+            accel: list[tuple[str, Any]] = list(sc.accelerators)
+            # Compatibility for ordinary runner folds, whose fold receipt does
+            # not yet carry exact edits. CycleFold receipts are authoritative
+            # and avoid mistaking program-owned accumulator resets for jumps.
+            if not accel and fork is not None:
                 snap = fork._scan_log.snapshot()
                 for scan_id in sorted(snap.patches_by_scan):
                     if scan_id < first_step.scan_before or scan_id > semantic_step.scan_after:
@@ -106,6 +127,11 @@ def _build_plan_journal(
                             and tag in acc_names
                         ):
                             accel.append((tag, val))
+
+            known_tags = getattr(fork, "_known_tags_by_name", {}) if fork is not None else {}
+            display_accel = tuple(
+                (operand_name(known_tags.get(tag, tag)), value) for tag, value in accel
+            )
 
             entries.append(
                 (
@@ -120,7 +146,7 @@ def _build_plan_journal(
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
-                        accelerators=tuple(accel),
+                        accelerators=display_accel,
                         rungs=sc.control_rungs,
                     ),
                 )
@@ -132,6 +158,7 @@ def _build_plan_journal(
                 if not (
                     isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )
+                and not _controlled_at(first_step.scan_before, tag, val)
             ]
             if command_inputs:
                 decision_tags = sorted(sc.candidate)
@@ -141,7 +168,7 @@ def _build_plan_journal(
                         first_step.scan_before,
                         "b_command",
                         PlanStep(
-                            kind="command",
+                            kind="pulse",
                             scan=first_step.scan_before,
                             scans=span,
                             inputs=tuple(command_inputs),
@@ -166,15 +193,40 @@ def _build_plan_journal(
         if receipt.status.effective
         for rung in receipt.rungs
     }
-    for entry in state.hold_log:
-        if entry.source == "revocation":
-            continue
+    recorded_removals = {
+        _rung_identity(rung)
+        for entry in state.hold_log
+        if entry.source == "revocation"
+        for rung in entry.rungs
+    }
+    for log_index, entry in enumerate(state.hold_log):
         if entry.scan < path_start or entry.scan > path_end:
+            continue
+        if entry.source == "revocation":
+            entries.append(
+                (
+                    entry.scan,
+                    f"a_{log_index:08d}",
+                    PlanStep(
+                        kind="revoke",
+                        scan=entry.scan,
+                        scans=0,
+                        inputs=tuple((rung.dest, rung.value) for rung in entry.rungs),
+                        label=", ".join(dict.fromkeys(rung.dest for rung in entry.rungs)),
+                        rungs=entry.rungs,
+                        source=entry.source,
+                    ),
+                )
+            )
             continue
         new_rungs: list[Any] = []
         for rung in entry.rungs:
             key = _rung_identity(rung)
-            if key in managed_rungs and key not in active_managed_rungs:
+            if (
+                key in managed_rungs
+                and key not in active_managed_rungs
+                and key not in recorded_removals
+            ):
                 continue
             if key in seen_rungs:
                 continue
@@ -187,7 +239,7 @@ def _build_plan_journal(
             entries.append(
                 (
                     entry.scan,
-                    "a_hold",
+                    f"a_{log_index:08d}",
                     PlanStep(
                         kind="force",
                         scan=entry.scan,
@@ -229,7 +281,9 @@ def _iteration_payload(
     }
 
 
-def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
+def _candidates_built_payload(
+    candidates: Any, lever_notes: dict[str, str] | None = None
+) -> dict[str, Any]:
     return {
         "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
         "trace_actions": candidates.trace_actions,
@@ -241,6 +295,11 @@ def _candidates_built_payload(candidates: Any) -> dict[str, Any]:
         "wait_prescribed": candidates.wait_prescribed,
         "wait_reason": candidates.wait_reason,
         "prerequisite_rungs": candidates.prerequisite_rungs,
+        "lever_notes": {
+            rung.dest: lever_notes[rung.dest]
+            for rung in candidates.prerequisite_rungs
+            if lever_notes and rung.dest in lever_notes
+        },
         "stuck_reason": candidates.stuck_reason,
         "completion_frontier": candidates.completion_frontier,
         "program_step": _program_step_payload(candidates.program_step),

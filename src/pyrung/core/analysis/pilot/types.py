@@ -396,6 +396,8 @@ class _StepContext:
     # The step's session timeline (pen marks + bump landings).  Incident
     # construction reads these instead of re-diffing history windows.
     timeline: tuple[Any, ...] = ()
+    # Exact CycleFold accumulator writes performed during this operation.
+    accelerators: tuple[_ActionPair, ...] = ()
 
     @property
     def steady_holds(self) -> tuple[str, ...]:

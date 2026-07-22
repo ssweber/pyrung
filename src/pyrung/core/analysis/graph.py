@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -191,9 +192,9 @@ class PlanStep:
 def _format_value(value: Any) -> str:
     """Format a tag value for use in a console command."""
     if value is True:
-        return "true"
+        return "True"
     if value is False:
-        return "false"
+        return "False"
     s = str(value)
     if " " in s:
         return f'"{s}"'
@@ -211,17 +212,61 @@ def _rung_values(rungs: list[Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_format_value(rung.value) for rung in rungs))
 
 
+def _condition_terms(condition: Any) -> tuple[Any, ...]:
+    from pyrung.core.condition import AllCondition
+
+    if isinstance(condition, AllCondition):
+        return tuple(term for child in condition.conditions for term in _condition_terms(child))
+    return (condition,)
+
+
+def _self_toggle_scope(rung: Any) -> tuple[Any, ...] | None:
+    """Return non-self guards for a Boolean reset/overwrite oscillator."""
+    from pyrung.core.condition import CompareNe
+
+    terms = _condition_terms(rung.guard)
+    self_terms = tuple(
+        term
+        for term in terms
+        if isinstance(term, CompareNe)
+        and operand_name(term.tag) == rung.dest
+        and term.value == rung.value
+    )
+    if rung.value is not True or not self_terms:
+        return None
+    return tuple(term for term in terms if term not in self_terms)
+
+
 def _oscillator_tags(rungs: tuple[Any, ...]) -> set[str]:
-    return {tag for tag, rules in _rungs_by_tag(rungs).items() if len(_rung_values(rules)) > 1}
+    return {
+        tag
+        for tag, rules in _rungs_by_tag(rungs).items()
+        if len(_rung_values(rules)) > 1
+        or any(_self_toggle_scope(rung) is not None for rung in rules)
+    }
 
 
-def _source_suffix(source: str) -> str:
+def _source_suffix(source: str, *, next_step: int | None = None) -> str:
     labels = {
         "investigation": "found during investigation",
-        "prerequisite": "needed for the next step",
+        "prerequisite": (
+            f"needed for step {next_step}" if next_step is not None else "needed for the next step"
+        ),
         "excursion": "found while testing",
     }
     return f" ({labels.get(source, source)})" if source else ""
+
+
+def _lever_requirement(note: str) -> str:
+    """Extract the constraint from a relational lever's witness note."""
+    note = note.removeprefix("held ")
+    return re.sub(r"\s+\(e\.g\., .+\)$", "", note)
+
+
+def _format_plan_note(note: str) -> str:
+    if note.startswith("held "):
+        return "Satisfies: " + _lever_requirement(note)
+    return note[:1].upper() + note[1:]
 
 
 def _rung_guard(rung: Any) -> str:
@@ -237,27 +282,61 @@ def _format_synthesis_instruction(rung: Any) -> str:
     return f"copy({operand_name(rung.value)}, {rung.dest})"
 
 
+def _display_rung_key(rung: Any) -> tuple[str, str]:
+    """Identity of one installed rung as presented in the plan."""
+    return (_rung_guard(rung), _format_synthesis_instruction(rung))
+
+
+def _format_step_refs(steps: tuple[int, ...]) -> str:
+    labels = [str(step) for step in steps]
+    if len(labels) == 1:
+        return f"step {labels[0]}"
+    if len(labels) == 2:
+        return f"steps {labels[0]} and {labels[1]}"
+    return f"steps {', '.join(labels[:-1])}, and {labels[-1]}"
+
+
 def _format_rung_install(
     prefix: str,
     rungs: tuple[Any, ...],
     source: str,
     notes: tuple[str, ...],
+    *,
+    next_step: int | None = None,
 ) -> str:
     """Render the actual guarded rungs installed by PILOT."""
     by_guard: dict[str, list[Any]] = {}
     for rung in rungs:
         by_guard.setdefault(_rung_guard(rung), []).append(rung)
 
-    line = f"{prefix} Install temporary logic{_source_suffix(source)}:"
+    line = f"{prefix} Install temporary logic{_source_suffix(source, next_step=next_step)}:"
     detail: list[str] = []
     for guard, guarded_rungs in by_guard.items():
-        detail.append(f"       with rung({guard}):")
-        detail.extend(f"         {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
-    detail.extend(f"       {note}" for note in notes)
+        detail.append(f"   with rung({guard}):")
+        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
+    detail.extend(f"   {_format_plan_note(note)}" for note in notes)
     return line + "\n" + "\n".join(detail)
 
 
-def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
+def _format_rung_revoke(
+    prefix: str,
+    rungs: tuple[Any, ...],
+    installed_steps: tuple[int, ...],
+) -> str:
+    """Render the actual removal of previously installed temporary logic."""
+    origin = f" from {_format_step_refs(installed_steps)}" if installed_steps else ""
+    line = f"{prefix} Remove temporary logic{origin}:"
+    by_guard: dict[str, list[Any]] = {}
+    for rung in rungs:
+        by_guard.setdefault(_rung_guard(rung), []).append(rung)
+    detail: list[str] = []
+    for guard, guarded_rungs in by_guard.items():
+        detail.append(f"   with rung({guard}):")
+        detail.extend(f"     {_format_synthesis_instruction(rung)}" for rung in guarded_rungs)
+    return line + "\n" + "\n".join(detail)
+
+
+def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> list[str]:
     """Summarize installed control machinery without implying every guard is active."""
     by_tag = _rungs_by_tag(rungs)
     oscillator_tags = _oscillator_tags(rungs)
@@ -271,13 +350,34 @@ def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
 
     lines: list[str] = []
     if steady:
-        lines.append(f"       Keep: {', '.join(steady)}.")
+        keep = "(same)" if same_holds else ", ".join(steady)
+        lines.append(f"   Keep: {keep}.")
     if oscillator_tags:
-        oscillators = ", ".join(
-            f"{tag} ({' <-> '.join(_rung_values(by_tag[tag]))})"
-            for tag in dict.fromkeys(rung.dest for rung in rungs if rung.dest in oscillator_tags)
-        )
-        lines.append(f"       Oscillate: {oscillators}.")
+        rendered: list[str] = []
+        for tag in dict.fromkeys(rung.dest for rung in rungs if rung.dest in oscillator_tags):
+            rules = by_tag[tag]
+            self_toggle = (
+                next(
+                    (
+                        (rung, scope)
+                        for rung in rules
+                        if (scope := _self_toggle_scope(rung)) is not None
+                    ),
+                    None,
+                )
+                if len(_rung_values(rules)) == 1
+                else None
+            )
+            if self_toggle is not None:
+                # Its exact condition and write are already shown by the
+                # installation step.  Do not recast guarded logic as a steady
+                # hold or give it a new behavioral name here.
+                continue
+            else:
+                rendered.append(f"{tag} ({' <-> '.join(_rung_values(rules))})")
+        if rendered:
+            oscillators = ", ".join(rendered)
+            lines.append(f"   Oscillate: {oscillators}.")
     return lines
 
 
@@ -350,62 +450,89 @@ def _render_pivot_redirect(pivot: RoutePivot) -> str:
         bits.append(f"avoid={avoid_expr}")
     for alt in pivot.alternatives:
         via_expr = _format_hint(alt.via_hint)
-        if via_expr:
+        if via_expr and via_expr != avoid_expr:
             bits.append(f"via={via_expr}")
-    return "redirect: " + " | ".join(bits) if bits else ""
+    unique = tuple(dict.fromkeys(bits))
+    return " | ".join(unique)
 
 
-def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> str:
-    prefix = f"  {idx}."
+def _format_plan_step(
+    idx: int,
+    step: PlanStep,
+    *,
+    dt: float | None = None,
+    same_holds: bool = False,
+    control_steps: tuple[int, ...] = (),
+) -> str:
+    prefix = f"{idx}."
 
     def _with_notes(line: str) -> str:
         if step.notes:
-            return line + "\n" + "\n".join(f"       {note}" for note in step.notes)
+            notes = (_format_plan_note(note) for note in step.notes)
+            return line + "\n" + "\n".join(f"   {note}" for note in notes)
         return line
 
     if step.kind == "force":
         if step.rungs:
-            return _format_rung_install(prefix, step.rungs, step.source, step.notes)
+            return _format_rung_install(
+                prefix,
+                step.rungs,
+                step.source,
+                step.notes,
+                next_step=idx + 1,
+            )
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
         return _with_notes(f"{prefix} Keep {tags}.")
 
+    if step.kind == "revoke":
+        return _format_rung_revoke(prefix, step.rungs, control_steps)
+
     if step.kind == "pulse":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        return _with_notes(f"{prefix} Pulse {tags}.")
+        line = f"{prefix} Pulse {tags}."
+        if step.transition:
+            line += f"\n   Observed: {step.transition}."
+        return _with_notes(line)
 
     if step.kind == "coast":
-        duration = f" ({step.scans} scans)"
+        scan_label = "scan" if step.scans == 1 else "scans"
+        duration = f" ({step.scans} {scan_label})"
         if dt and step.scans > 0:
             secs = step.scans * dt
             t = f"~{secs:.0f}s" if secs >= 1 else f"~{secs * 1000:.0f}ms"
             duration = f" {t} ({step.scans} scans)"
-        wait_for = f" for {', '.join(step.waiting_for)}" if step.waiting_for else ""
-        line = f"{prefix} Wait{wait_for}{duration}."
+        line = f"{prefix} Wait{duration}."
         if step.transition:
-            line += f"\n       Observed: {step.transition}."
+            line += f"\n   Observed: {step.transition}."
         sub: list[str] = []
         if step.rungs:
-            sub.extend(_rung_coast_summary(step.rungs))
+            if same_holds:
+                sub.append("   Temporary logic: (same).")
+            elif control_steps:
+                sub.append(f"   Temporary logic in effect: {_format_step_refs(control_steps)}.")
+            else:
+                sub.extend(_rung_coast_summary(step.rungs))
         else:
             if step.steady_holds:
-                sub.append(f"       Keep: {', '.join(step.steady_holds)}.")
+                keep = "(same)" if same_holds else ", ".join(step.steady_holds)
+                sub.append(f"   Keep: {keep}.")
             if step.pulsing_holds:
-                sub.append(f"       Pulse: {', '.join(step.pulsing_holds)}.")
+                sub.append(f"   Pulse: {', '.join(step.pulsing_holds)}.")
         if step.accelerators:
-            skip_items = ", ".join(f"{t}={v}" for t, v in step.accelerators)
-            sub.append(f"       Advance: {skip_items}.")
+            skip_items = ", ".join(f"{t}={_format_value(v)}" for t, v in step.accelerators)
+            sub.append(f"   Jump ahead: set {skip_items}.")
         if sub:
             return line + "\n" + "\n".join(sub)
         return line
 
     if step.kind == "accelerator":
-        tags = ", ".join(f"{t}={v}" for t, v in step.inputs)
-        return f"{prefix} Advance {tags}."
+        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
+        return f"{prefix} Jump ahead: set {tags}."
 
     inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
     line = f"{prefix} Set {inputs}."
     if step.transition:
-        line += f"\n       Observed: {step.transition}."
+        line += f"\n   Observed: {step.transition}."
     return _with_notes(line)
 
 
@@ -577,20 +704,53 @@ class Plan:
         if dt and self.total_scans > 0:
             seconds = self.total_scans * dt
             duration = f"{seconds:.1f}s" if seconds >= 1 else f"{seconds * 1000:.0f}ms"
-            elapsed = f", about {duration}"
-        lines = [f"Reached {goal} in {self.total_scans} scan(s){elapsed}."]
+            elapsed = f" (~{duration})"
+        scan_label = "scan" if self.total_scans == 1 else "scans"
+        lines = [f"Reached {goal} in {self.total_scans} {scan_label}{elapsed}."]
         if self.route is not None and not self.route.dominant:
             lines.append(f"Route: {self.route.label}")
+            redirects: list[str] = []
             for pivot in self.route.salient_pivots:
                 redirect = _render_pivot_redirect(pivot)
                 if redirect:
-                    lines.append(
-                        f"  To choose another route: {redirect.removeprefix('redirect: ')}"
-                    )
+                    redirects.extend(redirect.split(" | "))
+            if redirects:
+                lines.append(f"  Other routes: {' | '.join(dict.fromkeys(redirects))}")
         if self.journal:
-            lines.extend(("", "Steps:"))
+            lines.extend(("", "Steps:", ""))
+            previous_holds: tuple[Any, ...] | None = None
+            installed_at: dict[tuple[str, str], int] = {}
             for i, step in enumerate(self.journal, 1):
-                lines.append(_format_plan_step(i, step, dt=dt))
+                if step.kind == "force":
+                    for rung in step.rungs:
+                        installed_at.setdefault(_display_rung_key(rung), i)
+                holds = step.rungs or tuple(step.steady_holds)
+                same_holds = step.kind == "coast" and bool(holds) and holds == previous_holds
+                control_steps = tuple(
+                    sorted(
+                        {
+                            installed_at[key]
+                            for rung in step.rungs
+                            if (key := _display_rung_key(rung)) in installed_at
+                        }
+                    )
+                )
+                lines.append(
+                    _format_plan_step(
+                        i,
+                        step,
+                        dt=dt,
+                        same_holds=same_holds,
+                        control_steps=control_steps,
+                    )
+                )
+                if step.kind == "revoke":
+                    for rung in step.rungs:
+                        installed_at.pop(_display_rung_key(rung), None)
+                if step.kind == "coast" and holds:
+                    previous_holds = holds
+                if i != len(self.journal):
+                    lines.append("")
         return "\n".join(lines)
 
     def __repr__(self) -> str:

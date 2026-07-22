@@ -556,14 +556,13 @@ def test_route_replay_accepts_local_neutralization_without_reaching_frontier():
     assert neutralized.snapshot[State.name] == 6
     assert "recorded regression neutralized" in neutralized.reason
 
-    # This proposal silences the recorded watchdog but creates a different
-    # departure. Bounded proof admits it only as a probationary hypothesis;
-    # the live State=6 -> 13 incident owns the later contradiction/revocation.
-    probationary = replay(((Detour.name, True),))
-    assert probationary.accepted
-    assert probationary.snapshot[State.name] == 13
-    assert probationary.justification is ReplayJustification.NEUTRALIZED
-    assert "replacement motion is deferred" in probationary.reason
+    # This proposal silences the recorded watchdog by creating a different
+    # departure inside the same bounded replay. Its replacement cause owns the
+    # result, so the hypothesis disproves itself before installation.
+    destructive = replay(((Detour.name, True),))
+    assert not destructive.accepted
+    assert destructive.snapshot[State.name] == 13
+    assert destructive.justification is None
 
 
 def test_non_timer_regression_witness_distinguishes_suppression_from_masking():
@@ -755,14 +754,14 @@ def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
     assert unrelated.snapshot[State.name] == 8
     assert unrelated.accepted
     assert unrelated.justification is ReplayJustification.NEUTRALIZED
-    assert "replacement motion is deferred" in unrelated.reason
+    assert "unrelated replacement departure" in unrelated.reason
     assert not unrelated.landed
-    assert unrelated.replacement_cause == frozenset()
+    assert unrelated.replacement_cause
 
     proposal_owned = replay(((Harmful.name, True),))
     assert proposal_owned.snapshot[State.name] == 8
-    assert proposal_owned.accepted
-    assert proposal_owned.justification is ReplayJustification.NEUTRALIZED
+    assert not proposal_owned.accepted
+    assert proposal_owned.justification is None
 
 
 def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
@@ -771,9 +770,9 @@ def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
     The release timer and both executor rungs are identical in the recorded and
     replayed departures. The recorded branch is selected by ``PrimaryFault``;
     after that branch is corrected, a later timer selects the same writer for a
-    different operation. Incident-local changed-write evidence cannot separate
-    them without reconstructing the replacement cause, so it conservatively
-    declines this correction and lets the live loop gather another incident.
+    different operation. The bounded replacement-cause receipt separates the
+    operations and still conservatively declines this correction because the
+    recorded changed-write signature was reused.
     """
     PrimaryFault = Bool("ReplaySpine_PrimaryFault", external=True)
     Harmful = Bool("ReplaySpine_Harmful", external=True)
@@ -831,7 +830,7 @@ def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
     assert unrelated.snapshot[State.name] == 8
     assert not unrelated.accepted
     assert unrelated.justification is None
-    assert unrelated.replacement_cause == frozenset()
+    assert Alternate.Done.name in unrelated.replacement_cause
 
     proposal_owned = replay(((Harmful.name, True),))
     assert not proposal_owned.accepted

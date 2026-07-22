@@ -32,7 +32,7 @@ from pyrung.core.condition import (
     NormallyClosedCondition,
     RisingEdgeCondition,
 )
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 
 _COMPARE_SYMBOLS: dict[type, str] = {
     CompareEq: "==",
@@ -77,7 +77,11 @@ _VERB: dict[str, str] = {
 
 
 def operand_name(value: Any) -> str:
-    """Render one instruction operand as source text, keyed on ``Tag.name``."""
+    """Render one instruction operand as source text.
+
+    Structure fields use their recoverable Python access path; ordinary tags
+    fall back to their canonical ``Tag.name``.
+    """
     from pyrung.core.expression import Expression
     from pyrung.core.memory_block import (
         BlockRange,
@@ -89,6 +93,15 @@ def operand_name(value: Any) -> str:
     if isinstance(value, ImmediateRef):
         return operand_name(value.value)
     if isinstance(value, Tag):
+        structure = getattr(value, "_pyrung_structure_name", None)
+        field = getattr(value, "_pyrung_structure_field", None)
+        runtime = getattr(value, "_pyrung_structure_runtime", None)
+        if structure and field and runtime is not None:
+            if runtime.count == 1:
+                return f"{structure}.{field}"
+            index = getattr(value, "_pyrung_structure_index", None)
+            if index is not None:
+                return f"{structure}[{index}].{field}"
         return value.name
     if isinstance(value, BlockRange):
         return f"{value.block.name}{value.start}..{value.block.name}{value.end}"
@@ -114,7 +127,7 @@ def render_expr(expr: Any) -> str:
     from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
 
     if isinstance(expr, TagExpr):
-        return expr.tag.name
+        return operand_name(expr.tag)
     if isinstance(expr, LiteralExpr):
         return str(expr.value)
     if isinstance(expr, BinaryExpr):
@@ -131,6 +144,14 @@ def render_expr(expr: Any) -> str:
 
 def render_condition(cond: Condition) -> str:
     """Render a leaf/compound :class:`Condition` as source text."""
+    if (
+        isinstance(cond, (CompareEq, CompareNe))
+        and cond.tag.type is TagType.BOOL
+        and isinstance(cond.value, bool)
+    ):
+        contact_is_true = cond.value if isinstance(cond, CompareEq) else not cond.value
+        name = operand_name(cond.tag)
+        return name if contact_is_true else f"~{name}"
     if isinstance(cond, (CompareEq, CompareNe, CompareLt, CompareLe, CompareGt, CompareGe)):
         sym = _COMPARE_SYMBOLS[type(cond)]
         return f"{operand_name(cond.tag)} {sym} {operand_name(cond.value)}"

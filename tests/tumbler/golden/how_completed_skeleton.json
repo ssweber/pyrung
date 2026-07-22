@@ -3320,12 +3320,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Clear",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX changed from 8191 to 0",
+    "transition": "A_CurDisabledStates_HEX 8191 -> 0",
     "waiting_for": []
    },
    {
@@ -3337,12 +3337,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Reset",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 9 to 1",
+    "transition": "Cmd_CtrlCmd 9 -> 1",
     "waiting_for": []
    },
    {
@@ -3388,12 +3388,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Start",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd changed from 1 to 2",
+    "transition": "Cmd_CtrlCmd 1 -> 2",
     "waiting_for": []
    },
    {
@@ -3454,7 +3454,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall changed from 0 to 1",
+    "transition": "Blower_xCall 0 -> 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -3476,7 +3476,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Sts_StateCurrent changed from 3 to 6",
+    "transition": "Sts_StateCurrent 3 -> 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -3490,12 +3490,12 @@
       true
      ]
     ],
-    "kind": "command",
+    "kind": "pulse",
     "label": "Cmd_State_Complete",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Blower_xCall changed from 1 to 0",
+    "transition": "Blower_xCall 1 -> 0",
     "waiting_for": []
    }
   ],
