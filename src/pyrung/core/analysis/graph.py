@@ -419,10 +419,11 @@ class RoutePivot:
 class RouteTaken:
     """How PILOT reached a Bool target — the legible "here's where I went".
 
-    ``how()`` never reports ambiguous: it picks a deterministic default route
-    (cheapest by trace score, rung order breaking ties), reaches the goal, and
-    records the route here so the engineer can redirect with ``avoid=``/``via=``.
-    ``dominant`` is True when the default was the unique cheapest (no real fork).
+    ``how()`` never reports ambiguous: it starts with a deterministic preferred
+    route (cheapest by trace score, rung order breaking ties) and records the
+    route that actually reached the goal here. The engineer can redirect with
+    ``avoid=``/``via=``. ``dominant`` is True when preparation found no real
+    root fork.
     """
 
     label: str

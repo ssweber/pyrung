@@ -1,11 +1,6 @@
 [
  {
-  "blocked_route_actions": [
-   [
-    "Cmd_Mode_Maintenance",
-    true
-   ]
-  ],
+  "blocked_route_actions": [],
   "kind": "started",
   "opaque_loop": [
    "A_CurDisabledStates_HEX",
@@ -99,9 +94,7 @@
     ]
    }
   ],
-  "route": {
-   "__type__": "TraceChoice"
-  },
+  "route": null,
   "steerable_count": 570,
   "target": [
    "y_BurnerLoop",

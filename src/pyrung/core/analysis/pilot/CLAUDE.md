@@ -22,9 +22,13 @@ Do not store a suffix of actions to execute later. Every iteration rebuilds the
 trace and candidate set from the current snapshot, static evidence, accumulated
 transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
-The exception is the user's trace-route lock. `_prepare_route` chooses it once
-before the loop because `via=` and `avoid=` express user intent. A graph path or
-learned transition is evidence for the next action only.
+The exception is the user's explicit trace-route lock. `_prepare_route` chooses
+it once before the loop because `via=` expresses positive user intent. `avoid=`
+remains a constraint at every read/action/scan gate. An inferred root route is
+one revocable commitment, not a queued suffix: re-trace it from each current
+world until exact world-scoped rejections exhaust every live action, then revoke
+it and re-enumerate root routes from that world. A graph path or learned
+transition is evidence for the next action only.
 
 ### Read before probing
 
@@ -93,6 +97,9 @@ Do not reproduce a decision in a second module for convenience. Shared callers
 should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
+- Inferred root-route lifecycle: `orientation.py` selects only when no inferred
+  commitment exists and returns `RouteExhausted`; `pilot.py` retains or revokes
+  that one receipt and remembers world-scoped exhausted route identities
 - Writer eligibility and order: `trace.py::_rank_writers`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's unchanged-world proof: `program_step.py::read_program_step`
@@ -126,11 +133,14 @@ should consume the first owner's result.
    prerequisites, and executes exactly one act through `verify.verify_gates`.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
    attempts, before any further orientation.
-5. An accepted fork is committed and `progress.py` decides retention,
+5. A `RouteExhausted` result revokes only an inferred root-route commitment; an
+   exhausted explicit `via=` lock is terminal. The next iteration re-enumerates
+   inferred alternatives from its then-current world.
+6. An accepted fork is committed and `progress.py` decides retention,
    pending continuation, investigation, or revert.
-6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
+7. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
    exhaustion mark are applied before orientation runs again.
-7. `Stuck` is terminal. No candidate list or route suffix survives an
+8. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
 
 Passing verification means "eligible to commit and assess", not "durable

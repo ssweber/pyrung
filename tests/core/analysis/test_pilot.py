@@ -333,6 +333,84 @@ def test_bool_output_routes_report_and_redirect():
     assert avoided.changes.get("ProdCmd") is not True
 
 
+def test_rejected_inferred_root_route_falls_back_to_alternate():
+    """A failed preferred route is evidence, not a permanent route lock."""
+    CmdA = Bool("RouteFallback_CmdA", external=True)
+    CmdB = Bool("RouteFallback_CmdB", external=True)
+    Forbidden = Bool("RouteFallback_Forbidden")
+    DummyB1 = Bool("RouteFallback_DummyB1")
+    DummyB2 = Bool("RouteFallback_DummyB2")
+    Target = Bool("RouteFallback_Target")
+
+    with Program() as logic:
+        with rung(CmdA):
+            latch(Target)
+            latch(Forbidden)
+        with rung(CmdB):
+            latch(Target)
+            latch(DummyB1)
+            latch(DummyB2)
+
+    events = []
+    path = PLC(logic).how(
+        Target,
+        avoid=Forbidden,
+        max_scans=200,
+        on_event=events.append,
+    )
+
+    assert path.reachable, path.reason
+    rejected = [event for event in events if event.kind == "candidate_rejected"]
+    assert rejected[0].data["candidate"]["tag"] == CmdA.name
+    exhausted = [event for event in events if event.kind == "route_exhausted"]
+    assert len(exhausted) == 1
+    assert exhausted[0].data["rejected_actions"] == ((CmdA.name, True),)
+    assert exhausted[0].data["revoked"] is True
+    assert path.changes.get(CmdA.name) is not True
+    assert path.changes.get(CmdB.name) is True
+    assert path.route is not None and CmdB.name in path.route.label
+    assert any(CmdA.name in alt.label for alt in path.route.pivots[0].alternatives)
+
+
+def test_explicit_via_keeps_alternate_root_route_locked_out():
+    """Unlike an inferred preference, ``via=`` remains durable user intent."""
+    CmdA = Bool("RouteVia_CmdA", external=True)
+    CmdB = Bool("RouteVia_CmdB", external=True)
+    Forbidden = Bool("RouteVia_Forbidden")
+    DummyB1 = Bool("RouteVia_DummyB1")
+    DummyB2 = Bool("RouteVia_DummyB2")
+    Target = Bool("RouteVia_Target")
+
+    with Program() as logic:
+        with rung(CmdB):
+            latch(Target)
+            latch(DummyB1)
+            latch(DummyB2)
+        with rung(CmdA):
+            latch(Target)
+            latch(Forbidden)
+
+    events = []
+    path = PLC(logic).how(
+        Target,
+        via=CmdA,
+        avoid=Forbidden,
+        max_scans=200,
+        on_event=events.append,
+    )
+
+    assert not path.reachable
+    exhausted = [event for event in events if event.kind == "route_exhausted"]
+    assert len(exhausted) == 1
+    assert exhausted[0].data["revoked"] is False
+    assert all(
+        event.data["candidate"]["tag"] != CmdB.name
+        for event in events
+        if event.kind == "candidate_try"
+    )
+    assert path.changes.get(CmdB.name) is not True
+
+
 def test_word_target_routes_report_and_redirect():
     """A word target (``State == 5``) gets the same route report + redirect as a
     Bool: ``copy(5, State)`` is gated ``Or(ProdMode, MaintMode)`` — two internal

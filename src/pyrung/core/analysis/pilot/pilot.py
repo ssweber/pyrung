@@ -1,7 +1,8 @@
 """Public entry points and outer orchestration for PILOT drives.
 
 This module builds static/runtime context, prepares the user-selected trace
-route, and dispatches ``Bearing | NeedProbe | Stuck`` results from ``Compass``.
+route, and dispatches ``Bearing | NeedProbe | RouteExhausted | Stuck`` results
+from ``Compass``.
 It invokes execution, applies observations, commits eligible forks, delegates
 post-commit recovery, and converts the event stream into public results.  It
 does not synthesize a navigation decision.
@@ -52,6 +53,7 @@ from pyrung.core.analysis.pilot.navigation import (
     NeedProbe,
     OrientationWorld,
     Pulse,
+    RouteExhausted,
     Stuck,
     TargetSpec,
     act_identity,
@@ -80,21 +82,16 @@ from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceChoice,
-    TraceNode,
     _all_nodes,
-    _route_conflicts,
     _route_forced_names,
-    _route_forces,
-    _trace_score,
     compute_edge_tags,
     compute_reference_constants,
     compute_resting_values,
     enumerate_trace_choices,
     frontier_pairs,
-    route_rung_order,
+    rank_trace_choices,
     target_reached,
     trace_back,
-    writer_route_eligible,
 )
 from pyrung.core.analysis.pilot.types import (
     PilotEvent,
@@ -151,6 +148,7 @@ class _DriveOutcome:
     journey: tuple[_Step, ...]
     reason: str | None
     knowledge: dict[str, Any]
+    root_route: TraceChoice | None
 
 
 @dataclass(frozen=True)
@@ -357,7 +355,7 @@ def _prepare_target_context(
     influence: Compass | None = None,
     work: PLC | None = None,
 ) -> tuple[_PilotContext, RouteTaken | None]:
-    """Bind one target and route choice to a prepared drive."""
+    """Bind one target and any explicit user route lock to a prepared drive."""
 
     target_work = setup.work if work is None else work
     route, blocked_actions, route_taken = _prepare_route(
@@ -764,6 +762,7 @@ def _finished_event(
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(state, ctx.compass),
+            "root_route": ctx.route or state.inferred_route_commitment,
             "work": state.work,
             "reason": reason,
             "plan_journal": _build_plan_journal(
@@ -783,7 +782,7 @@ def _stuck_event(
     reason: str,
     *,
     candidate_count: int,
-    diagnosis: Stuck | None = None,
+    diagnosis: Stuck | RouteExhausted | None = None,
 ) -> PilotEvent:
     """Build the common terminal-stuck diagnostic shape."""
 
@@ -916,6 +915,21 @@ def _pilot_loop_events(
         constraints = NavigationConstraints(
             blocked_actions=ctx.blocked_route_actions,
             avoid_predicate=ctx.avoid_pred,
+            active_root_route=state.inferred_route_commitment,
+            exhausted_root_routes=(
+                frozenset(
+                    state.exhausted_route_ids.get(
+                        _pilot_world_key(
+                            dict(state.work.state.tags),
+                            state.key_config,
+                            state.rungs,
+                        ),
+                        set(),
+                    )
+                )
+                if state.key_config is not None
+                else frozenset()
+            ),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
         trace = result.trace
@@ -957,6 +971,49 @@ def _pilot_loop_events(
             state.work.state.scan_id,
             _candidates_built_payload(candidates, state.lever_notes),
         )
+
+        if isinstance(result, RouteExhausted):
+            state.exhausted_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
+            if result.revocable:
+                state.inferred_route_commitment = None
+            yield PilotEvent(
+                "route_exhausted",
+                state.work.state.scan_id,
+                {
+                    "route": result.route,
+                    "identity": result.route_identity,
+                    "rejected_actions": result.rejected_actions,
+                    "revoked": result.revocable,
+                },
+            )
+            if result.revocable:
+                continue
+            terminal_reason = (
+                "Every available action on the requested via route failed its trial"
+                + _frontier_clause(frame)
+            )
+            yield _stuck_event(
+                state,
+                ctx,
+                frame,
+                terminal_reason,
+                candidate_count=len(candidates.candidates),
+                diagnosis=result,
+            )
+            if state.checkpoints:
+                state.load_world(state.checkpoints[-1].world)
+            yield _finished_event(
+                state,
+                ctx,
+                journal_channel_tags,
+                journal_acc_names,
+                reached=False,
+                reason=terminal_reason,
+            )
+            return
+
+        if ctx.route is None and state.inferred_route_commitment is None:
+            state.inferred_route_commitment = orientation_world.root_route
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)
@@ -1200,6 +1257,7 @@ def _pilot_loop(
             journey=(),
             reason=None,
             knowledge={},
+            root_route=None,
         )
     reached = bool(final.data["reached"])
     return _DriveOutcome(
@@ -1209,6 +1267,7 @@ def _pilot_loop(
         journey=tuple(final.data.get("journey", ())),
         reason=None if reached else final.data.get("reason"),
         knowledge=dict(final.data.get("knowledge", {})),
+        root_route=final.data.get("root_route"),
     )
 
 
@@ -1378,6 +1437,51 @@ def _build_route_taken(
     )
 
 
+def _report_selected_route(
+    prepared: RouteTaken | None,
+    selected: TraceChoice | None,
+) -> RouteTaken | None:
+    """Make the public route receipt name the route that actually finished.
+
+    ``prepared`` describes the initially preferred fork so the engineer can see
+    its alternatives before execution. If that inferred commitment is later
+    exhausted and replaced, rotate the same root pivot around the route that
+    ultimately reached the target. This is reporting only; no alternative list
+    feeds back into navigation.
+    """
+
+    if prepared is None or selected is None or not prepared.pivots:
+        return prepared
+    selected_name = _route_name(selected)
+    pivot = prepared.pivots[0]
+    if pivot.label == selected_name:
+        return prepared
+
+    alternatives = [
+        RouteAlt(label=pivot.label, via_hint=pivot.via_hint),
+        *(alt for alt in pivot.alternatives if alt.label != selected_name),
+    ]
+    selected_hint = selected.via_hint
+    selected_tag, selected_value = (
+        selected_hint if selected_hint is not None else (selected.label, True)
+    )
+    return RouteTaken(
+        label=f"via {selected_name}",
+        pivots=(
+            RoutePivot(
+                tag=selected_tag,
+                value=selected_value,
+                label=selected_name,
+                kind="writer" if selected.writer_locks else "or-arm",
+                via_hint=selected_hint,
+                alternatives=tuple(alternatives),
+                salient=pivot.salient,
+            ),
+        ),
+        dominant=prepared.dominant,
+    )
+
+
 def _prepare_route(
     plc: PLC,
     target_tag: str,
@@ -1391,17 +1495,22 @@ def _prepare_route(
     avoid_pred: Any = None,
     via_pred: Any = None,
 ) -> tuple[TraceChoice | None, frozenset[tuple[str, Any]], RouteTaken | None]:
-    """Pick the deterministic default route for a multi-route value target.
+    """Describe the preferred route and bind an explicit ``via=`` route lock.
 
     Works for any concrete equality target — ``Bool == True``, ``Bool == False``,
     or a word ``tag == value``; a live relational predicate gets no route (see
     :func:`_target_is_value_route`).  ``how()`` never reports ambiguous: it
     enumerates the routes, prunes any that ``avoid=`` forbids or that ``via=``
-    does not pass through, then locks the cheapest survivor (gate-eligible routes
+    does not pass through, then ranks the cheapest survivor (gate-eligible routes
     preferred, trace score next, rung order breaking ties) and records the rest
     as redirectable pivots on the returned :class:`RouteTaken`.
 
-    Returns ``(route_lock, blocked_route_actions, route_taken)``.  All ``None``/
+    Only ``via=`` expresses a durable choice: it returns the selected
+    ``route_lock`` and excludes actions belonging solely to other root routes.
+    An inferred default becomes one revocable session commitment instead; only
+    exact exhaustion releases it so another admissible route can be selected.
+
+    Returns ``(route_lock, blocked_route_actions, route_taken)``. All ``None``/
     empty when the target is not a multi-route value target, or when the
     constraint excludes every route (the loop then runs unlocked and honestly
     reports the miss; the ``avoid=`` verify gate still vetoes resting in the
@@ -1414,69 +1523,31 @@ def _prepare_route(
     ):
         return None, frozenset(), None
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
-    choices = enumerate_trace_choices(
-        target_tag, target_value, snapshot, pdg, program, steerable=steerable, clear_only=clear_only
+    choices, traced = rank_trace_choices(
+        target_tag,
+        target_value,
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        clear_only=clear_only,
+        opaque_loop=opaque_loop,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
     )
     if not choices:
         return None, frozenset(), None
-
-    # Trace each route once; prune by avoid (route forces it) / via (route does
-    # not force it), then rank the survivors.
-    traced: list[tuple[TraceChoice, list[TraceNode]]] = []
-    for ch in choices:
-        tree = trace_back(
-            target_tag,
-            target_value,
-            snapshot,
-            pdg,
-            program,
-            steerable,
-            clear_only=clear_only,
-            opaque_loop=opaque_loop,
-            route=ch,
-        )
-        if avoid_pred is not None and _route_forces([tree], snapshot, avoid_pred):
-            continue
-        if via_pred is not None and not _route_forces([tree], snapshot, via_pred):
-            continue
-        traced.append((ch, [tree]))
     if not traced:
         return None, frozenset(), None
-
-    # Cross-route contradiction baseline: an identical conflict witness (tag,
-    # incompatible value sets, and trace sources) shared by *every* route is
-    # inherent to the goal — an SFC sequencing S_StateCurrent 3→6 shows up on all
-    # of them.  A witness unique to a route is that route's own contradiction (a
-    # manual-mode caller gate over a body that needs production mode), and it can
-    # never be satisfied — yet an already-held gate makes such a route look cheap
-    # to the trace scorer.  Witnesses must not collapse to tag names: common
-    # ``Mode 0 ↔ 1`` sequencing must not hide Manual's distinct ``Mode 3 ↔ 1``.
-    route_conflicts = [
-        frozenset().union(*(_route_conflicts(n, pdg, program) for n in nodes))
-        if nodes
-        else frozenset()
-        for _, nodes in traced
-    ]
-    shared_conflicts = frozenset.intersection(*route_conflicts) if route_conflicts else frozenset()
-
-    def _rank(indexed: tuple[int, tuple[TraceChoice, list[TraceNode]]]) -> tuple[Any, ...]:
-        idx, (ch, nodes) = indexed
-        unique_conflicts = len(route_conflicts[idx] - shared_conflicts)
-        eligible = bool(ch.writer_locks) and writer_route_eligible(
-            ch.writer_locks[0][2], target_tag, pdg, program, steerable
-        )
-        return (
-            unique_conflicts,
-            0 if eligible else 1,
-            _trace_score(nodes, pdg),
-            route_rung_order(ch),
-        )
-
-    order = sorted(range(len(traced)), key=lambda i: _rank((i, traced[i])))
-    traced = [traced[i] for i in order]
     default = traced[0][0]
-    survivors = tuple(ch for ch, _ in traced)
+    survivors = tuple(choice for choice, _tree in traced)
     route_taken = _build_route_taken(default, survivors, steerable)
+    # The selected route is a permanent execution constraint only when the user
+    # explicitly requested it.  A default is a preference/reporting choice, and
+    # ``avoid=`` already owns its exclusions through the route/action/scan gates.
+    # Neither may turn every other clean route into a durable rejection.
+    if via_pred is None:
+        return None, frozenset(), route_taken
     blocked = _exclusive_route_actions(
         default,
         choices,
@@ -1707,9 +1778,10 @@ def pilot_how(
     """PILOT on a fork — drive to the target and return the recording. Nothing changes.
 
     For a multi-route value target (``Bool == True/False`` or word
-    ``tag == value``) PILOT picks a deterministic default route and records it on
-    ``Plan.route``; ``avoid_pred``/``via_pred`` redirect off/onto a route (the
-    engineer names the alternative from ``Plan.route``).
+    ``tag == value``) PILOT starts with a deterministic preferred route and
+    records the route that actually reached the goal on ``Plan.route``;
+    ``avoid_pred``/``via_pred`` redirect off/onto a route (the engineer names the
+    alternative from ``Plan.route``).
 
     ``unlink`` names harness-synthesized feedback tags to free for fault
     injection: the Harness stops driving them and they become steerable, so
@@ -1771,7 +1843,9 @@ def pilot_how(
             if linked_block is not None
             else PlanStatus.STOPPED
         ),
-        route=route_taken if outcome.reached else None,
+        route=(
+            _report_selected_route(route_taken, outcome.root_route) if outcome.reached else None
+        ),
         journal=outcome.journal,
         anchor_scan=setup.anchor_scan,
         journey=outcome.journey,
@@ -1960,7 +2034,9 @@ def pilot_drive(
             if linked_block is not None
             else PlanStatus.STOPPED
         ),
-        route=route_taken if outcome.reached else None,
+        route=(
+            _report_selected_route(route_taken, outcome.root_route) if outcome.reached else None
+        ),
         anchor_scan=setup.anchor_scan,
         journey=outcome.journey,
         hold_log=outcome.knowledge.get("hold_log", ()),

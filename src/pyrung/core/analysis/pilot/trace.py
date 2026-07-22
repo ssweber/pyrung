@@ -2717,6 +2717,97 @@ def route_rung_order(choice: TraceChoice) -> tuple[int, ...]:
     return ()
 
 
+def trace_choice_identity(choice: TraceChoice) -> tuple[Any, ...]:
+    """Stable structural identity for one root route commitment."""
+
+    return (choice.writer_locks, choice.or_locks)
+
+
+def rank_trace_choices(
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    clear_only: frozenset[str] = frozenset(),
+    opaque_loop: frozenset[str] = frozenset(),
+    pipeline_internal_tags: frozenset[str] = frozenset(),
+    prior: DomainPrior | None = None,
+    avoid_pred: Any = None,
+    via_pred: Any = None,
+    harness: Any = None,
+) -> tuple[tuple[TraceChoice, ...], tuple[tuple[TraceChoice, TraceNode], ...]]:
+    """Enumerate and rank current-world root choices once.
+
+    The complete enumerated set is returned for explicit route-action locking;
+    the ranked set contains only choices admitted by the user's predicates.
+    Both drive preparation and Orientation consume this reader so route order is
+    not independently re-derived at the two ownership boundaries.
+    """
+
+    choices = enumerate_trace_choices(
+        tag,
+        value,
+        snapshot,
+        pdg,
+        program,
+        steerable=steerable,
+        clear_only=clear_only,
+    )
+    traced: list[tuple[TraceChoice, TraceNode]] = []
+    for choice in choices:
+        tree = trace_back(
+            tag,
+            value,
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            clear_only=clear_only,
+            opaque_loop=opaque_loop,
+            pipeline_internal_tags=pipeline_internal_tags,
+            route=choice,
+            prior=prior,
+            harness=harness,
+        )
+        if avoid_pred is not None and _route_forces([tree], snapshot, avoid_pred):
+            continue
+        if via_pred is not None and not _route_forces([tree], snapshot, via_pred):
+            continue
+        traced.append((choice, tree))
+    if not traced:
+        return choices, ()
+
+    # Cross-route contradiction baseline: an identical conflict witness (tag,
+    # incompatible value sets, and trace sources) shared by *every* route is
+    # inherent to the goal — an SFC sequencing S_StateCurrent 3→6 shows up on all
+    # of them. A witness unique to a route is that route's own contradiction (a
+    # manual-mode caller gate over a body that needs production mode), and it can
+    # never be satisfied — yet an already-held gate makes such a route look cheap
+    # to the trace scorer. Witnesses must not collapse to tag names: common
+    # ``Mode 0 ↔ 1`` sequencing must not hide Manual's distinct ``Mode 3 ↔ 1``.
+    route_conflicts = [frozenset(_route_conflicts(tree, pdg, program)) for _choice, tree in traced]
+    shared_conflicts = frozenset.intersection(*route_conflicts) if route_conflicts else frozenset()
+
+    def rank(index: int) -> tuple[Any, ...]:
+        choice, tree = traced[index]
+        unique_conflicts = len(route_conflicts[index] - shared_conflicts)
+        eligible = bool(choice.writer_locks) and writer_route_eligible(
+            choice.writer_locks[0][2], tag, pdg, program, steerable
+        )
+        return (
+            unique_conflicts,
+            0 if eligible else 1,
+            _trace_score([tree], pdg),
+            route_rung_order(choice),
+        )
+
+    order = sorted(range(len(traced)), key=rank)
+    return choices, tuple(traced[index] for index in order)
+
+
 def _writer_route_drafts(
     ri: int,
     tag: str,

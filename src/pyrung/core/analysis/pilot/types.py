@@ -358,9 +358,9 @@ class _PilotContext:
     opaque_loop: frozenset[str]
     pipeline_roles: tuple[PipelineRoles, ...]
     pipeline_internal_tags: frozenset[str]
-    # The locked default route through a multi-route Bool trace (a TraceChoice),
-    # or None.  Picked by ``_prepare_route``; reported to the user as
-    # ``Path.route`` (a RouteTaken).
+    # An explicit user ``via=`` lock through a multi-route value trace, or None.
+    # Inferred commitment lifecycle lives in _PilotState; the final Plan.route
+    # receipt is reporting only and never feeds back into execution.
     route: TraceChoice | None
     blocked_route_actions: frozenset[_ActionPair]
     max_scans: int
@@ -502,6 +502,11 @@ class _PilotState:
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
     last_wait_log: tuple[Any, ...] | None = None
+    # One active inferred root-route commitment. It is re-traced from each live
+    # snapshot and survives score changes; only an exact current-world exhaustion
+    # receipt revokes it. Explicit ``via=`` lives in context and is non-revocable.
+    inferred_route_commitment: TraceChoice | None = None
+    exhausted_route_ids: dict[_StateKey, set[tuple[Any, ...]]] = field(default_factory=dict)
     # The target-relative progress gauge (gauge.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
     # built once at loop init; a None/empty gauge degrades consumers (verify

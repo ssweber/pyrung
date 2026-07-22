@@ -32,6 +32,7 @@ class _Context:
     target_predicate: object = None
     blocked_route_actions: frozenset = frozenset()
     avoid_pred: object = None
+    route: object = None
 
 
 def _candidate(tag: str) -> SimpleNamespace:
@@ -74,9 +75,45 @@ def _world(compass: Compass) -> OrientationWorld:
             tree=TraceNode("Target", True, satisfied=False),
             completion_frontier=(),
         ),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(key_config=None, rungs=()),
         context=context,
     )
+
+
+def test_active_inferred_root_route_is_retraced_without_reranking(monkeypatch) -> None:
+    """A score change cannot switch routes before an exhaustion boundary."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+    from pyrung.core.analysis.pilot.trace import TraceChoice
+
+    active = TraceChoice(id="route-a", label="A", route=("A",))
+    committed_tree = object()
+    monkeypatch.setattr(
+        orientation,
+        "_trace_for_route",
+        lambda _world, _target, _constraints, route: (
+            committed_tree if route is active else pytest.fail("commitment changed")
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_route_rejected_actions",
+        lambda _tree, _world, _exclusions: None,
+    )
+    monkeypatch.setattr(
+        orientation,
+        "rank_trace_choices",
+        lambda *_args, **_kwargs: pytest.fail("active route was re-ranked"),
+    )
+
+    selected, tree, exhaustion = orientation._read_committed_route(
+        _world(Compass()),
+        TargetSpec("Target", True),
+        NavigationConstraints(active_root_route=active),
+    )
+
+    assert selected is active
+    assert tree is committed_tree
+    assert exhaustion is None
 
 
 def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:

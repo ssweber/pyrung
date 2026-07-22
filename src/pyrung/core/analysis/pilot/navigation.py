@@ -8,12 +8,17 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
 from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.trace import TraceChoice
+
 T = TypeVar("T")
+_RouteIdentity = tuple[Any, ...]
+_RouteExhaustionReceipt = tuple[_RouteIdentity, tuple[_ActionPair, ...], bool]
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,8 @@ class NavigationConstraints:
 
     blocked_actions: frozenset[_ActionPair] = frozenset()
     avoid_predicate: Any = None
+    active_root_route: TraceChoice | None = None
+    exhausted_root_routes: frozenset[_RouteIdentity] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -101,6 +108,10 @@ class OrientationWorld:
     state: Any
     context: Any
     key_config: Any = None
+    # Current-world root-route receipt selected by Orientation. This is one
+    # commitment, never a retained suffix of alternatives.
+    root_route: TraceChoice | None = None
+    route_exhaustion: _RouteExhaustionReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -214,7 +225,20 @@ class Stuck:
     trace: OrientationTrace | None = None
 
 
-OrientationResult = Bearing | NeedProbe | Stuck
+@dataclass(frozen=True)
+class RouteExhausted:
+    """The active root-route commitment has no untried action in this world."""
+
+    world_key: _StateKey
+    route: TraceChoice
+    route_identity: _RouteIdentity
+    rejected_actions: tuple[_ActionPair, ...]
+    revocable: bool
+    rationale: str
+    trace: OrientationTrace
+
+
+OrientationResult = Bearing | NeedProbe | Stuck | RouteExhausted
 
 
 def act_identity(act: NavigationAct) -> tuple[Any, ...]:

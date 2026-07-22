@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.navigation import (
     OrientationWorld,
     ProbeRequest,
     Pulse,
+    RouteExhausted,
     Stuck,
     TargetSpec,
     act_identity,
@@ -29,14 +30,179 @@ from pyrung.core.analysis.pilot.options import (
 )
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
+    TraceChoice,
+    TraceNode,
     frontier_pairs,
+    rank_trace_choices,
     trace_back,
+    trace_choice_identity,
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.sp_values import _values_match
 
 _PROBE_BUDGET = 2
+
+
+def _trace_for_route(
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+    route: TraceChoice | None,
+) -> TraceNode:
+    """Read one target tree under one root-route choice."""
+
+    state = world.state
+    ctx = world.context
+    snapshot = world.snapshot
+    if target.predicate is not None:
+        return trace_relational(
+            target.predicate,
+            snapshot,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            clear_only=ctx.clear_only,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            route=route,
+            prior=ctx.domain_prior,
+            avoid_pred=constraints.avoid_predicate,
+            via_pred=ctx.via_pred,
+            harness=getattr(state.work, "_harness", None),
+        )
+    return trace_back(
+        target.tag,
+        target.value,
+        snapshot,
+        ctx.pdg,
+        ctx.program,
+        ctx.steerable,
+        clear_only=ctx.clear_only,
+        opaque_loop=ctx.opaque_loop,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
+        route=route,
+        prior=ctx.domain_prior,
+        avoid_pred=constraints.avoid_predicate,
+        via_pred=ctx.via_pred,
+        harness=getattr(state.work, "_harness", None),
+    )
+
+
+def _pair_has_exact_rejection(pair: tuple[str, Any], exclusions: frozenset[Any]) -> bool:
+    """Whether current-world evidence rejected this exact one-action choice.
+
+    A joint pulse is intentionally not projected onto its first member here.
+    That identity disproves the joint act, not the same primary action under a
+    different context. Pair observations and single-member pulses are the only
+    evidence precise enough to exhaust a root route action.
+    """
+
+    return any(
+        len(identity) >= 2 and identity[0] == "pulse" and tuple(identity[1]) == (pair,)
+        for identity in exclusions
+    )
+
+
+def _route_rejected_actions(
+    tree: Any,
+    world: OrientationWorld,
+    exclusions: frozenset[Any],
+) -> tuple[tuple[str, Any], ...] | None:
+    """Exact rejected actions when every live action on *tree* is exhausted."""
+
+    ctx = world.context
+    active: list[tuple[str, Any]] = []
+    for detail in tree.ordered_action_details():
+        pair = detail.pair
+        if pair in active:
+            continue
+        if (
+            not _values_match(world.snapshot.get(detail.tag), detail.value)
+            or detail.tag in ctx.edge_tags
+            or detail.pulse
+            or detail.until is not None
+        ):
+            active.append(pair)
+    if active and all(_pair_has_exact_rejection(pair, exclusions) for pair in active):
+        return tuple(active)
+    return None
+
+
+def _read_committed_route(
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+) -> tuple[
+    TraceChoice | None,
+    TraceNode,
+    tuple[tuple[Any, ...], tuple[tuple[str, Any], ...], bool] | None,
+]:
+    """Read or select one root-route commitment in the current world.
+
+    An active inferred route is re-traced without re-ranking. Selection happens
+    only when no inferred commitment exists. Exact exhaustion is returned as a
+    boundary for the drive loop to record and revoke; alternatives are then
+    re-enumerated from the next current-world Orientation call.
+    """
+
+    ctx = world.context
+    key_config = world.state.key_config
+    exclusions = (
+        ctx.compass.knowledge.nogood_identities(
+            _pilot_world_key(world.snapshot, key_config, world.state.rungs)
+        )
+        if key_config is not None
+        else frozenset()
+    )
+
+    # Explicit positive user intent is a non-revocable lock. Candidate filtering
+    # reports exhaustion, but the drive loop must stop instead of selecting an
+    # alternative.
+    if ctx.route is not None:
+        tree = _trace_for_route(world, target, constraints, ctx.route)
+        rejected = _route_rejected_actions(tree, world, exclusions)
+        exhaustion = (
+            (trace_choice_identity(ctx.route), rejected, False) if rejected is not None else None
+        )
+        return ctx.route, tree, exhaustion
+
+    active = constraints.active_root_route
+    if active is not None:
+        tree = _trace_for_route(world, target, constraints, active)
+        rejected = _route_rejected_actions(tree, world, exclusions)
+        if rejected is not None:
+            return active, tree, (trace_choice_identity(active), rejected, True)
+        return active, tree, None
+
+    if target.predicate is not None:
+        return None, _trace_for_route(world, target, constraints, None), None
+
+    _choices, ranked = rank_trace_choices(
+        target.tag,
+        target.value,
+        world.snapshot,
+        ctx.pdg,
+        ctx.program,
+        ctx.steerable,
+        clear_only=ctx.clear_only,
+        opaque_loop=ctx.opaque_loop,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
+        prior=ctx.domain_prior,
+        avoid_pred=constraints.avoid_predicate,
+        via_pred=ctx.via_pred,
+        harness=getattr(world.state.work, "_harness", None),
+    )
+    for choice, tree in ranked:
+        identity = trace_choice_identity(choice)
+        if identity in constraints.exhausted_root_routes:
+            continue
+        rejected = _route_rejected_actions(tree, world, exclusions)
+        if rejected is not None:
+            return choice, tree, (identity, rejected, True)
+        return choice, tree, None
+
+    return None, _trace_for_route(world, target, constraints, None), None
 
 
 def _read_world(
@@ -49,39 +215,18 @@ def _read_world(
     state = world.state
     ctx = world.context
     snapshot = dict(state.work.state.tags)
-    if target.predicate is not None:
-        tree = trace_relational(
-            target.predicate,
-            snapshot,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=ctx.domain_prior,
-            avoid_pred=constraints.avoid_predicate,
-            via_pred=ctx.via_pred,
-            harness=getattr(state.work, "_harness", None),
-        )
-    else:
-        tree = trace_back(
-            target.tag,
-            target.value,
-            snapshot,
-            ctx.pdg,
-            ctx.program,
-            ctx.steerable,
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=ctx.route,
-            prior=ctx.domain_prior,
-            avoid_pred=constraints.avoid_predicate,
-            via_pred=ctx.via_pred,
-            harness=getattr(state.work, "_harness", None),
-        )
+    world = replace(world, snapshot=snapshot)
+    selected_route, tree, route_exhaustion = _read_committed_route(world, target, constraints)
+    # The selected route is scoped to this Orientation receipt. Candidate
+    # construction and trial verification consume the same trace; the drive loop
+    # separately owns whether an inferred commitment survives the next read.
+    ctx = replace(ctx, route=selected_route)
+    world = replace(
+        world,
+        context=ctx,
+        root_route=selected_route,
+        route_exhaustion=route_exhaustion,
+    )
     key_config = state.key_config
     if key_config is None:
         tree_tags = tree.pivot_tags() | {target.tag}
@@ -252,6 +397,31 @@ def orient(
                 world.frame,
                 completion_frontier=candidates.completion_frontier,
             ),
+        )
+
+    if world.route_exhaustion is not None:
+        route_identity, rejected_actions, revocable = world.route_exhaustion
+        assert world.root_route is not None
+        route_trace = OrientationTrace(
+            world_key=world.world_key,
+            world=world,
+            candidates=candidates,
+            considered_paths=(),
+            rankings=tuple(candidates.candidates),
+            exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
+        )
+        return RouteExhausted(
+            world_key=world.world_key,
+            route=world.root_route,
+            route_identity=route_identity,
+            rejected_actions=rejected_actions,
+            revocable=revocable,
+            rationale=(
+                "every live action on the inferred root route was rejected"
+                if revocable
+                else "every live action on the requested via route was rejected"
+            ),
+            trace=route_trace,
         )
 
     if candidates.wait_prescribed:
