@@ -3,8 +3,7 @@
 The low-level scan helpers pin nonparticipating mutable tags, apply a bounded
 action set, step a fork, and report the resulting changes. The frontier probe
 logic selects only finite declared action domains, runs control and probe
-experiments, and returns ``CompassObservation`` values or a diagnostic naming
-an undeclared free-word domain.
+experiments, and returns ``CompassObservation`` values.
 
 Skiff probing does not update the compass itself or treat an observation as a
 committed plan step.
@@ -20,7 +19,6 @@ from pyrung.core.analysis.pilot.causal import empirical_program_writes
 from pyrung.core.analysis.pilot.compass import (
     CompassObservation,
     NavigationObservation,
-    ProbeDeclinedObservation,
     _action_sort_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -237,7 +235,7 @@ def probe_live_guard_frontiers(
     # Empirical steerable veto (``empirical_program_writes``): a word that looks
     # steerable to the static classifier but that the recorded run shows the
     # PROGRAM wrote (at a scan the pilot neither held nor pulsed it) is not a
-    # sound probe lever and must not headline a free-word decline.  Restricted to
+    # sound probe lever and must not enter the probe set. Restricted to
     # the frontier cones' steerable words (cheap) over the whole recorded run.
     cone_steerable: set[str] = set()
     for node in frontiers:
@@ -249,27 +247,6 @@ def probe_live_guard_frontiers(
         end_scan=getattr(getattr(state.work, "state", None), "scan_id", 0) or 0,
     )
 
-    # Honest decline: an unreadable frontier whose broader upstream cone holds
-    # a free word (steerable, no declared complete domain) has no sound probe
-    # values. This is an instrumentation limit, not causal proof that the word
-    # gates the frontier. Name the tag and nudge a ``choices=`` declaration
-    # without promoting cone membership into the terminal diagnosis.
-    decline_observation: ProbeDeclinedObservation | None = None
-    for node in frontiers:
-        free_words = _frontier_free_words(node.tag, ctx, empirical_writes)
-        if free_words:
-            word = free_words[0]
-            decline_observation = ProbeDeclinedObservation(
-                frame.key,
-                f"pilot: could not probe frontier {node.tag}={node.value!r}: "
-                f"free word {word!r} appears in its broader upstream cone and has "
-                f"no declared domain, so the skiff has no sound probe values for it. "
-                f"This does not establish that {word} blocks the frontier. Declare "
-                f"choices= (or min=/max=) on {word} to make that part of the cone "
-                f"probeable.",
-            )
-            break
-
     # Context: the readable half of the bearing.  A joint requirement
     # (command + config select) is only observable when the known-steerable
     # trace actions ride along with the probe.
@@ -279,8 +256,6 @@ def probe_live_guard_frontiers(
             context.setdefault(tag, value)
 
     observations: list[NavigationObservation] = []
-    if decline_observation is not None:
-        observations.append(decline_observation)
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         # Canonical key: a frontier can surface probe pairs whose values mix types
@@ -441,8 +416,7 @@ def _frontier_probes(
     is probeable even when only *data-read* (a copy source no condition reads).
     A word with only a back-inferred ``nd_domains`` representative is probed only
     when a condition reads it (the pre-existing lever case); a wide/undeclared
-    data word offers no sound probe values and is left for the honest decline
-    (that tier needs a ``choices=`` declaration, not a guess).
+    data word offers no sound probe values and is left untouched.
     """
     cone = ctx.pdg.upstream_slice(frontier_tag, follow_calls=True)
     condition_read = {
@@ -471,37 +445,6 @@ def _frontier_probes(
             if 0 < len(domain) <= _SKIFF_MAX_DOMAIN:
                 probes.update((tag, v) for v in domain if not _values_match(v, cur))
     return probes
-
-
-def _frontier_free_words(
-    frontier_tag: str, ctx: Any, empirical_writes: frozenset[str] = frozenset()
-) -> list[str]:
-    """Steerable **word** tags in the frontier's upstream cone that carry no
-    declared complete domain — the free words the skiff cannot probe soundly.
-
-    These are the honest-decline culprits: an unreadable frontier gated by such a
-    word has no sound probe values, so the fix is a domain *declaration*
-    (``choices=`` / ``min=``/``max=``) — the single source of truth the prover,
-    bounds checks, validators, and the skiff all read — not a ``how()``-only
-    guess.  Dispatches purely on domain completeness, never on tag names.
-
-    *empirical_writes* (the empirical steerable veto) drops words the recorded run
-    shows the program wrote: a program-authored status word is not a free operator
-    lever, so it must not headline the decline (positive evidence only — empty is
-    the prior behavior).
-    """
-    cone = ctx.pdg.upstream_slice(frontier_tag, follow_calls=True)
-    words: list[str] = []
-    for tag in sorted(cone & ctx.steerable):
-        if tag in empirical_writes:
-            continue  # recorded run shows the program wrote it — not a free lever
-        resting = ctx.resting.get(tag)
-        if isinstance(resting, bool) or resting is None:
-            continue  # a Bool, not a word
-        if _declared_domain(ctx.pdg.tags.get(tag)) is not None:
-            continue  # declared complete domain — probeable, not a free word
-        words.append(tag)
-    return words
 
 
 def _frontier_participating(

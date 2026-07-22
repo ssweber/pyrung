@@ -5,7 +5,7 @@ The fill shape: a step register advances through an ``on_delay`` gated on
 writer is a two-tag calc (``Raw - Level``) so the equality chase can't invert it;
 ``Lower = calc(SetPoint - Band)`` where ``Band`` is a steerable Real with **no
 declared domain** — the "free word".  Statically every resolution punts, so
-pre-fix the drive dies with the skiff's free-word decline naming ``Band``.
+pre-fix the drive stops without finding the relational boundary for ``Band``.
 
 The target is hand-driveable (ground truth below), so ``how()`` must not fail and
 blame the missing domain: for an *ordered* comparison the trace may propose a

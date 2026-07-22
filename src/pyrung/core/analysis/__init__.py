@@ -3,6 +3,7 @@
 from pyrung.core.analysis.dataview import DataView, TagNameMatcher
 from pyrung.core.analysis.graph import (
     Plan,
+    PlanStatus,
     RouteAlt,
     RoutePivot,
     RouteTaken,
@@ -38,6 +39,7 @@ __all__ = [
     "Journal",
     "Intractable",
     "Plan",
+    "PlanStatus",
     "ProgramGraph",
     "Proven",
     "RouteAlt",

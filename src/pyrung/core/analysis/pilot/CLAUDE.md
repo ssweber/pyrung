@@ -83,8 +83,9 @@ durable knowledge that prevents byte-identical repetition.
   nogoods or installed corrections rather than a separate counter.
 
 A terminal result must name the outstanding frontier when one can be read.
-Keep `reason`, `skiff_decline`, `avoid_names`, `lever_notes`, journey, and hold
-receipts attached to the result path that discovered them.
+Keep `reason`, `avoid_names`, `lever_notes`, journey, and hold receipts attached
+to the result path that discovered them. Do not guess at a special cause when
+probing produces no navigation evidence; stop and report the frontier.
 
 ### Give each decision one owner
 
@@ -141,7 +142,7 @@ knowledge that must survive:
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
   recovery, gauge, correction receipts/revocations, and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
-  budgets/declines, coast receipts, and static-edge evidence overlays.
+  budgets/results, coast receipts, and static-edge evidence overlays.
 - `_PilotContext`: static program analysis plus the current persistent
   `Compass` value.
 

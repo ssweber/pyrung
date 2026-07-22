@@ -103,14 +103,6 @@ class ProbeExhaustedObservation:
 
 
 @dataclass(frozen=True)
-class ProbeDeclinedObservation:
-    """A probe frontier is not soundly enumerable in this world."""
-
-    world_key: tuple[Any, ...]
-    reason: str
-
-
-@dataclass(frozen=True)
 class CoastObservation:
     """A terminal coast/dwell receipt that affects future orientation."""
 
@@ -130,7 +122,6 @@ NavigationObservation = (
     CompassObservation
     | ActionNogoodObservation
     | ProbeExhaustedObservation
-    | ProbeDeclinedObservation
     | CoastObservation
     | StaticEdgeObservation
 )
@@ -364,7 +355,6 @@ class CompassKnowledge:
     entries: PMap = field(default_factory=pmap)
     act_nogoods: PMap = field(default_factory=pmap)
     probe_counts: PMap = field(default_factory=pmap)
-    probe_declines: PMap = field(default_factory=pmap)
     coast_receipts: PMap = field(default_factory=pmap)
     static_overlays: PMap = field(default_factory=pmap)
 
@@ -387,9 +377,6 @@ class CompassKnowledge:
 
     def probe_count(self, world_key: tuple[Any, ...]) -> int:
         return int(self.probe_counts.get(world_key, 0))
-
-    def probe_decline(self, world_key: tuple[Any, ...]) -> str | None:
-        return self.probe_declines.get(world_key)
 
     def coast_receipt(self, world_key: tuple[Any, ...]) -> str | None:
         return self.coast_receipts.get(world_key)
@@ -503,7 +490,6 @@ class CompassKnowledge:
         table = self.entries
         act_nogoods = self.act_nogoods
         probe_counts = self.probe_counts
-        probe_declines = self.probe_declines
         coast_receipts = self.coast_receipts
         static_overlays = self.static_overlays
         changed = False
@@ -520,13 +506,6 @@ class CompassKnowledge:
                 count = int(probe_counts.get(observation.world_key, 0))
                 probe_counts = probe_counts.set(observation.world_key, count + 1)
                 changed = True
-            elif isinstance(observation, ProbeDeclinedObservation):
-                if probe_declines.get(observation.world_key) != observation.reason:
-                    probe_declines = probe_declines.set(
-                        observation.world_key,
-                        observation.reason,
-                    )
-                    changed = True
             elif isinstance(observation, CoastObservation):
                 if coast_receipts.get(observation.world_key) != observation.stop_reason:
                     coast_receipts = coast_receipts.set(
@@ -575,7 +554,6 @@ class CompassKnowledge:
                 entries=table,
                 act_nogoods=act_nogoods,
                 probe_counts=probe_counts,
-                probe_declines=probe_declines,
                 coast_receipts=coast_receipts,
                 static_overlays=static_overlays,
             ),

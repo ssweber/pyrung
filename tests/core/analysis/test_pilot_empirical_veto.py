@@ -8,7 +8,7 @@ classification.  Fail-safe: positive evidence only — never promotes, and no
 recorded change leaves the static verdict untouched.
 
 Covers the primitive and each wired consumer: ``chase_cause_roots`` (recurse
-through, never nogood-stop), the skiff free-word decline / probe selection.
+through, never nogood-stop) and skiff probe selection.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from pyrung.core.analysis.pilot.causal import (
     chase_cause_roots,
     empirical_program_writes,
 )
-from pyrung.core.analysis.pilot.skiff import _frontier_free_words, _frontier_probes
+from pyrung.core.analysis.pilot.skiff import _frontier_probes
 from pyrung.core.analysis.pilot.trace import compute_resting_values
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
@@ -231,7 +231,7 @@ def test_explicit_scan_cause_is_shared_across_investigation_passes(
 
 
 # ---------------------------------------------------------------------------
-# Consumer: skiff free-word decline / probe selection
+# Consumer: skiff probe selection
 # ---------------------------------------------------------------------------
 
 
@@ -251,19 +251,6 @@ def _free_word_ctx() -> tuple[SimpleNamespace, str]:
     resting = compute_resting_values(steerable, known, graph, logic)
     ctx = SimpleNamespace(pdg=graph, steerable=steerable, resting=resting, nd_domains={})
     return ctx, "Step"
-
-
-def test_skiff_free_word_decline_without_evidence_names_the_word() -> None:
-    ctx, frontier = _free_word_ctx()
-    assert "PV" in ctx.steerable
-    # No evidence → the free word still headlines (prior behavior).
-    assert "PV" in _frontier_free_words(frontier, ctx)
-
-
-def test_skiff_free_word_decline_drops_empirically_written_word() -> None:
-    ctx, frontier = _free_word_ctx()
-    # Recorded run shows PV program-written → not a free lever, dropped from decline.
-    assert "PV" not in _frontier_free_words(frontier, ctx, frozenset({"PV"}))
 
 
 def test_skiff_probe_selection_skips_empirically_written_word() -> None:

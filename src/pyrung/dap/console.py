@@ -438,56 +438,96 @@ def _cmd_why(adapter: Any, expression: str) -> ConsoleResult:
 
 
 def _format_pilot_progress(event: Any) -> str | None:
-    """Format a PilotEvent into a one-line progress string, or None to suppress."""
+    """Translate one Pilot event into concise technician-facing progress."""
     kind = event.kind
     data = event.data
 
+    def _value(value: Any) -> str:
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        return repr(value) if isinstance(value, str) and " " in value else str(value)
+
+    def _assignments(actions: Any) -> str:
+        ordered = sorted(actions, key=lambda pair: pair[0])
+        return ", ".join(f"{tag}={_value(value)}" for tag, value in ordered)
+
     if kind == "started":
         tag, value = data["target"]
-        return f"  target: {tag}={value!r}, {data['steerable_count']} steerable tags"
+        return f"Finding a way to reach {tag}={_value(value)}..."
 
     if kind == "candidates_built":
-        holds = data.get("prerequisite_holds", ())
-        if holds:
-            hold_tags = sorted(t for t, _v in holds)
-            return f"  hold {', '.join(hold_tags)}"
+        rungs = data.get("prerequisite_rungs", ())
+        if rungs:
+            holds = ((rung.dest, rung.value) for rung in rungs)
+            return f"  Keeping {_assignments(holds)} while testing the next step."
+        return None
+
+    if kind == "candidate_try":
+        actions = data.get("applied", ())
+        if actions:
+            return f"  Testing if setting {_assignments(actions)} moves the machine..."
         return None
 
     if kind == "candidate_accepted":
         actions = data.get("applied", ())
         if actions:
-            parts = [f"{t}={v!r}" for t, v in sorted(actions)]
-            return f"  set {', '.join(parts)}  (scan {event.scan})"
+            return f"  Set {_assignments(actions)}."
         decision = data.get("candidate", {})
         if decision:
-            parts = [f"{t}={v!r}" for t, v in sorted(decision.items())]
-            return f"  set {', '.join(parts)}  (scan {event.scan})"
+            return f"  Set {_assignments(decision.items())}."
         return None
 
     if kind == "zoom":
         reason = data.get("reason", "")
         chan = data.get("channel_tag")
         if chan:
-            return f"  coast: waiting for {chan}  ({reason})"
-        return f"  coast: {reason}"
+            return f"  Waiting for {chan} to change..."
+        return f"  Waiting for the program to advance... ({reason})"
 
     if kind == "zoom_accepted":
         scan_before = data.get("scan_before")
         scan_after = data.get("scan_after", event.scan)
         span = scan_after - scan_before if scan_before is not None else None
         chan = data.get("zoom_channel_tag")
-        parts: list[str] = [f"  coast accepted  (scan {scan_after})"]
-        if span is not None:
-            parts[0] = f"  coast accepted  ({span} scans, scan {scan_after})"
-        if chan and data.get("zoom_target_value") is not None:
-            parts[0] += f"  {chan}->{data['zoom_target_value']!r}"
-        return parts[0]
+        before = data.get("zoom_before_value")
+        after = data.get("zoom_actual_value")
+        elapsed = f" after {span} scan(s)" if span is not None else ""
+        if chan is not None and before != after:
+            return f"  {chan} changed from {_value(before)} to {_value(after)}{elapsed}."
+        return f"  The program advanced{elapsed}."
 
     if kind == "trend_checkpoint":
-        trend = data.get("trend")
-        if data.get("frontier"):
-            return f"  frontier: distance {trend}"
-        return f"  progress: distance {trend}"
+        return None
+
+    if kind == "letrun_ejection":
+        tag = data.get("channel_tag")
+        before = data.get("from_value")
+        after = data.get("to_value")
+        return (
+            f"  {tag} changed unexpectedly from {_value(before)} to {_value(after)}."
+            if tag is not None
+            else "  The program moved away from the expected path."
+        )
+
+    if kind == "departure_check_started":
+        tag = data.get("channel_tag")
+        after = data.get("to_value")
+        if tag is not None:
+            return f"  Checking whether {tag}={_value(after)} is valid program motion..."
+        return "  Checking whether the unexpected move is valid program motion..."
+
+    if kind == "investigation_started":
+        tag = data.get("channel_tag")
+        before = data.get("from_value")
+        after = data.get("to_value")
+        if tag is not None:
+            return (
+                "  Testing if the unexpected "
+                f"{tag} change from {_value(before)} to {_value(after)} can be prevented..."
+            )
+        return "  Testing what caused the machine to move away from the target..."
 
     if kind == "trend_regression":
         investigation = data.get("investigation", {})
@@ -506,16 +546,25 @@ def _format_pilot_progress(event: Any) -> str | None:
         # Channel transition(s) the revert undoes — a destructive move
         # (``S_StateCurrent 6->8``) vs. a program-intended detour (``6->11``).
         transitions = data.get("channel_transitions", ())
-        chan_txt = ", ".join(f"{t} {fv!r}->{tv!r}" for t, fv, tv in transitions)
+        chan_txt = ", ".join(
+            f"{tag} changed from {_value(before)} to {_value(after)}"
+            for tag, before, after in transitions
+        )
         if chan_txt:
-            cause = f", cause={', '.join(hold_parts)}" if hold_parts else ""
-            return f"  regression: reverted, channel {chan_txt}{cause}"
+            correction = (
+                f" Correction: keep {', '.join(hold_parts)}."
+                if hold_parts
+                else " No corrective hold was confirmed."
+            )
+            return f"  Returning to the last good state after {chan_txt}.{correction}"
         if hold_parts:
-            return f"  regression: reverted, {', '.join(hold_parts)}"
-        return "  regression: reverted to checkpoint"
+            return f"  Returning to the last good state. Keep {', '.join(hold_parts)}."
+        return "  Returning to the last good state; no corrective hold was confirmed."
 
     if kind == "stuck":
-        return f"  stuck: {data.get('reason', '?')}"
+        reason = str(data.get("reason") or "No safe next action was found.")
+        reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+        return f"  Stopping: {reason}"
 
     return None
 
@@ -603,7 +652,6 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         if line is not None:
             adapter._send_event("output", {"category": "console", "output": line + "\n"})
 
-    adapter._send_event("output", {"category": "console", "output": "Planning...\n"})
     path = runner.how(
         *conditions, avoid=_single("avoid"), via=_single("via"), on_event=_on_pilot_event
     )

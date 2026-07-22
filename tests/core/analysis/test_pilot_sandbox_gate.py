@@ -16,15 +16,10 @@ Two tiers:
   commands.  Two conditional writers, so the tide tables' single-writer operand
   model punts, but a pair probe (config select + start command) observably
   flips the channel register in isolation.
-- **Free-word** (``_live_mask_program``): the mask is copied from an external
-  word.  Its resolution is *not* eventual reachability of the undeclared
-  program — an unconstrained external word has no complete domain, so the skiff
-  has no sound probe values.  The honest answer is a **two-part gate**:
-
-  1. *Undeclared* → an honest decline that **names the offending word** and
-     nudges a ``choices=`` declaration (the single source of truth the prover,
-     bounds, validators, and skiff all read).  Never a ``how()``-only guess.
-  2. *Declared* (``choices=`` on the word) → the existing skiff resolves it with
+- **Undeclared word** (``_live_mask_program``): the mask is copied from an
+  external word with no complete domain. The skiff has no sound probe values,
+  so PILOT stops without guessing which word blocks the frontier.
+- **Declared word** (``choices=`` on the word): the existing skiff resolves it with
      no new instrument: the declared values become sound probe candidates, the
      pair probe (word value × load pulse) learns the joint edge, and the live
      verify pipeline confirms it — so ``how()`` reaches the target.
@@ -52,7 +47,7 @@ def _live_mask_program(cfg_choices=None):
     ``cfg_choices`` declares ``CfgWord``'s complete finite domain (the free-word
     tier's resolution): a small ``choices=`` mapping containing at least one
     permissive value (nonzero, bit 6 clear) and one blocking value.  ``None``
-    leaves the word unconstrained — no complete domain, the honest-decline case.
+    leaves the word unconstrained, with no complete domain to probe.
     """
     from pyrung.click import ClickBlocks
 
@@ -239,23 +234,17 @@ def test_skiff_gate_command_selected_mask():
     assert replay.state.tags["Output"] is True
 
 
-def test_free_word_declines_naming_the_tag():
-    """The free-word tier's resolution, part 1: honest decline.
+def test_undeclared_word_stops_without_guessing_at_a_cause():
+    """No sound probe value means stop, not a speculative diagnosis."""
+    from pyrung.core.analysis.graph import PlanStatus
 
-    An unconstrained external word has no complete domain, so the skiff has no
-    sound probe values.  The miss must be unreachable AND carry a specific,
-    named reason — the offending word plus a ``choices=`` nudge — not a generic
-    ``stuck`` or a silent ``reason=None``.
-    """
     prog, output = _live_mask_program()
     plc = PLC(prog)
     path = pilot_how(plc, output, max_scans=600)
     assert not path.reachable, "an undeclared free word has no complete domain to probe"
-    assert path.reason, "unreachable target must always name a reason"
-    assert "CfgWord" in path.reason, f"reason must name the offending word: {path.reason}"
-    assert "choices" in path.reason, f"reason must nudge a choices= declaration: {path.reason}"
-    assert "is gated by" not in path.reason
-    assert "does not establish" in path.reason
+    assert path.status is PlanStatus.STOPPED
+    assert path.reason == "No safe next action was found; still waiting on Output=True (have False)"
+    assert "CfgWord" not in path.reason
 
 
 def test_free_word_solves_under_declared_choices():
@@ -307,7 +296,6 @@ def test_compass_apply_identity_on_no_new_knowledge():
         CoastObservation,
         Compass,
         CompassObservation,
-        ProbeDeclinedObservation,
         ProbeExhaustedObservation,
         StaticEdgeObservation,
     )
@@ -318,7 +306,6 @@ def test_compass_apply_identity_on_no_new_knowledge():
         CompassObservation("no_change", "State", ("Cmd", False), 1),
         CompassObservation("contradict", "State", ("Stop", True), 2),
         ActionNogoodObservation(wk, ("act", "Cmd", True)),
-        ProbeDeclinedObservation(wk, "free word"),
         CoastObservation(wk, "budget"),
         StaticEdgeObservation(("edge-id",), "confirmed"),
     )

@@ -195,7 +195,8 @@ def test_regression_console_prints_channel_transition() -> None:
     )
     line = _format_pilot_progress(event)
     assert line is not None
-    assert "channel S_StateCurrent 6->8" in line
+    assert "Returning to the last good state after S_StateCurrent changed from 6 to 8" in line
+    assert "Correction: keep A_Alm16_Status=1" in line
     assert "A_Alm16_Status=1" in line  # the cause still rides the same line
 
 
@@ -209,7 +210,9 @@ def test_regression_console_no_transition_is_unchanged() -> None:
         815,
         {"channel_transitions": (), "investigation": {}},
     )
-    assert _format_pilot_progress(event) == "  regression: reverted to checkpoint"
+    assert _format_pilot_progress(event) == (
+        "  Returning to the last good state; no corrective hold was confirmed."
+    )
 
 
 # --------------------------------------------------------------------------- #

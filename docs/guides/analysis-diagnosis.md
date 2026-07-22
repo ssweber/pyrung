@@ -107,7 +107,7 @@ This loop — load dump, `why()`, force a tag, `why()` again — is the core int
 
 ## `how()` — how do I reach a target state?
 
-`how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, pulses a command, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and reverts on regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
+`how()` drives the PLC to a target state the way an engineer would — it reads the program backward to find what needs to change, tests each command on a fork, verifies what moved, and adapts when the program pushes back. It waits through timer dwells, navigates multi-step state machines, and returns to the last good state after a regression. Use it after `why()` to turn a diagnosis into action, or on its own to answer "how do I even start this machine?"
 
 Given a state machine with IDLE, RUNNING, and FAULTED states:
 
@@ -116,17 +116,40 @@ plc.how(State == RUNNING)
 ```
 
 ```
-Path (1 step(s), 1 input change(s)):
-  Step 1: CmdStart=True  (1 scan(s))
+Reached State=running in 2 scan(s), about 20ms.
+
+Steps:
+  1. Set CmdStart=true.
+     Observed: State changed from idle to running.
 ```
 
 From a faulted state, the path is longer:
 
 ```
-Path (2 step(s), 3 input change(s)):
-  Step 1: CmdReset=True, Fault=False  (1 scan(s))
-  Step 2: CmdStart=True  (1 scan(s))
+Reached State=running in 4 scan(s), about 40ms.
+
+Steps:
+  1. Set CmdReset=true, Fault=false.
+     Observed: State changed from faulted to idle.
+  2. Set CmdStart=true.
+     Observed: State changed from idle to running.
 ```
+
+The headline is deliberately specific:
+
+- `Reached` means the returned recording ends at the target.
+- `Cannot reach` means `how()` proved a conflict or physical constraint.
+- `Stopped` means it could not identify another safe action. It does not call an unknown path impossible.
+
+The debug console reports long-running work as it happens. An unexpected state transition reads like this:
+
+```
+  State changed unexpectedly from 6 to 10.
+  Checking whether State=10 is valid program motion...
+  Testing if the unexpected State change from 6 to 10 can be prevented...
+```
+
+The first two lines are emitted before stable-landing analysis. The final line is emitted before causal replay, so a long investigation does not look like a hung console.
 
 ### Condition syntax
 
@@ -138,10 +161,10 @@ plc.how(Running)                                  # Bool shorthand — target is
 plc.how(Running, State == RUNNING)               # AND — a state where both hold
 ```
 
-If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the path is unreachable and the reason names the conflict:
+If the targets can't coexist — the same register at two values, or two states whose only writers clobber each other — the result says `Cannot reach` and names the conflict:
 
 ```python
-plc.how(State == IDLE, State == RUNNING)         # unreachable: one register, two values
+plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values
 ```
 
 `avoid=` / `via=` work with multiple targets too — the route predicate constrains every target's route selection at once.
@@ -164,19 +187,21 @@ plc.how(Burner, avoid=(ProdMode, MaintFault))   # avoid ProdMode OR MaintFault
 
 Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own. (`via=` stays a conjunction — a tuple/list means the route must pass through every one.)
 
-When every path is excluded the returned `Path` is unreachable with a reason that names the violated avoid condition(s).
+When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
 ### `via` and the route taken
 
-When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Path.route`:
+When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Plan.route`:
 
 ```python
-path = plc.how(Burner)
-print(path)
-# Path (1 step(s), 1 input change(s)):
-#   Step 1: ProdCmd=True  (3 scan(s))
-#   Route: via ProdMode
-#     redirect: avoid=ProdMode | via=MaintMode
+plan = plc.how(Burner)
+print(plan)
+# Reached Burner=true in 3 scan(s), about 30ms.
+# Route: via ProdMode
+#   To choose another route: avoid=ProdMode | via=MaintMode
+#
+# Steps:
+#   1. Set ProdCmd=true.
 ```
 
 You already know your machine, so you redirect by naming the route — `avoid=` steers off it, `via=` steers onto another:
@@ -186,16 +211,16 @@ plc.how(Burner, via=MaintMode)     # reaches via the maintenance route
 plc.how(Burner, avoid=ProdMode)    # same — steer off production
 ```
 
-The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Path.route` and redirect the same way:
+The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Plan.route` and redirect the same way:
 
 ```python
 plc.how(State == 5, via=MaintMode)   # word target — steer onto the maintenance route
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
 ```
 
-A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Path.route`.
+A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Plan.route`.
 
-A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to commit to — so `Path.route` is `None`. `via=` still steers onto a specific arm when you want one.
+A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to commit to — so `Plan.route` is `None`. `via=` still steers onto a specific arm when you want one.
 
 ## In a debug session
 

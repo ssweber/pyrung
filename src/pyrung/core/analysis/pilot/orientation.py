@@ -142,7 +142,6 @@ def _probe_or_stuck(
     reason: str,
 ) -> NeedProbe | Stuck:
     frontier = _frontier(world, candidates)
-    decline = compass.knowledge.probe_decline(world.world_key)
     count = compass.knowledge.probe_count(world.world_key)
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
     trace = OrientationTrace(
@@ -153,7 +152,7 @@ def _probe_or_stuck(
         rankings=tuple(candidates.candidates),
         exclusions=exclusions,
     )
-    if decline is None and count < _PROBE_BUDGET:
+    if count < _PROBE_BUDGET:
         request = ProbeRequest(frontier=frontier, reason=reason)
         return NeedProbe(
             world_key=world.world_key,
@@ -168,8 +167,8 @@ def _probe_or_stuck(
         reason_code=reason,
         frontier=frontier,
         exclusions=exclusions,
-        evidence=((decline,) if decline is not None else (f"probe budget {count}",)),
-        rationale=decline or f"no admissible bearing remains after {count} probe round(s)",
+        evidence=(f"probe budget {count}",),
+        rationale=f"no admissible bearing remains after {count} probe round(s)",
         trace=trace,
     )
 

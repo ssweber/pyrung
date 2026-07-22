@@ -405,7 +405,7 @@ class TestCausalVerbs:
         resp, _ = _repl(adapter, out, "how Running", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "Plan" in result or "reached" in result or "Unreachable" in result
+        assert "Reached" in result or "Cannot reach" in result or "Stopped" in result
 
     def test_how_missing_tag(self, tmp_path: Path):
         adapter, out = _setup(tmp_path)
@@ -419,14 +419,14 @@ class TestCausalVerbs:
         assert resp["success"] is True, resp
         result = resp["body"]["result"]
         assert "Running" in result and "Done" in result, result
-        assert "reached" in result, result
+        assert "Reached" in result, result
 
     def test_how_avoid(self, tmp_path: Path):
         adapter, out = _setup_how(tmp_path)
         resp, _ = _repl(adapter, out, "how Done avoid ~Start", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "Plan" in result or "reached" in result or "Unreachable" in result
+        assert "Reached" in result or "Cannot reach" in result or "Stopped" in result
 
     def test_how_avoid_multiple_is_union(self, tmp_path: Path):
         """Comma-separated ``avoid`` conditions are a union of exclusions: both A
@@ -437,7 +437,7 @@ class TestCausalVerbs:
         resp, _ = _repl(adapter, out, "how Filling avoid A, B", seq=10)
         assert resp["success"] is True, resp
         result = resp["body"]["result"]
-        assert "reached" in result, result
+        assert "Reached" in result, result
 
     def test_how_compound_comparisons(self, tmp_path: Path):
         """Comma-separated comparison conjuncts are a multi-target conjunction."""
@@ -458,7 +458,7 @@ class TestCausalVerbs:
         resp, _ = _repl(adapter, out, "how Running", seq=10)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "Plan" in result
+        assert "Reached" in result
         assert "Running" in result
 
     def test_how_already_at_target(self, tmp_path: Path):
@@ -468,7 +468,39 @@ class TestCausalVerbs:
         resp, _ = _repl(adapter, out, "how Running", seq=12)
         assert resp["success"] is True
         result = resp["body"]["result"]
-        assert "reached in 0 scan" in result
+        assert "in 0 scan" in result
+
+    def test_how_progress_explains_long_investigation(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _format_pilot_progress
+
+        event = PilotEvent(
+            "investigation_started",
+            910,
+            {"channel_tag": "State", "from_value": 6, "to_value": 10},
+        )
+
+        assert _format_pilot_progress(event) == (
+            "  Testing if the unexpected State change from 6 to 10 can be prevented..."
+        )
+
+    def test_how_progress_describes_observed_motion(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _format_pilot_progress
+
+        event = PilotEvent(
+            "zoom_accepted",
+            120,
+            {
+                "scan_before": 100,
+                "scan_after": 120,
+                "zoom_channel_tag": "State",
+                "zoom_before_value": 6,
+                "zoom_actual_value": 7,
+            },
+        )
+
+        assert _format_pilot_progress(event) == ("  State changed from 6 to 7 after 20 scan(s).")
 
 
 # ---------------------------------------------------------------------------

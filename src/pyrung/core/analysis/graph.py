@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.validation.render import operand_name, render_condition
@@ -215,7 +216,12 @@ def _oscillator_tags(rungs: tuple[Any, ...]) -> set[str]:
 
 
 def _source_suffix(source: str) -> str:
-    return f"  (from {source})" if source else ""
+    labels = {
+        "investigation": "found during investigation",
+        "prerequisite": "needed for the next step",
+        "excursion": "found while testing",
+    }
+    return f" ({labels.get(source, source)})" if source else ""
 
 
 def _rung_guard(rung: Any) -> str:
@@ -242,7 +248,7 @@ def _format_rung_install(
     for rung in rungs:
         by_guard.setdefault(_rung_guard(rung), []).append(rung)
 
-    line = f"{prefix} install synthesis rungs{_source_suffix(source)}"
+    line = f"{prefix} Install temporary logic{_source_suffix(source)}:"
     detail: list[str] = []
     for guard, guarded_rungs in by_guard.items():
         detail.append(f"       with rung({guard}):")
@@ -265,13 +271,13 @@ def _rung_coast_summary(rungs: tuple[Any, ...]) -> list[str]:
 
     lines: list[str] = []
     if steady:
-        lines.append(f"       installed holds: {', '.join(steady)}")
+        lines.append(f"       Keep: {', '.join(steady)}.")
     if oscillator_tags:
         oscillators = ", ".join(
             f"{tag} ({' <-> '.join(_rung_values(by_tag[tag]))})"
             for tag in dict.fromkeys(rung.dest for rung in rungs if rung.dest in oscillator_tags)
         )
-        lines.append(f"       installed oscillators: {oscillators}")
+        lines.append(f"       Oscillate: {oscillators}.")
     return lines
 
 
@@ -361,49 +367,59 @@ def _format_plan_step(idx: int, step: PlanStep, *, dt: float | None = None) -> s
         if step.rungs:
             return _format_rung_install(prefix, step.rungs, step.source, step.notes)
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        return _with_notes(f"{prefix} force {tags}")
+        return _with_notes(f"{prefix} Keep {tags}.")
 
     if step.kind == "pulse":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-        return _with_notes(f"{prefix} pulse {tags}")
+        return _with_notes(f"{prefix} Pulse {tags}.")
 
     if step.kind == "coast":
-        trans = f"  ({step.transition})" if step.transition else ""
         duration = f" ({step.scans} scans)"
         if dt and step.scans > 0:
             secs = step.scans * dt
             t = f"~{secs:.0f}s" if secs >= 1 else f"~{secs * 1000:.0f}ms"
             duration = f" {t} ({step.scans} scans)"
-        line = f"{prefix} coast{duration}{trans}"
+        wait_for = f" for {', '.join(step.waiting_for)}" if step.waiting_for else ""
+        line = f"{prefix} Wait{wait_for}{duration}."
+        if step.transition:
+            line += f"\n       Observed: {step.transition}."
         sub: list[str] = []
-        if step.waiting_for:
-            sub.append(f"       waiting for: {', '.join(step.waiting_for)}")
         if step.rungs:
             sub.extend(_rung_coast_summary(step.rungs))
         else:
             if step.steady_holds:
-                sub.append(f"       holds: {', '.join(step.steady_holds)}")
+                sub.append(f"       Keep: {', '.join(step.steady_holds)}.")
             if step.pulsing_holds:
-                sub.append(f"       pulsing: {', '.join(step.pulsing_holds)}")
+                sub.append(f"       Pulse: {', '.join(step.pulsing_holds)}.")
         if step.accelerators:
             skip_items = ", ".join(f"{t}={v}" for t, v in step.accelerators)
-            sub.append(f"       skip: {skip_items}")
+            sub.append(f"       Advance: {skip_items}.")
         if sub:
             return line + "\n" + "\n".join(sub)
         return line
 
     if step.kind == "accelerator":
         tags = ", ".join(f"{t}={v}" for t, v in step.inputs)
-        return f"{prefix} skip {tags}"
+        return f"{prefix} Advance {tags}."
 
     inputs = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
-    trans = f"  ({step.transition})" if step.transition else ""
-    return _with_notes(f"{prefix} {inputs}{trans}")
+    line = f"{prefix} Set {inputs}."
+    if step.transition:
+        line += f"\n       Observed: {step.transition}."
+    return _with_notes(line)
+
+
+class PlanStatus(Enum):
+    """What ``how()`` established about the requested target."""
+
+    REACHED = "reached"
+    CANNOT_REACH = "cannot_reach"
+    STOPPED = "stopped"
 
 
 @dataclass(frozen=True)
 class Plan:
-    """The result of :meth:`PLC.how` — a reached recording, or a reason it can't be.
+    """The result of :meth:`PLC.how` and what the drive established.
 
     On success, :attr:`fork` is the PLC that PILOT drove to the target.  Its
     ``scan_log`` + ``_synthesis`` holds *are* the replayable recording: every
@@ -411,10 +427,11 @@ class Plan:
     reconstructs the reached state with no re-derivation.  This is deliberately
     *not* a reconstructed step list — the fork is the artifact.
 
-    On failure, :attr:`fork` is ``None`` and :attr:`reason` explains why (e.g. a
-    physical link holding the target out of reach).  :attr:`route` records which
-    way PILOT went to a Bool target so the engineer can redirect with
-    ``avoid=`` / ``via=``.
+    On failure, :attr:`fork` is ``None``. :attr:`status` distinguishes a proved
+    ``CANNOT_REACH`` result from ``STOPPED``, where PILOT ran out of safe,
+    evidence-backed actions. :attr:`reason` names the proof or outstanding
+    frontier. :attr:`route` records which way PILOT went to a Bool target so the
+    engineer can redirect with ``avoid=`` / ``via=``.
     """
 
     reachable: bool
@@ -435,15 +452,23 @@ class Plan:
     # Knowledge threaded off the drive's ``_PilotState`` (recording only — never
     # consulted by ``replay`` or the reachability verdict).  ``journey`` is the full
     # attempt log incl. reverted rounds; ``hold_log`` the installed holds; the
-    # ``lever_notes`` the relational reports per steered tag; ``skiff_decline`` /
-    # ``avoid_names`` the honest-decline evidence a terminal miss reads.  These are
+    # ``lever_notes`` the relational reports per steered tag; ``avoid_names`` the
+    # route-exclusion evidence a terminal miss reads. These are
     # the Knowledge half of the World/Knowledge split — they survive every revert,
     # so the Plan can explain the same drive it recorded.
     journey: tuple[Any, ...] = ()
     hold_log: tuple[Any, ...] = ()
     lever_notes: dict[str, str] = field(default_factory=dict)
-    skiff_decline: str | None = None
     avoid_names: tuple[str, ...] = ()
+    status: PlanStatus | None = None
+
+    def __post_init__(self) -> None:
+        status = self.status
+        if status is None:
+            status = PlanStatus.REACHED if self.reachable else PlanStatus.CANNOT_REACH
+            object.__setattr__(self, "status", status)
+        if self.reachable != (status is PlanStatus.REACHED):
+            raise ValueError("Plan.reachable and Plan.status disagree")
 
     @property
     def total_scans(self) -> int:
@@ -528,23 +553,42 @@ class Plan:
         return getattr(self.fork, "_dt", None) if self.fork is not None else None
 
     def __str__(self) -> str:
-        if not self.reachable:
-            return f"Unreachable: {self.reason}"
-        dt = self.dt
-        dt_label = f", dt={dt * 1000:.0f}ms" if dt else ""
         if self.targets:
             goal = " & ".join(f"{t}={_format_value(v)}" for t, v in self.targets)
         else:
             goal = f"{self.target_tag}={_format_value(self.target_value)}"
-        lines = [f"Plan: {goal} reached in {self.total_scans} scan(s){dt_label}"]
+        if not self.reachable:
+            headline = (
+                f"Cannot reach {goal}."
+                if self.status is PlanStatus.CANNOT_REACH
+                else f"Stopped before reaching {goal}."
+            )
+            reason = self.reason or "No safe next action was found."
+            reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
+            if "; still waiting on " in reason:
+                reason, waiting = reason.split("; still waiting on ", 1)
+                reason = reason if reason.endswith((".", "!", "?")) else reason + "."
+                return f"{headline}\n  Reason: {reason}\n  Waiting for: {waiting}"
+            reason = reason if reason.endswith((".", "!", "?")) else reason + "."
+            return f"{headline}\n  Reason: {reason}"
+
+        dt = self.dt
+        elapsed = ""
+        if dt and self.total_scans > 0:
+            seconds = self.total_scans * dt
+            duration = f"{seconds:.1f}s" if seconds >= 1 else f"{seconds * 1000:.0f}ms"
+            elapsed = f", about {duration}"
+        lines = [f"Reached {goal} in {self.total_scans} scan(s){elapsed}."]
         if self.route is not None and not self.route.dominant:
-            lines.append(f"  Route: {self.route.label}")
+            lines.append(f"Route: {self.route.label}")
             for pivot in self.route.salient_pivots:
                 redirect = _render_pivot_redirect(pivot)
                 if redirect:
-                    lines.append(f"    {redirect}")
+                    lines.append(
+                        f"  To choose another route: {redirect.removeprefix('redirect: ')}"
+                    )
         if self.journal:
-            lines.append("")
+            lines.extend(("", "Steps:"))
             for i, step in enumerate(self.journal, 1):
                 lines.append(_format_plan_step(i, step, dt=dt))
         return "\n".join(lines)

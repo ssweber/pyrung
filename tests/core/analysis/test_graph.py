@@ -89,12 +89,28 @@ class TestPlanDisplay:
         plc = PLC(prog, dt=0.010)
         plan = plc.how(Running)
         text = str(plan)
-        assert "Plan" in text
+        assert "Reached" in text
         assert "Running" in text
 
     def test_str_unreachable(self):
         plan = Plan(reachable=False, target_tag="X", target_value=True, reason="nope")
-        assert "Unreachable" in str(plan)
+        assert str(plan) == "Cannot reach X=true.\n  Reason: nope."
+
+    def test_str_stopped(self):
+        from pyrung.core.analysis.graph import PlanStatus
+
+        plan = Plan(
+            reachable=False,
+            target_tag="X",
+            target_value=True,
+            reason="No safe next action was found; still waiting on Guard=True (have False)",
+            status=PlanStatus.STOPPED,
+        )
+        assert str(plan) == (
+            "Stopped before reaching X=true.\n"
+            "  Reason: No safe next action was found.\n"
+            "  Waiting for: Guard=True (have False)"
+        )
 
     def test_str_already_there(self):
         prog, Start, Running, Done = _simple_latch_program()
@@ -103,7 +119,7 @@ class TestPlanDisplay:
         plc.step()
         plc.step()
         plan = plc.how(Running)
-        assert "reached in 0 scan" in str(plan)
+        assert "Reached Running=true in 0 scan(s)." in str(plan)
 
     def test_guarded_hold_renders_value_scope_and_source(self):
         State = Int("Sts_StateCurrent")
@@ -132,7 +148,7 @@ class TestPlanDisplay:
 
         assert "with rung(Sts_StateCurrent != 6):" in text
         assert "latch(DoorClosed)" in text
-        assert "(from investigation)" in text
+        assert "(found during investigation)" in text
         assert "force DoorClosed" not in text
 
     def test_guarded_pair_renders_as_oscillator(self):
@@ -185,7 +201,7 @@ class TestPlanDisplay:
         assert "latch(RotateSensor)" in text
         assert "with rung(And(Sts_StateCurrent == 6, RotateSensor != False)):" in text
         assert "reset(RotateSensor)" in text
-        assert "installed oscillators: RotateSensor (true <-> false)" in text
+        assert "Oscillate: RotateSensor (true <-> false)." in text
         assert "holds: RotateSensor" not in text
 
 

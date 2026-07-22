@@ -66,7 +66,7 @@ from pyrung import (
 # Dwell for the program-owned Hold/Complete timers.  100 ms (= 10 scans at dt=0.010)
 # is short enough that a skiff probe window covers a whole dwell, so the loop reaches
 # the skiff's second lap (the ``State`` pair-probe that learns a composite cause) and
-# lands on the free-word stuck exit — the decline that NAMES the undeclared mask-table
+# lands on a stuck exit because the undeclared mask-table word cannot be probed
 # neighbor, mirroring the real machine's mis-attribution.  A longer dwell (200 ms)
 # budget-exhausts on the avoided command first and never reaches that exit.
 _DWELL_MS = 100
