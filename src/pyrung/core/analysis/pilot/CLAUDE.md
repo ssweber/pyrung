@@ -178,6 +178,9 @@ recorded concrete conditions held.
 `PendingDeparture` records a clean program departure whose progress is not yet
 conclusive. It names the stable owner of its rollback checkpoint, the owner of
 an optional saved-progress checkpoint, and a finite search-scan deadline.
+The saved-progress owner is an irreversible recovery floor: expiry and
+regression resolve its current executable artifact and may discard only work
+after it. Until that owner exists, the opening rollback owner remains the floor.
 Correction install/revoke may replace a checkpoint's executable artifact but
 must preserve that owner. `TrialAssessment` and
 gauge receipts carry the evidence; every observed unexpected departure still

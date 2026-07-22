@@ -88,6 +88,18 @@ def _checkpoint_index(state: _PilotState, owner: _CheckpointOwner) -> int:
     raise ValueError("recovery checkpoint is no longer owned by this world")
 
 
+def _pending_recovery_index(state: _PilotState, pending: PendingDeparture) -> int:
+    """Locate the irreversible recovery floor owned by pending progress.
+
+    The opening rollback receipt remains the corridor fallback only until the
+    departure banks a newer target-progress receipt.  Once present, that saved
+    owner is the floor for destructive recovery as well as expiry; resolving
+    the owner here also picks up any later refresh of its executable artifact.
+    """
+    owner = pending.saved_progress_owner or pending.rollback_owner
+    return _checkpoint_index(state, owner)
+
+
 def _refresh_checkpoint(existing: _Checkpoint, receipt: _Checkpoint) -> _Checkpoint:
     """Refresh one stack slot without transferring its rollback ownership."""
     return replace(receipt, owner=existing.owner)
@@ -733,15 +745,15 @@ def _apply_departure_decision(
     if decision.action is DepartureAction.WAIT:
         return None
 
-    state.pending_departure = None
     rollback_index = _checkpoint_index(state, pending.rollback_owner)
     saved_progress = (
         state.checkpoints[_checkpoint_index(state, pending.saved_progress_owner)]
         if pending.saved_progress_owner is not None
         else None
     )
-    del state.checkpoints[rollback_index + 1 :]
+    state.pending_departure = None
     if decision.action is DepartureAction.PROMOTE:
+        del state.checkpoints[rollback_index + 1 :]
         promoted_trend = trial.trend if trial.trend is not None else 0
         if trial.new_key is not None:
             state.checkpoints.append(
@@ -791,11 +803,15 @@ def _apply_departure_decision(
             frame,
             state,
             ctx,
-            origin=_checkpoint_recovery_origin(state),
+            origin=_checkpoint_recovery_origin(
+                state,
+                checkpoint_index=_pending_recovery_index(state, pending),
+            ),
         )
         return (event, *regression)
 
     assert decision.action is DepartureAction.EXPIRE
+    del state.checkpoints[rollback_index + 1 :]
     if saved_progress is not None:
         state.checkpoints.append(saved_progress)
     checkpoint = state.checkpoints[-1]

@@ -41,11 +41,15 @@ from pyrung.core.analysis.pilot.outcome import (
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
+    _apply_departure_decision,
     _channel_recovery_origin,
     _deviation_bearing,
+    _investigate_and_revert,
     _monitor_trend,
 )
 from pyrung.core.analysis.pilot.types import (
+    DepartureAction,
+    DepartureDecision,
     PendingDeparture,
     PilotEvent,
     _Checkpoint,
@@ -404,6 +408,123 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
     )
     assert [event.kind for event in events] == ["provisional_expired"]
     assert state.checkpoints[-1] is refreshed
+
+
+def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
+    """A later incident cannot erase progress banked inside an outer corridor."""
+    rollback = _cp(("source",), _oneshot_plc(), 5)
+    saved = _cp(("saved",), _oneshot_plc(), 4)
+    saved_work = saved.world.work.fork()
+    saved_work.patch({"A": True})
+    saved_work.step()
+    refreshed = replace(
+        saved,
+        key=("saved-refreshed",),
+        world=saved.world.set(work=saved_work, best_trend=3),
+        trend=3,
+    )
+    current_work = saved_work.fork()
+    current_work.step()
+    current_step = _Step(
+        inputs={"A": False},
+        scan_before=saved_work.state.scan_id,
+        scan_after=current_work.state.scan_id,
+    )
+    state = _make_state(
+        best_trend=3,
+        checkpoints=[rollback, refreshed],
+        work=current_work,
+        steps=[current_step],
+    )
+    state.pending_departure = replace(
+        _pending_departure(state),
+        rollback_owner=rollback.owner,
+        saved_progress_owner=saved.owner,
+    )
+    trial = _make_trial(
+        8,
+        Outcome.CONFIRMED,
+        fork=current_work,
+        fork_snap=dict(current_work.state.tags),
+        chase_regression_causes=False,
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture(*args, origin, **kwargs):
+        captured["origin"] = origin
+        captured["acts"] = tuple(state.committed_acts)
+        return _investigate_and_revert(*args, origin=origin, **kwargs)
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress._investigate_and_revert",
+        _capture,
+    )
+
+    events = _apply_departure_decision(
+        DepartureDecision(DepartureAction.REGRESS, "behind"),
+        trial,
+        _frame(),
+        state,
+        SimpleNamespace(target_tag="State"),
+    )
+
+    assert events is not None
+    assert [event.kind for event in events] == ["provisional_regressed", "trend_regression"]
+    assert captured["origin"].checkpoint_owner is saved.owner
+    assert captured["origin"].anchor_scan == saved_work.state.scan_id
+    assert captured["origin"].before_snap == dict(saved_work.state.tags)
+    assert captured["acts"]
+    assert state.checkpoints == [rollback, refreshed]
+    assert state.pending_departure is None
+    assert state.best_trend == 3
+    assert state.work.state.scan_id == saved_work.state.scan_id
+    assert dict(state.work.state.tags) == dict(saved_work.state.tags)
+
+
+def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypatch):
+    rollback_work = _oneshot_plc()
+    rollback_work.step()
+    rollback = _cp(("source",), rollback_work, 5)
+    current_work = rollback_work.fork()
+    current_work.step()
+    state = _make_state(
+        best_trend=5,
+        checkpoints=[rollback],
+        work=current_work,
+    )
+    state.pending_departure = _pending_departure(state)
+    trial = _make_trial(
+        8,
+        Outcome.CONFIRMED,
+        fork=current_work,
+        fork_snap=dict(current_work.state.tags),
+        chase_regression_causes=False,
+    )
+    captured = []
+
+    def _capture(*args, origin, **kwargs):
+        captured.append(origin)
+        return _investigate_and_revert(*args, origin=origin, **kwargs)
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress._investigate_and_revert",
+        _capture,
+    )
+
+    events = _apply_departure_decision(
+        DepartureDecision(DepartureAction.REGRESS, "behind"),
+        trial,
+        _frame(),
+        state,
+        SimpleNamespace(target_tag="State"),
+    )
+
+    assert events is not None
+    assert captured[0].checkpoint_owner is rollback.owner
+    assert captured[0].anchor_scan == rollback_work.state.scan_id
+    assert state.checkpoints == [rollback]
+    assert state.best_trend == 5
+    assert state.work.state.scan_id == rollback_work.state.scan_id
 
 
 def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
