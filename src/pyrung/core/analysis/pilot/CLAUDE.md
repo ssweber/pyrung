@@ -98,6 +98,10 @@ should consume the first owner's result.
 - One exact producer's unchanged-world proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
   `compass.py::Compass.orient` facade
+- Target-relative Bearing objective: `orientation.py::_bearing`; the original
+  `TargetSpec` and complete unresolved frontier travel unchanged through
+  execution and verification, and recovery consumes that receipt rather than
+  rebuilding intent from the global context
 - Option materialization and ranking evidence: `options.py::_build_candidates`
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
@@ -270,8 +274,8 @@ an internal state or policy.
 - `program_step.py` — read-only unchanged-world proof for one exact producer;
   reports the immediate boundary, unmet input, or a pipeline interruption that
   must be observed before another route is selected.
-- `navigation.py` — immutable evidence, act, result, target, constraint, and
-  world-view contracts.
+- `navigation.py` — immutable evidence, act, result, target, constraint,
+  target-relative Bearing objective, and world-view contracts.
 
 ### Execution and observation
 
@@ -288,7 +292,8 @@ an internal state or policy.
 - `outcome.py` — agency, bearing, progress, and frontier evidence.
 - `progress.py` — checkpoints, pending departures, regression recovery,
   correction installation, and reverts.
-- `detour.py` — channel-departure classification for progress handling.
+- `detour.py` — channel-departure classification for progress handling; reads
+  the executed Bearing objective and never reconstructs a target objective.
 - `gauge.py` — conservative target-relative earned-work marks and reset
   boundaries.
 - `causal.py` — recorded cause-chain queries and empirical program-write

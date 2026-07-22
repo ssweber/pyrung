@@ -535,6 +535,8 @@ def test_route_replay_accepts_local_neutralization_without_reaching_frontier():
     witness = incident_regression_witness(recorded, incident)
     assert witness is not None
     assert (witness.source, witness.departed) == (6, 8)
+    assert witness.owner_snapshot is not None
+    assert witness.owner_snapshot[State.name] == 6
 
     ctx = _make_replay_context(prog, plc, State.name, 17)
     replay = build_replay_fn(

@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot.compass import (
 )
 from pyrung.core.analysis.pilot.navigation import (
     Bearing,
+    BearingObjective,
     Coast,
     NavigationConstraints,
     NeedProbe,
@@ -100,12 +101,48 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert isinstance(result, Bearing)
     assert isinstance(result.act, Pulse)
     assert result.act.action == ("First", True)
+    assert result.objective.target == TargetSpec("Target", True)
+    assert result.objective.frontier == ()
     assert not hasattr(result, "path")
     assert not hasattr(result, "candidates")
     assert result.trace is not None
     assert result.trace.world.frame is world.frame
     assert result.trace.candidates.candidates == (first,)
     assert not hasattr(result.trace, "readings")
+
+
+def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
+    """A Boolean target keeps the state-register goal Orientation traced for it."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+    from pyrung.core.analysis.pilot.trace import TraceNode
+
+    compass = Compass()
+    first = _candidate("First")
+    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
+    monkeypatch.setattr(
+        orientation,
+        "_candidate_applied",
+        lambda option, _options, _context: (option.pair,),
+    )
+    state_goal = TraceNode(
+        "State",
+        17,
+        children=[TraceNode("CompleteCommand", True, is_steerable=True)],
+    )
+    complete_goal = TraceNode("Complete", True, children=[state_goal])
+    world = _world(compass)
+    world.snapshot.update({"Complete": False, "State": 6})
+    world.frame.tree = complete_goal
+
+    result = compass.orient(
+        world,
+        TargetSpec("Complete", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(result, Bearing)
+    assert result.objective.target == TargetSpec("Complete", True)
+    assert result.objective.channel_goals("State") == (17,)
 
 
 def test_coast_act_carries_only_immediate_heading() -> None:
@@ -231,6 +268,7 @@ def test_stale_bearing_cannot_execute() -> None:
     bearing = Bearing(
         world_key=("stale",),
         act=Pulse(("Cmd", True), (("Cmd", True),), _candidate("Cmd")),
+        objective=BearingObjective(TargetSpec("Target", True)),
     )
     with pytest.raises(StaleBearingError):
         execute(bearing, world)

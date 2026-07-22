@@ -30,6 +30,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -126,6 +127,7 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _TrialResult:
         "post_pulse_snap": {},
         "fork_snap": {},
         "observe_label": "pulse",
+        "bearing_objective": BearingObjective(TargetSpec("State", 17)),
         "new_key": ("k",),
         "trend": trend,
         "outcome": outcome,

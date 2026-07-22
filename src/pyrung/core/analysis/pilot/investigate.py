@@ -150,6 +150,10 @@ class RegressionWitness:
     cause: tuple[CausalOccurrence, ...]
     causal_spine: frozenset[str]
     causal_roots: tuple[tuple[str, Any], ...] = ()
+    # Snapshot in which synthetic guards were evaluated before the causal
+    # departure scan. A correction may become active long after the incident
+    # anchor, so lifecycle ownership cannot be reconstructed from the anchor.
+    owner_snapshot: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -383,6 +387,11 @@ def incident_regression_witness(
         cause=tuple(cause),
         causal_spine=frozenset(chase_chain_tags(plc, channel, scan=departure.scan)),
         causal_roots=tuple((root.tag_name, root.value) for root in chain.roots),
+        owner_snapshot=(
+            dict(plc.history.at(departure.scan - 1).tags)
+            if departure.scan > plc.history.oldest_scan_id
+            else dict(incident.before_snap)
+        ),
     )
 
 

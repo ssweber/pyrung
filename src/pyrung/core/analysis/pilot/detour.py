@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.navigation import BearingObjective
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -142,6 +143,7 @@ def _edge_resurrects(
 def classify_departure(
     state: _PilotState,
     ctx: _PilotContext,
+    objective: BearingObjective,
     channel_tag: str,
     from_value: Any,
     source_snap: Any,
@@ -190,10 +192,9 @@ def classify_departure(
         return _v("regression", "settled world is behind the exact source receipt")
 
     goals: list[Any] = [from_value]
-    target_tag = getattr(ctx, "target_tag", None)
-    target_value = getattr(ctx, "target_value", None)
-    if target_tag == channel_tag and not any(_values_match(target_value, g) for g in goals):
-        goals.append(target_value)
+    for value in objective.channel_goals(channel_tag):
+        if not any(_values_match(value, goal) for goal in goals):
+            goals.append(value)
 
     blocked_values, all_resolved = _reset_blocked_values(gauge, anchor_snap, channel_tag)
     if not all_resolved:

@@ -353,7 +353,7 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
 
 
 def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
-    """Lock the cold avoided-Complete drive through its solved route.
+    """Lock the cold avoided-Complete drive to the real completion signal.
 
     The former endpoint was an Unhold read at HELD/Step101. That landing was
     premature safety motion, not recipe progress; the exact-producer bearing
@@ -365,7 +365,9 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     motion observed while reading a later producer must keep its current owner;
     it must not introduce a duplicate Hold command. Each later door incident on
     the reused state-transition executor is corrected in its own causal era,
-    after which the program-owned Complete transition reaches State 17.
+    after which the program-owned Complete transition reaches State 17 and
+    asserts ``Sts_State_Completed``. The Boolean target is deliberate: reaching
+    state 17 one scan before its status output is not completion.
     """
     plc = PLC(tumbler_logic)
     plc.step()
@@ -380,7 +382,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
         plc,
-        tags["Sts_StateCurrent"] == 17,
+        tags["Sts_State_Completed"],
         max_scans=INTERNAL_ROUTE_MAX_SCANS,
         avoid_pred=avoid_pred,
     ):

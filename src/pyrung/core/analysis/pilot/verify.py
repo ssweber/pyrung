@@ -97,6 +97,7 @@ def _trial_result(
         post_pulse_snap=trial.post_pulse_snap,
         fork_snap=trial.snap,
         observe_label=observe_label,
+        bearing_objective=intent.bearing_objective,
         route_prescribed=intent.route_prescribed,
         motion=intent.motion,
         regression_nogoods=intent.regression_nogoods,

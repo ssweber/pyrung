@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation,
 from pyrung.core.analysis.pilot.navigation import (
     BatchPulse,
     Bearing,
+    BearingObjective,
     Coast,
     Dwell,
     OrientationWorld,
@@ -399,6 +400,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         option = act.option
         return _try_action_batch(
             _AttemptIntent(
+                bearing_objective=bearing.objective,
                 action_pairs=(act.action,),
                 applied=act.applied,
                 influence_prescribed=option.influence_prescribed,
@@ -420,6 +422,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     if isinstance(act, BatchPulse):
         return _try_action_batch(
             _AttemptIntent(
+                bearing_objective=bearing.objective,
                 action_pairs=act.actions,
                 applied=act.actions,
                 observe_label="batch" if act.source == "learned" else "width",
@@ -447,10 +450,11 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 route_channel_tag=act.route_channel_tag,
                 route_from_value=act.route_from_value,
                 route_target_value=act.route_target_value,
+                bearing_objective=bearing.objective,
             )
-        return _try_terminal_letrun(frame, state, ctx)
+        return _try_terminal_letrun(frame, state, ctx, bearing.objective)
     if isinstance(act, Dwell):
-        return _try_terminal_dwell(frame, state, ctx)
+        return _try_terminal_dwell(frame, state, ctx, bearing.objective)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
@@ -467,6 +471,7 @@ def _try_zoom(
     state: _PilotState,
     ctx: _PilotContext,
     *,
+    bearing_objective: BearingObjective,
     boundary: Any = None,
     route_channel_tag: str | None = None,
     route_from_value: Any = None,
@@ -563,6 +568,7 @@ def _try_zoom(
         _ExecutedAttempt(
             pulse=trial,
             intent=_AttemptIntent(
+                bearing_objective=bearing_objective,
                 observe_label="zoom",
                 target_observe_label="zoom-target",
                 route_prescribed=route_prescribed,
@@ -583,6 +589,7 @@ def _try_terminal_letrun(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    bearing_objective: BearingObjective,
 ) -> _AttemptResult:
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
@@ -695,6 +702,7 @@ def _try_terminal_letrun(
         _ExecutedAttempt(
             pulse=trial,
             intent=_AttemptIntent(
+                bearing_objective=bearing_objective,
                 observe_label="letrun",
                 target_observe_label="letrun-target",
                 channel_tag=chan_tag,
@@ -713,6 +721,7 @@ def _try_terminal_dwell(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    bearing_objective: BearingObjective,
 ) -> _AttemptResult:
     """Run one bounded repeated dwell through the shared trial gates.
 
@@ -787,6 +796,7 @@ def _try_terminal_dwell(
         _ExecutedAttempt(
             pulse=trial,
             intent=_AttemptIntent(
+                bearing_objective=bearing_objective,
                 observe_label="letrun",
                 target_observe_label="letrun-target",
                 motion=MotionKind.COAST_HOLDING_WORLD,

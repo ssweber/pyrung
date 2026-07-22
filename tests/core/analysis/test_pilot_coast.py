@@ -871,6 +871,7 @@ class TestClassifyDepartureRefusal:
         from types import SimpleNamespace
 
         from pyrung.core.analysis.pilot import detour
+        from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 
         timeout_receipt = CoastReceipt(
             kind="departure-settle",
@@ -891,6 +892,7 @@ class TestClassifyDepartureRefusal:
         verdict = detour.classify_departure(
             SimpleNamespace(),  # state — consumed only by the (mocked) settle
             SimpleNamespace(),  # ctx — untouched on the refusal arm
+            BearingObjective(TargetSpec("Target", True)),
             "Chan",
             from_value=1,
             source_snap={"Chan": 1},

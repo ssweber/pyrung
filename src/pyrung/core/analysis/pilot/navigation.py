@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeVar
 
 from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
+from pyrung.core.analysis.sp_values import _values_match
 
 T = TypeVar("T")
 
@@ -47,6 +48,33 @@ class TargetSpec:
     tag: str
     value: Any
     predicate: Any = None
+
+
+@dataclass(frozen=True)
+class BearingObjective:
+    """Target-relative meaning that must survive execution of one bearing.
+
+    The navigation act owns the immediate physical boundary it will observe.
+    This receipt owns why alternate landings may still be useful: the original
+    user target plus the unresolved frontier Orientation read for that target.
+    Verification and recovery carry it unchanged instead of reconstructing a
+    weaker objective from the global context.
+    """
+
+    target: TargetSpec
+    frontier: tuple[_ActionPair, ...] = ()
+
+    def channel_goals(self, channel_tag: str) -> tuple[Any, ...]:
+        """Ordered, de-duplicated target-relative goals for one channel."""
+        goals: list[Any] = []
+        for tag, value in self.frontier:
+            if tag == channel_tag and not any(_values_match(value, goal) for goal in goals):
+                goals.append(value)
+        if self.target.tag == channel_tag and not any(
+            _values_match(self.target.value, goal) for goal in goals
+        ):
+            goals.append(self.target.value)
+        return tuple(goals)
 
 
 @dataclass(frozen=True)
@@ -147,8 +175,8 @@ class Bearing:
 
     world_key: _StateKey
     act: NavigationAct
+    objective: BearingObjective
     prerequisites: tuple[Any, ...] = ()
-    immediate_goal: Any = None
     rationale: str = ""
     trace: OrientationTrace | None = None
 

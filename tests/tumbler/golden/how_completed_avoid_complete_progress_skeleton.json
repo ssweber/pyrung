@@ -97,12 +97,12 @@
   "route": null,
   "steerable_count": 570,
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ]
  },
  {
-  "distance": 5,
+  "distance": 6,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -116,6 +116,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 9)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_UnitModeCurrent=1 (have 3)",
@@ -123,14 +124,15 @@
    "Cmd_UnitMode=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -393,7 +395,7 @@
   "kind": "candidate_rejected"
  },
  {
-  "distance": 5,
+  "distance": 6,
   "kind": "iteration",
   "nogoods": [
    [
@@ -412,6 +414,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 9)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_UnitModeCurrent=1 (have 3)",
@@ -419,14 +422,15 @@
    "Cmd_UnitMode=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -656,7 +660,7 @@
   "kind": "candidate_rejected"
  },
  {
-  "distance": 5,
+  "distance": 6,
   "kind": "iteration",
   "nogoods": [
    [
@@ -679,6 +683,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 9)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_UnitModeCurrent=1 (have 3)",
@@ -686,14 +691,15 @@
    "Cmd_UnitMode=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -901,15 +907,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 5 -> 2",
+     "detail": "channel ejected",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 6 -> 3",
      "event": "ambient"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 2,
-   "trend_before": 5
+   "trend_after": 3,
+   "trend_before": 6
   },
   "applied": [
    [
@@ -961,7 +972,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 5 -> 2",
+    "detail": "channel ejected",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 6 -> 3",
     "event": "ambient"
    }
   ],
@@ -1035,23 +1051,25 @@
   "settled_value": 2
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 2)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -1210,15 +1228,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 2",
+     "detail": "channel ejected",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 3",
      "event": "ambient"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 2,
-   "trend_before": 2
+   "trend_after": 3,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -1253,7 +1276,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 2",
+    "detail": "channel ejected",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 3",
     "event": "ambient"
    }
   ],
@@ -1297,23 +1325,25 @@
   "to_value": 4
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 4)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -1449,15 +1479,15 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 15",
+     "detail": "distance 3 -> 16",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 15,
-   "trend_before": 2
+   "trend_after": 16,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -1492,7 +1522,7 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 15",
+    "detail": "distance 3 -> 16",
     "event": "confirmed"
    }
   ],
@@ -1520,15 +1550,15 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 15
+  "trend": 16
  },
  {
-  "distance": 15,
+  "distance": 16,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -1542,6 +1572,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -1559,14 +1590,15 @@
    "i_RotateFB=True (have False)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -1591,14 +1623,14 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 15 -> 2",
-    "event": "zoom-stall"
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
    }
   ],
   "kind": "zoom_rejected"
  },
  {
-  "distance": 15,
+  "distance": 16,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -1612,6 +1644,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -1629,14 +1662,15 @@
    "i_RotateFB=True (have False)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -1771,7 +1805,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 6,
+  "trend": 7,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -1804,14 +1838,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    4,
-    8
-   ]
-  ],
-  "from_trend": 6,
+  "channel_transitions": [],
+  "from_trend": 7,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -1897,26 +1925,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 4)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2052,15 +2082,15 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 15",
+     "detail": "distance 3 -> 16",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 15,
-   "trend_before": 2
+   "trend_after": 16,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -2095,7 +2125,7 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 15",
+    "detail": "distance 3 -> 16",
     "event": "confirmed"
    }
   ],
@@ -2123,15 +2153,15 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 15
+  "trend": 16
  },
  {
-  "distance": 15,
+  "distance": 16,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -2145,6 +2175,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -2162,14 +2193,15 @@
    "i_RotateFB=True (have False)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2194,14 +2226,14 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 15 -> 2",
-    "event": "zoom-stall"
+    "detail": "empty frontier, no pending effects",
+    "event": "dead-end"
    }
   ],
   "kind": "zoom_rejected"
  },
  {
-  "distance": 15,
+  "distance": 16,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -2215,6 +2247,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -2232,14 +2265,15 @@
    "i_RotateFB=True (have False)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2374,7 +2408,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 6,
+  "trend": 7,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -2407,14 +2441,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    4,
-    8
-   ]
-  ],
-  "from_trend": 6,
+  "channel_transitions": [],
+  "from_trend": 7,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -2460,26 +2488,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 4)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2615,15 +2645,15 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 15",
+     "detail": "distance 3 -> 16",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 15,
-   "trend_before": 2
+   "trend_after": 16,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -2658,7 +2688,7 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 15",
+    "detail": "distance 3 -> 16",
     "event": "confirmed"
    }
   ],
@@ -2686,15 +2716,15 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 15
+  "trend": 16
  },
  {
-  "distance": 15,
+  "distance": 16,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [
@@ -2708,6 +2738,7 @@
    ]
   ],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -2725,14 +2756,15 @@
    "i_RotateFB=True (have False)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2759,7 +2791,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 5,
   "zoom_channel_tag": "Rotate_tmr_Acc",
   "zoom_target_value": 4
@@ -2771,7 +2803,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
+  "trend": 11
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -2790,14 +2822,15 @@
    ]
   ],
   "terminal": false,
-  "trend": 10
+  "trend": 11
  },
  {
-  "distance": 10,
+  "distance": 11,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -2810,14 +2843,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2883,7 +2917,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 4,
+  "trend": 5,
   "zoom_actual_value": 3,
   "zoom_channel_tag": "Blower_tmr_Acc",
   "zoom_target_value": 2
@@ -2895,28 +2929,30 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 4
+  "trend": 5
  },
  {
-  "distance": 4,
+  "distance": 5,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 3)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
    "Sts_StateCompleteBool=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -2982,7 +3018,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -2994,26 +3030,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3069,7 +3107,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -3102,14 +3140,8 @@
   "to_value": 10
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    6,
-    10
-   ]
-  ],
-  "from_trend": 8,
+  "channel_transitions": [],
+  "from_trend": 9,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -3194,26 +3226,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3269,7 +3303,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -3302,14 +3336,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    6,
-    8
-   ]
-  ],
-  "from_trend": 10,
+  "channel_transitions": [],
+  "from_trend": 11,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -3371,26 +3399,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3446,7 +3476,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -3479,14 +3509,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    6,
-    8
-   ]
-  ],
-  "from_trend": 10,
+  "channel_transitions": [],
+  "from_trend": 11,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -3544,26 +3568,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3619,7 +3645,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 60,
   "zoom_channel_tag": "S_HeatAtTemp_tmr_Acc",
   "zoom_target_value": 60
@@ -3631,26 +3657,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3706,7 +3734,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -3764,26 +3792,28 @@
     103
    ]
   ],
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 11)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -3919,15 +3949,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 13",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 13,
-   "trend_before": 2
+   "trend_after": 14,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -3962,7 +3997,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 13",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
     "event": "confirmed"
    }
   ],
@@ -3990,19 +4030,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 13
+  "trend": 14
  },
  {
-  "distance": 13,
+  "distance": 14,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -4018,14 +4059,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -4091,7 +4133,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 6,
+  "trend": 7,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -4124,14 +4166,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    11,
-    8
-   ]
-  ],
-  "from_trend": 6,
+  "channel_transitions": [],
+  "from_trend": 7,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -4217,26 +4253,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 11)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -4372,15 +4410,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 13",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 13,
-   "trend_before": 2
+   "trend_after": 14,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -4415,7 +4458,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 13",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
     "event": "confirmed"
    }
   ],
@@ -4443,19 +4491,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 13
+  "trend": 14
  },
  {
-  "distance": 13,
+  "distance": 14,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -4471,14 +4520,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -4544,7 +4594,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 6,
+  "trend": 7,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -4577,14 +4627,8 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    11,
-    8
-   ]
-  ],
-  "from_trend": 6,
+  "channel_transitions": [],
+  "from_trend": 7,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -4630,26 +4674,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 11)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -4785,15 +4831,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 13",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 13,
-   "trend_before": 2
+   "trend_after": 14,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -4828,7 +4879,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 13",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
     "event": "confirmed"
    }
   ],
@@ -4856,19 +4912,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 13
+  "trend": 14
  },
  {
-  "distance": 13,
+  "distance": 14,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -4884,14 +4941,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -4957,7 +5015,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 5,
   "zoom_channel_tag": "Rotate_tmr_Acc",
   "zoom_target_value": 4
@@ -4969,7 +5027,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
+  "trend": 11
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -4988,14 +5046,15 @@
    ]
   ],
   "terminal": false,
-  "trend": 10
+  "trend": 11
  },
  {
-  "distance": 10,
+  "distance": 11,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -5008,14 +5067,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5081,7 +5141,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 4,
+  "trend": 5,
   "zoom_actual_value": 3,
   "zoom_channel_tag": "Blower_tmr_Acc",
   "zoom_target_value": 2
@@ -5093,28 +5153,30 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 4
+  "trend": 5
  },
  {
-  "distance": 4,
+  "distance": 5,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
    "Sts_StateCompleteBool=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5180,7 +5242,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -5192,26 +5254,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5267,7 +5331,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -5300,14 +5364,8 @@
   "to_value": 10
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    6,
-    10
-   ]
-  ],
-  "from_trend": 8,
+  "channel_transitions": [],
+  "from_trend": 9,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -5392,26 +5450,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5467,7 +5527,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 15,
   "zoom_channel_tag": "S_CoolCycle_tmr_Acc",
   "zoom_target_value": 15
@@ -5479,26 +5539,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5554,7 +5616,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -5612,26 +5674,28 @@
     107
    ]
   ],
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 11)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5767,15 +5831,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 13",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 13,
-   "trend_before": 2
+   "trend_after": 14,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -5810,7 +5879,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 13",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
     "event": "confirmed"
    }
   ],
@@ -5838,19 +5912,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 13
+  "trend": 14
  },
  {
-  "distance": 13,
+  "distance": 14,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -5866,14 +5941,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -5939,7 +6015,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 5,
   "zoom_channel_tag": "Rotate_tmr_Acc",
   "zoom_target_value": 4
@@ -5951,7 +6027,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
+  "trend": 11
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -5970,14 +6046,15 @@
    ]
   ],
   "terminal": false,
-  "trend": 10
+  "trend": 11
  },
  {
-  "distance": 10,
+  "distance": 11,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -5990,14 +6067,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6063,7 +6141,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 4,
+  "trend": 5,
   "zoom_actual_value": 3,
   "zoom_channel_tag": "Blower_tmr_Acc",
   "zoom_target_value": 2
@@ -6075,28 +6153,30 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 4
+  "trend": 5
  },
  {
-  "distance": 4,
+  "distance": 5,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
    "Sts_StateCompleteBool=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6162,7 +6242,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -6174,26 +6254,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6249,7 +6331,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -6307,26 +6389,28 @@
     109
    ]
   ],
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 11)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6462,15 +6546,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 2 -> 13",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
      "event": "confirmed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 13,
-   "trend_before": 2
+   "trend_after": 14,
+   "trend_before": 3
   },
   "applied": [
    [
@@ -6505,7 +6594,12 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 2 -> 13",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
     "event": "confirmed"
    }
   ],
@@ -6533,19 +6627,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 13
+  "trend": 14
  },
  {
-  "distance": 13,
+  "distance": 14,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -6561,14 +6656,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6634,7 +6730,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 10,
+  "trend": 11,
   "zoom_actual_value": 5,
   "zoom_channel_tag": "Rotate_tmr_Acc",
   "zoom_target_value": 4
@@ -6646,7 +6742,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
+  "trend": 11
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -6665,14 +6761,15 @@
    ]
   ],
   "terminal": false,
-  "trend": 10
+  "trend": 11
  },
  {
-  "distance": 10,
+  "distance": 11,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -6685,14 +6782,15 @@
    "Blower_CurStep=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6758,7 +6856,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 4,
+  "trend": 5,
   "zoom_actual_value": 3,
   "zoom_channel_tag": "Blower_tmr_Acc",
   "zoom_target_value": 2
@@ -6770,28 +6868,30 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 4
+  "trend": 5
  },
  {
-  "distance": 4,
+  "distance": 5,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 12)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
    "Sts_StateCompleteBool=1 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6857,7 +6957,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 2,
+  "trend": 3,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 6
@@ -6869,26 +6969,28 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 2
+  "trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -6944,7 +7046,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "ambient",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 10,
   "zoom_channel_tag": "Sts_StateCurrent",
   "zoom_target_value": 16
@@ -6977,14 +7079,8 @@
   "to_value": 10
  },
  {
-  "channel_transitions": [
-   [
-    "Sts_StateCurrent",
-    6,
-    10
-   ]
-  ],
-  "from_trend": 8,
+  "channel_transitions": [],
+  "from_trend": 9,
   "investigation": {
    "confirmed": 1,
    "confirmed_detail": [
@@ -7069,26 +7165,28 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 2
+  "to_trend": 3
  },
  {
-  "distance": 2,
+  "distance": 3,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 6)",
    "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },
@@ -7144,7 +7242,7 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 8,
+  "trend": 9,
   "zoom_actual_value": 30,
   "zoom_channel_tag": "S_Fluffing_tmr_Acc",
   "zoom_target_value": 30
@@ -7155,19 +7253,20 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 2,
+  "baseline_trend": 3,
   "channel": "S_Fluffing_tmr_Acc",
   "channel_value": 30,
   "kind": "trend_checkpoint",
   "provisional": true,
-  "trend": 8
+  "trend": 9
  },
  {
-  "distance": 8,
+  "distance": 9,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
   "still_need": [
+   "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 16)",
    "Sts_StateRequested=17 (have 0)",
    "Sts_StateCompleteFlag=True (have False)",
@@ -7178,14 +7277,15 @@
    "Blower_xCall=0 (have 1)"
   ],
   "target": [
-   "Sts_StateCurrent",
-   17
+   "Sts_State_Completed",
+   true
   ],
   "watch_tags": [
    "Cmd_UnitMode",
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
+   "Sts_State_Completed",
    "Sts_UnitModeCurrent"
   ]
  },

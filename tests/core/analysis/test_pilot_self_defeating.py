@@ -38,6 +38,7 @@ from pyrung.core.analysis.pilot.investigate import (
     hold_defeats_needed,
     investigate_deviation,
 )
+from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
@@ -467,6 +468,10 @@ def _saboteur_scenario():
         post_pulse_snap=dict(work.state.tags),
         fork_snap=dict(work.state.tags),
         observe_label="letrun",
+        bearing_objective=BearingObjective(
+            TargetSpec("Out", True),
+            cp_frontier,
+        ),
         new_key=("ejected",),
         trend=1,  # misleadingly LOW — the ejection branch intercepts it
         outcome=Outcome.AMBIENT_DRIFT,
@@ -816,12 +821,14 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
 
-def test_later_causal_incident_revokes_probationary_correction_without_remedy(
+def test_later_causal_incident_revokes_promoted_correction_without_remedy(
     monkeypatch,
 ):
-    """A live causal counterexample removes a trial rung before replacement exists."""
+    """Promotion is not immunity from a later exact causal counterexample."""
     state, trial, frame, ctx = _saboteur_scenario()
-    scope = CompareEq(state.work._known_tags_by_name["State"], 6)
+    # Inactive at the incident anchor (Step=1), active only in the later world
+    # immediately before the recorded departure (Step=2).
+    scope = CompareEq(state.work._known_tags_by_name["Step"], 2)
     harmful = PilotRung("Go", True, scope)
     correction = _ConfirmedCorrection(
         identity=correction_identity((harmful,)),
@@ -837,6 +844,8 @@ def test_later_causal_incident_revokes_probationary_correction_without_remedy(
         source="investigation",
     )
     receipt = state.correction_receipts[0]
+    assert _promote_probationary_corrections(state) == (receipt.receipt_id,)
+    assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
 
     witness = RegressionWitness(
         channel_tag="State",
@@ -846,14 +855,21 @@ def test_later_causal_incident_revokes_probationary_correction_without_remedy(
         cause=(CausalOccurrence(RungId("Program", 0), "State", 8),),
         causal_spine=frozenset(("Go", "State")),
         causal_roots=(("Go", True),),
+        owner_snapshot={**frame.snap, "Step": 2},
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.incident_regression_witness",
         lambda _plc, _incident: witness,
     )
+    excluded = []
+
+    def _no_replacement(_plc, _incident, _ctx, _replay, **kwargs):
+        excluded.extend(kwargs.get("excluded_corrections", ()))
+        return InvestigationResult()
+
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.investigate_deviation",
-        _stub_investigation([]),
+        _no_replacement,
     )
 
     events = _investigate_and_revert(
@@ -867,6 +883,8 @@ def test_later_causal_incident_revokes_probationary_correction_without_remedy(
     assert harmful not in state.rungs
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
+    assert receipt.identity in excluded
+    assert all(harmful not in checkpoint.world.rungs for checkpoint in state.checkpoints)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
 

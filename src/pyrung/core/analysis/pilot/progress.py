@@ -277,13 +277,23 @@ def _monitor_trend(
                 "to_value": trial.fork_snap.get(chan),
             },
         )
+        assert trial.bearing_objective is not None, (
+            "a committed channel departure must retain Orientation's Bearing objective"
+        )
         # Classify BEFORE investigating (detour.py): program-owned motion may
         # preserves the progress gauge and offers a clean forward route —
         # reverting it would throw away the whole march, and investigation
         # would honestly confirm nothing. Affirmative clean-route evidence opens
         # bounded pending piloting; regression or unknown evidence follows
         # the conservative investigate-and-revert arm.
-        verdict = classify_departure(state, ctx, chan, departed_from, trial.before_snap)
+        verdict = classify_departure(
+            state,
+            ctx,
+            trial.bearing_objective,
+            chan,
+            departed_from,
+            trial.before_snap,
+        )
         if verdict.can_continue:
             prescribed_departure = (
                 trial.route_prescribed
@@ -1048,24 +1058,25 @@ def _contradicted_corrections(
     return tuple(contradicted)
 
 
-def _causally_harmful_probationary_corrections(
+def _causally_harmful_corrections(
     state: _PilotState,
     witness: RegressionWitness | None,
     snapshot: Mapping[str, Any],
 ) -> tuple[_CorrectionReceipt, ...]:
-    """Probationary corrections whose exact PILOT write caused this incident.
+    """Effective corrections whose exact active PILOT write caused this incident.
 
-    Bounded replay proves only that a proposed rung suppresses one recorded
-    departure.  Until the live run banks progress, the correction remains a
-    hypothesis.  If the next incident's recorded ``cause()`` chain contains
-    the active synthetic write owned by that hypothesis, the live machine has
-    supplied the missing counterexample and the rung must be removed even when
-    investigation cannot yet name a replacement.
+    Banking progress promotes confidence; it does not make a synthetic rung
+    immune to later causal testimony. If a later incident's recorded
+    ``cause()`` chain contains the exact active write owned by any effective
+    correction, the live machine has supplied a counterexample and the rung
+    must be removed even when investigation cannot yet name a replacement.
 
     Match the exact PILOT write (destination and value), then resolve the last
     active rung for that destination using the same ordered-overlay rule as
     ``_set_rungs``.  This avoids blaming an expired or shadowed correction that
-    merely mentions the same tag.
+    merely mentions the same tag. Guard ownership is evaluated in the
+    witness's pre-departure world, not the earlier incident anchor: a delayed
+    correction may become active only shortly before it causes harm.
     """
     if witness is None:
         return ()
@@ -1080,7 +1091,7 @@ def _causally_harmful_probationary_corrections(
     if not causal_values:
         return ()
 
-    view = _SnapshotView(dict(snapshot), {})
+    view = _SnapshotView(dict(witness.owner_snapshot or snapshot), {})
     active_owner: dict[str, PilotRung] = {}
     for rung in state.rungs:
         try:
@@ -1092,7 +1103,7 @@ def _causally_harmful_probationary_corrections(
 
     harmful: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
-        if receipt.status is not CorrectionStatus.PROBATIONARY:
+        if not receipt.status.effective:
             continue
         owns_cause = False
         for rung in receipt.rungs:
@@ -1233,6 +1244,15 @@ def _investigate_and_revert(
         regression_progress_floor = dict(cp_fork.state.tags)
         regression_progress_floor.update(correction_progress_mark)
         regression_witness = incident_regression_witness(trial.fork, incident)
+        causally_revoked = _causally_harmful_corrections(
+            state,
+            regression_witness,
+            incident.before_snap,
+        )
+        excluded_corrections = {
+            *state.correction_nogoods.get(cp_key, ()),
+            *(receipt.identity for receipt in causally_revoked),
+        }
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
@@ -1285,7 +1305,7 @@ def _investigate_and_revert(
                 for rung in receipt.rungs
             ),
             correction_progress_mark=correction_progress_mark,
-            excluded_corrections=frozenset(state.correction_nogoods.get(cp_key, ())),
+            excluded_corrections=frozenset(excluded_corrections),
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this
@@ -1295,11 +1315,7 @@ def _investigate_and_revert(
         revoked_by_id = {
             receipt.receipt_id: receipt
             for receipt in (
-                *_causally_harmful_probationary_corrections(
-                    state,
-                    regression_witness,
-                    incident.before_snap,
-                ),
+                *causally_revoked,
                 *_contradicted_corrections(state, investigation),
             )
         }

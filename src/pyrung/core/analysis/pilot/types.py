@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+    from pyrung.core.analysis.pilot.navigation import BearingObjective
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -673,6 +674,7 @@ class _PulseState:
 class _AttemptIntent:
     """Navigation's declared act and the policy verification must preserve."""
 
+    bearing_objective: BearingObjective | None = None
     action_pairs: tuple[_ActionPair, ...] = ()
     applied: tuple[_ActionPair, ...] = ()
     observe_label: str = "accept"
@@ -708,6 +710,10 @@ class _TrialResult:
     post_pulse_snap: dict[str, Any]
     fork_snap: dict[str, Any]
     observe_label: str
+    # Orientation's complete target-relative objective for the executed
+    # bearing. Recovery consumes this receipt; it must not reconstruct intent
+    # from the global target after the act has landed elsewhere.
+    bearing_objective: BearingObjective | None = None
     # The act followed an explicit Compass/current bearing. Preserve this
     # intent through verification so post-commit departure policy can
     # distinguish a prescribed tide-table edge from merely ambient motion

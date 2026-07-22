@@ -9,6 +9,7 @@ from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
 from pyrung.core.analysis.pilot.navigation import (
     BatchPulse,
     Bearing,
+    BearingObjective,
     Coast,
     Dwell,
     NavigationConstraints,
@@ -130,9 +131,15 @@ def _read_world(
 
 
 def _frontier(world: OrientationWorld, candidates: Any) -> tuple[tuple[str, Any], ...]:
-    if candidates.completion_frontier:
-        return tuple(candidates.completion_frontier)
-    return tuple(frontier_pairs(world.frame.tree, world.snapshot))
+    """One complete target-relative frontier for every Orientation result."""
+    pairs = tuple(candidates.completion_frontier) + tuple(
+        frontier_pairs(world.frame.tree, world.snapshot)
+    )
+    result: list[tuple[str, Any]] = []
+    for pair in pairs:
+        if pair not in result:
+            result.append(pair)
+    return tuple(result)
 
 
 def _probe_or_stuck(
@@ -178,8 +185,8 @@ def _bearing(
     act: Any,
     candidates: Any,
     *,
+    target: TargetSpec,
     rationale: str,
-    immediate_goal: Any,
 ) -> Bearing:
     trace = OrientationTrace(
         world_key=world.world_key,
@@ -193,8 +200,8 @@ def _bearing(
     return Bearing(
         world_key=world.world_key,
         act=act,
+        objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
         prerequisites=tuple(candidates.prerequisite_rungs),
-        immediate_goal=immediate_goal,
         rationale=rationale,
         trace=trace,
     )
@@ -324,16 +331,8 @@ def orient(
                 world,
                 act,
                 candidates,
+                target=target,
                 rationale=candidates.wait_reason or "charted completion edge",
-                immediate_goal=(
-                    program_heading[1]
-                    if program_heading is not None
-                    else advance_boundary[1]
-                    if advance_boundary is not None
-                    else candidates.route_plan.first_edge.to_value
-                    if candidates.route_plan is not None
-                    else target.value
-                ),
             )
 
     if candidates.prescribed_batch:
@@ -343,8 +342,8 @@ def orient(
                 world,
                 act,
                 candidates,
+                target=target,
                 rationale="learned joint transition",
-                immediate_goal=target.value,
             )
 
     for option in candidates.candidates:
@@ -356,17 +355,13 @@ def orient(
             world,
             act,
             candidates,
+            target=target,
             rationale=(
                 option.current_note
                 or getattr(option, "program_note", None)
                 or ("static route edge" if option.route_prescribed else "")
                 or ("learned transition" if option.influence_prescribed else "")
                 or "ranked trace action"
-            ),
-            immediate_goal=(
-                option.bearing_channel_value
-                if option.bearing_channel_tag is not None
-                else target.value
             ),
         )
 
@@ -381,8 +376,8 @@ def orient(
                 world,
                 act,
                 candidates,
+                target=target,
                 rationale=f"widen trace context to {width} atomic actions",
-                immediate_goal=target.value,
             )
 
     if candidates.stuck_reason is not None:
@@ -405,8 +400,8 @@ def orient(
             world,
             terminal,
             candidates,
+            target=target,
             rationale=rationale,
-            immediate_goal=target.value,
         )
 
     return _probe_or_stuck(compass, world, candidates, "all_rejected")
