@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot._ops import (
     _StateKeyConfig,
 )
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
+from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
     _AttemptIntent,
@@ -318,7 +319,12 @@ class TestVerifyGates:
             key=("target",),
             timeline=("recorded-event",),
         )
+        objective = BearingObjective(
+            TargetSpec(target.name, True),
+            (("CompletionState", 17),),
+        )
         intent = _AttemptIntent(
+            bearing_objective=objective,
             action_pairs=((source.name, True),),
             applied=((source.name, True), ("VerifyCoaction", False)),
             target_observe_label="bearing-target",
@@ -347,6 +353,7 @@ class TestVerifyGates:
         assert result.trial.candidate == dict(intent.action_pairs)
         assert result.trial.applied == intent.applied
         assert result.trial.observe_label == intent.target_observe_label
+        assert result.trial.bearing_objective is objective
         assert result.trial.route_prescribed is True
         assert result.trial.regression_nogoods == intent.regression_nogoods
         assert result.trial.chase_regression_causes is False

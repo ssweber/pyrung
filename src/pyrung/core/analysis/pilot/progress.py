@@ -45,13 +45,14 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
+from pyrung.core.analysis.pilot.navigation import BearingObjective
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
     Outcome,
     ProgressEffect,
 )
-from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached
+from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
     DepartureAction,
@@ -277,9 +278,6 @@ def _monitor_trend(
                 "to_value": trial.fork_snap.get(chan),
             },
         )
-        assert trial.bearing_objective is not None, (
-            "a committed channel departure must retain Orientation's Bearing objective"
-        )
         # Classify BEFORE investigating (detour.py): program-owned motion may
         # preserves the progress gauge and offers a clean forward route —
         # reverting it would throw away the whole march, and investigation
@@ -413,7 +411,7 @@ def _monitor_trend(
                 trial.new_key,
                 state.snapshot_world(),
                 trial.trend,
-                trial.frontier,
+                trial.bearing_objective,
             )
         )
         state.best_trend = trial.trend
@@ -437,7 +435,7 @@ def _monitor_trend(
                 trial.new_key,
                 state.snapshot_world(),
                 trial.trend,
-                trial.frontier,
+                trial.bearing_objective,
             )
         )
         yield PilotEvent(
@@ -479,8 +477,12 @@ def _bearing_satisfied(trial: _TrialResult) -> bool:
     )
 
 
-def _anchor_frame_receipt(frame: _IterationFrame, state: _PilotState) -> int:
-    """Capture the executable source world for an owned operation."""
+def _anchor_frame_receipt(
+    frame: _IterationFrame,
+    state: _PilotState,
+    objective: BearingObjective,
+) -> int:
+    """Capture the executable source world and its owned target objective."""
     key = (
         _pilot_world_key(frame.snap, state.key_config, state.rungs)
         if state.key_config is not None
@@ -490,7 +492,7 @@ def _anchor_frame_receipt(frame: _IterationFrame, state: _PilotState) -> int:
         key,
         state.snapshot_world(),
         frame.distance_before,
-        frontier_pairs(frame.tree, frame.snap),
+        objective,
     )
     if state.checkpoints and state.checkpoints[-1].key == key:
         state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
@@ -515,7 +517,7 @@ def _anchor_bearing_receipt(
     """
     if not _bearing_satisfied(trial):
         return
-    _anchor_frame_receipt(frame, state)
+    _anchor_frame_receipt(frame, state, trial.bearing_objective)
 
 
 def _open_pending_departure(
@@ -604,7 +606,7 @@ def _bank_pending_landing(trial: _TrialResult, state: _PilotState) -> None:
         trial.new_key,
         state.snapshot_world(),
         trial.trend,
-        trial.frontier,
+        trial.bearing_objective,
     )
     if state.checkpoints and state.checkpoints[-1].key == trial.new_key:
         state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
@@ -637,7 +639,7 @@ def _record_pending_landing(
         frame.key,
         state.snapshot_world(),
         frame.distance_before,
-        frontier_pairs(frame.tree, frame.snap),
+        state.checkpoints[-1].objective,
     )
     state.checkpoints.append(receipt)
     state.best_trend = frame.distance_before
@@ -746,7 +748,7 @@ def _apply_departure_decision(
                     trial.new_key,
                     state.snapshot_world(),
                     promoted_trend,
-                    trial.frontier,
+                    trial.bearing_objective,
                 )
             )
         state.best_trend = promoted_trend
@@ -1201,7 +1203,7 @@ def _investigate_and_revert(
             trial,
             frame,
             state.watch_tags,
-            checkpoint.frontier,
+            trial.bearing_objective.frontier,
         )
         # The incident's evidence is the recorded step timelines inside the
         # window — the trend recorder's pen marks — never a history re-diff.
@@ -1282,13 +1284,13 @@ def _investigate_and_revert(
             ),
         )
 
-        # The register set the target still needs: the checkpoint's *frontier*,
-        # captured when the checkpoint was created (the frame that computed the
-        # distance and launched the coast).  The live frame here is useless — a
-        # terminal-let-run frame is a coast with no tree — and re-deriving loses
-        # the non-steerable interior needs (``Heat_CurStep = 3``) that
-        # ``ordered_actions()``-style extractions can never surface.
-        needed = list(checkpoint.frontier)
+        # The register set the target still needs comes from the exact Bearing
+        # that produced this incident. The live frame here is useless — a
+        # terminal-let-run frame is a coast with no tree — and the rollback
+        # checkpoint may predate this operation. Re-deriving from either loses
+        # completion-frontier needs (``Sts_StateCurrent = 17``) that the target
+        # tree alone cannot surface.
+        needed = list(trial.bearing_objective.frontier)
         investigation = investigate_deviation(
             # Derive hypotheses from the PLC that actually observed the
             # incident.  Replay still starts from ``cp_fork`` above.

@@ -45,6 +45,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.navigation import (
     Bearing,
+    BearingObjective,
     Coast,
     Dwell,
     NavigationConstraints,
@@ -563,6 +564,7 @@ def _record_attempt(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    objective: BearingObjective,
 ) -> None:
     """Commit knowledge from an attempt, whether accepted or rejected.
 
@@ -579,7 +581,7 @@ def _record_attempt(
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
     if attempt.confirmed_correction is not None:
-        _anchor_frame_receipt(frame, state)
+        _anchor_frame_receipt(frame, state, objective)
         _install_confirmed_correction(
             state,
             attempt.confirmed_correction,
@@ -933,7 +935,7 @@ def _pilot_loop_events(
         if state.best_trend is None:
             state.best_trend = frame.distance_before
             state.seen_keys.add(frame.key)
-        if not state.checkpoints:
+        if not state.checkpoints and isinstance(result, Bearing):
             # Seed an entry checkpoint so the first regression — or a terminal
             # let-run ejection from a pre-positioned start (e.g. dropped straight
             # into Execute) — has somewhere to revert to.  "No checkpoint" should
@@ -943,7 +945,7 @@ def _pilot_loop_events(
                     key=frame.key,
                     world=state.snapshot_world(),
                     trend=frame.distance_before,
-                    frontier=frontier_pairs(frame.tree, frame.snap),
+                    objective=result.objective,
                 )
             )
         yield from _record_pending_landing(frame, state)
@@ -1057,7 +1059,7 @@ def _pilot_loop_events(
             )
 
         attempt = execute(result, orientation_world)
-        _record_attempt(attempt, frame, state, ctx)
+        _record_attempt(attempt, frame, state, ctx, result.objective)
 
         if isinstance(act, Coast) and act.mode == "terminal":
             stop_reason = (

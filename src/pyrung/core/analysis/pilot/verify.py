@@ -32,7 +32,7 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
     Reachable,
 )
 from pyrung.core.analysis.pilot.outcome import assess_outcome
-from pyrung.core.analysis.pilot.trace import frontier_pairs, target_reached, trace_back
+from pyrung.core.analysis.pilot.trace import target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
     PilotGateEvent,
     _ActionPair,
@@ -672,10 +672,6 @@ def verify_gates(
             trend=dead_end.trend,
             outcome=outcome,
             assessment=assessment,
-            # The frontier a checkpoint created from this trial must carry: the
-            # post-trial tree's outstanding non-steerable needs, captured here
-            # where the tree already exists (it is discarded after this).
-            frontier=frontier_pairs(dead_end.tree, trial.snap),
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),

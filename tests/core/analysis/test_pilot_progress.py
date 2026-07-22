@@ -86,7 +86,7 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
             dwell_scans=0,
         ),
         trend,
-        frontier,
+        BearingObjective(TargetSpec("State", 17), frontier),
     )
 
 
@@ -177,7 +177,11 @@ class TestCheckpoints:
 
     def test_trend_improvement_creates_checkpoint(self):
         state = _make_state(best_trend=5, checkpoints=[])
-        trial = _make_trial(3, Outcome.CONFIRMED)
+        objective = BearingObjective(
+            TargetSpec("Completed", True),
+            (("State", 17),),
+        )
+        trial = _make_trial(3, Outcome.CONFIRMED, bearing_objective=objective)
         events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
@@ -186,6 +190,7 @@ class TestCheckpoints:
         assert events[0].data.get("flat") is None
         assert state.best_trend == 3
         assert len(state.checkpoints) == 1
+        assert state.checkpoints[0].objective is objective
 
     def test_flat_confirmed_creates_checkpoint(self):
         # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
@@ -213,9 +218,14 @@ class TestCheckpoints:
 
     def test_confirmed_route_landing_keeps_its_source_checkpoint(self):
         state = _make_state(best_trend=2, checkpoints=[_cp(("idle",), _oneshot_plc(), 2)])
+        objective = BearingObjective(
+            TargetSpec("Completed", True),
+            (("State", 17),),
+        )
         trial = _make_trial(
             15,
             Outcome.CONFIRMED,
+            bearing_objective=objective,
             zoom_channel_tag="State",
             zoom_target_value=3,
             fork_snap={"State": 3},
@@ -240,9 +250,14 @@ class TestCheckpoints:
         frame.snap["State"] = 4
         frame.tree.children = ()
         frame.tree.satisfied = True
+        objective = BearingObjective(
+            TargetSpec("Completed", True),
+            (("State", 17),),
+        )
         trial = _make_trial(
             15,
             Outcome.CONFIRMED,
+            bearing_objective=objective,
             zoom_channel_tag="State",
             zoom_target_value=3,
             fork_snap={"State": 3},
@@ -255,6 +270,7 @@ class TestCheckpoints:
         assert receipt.key == ("idle",)
         assert receipt.trend == 2
         assert receipt.world.work.state.scan_id == source_scan
+        assert receipt.objective is objective
 
     def test_channel_recovery_origin_owns_the_whole_tenure(self):
         entered = _oneshot_plc()
@@ -373,7 +389,7 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
     frame.key = saved.key
     frame.distance_before = 3
 
-    _anchor_frame_receipt(frame, state)
+    _anchor_frame_receipt(frame, state, state.checkpoints[-1].objective)
 
     refreshed = state.checkpoints[-1]
     assert refreshed is not saved
@@ -634,6 +650,31 @@ class TestRegression:
         # which leaves it empty.
         assert "hypotheses" in investigation
         assert "confirmed" in investigation
+
+    def test_recovery_consumes_the_executed_bearing_objective(self, monkeypatch):
+        from pyrung.core.analysis.pilot.investigate import InvestigationResult
+
+        state, trial, frame, ctx = _seal_in_regression_inputs()
+        objective = BearingObjective(
+            TargetSpec("Completed", True),
+            (("State", 17), ("RotateFeedback", True)),
+        )
+        trial = replace(trial, bearing_objective=objective)
+        assert state.checkpoints[-1].objective is not objective
+        captured: list[tuple[tuple[str, Any], ...]] = []
+
+        def _stub(_plc, _incident, _ctx, _replay, **kwargs):
+            captured.append(tuple(kwargs["needed"]))
+            return InvestigationResult()
+
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.progress.investigate_deviation",
+            _stub,
+        )
+
+        tuple(_monitor_trend(trial, frame, state, ctx))
+
+        assert captured == [objective.frontier]
 
     def test_regression_reverts_to_checkpoint(self):
         cp_fork = _oneshot_plc()

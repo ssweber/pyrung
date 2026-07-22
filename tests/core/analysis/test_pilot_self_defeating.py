@@ -454,7 +454,7 @@ def _saboteur_scenario():
                     dwell_scans=0,
                 ),
                 2,
-                cp_frontier,
+                BearingObjective(TargetSpec("Out", True), cp_frontier),
             )
         ],
         watch_tags=["State"],
@@ -555,7 +555,7 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
         incident,
         ctx,
         replay,
-        needed=state.checkpoints[-1].frontier,
+        needed=state.checkpoints[-1].objective.frontier,
     )
 
     assert replayed == [(("InitFlag", 1),)]
@@ -594,7 +594,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
 
 def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     """Verification hands off its exact correction instead of recompiling it."""
-    state, _trial, frame, ctx = _saboteur_scenario()
+    state, trial, frame, ctx = _saboteur_scenario()
     state_tag = state.work._known_tags_by_name["State"]
     replayed = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
@@ -620,7 +620,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     )
     frame.tree = SimpleNamespace(children=(), satisfied=True, is_steerable=False)
 
-    _record_attempt(attempt, frame, state, ctx)
+    _record_attempt(attempt, frame, state, ctx, trial.bearing_objective)
 
     assert tuple(state.rungs) == (replayed,)
     assert state.correction_receipts[0].correction is correction
@@ -709,7 +709,7 @@ def test_correction_installer_banks_artifact_into_every_checkpoint():
     first = state.checkpoints[0]
     state.checkpoints.insert(
         0,
-        _Checkpoint(("older",), first.world, first.trend, first.frontier),
+        _Checkpoint(("older",), first.world, first.trend, first.objective),
     )
     state_tag = state.work._known_tags_by_name["State"]
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))

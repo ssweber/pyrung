@@ -172,16 +172,17 @@ class _Checkpoint:
     (``_PilotState.snapshot_world``); revert is ``state.load_world(cp.world)`` —
     plain assignment, not a scan-cutoff reconstruction.
 
-    ``frontier`` is the launching frame's outstanding non-steerable
-    prerequisites (``trace.frontier_pairs``) captured at creation — the coast
-    frame that later regresses has an empty tree, so investigation reads the
-    frontier *here*, never re-derives it (``hold_defeats_needed``'s ``needed``).
+    ``objective`` is Orientation's complete target-relative receipt that
+    justified banking this world. Source anchors carry the objective of the
+    operation launched there; progress anchors carry the objective of the
+    operation that reached them. Recovery keeps rollback ownership separate
+    from the current incident's objective.
     """
 
     key: _StateKey
     world: _World
     trend: int
-    frontier: tuple[_ActionPair, ...] = ()
+    objective: BearingObjective
     owner: _CheckpointOwner = field(
         default_factory=_CheckpointOwner,
         compare=False,
@@ -674,7 +675,7 @@ class _PulseState:
 class _AttemptIntent:
     """Navigation's declared act and the policy verification must preserve."""
 
-    bearing_objective: BearingObjective | None = None
+    bearing_objective: BearingObjective
     action_pairs: tuple[_ActionPair, ...] = ()
     applied: tuple[_ActionPair, ...] = ()
     observe_label: str = "accept"
@@ -713,7 +714,7 @@ class _TrialResult:
     # Orientation's complete target-relative objective for the executed
     # bearing. Recovery consumes this receipt; it must not reconstruct intent
     # from the global target after the act has landed elsewhere.
-    bearing_objective: BearingObjective | None = None
+    bearing_objective: BearingObjective
     # The act followed an explicit Compass/current bearing. Preserve this
     # intent through verification so post-commit departure policy can
     # distinguish a prescribed tide-table edge from merely ambient motion
@@ -724,9 +725,6 @@ class _TrialResult:
     trend: int | None = None
     outcome: Outcome | None = None
     assessment: TrialAssessment | None = None
-    # The post-trial tree's non-steerable frontier (trace.frontier_pairs over the
-    # dead-end gate's tree) — captured on the checkpoint this trial may create.
-    frontier: tuple[_ActionPair, ...] = ()
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
