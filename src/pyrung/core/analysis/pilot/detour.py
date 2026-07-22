@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _avoid_forces,
+    _pilot_world_key,
     fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
@@ -203,13 +204,19 @@ def classify_departure(
     discharged = _discharged_actions(state, channel_tag)
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
     route_allowed = getattr(ctx, "route_allowed", lambda _action: True)
+    settled_snap = dict(fork.state.tags)
+    settled_key = (
+        _pilot_world_key(settled_snap, state.key_config, state.rungs)
+        if state.key_config is not None
+        else None
+    )
     continuation = NavigationEvidence.channel_continuation(
         tuple(graphs),
         channel_tag,
         settled_value,
         tuple(goals),
         edge_allowed=lambda edge: (
-            ctx.compass.knowledge.static_overlays.get(edge.identity)
+            ctx.compass.knowledge.static_edge_status(edge, settled_key, settled_snap)
             not in {"contradicted", "no_change"}
             and not any(_values_match(edge.to_value, blocked) for blocked in blocked_values)
             and not _edge_resurrects(edge, discharged)

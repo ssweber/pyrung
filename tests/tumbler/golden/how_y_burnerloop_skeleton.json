@@ -1468,7 +1468,7 @@
     ],
     "current_note": "",
     "current_prescribed": false,
-    "influence_prescribed": true,
+    "influence_prescribed": false,
     "over_wake": false,
     "pair": [
      "Cmd_State_Start",
@@ -1534,7 +1534,7 @@
    ],
    "current_note": "",
    "current_prescribed": false,
-   "influence_prescribed": true,
+   "influence_prescribed": false,
    "over_wake": false,
    "pair": [
     "Cmd_State_Start",
@@ -1588,7 +1588,7 @@
    ],
    "current_note": "",
    "current_prescribed": false,
-   "influence_prescribed": true,
+   "influence_prescribed": false,
    "over_wake": false,
    "pair": [
     "Cmd_State_Start",
@@ -1801,13 +1801,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "i_BlowerFB: False->True"
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "i_BlowerFB: False->True"
+  "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "bearing_stop_reason": "departed",
@@ -1964,7 +1964,7 @@
     ],
     "current_note": "",
     "current_prescribed": false,
-    "influence_prescribed": true,
+    "influence_prescribed": false,
     "over_wake": false,
     "pair": [
      "Cmd_State_Start",
@@ -2030,7 +2030,7 @@
    ],
    "current_note": "",
    "current_prescribed": false,
-   "influence_prescribed": true,
+   "influence_prescribed": false,
    "over_wake": false,
    "pair": [
     "Cmd_State_Start",
@@ -2084,7 +2084,7 @@
    ],
    "current_note": "",
    "current_prescribed": false,
-   "influence_prescribed": true,
+   "influence_prescribed": false,
    "over_wake": false,
    "pair": [
     "Cmd_State_Start",
@@ -2297,13 +2297,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "i_BlowerFB: False->True"
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "i_BlowerFB: False->True"
+  "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -3132,13 +3132,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "HeatDelay_Tmr_Acc: 0->10"
+  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
  {
   "channel_tag": "HeatDelay_Tmr_Done",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "HeatDelay_Tmr_Acc: 0->10"
+  "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
  {
   "bearing_stop_reason": "reached",

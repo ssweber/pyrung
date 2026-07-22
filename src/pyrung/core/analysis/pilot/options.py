@@ -265,9 +265,20 @@ def _compass_score(
         if _values_match(cur_val, n.value):
             continue
 
-        dest = ctx.compass.transition_dest(n.tag, cur_val, pair)
+        dest = ctx.compass.transition_dest(
+            n.tag,
+            cur_val,
+            pair,
+            world_key=frame.key,
+            snapshot=frame.snap,
+        )
         if dest is None:
-            if pair in ctx.compass.probed_actions(n.tag, cur_val):
+            if pair in ctx.compass.probed_actions(
+                n.tag,
+                cur_val,
+                world_key=frame.key,
+                snapshot=frame.snap,
+            ):
                 saw_no_change = True
             continue
 
@@ -289,6 +300,8 @@ def _compass_score(
                 dest,
                 n.value,
                 cause_allowed=edge_allowed,
+                world_key=frame.key,
+                snapshot=frame.snap,
             )
             if forward:
                 score = (1, len(forward))
@@ -298,6 +311,8 @@ def _compass_score(
                     dest,
                     cur_val,
                     cause_allowed=edge_allowed,
+                    world_key=frame.key,
+                    snapshot=frame.snap,
                 )
                 if not back:
                     continue
@@ -364,7 +379,9 @@ def _compass_route_plan(
     def _edge_open(edge: Any) -> bool:
         if edge.identity in excluded_edges:
             return False
-        if ctx.compass.knowledge.static_overlays.get(edge.identity) in {
+        if ctx.compass.knowledge.static_edge_status(
+            edge, getattr(frame, "key", None), frame.snap
+        ) in {
             "contradicted",
             "no_change",
         }:
@@ -1216,7 +1233,7 @@ def _build_candidates(
         unreadable = getattr(n, "live_guard", False) or (
             getattr(n, "pipeline_internal", False)
             and route_plan is None
-            and ctx.compass.has_transitions(n.tag)
+            and ctx.compass.has_transitions(n.tag, world_key=frame.key, snapshot=frame.snap)
         )
         if (
             (n.children and not unreadable)
@@ -1255,6 +1272,8 @@ def _build_candidates(
             cur_val,
             n.value,
             cause_allowed=_learned_edge_open,
+            world_key=frame.key,
+            snapshot=frame.snap,
         )
         if path:
             first_step = path[0]

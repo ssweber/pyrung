@@ -55,11 +55,11 @@ def _learned_reachable(
     current = world.snapshot.get(target.tag)
     if _values_match(current, target.value):
         return True
-    live = {
-        (from_value, cause): entry.to_val
-        for (tag, from_value, cause), entry in knowledge.entries.items()
-        if tag == target.tag and entry.is_live
-    }
+    live = knowledge.live_edges(
+        target.tag,
+        world_key=world.world_key,
+        snapshot=world.snapshot,
+    )
     queue: deque[Any] = deque([current])
     visited = {repr(current)}
     pair_nogoods = knowledge.nogood_pairs(world.world_key)
@@ -100,7 +100,7 @@ class NavigationEvidence:
         pair_nogoods = knowledge.nogood_pairs(world.world_key)
 
         def edge_allowed(edge: Any) -> bool:
-            if knowledge.static_overlays.get(edge.identity) in {
+            if knowledge.static_edge_status(edge, world.world_key, world.snapshot) in {
                 "contradicted",
                 "no_change",
             }:

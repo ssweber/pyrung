@@ -121,6 +121,215 @@ def test_runtime_no_change_overlays_static_edge_without_mutating_catalog() -> No
     assert observed.catalog is compass.catalog
 
 
+def test_runtime_transitions_remain_distinct_in_exact_observed_worlds() -> None:
+    """The same channel/action can have different destinations by recipe."""
+    action = ("Start", True)
+    # Recipe is an external selector omitted by the projected Pilot world key.
+    # The full pre-action context must still keep the receipts distinct.
+    world = ("projected-world", 6)
+    snap_a = {"State": 6, "Recipe": "A", "Start": False}
+    snap_b = {"State": 6, "Recipe": "B", "Start": False}
+
+    compass, _ = Compass().apply(
+        (
+            CompassObservation(
+                "edge",
+                "State",
+                action,
+                6,
+                8,
+                world,
+                tuple(sorted(snap_a.items())),
+                (action,),
+            ),
+            CompassObservation(
+                "edge",
+                "State",
+                action,
+                6,
+                10,
+                world,
+                tuple(sorted(snap_b.items())),
+                (action,),
+            ),
+        )
+    )
+
+    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap_a) == 8
+    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap_b) == 10
+    assert (
+        compass.transition_dest(
+            "State", 6, action, world_key=world, snapshot={**snap_b, "Recipe": "C"}
+        )
+        is None
+    )
+    assert compass.has_transitions("State", world_key=world, snapshot=snap_a)
+    assert not compass.has_transitions("State", world_key=world, snapshot={**snap_b, "Recipe": "C"})
+
+
+def test_exact_world_and_applied_artifact_scope_negative_evidence() -> None:
+    action = ("Start", True)
+    gate = ("Gate", True)
+    world_a = ("world", "a")
+    world_b = ("world", "b")
+    snap = {"State": 6, "Start": False, "Gate": False}
+    context = tuple(sorted(snap.items()))
+
+    compass, _ = Compass().apply(
+        (
+            CompassObservation("edge", "State", action, 6, 8, world_a, context, (action, gate)),
+            CompassObservation("edge", "State", action, 6, 10, world_b, context, (action, gate)),
+        )
+    )
+    # Trying the primary button without its gate disproves only that exact
+    # artifact; it cannot tombstone the co-action edge in the same world.
+    compass, _ = compass.apply(
+        (CompassObservation("contradict", "State", action, 6, None, world_a, context, (action,)),)
+    )
+    assert compass.transition_dest("State", 6, action, world_key=world_a, snapshot=snap) == 8
+    assert compass.transition_dest("State", 6, action, world_key=world_b, snapshot=snap) == 10
+
+    # The matching artifact is local: it removes A without touching B.
+    compass, _ = compass.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                action,
+                6,
+                None,
+                world_a,
+                context,
+                (action, gate),
+            ),
+        )
+    )
+    assert compass.transition_dest("State", 6, action, world_key=world_a, snapshot=snap) is None
+    assert compass.transition_dest("State", 6, action, world_key=world_b, snapshot=snap) == 10
+
+
+def test_probe_marks_are_scoped_to_the_prospective_applied_context() -> None:
+    probe = ("Start", True)
+    context_a = (("RecipeA", True),)
+    context_b = (("RecipeB", True),)
+    world = ("projected-world", 6)
+    snap = {"State": 6, "Start": False}
+    before = tuple(sorted(snap.items()))
+
+    compass, _ = Compass().apply(
+        (
+            CompassObservation(
+                "no_change",
+                "State",
+                probe,
+                6,
+                None,
+                world,
+                before,
+                (*context_a, probe),
+            ),
+        )
+    )
+
+    assert (
+        compass.unprobed_actions(
+            "State",
+            6,
+            {probe},
+            world_key=world,
+            snapshot=snap,
+            applied_context=context_a,
+        )
+        == []
+    )
+    assert compass.unprobed_actions(
+        "State",
+        6,
+        {probe},
+        world_key=world,
+        snapshot=snap,
+        applied_context=context_b,
+    ) == [probe]
+
+
+def test_exact_world_tombstone_overrides_global_seed_only_locally() -> None:
+    action = ("Start", True)
+    world = ("world", 6)
+    other_world = ("other-world", 6)
+    snap = {"State": 6, "Start": False}
+    context = tuple(sorted(snap.items()))
+    compass, _ = Compass().apply((CompassObservation("edge", "State", action, 6, 8),))
+    compass, _ = compass.apply(
+        (CompassObservation("contradict", "State", action, 6, None, world, context, (action,)),)
+    )
+
+    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap) is None
+    assert compass.transition_dest("State", 6, action, world_key=other_world, snapshot=snap) == 8
+
+
+def test_static_edge_negative_overlay_requires_exact_context_and_actions() -> None:
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(role, (_action_route(6, 8, "Start"),))
+    edge = replace(graph.edges[0], co_actions=(("Gate", True),))
+    graph.edges = (edge,)
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
+    world = ("world", "recipe-a")
+    other_world = ("world", "recipe-b")
+    snap = {"State": 6, "Start": False, "Gate": False}
+    context = tuple(sorted(snap.items()))
+
+    # Missing the co-action did not exercise the guarded catalog edge.
+    unchanged, _ = compass.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                ("Start", True),
+                6,
+                None,
+                world,
+                context,
+                (("Start", True),),
+            ),
+        )
+    )
+    assert unchanged.knowledge.static_edge_status(edge, world, snap) is None
+
+    # Extra interference is a different artifact too.
+    interfered, _ = unchanged.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                ("Start", True),
+                6,
+                None,
+                world,
+                context,
+                (("Start", True), ("Gate", True), ("Override", True)),
+            ),
+        )
+    )
+    assert interfered.knowledge.static_edge_status(edge, world, snap) is None
+
+    scoped, _ = interfered.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                ("Start", True),
+                6,
+                None,
+                world,
+                context,
+                (("Start", True), ("Gate", True)),
+            ),
+        )
+    )
+    assert scoped.knowledge.static_edge_status(edge, world, snap) == "contradicted"
+    assert scoped.knowledge.static_edge_status(edge, other_world, snap) is None
+
+
 def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     """A rejected wait is remembered at its world key; the next ORIENT's route
     query excludes the sterile automatic edge and falls to the surviving
@@ -292,6 +501,24 @@ def test_apply_reports_changed_and_returns_self_when_nothing_new():
     # …but re-applying it does not.
     _, probe_again = with_probe.apply((probe,))
     assert probe_again is False
+
+
+def test_equivalent_applied_order_is_one_compass_receipt() -> None:
+    action = ("Start", True)
+    gate = ("Gate", True)
+    world = ("world", 6)
+    snap = {"State": 6}
+    context = tuple(snap.items())
+    first = CompassObservation("edge", "State", action, 6, 8, world, context, (gate, action))
+    reordered = CompassObservation("edge", "State", action, 6, 8, world, context, (action, gate))
+
+    compass, changed = Compass().apply((first,))
+    assert changed
+    same, changed = compass.apply((reordered,))
+    assert same is compass
+    assert not changed
+    entry = tuple(compass.knowledge.tag_entries("State"))[0][2]
+    assert entry.applied == (gate, action)
 
 
 def test_duplicate_probe_evidence_requires_explicit_exhaustion_observation():

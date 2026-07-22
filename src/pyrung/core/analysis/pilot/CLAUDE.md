@@ -167,6 +167,13 @@ knowledge that must survive:
 `Compass.apply` returns a new compass and a `changed` flag. When no entry
 changes, it returns the same object. Runtime instruments return
 `CompassObservation` values and do not mutate the compass themselves.
+Empirical transition and probe receipts are scoped to the exact executable
+world, complete pre-transition snapshot, and applied action artifact that
+proved them. A local tombstone cannot erase another recipe or co-action
+context; within its own exact context it overrides deliberately global seeded
+evidence. Static-edge overlays are narrower still: negative evidence attaches
+only when the trial exercised that edge's exact action/co-action set while its
+recorded concrete conditions held.
 
 `PendingDeparture` records a clean program departure whose progress is not yet
 conclusive. It names the stable owner of its rollback checkpoint, the owner of

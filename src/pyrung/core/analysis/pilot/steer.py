@@ -263,6 +263,8 @@ def _compass_observations(
     ctx: _PilotContext,
     *,
     contradict_no_change: bool,
+    world_key: tuple[Any, ...],
+    applied: tuple[_ActionPair, ...] = (),
     fork: PLC | None = None,
     scan: int | None = None,
 ) -> tuple[CompassObservation, ...]:
@@ -289,13 +291,35 @@ def _compass_observations(
                 and not _action_caused_change(fork, action_tag, n.tag, ctx.steerable, scan=scan)
             ):
                 continue
-            observations.append(CompassObservation("edge", n.tag, cause, old_v, new_v))
+            observations.append(
+                CompassObservation(
+                    "edge",
+                    n.tag,
+                    cause,
+                    old_v,
+                    new_v,
+                    world_key,
+                    tuple(sorted(before_snap.items())),
+                    applied,
+                )
+            )
         elif contradict_no_change:
             # The cause fired from old_v under a full settle window and the
             # register did not move — falsify any learned edge claiming it
             # would (a static-catalog route ignores unreadable enablers),
             # and mark the probe so it is not re-sent.
-            observations.append(CompassObservation("contradict", n.tag, cause, old_v))
+            observations.append(
+                CompassObservation(
+                    "contradict",
+                    n.tag,
+                    cause,
+                    old_v,
+                    None,
+                    world_key,
+                    tuple(sorted(before_snap.items())),
+                    applied,
+                )
+            )
     return tuple(observations)
 
 
@@ -334,6 +358,8 @@ def _try_action_batch(
         )
 
     trial = _apply_actions(intent.applied, frame, state, ctx)
+    key_config = state.key_config
+    assert key_config is not None
 
     observations: list[CompassObservation] = []
     if record_influence_action is not None:
@@ -345,6 +371,8 @@ def _try_action_batch(
                 trial.action_snap,
                 ctx,
                 contradict_no_change=True,
+                world_key=_pilot_world_key(frame.snap, key_config, state.rungs),
+                applied=intent.applied,
                 fork=trial.fork,
                 scan=trial.action_scan,
             )
@@ -359,6 +387,7 @@ def _try_action_batch(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
+                world_key=_pilot_world_key(wait_before, key_config, state.rungs),
             )
         )
         wait_before = wait_after
@@ -539,6 +568,7 @@ def _try_zoom(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
+                world_key=_pilot_world_key(wait_before, key_config, state.rungs),
             )
         )
         wait_before = wait_after
@@ -650,7 +680,13 @@ def _try_terminal_letrun(
     key_after = _pilot_world_key(snap_after, key_config, state.rungs)
 
     observations = _compass_observations(
-        WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
+        WAIT,
+        frame,
+        snap_before,
+        snap_after,
+        ctx,
+        contradict_no_change=False,
+        world_key=_pilot_world_key(snap_before, key_config, state.rungs),
     )
 
     # Decide the outcome here — only the let-run knows the macro-state sentinel.
@@ -762,7 +798,13 @@ def _try_terminal_dwell(
     key_after = _pilot_world_key(snap_after, key_config, state.rungs)
 
     observations = _compass_observations(
-        WAIT, frame, snap_before, snap_after, ctx, contradict_no_change=False
+        WAIT,
+        frame,
+        snap_before,
+        snap_after,
+        ctx,
+        contradict_no_change=False,
+        world_key=_pilot_world_key(snap_before, key_config, state.rungs),
     )
 
     if not _reached(snap_after):

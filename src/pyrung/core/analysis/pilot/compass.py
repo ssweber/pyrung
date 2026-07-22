@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, TypeGuard
+from typing import Any, Literal, TypeGuard, cast
 
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
@@ -85,6 +85,16 @@ class CompassObservation:
     cause: TransitionCause
     from_val: Any
     to_val: Any = None
+    # Exact executable world that produced this evidence. ``None`` is reserved
+    # for deliberately global/seeded observations; runtime producers always
+    # stamp their current frame key.
+    world_key: tuple[Any, ...] | None = None
+    # Exact pre-action values and the complete applied action set. Together
+    # with ``world_key`` these distinguish executable contexts that the
+    # projected state key intentionally omits, and let static-edge overlays
+    # verify that the trial actually exercised the guarded artifact.
+    context: tuple[ActionPair, ...] = ()
+    applied: tuple[ActionPair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,8 @@ class StaticEdgeObservation:
 
     edge_id: tuple[Any, ...]
     status: Literal["confirmed", "contradicted", "no_change"]
+    scope_key: tuple[Any, ...] | None = None
+    artifact_key: tuple[tuple[str, Any], ...] = ()
 
 
 NavigationObservation = (
@@ -128,7 +140,8 @@ NavigationObservation = (
 
 
 # ===========================================================================
-# One entry per (tag, from_val, cause) — provenance is the lifecycle
+# One entry per (world, snapshot, tag, from, cause, applied artifact) —
+# provenance is the lifecycle
 # ===========================================================================
 
 
@@ -150,6 +163,7 @@ class Provenance(Enum):
 # walk.  A CONTRADICTED or NO_CHANGE entry is a tombstone: still a probe mark,
 # never a destination.
 _LIVE_PROVENANCE = frozenset({Provenance.OBSERVED, Provenance.CONFIRMED})
+_ALL_CONTEXTS = object()
 
 
 def _canon(value: Any) -> Any:
@@ -164,13 +178,71 @@ def _canon(value: Any) -> Any:
     return int(value) if isinstance(value, bool) else value
 
 
-class CompassEntry(PRecord):
-    """One learned transition (or probe mark) for a ``(tag, from_val, cause)``.
+def _context_value_key(value: Any) -> Any:
+    """Hashable exact identity for one observed snapshot value."""
+    if value is None or isinstance(value, bool | int | float | str | bytes):
+        return _canon(value)
+    if isinstance(value, tuple | list):
+        return tuple(_context_value_key(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_context_value_key(item) for item in value), key=repr))
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    (_context_value_key(key), _context_value_key(member))
+                    for key, member in value.items()
+                ),
+                key=repr,
+            )
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
 
-    The persistent record keeps learned knowledge independent from revertible
-    PLC worlds. A live entry has a destination; a NO_CHANGE or CONTRADICTED
-    tombstone is skipped during traversal but remains evidence that the cause
-    was tried. Contradictory evidence demotes rather than deletes an entry.
+
+def _evidence_scope_key(
+    world_key: tuple[Any, ...] | None,
+    context: Iterable[ActionPair] | None = None,
+) -> tuple[Any, ...] | None:
+    """Canonical identity of the exact world that proved an observation."""
+    if world_key is None:
+        return None
+    if context is None:
+        return (world_key, None)
+    return (
+        world_key,
+        tuple(sorted(((tag, _context_value_key(value)) for tag, value in context))),
+    )
+
+
+def _canonical_applied(applied: Iterable[ActionPair]) -> tuple[ActionPair, ...]:
+    """Canonical effective action overlay (last write per tag, tag ordered)."""
+    return tuple(sorted(dict(applied).items()))
+
+
+def _applied_key(applied: Iterable[ActionPair]) -> tuple[tuple[str, Any], ...]:
+    """Hashable identity of the complete action overlay used by a trial."""
+    return tuple((tag, _context_value_key(value)) for tag, value in _canonical_applied(applied))
+
+
+def _observation_applied(observation: CompassObservation) -> tuple[ActionPair, ...]:
+    """Exact artifact, with legacy action observations interpreted literally."""
+    if observation.applied:
+        return _canonical_applied(observation.applied)
+    if not is_action(observation.cause):
+        return ()
+    if is_composite_action(observation.cause):
+        return _canonical_applied(cast("tuple[ActionPair, ...]", tuple(observation.cause)))
+    return (observation.cause,)
+
+
+class CompassEntry(PRecord):
+    """One learned transition (or probe mark) for one exact trial artifact.
+
+    The persistent table key supplies the executable world and full
+    pre-transition context; ``applied`` names the exact action overlay. A live
+    entry has a destination; a NO_CHANGE or CONTRADICTED tombstone is skipped
+    during traversal but remains evidence that this artifact was tried.
+    Contradictory evidence demotes rather than deletes an entry.
 
     A CONFIRMED entry is minted only by ``outcome.confirmed_entry``; the
     general observation write path rejects that provenance, so
@@ -180,6 +252,7 @@ class CompassEntry(PRecord):
     tag = _precord_field(type=str)
     from_val = _precord_field()
     cause = _precord_field()
+    applied = _precord_field(initial=())
     to_val = _precord_field()
     provenance = _precord_field(type=Provenance)
 
@@ -224,6 +297,33 @@ def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
     return tuple((str(t), repr(v)) for t, v in pairs)
 
 
+def _observation_exercised_edge(
+    observation: CompassObservation,
+    edge: Any,
+) -> bool:
+    """Whether the runtime trial exercised this exact static artifact.
+
+    Matching a primary button is insufficient: the chart edge may require
+    same-scan co-actions or concrete guard/enabler values. Negative evidence
+    can only overlay the edge when all of those facts were present in the
+    observed pre-transition context plus the applied action overlay.
+    """
+    if observation.world_key is None:
+        # Deliberately global seeded observations retain the legacy API.
+        return True
+    context = dict(observation.context)
+    exact_applied = _observation_applied(observation)
+    applied = dict(exact_applied)
+    overlay = {**context, **applied}
+    required_actions = () if edge.action is None else (edge.action, *edge.co_actions)
+    if _applied_key(exact_applied) != _applied_key(required_actions):
+        return False
+    for tag, value in (*edge.source_constraints, *edge.enablers):
+        if tag not in overlay or not _values_match(overlay[tag], value):
+            return False
+    return True
+
+
 # ===========================================================================
 # Pure table operations — every write is persistent-table-in, persistent-
 # table-out; the Compass methods and observation fold both delegate here so
@@ -238,8 +338,10 @@ def _table_record(
     from_val: Any,
     to_val: Any,
     provenance: Provenance,
+    scope_key: tuple[Any, ...] | None,
+    applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool]:
-    """Write a live edge, overwriting whatever was at the key.
+    """Write a live edge, overwriting only the same exact trial artifact.
 
     Including reviving a CONTRADICTED tombstone if the edge is learned again
     (old behavior: ``_transitions[key] = to_val``).  The entry is its own probe
@@ -258,15 +360,27 @@ def _table_record(
             "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
         )
     fv = _canon(from_val)
-    key = (tag, fv, cause)
-    entry = CompassEntry(tag=tag, from_val=fv, cause=cause, to_val=to_val, provenance=provenance)
+    key = (scope_key, tag, fv, cause, _applied_key(applied))
+    entry = CompassEntry(
+        tag=tag,
+        from_val=fv,
+        cause=cause,
+        applied=applied,
+        to_val=to_val,
+        provenance=provenance,
+    )
     if entries.get(key) == entry:
         return entries, False
     return entries.set(key, entry), True
 
 
 def _table_no_change(
-    entries: PMap, tag: str, cause: TransitionCause, from_val: Any
+    entries: PMap,
+    tag: str,
+    cause: TransitionCause,
+    from_val: Any,
+    scope_key: tuple[Any, ...] | None,
+    applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool]:
     """Probe mark only.
 
@@ -276,14 +390,19 @@ def _table_no_change(
     when a fresh probe mark was added.
     """
     fv = _canon(from_val)
-    key = (tag, fv, cause)
+    key = (scope_key, tag, fv, cause, _applied_key(applied))
     if key in entries:
         return entries, False
     return (
         entries.set(
             key,
             CompassEntry(
-                tag=tag, from_val=fv, cause=cause, to_val=None, provenance=Provenance.NO_CHANGE
+                tag=tag,
+                from_val=fv,
+                cause=cause,
+                applied=applied,
+                to_val=None,
+                provenance=Provenance.NO_CHANGE,
             ),
         ),
         True,
@@ -291,7 +410,12 @@ def _table_no_change(
 
 
 def _table_contradict(
-    entries: PMap, tag: str, cause: TransitionCause, from_val: Any
+    entries: PMap,
+    tag: str,
+    cause: TransitionCause,
+    from_val: Any,
+    scope_key: tuple[Any, ...] | None,
+    applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool, bool]:
     """Demote every matching live edge to a CONTRADICTED tombstone.
 
@@ -304,19 +428,27 @@ def _table_contradict(
     evolver = entries.evolver()
     removed = False
     for key, entry in entries.items():
-        if key[0] == tag and key[2] == cause and _values_match(key[1], from_val) and entry.is_live:
+        if (
+            key[0] == scope_key
+            and key[1] == tag
+            and key[3] == cause
+            and _values_match(key[2], from_val)
+            and key[4] == _applied_key(applied)
+            and entry.is_live
+        ):
             evolver[key] = entry.set(to_val=None, provenance=Provenance.CONTRADICTED)
             removed = True
     # Ensure the passed key carries a probe mark.  When it collapses onto a
     # just-demoted edge (bool/int keys share a PMap slot) it is already a
     # tombstone; otherwise record a bare NO_CHANGE probe.
-    pkey = (tag, _canon(from_val), cause)
+    pkey = (scope_key, tag, _canon(from_val), cause, _applied_key(applied))
     probe_added = False
     if pkey not in entries:
         evolver[pkey] = CompassEntry(
             tag=tag,
             from_val=_canon(from_val),
             cause=cause,
+            applied=applied,
             to_val=None,
             provenance=Provenance.NO_CHANGE,
         )
@@ -381,22 +513,93 @@ class CompassKnowledge:
     def coast_receipt(self, world_key: tuple[Any, ...]) -> str | None:
         return self.coast_receipts.get(world_key)
 
-    def tag_entries(self, tag: str) -> Iterable[tuple[Any, TransitionCause, CompassEntry]]:
-        for (entry_tag, from_value, cause), entry in self.entries.items():
-            if entry_tag == tag:
-                yield from_value, cause, entry
+    def tag_entries(
+        self,
+        tag: str,
+        *,
+        world_key: tuple[Any, ...] | None | object = _ALL_CONTEXTS,
+        snapshot: dict[str, Any] | None = None,
+        applied: tuple[ActionPair, ...] | None = None,
+    ) -> Iterable[tuple[Any, TransitionCause, CompassEntry]]:
+        """Entries for *tag*, optionally restricted to one applicable world.
 
-    def live_edges(self, tag: str) -> dict[tuple[Any, TransitionCause], Any]:
-        return {
-            (from_value, cause): entry.to_val
-            for from_value, cause, entry in self.tag_entries(tag)
-            if entry.is_live
-        }
+        A deliberately global entry (scope ``None``) applies in every world.
+        Scoped runtime evidence applies only in the exact world that produced
+        it. Omitting ``world_key`` is an inspection operation and returns all
+        receipts; navigation callers always pass a concrete key (or ``None``
+        when querying only deliberately global seeded evidence).
+        """
+        if world_key is _ALL_CONTEXTS:
+            for (
+                _entry_world,
+                entry_tag,
+                from_value,
+                cause,
+                _artifact,
+            ), entry in self.entries.items():
+                if entry_tag == tag:
+                    yield from_value, cause, entry
+            return
 
-    def has_transitions(self, tag: str) -> bool:
+        # Resolve, do not union: an exact-world tombstone must suppress a
+        # global live entry just as an exact-world destination supersedes a
+        # global destination. Persistent-map iteration order is irrelevant.
+        resolved: dict[tuple[Any, TransitionCause, Any], CompassEntry] = {}
+        exact_scope = _evidence_scope_key(
+            world_key if isinstance(world_key, tuple) else None,
+            snapshot.items() if snapshot is not None else None,
+        )
+        scopes = (None,) if world_key is None else (None, exact_scope)
+        exact_artifact = _applied_key(applied) if applied is not None else None
+        for scope in scopes:
+            for (
+                entry_world,
+                entry_tag,
+                from_value,
+                cause,
+                artifact,
+            ), entry in self.entries.items():
+                if (
+                    entry_world == scope
+                    and entry_tag == tag
+                    and (scope is None or exact_artifact is None or artifact == exact_artifact)
+                ):
+                    resolved[(from_value, cause, artifact)] = entry
+        for (from_value, cause, _artifact), entry in resolved.items():
+            yield from_value, cause, entry
+
+    def live_edges(
+        self,
+        tag: str,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> dict[tuple[Any, TransitionCause], Any]:
+        destinations: dict[tuple[Any, TransitionCause], list[Any]] = {}
+        for from_value, cause, entry in self.tag_entries(
+            tag, world_key=world_key, snapshot=snapshot
+        ):
+            if not entry.is_live:
+                continue
+            values = destinations.setdefault((from_value, cause), [])
+            if not any(_values_match(entry.to_val, value) for value in values):
+                values.append(entry.to_val)
+        # Differing destinations from distinct exact artifacts are ambiguity,
+        # not an invitation for persistent-map iteration order to select one.
+        return {key: values[0] for key, values in destinations.items() if len(values) == 1}
+
+    def has_transitions(
+        self,
+        tag: str,
+        *,
+        world_key: tuple[Any, ...] | None | object = _ALL_CONTEXTS,
+        snapshot: dict[str, Any] | None = None,
+    ) -> bool:
         return any(
             entry.provenance is not Provenance.NO_CHANGE
-            for _from_value, _cause, entry in self.tag_entries(tag)
+            for _from_value, _cause, entry in self.tag_entries(
+                tag, world_key=world_key, snapshot=snapshot
+            )
         )
 
     def find_path(
@@ -406,8 +609,10 @@ class CompassKnowledge:
         to_value: Any,
         *,
         cause_allowed: Any = None,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> list[TransitionCause] | None:
-        live = self.live_edges(tag)
+        live = self.live_edges(tag, world_key=world_key, snapshot=snapshot)
         if not live:
             return None
         if _values_match(from_value, to_value):
@@ -430,10 +635,23 @@ class CompassKnowledge:
                 queue.append((destination, next_path))
         return None
 
-    def probed_actions(self, tag: str, from_value: Any) -> set[Action]:
+    def probed_actions(
+        self,
+        tag: str,
+        from_value: Any,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+        applied: tuple[ActionPair, ...] | None = None,
+    ) -> set[Action]:
         return {
             cause
-            for candidate_from, cause, _entry in self.tag_entries(tag)
+            for candidate_from, cause, _entry in self.tag_entries(
+                tag,
+                world_key=world_key,
+                snapshot=snapshot,
+                applied=applied,
+            )
             if candidate_from == from_value and is_action(cause)
         }
 
@@ -442,29 +660,62 @@ class CompassKnowledge:
         tag: str,
         from_value: Any,
         available_actions: set[Action] | frozenset[Action],
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+        applied_context: tuple[ActionPair, ...] | None = None,
     ) -> list[Action]:
-        return sorted(
-            available_actions - self.probed_actions(tag, from_value),
-            key=_action_sort_key,
-        )
+        ordered = sorted(available_actions, key=_action_sort_key)
+        if applied_context is None:
+            probed = self.probed_actions(tag, from_value, world_key=world_key, snapshot=snapshot)
+            return [action for action in ordered if action not in probed]
+        base = dict(applied_context)
+        result: list[Action] = []
+        for action in ordered:
+            applied = dict(base)
+            members = action if is_composite_action(action) else (action,)
+            applied.update(members)
+            tried = self.probed_actions(
+                tag,
+                from_value,
+                world_key=world_key,
+                snapshot=snapshot,
+                applied=tuple(sorted(applied.items())),
+            )
+            if action not in tried:
+                result.append(action)
+        return result
 
     def transition_dest(
         self,
         tag: str,
         from_value: Any,
         cause: TransitionCause,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> Any | None:
-        for (candidate_from, candidate_cause), destination in self.live_edges(tag).items():
+        for (candidate_from, candidate_cause), destination in self.live_edges(
+            tag, world_key=world_key, snapshot=snapshot
+        ).items():
             if candidate_cause == cause and _values_match(candidate_from, from_value):
                 return destination
         return None
 
-    def off_path_actions(self, tag: str, from_value: Any, to_value: Any) -> set[Action]:
-        path = self.find_path(tag, from_value, to_value)
+    def off_path_actions(
+        self,
+        tag: str,
+        from_value: Any,
+        to_value: Any,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> set[Action]:
+        path = self.find_path(tag, from_value, to_value, world_key=world_key, snapshot=snapshot)
         if not path:
             return set()
         good_cause = path[0]
-        table = self.live_edges(tag)
+        table = self.live_edges(tag, world_key=world_key, snapshot=snapshot)
         on_path: set[Any] = {from_value}
         state = from_value
         for cause in path:
@@ -480,6 +731,28 @@ class CompassKnowledge:
             and is_action(cause)
             and destination not in on_path
         }
+
+    def static_edge_status(
+        self,
+        edge: Any,
+        world_key: tuple[Any, ...] | None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> Literal["confirmed", "contradicted", "no_change"] | None:
+        """Evidence for one static edge in one world.
+
+        Exact-world evidence overrides a deliberately global seeded overlay.
+        Callers never reconstruct the persistent-map storage key.
+        """
+        edge_id = edge.identity
+        required_actions = () if edge.action is None else (edge.action, *edge.co_actions)
+        scope_key = _evidence_scope_key(
+            world_key,
+            snapshot.items() if snapshot is not None else None,
+        )
+        scoped_key = (scope_key, _applied_key(required_actions), edge_id)
+        if scope_key is not None and scoped_key in self.static_overlays:
+            return self.static_overlays[scoped_key]
+        return self.static_overlays.get(edge_id)
 
     def apply(
         self,
@@ -514,13 +787,24 @@ class CompassKnowledge:
                     )
                     changed = True
             elif isinstance(observation, StaticEdgeObservation):
-                if static_overlays.get(observation.edge_id) != observation.status:
-                    static_overlays = static_overlays.set(
+                overlay_key = (
+                    observation.edge_id
+                    if observation.scope_key is None
+                    else (
+                        observation.scope_key,
+                        observation.artifact_key,
                         observation.edge_id,
+                    )
+                )
+                if static_overlays.get(overlay_key) != observation.status:
+                    static_overlays = static_overlays.set(
+                        overlay_key,
                         observation.status,
                     )
                     changed = True
             elif observation.kind == "edge":
+                scope_key = _evidence_scope_key(observation.world_key, observation.context)
+                applied = _observation_applied(observation)
                 table, touched = _table_record(
                     table,
                     observation.tag,
@@ -528,22 +812,32 @@ class CompassKnowledge:
                     observation.from_val,
                     observation.to_val,
                     Provenance.OBSERVED,
+                    scope_key,
+                    applied,
                 )
                 changed |= touched
             elif observation.kind == "contradict":
+                scope_key = _evidence_scope_key(observation.world_key, observation.context)
+                applied = _observation_applied(observation)
                 table, touched, _ = _table_contradict(
                     table,
                     observation.tag,
                     observation.cause,
                     observation.from_val,
+                    scope_key,
+                    applied,
                 )
                 changed |= touched
             else:
+                scope_key = _evidence_scope_key(observation.world_key, observation.context)
+                applied = _observation_applied(observation)
                 table, touched = _table_no_change(
                     table,
                     observation.tag,
                     observation.cause,
                     observation.from_val,
+                    scope_key,
+                    applied,
                 )
                 changed |= touched
         if not changed:
@@ -587,13 +881,19 @@ class Compass:
 
         return orient(self, world, target, constraints)
 
-    def has_transitions(self, tag: str) -> bool:
+    def has_transitions(
+        self,
+        tag: str,
+        *,
+        world_key: tuple[Any, ...] | None | object = _ALL_CONTEXTS,
+        snapshot: dict[str, Any] | None = None,
+    ) -> bool:
         # True iff a real edge was ever recorded for *tag* (a CONTRADICTED
         # tombstone still counts — it *was* an edge), matching the old
         # ``tag in self._transitions`` (which stayed True after contradict
         # emptied the per-tag dict).  A tag carrying only NO_CHANGE probe marks
         # never had a transition, so it reads False as it did before.
-        return self.knowledge.has_transitions(tag)
+        return self.knowledge.has_transitions(tag, world_key=world_key, snapshot=snapshot)
 
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""
@@ -625,6 +925,8 @@ class Compass:
                     )
                     if not (cause_matches and _values_match(edge.from_value, observation.from_val)):
                         continue
+                    if not _observation_exercised_edge(observation, edge):
+                        continue
                     if observation.kind == "edge":
                         # An alternate observed destination does not globally
                         # falsify a statically guarded edge: this runtime world
@@ -638,7 +940,14 @@ class Compass:
                         status = "contradicted"
                     else:
                         status = "no_change"
-                    overlays.append(StaticEdgeObservation(edge.identity, status))
+                    overlays.append(
+                        StaticEdgeObservation(
+                            edge.identity,
+                            status,
+                            _evidence_scope_key(observation.world_key, observation.context),
+                            _applied_key(_observation_applied(observation)),
+                        )
+                    )
         knowledge, changed = self.knowledge.apply((*supplied, *overlays))
         if not changed:
             return self, False
@@ -651,6 +960,8 @@ class Compass:
         to_val: Any,
         *,
         cause_allowed: Any = None,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> list[TransitionCause] | None:
         """BFS shortest transition-cause sequence through the learned table.
 
@@ -663,6 +974,8 @@ class Compass:
             from_val,
             to_val,
             cause_allowed=cause_allowed,
+            world_key=world_key,
+            snapshot=snapshot,
         )
 
     def unprobed_actions(
@@ -670,6 +983,10 @@ class Compass:
         tag: str,
         from_val: Any,
         available_actions: set[Action] | frozenset[Action],
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+        applied_context: tuple[ActionPair, ...] | None = None,
     ) -> list[Action]:
         """Available actions not yet tried from *from_val* for *tag*.
 
@@ -678,31 +995,71 @@ class Compass:
         not the bare tuple order, so the two shapes never get compared
         directly (see its docstring for the crash that guards against).
         """
-        return self.knowledge.unprobed_actions(tag, from_val, available_actions)
+        return self.knowledge.unprobed_actions(
+            tag,
+            from_val,
+            available_actions,
+            world_key=world_key,
+            snapshot=snapshot,
+            applied_context=applied_context,
+        )
 
-    def probed_actions(self, tag: str, from_val: Any) -> set[Action]:
+    def probed_actions(
+        self,
+        tag: str,
+        from_val: Any,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+        applied: tuple[ActionPair, ...] | None = None,
+    ) -> set[Action]:
         """Actions already probed from *from_val* for *tag*.
 
         Every entry key — live edge or tombstone — is a probe mark, so this
         reads the whole entry table (the old ``_probed`` set was exactly the
         union of every write's key).
         """
-        return self.knowledge.probed_actions(tag, from_val)
+        return self.knowledge.probed_actions(
+            tag,
+            from_val,
+            world_key=world_key,
+            snapshot=snapshot,
+            applied=applied,
+        )
 
     def transition_dest(
         self,
         tag: str,
         from_val: Any,
         cause: TransitionCause,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> Any | None:
         """Observed destination for one transition cause from *from_val*."""
-        return self.knowledge.transition_dest(tag, from_val, cause)
+        return self.knowledge.transition_dest(
+            tag, from_val, cause, world_key=world_key, snapshot=snapshot
+        )
 
-    def off_path_actions(self, tag: str, from_val: Any, to_val: Any) -> set[Action]:
+    def off_path_actions(
+        self,
+        tag: str,
+        from_val: Any,
+        to_val: Any,
+        *,
+        world_key: tuple[Any, ...] | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> set[Action]:
         """Actions known to move *tag* away from the BFS path toward *to_val*.
 
         Once we know the shortest path, any action from the current state
         that goes to a state NOT on that path (or with no path to the
         target) is off-path and should be tried after path actions.
         """
-        return self.knowledge.off_path_actions(tag, from_val, to_val)
+        return self.knowledge.off_path_actions(
+            tag,
+            from_val,
+            to_val,
+            world_key=world_key,
+            snapshot=snapshot,
+        )

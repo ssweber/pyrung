@@ -4351,13 +4351,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "departed",
@@ -4858,13 +4858,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "departed",
@@ -5325,13 +5325,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -5485,13 +5485,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -6421,13 +6421,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -6581,13 +6581,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -7226,13 +7226,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",
@@ -7386,13 +7386,13 @@
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "Blower__init: 0->1"
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "channel_tag": "Sts_StateCurrent",
   "kind": "zoom",
   "prescribed": true,
-  "reason": "Blower__init: 0->1"
+  "reason": "let-run Sts_StateCurrent: 12->6"
  },
  {
   "bearing_stop_reason": "reached",

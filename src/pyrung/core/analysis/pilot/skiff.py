@@ -282,10 +282,26 @@ def probe_live_guard_frontiers(
         # Pass 1: single actions.
         edge_found = False
         budget = max_probes
-        for probe in ctx.compass.unprobed_actions(node.tag, cur_val, set(singles))[:budget]:
+        for probe in ctx.compass.unprobed_actions(
+            node.tag,
+            cur_val,
+            set(singles),
+            world_key=frame.key,
+            snapshot=frame.snap,
+            applied_context=tuple(sorted(context.items())),
+        )[:budget]:
             budget -= 1
             obs = _send_probe(
-                node.tag, cur_val, (probe,), probe, context, allowed, state, ctx, scans
+                node.tag,
+                cur_val,
+                (probe,),
+                probe,
+                context,
+                allowed,
+                state,
+                ctx,
+                scans,
+                frame.key,
             )
             edge_found |= obs.kind == "edge"
             observations.append(obs)
@@ -299,7 +315,14 @@ def probe_live_guard_frontiers(
                 for pair in itertools.combinations(singles, 2)
                 if pair[0][0] != pair[1][0]
             ]
-            for composite in ctx.compass.unprobed_actions(node.tag, cur_val, set(pairs))[:budget]:
+            for composite in ctx.compass.unprobed_actions(
+                node.tag,
+                cur_val,
+                set(pairs),
+                world_key=frame.key,
+                snapshot=frame.snap,
+                applied_context=tuple(sorted(context.items())),
+            )[:budget]:
                 observation = _send_probe(
                     node.tag,
                     cur_val,
@@ -310,6 +333,7 @@ def probe_live_guard_frontiers(
                     state,
                     ctx,
                     scans,
+                    frame.key,
                 )
                 observations.append(observation)
                 budget -= 1
@@ -326,6 +350,9 @@ def probe_live_guard_frontiers(
                 node.tag,
                 cur_val,
                 set(triples),
+                world_key=frame.key,
+                snapshot=frame.snap,
+                applied_context=tuple(sorted(context.items())),
             )[:budget]:
                 observation = _send_probe(
                     node.tag,
@@ -337,6 +364,7 @@ def probe_live_guard_frontiers(
                     state,
                     ctx,
                     scans,
+                    frame.key,
                 )
                 observations.append(observation)
                 if observation.kind == "edge":
@@ -354,6 +382,7 @@ def _send_probe(
     state: Any,
     ctx: Any,
     scans: int,
+    world_key: tuple[Any, ...],
 ) -> CompassObservation:
     """Run one isolated probe and return its unapplied observation."""
     actions = dict(context)
@@ -362,9 +391,15 @@ def _send_probe(
         state.work, allowed, ctx.pdg, actions=tuple(actions.items()), scans=scans
     )
     new_val = result.after.get(frontier_tag)
+    before = tuple(sorted(dict(state.work.state.tags).items()))
+    applied = tuple(sorted(actions.items()))
     if not _values_match(new_val, cur_val):
-        return CompassObservation("edge", frontier_tag, cause, cur_val, new_val)
-    return CompassObservation("no_change", frontier_tag, cause, cur_val)
+        return CompassObservation(
+            "edge", frontier_tag, cause, cur_val, new_val, world_key, before, applied
+        )
+    return CompassObservation(
+        "no_change", frontier_tag, cause, cur_val, None, world_key, before, applied
+    )
 
 
 def _declared_domain(tag_ref: Any) -> tuple[Any, ...] | None:
