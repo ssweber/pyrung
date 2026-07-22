@@ -1014,6 +1014,12 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "kind": "departure_check_started",
+  "to_value": 2
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
   "classification": "continue",
   "from_value": 9,
   "gauge_at_source": [
@@ -1282,6 +1288,12 @@
   "observe_label": "accept",
   "reason": null,
   "requested_value": 15,
+  "to_value": 4
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 2,
+  "kind": "departure_check_started",
   "to_value": 4
  },
  {
@@ -1780,6 +1792,18 @@
   "to_value": 8
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 3,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 4,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
   "channel_transitions": [
    [
     "Sts_StateCurrent",
@@ -1792,17 +1816,11 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
-       "value": true
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_LintDoorClosed",
        "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
        "value": true
       }
@@ -1810,9 +1828,7 @@
      "kind": "latch-exposure",
      "sources": [
       "A_Alm14_DoorOpen_Trig",
-      "A_Alm15_LintOpen_Trig",
-      "x_DoorClosed",
-      "x_LintDoorClosed"
+      "x_DoorClosed"
      ]
     }
    ],
@@ -1875,29 +1891,535 @@
      ]
     }
    ],
-   "rejected": 2,
-   "rejected_detail": [
+   "rejected": 0,
+   "rejected_detail": [],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 4)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 3,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Start",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Start",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
     {
-     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
-     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
-       "value": true
-      }
+     "action": [
+      "Cmd_State_Start",
+      true
      ],
-     "kind": "latch-exposure",
-     "slug": "sibling-regression",
-     "sources": [
-      "A_Alm14_DoorOpen_Trig",
-      "x_DoorClosed"
-     ]
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
     },
     {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 15",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 15,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Start",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Start",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 15",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 3,
+    "before": 4,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Start",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Start": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 2,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 3,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 15
+ },
+ {
+  "distance": 15,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)",
+   "i_BlowerFB=True (have False)",
+   "i_RotateFB=True (have False)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": null,
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "channel_tag": "Rotate_tmr_Acc",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "advance Rotate_tmr_Acc to its next boundary 4"
+ },
+ {
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 15 -> 2",
+    "event": "zoom-stall"
+   }
+  ],
+  "kind": "zoom_rejected"
+ },
+ {
+  "distance": 15,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 3)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)",
+   "i_BlowerFB=True (have False)",
+   "i_RotateFB=True (have False)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "candidates": [
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_BlowerFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_BlowerFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R305"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_BlowerFB",
+    "value": true
+   },
+   {
+    "avail_tier": 2,
+    "bearing_channel_tag": "i_RotateFB",
+    "bearing_channel_value": true,
+    "compass_score": [
+     50,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "x_RotateFB",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "ReadInputs:R304"
+    ],
+    "route_prescribed": false,
+    "scored": true,
+    "tag": "x_RotateFB",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [
+   [
+    "x_BlowerFB",
+    true
+   ],
+   [
+    "x_RotateFB",
+    true
+   ]
+  ],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 6,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 3,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 6,
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 3,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 4,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    4,
+    8
+   ]
+  ],
+  "from_trend": 6,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1907,13 +2429,33 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "sibling-regression",
      "sources": [
       "A_Alm15_LintOpen_Trig",
       "x_LintDoorClosed"
      ]
     }
    ],
+   "hypotheses": 1,
+   "hypothesis_detail": [
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "rejected": 0,
+   "rejected_detail": [],
    "unresolved": []
   },
   "kind": "trend_regression",
@@ -2548,6 +3090,18 @@
   "to_value": 10
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "investigation_started",
+  "to_value": 10
+ },
+ {
   "channel_transitions": [
    [
     "Sts_StateCurrent",
@@ -2736,6 +3290,18 @@
   "to_value": 8
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
   "channel_transitions": [
    [
     "Sts_StateCurrent",
@@ -2901,6 +3467,18 @@
   "to_value": 8
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
   "channel_transitions": [
    [
     "Sts_StateCurrent",
@@ -2918,7 +3496,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_SailRelay",
-       "guard": "<pyrung.core.condition.CompareNe object at <ADDR:6>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:6>>",
        "value": true
       }
      ],
@@ -3146,6 +3724,12 @@
   "observe_label": "zoom",
   "reason": null,
   "requested_value": 16,
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
   "to_value": 10
  },
  {
@@ -3528,6 +4112,18 @@
   "to_value": 8
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 11,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
   "channel_transitions": [
    [
     "Sts_StateCurrent",
@@ -3540,17 +4136,11 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
-       "value": true
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_LintDoorClosed",
        "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
        "value": true
       }
@@ -3558,9 +4148,7 @@
      "kind": "latch-exposure",
      "sources": [
       "A_Alm14_DoorOpen_Trig",
-      "A_Alm15_LintOpen_Trig",
-      "x_DoorClosed",
-      "x_LintDoorClosed"
+      "x_DoorClosed"
      ]
     }
    ],
@@ -3623,29 +4211,385 @@
      ]
     }
    ],
-   "rejected": 2,
-   "rejected_detail": [
+   "rejected": 0,
+   "rejected_detail": [],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 2
+ },
+ {
+  "distance": 2,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 11)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "avail_tier": 0,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "compass_score": [
+     0,
+     0
+    ],
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "over_wake": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "scored": false,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
     {
-     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
-     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm15_LintOpen_Trig, x_LintDoorClosed",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
-       "value": true
-      }
+     "action": [
+      "Cmd_State_Unhold",
+      true
      ],
-     "kind": "latch-exposure",
-     "slug": "sibling-regression",
-     "sources": [
-      "A_Alm14_DoorOpen_Trig",
-      "x_DoorClosed"
-     ]
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
     },
     {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 2 -> 13",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 13,
+   "trend_before": 2
+  },
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "avail_tier": 0,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "compass_score": [
+    0,
+    0
+   ],
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "over_wake": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 2 -> 13",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 12,
+    "before": 11,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Unhold": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 2,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 12,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 13
+ },
+ {
+  "distance": 13,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_StateCurrent=17 (have 12)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_StateCurrent",
+   17
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "Blower__init: 0->1"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "Blower__init: 0->1"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 6,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 6,
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 11,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    11,
+    8
+   ]
+  ],
+  "from_trend": 6,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
      "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
-     "ground": "replacement departure belongs to unresolved incident hypothesis source(s): A_Alm14_DoorOpen_Trig, x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -3655,13 +4599,33 @@
       }
      ],
      "kind": "latch-exposure",
-     "slug": "sibling-regression",
      "sources": [
       "A_Alm15_LintOpen_Trig",
       "x_LintDoorClosed"
      ]
     }
    ],
+   "hypotheses": 1,
+   "hypothesis_detail": [
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "rejected": 0,
+   "rejected_detail": [],
    "unresolved": []
   },
   "kind": "trend_regression",
@@ -4321,6 +5285,18 @@
   "observe_label": "zoom",
   "reason": null,
   "requested_value": 16,
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "investigation_started",
   "to_value": 10
  },
  {
@@ -4600,6 +5576,12 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
   "classification": "continue",
   "from_value": 6,
   "gauge_at_source": [
@@ -5289,6 +6271,12 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
   "classification": "continue",
   "from_value": 6,
   "gauge_at_source": [
@@ -5974,6 +6962,18 @@
   "observe_label": "zoom",
   "reason": null,
   "requested_value": 16,
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "departure_check_started",
+  "to_value": 10
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "kind": "investigation_started",
   "to_value": 10
  },
  {
@@ -6267,7 +7267,27 @@
       [
        "x_DoorClosed",
        true
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "prerequisite",
+     "tags": [
+      [
+       "x_BlowerFB",
+       true
       ],
+      [
+       "x_RotateFB",
+       true
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "investigation",
+     "tags": [
       [
        "x_LintDoorClosed",
        true
@@ -6359,7 +7379,13 @@
       [
        "x_DoorClosed",
        true
-      ],
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "investigation",
+     "tags": [
       [
        "x_LintDoorClosed",
        true
@@ -6395,8 +7421,7 @@
      ]
     }
    ],
-   "lever_notes": {},
-   "skiff_decline": null
+   "lever_notes": {}
   },
   "plan_journal": [
    {
@@ -6421,7 +7446,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "A_CurDisabledStates_HEX 8191 -> 0",
+    "transition": "A_CurDisabledStates_HEX changed from 8191 to 0",
     "waiting_for": []
    },
    {
@@ -6438,7 +7463,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 9 -> 1",
+    "transition": "Cmd_CtrlCmd changed from 9 to 1",
     "waiting_for": []
    },
    {
@@ -6448,14 +7473,27 @@
      [
       "x_DoorClosed",
       true
-     ],
+     ]
+    ],
+    "kind": "force",
+    "label": "x_DoorClosed",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
      [
       "x_LintDoorClosed",
       true
      ]
     ],
     "kind": "force",
-    "label": "x_DoorClosed, x_LintDoorClosed",
+    "label": "x_LintDoorClosed",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
@@ -6476,7 +7514,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 1 -> 2",
+    "transition": "Cmd_CtrlCmd changed from 1 to 2",
     "waiting_for": []
    },
    {
@@ -6537,7 +7575,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Blower_xCall 0 -> 1",
+    "transition": "Blower_xCall changed from 0 to 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -6559,7 +7597,7 @@
      "x_LintDoorClosed",
      "x_RotateFB"
     ],
-    "transition": "Sts_StateCurrent 3 -> 6",
+    "transition": "Sts_StateCurrent changed from 3 to 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -6894,7 +7932,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Heat_xCall 0 -> 1",
+    "transition": "Heat_xCall changed from 0 to 1",
     "waiting_for": []
    },
    {
@@ -6914,7 +7952,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 2 -> 4",
+    "transition": "Cmd_CtrlCmd changed from 2 to 4",
     "waiting_for": []
    },
    {
@@ -6924,14 +7962,27 @@
      [
       "x_DoorClosed",
       true
-     ],
+     ]
+    ],
+    "kind": "force",
+    "label": "x_DoorClosed",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
      [
       "x_LintDoorClosed",
       true
      ]
     ],
     "kind": "force",
-    "label": "x_DoorClosed, x_LintDoorClosed",
+    "label": "x_LintDoorClosed",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
@@ -6952,7 +8003,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 -> 5",
+    "transition": "Cmd_CtrlCmd changed from 4 to 5",
     "waiting_for": []
    },
    {
@@ -7019,7 +8070,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 -> 1",
+    "transition": "Blower_xCall changed from 0 to 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7044,7 +8095,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 -> 6",
+    "transition": "Sts_StateCurrent changed from 12 to 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7144,7 +8195,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 -> 4",
+    "transition": "Cmd_CtrlCmd changed from 5 to 4",
     "waiting_for": []
    },
    {
@@ -7161,7 +8212,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 -> 5",
+    "transition": "Cmd_CtrlCmd changed from 4 to 5",
     "waiting_for": []
    },
    {
@@ -7228,7 +8279,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 -> 1",
+    "transition": "Blower_xCall changed from 0 to 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7253,7 +8304,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 -> 6",
+    "transition": "Sts_StateCurrent changed from 12 to 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7275,7 +8326,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 -> 4",
+    "transition": "Cmd_CtrlCmd changed from 5 to 4",
     "waiting_for": []
    },
    {
@@ -7292,7 +8343,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 4 -> 5",
+    "transition": "Cmd_CtrlCmd changed from 4 to 5",
     "waiting_for": []
    },
    {
@@ -7338,7 +8389,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 0 -> 1",
+    "transition": "Blower_xCall changed from 0 to 1",
     "waiting_for": [
      "Blower_xInit",
      "Blower_tmr_Acc",
@@ -7363,7 +8414,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Sts_StateCurrent 12 -> 6",
+    "transition": "Sts_StateCurrent changed from 12 to 6",
     "waiting_for": [
      "Ref_State_EXECUTE"
     ]
@@ -7443,7 +8494,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Cmd_CtrlCmd 5 -> 10",
+    "transition": "Cmd_CtrlCmd changed from 5 to 10",
     "waiting_for": []
    },
    {
@@ -7463,7 +8514,7 @@
      "x_RotateSensor",
      "x_SailRelay"
     ],
-    "transition": "Blower_xCall 1 -> 0",
+    "transition": "Blower_xCall changed from 1 to 0",
     "waiting_for": []
    }
   ],

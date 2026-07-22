@@ -10,8 +10,8 @@ event stream and on :class:`Plan`:
    ordering (winner + losers, each with its availability/bucket/clobber) plus the
    ranked writers the walk actively skipped.
 3. **Knowledge onto Plan** — ``journey`` / ``hold_log`` / ``lever_notes`` /
-   ``skiff_decline`` / ``avoid_names`` are threaded off the drive's ``_PilotState``
-   onto the returned :class:`Plan`.
+   ``avoid_names`` are threaded off the drive's ``_PilotState`` onto the returned
+   :class:`Plan`.
 """
 
 from __future__ import annotations
@@ -264,4 +264,3 @@ def test_plan_reachable_run_leaves_avoid_names_empty() -> None:
     plan = pilot_how(plc, Done, max_scans=1000)
     assert plan.reachable, plan.reason
     assert plan.avoid_names == ()
-    assert plan.skiff_decline is None

@@ -359,6 +359,12 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "kind": "departure_check_started",
+  "to_value": 2
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
   "classification": "continue",
   "from_value": 9,
   "gauge_at_source": [
@@ -607,6 +613,12 @@
   "to_value": 4
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 2,
+  "kind": "departure_check_started",
+  "to_value": 4
+ },
+ {
   "distance": 2,
   "kind": "iteration",
   "nogoods": [],
@@ -830,8 +842,7 @@
   "knowledge": {
    "avoid_names": [],
    "hold_log": [],
-   "lever_notes": {},
-   "skiff_decline": null
+   "lever_notes": {}
   },
   "plan_journal": [
    {
@@ -848,7 +859,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 0 -> 9",
+    "transition": "Cmd_CtrlCmd changed from 0 to 9",
     "waiting_for": []
    },
    {
@@ -865,7 +876,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 9 -> 1",
+    "transition": "Cmd_CtrlCmd changed from 9 to 1",
     "waiting_for": []
    },
    {
@@ -882,7 +893,7 @@
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
-    "transition": "Cmd_CtrlCmd 1 -> 2",
+    "transition": "Cmd_CtrlCmd changed from 1 to 2",
     "waiting_for": []
    }
   ],

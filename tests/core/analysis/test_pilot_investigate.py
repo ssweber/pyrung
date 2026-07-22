@@ -556,10 +556,14 @@ def test_route_replay_accepts_local_neutralization_without_reaching_frontier():
     assert neutralized.snapshot[State.name] == 6
     assert "recorded regression neutralized" in neutralized.reason
 
-    harmful = replay(((Detour.name, True),))
-    assert not harmful.accepted
-    assert harmful.snapshot[State.name] == 13
-    assert harmful.justification is None
+    # This proposal silences the recorded watchdog but creates a different
+    # departure. Bounded proof admits it only as a probationary hypothesis;
+    # the live State=6 -> 13 incident owns the later contradiction/revocation.
+    probationary = replay(((Detour.name, True),))
+    assert probationary.accepted
+    assert probationary.snapshot[State.name] == 13
+    assert probationary.justification is ReplayJustification.NEUTRALIZED
+    assert "replacement motion is deferred" in probationary.reason
 
 
 def test_non_timer_regression_witness_distinguishes_suppression_from_masking():
@@ -690,7 +694,7 @@ def test_regression_witness_does_not_confuse_a_shared_executor_with_its_owner():
 
 
 def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
-    """A later fault is a new incident when the proposal did not cause it."""
+    """A later fault is deferred to a new incident after local suppression."""
     Inhibit = Bool("ReplayOwner_Inhibit", external=True)
     Harmful = Bool("ReplayOwner_Harmful", external=True)
     Primary = Timer.clone("ReplayOwner_Primary")
@@ -751,23 +755,25 @@ def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
     assert unrelated.snapshot[State.name] == 8
     assert unrelated.accepted
     assert unrelated.justification is ReplayJustification.NEUTRALIZED
-    assert "later unrelated operation" in unrelated.reason
+    assert "replacement motion is deferred" in unrelated.reason
     assert not unrelated.landed
+    assert unrelated.replacement_cause == frozenset()
 
     proposal_owned = replay(((Harmful.name, True),))
     assert proposal_owned.snapshot[State.name] == 8
-    assert not proposal_owned.accepted
-    assert proposal_owned.justification is None
+    assert proposal_owned.accepted
+    assert proposal_owned.justification is ReplayJustification.NEUTRALIZED
 
 
 def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
-    """A write signature can span two operations without transferring ownership.
+    """An indistinguishable replacement remains unresolved by bounded proof.
 
     The release timer and both executor rungs are identical in the recorded and
     replayed departures. The recorded branch is selected by ``PrimaryFault``;
     after that branch is corrected, a later timer selects the same writer for a
-    different operation. Changed-write matching alone deliberately reports a
-    replay, so the two causal-spine receipts must disambiguate ownership.
+    different operation. Incident-local changed-write evidence cannot separate
+    them without reconstructing the replacement cause, so it conservatively
+    declines this correction and lets the live loop gather another incident.
     """
     PrimaryFault = Bool("ReplaySpine_PrimaryFault", external=True)
     Harmful = Bool("ReplaySpine_Harmful", external=True)
@@ -823,17 +829,16 @@ def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
 
     unrelated = replay(((PrimaryFault.name, False),))
     assert unrelated.snapshot[State.name] == 8
-    assert unrelated.accepted
-    assert unrelated.justification is ReplayJustification.NEUTRALIZED
-    assert PrimaryFault.name not in unrelated.replacement_cause
-    assert Alternate.Done.name in unrelated.replacement_cause
+    assert not unrelated.accepted
+    assert unrelated.justification is None
+    assert unrelated.replacement_cause == frozenset()
 
     proposal_owned = replay(((Harmful.name, True),))
     assert not proposal_owned.accepted
 
 
-def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
-    """Correction scope comes from automatic motion beyond the incident window."""
+def test_latch_silencing_replay_stops_at_the_incident_horizon():
+    """Local proof does not coast forward to reconstruct a stable landing."""
     DoorA = Bool("Landing_DoorA", external=True)
     DoorB = Bool("Landing_DoorB", external=True)
     AlarmA = Bool("Landing_AlarmA")
@@ -895,7 +900,7 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
     outcome = replay(((DoorA.name, True), (DoorB.name, True)))
 
     assert outcome.accepted
-    assert outcome.snapshot[State.name] == 6
+    assert outcome.snapshot[State.name] == 3
 
     guarded = replay(
         (
@@ -904,7 +909,7 @@ def test_latch_silencing_replay_observes_the_stable_landing_after_a_waypoint():
         )
     )
     assert guarded.accepted
-    assert guarded.snapshot[State.name] == 6
+    assert guarded.snapshot[State.name] == 3
 
 
 # ---------------------------------------------------------------------------

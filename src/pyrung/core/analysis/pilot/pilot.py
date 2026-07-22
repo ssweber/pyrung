@@ -19,6 +19,7 @@ from pyrsistent import pvector
 
 from pyrung.core.analysis.graph import (
     Plan,
+    PlanStatus,
     PlanStep,
     RouteAlt,
     RoutePivot,
@@ -60,6 +61,7 @@ from pyrung.core.analysis.pilot.progress import (
     _anchor_frame_receipt,
     _install_confirmed_correction,
     _monitor_trend,
+    _promote_probationary_corrections,
     _record_pending_landing,
 )
 from pyrung.core.analysis.pilot.recording import (
@@ -479,6 +481,13 @@ def _with_avoid_reason(
     )
 
 
+def _stopped_reason(reason_code: str) -> str:
+    """Translate internal orientation taxonomy into an honest public stop."""
+    if reason_code == "all_rejected":
+        return "Every available action failed its trial"
+    return "No safe next action was found"
+
+
 def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str, ...]:
     """Avoid-condition names that forced *every* route to the value target.
 
@@ -741,7 +750,6 @@ def _finished_event(
     *,
     reached: bool,
     reason: str,
-    skiff_decline: str | None = None,
 ) -> PilotEvent:
     """Build the single terminal recording shape for every loop exit."""
 
@@ -752,11 +760,7 @@ def _finished_event(
             "reached": reached,
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
-            "knowledge": _knowledge_payload(
-                state,
-                ctx.compass,
-                skiff_decline=skiff_decline,
-            ),
+            "knowledge": _knowledge_payload(state, ctx.compass),
             "work": state.work,
             "reason": reason,
             "plan_journal": _build_plan_journal(
@@ -880,6 +884,7 @@ def _pilot_loop_events(
     while state.search_scan < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
+            _promote_probationary_corrections(state)
             if state.steps:
                 # The terminal let-run's span extends to the actual finish scan;
                 # rewrite the last step (and its journey twin, the same object) so
@@ -963,13 +968,39 @@ def _pilot_loop_events(
                     "changed": changed,
                 },
             )
+            if not changed:
+                terminal_reason = _with_avoid_reason(
+                    "No safe next action was found",
+                    state,
+                    ctx,
+                    frame,
+                ) + _frontier_clause(frame)
+                yield _stuck_event(
+                    state,
+                    ctx,
+                    frame,
+                    terminal_reason,
+                    candidate_count=0,
+                )
+                if state.checkpoints:
+                    state.load_world(state.checkpoints[-1].world)
+                yield _finished_event(
+                    state,
+                    ctx,
+                    journal_channel_tags,
+                    journal_acc_names,
+                    reached=False,
+                    reason=terminal_reason,
+                )
+                return
             continue
 
         if isinstance(result, Stuck):
-            skiff_decline = ctx.compass.knowledge.probe_decline(frame.key)
-            terminal_reason = (
-                skiff_decline
-                or ("stuck: " + _with_avoid_reason(result.reason_code, state, ctx, frame))
+            terminal_reason = _with_avoid_reason(
+                _stopped_reason(result.reason_code),
+                state,
+                ctx,
+                frame,
             ) + _frontier_clause(frame)
             yield _stuck_event(
                 state,
@@ -988,7 +1019,6 @@ def _pilot_loop_events(
                 journal_acc_names,
                 reached=False,
                 reason=terminal_reason,
-                skiff_decline=skiff_decline,
             )
             return
 
@@ -1111,7 +1141,6 @@ def _pilot_loop_events(
     # ("How we fail" #1 — every stop points at a named leaf).
     snap = dict(state.work.state.tags)
     reached = target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate)
-    terminal_skiff_decline: str | None = None
     if reached:
         reason = "target reached"
     else:
@@ -1122,8 +1151,6 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(frame)
-        if frame is not None:
-            terminal_skiff_decline = ctx.compass.knowledge.probe_decline(frame.key)
         yield _stuck_event(
             state,
             ctx,
@@ -1140,7 +1167,6 @@ def _pilot_loop_events(
         journal_acc_names,
         reached=reached,
         reason=reason,
-        skiff_decline=terminal_skiff_decline,
     )
 
 
@@ -1696,6 +1722,7 @@ def pilot_how(
             avoid_pred=avoid_pred,
             via_pred=via_pred,
             unlink=unlink,
+            on_event=on_event,
         )
     target_tag, target_value, target_predicate = targets[0]
     setup = _prepare_drive(plc, live=False, unlink=unlink)
@@ -1714,7 +1741,7 @@ def pilot_how(
         on_event=on_event,
     )
 
-    reason = (
+    linked_block = (
         None
         if outcome.reached
         else _linked_feedback_block(
@@ -1726,24 +1753,27 @@ def pilot_how(
             setup.steerable,
             _harness_couplings(setup.work),
         )
-        # Fall back to the loop's own terminal diagnostic (``stuck: …`` /
-        # ``budget exhausted``) so an unreachable target always carries a reason
-        # rather than surfacing as a silent ``reachable=False, reason=None``.
-        or outcome.reason
     )
+    reason = linked_block or outcome.reason
     return Plan(
         reachable=outcome.reached,
         target_tag=target_tag,
         target_value=target_value,
         fork=outcome.work if outcome.reached else None,
         reason=reason,
+        status=(
+            PlanStatus.REACHED
+            if outcome.reached
+            else PlanStatus.CANNOT_REACH
+            if linked_block is not None
+            else PlanStatus.STOPPED
+        ),
         route=route_taken if outcome.reached else None,
         journal=outcome.journal,
         anchor_scan=setup.anchor_scan,
         journey=outcome.journey,
         hold_log=outcome.knowledge.get("hold_log", ()),
         lever_notes=outcome.knowledge.get("lever_notes", {}),
-        skiff_decline=outcome.knowledge.get("skiff_decline"),
         avoid_names=outcome.knowledge.get("avoid_names", ()),
     )
 
@@ -1756,6 +1786,7 @@ def _pilot_how_multi(
     avoid_pred: Any = None,
     via_pred: Any = None,
     unlink: list[str] | None = None,
+    on_event: Callable[[PilotEvent], None] | None = None,
 ) -> Plan:
     """Multi-target ``how(A, B, …)`` — reach one committed scan where every target holds.
 
@@ -1787,6 +1818,7 @@ def _pilot_how_multi(
             target_value=True,
             targets=goal_pairs,
             reason=reason,
+            status=PlanStatus.CANNOT_REACH,
             anchor_scan=setup.anchor_scan,
         )
 
@@ -1817,7 +1849,7 @@ def _pilot_how_multi(
             via_pred=via_pred,
             work=work,
         )
-        outcome = _pilot_loop(work, ctx)
+        outcome = _pilot_loop(work, ctx, on_event=on_event)
         work = outcome.work
         last_knowledge = outcome.knowledge
         inf = outcome.knowledge.get("compass", inf)
@@ -1834,6 +1866,7 @@ def _pilot_how_multi(
                     f"pilot: could not establish {t_tag}={t_val!r} while holding the "
                     f"other target(s){detail}"
                 ),
+                status=PlanStatus.STOPPED,
                 anchor_scan=setup.anchor_scan,
             )
 
@@ -1848,6 +1881,7 @@ def _pilot_how_multi(
             targets=goal_pairs,
             reason=f"pilot: reached each target individually but {names} did not hold "
             "simultaneously (clobbered during co-establishment).",
+            status=PlanStatus.STOPPED,
             anchor_scan=setup.anchor_scan,
         )
     # recording: threaded from the LAST target's drive only (multi runs the loop
@@ -1863,7 +1897,6 @@ def _pilot_how_multi(
         journey=last_journey,
         hold_log=last_knowledge.get("hold_log", ()),
         lever_notes=last_knowledge.get("lever_notes", {}),
-        skiff_decline=last_knowledge.get("skiff_decline"),
         avoid_names=last_knowledge.get("avoid_names", ()),
     )
 
@@ -1897,33 +1930,37 @@ def pilot_drive(
     # A live failure without a harness-link explanation falls back to the
     # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
     # an unreachable target always carries a reason ("How we fail" #2).
-    reason = (
+    linked_block = (
         None
         if outcome.reached
-        else (
-            _linked_feedback_block(
-                target_tag,
-                target_value,
-                setup.diag_snapshot,
-                setup.pdg,
-                setup.program,
-                setup.steerable,
-                _harness_couplings(setup.work),
-            )
-            or outcome.reason
+        else _linked_feedback_block(
+            target_tag,
+            target_value,
+            setup.diag_snapshot,
+            setup.pdg,
+            setup.program,
+            setup.steerable,
+            _harness_couplings(setup.work),
         )
     )
+    reason = linked_block or outcome.reason
     return Plan(
         reachable=outcome.reached,
         target_tag=target_tag,
         target_value=target_value,
         fork=outcome.work if outcome.reached else None,
         reason=reason,
+        status=(
+            PlanStatus.REACHED
+            if outcome.reached
+            else PlanStatus.CANNOT_REACH
+            if linked_block is not None
+            else PlanStatus.STOPPED
+        ),
         route=route_taken if outcome.reached else None,
         anchor_scan=setup.anchor_scan,
         journey=outcome.journey,
         hold_log=outcome.knowledge.get("hold_log", ()),
         lever_notes=outcome.knowledge.get("lever_notes", {}),
-        skiff_decline=outcome.knowledge.get("skiff_decline"),
         avoid_names=outcome.knowledge.get("avoid_names", ()),
     )

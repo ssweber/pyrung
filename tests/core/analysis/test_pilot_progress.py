@@ -176,7 +176,7 @@ class TestCheckpoints:
     def test_trend_improvement_creates_checkpoint(self):
         state = _make_state(best_trend=5, checkpoints=[])
         trial = _make_trial(3, Outcome.CONFIRMED)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["trend"] == 3
@@ -189,7 +189,7 @@ class TestCheckpoints:
         # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(3, Outcome.CONFIRMED)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["flat"] is True
@@ -201,7 +201,7 @@ class TestCheckpoints:
         # pre-frontier checkpoint and high-water mark must survive.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(8, Outcome.FRONTIER)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["frontier"] is True
@@ -219,7 +219,7 @@ class TestCheckpoints:
             fork_snap={"State": 3},
         )
 
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [event.kind for event in events] == ["trend_checkpoint"]
         assert events[0].data["channel"] == "State"
@@ -312,7 +312,7 @@ def test_banked_ordinary_checkpoint_promotes_the_pending_departure():
     trial = _make_trial(3, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [e.kind for e in events] == ["trend_checkpoint", "provisional_promoted"]
     assert events[1].data["outcome"] == "banked ordinary progress"
@@ -333,7 +333,7 @@ def test_pending_expiry_without_saved_progress_rolls_back():
     trial = _make_trial(5, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [e.kind for e in events] == ["provisional_expired"]
     assert state.pending_departure is None
@@ -351,7 +351,7 @@ def test_pending_expiry_restores_the_current_checkpoint_artifact():
     trial = _make_trial(5, Outcome.CONFIRMED)
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [event.kind for event in events] == ["provisional_expired"]
     assert state.checkpoints == [corrected]
@@ -376,11 +376,13 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
     refreshed = state.checkpoints[-1]
     assert refreshed is not saved
     assert refreshed.owner is saved.owner
-    events = _monitor_trend(
-        _make_trial(4, Outcome.CONFIRMED),
-        frame,
-        state,
-        SimpleNamespace(target_tag="State", target_value=17, target_predicate=None),
+    events = tuple(
+        _monitor_trend(
+            _make_trial(4, Outcome.CONFIRMED),
+            frame,
+            state,
+            SimpleNamespace(target_tag="State", target_value=17, target_predicate=None),
+        )
     )
     assert [event.kind for event in events] == ["provisional_expired"]
     assert state.checkpoints[-1] is refreshed
@@ -404,7 +406,7 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
     trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
     ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert all(event.kind != "provisional_expired" for event in events)
     assert state.search_scan == 0
@@ -455,10 +457,12 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         target_predicate=None,
     )
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [event.kind for event in events] == [
         "letrun_ejection",
+        "departure_check_started",
+        "investigation_started",
         "departure_investigated",
     ]
     assert investigated == [verdict]
@@ -528,10 +532,11 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         max_scans=100,
     )
 
-    events = _monitor_trend(trial, _frame(), state, ctx)
+    events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [event.kind for event in events] == [
         "letrun_ejection",
+        "departure_check_started",
         "provisional_started",
     ]
     assert state.pending_departure is not None
@@ -619,10 +624,10 @@ class TestRegression:
         # chase_regression_causes=True runs the investigation pipeline and
         # attaches its payload to the regression event.
         state, trial, frame, ctx = _seal_in_regression_inputs()
-        events = _monitor_trend(trial, frame, state, ctx)
+        events = tuple(_monitor_trend(trial, frame, state, ctx))
 
-        assert [e.kind for e in events] == ["trend_regression"]
-        investigation = events[0].data["investigation"]
+        assert [e.kind for e in events] == ["investigation_started", "trend_regression"]
+        investigation = events[1].data["investigation"]
         # The investigation ran (payload populated), unlike the chase=False path
         # which leaves it empty.
         assert "hypotheses" in investigation
@@ -634,7 +639,7 @@ class TestRegression:
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
         work_before = state.work
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         assert [e.kind for e in events] == ["trend_regression"]
         assert events[0].data["from_trend"] == 6
@@ -653,7 +658,7 @@ class TestRegression:
 
         state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
 
         state.work.step()
         assert not state.rungs
@@ -672,7 +677,7 @@ class TestRegression:
             regression_nogoods=frozenset({("X", True)}),
         )
         ctx = SimpleNamespace(compass=Compass())
-        events = _monitor_trend(trial, _frame(), state, ctx)
+        events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
         assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("cpk",))
         assert ("X", True) in events[0].data["regression_nogoods"]
@@ -701,13 +706,64 @@ class TestLetrunEjection:
             fork_snap={"S": 2},
             chase_regression_causes=False,
         )
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
         # The ejection is announced, then handed to investigation/revert.
-        assert [e.kind for e in events] == ["letrun_ejection", "trend_regression"]
+        assert [e.kind for e in events] == [
+            "letrun_ejection",
+            "departure_check_started",
+            "trend_regression",
+        ]
         announce = events[0]
         assert announce.data["channel_tag"] == "S"
         assert announce.data["investigated"] is True
         assert announce.data["reason"] is None
+
+    def test_ejection_and_check_are_streamed_before_slow_work(self, monkeypatch):
+        state = _make_state(best_trend=5, checkpoints=[_cp(("cpk",), _oneshot_plc(), 5)])
+        trial = _make_trial(
+            2,
+            Outcome.AMBIENT_DRIFT,
+            zoom_channel_tag="State",
+            zoom_target_value=1,
+            before_snap={"State": 6},
+            fork_snap={"State": 10},
+        )
+        classified = False
+        investigated = False
+
+        def _classify(*_args, **_kwargs):
+            nonlocal classified
+            classified = True
+            return DepartureVerdict(
+                decision="unknown",
+                reason="no clean continuation",
+                settled_fork=trial.fork,
+                settled_value=10,
+                settle_scans=0,
+            )
+
+        def _investigate(*_args, **_kwargs):
+            nonlocal investigated
+            investigated = True
+            return ()
+
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.progress.classify_departure",
+            _classify,
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.progress._investigate_and_revert",
+            _investigate,
+        )
+
+        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        assert next(events).kind == "letrun_ejection"
+        assert classified is False
+        assert next(events).kind == "departure_check_started"
+        assert classified is False
+        assert next(events).kind == "investigation_started"
+        assert classified is True
+        assert investigated is False
 
     def test_ejection_without_checkpoints_is_announced_but_not_investigated(self):
         # No checkpoint to revert to → the ejected state stands committed, but
@@ -723,7 +779,7 @@ class TestLetrunEjection:
             before_snap={"S": 0},
             fork_snap={"S": 2},
         )
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
         assert [e.kind for e in events] == ["letrun_ejection"]
         assert events[0].data["investigated"] is False
         assert events[0].data["reason"] == "no checkpoint to revert to"
@@ -868,10 +924,10 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
     monkeypatch.setattr("pyrung.core.analysis.pilot.progress.investigate_deviation", _stub)
 
     state, trial, frame, ctx = _seal_in_regression_inputs()
-    events = _monitor_trend(trial, frame, state, ctx)
+    events = tuple(_monitor_trend(trial, frame, state, ctx))
 
-    assert [e.kind for e in events] == ["trend_regression"]
-    rejected_detail = events[0].data["investigation"]["rejected_detail"]
+    assert [e.kind for e in events] == ["investigation_started", "trend_regression"]
+    rejected_detail = events[1].data["investigation"]["rejected_detail"]
     assert [r["slug"] for r in rejected_detail] == [
         "exploratory-replay-failed",
         "guarded-replay-failed",

@@ -435,20 +435,26 @@ class _HoldLogEntry:
 
 
 class CorrectionStatus(Enum):
-    """Whether an investigation correction still owns an active overlay."""
+    """Evidence maturity for an investigation-owned overlay."""
 
+    PROBATIONARY = "probationary"
     ACTIVE = "active"
     REVOKED = "revoked"
+
+    @property
+    def effective(self) -> bool:
+        """Whether the correction still participates in the live overlay."""
+        return self is not CorrectionStatus.REVOKED
 
 
 @dataclass(frozen=True)
 class _CorrectionReceipt:
-    """Replay proof and lifecycle for one installed investigation correction."""
+    """Bounded replay proof and lifecycle for one investigation correction."""
 
     receipt_id: int
     origin_key: _StateKey
     correction: _ConfirmedCorrection
-    status: CorrectionStatus = CorrectionStatus.ACTIVE
+    status: CorrectionStatus = CorrectionStatus.PROBATIONARY
 
     @property
     def identity(self) -> tuple[tuple[str, Any], ...]:

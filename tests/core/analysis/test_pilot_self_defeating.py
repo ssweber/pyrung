@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.progress import (
     _install_confirmed_correction,
     _investigate_and_revert,
     _monitor_trend,
+    _promote_probationary_corrections,
 )
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
@@ -568,7 +569,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
         _stub_investigation([PilotRung("Go", True, scope)]),
     )
 
-    _monitor_trend(trial, frame, state, ctx)
+    tuple(_monitor_trend(trial, frame, state, ctx))
 
     installed = next(r for r in state.rungs if r.dest == "Go" and r.value is True)
 
@@ -617,7 +618,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     assert state.correction_receipts[0].correction is correction
     assert state.correction_receipts[0].rungs == (replayed,)
     assert state.correction_receipts[0].origin_key == frame.key
-    assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
+    assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
     assert state.hold_log[-1].source == "excursion"
     assert state.checkpoints[-1].world.rungs == state.world.rungs
 
@@ -722,11 +723,36 @@ def test_correction_installer_banks_artifact_into_every_checkpoint():
     assert all(rung in checkpoint.world.rungs for checkpoint in state.checkpoints)
     state.load_world(state.checkpoints[0].world)
     assert rung in state.rungs
+    assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
+
+
+def test_probationary_correction_promotes_only_after_banked_progress():
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        rungs=(rung,),
+        sources=("Go",),
+        justification="bounded incident replay",
+    )
+    _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+
+    receipt = state.correction_receipts[0]
+    assert receipt.status is CorrectionStatus.PROBATIONARY
+    assert _promote_probationary_corrections(state) == (receipt.receipt_id,)
     assert state.correction_receipts[0].status is CorrectionStatus.ACTIVE
+    assert _promote_probationary_corrections(state) == ()
 
 
-def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
-    """A later exact contradiction hands ownership to its proved replacement."""
+def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
+    """Local success is not gospel: a later contradiction revokes and nogoods it."""
     state, trial, frame, ctx = _saboteur_scenario()
     scope = CompareEq(state.work._known_tags_by_name["State"], 6)
     harmful = PilotRung("Go", True, scope)
@@ -735,12 +761,12 @@ def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
         _stub_investigation([harmful]),
     )
 
-    _monitor_trend(trial, frame, state, ctx)
+    tuple(_monitor_trend(trial, frame, state, ctx))
 
     assert harmful in state.rungs
     assert len(state.correction_receipts) == 1
     receipt = state.correction_receipts[0]
-    assert receipt.status is CorrectionStatus.ACTIVE
+    assert receipt.status is CorrectionStatus.PROBATIONARY
 
     opposite = PilotRung("Go", False, scope)
     remedy = InvestigationHypothesis(
@@ -778,7 +804,7 @@ def test_causally_opposite_remedy_replaces_harmful_correction(monkeypatch):
     assert opposite in state.rungs
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
     replacement = state.correction_receipts[1]
-    assert replacement.status is CorrectionStatus.ACTIVE
+    assert replacement.status is CorrectionStatus.PROBATIONARY
     assert replacement.rungs == (opposite,)
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
     assert all(harmful not in checkpoint.world.rungs for checkpoint in state.checkpoints)
@@ -805,7 +831,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         "pyrung.core.analysis.pilot.progress.investigate_deviation",
         _stub_investigation([high]),
     )
-    _monitor_trend(trial, frame, state, ctx)
+    tuple(_monitor_trend(trial, frame, state, ctx))
 
     low = PilotRung(
         go.name,
@@ -846,5 +872,8 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
 
     assert high in state.rungs
     assert low in state.rungs
-    assert all(receipt.status is CorrectionStatus.ACTIVE for receipt in state.correction_receipts)
+    assert all(
+        receipt.status is CorrectionStatus.PROBATIONARY
+        for receipt in state.correction_receipts
+    )
     assert events[-1].data["revoked_corrections"] == ()

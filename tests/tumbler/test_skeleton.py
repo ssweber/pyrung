@@ -63,7 +63,6 @@ def _finished_event(*, reverse: bool):
             "knowledge": {
                 "hold_log": (_HoldLogEntry(scan=10, source="investigation", rungs=holds),),
                 "lever_notes": {},
-                "skiff_decline": None,
                 "avoid_names": (),
             },
             "plan_journal": (

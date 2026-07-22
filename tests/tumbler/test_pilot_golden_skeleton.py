@@ -375,7 +375,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     door_correction = None
     liveness_correction = None
     sail_correction = None
-    post_sail_door_correction = None
+    post_sail_door_corrections: set[str] = set()
     finished = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
@@ -424,11 +424,10 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
                 for rung in hypothesis.get("holds", ())
                 if hasattr(rung, "dest")
             }
-            if (
-                sail_correction is not None
-                and {"x_DoorClosed", "x_LintDoorClosed"} <= latch_exposure
-            ):
-                post_sail_door_correction = event
+            if sail_correction is not None:
+                post_sail_door_corrections.update(
+                    latch_exposure & {"x_DoorClosed", "x_LintDoorClosed"}
+                )
         if event.kind == "finished":
             finished = event
             break
@@ -440,7 +439,10 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     assert door_correction is not None
     assert liveness_correction is not None
     assert sail_correction is not None
-    assert post_sail_door_correction is not None
+    # Bounded correction proof owns one recorded fault. The post-sail door
+    # contacts may therefore be learned in successive incidents instead of a
+    # single eager reconstruction, but both must be present before completion.
+    assert post_sail_door_corrections == {"x_DoorClosed", "x_LintDoorClosed"}
     assert finished is not None
     assert finished.data["reached"] is True
     assert liveness_correction.data["investigation"]["confirmed"] > 0

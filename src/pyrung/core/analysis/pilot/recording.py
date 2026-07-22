@@ -14,7 +14,6 @@ from pyrung.core.analysis.pilot._ops import _rung_identity
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
-    CorrectionStatus,
     TagChange,
     _IterationFrame,
     _PilotContext,
@@ -58,8 +57,16 @@ def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
         before = sc.before_snap.get(tag)
         after = sc.after_snap.get(tag)
         if before != after:
-            return f"{tag} {before} -> {after}"
+            return f"{tag} changed from {_display_value(before)} to {_display_value(after)}"
     return ""
+
+
+def _display_value(value: Any) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return str(value)
 
 
 def _build_plan_journal(
@@ -156,7 +163,7 @@ def _build_plan_journal(
     active_managed_rungs = {
         _rung_identity(rung)
         for receipt in correction_receipts
-        if receipt.status is CorrectionStatus.ACTIVE
+        if receipt.status.effective
         for rung in receipt.rungs
     }
     for entry in state.hold_log:
@@ -316,14 +323,11 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
 def _knowledge_payload(
     state: _PilotState,
     compass: Compass,
-    *,
-    skiff_decline: str | None = None,
 ) -> dict[str, Any]:
     """Render the knowledge fields that survive a world revert."""
     return {
         "hold_log": tuple(state.hold_log),
         "lever_notes": dict(state.lever_notes),
-        "skiff_decline": skiff_decline,
         "avoid_names": tuple(sorted(state.avoid_names)),
         "compass": compass,
     }
@@ -380,6 +384,11 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "outcome": trial.outcome.value if trial.outcome else None,
         "observe_label": trial.observe_label,
         "zoom_channel_tag": trial.zoom_channel_tag,
+        "zoom_before_value": (
+            trial.before_snap.get(trial.zoom_channel_tag)
+            if trial.zoom_channel_tag is not None
+            else None
+        ),
         "zoom_target_value": trial.zoom_target_value,
         "zoom_actual_value": landed,
         "bearing_stop_reason": trial.bearing_stop_reason,

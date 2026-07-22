@@ -423,7 +423,6 @@ def _extract_knowledge(knowledge: Mapping[str, Any] | None) -> Any:
     return {
         "hold_log": _jsonify(knowledge.get("hold_log", ())),
         "lever_notes": _jsonify(knowledge.get("lever_notes", {})),
-        "skiff_decline": _jsonify(knowledge.get("skiff_decline")),
         "avoid_names": _jsonify(knowledge.get("avoid_names", ())),
     }
 

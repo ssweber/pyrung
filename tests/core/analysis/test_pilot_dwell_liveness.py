@@ -10,6 +10,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import _coast_holding_state, _set_rungs
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import build_deviation_incident
+from pyrung.core.analysis.pilot.pilot import pilot_events
 from pyrung.core.analysis.steerable import compute_steerable
 
 
@@ -51,6 +52,35 @@ def _delayed_rotate_sensor_program() -> tuple[Program, dict[str, object]]:
         "error": error,
         "complete": complete,
     }
+
+
+def _delayed_rotate_sensor_state_program() -> tuple[Program, dict[str, object]]:
+    """State-shaped twin that exercises PILOT's full incident lifecycle."""
+    sensor = Bool("DwellPilotRotateSensor", external=True)
+    stable_on = Timer.clone("DwellPilotRotateSensorStableOn")
+    stable_off = Timer.clone("DwellPilotRotateSensorStableOff")
+    sensor_on_wd = Timer.clone("DwellPilotRotateSensorOnWD")
+    sensor_off_wd = Timer.clone("DwellPilotRotateSensorOffWD")
+    run = Timer.clone("DwellPilotRotateRun")
+    state = Int("DwellPilotRotateState", default=6)
+
+    with Program() as program:
+        with rung(state == 6, sensor):
+            on_delay(stable_on, 30, "ms")
+        with rung(state == 6, ~sensor):
+            on_delay(stable_off, 30, "ms")
+        with rung(state == 6):
+            on_delay(sensor_on_wd, 70, "ms").reset(stable_off.Done)
+        with rung(state == 6):
+            on_delay(sensor_off_wd, 70, "ms").reset(stable_on.Done)
+        with rung(state == 6, Or(sensor_on_wd.Done, sensor_off_wd.Done)):
+            copy(8, state)
+        with rung(state == 6):
+            on_delay(run, 250, "ms")
+        with rung(state == 6, run.Done):
+            copy(7, state)
+
+    return program, {"sensor": sensor, "state": state}
 
 
 def _context(program: Program, plc: PLC) -> SimpleNamespace:
@@ -141,3 +171,44 @@ def test_pilot_watchdog_corrections_compose_into_alternating_owned_dwell() -> No
     )
     assert receipt.reached is True
     assert replay.state.tags[tags["error"].name] == 0
+
+
+def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> None:
+    """One bounded correction per watchdog composes on the live retry path."""
+    program, tags = _delayed_rotate_sensor_state_program()
+    plc = PLC(program, dt=0.010)
+    plc.step()
+
+    events = tuple(
+        pilot_events(
+            plc,
+            tags["state"] == 7,
+            max_scans=2_000,
+        )
+    )
+    finished = [event for event in events if event.kind == "finished"]
+    assert len(finished) == 1
+    assert finished[0].data["reached"] is True
+    assert finished[0].data["work"].state.tags[tags["state"].name] == 7
+
+    confirmed = [
+        detail
+        for event in events
+        if event.kind == "trend_regression"
+        for detail in event.data["investigation"]["confirmed_detail"]
+    ]
+    assert [detail["kind"] for detail in confirmed] == ["liveness", "liveness"]
+    assert {
+        (hold.dest, hold.value)
+        for detail in confirmed
+        for hold in detail["holds"]
+    } == {
+        (tags["sensor"].name, False),
+        (tags["sensor"].name, True),
+    }
+    assert not any(
+        rejection["slug"] == "sibling-regression"
+        for event in events
+        if event.kind == "trend_regression"
+        for rejection in event.data["investigation"]["rejected_detail"]
+    )
