@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _atom_condition,
     _avoid_forces,
+    _rung_execution_receipt,
     _target_unresolved_condition,
     _until_unresolved_condition,
     wait_edge_nogood,
@@ -33,7 +34,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
 )
 from pyrung.core.analysis.pilot.types import _ActionPair
-from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
+from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
@@ -529,7 +530,7 @@ def _managed_boolean_rungs(
     from pyrung.core.condition import AllCondition, CompareNe
 
     managed = {rung.dest for rung in state.rungs}
-    view = _SnapshotView(frame.snap, {})
+    overlay = _rung_execution_receipt(state.rungs, frame.snap)
     proposed: list[PilotRung] = []
     lowered: set[_ActionPair] = set()
     for detail in details:
@@ -552,14 +553,7 @@ def _managed_boolean_rungs(
             # subsequent scans inherit the overlay's ordinary release value.
             lowered.add(detail.pair)
             continue
-        active_owner = next(
-            (
-                rung
-                for rung in reversed(state.rungs)
-                if rung.dest == tag and bool(rung.guard.evaluate(view))
-            ),
-            None,
-        )
+        active_owner = overlay.owner(tag)
         if active_owner is not None:
             # A replay-proved correction owns this input until its observed
             # release boundary. The backward trace is still diagnostic, but it

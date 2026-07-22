@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
     _pilot_world_key,
+    _rung_execution_receipt,
     _rung_identity,
     _semantic_key,
     _set_rungs,
@@ -74,7 +75,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _TrialResult,
 )
-from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
+from pyrung.core.analysis.sp_values import _values_match
 
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
 
@@ -1012,8 +1013,9 @@ def _checkpoint_with_rungs(
 def _contradicted_corrections(
     state: _PilotState,
     investigation: InvestigationResult,
+    snapshot: Mapping[str, Any],
 ) -> tuple[_CorrectionReceipt, ...]:
-    """Active corrections contradicted by the next incident's exact remedy.
+    """Overlay-effective corrections contradicted by the exact new remedy.
 
     A later hypothesis that causally names an installed destination and needs a
     value outside the correction's admitted values is evidence that the prior
@@ -1036,13 +1038,17 @@ def _contradicted_corrections(
             and _semantic_key(new_operation.until) != _semantic_key(old.operation.until)
         )
 
+    effective_ids = {
+        _rung_identity(rung) for rung in _rung_execution_receipt(state.rungs, snapshot).effective
+    }
     contradicted: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
         if not receipt.status.effective:
             continue
         admitted: dict[str, list[PilotRung]] = {}
         for rung in receipt.rungs:
-            admitted.setdefault(rung.dest, []).append(rung)
+            if _rung_identity(rung) in effective_ids:
+                admitted.setdefault(rung.dest, []).append(rung)
         if any(
             tag in sources
             and all(
@@ -1073,10 +1079,10 @@ def _causally_harmful_corrections(
     correction, the live machine has supplied a counterexample and the rung
     must be removed even when investigation cannot yet name a replacement.
 
-    Match the exact PILOT write (destination and value), then resolve the last
-    active rung for that destination using the same ordered-overlay rule as
-    ``_set_rungs``.  This avoids blaming an expired or shadowed correction that
-    merely mentions the same tag. Guard ownership is evaluated in the
+    Match the exact PILOT write (destination and value), then consume the
+    execution layer's effective-owner receipt. This avoids blaming a dormant,
+    eligible, continuing-but-overridden, or shadowed correction that merely
+    mentions the same tag. Guard ownership is evaluated in the
     witness's pre-departure world, not the earlier incident anchor: a delayed
     correction may become active only shortly before it causes harm.
     """
@@ -1093,15 +1099,11 @@ def _causally_harmful_corrections(
     if not causal_values:
         return ()
 
-    view = _SnapshotView(dict(witness.owner_snapshot or snapshot), {})
-    active_owner: dict[str, PilotRung] = {}
-    for rung in state.rungs:
-        try:
-            active = bool(rung.guard.evaluate(view))
-        except (AttributeError, KeyError, TypeError, ValueError):
-            active = False
-        if active:
-            active_owner[rung.dest] = rung
+    overlay = _rung_execution_receipt(
+        state.rungs,
+        dict(witness.owner_snapshot or snapshot),
+    )
+    active_owner = {rung.dest: rung for rung in overlay.effective}
 
     harmful: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
@@ -1318,7 +1320,7 @@ def _investigate_and_revert(
             receipt.receipt_id: receipt
             for receipt in (
                 *causally_revoked,
-                *_contradicted_corrections(state, investigation),
+                *_contradicted_corrections(state, investigation, incident.before_snap),
             )
         }
         revoked_receipts = tuple(revoked_by_id.values())

@@ -19,7 +19,9 @@ import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core.analysis.pilot._ops import (
+    OperationReceipt,
     PilotRung,
+    PilotRungExecutionState,
     _append_rungs,
     _apply_pulse,
     _coast_holding_state,
@@ -27,6 +29,7 @@ from pyrung.core.analysis.pilot._ops import (
     _has_pending_effects,
     _pilot_state_key,
     _pilot_world_key,
+    _rung_execution_receipt,
     _set_rungs,
     _settle_delayed_effects,
     _StateKeyConfig,
@@ -42,8 +45,10 @@ from pyrung.core.analysis.prove.absorb import (
 )
 from pyrung.core.analysis.prove.events import _StateKeyDoneSpec
 from pyrung.core.analysis.prove.results import PENDING
+from pyrung.core.condition import CompareEq
 from pyrung.core.crossing import Eq
 from pyrung.core.harness import Harness
+from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.instruction.timers import OnDelayInstruction
 from pyrung.core.physical import Physical
 from pyrung.core.program.context._state import _current_rung
@@ -394,6 +399,62 @@ class TestPilotRungs:
         _append_rungs(plc, [PilotRung("In", False, ~Scope)], rungs)
         plc.step()
         assert plc.state.tags["In"] is False
+
+    def test_execution_receipt_matches_expanded_continuation_precedence(self):
+        """Every installed rule receives one compiler-owned execution state."""
+        In = Bool("ReceiptIn", external=True)
+        Scope = Bool("ReceiptScope", external=True)
+        ProgressA = Bool("ProgressA", external=True)
+        ProgressB = Bool("ProgressB", external=True)
+        Never = Bool("Never", external=True)
+        with Program() as prog:
+            with Rung(In):
+                out(Bool("ReceiptOut"))
+            with Rung(ProgressA, ProgressB, Never):
+                out(Bool("ProgressSeen"))
+        plc = PLC(prog, dt=0.010)
+        continuing = PilotRung(
+            In.name,
+            True,
+            ~Scope,
+            OperationReceipt(In, ConditionDemand(CompareEq(ProgressA, True))),
+        )
+        eligible = PilotRung(In.name, False, ~Scope)
+        effective = PilotRung(
+            In.name,
+            False,
+            ~Scope,
+            OperationReceipt(~In, ConditionDemand(CompareEq(ProgressB, True))),
+        )
+        shadowed = PilotRung(
+            In.name,
+            True,
+            ~Scope,
+            OperationReceipt(In, ConditionDemand(CompareEq(Never, True))),
+        )
+        dormant = PilotRung(In.name, True, Scope)
+        rungs = (continuing, eligible, effective, shadowed, dormant)
+        snapshot = dict(plc.state.tags)
+        snapshot.update({ProgressA.name: True, ProgressB.name: True, Never.name: False})
+
+        receipt = _rung_execution_receipt(rungs, snapshot)
+
+        assert tuple(entry.state for entry in receipt.rungs) == (
+            PilotRungExecutionState.CONTINUING,
+            PilotRungExecutionState.ELIGIBLE,
+            PilotRungExecutionState.EFFECTIVE,
+            PilotRungExecutionState.SHADOWED,
+            PilotRungExecutionState.DORMANT,
+        )
+        assert receipt.rungs[0].continuation
+        assert receipt.rungs[2].continuation
+        assert receipt.owner(In.name) is effective
+
+        _set_rungs(plc, rungs)
+        plc.patch({ProgressA.name: True, ProgressB.name: True, Never.name: False})
+        plc.step()
+        plc.step()
+        assert plc.state.tags[In.name] is effective.value
 
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
         prog, _In, Scope = _scoped_input_program()

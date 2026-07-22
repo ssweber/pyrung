@@ -17,6 +17,7 @@ import pytest
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
+    OperationReceipt,
     PilotRung,
     _coast_holding_state,
     _pilot_state_key,
@@ -50,6 +51,8 @@ from pyrung.core.analysis.pilot.investigate import (
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
+from pyrung.core.condition import CompareEq
+from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
 
@@ -285,6 +288,79 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
     assert replayed
     assert all(Bad.name not in {tag for tag, _value in attempt} for attempt in replayed)
     assert tuple(rejection.slug for rejection in result.rejected) == ("correction-revoked",)
+
+
+def test_investigation_filters_corrections_after_observing_full_overlay(monkeypatch):
+    """A correction shadowed by another continuing owner is not installed-active."""
+    Held = Bool("FullOverlayHeld", external=True)
+    Progress = Bool("FullOverlayProgress", external=True)
+    Never = Bool("FullOverlayNever", external=True)
+    with Program(strict=False) as prog:
+        with Rung(Held, Progress, Never):
+            out(Bool("FullOverlayOut"))
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc)
+    shadowed = PilotRung(
+        Held.name,
+        True,
+        ~Never,
+        OperationReceipt(Held, ConditionDemand(CompareEq(Never, True))),
+    )
+    winner = PilotRung(
+        Held.name,
+        False,
+        ~Never,
+        OperationReceipt(~Held, ConditionDemand(CompareEq(Progress, True))),
+    )
+    hypothesis = InvestigationHypothesis("shadowed", ((Held.name, True),))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([hypothesis], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
+        lambda _plc, holds, *_args: tuple(PilotRung(tag, value, ~Never) for tag, value in holds),
+    )
+    incident = _ground_test_incident(plc)
+    incident = DeviationIncident(
+        **{
+            **incident.__dict__,
+            "before_snap": {**incident.before_snap, Progress.name: True, Never.name: False},
+        }
+    )
+    replayed: list[tuple[Any, ...]] = []
+
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(True, None, dict(incident.before_snap), "confirmed")
+
+    result = investigate_deviation(
+        plc,
+        incident,
+        ctx,
+        replay,
+        installed_rungs=(shadowed, winner),
+        correction_rungs=(shadowed,),
+    )
+
+    assert replayed, "the shadowed correction must not skip its hypothesis"
+    assert result.correction is not None
 
 
 def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():

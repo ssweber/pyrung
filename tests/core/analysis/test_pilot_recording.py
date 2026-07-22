@@ -30,10 +30,12 @@ from pyrung import (
     out,
 )
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import (
     MotionKind,
     _CommittedAct,
+    _HoldLogEntry,
     _Step,
     _StepContext,
 )
@@ -74,6 +76,37 @@ def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     assert journal[0].scan == 10
     assert journal[0].scans == 3
     assert journal[0].inputs == (("Cmd", True),)
+
+
+def test_plan_manual_edit_is_hidden_only_by_matching_effective_owner() -> None:
+    """Dormant and overwritten rules cannot claim a command input."""
+    In = Bool("JournalOwnerIn", external=True)
+    Scope = Bool("JournalOwnerScope", external=True)
+    dormant = PilotRung(In.name, True, Scope)
+    eligible = PilotRung(In.name, True, ~Scope)
+    effective = PilotRung(In.name, False, ~Scope)
+
+    def _journal(value: bool):
+        step = _Step(inputs={In.name: value}, scan_before=10, scan_after=11)
+        state = SimpleNamespace(
+            committed_acts=(
+                _CommittedAct(
+                    steps=(step,),
+                    context=_StepContext(
+                        candidate={In.name: value},
+                        motion=MotionKind.INTERVENTION,
+                        before_snap={Scope.name: False, In.name: False},
+                    ),
+                ),
+            ),
+            lever_notes={},
+            hold_log=(_HoldLogEntry(1, "investigation", (dormant, eligible, effective)),),
+            correction_receipts=(),
+        )
+        return _build_plan_journal(state, None, frozenset(), frozenset())
+
+    assert [step.inputs for step in _journal(True) if step.kind == "pulse"] == [((In.name, True),)]
+    assert not [step for step in _journal(False) if step.kind == "pulse"]
 
 
 # ---------------------------------------------------------------------------

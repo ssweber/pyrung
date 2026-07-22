@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.graph import PlanStep
-from pyrung.core.analysis.pilot._ops import _rung_identity
+from pyrung.core.analysis.pilot._ops import _rung_execution_receipt, _rung_identity
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
@@ -85,7 +85,7 @@ def _build_plan_journal(
 
     hold_log = tuple(state.hold_log)
 
-    def _controlled_at(scan: int, tag: str, value: Any) -> bool:
+    def _controlled_at(scan: int, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
         active: dict[tuple[Any, ...], Any] = {}
         for entry in hold_log:
             if entry.scan > scan:
@@ -96,9 +96,8 @@ def _build_plan_journal(
                     active.pop(key, None)
                 else:
                     active[key] = rung
-        return any(
-            rung.dest == tag and _values_match(rung.value, value) for rung in active.values()
-        )
+        owner = _rung_execution_receipt(tuple(active.values()), snapshot).owner(tag)
+        return owner is not None and _values_match(owner.value, value)
 
     entries: list[tuple[int, str, PlanStep]] = []
 
@@ -158,7 +157,7 @@ def _build_plan_journal(
                 if not (
                     isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )
-                and not _controlled_at(first_step.scan_before, tag, val)
+                and not _controlled_at(first_step.scan_before, tag, val, sc.before_snap)
             ]
             if command_inputs:
                 decision_tags = sorted(sc.candidate)

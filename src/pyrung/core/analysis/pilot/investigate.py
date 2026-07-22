@@ -28,6 +28,8 @@ from pyrung.core.analysis.pilot._ops import (
     _coast_to_value,
     _hold_allowed,
     _pilot_state_key,
+    _rung_execution_receipt,
+    _rung_identity,
     _rungs_from_proposals,
     _semantic_key,
     _set_rungs,
@@ -54,7 +56,6 @@ from pyrung.core.analysis.pilot.types import (
     _ConfirmedCorrection,
 )
 from pyrung.core.analysis.sp_values import (
-    _SnapshotView,
     _values_match,
     _writer_for_tag,
     _written_value_for_tag,
@@ -1353,20 +1354,19 @@ def investigate_deviation(
     # survive the bounded replay, the terminal names the cause while the
     # suppressor merely mutes the response.
     installed_rungs = tuple(installed_rungs)
-    # The effective pilot-held value per dest *at the incident anchor*: managed
-    # lowering returns each Boolean to its rest, then active rungs write in append
-    # order, so the last active rung wins.  A rung whose guard evaluated False at
-    # the anchor (an expired door hold in Execute) contributes nothing — it was
-    # NOT active when the incident happened and must not gate the installed-skip.
-    _before_view = _SnapshotView(dict(incident.before_snap), {})
-    installed_active: dict[str, Any] = {}
-    for _rung in installed_rungs:
-        if bool(_rung.guard.evaluate(_before_view)):
-            installed_active[_rung.dest] = _rung.value
-    correction_active: dict[str, Any] = {}
-    for _rung in correction_rungs:
-        if bool(_rung.guard.evaluate(_before_view)):
-            correction_active[_rung.dest] = _rung.value
+    # Ask the overlay compiler which installed rule actually owned each
+    # destination at the incident anchor.  Observing the full overlay before
+    # filtering correction provenance preserves start/continuation precedence
+    # and prevents an eligible, shadowed, or dormant sibling from claiming the
+    # write. Persistent rules are not removed merely because they are inactive.
+    overlay = _rung_execution_receipt(installed_rungs, dict(incident.before_snap))
+    installed_active = {rung.dest: rung.value for rung in overlay.effective}
+    correction_ids = {_rung_identity(rung) for rung in correction_rungs}
+    correction_active = {
+        rung.dest: rung.value
+        for rung in overlay.effective
+        if _rung_identity(rung) in correction_ids
+    }
     absence_hyps, absence_tags = _absence_root_correctives(
         plc,
         incident,
@@ -1585,20 +1585,14 @@ def _active_rungs_defeat_needed(
 ) -> bool:
     """Whether the guarded correction provably pins a checkpoint need.
 
-    Guards are evaluated in the exact pre-incident world because synthesized
-    PilotRung branches read one frozen rung-entry snapshot. Inactive or
-    unevaluable guards cannot prove a rejection. Active rungs are checked as
-    one assignment, so a coordinated correction that forces an ``And``-gated
-    reset is caught even when no member defeats progress alone.
+    The compiler-owned receipt evaluates the exact pre-incident world because
+    synthesized PilotRung branches read one frozen rung-entry snapshot. Only
+    effective owners are checked as one assignment, so a coordinated correction
+    that forces an ``And``-gated reset is caught even when no member defeats
+    progress alone; dormant and shadowed siblings cannot manufacture a pin.
     """
-    view = _SnapshotView(dict(snapshot), {})
-    active: list[tuple[str, Any]] = []
-    for rung in rungs:
-        try:
-            if bool(rung.guard.evaluate(view)):
-                active.append((rung.dest, rung.value))
-        except (AttributeError, KeyError, TypeError, ValueError):
-            continue
+    overlay = _rung_execution_receipt(rungs, snapshot)
+    active = [(rung.dest, rung.value) for rung in overlay.effective]
     return _holds_defeat_needed(active, needed, pdg, program)
 
 

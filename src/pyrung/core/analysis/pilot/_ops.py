@@ -1,7 +1,8 @@
 """Shared PLC operations and action-admission helpers for PILOT.
 
-The module projects search/world keys, installs guarded input rungs, forks PLC
-state, applies pulses, settles delayed effects, and adapts common coasts to
+The module projects search/world keys, compiles guarded input rungs, reports
+their authoritative snapshot-relative execution ownership, forks PLC state,
+applies pulses, settles delayed effects, and adapts common coasts to
 ``CoastReceipt`` results. It also contains the shared avoid and hold/route
 admission checks used at execution boundaries.
 
@@ -12,8 +13,9 @@ reverts.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrsistent import pvector
@@ -57,6 +59,47 @@ class PilotRung:
     def __post_init__(self) -> None:
         if self.guard is None:
             raise ValueError("PilotRung.guard is required")
+
+
+class PilotRungExecutionState(Enum):
+    """One installed rule's status in a frozen rung-entry snapshot."""
+
+    DORMANT = "dormant"
+    ELIGIBLE = "eligible"
+    SHADOWED = "shadowed"
+    CONTINUING = "continuing"
+    EFFECTIVE = "effective"
+
+
+@dataclass(frozen=True)
+class PilotRungExecution:
+    """Authoritative execution status for one installed :class:`PilotRung`.
+
+    ``continuation`` records whether the rule's owner-declared progress witness
+    selected its continuation branch.  An effective continuation still has
+    state :attr:`PilotRungExecutionState.EFFECTIVE`; the flag preserves why it
+    won without making consumers reconstruct the compiler's expansion.
+    """
+
+    rung: PilotRung
+    state: PilotRungExecutionState
+    continuation: bool = False
+
+
+@dataclass(frozen=True)
+class PilotOverlayExecution:
+    """Effective-ownership receipt for one ordered overlay and snapshot."""
+
+    rungs: tuple[PilotRungExecution, ...]
+
+    @property
+    def effective(self) -> tuple[PilotRung, ...]:
+        return tuple(
+            entry.rung for entry in self.rungs if entry.state is PilotRungExecutionState.EFFECTIVE
+        )
+
+    def owner(self, dest: str) -> PilotRung | None:
+        return next((rung for rung in self.effective if rung.dest == dest), None)
 
 
 def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
@@ -245,10 +288,19 @@ def _rungs_from_proposals(
     return result
 
 
-def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
-    """Replace PILOT's overlay from its ordered, guarded rung records."""
-    from pyrung.core.condition import AllCondition, Condition
-    from pyrung.core.synthesis import guarded_copy_rung
+@dataclass(frozen=True)
+class _ExpandedPilotRule:
+    """One compiler branch, linked back to its installed rule owner."""
+
+    rung_index: int
+    rung: PilotRung
+    guard: Any
+    continuation: bool
+
+
+def _expand_pilot_rules(rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule, ...]:
+    """Lower installed rules to the exact ordered branches the runner scans."""
+    from pyrung.core.condition import AllCondition, Condition, _as_condition
 
     class _DemandActive(Condition):
         def __init__(self, demand: Any):
@@ -277,29 +329,95 @@ def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
         if all(_semantic_key(progress) != _semantic_key(existing) for existing in current):
             progress_by_dest[rung.dest] = (*current, progress)
 
-    rules: list[tuple[Any, Any, Any]] = []
-    continuation_rules: list[tuple[Any, Any, Any]] = []
-    for rung in materialized:
-        dest = plc._known_tags_by_name.get(rung.dest)
-        if dest is None:
-            raise KeyError(f"pilot rung destination {rung.dest!r} is not a program tag")
+    rules: list[_ExpandedPilotRule] = []
+    continuation_rules: list[_ExpandedPilotRule] = []
+    for rung_index, rung in enumerate(materialized):
+        rung_guard = _as_condition(rung.guard)
         progress = rung.operation.progress if rung.operation is not None else None
         peers = progress_by_dest.get(rung.dest, ())
         start_guard = (
-            AllCondition(rung.guard, _NoDemandActive(peers))
+            AllCondition(rung_guard, _NoDemandActive(peers))
             if progress is not None and peers
-            else rung.guard
+            else rung_guard
         )
-        rules.append((dest, rung.value, start_guard))
+        rules.append(_ExpandedPilotRule(rung_index, rung, start_guard, False))
         if progress is not None:
             # Continuations come after every start rule. The last active write
             # therefore belongs to the operation whose owner says it is already
             # in flight, rather than to a competing value that merely remains
             # eligible to start.
             continuation_rules.append(
-                (dest, rung.value, AllCondition(rung.guard, _DemandActive(progress)))
+                _ExpandedPilotRule(
+                    rung_index,
+                    rung,
+                    AllCondition(rung_guard, _DemandActive(progress)),
+                    True,
+                )
             )
     rules.extend(continuation_rules)
+    return tuple(rules)
+
+
+def _rung_execution_receipt(
+    rungs: Iterable[PilotRung], snapshot: Mapping[str, Any]
+) -> PilotOverlayExecution:
+    """Classify every installed rule using the compiler's exact expansion.
+
+    All conditions read one frozen rung-entry snapshot, just as
+    :func:`guarded_copy_rung` executes them.  The last active expanded branch
+    for each destination is the effective owner.  Earlier active starts remain
+    eligible, earlier active continuation branches remain continuing, and an
+    operation prevented from starting by a peer's progress is shadowed.
+    """
+    from pyrung.core.analysis.sp_values import _SnapshotView
+    from pyrung.core.condition import _as_condition
+
+    materialized = tuple(rungs)
+    expanded = _expand_pilot_rules(materialized)
+    view = _SnapshotView(dict(snapshot), {})
+    active = tuple(bool(rule.guard.evaluate(view)) for rule in expanded)
+    effective_by_dest: dict[str, int] = {}
+    for rule_index, (rule, is_active) in enumerate(zip(expanded, active, strict=True)):
+        if is_active:
+            effective_by_dest[rule.rung.dest] = rule_index
+
+    by_rung: list[list[int]] = [[] for _rung in materialized]
+    for rule_index, rule in enumerate(expanded):
+        if active[rule_index]:
+            by_rung[rule.rung_index].append(rule_index)
+
+    entries: list[PilotRungExecution] = []
+    for rung_index, rung in enumerate(materialized):
+        active_rules = by_rung[rung_index]
+        effective_index = effective_by_dest.get(rung.dest)
+        is_effective = effective_index in active_rules
+        continuing = any(expanded[index].continuation for index in active_rules)
+        if is_effective:
+            state = PilotRungExecutionState.EFFECTIVE
+        elif continuing:
+            state = PilotRungExecutionState.CONTINUING
+        elif active_rules:
+            state = PilotRungExecutionState.ELIGIBLE
+        elif not bool(cast(Any, _as_condition(rung.guard)).evaluate(view)):
+            state = PilotRungExecutionState.DORMANT
+        else:
+            state = PilotRungExecutionState.SHADOWED
+        entries.append(PilotRungExecution(rung, state, continuing))
+    return PilotOverlayExecution(tuple(entries))
+
+
+def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
+    """Replace PILOT's overlay from its ordered, guarded rung records."""
+    from pyrung.core.synthesis import guarded_copy_rung
+
+    materialized = tuple(rungs)
+    expanded = _expand_pilot_rules(materialized)
+    rules: list[tuple[Any, Any, Any]] = []
+    for rule in expanded:
+        dest = plc._known_tags_by_name.get(rule.rung.dest)
+        if dest is None:
+            raise KeyError(f"pilot rung destination {rule.rung.dest!r} is not a program tag")
+        rules.append((dest, rule.rung.value, rule.guard))
     _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
 
 

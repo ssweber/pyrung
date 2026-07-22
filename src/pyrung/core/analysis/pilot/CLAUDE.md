@@ -123,6 +123,10 @@ should consume the first owner's result.
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
+- Temporary-logic execution ownership: `_ops.py::_rung_execution_receipt`,
+  produced from the same expanded branches `_set_rungs` installs; investigation,
+  causal revocation, and recording consume its effective owner rather than
+  re-evaluating raw guards
 
 ## Actual control flow
 
@@ -290,8 +294,8 @@ an internal state or policy.
 ### Execution and observation
 
 - `steer.py` — forked action/coast execution and invocation of trial gates.
-- `_ops.py` — shared PLC operations, world keys, holds, pulses, coast adapters,
-  and action-admission checks.
+- `_ops.py` — shared PLC operations, world keys, temporary-logic compilation and
+  effective-owner receipts, pulses, coast adapters, and action-admission checks.
 - `coast.py` — bump-driven coasts with exact-scan receipts.
 - `cyclefold.py` — proven active-cycle skipping during long waits.
 - `skiff.py` — finite isolated probes of unreadable frontiers.

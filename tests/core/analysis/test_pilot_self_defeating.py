@@ -42,7 +42,9 @@ from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
+    _causally_harmful_corrections,
     _checkpoint_recovery_origin,
+    _contradicted_corrections,
     _install_confirmed_correction,
     _investigate_and_revert,
     _monitor_trend,
@@ -55,6 +57,7 @@ from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
     _Checkpoint,
     _ConfirmedCorrection,
+    _CorrectionReceipt,
     _PilotState,
     _TrialResult,
     _World,
@@ -63,6 +66,7 @@ from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import AllCondition, CompareEq, CompareNe
 from pyrung.core.context import RungId
 from pyrung.core.crossing import Eq
+from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.memory_block import Block
 
 
@@ -327,6 +331,37 @@ def test_coordinated_guarded_holds_are_checked_as_one_world():
         rungs,
         ((Counter.name, 3),),
         {State.name: 6},
+        _pdg(prog),
+        prog,
+    )
+
+
+def test_shadowed_harmful_rung_does_not_prove_self_defeat():
+    """A waiting start cannot pin progress through a continuing sibling."""
+    InitFlag = Bool("ShadowedInit", external=True)
+    Progress = Bool("ShadowedProgress", external=True)
+    Never = Bool("ShadowedNever", external=True)
+    Counter = Int("ShadowedCounter")
+    with Program(strict=False) as prog:
+        with rung(InitFlag):
+            copy(1, Counter)
+    continuing = PilotRung(
+        InitFlag.name,
+        False,
+        ~Never,
+        OperationReceipt(~InitFlag, ConditionDemand(CompareEq(Progress, True))),
+    )
+    harmful_waiter = PilotRung(
+        InitFlag.name,
+        True,
+        ~Never,
+        OperationReceipt(InitFlag, ConditionDemand(CompareEq(Never, True))),
+    )
+
+    assert not _active_rungs_defeat_needed(
+        (continuing, harmful_waiter),
+        ((Counter.name, 3),),
+        {Progress.name: True, Never.name: False},
         _pdg(prog),
         prog,
     )
@@ -886,6 +921,85 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
     assert receipt.identity in excluded
     assert all(harmful not in checkpoint.world.rungs for checkpoint in state.checkpoints)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
+
+
+def test_causal_revocation_blames_only_effective_continuation_owner():
+    """Dormant and shadowed siblings survive an exact PILOT causal witness."""
+    Dest = Bool("OwnerDest", external=True)
+    Scope = Bool("OwnerScope", external=True)
+    Progress = Bool("OwnerProgress", external=True)
+    Never = Bool("OwnerNever", external=True)
+    dormant = PilotRung(Dest.name, True, Scope)
+    shadowed = PilotRung(
+        Dest.name,
+        True,
+        ~Scope,
+        OperationReceipt(Dest, ConditionDemand(CompareEq(Never, True))),
+    )
+    winner = PilotRung(
+        Dest.name,
+        False,
+        ~Scope,
+        OperationReceipt(~Dest, ConditionDemand(CompareEq(Progress, True))),
+    )
+
+    def _receipt(receipt_id: int, owned: PilotRung) -> _CorrectionReceipt:
+        correction = _ConfirmedCorrection(
+            identity=correction_identity((owned,)),
+            rungs=(owned,),
+            sources=(owned.dest,),
+            justification="test",
+        )
+        return _CorrectionReceipt(receipt_id, (), correction, CorrectionStatus.ACTIVE)
+
+    receipts = tuple(
+        _receipt(index, rung) for index, rung in enumerate((dormant, shadowed, winner), 1)
+    )
+    state = SimpleNamespace(rungs=(dormant, shadowed, winner), correction_receipts=list(receipts))
+    snapshot = {Scope.name: False, Progress.name: True, Never.name: False}
+    witness = RegressionWitness(
+        channel_tag="State",
+        source=6,
+        departed=8,
+        departure_scan=1,
+        cause=(),
+        causal_spine=frozenset((Dest.name,)),
+        causal_roots=((Dest.name, False),),
+        owner_snapshot=snapshot,
+    )
+
+    assert _causally_harmful_corrections(state, witness, snapshot) == (receipts[2],)
+
+
+def test_opposite_remedy_does_not_revoke_dormant_disjoint_correction():
+    """Installed lifecycle status is not runtime execution ownership."""
+    Dest = Bool("DormantDest", external=True)
+    Scope = Bool("DormantScope", external=True)
+    old = PilotRung(Dest.name, True, Scope)
+    receipt = _CorrectionReceipt(
+        1,
+        (),
+        _ConfirmedCorrection(
+            identity=correction_identity((old,)),
+            rungs=(old,),
+            sources=(Dest.name,),
+            justification="test",
+        ),
+        CorrectionStatus.ACTIVE,
+    )
+    remedy = PilotRung(Dest.name, False, ~Scope)
+    investigation = InvestigationResult(
+        correction=_ConfirmedCorrection(
+            identity=correction_identity((remedy,)),
+            rungs=(remedy,),
+            sources=(Dest.name,),
+            justification="opposite context",
+        )
+    )
+    state = SimpleNamespace(rungs=(old,), correction_receipts=[receipt])
+
+    assert _contradicted_corrections(state, investigation, {Scope.name: False}) == ()
+    assert _contradicted_corrections(state, investigation, {Scope.name: True}) == (receipt,)
 
 
 def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
