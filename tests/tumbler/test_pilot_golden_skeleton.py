@@ -254,6 +254,12 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     finished = _finished(skeleton)
     assert finished["reached"] is True, f"BurnerLoop drive did not reach: {finished}"
     _assert_zoom_tripwire(skeleton)
+    assert any(
+        tag == "x_RotateFB"
+        for entry in skeleton
+        if entry["kind"] == "candidates_built"
+        for tag, _value in entry.get("completion_frontier") or ()
+    ), "the Starting->Execute completion frontier never named x_RotateFB"
 
     # The Execute-era departure has one exact coordinated corrective frontier:
     # the physical door contacts. Defaults and first-scan plumbing must never
@@ -300,7 +306,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal-route gate: how(Sts_StateCurrent == 17) avoiding the Complete button
+# Internal-route gate: how(Sts_State_Completed) avoiding the Complete button
 # ---------------------------------------------------------------------------
 
 
@@ -487,6 +493,19 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     )
     skeleton = extract_skeleton(events)
     _assert_zoom_tripwire(skeleton)
+
+    # The program-owned route must earn completion without Pilot pressing the
+    # avoided operator shortcut, and its record must show that it traversed the
+    # production recipe rather than finding an unrelated path to the output.
+    pressed = _all_action_tags(skeleton)
+    assert "Cmd_State_Complete" not in pressed, (
+        f"pilot pressed the avoided Complete button: {sorted(pressed)}"
+    )
+    assert _recipe_era_evidence(skeleton), (
+        "reached completion without any recipe-era beats (Fluffing timer, "
+        "Internal__Step >= 103, or a HELD(11) passage) in the decision record"
+    )
+
     _assert_matches_golden(
         skeleton,
         GOLDEN_DIR / "how_completed_avoid_complete_progress_skeleton.json",
@@ -532,61 +551,3 @@ def _recipe_era_evidence(skeleton: list[dict]) -> bool:
                 if pair[0] == "Internal__Step" and isinstance(pair[1], int) and pair[1] >= 103:
                     return True
     return False
-
-
-def test_pilot_internal_route_gate_completed_avoiding_shortcut(tumbler_logic) -> None:
-    """Earn Completed through the program-owned route, never its operator shortcut.
-
-    ``test_pilot_golden_skeleton_completed`` covers the same target unavoided:
-    the pilot reaches 17 by pressing ``Cmd_State_Complete`` from Execute (the
-    legal operator shortcut).  Here ``avoid=Cmd_State_Complete`` forbids that
-    press, so the only way to 17 is the internal route the hand-driven Bench
-    proves (``test_constructive_route_to_completed``): ProductionExecuteSteps
-    issues the Complete command itself via ``rise(S_Fluffing_tmr.Done)``.
-
-    The avoided-Complete golden sibling records the exact structural route.
-    This acceptance gate independently checks the outcome and the essential
-    proof that the pilot never selected the avoided operator action.
-
-    Fast-fail: the floundering mode repeats ~900-scan Unhold laps at ~90s
-    wall each, so the drive loop retains a wall-clock deadline
-    (``INTERNAL_ROUTE_WALL_BUDGET_S``) to report a regression promptly.
-    """
-    plc = PLC(tumbler_logic)
-    plc.step()
-    tags = plc._known_tags_by_name
-    target = tags["Sts_StateCurrent"]
-    avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
-    deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
-    events = []
-    for event in pilot_events(
-        plc, target == 17, max_scans=INTERNAL_ROUTE_MAX_SCANS, avoid_pred=avoid_pred
-    ):
-        events.append(event)
-        if event.kind == "finished":
-            break
-        if time.monotonic() > deadline:
-            pytest.fail(
-                f"internal-route drive exceeded the {INTERNAL_ROUTE_WALL_BUDGET_S:.0f}s "
-                f"wall budget at scan {event.scan} (kind={event.kind}) — the "
-                f"floundering let-run mode; a healthy drive finishes far inside it"
-            )
-    skeleton = extract_skeleton(events)
-
-    finished = _finished(skeleton)
-    _assert_zoom_tripwire(skeleton)
-    assert finished["reached"] is True, f"internal route not earned: {finished.get('reason')!r}"
-
-    # Internal-route proof, mirroring the Bench: the Complete command was
-    # never a pilot action — the program must have issued it itself.
-    pressed = _all_action_tags(skeleton)
-    assert "Cmd_State_Complete" not in pressed, (
-        f"pilot pressed the avoided Complete button: {sorted(pressed)}"
-    )
-
-    # And the record shows the recipe era actually happened (Fluffing/step
-    # progression or the HELD passage), not some other shortcut.
-    assert _recipe_era_evidence(skeleton), (
-        "reached 17 without any recipe-era beats (Fluffing timer, "
-        "Internal__Step >= 103, or a HELD(11) passage) in the decision record"
-    )

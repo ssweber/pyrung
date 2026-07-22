@@ -238,6 +238,7 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
         "candidates",
         "trace_actions",
         "active_trace_actions",
+        "completion_frontier",
         "route_candidates",
         "route_plan",
         "wait_prescribed",
@@ -443,6 +444,8 @@ def extract_skeleton(events: Iterable[Any]) -> list[dict[str, Any]]:
             if key not in data:
                 continue
             value = data[key]
+            if key == "completion_frontier" and not value:
+                continue
             if key in ("candidate", "candidate_detail") and isinstance(value, Mapping):
                 # ``candidate`` is the full rank-rationale dict on try/reject
                 # events but a bare ``{tag: value}`` action map on committed /
