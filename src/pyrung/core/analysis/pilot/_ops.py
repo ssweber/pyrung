@@ -195,7 +195,7 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
     form = atom.form
     operand = (
         plc._known_tags_by_name.get(atom.operand, atom.operand)
-        if isinstance(atom.operand, str)
+        if atom.operand_is_tag
         else atom.operand
     )
     if form in ("xic", "truthy"):
@@ -233,7 +233,7 @@ def _atom_condition(plc: PLC, atom: Any) -> Any:
     form = atom.form
     operand = (
         plc._known_tags_by_name.get(atom.operand, atom.operand)
-        if isinstance(atom.operand, str)
+        if atom.operand_is_tag
         else atom.operand
     )
     if form in ("xic", "truthy"):

@@ -26,14 +26,21 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Atom:
-    """Leaf: a single contact or comparison."""
+    """Leaf: a single contact or comparison.
+
+    ``operand_is_tag`` preserves whether a comparison's right-hand operand was
+    a tag reference before the condition was lowered to names. A string operand
+    is otherwise ambiguous: it may be a literal string or the name of a tag.
+    Consumers must use this receipt rather than guessing from ``str``.
+    """
 
     tag: str
     form: str  # "xic"|"xio"|"rise"|"fall"|"truthy"|"eq"|"ne"|"lt"|"le"|"gt"|"ge"
     operand: Any = None
+    operand_is_tag: bool = False
 
-    def _key(self) -> tuple[str, str, Any]:
-        return (self.tag, self.form, self.operand)
+    def _key(self) -> tuple[str, str, Any, bool]:
+        return (self.tag, self.form, self.operand, self.operand_is_tag)
 
 
 @dataclass(frozen=True)
@@ -106,6 +113,8 @@ def _atom_true_under(atom: Atom, value: Any) -> bool | None:
         return bool(value)
     if form == "xio":
         return not bool(value)
+    if atom.operand_is_tag:
+        return None
     from pyrung.core.analysis.sp_values import _values_match
 
     op = atom.operand
@@ -188,6 +197,13 @@ def _operand_label(value: Any) -> Any:
     return value
 
 
+def _operand_is_tag(value: Any) -> bool:
+    """Whether *value* remains a live tag reference after lowering."""
+    from pyrung.core.tag import Tag
+
+    return isinstance(value, Tag) and not value.readonly
+
+
 def _condition_to_expr(condition: Any) -> Expr:
     """Convert a Condition object to an Expr."""
     from pyrung.core.condition import (
@@ -243,6 +259,7 @@ def _condition_to_expr(condition: Any) -> Expr:
             condition.tag.name,
             _COMPARE_FORMS[cls_name],
             _operand_label(condition.value),
+            operand_is_tag=_operand_is_tag(condition.value),
         )
 
     if cls_name in _INDIRECT_COMPARE_FORMS:
@@ -250,6 +267,7 @@ def _condition_to_expr(condition: Any) -> Expr:
             f"indirect({cls_name})",
             _INDIRECT_COMPARE_FORMS[cls_name],
             _operand_label(condition.value),
+            operand_is_tag=_operand_is_tag(condition.value),
         )
 
     return Atom(cls_name, "xic")
@@ -692,8 +710,18 @@ def _negate(expr: Expr) -> Expr:
             "ge": "lt",
         }
         if expr.form in flips:
-            return Atom(expr.tag, flips[expr.form], expr.operand)
-        return Atom(expr.tag, expr.form, expr.operand)
+            return Atom(
+                expr.tag,
+                flips[expr.form],
+                expr.operand,
+                operand_is_tag=expr.operand_is_tag,
+            )
+        return Atom(
+            expr.tag,
+            expr.form,
+            expr.operand,
+            operand_is_tag=expr.operand_is_tag,
+        )
 
     # De Morgan for compound expressions
     if isinstance(expr, And):
@@ -715,7 +743,7 @@ def _expr_key(expr: Expr) -> tuple[Any, ...]:
     if isinstance(expr, Const):
         return (0, expr.value)
     if isinstance(expr, Atom):
-        return (1, expr.tag, expr.form, str(expr.operand))
+        return (1, expr.tag, expr.form, str(expr.operand), expr.operand_is_tag)
     if isinstance(expr, And):
         return (2, tuple(_expr_key(t) for t in expr.terms))
     if isinstance(expr, Or):

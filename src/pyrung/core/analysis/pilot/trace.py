@@ -50,6 +50,7 @@ from pyrung.core.analysis.sp_values import (
     _expr_tag_names,
     _invert_affine,
     _required_from_atom,
+    _satisfying_value,
     _values_match,
     _writer_projection,
     _written_value_for_tag,
@@ -72,9 +73,11 @@ class DomainPrior:
     """Prover-derived domain prior for resolving inequality atoms.
 
     ``nd_domains`` maps a free/steerable input to its value domain
-    (``_ExploreContext.nondeterministic_dims``); ``func_deps`` is the affine
+    (``_ExploreContext.nondeterministic_dims``); ``stateful_domains`` maps a
+    program-owned tag to the values its writers can produce
+    (``_ExploreContext.stateful_dims``); and ``func_deps`` is the affine
     projection map ``{tag: (source, scale, offset)}`` for derived scratch
-    (``_ExploreContext.functional_dep_projections``).  Both feed
+    (``_ExploreContext.functional_dep_projections``).  These feed
     :func:`_resolve_inequality_target` so an inequality (``PV >= Lower``,
     ``ModeSel >= 1``) resolves to a *reachable* satisfying value instead of a
     blind arithmetic boundary.  ``None`` everywhere reproduces the pre-domain
@@ -83,6 +86,7 @@ class DomainPrior:
     """
 
     nd_domains: dict[str, tuple[Any, ...]] | None = None
+    stateful_domains: dict[str, tuple[Any, ...]] | None = None
     func_deps: dict[str, tuple[str, int, Any]] | None = None
 
 
@@ -699,7 +703,10 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
 _SAME_TAG_VALUE_BUDGET = 1
 
 
-def _atom_target(atom: Atom) -> tuple[str, Any] | None:
+def _atom_target(
+    atom: Atom,
+    snapshot: dict[str, Any] | None = None,
+) -> tuple[str, Any] | None:
     """Convert an Atom to the ``(tag, value)`` needed to satisfy it.
 
     ``rise``/``fall`` need the tag at the transition target value.
@@ -711,6 +718,10 @@ def _atom_target(atom: Atom) -> tuple[str, Any] | None:
     if form == "xio":
         return (atom.tag, False)
     if form == "eq":
+        if atom.operand_is_tag:
+            if snapshot is None or atom.operand not in snapshot:
+                return None
+            return (atom.tag, snapshot[atom.operand])
         return (atom.tag, atom.operand)
     if form == "rise":
         return (atom.tag, True)
@@ -751,7 +762,11 @@ def _strict_inequality_step(tag: str, prior: DomainPrior | None, pdg: ProgramGra
         tag_ref = pdg.tags.get(tag)
         if tag_ref is not None and getattr(tag_ref, "type", None) is TagType.REAL:
             return _REAL_STRICT_EPSILON
-    domain = prior.nd_domains.get(tag) if (prior is not None and prior.nd_domains) else None
+    domain = None
+    if prior is not None:
+        domain = (prior.nd_domains or {}).get(tag)
+        if domain is None:
+            domain = (prior.stateful_domains or {}).get(tag)
     if domain:
         step = _domain_granularity(domain)
         if step is not None:
@@ -767,25 +782,28 @@ def _resolve_inequality_target(
 ) -> tuple[str, Any] | None:
     """Resolve an inequality atom to a ``(tag, satisfying_value)`` target.
 
-    Two-stage, mirroring the walk engine (``sp_values._chase_inequality_source``):
+    Three-stage, mirroring the walk engine
+    (``sp_values._chase_inequality_source``):
 
     1. *Domain-aware* — when the prover gives the compare tag (or its affine
        source) a pipeline domain, chase to that source and pick the nearest
        **in-domain** satisfying value.  Reachable by construction, and this is
        what re-enables literal-operand inequalities on steerable analog/word
        inputs (``ModeSel >= 1``) that the pre-domain code dropped.
-    2. *Snapshot-boundary fallback* — no domain.  A tag-name operand
+    2. *Program-owned domain* — when ExploreContext gives a logic-written tag
+       a finite stateful domain, pick a satisfying value and let ``_trace_back``
+       follow the writer that produces it. This is proposal evidence only; the
+       interpreted fork still verifies the route.
+    3. *Snapshot-boundary fallback* — no domain.  A tag-name operand
        (``PV >= Lower``) is a computed-threshold comparison: resolve the
        operand from *snapshot* and steer toward ``operand`` (``ge``/``le``) or
        one step past it (strict ``gt``/``lt`` — an epsilon for a Real tag, the
        domain granularity for a non-unit domain, else the integer unit; see
-       ``_strict_inequality_step``, which reads the tag type off *pdg*).  A literal operand on a
-       domain-less (logic-written) tag is a static guard whose satisfying
-       value comes from a writer/binding elsewhere in the trace — return
-       ``None`` (drop), the original punt's safe direction.
+       ``_strict_inequality_step``, which reads the tag type off *pdg*). A
+       literal operand on a domain-less logic-written tag remains a punt.
     """
     operand = atom.operand
-    operand_is_tag = isinstance(operand, str)
+    operand_is_tag = atom.operand_is_tag
     if operand_is_tag:
         resolved = snapshot.get(operand)
         if resolved is None:
@@ -815,14 +833,33 @@ def _resolve_inequality_target(
             if extreme is not None and not _values_match(snapshot.get(atom.tag), extreme):
                 return (atom.tag, extreme)
 
+    stateful_domain = (
+        prior.stateful_domains.get(atom.tag)
+        if prior is not None and prior.stateful_domains
+        else None
+    )
+    if stateful_domain and atom.form in {"lt", "le", "gt", "ge"}:
+        value = _satisfying_value(atom.form, threshold, stateful_domain)
+        if value is not None:
+            # ExploreContext canonicalizes integral domain members as ints. A
+            # witness lives in the comparison boundary's coordinate, so retain
+            # a floating boundary's scalar representation (``0.0 + 1`` remains
+            # ``1.0``) rather than leaking the domain key's canonical ``1`` into
+            # the public trace.
+            if (
+                isinstance(threshold, float)
+                and isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ):
+                value = float(value)
+            return (atom.tag, value)
+
     if atom.form == "ne":
         # A disequality has no single satisfying value; with a finite domain, steer
         # to any in-domain value other than the excluded one (preferring one we are
         # not already at).  No domain → drop (the safe punt), same as an
         # unresolvable literal-operand guard.
-        domain = (
-            prior.nd_domains.get(atom.tag) if (prior is not None and prior.nd_domains) else None
-        )
+        domain = prior.nd_domains.get(atom.tag) if prior is not None and prior.nd_domains else None
         if domain:
             cur = snapshot.get(atom.tag)
             alts = [v for v in domain if not _values_match(v, threshold)]
@@ -889,7 +926,7 @@ def _heuristic_inequality_target(
     if atom.tag not in steerable:
         return None
     operand = atom.operand
-    threshold = snapshot.get(operand) if isinstance(operand, str) else operand
+    threshold = snapshot.get(operand) if atom.operand_is_tag else operand
     if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
         return None
 
@@ -1012,7 +1049,7 @@ def _rewrite_internal_compare(
     from pyrung.core.analysis import crossings
     from pyrung.core.crossing import Cmp, CrossingContext
 
-    target = Cmp(atom.tag, op, atom.operand, bound_is_tag=isinstance(atom.operand, str))
+    target = Cmp(atom.tag, op, atom.operand, bound_is_tag=atom.operand_is_tag)
     result = crossings.reverse(instr, None, target, CrossingContext(snapshot=snapshot))
     if result.fallthrough or not result.branches:
         return [atom]
@@ -1035,7 +1072,12 @@ def _rewrite_internal_compare(
                 return [atom]
             rewritten.extend(
                 _rewrite_internal_compare(
-                    Atom(tag=c.tag, form=form, operand=c.bound),
+                    Atom(
+                        tag=c.tag,
+                        form=form,
+                        operand=c.bound,
+                        operand_is_tag=c.bound_is_tag,
+                    ),
                     steerable,
                     pdg,
                     program,
@@ -1123,7 +1165,7 @@ def _inequality_levers(
 
     base = _rewrite(atom)
     operand = atom.operand
-    if isinstance(operand, str) and program is not None:
+    if atom.operand_is_tag and program is not None:
         # Snapshot-frozen variants of both sides (see docstring).  Dedup by
         # atom key so an unchanged rewrite adds nothing new.
         seen_atoms = {a._key() for a in base}
@@ -1145,8 +1187,16 @@ def _inequality_levers(
 
     for a in base:
         _add("left", a)
-        if isinstance(a.operand, str) and a.form in _FLIP_FORM:
-            _add("right", Atom(tag=a.operand, form=_FLIP_FORM[a.form], operand=a.tag))
+        if a.operand_is_tag and a.form in _FLIP_FORM:
+            _add(
+                "right",
+                Atom(
+                    tag=a.operand,
+                    form=_FLIP_FORM[a.form],
+                    operand=a.tag,
+                    operand_is_tag=True,
+                ),
+            )
 
     return levers
 
@@ -1194,7 +1244,12 @@ def _constraint_atom(constraint: Constraint) -> Atom | None:
             ">": "gt",
             ">=": "ge",
         }.get(constraint.op, constraint.op)
-        return Atom(constraint.tag, form, constraint.bound)
+        return Atom(
+            constraint.tag,
+            form,
+            constraint.bound,
+            operand_is_tag=constraint.bound_is_tag,
+        )
     return None
 
 
@@ -1762,6 +1817,7 @@ def _trace_expression(
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _codemands: tuple[tuple[str, Any], ...] = (),
+    _relational_goal: Any = None,
     _depth: int,
 ) -> list[TraceNode]:
     """Walk an expression tree, returning trace children.
@@ -1785,6 +1841,7 @@ def _trace_expression(
                 if pairs:
                     and_demands.extend(pairs)
         codemands = (*_codemands, *and_demands)
+        relational_goal = expr
         children: list[TraceNode] = []
         for term in expr.terms:
             children.extend(
@@ -1796,6 +1853,7 @@ def _trace_expression(
                     _visited=_visited,
                     _ancestry=_ancestry,
                     _codemands=codemands,
+                    _relational_goal=relational_goal,
                     _depth=_depth,
                 )
             )
@@ -1819,6 +1877,7 @@ def _trace_expression(
                     _visited=set(_visited),
                     _ancestry=_ancestry,
                     _codemands=_codemands,
+                    _relational_goal=term,
                     _depth=_depth,
                 )
 
@@ -1838,6 +1897,7 @@ def _trace_expression(
                 _visited=set(_visited),
                 _ancestry=_ancestry,
                 _codemands=_codemands,
+                _relational_goal=term,
                 _depth=_depth,
             )
             # Steering this arm would land in the avoided region — skip it so a
@@ -1886,7 +1946,7 @@ def _trace_expression(
         return selected[0]
 
     if isinstance(expr, Atom):
-        target = _atom_target(expr)
+        target = _atom_target(expr, env.snapshot)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
                 constraint = Cmp(
@@ -1899,7 +1959,7 @@ def _trace_expression(
                         "ne": "!=",
                     }[expr.form],
                     expr.operand,
-                    bound_is_tag=(isinstance(expr.operand, str) and expr.operand in env.pdg.tags),
+                    bound_is_tag=expr.operand_is_tag,
                 )
                 advance = _advance_frontier(
                     env,
@@ -1931,6 +1991,9 @@ def _trace_expression(
                         lever.value,
                         _visited=set(_visited),
                         _ancestry=_ancestry,
+                        _preserve_predicate=(
+                            _relational_goal if _relational_goal is not None else expr
+                        ),
                         _depth=_depth + 1,
                     )
                     if child.is_steerable and not child.provenance:
@@ -2047,6 +2110,7 @@ def _trace_back(
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _codemands: tuple[tuple[str, Any], ...] = (),
+    _preserve_predicate: Any = None,
     _depth: int = 0,
 ) -> TraceNode:
     """Backward-trace worker over a fixed :class:`_TraceEnv`.
@@ -2394,6 +2458,7 @@ def _trace_back(
                 tag,
                 value,
                 ri,
+                predicate=_preserve_predicate,
                 _visited=_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth,
@@ -2502,6 +2567,7 @@ def _preserve_children(
     value: Any,
     establish_ri: int,
     *,
+    predicate: Any = None,
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...],
     _depth: int,
@@ -2523,10 +2589,13 @@ def _preserve_children(
     out.  De Morgan turns a compound reset guard into an ``Or`` of suppression
     options, which ``_trace_expression`` resolves like any route choice.
 
-    Honesty boundary: a competing writer whose written value *could* be the
-    target (``_can_produce`` True — affine / aggregate / unknown) is **not**
-    suppressed.  Trace never fabricates a hold it cannot statically read; that is
-    skiff territory.
+    For an exact target, a competing writer whose written value *could* be the
+    target (``_can_produce`` True — affine / aggregate / unknown) is not
+    suppressed. For a relational target, preservation is deliberately narrower:
+    only a writer whose guard is active now and whose concrete output falsifies
+    the predicate is an antagonist. The interpreted fork verifies the proposal
+    and the next scan replans, so trace need not suppress every inactive state
+    transition merely because it produces a different exact witness.
     """
     establish_node = env.pdg.rung_nodes[establish_ri]
     # Only retentive targets need preserving — an OTE coil is recomputed every
@@ -2536,6 +2605,16 @@ def _preserve_children(
 
     children: list[TraceNode] = []
     seen_guards: set[str] = set()
+    establish_ro = resolve_rung(env.program, establish_node)
+    if establish_ro is not None:
+        establish_sp = establish_ro.sp_tree()
+        if establish_sp is not None:
+            # The establish walk already traced this guard. A competing writer
+            # may have its exact negation (``Mode`` / ``~Mode``), making the
+            # suppression prerequisite identical to the establish prerequisite.
+            # Do not trace the same demand twice: the shared visited set would
+            # turn the duplicate into a childless pseudo-frontier.
+            seen_guards.add(_expr_route_key(_sp_to_expr(establish_sp)))
     for ri in sorted(env.pdg.writers_of.get(tag, frozenset())):
         if ri == establish_ri:
             continue
@@ -2543,13 +2622,27 @@ def _preserve_children(
         ro = resolve_rung(env.program, rung_node)
         if ro is None:
             continue
-        # A clobber is a writer that *provably* drives the tag away from value.
-        if _can_produce(_written_value_for_tag(ro, tag), value):
-            continue
         sp = ro.sp_tree()
         if sp is None:
             continue
-        suppress = _negate(_sp_to_expr(sp))
+        guard = _sp_to_expr(sp)
+        if predicate is None:
+            # An exact clobber provably drives the tag away from the value.
+            if _can_produce(_written_value_for_tag(ro, tag), value):
+                continue
+        else:
+            # A range witness is only a means to the relational goal. Surface
+            # the active writer that currently defeats that goal; do not turn
+            # every other state-machine transition into an exact-value hold.
+            if _eval_expr_from_state(guard, env.snapshot) is not True:
+                continue
+            produced = _concrete_written_value(_written_value_for_tag(ro, tag), env.snapshot)
+            if produced is _UNRESOLVED:
+                continue
+            prospective = {**env.snapshot, tag: produced}
+            if _eval_expr_from_state(predicate, prospective) is not False:
+                continue
+        suppress = _negate(guard)
         key = _expr_route_key(suppress)
         if key in seen_guards:
             continue
@@ -3074,14 +3167,21 @@ def _writer_label(tag: str, value: Any, rung_index: int, rung_node: Any) -> str:
 def compute_reference_constants(
     pdg: ProgramGraph, program: Any, known: dict[str, Any] | None = None
 ) -> frozenset[str]:
-    """Never-written copy sources feeding into lookup-table pointer chains.
+    """Never-written, non-external tags used as program reference values.
 
-    Four conditions, all must hold:
+    Two structural families qualify:
+
+    * a copy/fill source feeding a lookup-table pointer chain (the generated
+      state-machine reference idiom); or
+    * a tag used as both ``copy(REFERENCE, State)`` and the live RHS of
+      ``State == REFERENCE`` (the direct named-state idiom).
+
+    In either family, all four conditions hold:
+
     1. Tag has no writers (initial-value only)
     2. Used as a copy/fill source feeding some destination D
-    3. D participates in a lookup-table pipeline — either D is a direct
-       indirect-copy pointer, or D is the representative of a pointer
-       via functional dependency (``calc(D + offset, ptr)``)
+    3. D consumes that tag as a static reference, either through a table
+       pipeline or an explicit tag-valued comparison
     4. Tag is **not** ``external`` — a declared program constant, not an
        operator/field interface (given *known*; unchecked when *known* is None).
 
@@ -3120,9 +3220,6 @@ def compute_reference_constants(
     for sub_rungs in getattr(program, "subroutines", {}).values():
         _scan_pointers(sub_rungs)
 
-    if not pointer_tags:
-        return frozenset()
-
     # Step 2: follow functional deps (calc-defined scratch) to find
     # representative tags.  ptr = calc(rep + offset) → rep drives ptr.
     pipeline_tags = set(pointer_tags)
@@ -3136,8 +3233,42 @@ def compute_reference_constants(
             pipeline_tags.add(rep)
             tag = rep
 
-    # Step 3: find never-written tags used as copy sources into pipeline tags.
+    # Direct named-state references preserve their identity in Atom. Pair the
+    # operand with the exact LHS it names a value for; this deliberately does
+    # not classify an ordinary threshold merely because it appears on the RHS
+    # of a comparison.
+    from pyrung.core.analysis.simplified import And, Atom, Or, _conditions_list_to_expr
+
+    comparison_reference_pairs: set[tuple[str, str]] = set()
+
+    def _scan_reference_expr(expr: Any) -> None:
+        if isinstance(expr, Atom):
+            if expr.operand_is_tag:
+                comparison_reference_pairs.add((expr.operand, expr.tag))
+            return
+        if isinstance(expr, (And, Or)):
+            for term in expr.terms:
+                _scan_reference_expr(term)
+
+    def _scan_reference_conditions(rungs: Any) -> None:
+        for r in rungs:
+            _scan_reference_expr(_conditions_list_to_expr(getattr(r, "_conditions", [])))
+            _scan_reference_conditions(getattr(r, "_branches", ()))
+
+    _scan_reference_conditions(program.rungs)
+    for sub_rungs in getattr(program, "subroutines", {}).values():
+        _scan_reference_conditions(sub_rungs)
+
+    # Step 3: find never-written tags used as copy sources into either family.
     candidates: set[str] = set()
+
+    def _is_direct_declaration(name: str) -> bool:
+        # A block-backed slot is mutable PLC memory even when this program has
+        # no writer for it; the operator, recipe loader, or another controller
+        # may own it. The direct named-state idiom is a standalone DSL
+        # declaration. Table analysis separately proves the block-backed
+        # reference slots it is allowed to classify.
+        return known is None or getattr(known.get(name), "_pyrung_block", None) is None
 
     def _scan_sources(rungs: Any) -> None:
         for r in rungs:
@@ -3145,12 +3276,32 @@ def compute_reference_constants(
                 if isinstance(instr, CopyInstruction):
                     src_name = getattr(instr.source, "name", None)
                     dest_name = getattr(instr.dest, "name", None)
-                    if src_name and dest_name and dest_name in pipeline_tags:
+                    if (
+                        src_name
+                        and dest_name
+                        and (
+                            dest_name in pipeline_tags
+                            or (
+                                (src_name, dest_name) in comparison_reference_pairs
+                                and _is_direct_declaration(src_name)
+                            )
+                        )
+                    ):
                         candidates.add(src_name)
                 elif isinstance(instr, FillInstruction):
                     src_name = getattr(instr.value, "name", None)
                     dest_name = getattr(instr.dest, "name", None)
-                    if src_name and dest_name and dest_name in pipeline_tags:
+                    if (
+                        src_name
+                        and dest_name
+                        and (
+                            dest_name in pipeline_tags
+                            or (
+                                (src_name, dest_name) in comparison_reference_pairs
+                                and _is_direct_declaration(src_name)
+                            )
+                        )
+                    ):
                         candidates.add(src_name)
             _scan_sources(getattr(r, "_branches", ()))
 

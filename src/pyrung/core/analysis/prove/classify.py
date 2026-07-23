@@ -1606,7 +1606,7 @@ def _backward_propagate_comparison_boundaries(
             for atom in atom_idx[_tag_name]:
                 if atom.form not in comparison_forms or atom.operand is None:
                     continue
-                if isinstance(atom.operand, str):
+                if atom.operand_is_tag:
                     continue
                 comp_boundaries.setdefault(_tag_name, []).append(atom.operand)
 
@@ -1725,27 +1725,18 @@ def _extract_value_domain(
     if not atoms:
         return base_domain or ()
 
-    def _is_tag_ref(s: str) -> bool:
-        return all_tags is not None and s in all_tags
-
-    def _is_literal_operand(operand: Any) -> bool:
-        if operand is None:
-            return False
-        if isinstance(operand, str):
-            return not _is_tag_ref(operand)
-        return not isinstance(operand, str)
+    def _is_literal_operand(atom: Atom) -> bool:
+        return atom.operand is not None and not atom.operand_is_tag
 
     if tag.choices is None and not (tag.min is not None and tag.max is not None):
         eq_ne_literals = {
             atom.operand
             for atom in atoms
-            if atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand)
+            if atom.form in {"eq", "ne"} and _is_literal_operand(atom)
         }
         if (
             eq_ne_literals
-            and all(
-                atom.form in {"eq", "ne"} and _is_literal_operand(atom.operand) for atom in atoms
-            )
+            and all(atom.form in {"eq", "ne"} and _is_literal_operand(atom) for atom in atoms)
             and not _has_non_condition_data_read(tag_name, graph)
         ):
             if base_domain is not None:
@@ -1763,7 +1754,8 @@ def _extract_value_domain(
         if atom.form not in comparison_forms or atom.operand is None:
             continue
         other_ref = atom.operand if atom.tag == tag_name else atom.tag
-        if isinstance(other_ref, str) and _is_tag_ref(other_ref):
+        other_is_tag = atom.operand_is_tag if atom.tag == tag_name else True
+        if other_is_tag:
             if other_ref == tag_name:
                 continue
             if known_domains is not None and other_ref in known_domains:

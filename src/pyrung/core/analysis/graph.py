@@ -45,7 +45,7 @@ def _enrich_atom_index(
         return atom_index
 
     enriched: dict[str, list[Atom]] = {tag: list(atoms) for tag, atoms in atom_index.items()}
-    existing_keys: dict[str, set[tuple[str, str, Any]]] = {
+    existing_keys: dict[str, set[tuple[str, str, Any, bool]]] = {
         tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
     }
 
@@ -63,10 +63,15 @@ def _enrich_atom_index(
                     continue
                 visited.add(source)
 
-                if isinstance(atom.operand, str):
+                if atom.operand_is_tag:
                     if composed_invert is not IDENTITY:
                         continue
-                    new_atom = Atom(tag=source, form=atom.form, operand=atom.operand)
+                    new_atom = Atom(
+                        tag=source,
+                        form=atom.form,
+                        operand=atom.operand,
+                        operand_is_tag=True,
+                    )
                 else:
                     new_threshold = composed_invert(atom.operand)
                     if new_threshold is None or not isinstance(new_threshold, (int, float)):
@@ -77,7 +82,7 @@ def _enrich_atom_index(
                 if key not in existing_keys.get(source, set()):
                     enriched.setdefault(source, []).append(new_atom)
                     existing_keys.setdefault(source, set()).add(key)
-                    if isinstance(new_atom.operand, str):
+                    if new_atom.operand_is_tag:
                         enriched.setdefault(new_atom.operand, []).append(new_atom)
                         existing_keys.setdefault(new_atom.operand, set()).add(key)
 
@@ -139,7 +144,12 @@ def _enrich_from_relational_calcs(
                 continue
 
             if expr.symbol == "-" and atom.operand == 0:
-                new_atom = Atom(tag=left_name, form=atom.form, operand=right_name)
+                new_atom = Atom(
+                    tag=left_name,
+                    form=atom.form,
+                    operand=right_name,
+                    operand_is_tag=True,
+                )
                 _add(left_name, new_atom)
                 _add(right_name, new_atom)
             else:

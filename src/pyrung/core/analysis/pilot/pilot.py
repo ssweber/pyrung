@@ -132,6 +132,7 @@ class _DriveSetup:
     anchor_scan: int
     diag_snapshot: dict[str, Any]
     nd_domains: dict[str, tuple[Any, ...]] | None
+    stateful_domains: dict[str, tuple[Any, ...]] | None
     key_config: _StateKeyConfig | None
     evidence: TransitionEvidence | None
     compass: Compass
@@ -157,6 +158,7 @@ class _ProverContext:
     """Best-effort static evidence shared by drive setup and target context."""
 
     nd_domains: dict[str, tuple[Any, ...]] | None = None
+    stateful_domains: dict[str, tuple[Any, ...]] | None = None
     key_config: _StateKeyConfig | None = None
     evidence: TransitionEvidence | None = None
 
@@ -227,6 +229,7 @@ def _make_pilot_context(
     resting: dict[str, Any],
     *,
     nd_domains: dict[str, tuple[Any, ...]] | None,
+    stateful_domains: dict[str, tuple[Any, ...]] | None,
     evidence: TransitionEvidence | None,
     key_config: _StateKeyConfig | None,
     influence: Compass | None,
@@ -264,12 +267,12 @@ def _make_pilot_context(
         ),
         knowledge=prior_compass.knowledge,
     )
-    # Domain prior for trace's inequality resolution: nd_domains (free-input
-    # value spaces) + affine func-deps (derived-tag → steerable source).  Both
-    # come from the prover ExploreContext that already built nd_domains and
-    # evidence; bundled here so a single handle threads through trace_back.
+    # Domain prior for trace's inequality resolution: nondeterministic domains
+    # for free inputs, stateful domains for program-owned tags, and affine
+    # func-deps for derived tags. All are receipts from the same ExploreContext.
     domain_prior = DomainPrior(
         nd_domains=nd_domains,
+        stateful_domains=stateful_domains,
         func_deps=evidence.affine_projections() if evidence is not None else None,
     )
     # Clear-only (ack-cleared momentary) command tags: a subset of ``steerable``
@@ -336,6 +339,7 @@ def _prepare_drive(
         anchor_scan=work.state.scan_id,
         diag_snapshot=diag_snapshot,
         nd_domains=prover.nd_domains,
+        stateful_domains=prover.stateful_domains,
         key_config=prover.key_config,
         evidence=prover.evidence,
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
@@ -381,6 +385,7 @@ def _prepare_target_context(
         setup.edge_tags,
         setup.resting,
         nd_domains=setup.nd_domains,
+        stateful_domains=setup.stateful_domains,
         evidence=setup.evidence,
         key_config=setup.key_config,
         influence=influence or setup.compass,
@@ -1585,7 +1590,7 @@ def _prepare_route(
 
 
 # ---------------------------------------------------------------------------
-# Prover context — nd_domains + state key config
+# Prover context — value domains + state key config
 # ---------------------------------------------------------------------------
 
 
@@ -1593,7 +1598,7 @@ def _build_prover_context(
     program: Any,
     snapshot: dict[str, Any],
 ) -> _ProverContext:
-    """Build prover context for nd_domains and state key projection.
+    """Build prover context for value domains and state key projection.
 
     Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
     pivot-tag state keys, and local static evidence.
@@ -1619,6 +1624,7 @@ def _build_prover_context(
         if isinstance(ctx, Intractable):
             return _ProverContext()
         nd = getattr(ctx, "nondeterministic_dims", None)
+        stateful = getattr(ctx, "stateful_dims", None)
         evidence = build_transition_evidence(ctx)
         if nd:
             logger.info("pilot: nd_domains ready (%d dims)", len(nd))
@@ -1650,7 +1656,11 @@ def _build_prover_context(
 
         if not stateful_names:
             logger.info("pilot: stateful_names empty, falling back to pivot_tags")
-            return _ProverContext(nd_domains=nd, evidence=evidence)
+            return _ProverContext(
+                nd_domains=nd,
+                stateful_domains=stateful,
+                evidence=evidence,
+            )
 
         key_config = _StateKeyConfig(
             stateful_names=stateful_names,
@@ -1667,6 +1677,7 @@ def _build_prover_context(
         )
         return _ProverContext(
             nd_domains=nd,
+            stateful_domains=stateful,
             key_config=key_config,
             evidence=evidence,
         )
@@ -1699,7 +1710,12 @@ def _relational_target_atom(cond: Any) -> Any | None:
     tag = cond.tag
     tag_name = tag.name if isinstance(tag, Tag) else str(tag)
     operand = cond.value.name if isinstance(cond.value, Tag) else cond.value
-    return Atom(tag=tag_name, form=form, operand=operand)
+    return Atom(
+        tag=tag_name,
+        form=form,
+        operand=operand,
+        operand_is_tag=isinstance(cond.value, Tag),
+    )
 
 
 def _parse_one(cond: Any) -> tuple[str, Any, Any]:

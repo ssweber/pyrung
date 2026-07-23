@@ -2299,7 +2299,7 @@ def _analog_boundary_hold(
                 yield from _iter_atoms(term)
 
     step_keys = {(s.rung_index, s.subroutine) for s in chain.steps}
-    seen: set[tuple[str, str, Any]] = set()
+    seen: set[tuple[str, str, Any, bool]] = set()
     for node in pdg.rung_nodes:
         if name not in getattr(node, "condition_reads", ()):
             continue
@@ -2312,22 +2312,32 @@ def _analog_boundary_hold(
             # Key the atom on the root (operand side flips via A>B ⟺ B<A).
             if atom.tag == name:
                 atom_on_root = atom
-            elif atom.operand == name and atom.form in _FLIP_FORM:
-                atom_on_root = Atom(tag=name, form=_FLIP_FORM[atom.form], operand=atom.tag)
+            elif atom.operand_is_tag and atom.operand == name and atom.form in _FLIP_FORM:
+                atom_on_root = Atom(
+                    tag=name,
+                    form=_FLIP_FORM[atom.form],
+                    operand=atom.tag,
+                    operand_is_tag=True,
+                )
             else:
                 continue
             if atom_on_root.form not in _NEGATE_FORM or atom_on_root._key() in seen:
                 continue
             seen.add(atom_on_root._key())
             operand = atom_on_root.operand
-            threshold = snapshot.get(operand) if isinstance(operand, str) else operand
+            threshold = snapshot.get(operand) if atom_on_root.operand_is_tag else operand
             truth = _ordered_truth(atom_on_root.form, root.value, threshold)
             if truth is None:
                 continue
             # Cross the boundary AWAY from the value's current contribution:
             # satisfy the negation of whatever the stuck value makes true.
             goal = (
-                Atom(tag=name, form=_NEGATE_FORM[atom_on_root.form], operand=operand)
+                Atom(
+                    tag=name,
+                    form=_NEGATE_FORM[atom_on_root.form],
+                    operand=operand,
+                    operand_is_tag=atom_on_root.operand_is_tag,
+                )
                 if truth
                 else atom_on_root
             )

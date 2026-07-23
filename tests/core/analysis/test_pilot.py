@@ -978,6 +978,29 @@ def test_preserve_holds_latch_against_active_reset():
     assert replay.state.tags["Run"] is True
 
 
+def test_preserve_deduplicates_establish_guard():
+    """An establish guard also suppressing its reset is one prerequisite."""
+    Mode = Bool("PreserveDedup_Mode", external=True)
+    State = Int("PreserveDedup_State")
+    Target = Bool("PreserveDedup_Target")
+
+    with Program() as logic:
+        with rung(Mode):
+            copy(100, State)
+        with rung(~Mode):
+            copy(0, State)
+        with rung(State == 100):
+            out(Target)
+
+    events = []
+    path = pilot_how(PLC(logic), Target, on_event=events.append)
+    assert path.reachable
+    tree = next(event.data["tree"] for event in events if event.kind == "iteration")
+
+    assert [(leaf.tag, leaf.value) for leaf in tree.leaves()] == [(Mode.name, True)]
+    assert tree.leaves()[0].is_steerable
+
+
 def test_two_step_sequential():
     x_A = Bool("x_A", external=True)
     x_B = Bool("x_B", external=True)

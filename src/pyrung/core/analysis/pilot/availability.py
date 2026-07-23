@@ -53,7 +53,7 @@ def _simplified_expr_tags(e: Any) -> set[str]:
     """Tag names referenced by a simplified ``Atom``/``And``/``Or`` expression."""
     if isinstance(e, Atom):
         tags = {e.tag}
-        if isinstance(e.operand, str):
+        if e.operand_is_tag:
             tags.add(e.operand)
         return tags
     if isinstance(e, (And, Or)):
@@ -74,7 +74,7 @@ def _guard_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
     twin is ``_known_eval_atom`` in ``prove/expr.py``.
     """
     tags = {atom.tag}
-    if isinstance(atom.operand, str):
+    if atom.operand_is_tag:
         tags.add(atom.operand)
     if tags <= known.keys():
         return _eval_expr_from_state(atom, known)
@@ -386,6 +386,18 @@ def _writer_availability(
             return _WriterAvailability.UNAVAILABLE_FROM_HERE
         if not _values_match(snapshot.get(tag), src_val):
             availability = _WriterAvailability.AFTER_PREREQ
+    elif isinstance(wv, Affine):
+        src_val = _invert_affine(wv, value)
+        if (
+            src_val is not None
+            and not _values_match(snapshot.get(wv.source), src_val)
+            and wv.source not in steerable
+            and not pdg.writers_of.get(wv.source)
+        ):
+            # A frozen reference source cannot be steered to make this writer
+            # produce a different value. Keep the writer as an honest fallback,
+            # but rank it behind a writer whose source already matches.
+            availability = _WriterAvailability.UNAVAILABLE_FROM_HERE
 
     sp = ro.sp_tree()
     if sp is None:

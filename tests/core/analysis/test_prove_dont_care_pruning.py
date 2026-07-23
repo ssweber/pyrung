@@ -139,5 +139,15 @@ class TestDontCarePruning:
         assert _eval_atom(Atom("X", "eq", 5), 5) is True
         assert _eval_atom(Atom("X", "eq", 5), 3) is False
 
+    def test_eval_expr_preserves_tag_operand_provenance(self):
+        from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+
+        state = {"State": 1, "DETECTING": 1}
+        tag_operand = Atom("State", "eq", "DETECTING", operand_is_tag=True)
+        literal_operand = Atom("State", "eq", "DETECTING")
+
+        assert _eval_expr_from_state(tag_operand, state) is True
+        assert _eval_expr_from_state(literal_operand, state) is False
+
     def test_eval_atom_rise_returns_none(self):
         assert _eval_atom(Atom("X", "rise"), True) is None

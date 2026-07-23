@@ -1268,7 +1268,10 @@ def test_real_inequality_steps_epsilon_int_steps_one():
     snap = {"PV": 20.0, "Lower": 15.0, "IntPV": 20, "IntLo": 15}
 
     real_hit = _resolve_inequality_target(
-        Atom(tag="PV", form="gt", operand="Lower"), snap, None, pdg
+        Atom(tag="PV", form="gt", operand="Lower", operand_is_tag=True),
+        snap,
+        None,
+        pdg,
     )
     assert real_hit is not None
     tag, val = real_hit
@@ -1276,7 +1279,10 @@ def test_real_inequality_steps_epsilon_int_steps_one():
     assert val > 15.0 and (val - 15.0) < 1.0  # an epsilon nudge, not +1
 
     int_hit = _resolve_inequality_target(
-        Atom(tag="IntPV", form="gt", operand="IntLo"), snap, None, pdg
+        Atom(tag="IntPV", form="gt", operand="IntLo", operand_is_tag=True),
+        snap,
+        None,
+        pdg,
     )
     assert int_hit == ("IntPV", 16)
 

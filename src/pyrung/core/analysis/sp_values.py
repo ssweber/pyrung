@@ -133,6 +133,8 @@ def _required_from_atom(atom: Atom) -> list[tuple[str, Any]] | None:
     if form == "xio":
         return [(atom.tag, False)]
     if form == "eq":
+        if atom.operand_is_tag:
+            return None
         return [(atom.tag, atom.operand)]
     if form in {"rise", "fall", "truthy"}:
         return None
@@ -655,7 +657,7 @@ def _extract_inequality_prereqs(
                 return
             # operand may be a literal (int/float) or a tag name (str reference)
             operand = e.operand
-            operand_tag = operand if isinstance(operand, str) else None
+            operand_tag = operand if e.operand_is_tag else None
             if operand_tag is not None:
                 operand = snapshot.get(operand_tag, 0)
             current = snapshot.get(tag)

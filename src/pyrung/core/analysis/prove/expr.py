@@ -20,7 +20,7 @@ def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
 def _index_atoms(expr: Expr, index: dict[str, list[Atom]]) -> None:
     if isinstance(expr, Atom):
         index.setdefault(expr.tag, []).append(expr)
-        if isinstance(expr.operand, str):
+        if expr.operand_is_tag:
             index.setdefault(expr.operand, []).append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
@@ -37,7 +37,7 @@ def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
 
 def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
     if isinstance(expr, Atom):
-        if expr.tag == tag_name or expr.operand == tag_name:
+        if expr.tag == tag_name or (expr.operand_is_tag and expr.operand == tag_name):
             out.append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
@@ -82,7 +82,7 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
         return None
 
     eval_atom = atom
-    if isinstance(atom.operand, str) and atom.operand in state:
+    if atom.operand_is_tag and atom.operand in state:
         eval_atom = Atom(atom.tag, atom.form, state[atom.operand])
     return _eval_atom(eval_atom, state[atom.tag])
 
@@ -157,7 +157,7 @@ def _known_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
     if atom.tag not in known:
         return None
     eval_expr = atom
-    if isinstance(atom.operand, str):
+    if atom.operand_is_tag:
         if atom.operand not in known:
             return None
         eval_expr = Atom(atom.tag, atom.form, known[atom.operand])
@@ -189,13 +189,18 @@ def _substitute_elided_atoms(
             return expr
         source_name, invert = subs[expr.tag]
         if expr.form in _COMPARISON_FORMS:
-            if isinstance(expr.operand, str):
+            if expr.operand_is_tag:
                 return expr
             new_operand = invert(expr.operand)
             if new_operand is None or not isinstance(new_operand, (int, float, bool)):
                 return None
             return Atom(source_name, expr.form, new_operand)
-        return Atom(source_name, expr.form, expr.operand)
+        return Atom(
+            source_name,
+            expr.form,
+            expr.operand,
+            operand_is_tag=expr.operand_is_tag,
+        )
 
     if isinstance(expr, And):
         terms: list[Expr] = []
@@ -228,7 +233,7 @@ def _referenced_tags(expr: Expr) -> frozenset[str]:
 def _walk_tags(expr: Expr, out: set[str]) -> None:
     if isinstance(expr, Atom):
         out.add(expr.tag)
-        if isinstance(expr.operand, str):
+        if expr.operand_is_tag:
             out.add(expr.operand)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:

@@ -244,3 +244,29 @@ def test_counter_done_reachable():
     path = pilot_how(PLC(ct.logic, dt=0.010), ct.BinACounter.Done, max_scans=500)
     assert path.reachable
     assert _replays_to(lambda: PLC(ct.logic, dt=0.010), path, "BinACounter_Done", True)
+
+
+# ===========================================================================
+# learn/state_machines — tag-valued states plus a relational prerequisite
+# ===========================================================================
+
+
+def test_lesson_state_machine_classifies_large_box():
+    """PILOT should enter DETECTING and satisfy the size comparison.
+
+    The lesson represents state constants as initialized, unwritten Int tags.
+    This guards against treating the constant tag as a steerable input and
+    later trying to write its name (``"DETECTING"``) into ``State``.
+    """
+    from examples.learn import state_machines as sm
+
+    path = pilot_how(PLC(sm.logic, dt=0.010), sm.IsLarge, max_scans=500)
+    assert path.reachable
+    state_constants = {
+        sm.IDLE.name,
+        sm.DETECTING.name,
+        sm.SORTING.name,
+        sm.RESETTING.name,
+    }
+    assert state_constants.isdisjoint(path.changes)
+    assert _replays_to(lambda: PLC(sm.logic, dt=0.010), path, "IsLarge", True)
