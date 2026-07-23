@@ -1823,10 +1823,10 @@
   "kind": "zoom_accepted",
   "observe_label": "zoom",
   "outcome": "confirmed",
-  "trend": 22,
-  "zoom_actual_value": 5,
-  "zoom_channel_tag": "Rotate_tmr_Acc",
-  "zoom_target_value": 4
+  "trend": 10,
+  "zoom_actual_value": 6,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
  },
  {
   "applied": [],
@@ -1835,7 +1835,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 22
+  "trend": 10
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -1854,153 +1854,6 @@
    ]
   ],
   "terminal": false,
-  "trend": 22
- },
- {
-  "distance": 22,
-  "kind": "iteration",
-  "nogoods": [],
-  "raw_trace_actions": [],
-  "still_need": [
-   "y_BurnerLoop=True (have False)",
-   "o_BurnerLoop=True (have False)",
-   "Heat_CurStep=3 (have 0)",
-   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
-   "Heat__x=1 (have 0)",
-   "Heat_CurStep=2 (have 0)",
-   "Heat_xCall=1 (have 0)",
-   "Heat_Trans=1 (have 0)",
-   "HeatDelay_Tmr_Done=True (have False)",
-   "Blower_x=True (have False)",
-   "Heat_CurStep=1 (have 0)",
-   "Sts_State_Execute=True (have False)",
-   "Blower__x=1 (have 0)",
-   "Sts_StateCurrent=6 (have 3)",
-   "Blower_xCall=1 (have 0)",
-   "Sts_StateRequested=6 (have 0)",
-   "Sts_StateCompleteFlag=True (have False)",
-   "Sts_StateCompleteBool=1 (have 0)",
-   "Blower__init=1 (have 0)",
-   "Blower_CurStep=2 (have 0)",
-   "Blower_Trans=1 (have 0)",
-   "Blower_CurStep=1 (have 0)"
-  ],
-  "target": [
-   "y_BurnerLoop",
-   true
-  ],
-  "watch_tags": [
-   "Blower__x",
-   "Blower_x",
-   "Blower_xCall",
-   "Cmd_UnitMode",
-   "Cmd_UnitModeChgReqBool",
-   "HeatDelay_Tmr_Done",
-   "Heat_CurStep",
-   "Heat_TargetTemp_F",
-   "Heat_Trans",
-   "Heat__x",
-   "Heat_xCall",
-   "S_CurrStep_Dry",
-   "S_ValLowBandTemp_F",
-   "Sts_Mode_Production",
-   "Sts_StateCurrent",
-   "Sts_StateRequested",
-   "Sts_State_Execute",
-   "Sts_State_Starting",
-   "Sts_UnitModeCurrent",
-   "o_BurnerLoop",
-   "y_BurnerLoop"
-  ]
- },
- {
-  "active_trace_actions": [],
-  "candidates": [],
-  "completion_frontier": [
-   [
-    "Sts_StateCompleteFlag",
-    true
-   ],
-   [
-    "Sts_StateCompleteBool",
-    1
-   ],
-   [
-    "Blower__init",
-    1
-   ],
-   [
-    "Blower_CurStep",
-    2
-   ],
-   [
-    "Blower__x",
-    1
-   ],
-   [
-    "Blower_Trans",
-    1
-   ],
-   [
-    "Blower_xCall",
-    1
-   ],
-   [
-    "Blower_CurStep",
-    1
-   ]
-  ],
-  "kind": "candidates_built",
-  "route_candidates": [],
-  "route_plan": {
-   "channel_tag": "Sts_StateCurrent",
-   "needed": [
-    "Sts_StateCurrent",
-    6
-   ],
-   "path": [
-    {
-     "action": null,
-     "enablers": [],
-     "from": 3,
-     "request": [
-      "Sts_StateRequested",
-      6
-     ],
-     "to": 6
-    }
-   ],
-   "target_value": 6
-  },
-  "stuck_reason": null,
-  "trace_actions": [],
-  "wait_prescribed": true,
-  "wait_reason": "let-run Sts_StateCurrent: 3->6"
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
-  "prescribed": true,
-  "reason": "let-run Sts_StateCurrent: 3->6"
- },
- {
-  "bearing_stop_reason": "reached",
-  "ejected": false,
-  "kind": "zoom_accepted",
-  "observe_label": "zoom",
-  "outcome": "confirmed",
-  "trend": 10,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
- },
- {
-  "applied": [],
-  "candidate": {},
-  "kind": "trial_committed"
- },
- {
-  "kind": "trend_checkpoint",
   "trend": 10
  },
  {
@@ -3032,42 +2885,6 @@
     "accelerators": [],
     "inputs": [],
     "kind": "coast",
-    "label": "Rotate_tmr_Acc",
-    "notes": [],
-    "pulsing_holds": [],
-    "steady_holds": [
-     "S_DryerTemp_F",
-     "x_BlowerFB",
-     "x_DoorClosed",
-     "x_LintDoorClosed",
-     "x_RotateFB"
-    ],
-    "transition": "",
-    "waiting_for": [
-     "Blower_Trans",
-     "Blower__x",
-     "Blower_CurStep",
-     "Rotate_Trans",
-     "Rotate_tmr_Acc",
-     "Heat_xInit",
-     "Sts_StateCompleteBool",
-     "Heat_tmr_Acc",
-     "Blower__init",
-     "Rotate__init",
-     "Rotate_CurStep",
-     "Heat_CurStep",
-     "Blower_tmr_Acc",
-     "i_BlowerFB",
-     "Blower_xInit",
-     "Blower_xCall",
-     "i_RotateFB"
-    ]
-   },
-   {
-    "__type__": "PlanStep",
-    "accelerators": [],
-    "inputs": [],
-    "kind": "coast",
     "label": "Sts_StateCurrent",
     "notes": [],
     "pulsing_holds": [],
@@ -3083,14 +2900,21 @@
      "Blower_Trans",
      "Blower__x",
      "Blower_CurStep",
+     "Rotate_Trans",
+     "HeatDelay_Tmr_Acc",
+     "Rotate_tmr_Acc",
      "Heat_xInit",
      "Sts_StateCompleteBool",
      "Heat_tmr_Acc",
      "Blower__init",
+     "Rotate__init",
+     "Rotate_CurStep",
      "Heat_CurStep",
      "Blower_tmr_Acc",
+     "i_BlowerFB",
      "Blower_xInit",
-     "Blower_xCall"
+     "Blower_xCall",
+     "i_RotateFB"
     ]
    },
    {

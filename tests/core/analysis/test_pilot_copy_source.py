@@ -7,9 +7,11 @@ the copy source to find the chain.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, call, copy, out, reset, subroutine
+from pyrung import Bool, Int, Program, Rung, blockcopy, call, copy, out, reset, rise, subroutine
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.memory_block import Block
 from pyrung.core.runner import PLC
+from pyrung.core.tag import TagType
 
 
 def _jump_state_program():
@@ -88,3 +90,28 @@ def test_jump_state_solves() -> None:
 
     replay = _replay(prog, path)
     assert replay.state.tags["Target"] is True
+
+
+def test_blockcopy_source_receipt_keeps_subroutine_call_gate() -> None:
+    """The selected subroutine writer reverses to its aligned source slot."""
+    Enable = Bool("BlockCopySubEnable", external=True)
+    Push = Bool("BlockCopySubPush", external=True)
+    Value = Int("BlockCopySubValue", external=True)
+    log = Block("BlockCopySubLog", TagType.INT, 1, 3)
+
+    @subroutine("BlockCopyShift")
+    def shift():
+        with Rung(rise(Push)):
+            blockcopy(log.select(1, 2), log.select(2, 3))
+            copy(Value, log[1])
+
+    with Program() as prog:
+        with Rung(Enable):
+            call(shift)
+
+    path = pilot_how(PLC(prog, dt=0.010), log[2] == 7, max_scans=500)
+
+    assert path.reachable
+    assert {"BlockCopySubEnable", "BlockCopySubPush", "BlockCopySubValue"} <= path.changes.keys()
+    replay = path.replay()
+    assert replay.state.tags["BlockCopySubLog2"] == 7

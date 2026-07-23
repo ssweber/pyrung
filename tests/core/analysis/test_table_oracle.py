@@ -495,8 +495,8 @@ def test_affine_copy_transition_surfaces_mode():
     same +100 offset, the same recomputed table gate — but the transition writer
     is a copy, not a calc.  The copy crossing now inverts the affine expression
     the same way calc does (fire-time pin ``StateRequested == 10``, from
-    ``110 - 100``), so ``copy_source_binding`` derives the pin and the oracle
-    trigger surfaces the mode prerequisite with zero pilot changes.
+    ``110 - 100``), so the writer's reverse receipt carries the pin and the
+    oracle trigger surfaces the mode prerequisite with zero pilot changes.
     """
     tree, _ = _mask_gate_trace("affine_copy")
     modes = _mask_gate_modes(tree)
@@ -518,8 +518,8 @@ def test_decode_transition_surfaces_mode():
 def test_nonaffine_calc_transition_surfaces_mode():
     """A non-affine decode ``calc(StateRequested * StateRequested, StateCurrent)``.
 
-    The crossing can't invert a self-multiply, so ``calc_source_binding`` punts
-    and no algebraic pin exists.  The fire-time pin ``StateRequested == 10`` is
+    The crossing can't invert a self-multiply, so its reverse receipt punts and
+    no algebraic pin exists.  The fire-time pin ``StateRequested == 10`` is
     instead solved by ``solve_calc_preimage`` — enumerate StateRequested over its
     complete finite domain ``(0, 10)``, keep the assignment whose square equals
     the target ``100``, and pin the FORCED value shared by every solution (only

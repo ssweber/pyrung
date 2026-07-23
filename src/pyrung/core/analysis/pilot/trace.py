@@ -52,11 +52,22 @@ from pyrung.core.analysis.sp_values import (
     _required_from_atom,
     _satisfying_value,
     _values_match,
+    _writer_for_tag,
     _writer_projection,
     _written_value_for_tag,
-    copy_source_binding,
 )
-from pyrung.core.crossing import Affine, Aggregate, Cmp, Constraint, Eq, Literal
+from pyrung.core.crossing import (
+    REVERSE_FALLTHROUGH,
+    Affine,
+    Aggregate,
+    Cmp,
+    Constraint,
+    CrossingContext,
+    Eq,
+    Literal,
+    ReverseResult,
+    eq_target,
+)
 from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
@@ -997,6 +1008,72 @@ def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
         if getattr(getattr(instr, "dest", None), "name", None) == tag:
             return instr
     return None
+
+
+def _reverse_writer(
+    ro: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    prior: DomainPrior | None = None,
+) -> ReverseResult:
+    """Reverse the exact instruction selected inside a writer rung.
+
+    ``pdg.writers_of`` owns writer selection (including subroutine and branch
+    nodes); this helper only resolves the instruction inside that already-chosen
+    rung and asks its registered crossing for the producer-side receipt.
+    """
+    instr = _writer_for_tag(ro, tag)
+    if instr is None:
+        return REVERSE_FALLTHROUGH
+    from pyrung.core.analysis import crossings
+
+    return crossings.reverse(
+        instr,
+        ro,
+        eq_target(tag, value),
+        CrossingContext(
+            snapshot=snapshot,
+            tags_by_name=pdg.tags,
+            nd_domains=prior.nd_domains if prior is not None else None,
+        ),
+    )
+
+
+def _producer_constraints(
+    result: ReverseResult,
+    target: Constraint,
+) -> tuple[Constraint, ...]:
+    """The deterministic producer requirements carried by a reverse receipt.
+
+    Trace can currently consume one conjunctive branch of scalar ``Eq``/``Cmp``
+    requirements. Other algebra shapes and disjunctions remain with their
+    established specialized consumers; fallthrough never fabricates a need.
+    A constraint identical to the target is a hold/self-copy, not progress.
+    """
+    if result.fallthrough or len(result.branches) != 1:
+        return ()
+    (branch,) = result.branches
+    requirements: list[Constraint] = []
+    for constraint in branch:
+        if not isinstance(constraint, (Eq, Cmp)):
+            return ()
+        if constraint == target:
+            continue
+        if isinstance(constraint, Eq) and len(constraint.values) != 1:
+            return ()
+        requirements.append(constraint)
+    return tuple(requirements)
+
+
+def _producer_pins(result: ReverseResult, target: Constraint) -> dict[str, Any]:
+    """Singleton equality pins from one deterministic producer receipt."""
+    pins: dict[str, Any] = {}
+    for constraint in _producer_constraints(result, target):
+        if isinstance(constraint, Eq):
+            pins[constraint.tag] = next(iter(constraint.values))
+    return pins
 
 
 #: simplified comparison form <-> Crossings ``Cmp`` operator symbol.
@@ -2189,6 +2266,7 @@ def _trace_back(
 
     writer_availability: dict[int, _WriterAvailability] = {}
     writer_ranking: list[_WriterRank] = []
+    writer_reverses: dict[int, ReverseResult] = {}
     ranked_writers = _rank_writers(
         writers,
         env.pdg,
@@ -2203,6 +2281,7 @@ def _trace_back(
         codemands=_codemands,
         availability_out=writer_availability,
         ranking_out=writer_ranking,
+        reverse_out=writer_reverses,
     )
     # Recording only: the full ranking (winner + losers) that chose this frontier's
     # writer, and the writers the loop below actively skips before settling.
@@ -2243,7 +2322,12 @@ def _trace_back(
             writer_skips.append((ri, "cant_produce"))
             continue
 
-        csb = copy_source_binding(ro, tag, value)
+        reverse_result = writer_reverses.get(ri)
+        if reverse_result is None:
+            reverse_result = _reverse_writer(ro, tag, value, env.snapshot, env.pdg, env.prior)
+        producer_target = eq_target(tag, value)
+        producer_constraints = _producer_constraints(reverse_result, producer_target)
+        producer_pins = _producer_pins(reverse_result, producer_target)
 
         sp = ro.sp_tree()
         guard_expr = _sp_to_expr(sp) if sp is not None else None
@@ -2257,10 +2341,13 @@ def _trace_back(
         # drop the atoms the pin already satisfies so a redundant ``src`` guard
         # (``UnitModeCmd != 0`` beside source ``== 2``) does not surface as a second
         # frontier fighting the source pin.
-        if csb is not None and guard_expr is not None:
-            guard_expr = _reduce_guard_by_pin(guard_expr, csb[0], csb[1], env.snapshot)
+        if reverse_result.exact and guard_expr is not None:
+            for pin_tag, pin_value in producer_pins.items():
+                guard_expr = _reduce_guard_by_pin(guard_expr, pin_tag, pin_value, env.snapshot)
+                if guard_expr is _GUARD_CONTRADICTION:
+                    writer_skips.append((ri, "guard_pin_contradiction"))
+                    break
             if guard_expr is _GUARD_CONTRADICTION:
-                writer_skips.append((ri, "guard_pin_contradiction"))
                 continue
 
         if guard_expr is not None:
@@ -2282,7 +2369,7 @@ def _trace_back(
         if guard_expr is not None:
             from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_PUNT
 
-            verdict = _writer_guard_verdict(env, ri, ro, tag, value, csb, guard_expr)
+            verdict = _writer_guard_verdict(env, ri, ro, tag, value, reverse_result, guard_expr)
             if verdict == GUARD_DEAD:
                 writer_skips.append((ri, "guard_dead"))
                 continue
@@ -2360,18 +2447,35 @@ def _trace_back(
                     env.caller_locks.setdefault(rung_node.subroutine, _ci)
                 node.children.extend(call_children)
 
-        if csb is not None:
-            src_tag, src_val = csb
-            child = _trace_back(
+        for constraint in producer_constraints:
+            if isinstance(constraint, Eq):
+                child = _trace_back(
+                    env,
+                    constraint.tag,
+                    next(iter(constraint.values)),
+                    _visited=_visited,
+                    _ancestry=_child_ancestry,
+                    _depth=_depth + 1,
+                )
+                child.data_flow = "producer"
+                node.children.append(child)
+                continue
+            atom = _constraint_atom(constraint)
+            if atom is None:
+                continue
+            children = _trace_expression(
                 env,
-                src_tag,
-                src_val,
+                atom,
+                tag,
+                provenance=(_scope_ref(ri, rung_node),),
                 _visited=_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth + 1,
+                _relational_goal=atom,
             )
-            child.data_flow = "copy"
-            node.children.append(child)
+            for child in children:
+                child.data_flow = "producer"
+            node.children.extend(children)
 
         # Enablement gate decided by a constant-table predicate (PackML
         # state-enable / cmd-valid mask): the flag on this transition is a
@@ -2388,21 +2492,16 @@ def _trace_back(
                 ro,
                 tag,
                 value,
-                csb,
+                reverse_result,
                 _visited=_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth,
             )
         )
 
-        # An identity copy (``copy(src, dest)``) forward-classifies as an identity
-        # Affine *and* binds via ``copy_source_binding`` — inverting both re-traces
-        # the same source, and the second call dead-ends on the visited set
-        # (childless), a pure duplicate that (when the source is steerable) shadows
-        # the real leaf and poisons pilotability.  The copy binding already handled
-        # the source; the Affine branch is only for genuine affine ``calc`` writers
-        # (``calc(X + 1, dest)``), which never bind a copy source.
-        if isinstance(wv, Affine) and csb is None:
+        # Registered reverse is the producer-value authority. Forward ``Affine``
+        # remains only as a compatibility fallback for a crossing that punts.
+        if isinstance(wv, Affine) and not producer_constraints:
             src_val = _invert_affine(wv, value)
             # Self-referential affine (``calc(CurStep+1, CurStep)``) is a
             # value-step: invert one hop (``CurStep==2`` <- ``CurStep==1``) and
@@ -3517,7 +3616,11 @@ def _flag_gate_comparisons(
 
 
 def _transition_fire_pins(
-    env: _TraceEnv, ro: Any, tag: str, value: Any, csb: tuple[str, Any] | None
+    env: _TraceEnv,
+    ro: Any,
+    tag: str,
+    value: Any,
+    reverse_result: ReverseResult,
 ) -> dict[str, Any]:
     """Data-flow pins a transition writer imposes the scan it produces *value*.
 
@@ -3526,12 +3629,9 @@ def _transition_fire_pins(
     pins, so evaluating it needs the *fire-time* source values, not the
     snapshot's.  Soundly derivable in three writer shapes, none guessed:
 
-    - a copy binding — ``copy(src, tag)`` forces ``src == inverse(value)``
-      (:func:`~pyrung.core.analysis.sp_values.copy_source_binding`; the identity
-      copy gives ``src == value``, a converting copy its exact preimage);
-    - an affine calc — ``calc(src + k, tag)`` forces ``src == value - k``
-      (:func:`~pyrung.core.analysis.sp_values.calc_source_binding`), inverted
-      through the crossings registry;
+    - a registered writer reverse — copy, aligned block-copy, or affine calc —
+      returns singleton ``Eq`` constraints for the producer values forced on its
+      firing scan;
     - a **non-affine calc** — ``calc(A * B, tag)``, ``calc(A & mask, tag)``,
       ``calc((A << 2) | B, tag)`` — that the crossing can't invert symbolically,
       solved by enumerate-and-evaluate over the sources' *complete* finite
@@ -3543,14 +3643,9 @@ def _transition_fire_pins(
     its *guard*, which the caller layers on separately.  Empty dict when no
     data-flow pin is derivable — never a fabricated binding.
     """
-    from pyrung.core.analysis.sp_values import calc_source_binding
-
-    if csb is not None:
-        src_tag, src_val = csb
-        return {src_tag: src_val}
-    ccb = calc_source_binding(ro, tag, value)
-    if ccb is not None:
-        return {ccb[0]: ccb[1]}
+    pins = _producer_pins(reverse_result, eq_target(tag, value))
+    if pins:
+        return pins
     # Non-affine calc decode: no symbolic inverse, so solve the expression over
     # the sources' complete finite domains and pin only the forced values.
     from pyrung.core.analysis.pilot.tide_tables import solve_calc_preimage
@@ -3566,7 +3661,7 @@ def _writer_guard_verdict(
     ro: Any,
     tag: str,
     value: Any,
-    csb: tuple[str, Any] | None,
+    reverse_result: ReverseResult,
     guard_expr: Any,
 ) -> str:
     """Tide-tables verdict for a candidate writer's guard under its own fire pins.
@@ -3594,7 +3689,7 @@ def _writer_guard_verdict(
     from pyrung.core.analysis.pilot.tide_tables import GUARD_PUNT, guard_verdict
     from pyrung.core.tag import TagType
 
-    pins = _transition_fire_pins(env, ro, tag, value, csb)
+    pins = _transition_fire_pins(env, ro, tag, value, reverse_result)
     key = (ri, tuple(sorted(pins.items(), key=lambda kv: kv[0])), _expr_route_key(guard_expr))
     cached = env.guard_memo.get(key)
     if cached is not None:
@@ -3632,7 +3727,7 @@ def _table_enablement_prereqs(
     ro: Any,
     tag: str,
     value: Any,
-    csb: tuple[str, Any] | None,
+    reverse_result: ReverseResult,
     *,
     _visited: set[tuple[str, Any]],
     _ancestry: tuple[tuple[str, Any], ...],
@@ -3658,7 +3753,7 @@ def _table_enablement_prereqs(
     sp = ro.sp_tree()
     if sp is None:
         return []
-    pins = _transition_fire_pins(env, ro, tag, value, csb)
+    pins = _transition_fire_pins(env, ro, tag, value, reverse_result)
 
     from pyrung.core.analysis.pilot.tide_tables import solve_table_predicate
 
@@ -3916,6 +4011,7 @@ def _rank_writers(
     codemands: tuple[tuple[str, Any], ...] = (),
     availability_out: dict[int, _WriterAvailability] | None = None,
     ranking_out: list[_WriterRank] | None = None,
+    reverse_out: dict[int, ReverseResult] | None = None,
 ) -> list[int]:
     """Rank viable writers by current-state availability, then writer role.
 
@@ -3954,6 +4050,9 @@ def _rank_writers(
         wv = _written_value_for_tag(ro, tag)
         if not _can_produce(wv, value):
             continue
+        reverse_result = _reverse_writer(ro, tag, value, snapshot, pdg)
+        if reverse_out is not None:
+            reverse_out[ri] = reverse_result
         proj = _writer_projection(ro, tag, value, snapshot, pdg, program, pinned_overlay, pinned)
         is_counterfactual = proj is not None and proj[0]
         availability = _writer_availability(
@@ -3990,11 +4089,12 @@ def _rank_writers(
             else:
                 bucket = 0
         else:
-            csb = copy_source_binding(ro, tag, value)
-            if csb is not None:
-                src_tag, src_val = csb
-                if _values_match(snapshot.get(src_tag), src_val):
-                    bucket = 0
+            producer_pins = _producer_pins(reverse_result, eq_target(tag, value))
+            if producer_pins and all(
+                _values_match(snapshot.get(src_tag), src_val)
+                for src_tag, src_val in producer_pins.items()
+            ):
+                bucket = 0
             if is_counterfactual:
                 bucket = 3
 

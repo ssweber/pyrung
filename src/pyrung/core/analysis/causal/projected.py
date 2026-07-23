@@ -10,10 +10,11 @@ from pyrung.core.analysis.sp_values import (
     _expr_tag_names,
     _extract_inequality_prereqs,
     _SnapshotView,
-    copy_source_binding,
+    _writer_for_tag,
     projected_writer_overlay,
 )
 from pyrung.core.context import ScanContext
+from pyrung.core.crossing import CrossingContext, Eq, eq_target
 
 from .history import (
     _NO_WRITE,
@@ -805,10 +806,33 @@ def projected_cause(
                 (node.rung_index, rung, node.subroutine, None, cand_state, cand_pinned)
             )
             continue
-        binding = copy_source_binding(rung, tag_name, to_value)
-        if binding is not None:
+        instruction = _writer_for_tag(rung, tag_name)
+        source_req: tuple[str, Any] | None = None
+        if instruction is not None:
+            from pyrung.core.analysis import crossings
+
+            reverse_result = crossings.reverse(
+                instruction,
+                rung,
+                eq_target(tag_name, to_value),
+                CrossingContext(snapshot=snapshot, tags_by_name=pdg.tags),
+            )
+            if not reverse_result.fallthrough and len(reverse_result.branches) == 1:
+                (branch,) = reverse_result.branches
+                if len(branch) == 1:
+                    constraint = branch[0]
+                    if (
+                        isinstance(constraint, Eq)
+                        and len(constraint.values) == 1
+                        and constraint != eq_target(tag_name, to_value)
+                    ):
+                        source_req = (
+                            constraint.tag,
+                            next(iter(constraint.values)),
+                        )
+        if source_req is not None:
             candidate_rungs.append(
-                (node.rung_index, rung, node.subroutine, binding, cand_state, cand_pinned)
+                (node.rung_index, rung, node.subroutine, source_req, cand_state, cand_pinned)
             )
 
     if not candidate_rungs:

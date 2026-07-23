@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from pyrung import Dint, Int
 from pyrung.core.analysis.crossings.calc import CalcCrossing
-from pyrung.core.analysis.sp_values import calc_source_binding
 from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.memory_block import Block
@@ -264,44 +261,3 @@ def test_forward_sum_returns_aggregate() -> None:
     assert isinstance(result, Aggregate)
     assert result.operation == "sum"
     assert result.tags == ("DS1", "DS2", "DS3")
-
-
-# --- calc_source_binding() ----------------------------------------------------
-
-
-def _rung(*instructions):
-    return SimpleNamespace(_instructions=list(instructions))
-
-
-def test_calc_binding_add_offset() -> None:
-    src, dest = Int("Raw"), Int("Scaled")
-    assert calc_source_binding(_rung(CalcInstruction(src + 10, dest)), "Scaled", 42) == ("Raw", 32)
-
-
-def test_calc_binding_literal_minus_tag() -> None:
-    src, dest = Int("Raw"), Int("Scaled")
-    assert calc_source_binding(_rung(CalcInstruction(100 - src, dest)), "Scaled", 30) == ("Raw", 70)
-
-
-def test_calc_binding_multiply_exact() -> None:
-    src, dest = Int("Raw"), Int("Scaled")
-    assert calc_source_binding(_rung(CalcInstruction(src * 3, dest)), "Scaled", 15) == ("Raw", 5)
-
-
-def test_calc_binding_multiply_non_exact_returns_none() -> None:
-    src, dest = Int("Raw"), Int("Scaled")
-    assert calc_source_binding(_rung(CalcInstruction(src * 3, dest)), "Scaled", 16) is None
-
-
-def test_calc_binding_multi_tag_returns_none() -> None:
-    a, b, dest = Int("A"), Int("B"), Int("C")
-    assert calc_source_binding(_rung(CalcInstruction(a + b, dest)), "C", 5) is None
-
-
-def test_calc_binding_no_writer_returns_none() -> None:
-    assert calc_source_binding(_rung(), "Dest", 7) is None
-
-
-def test_calc_binding_self_referential_returns_none() -> None:
-    acc = Int("Acc")
-    assert calc_source_binding(_rung(CalcInstruction(acc + 1, acc)), "Acc", 5) is None

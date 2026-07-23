@@ -1,20 +1,15 @@
-"""Crossings — CopyCrossing + the copy-source dedup helper.
+"""Crossings — copy, fill, and block-copy projected reverse.
 
 Covers the plain copy/fill data-flow half (incl. the clamp-rail soundness fix),
 the bijective ``to_ascii``/``to_binary`` conversions (exact), the conservative
-``to_value``/``to_text`` fallthroughs, the block-copy fallthrough, and the
-neutral ``copy_source_binding`` helper that both the walker and
-``projected_cause`` share (until Step 4 routes them through the registry).
+``to_value``/``to_text`` fallthroughs, and aligned block-copy slots.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from pyrung import Char, Dint, Int, Real, Word
 from pyrung.core.analysis import crossings
 from pyrung.core.analysis.crossings.copy import CopyCrossing
-from pyrung.core.analysis.sp_values import copy_source_binding
 from pyrung.core.copy_converters import to_ascii, to_binary, to_text, to_value
 from pyrung.core.crossing import Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.data_transfer import (
@@ -284,51 +279,3 @@ def test_block_copy_converting_falls_through() -> None:
     dst_blk = Block("DD", TagType.INT, 1, 5)
     instr = BlockCopyInstruction(src_blk.select(1, 3), dst_blk.select(1, 3), convert=to_value)
     assert crossings.reverse(instr, None, eq_target("DD1", 1), _ctx()).fallthrough is True
-
-
-# --- copy_source_binding (the dedup helper, until Step 4 routes via registry) --
-
-
-def _rung(*instructions):
-    return SimpleNamespace(_instructions=list(instructions))
-
-
-def test_binding_names_distinct_copy_source() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    rung = _rung(CopyInstruction(src, dest))
-    assert copy_source_binding(rung, "Dest", 7) == ("Src", 7)
-
-
-def test_binding_none_for_literal_source() -> None:
-    dest = Int("Dest")
-    assert copy_source_binding(_rung(CopyInstruction(7, dest)), "Dest", 7) is None
-
-
-def test_binding_none_for_self_copy() -> None:
-    dest = Int("Dest")
-    assert copy_source_binding(_rung(CopyInstruction(dest, dest)), "Dest", 7) is None
-
-
-def test_binding_none_for_indirect_source() -> None:
-    blk = Block("DS", TagType.INT, 1, 5)
-    ptr, dest = Int("Ptr"), Int("Dest")
-    assert copy_source_binding(_rung(CopyInstruction(blk[ptr], dest)), "Dest", 7) is None
-
-
-def test_binding_inverts_affine_expr_source() -> None:
-    # copy(Src + 100, Dest): the fire-time pin is the inverted affine map.
-    src, dest = Int("Src"), Int("Dest")
-    rung = _rung(CopyInstruction(src + 100, dest))
-    assert copy_source_binding(rung, "Dest", 250) == ("Src", 150)
-
-
-def test_binding_none_for_non_affine_expr_source() -> None:
-    # A two-tag expression carries no single distinct copy-source pin.
-    a, b, dest = Int("A"), Int("B"), Int("Dest")
-    assert copy_source_binding(_rung(CopyInstruction(a + b, dest)), "Dest", 5) is None
-
-
-def test_binding_none_for_affine_expr_at_clamp_rail() -> None:
-    # A clamp-rail target inverts to a range, not a singleton -> no single pin.
-    src, dest = Int("Src"), Int("Dest")
-    assert copy_source_binding(_rung(CopyInstruction(src + 100, dest)), "Dest", 32767) is None

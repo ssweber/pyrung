@@ -193,8 +193,8 @@ def solve_calc_preimage(
     The value-side sibling of :func:`solve_table_predicate`: where that solver
     inverts a boolean *predicate* over constant-table operands, this one inverts
     a whole ``calc`` *expression* — ``A * B``, ``A & mask``, ``(A << 2) | B`` —
-    that trace's affine crossing (``calc_source_binding``) cannot invert
-    symbolically.  Nothing here is guessed: it is exact enumerate-and-evaluate
+    whose registered reverse cannot invert symbolically. Nothing here is
+    guessed: it is exact enumerate-and-evaluate
     over *complete finite* domains, punting on anything softer.
 
     Each operand tag is modeled as one of:

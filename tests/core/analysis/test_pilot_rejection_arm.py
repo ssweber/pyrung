@@ -28,12 +28,12 @@ from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceNode,
     _all_nodes,
+    _reverse_writer,
     _writer_guard_verdict,
     resolve_rung,
     trace_back,
 )
 from pyrung.core.analysis.simplified import _sp_to_expr
-from pyrung.core.analysis.sp_values import copy_source_binding
 from pyrung.core.analysis.steerable import compute_steerable
 
 
@@ -57,9 +57,8 @@ def _leaf_pairs(node: TraceNode) -> set[tuple[str, object]]:
 #
 # ``calc(Cmd + 5, State)`` producing ``State == 7`` forces ``Cmd == 2`` (the calc
 # fire pin), while the same rung is gated ``Cmd == 1``.  The two can never hold at
-# once, so the writer is provably dead.  This is NOT caught by the existing
-# ``_reduce_guard_by_pin`` (which only fires for *copy* sources — a calc writer has
-# ``copy_source_binding is None``), so the oracle's rejection arm is what skips it.
+# once, so the writer is provably dead. The selected writer's reverse receipt
+# carries that fire pin to the oracle, which skips the impossible writer.
 
 
 def _calc_contradiction_program():
@@ -86,9 +85,8 @@ def test_calc_fire_pin_contradiction_verdict_is_dead():
     env = _env_for(snap, pdg, logic, steer)
     ro = resolve_rung(logic, pdg.rung_nodes[0])
     guard = _sp_to_expr(ro.sp_tree())
-    csb = copy_source_binding(ro, "State", 7)  # None — it is a calc, not a copy
-    assert csb is None
-    assert _writer_guard_verdict(env, 0, ro, "State", 7, csb, guard) == GUARD_DEAD
+    reverse_result = _reverse_writer(ro, "State", 7, snap, pdg)
+    assert _writer_guard_verdict(env, 0, ro, "State", 7, reverse_result, guard) == GUARD_DEAD
 
 
 def test_calc_fire_pin_contradiction_writer_skipped():
@@ -239,5 +237,5 @@ def test_satisfiable_guard_verdict_is_sat():
     env = _env_for(snap, pdg, logic, steerable=_steer(logic), prior=prior)
     ro = resolve_rung(logic, pdg.rung_nodes[1])  # the viable Mode==1 writer
     guard = _sp_to_expr(ro.sp_tree())
-    csb = copy_source_binding(ro, "State", 2)
-    assert _writer_guard_verdict(env, 1, ro, "State", 2, csb, guard) == GUARD_SAT
+    reverse_result = _reverse_writer(ro, "State", 2, snap, pdg)
+    assert _writer_guard_verdict(env, 1, ro, "State", 2, reverse_result, guard) == GUARD_SAT

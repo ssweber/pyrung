@@ -21,6 +21,8 @@ import os
 os.environ.setdefault("PYRUNG_DAP_ACTIVE", "1")
 
 
+import pytest
+
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
@@ -37,6 +39,84 @@ def _replays_to(plc_factory, path, tag: str, expected) -> bool:
     the concrete oracle behind every ``how()`` result.  ``plc_factory`` is unused
     now that the recording carries its own program and initial state."""
     return path.replay().state.tags.get(tag) == expected
+
+
+# ===========================================================================
+# Short examples — table-driven public-surface smoke matrix
+# ===========================================================================
+
+
+def _smoke_direct_output():
+    from examples.learn import scan_cycle as example
+
+    return PLC(example.logic, dt=0.010), example.ConveyorMotor, "ConveyorMotor", True, 100
+
+
+def _smoke_relational_output():
+    from examples.learn import tags as example
+
+    return PLC(example.logic, dt=0.010), example.OverSpeed, "OverSpeed", True, 100
+
+
+def _smoke_latch_reset():
+    from examples.learn import latch_reset as example
+
+    return PLC(example.logic, dt=0.010), example.Running, "Running", True, 100
+
+
+def _smoke_edge_copy():
+    from examples.learn import assignment as example
+
+    return (
+        PLC(example.logic, dt=0.010),
+        example.CurrentSize == 150,
+        "CurrentSize",
+        150,
+        200,
+    )
+
+
+def _smoke_autonomous_calc():
+    from examples.learn import assignment as example
+
+    return PLC(example.logic, dt=0.010), example.CycleCount == 5, "CycleCount", 5, 100
+
+
+def _smoke_scalar_shift():
+    from pyrung import Bool, Int, Program, Rung, copy, rise
+
+    push = Bool("PilotSmokeShift_Push", external=True)
+    value = Int("PilotSmokeShift_Value", external=True)
+    first = Int("PilotSmokeShift_First")
+    second = Int("PilotSmokeShift_Second")
+
+    with Program() as logic:
+        with Rung(rise(push)):
+            copy(first, second)
+            copy(value, first)
+
+    return PLC(logic, dt=0.010), second == 7, second.name, 7, 300
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(_smoke_direct_output, id="direct-output"),
+        pytest.param(_smoke_relational_output, id="relational-output"),
+        pytest.param(_smoke_latch_reset, id="latch-reset"),
+        pytest.param(_smoke_edge_copy, id="edge-copy"),
+        pytest.param(_smoke_autonomous_calc, id="autonomous-calc"),
+        pytest.param(_smoke_scalar_shift, id="repeated-edge-shift"),
+    ],
+)
+def test_short_example_pilot_smoke(build):
+    """One compact public example per uncomplicated PILOT capability family."""
+    plc, target, target_name, expected, max_scans = build()
+
+    path = pilot_how(plc, target, max_scans=max_scans)
+
+    assert path.reachable, path.reason
+    assert path.replay().state.tags.get(target_name) == expected
 
 
 # ===========================================================================
@@ -244,6 +324,24 @@ def test_counter_done_reachable():
     path = pilot_how(PLC(ct.logic, dt=0.010), ct.BinACounter.Done, max_scans=500)
     assert path.reachable
     assert _replays_to(lambda: PLC(ct.logic, dt=0.010), path, "BinACounter_Done", True)
+
+
+# ===========================================================================
+# learn/structured_tags — blockcopy-backed shift register
+# ===========================================================================
+
+
+def test_structured_tags_shift_register_reachable():
+    """Two NewBox pulses should carry BoxSize through SortLog1 to SortLog2.
+
+    This guards the blockcopy destination's aligned-source receipt:
+    ``SortLog2`` traces through ``SortLog1`` and then ``BoxSize``.
+    """
+    from examples.learn import structured_tags as st
+
+    path = pilot_how(PLC(st.logic, dt=0.010), st.SortLog[2] == 7, max_scans=500)
+    assert path.reachable
+    assert _replays_to(lambda: PLC(st.logic, dt=0.010), path, "SortLog2", 7)
 
 
 # ===========================================================================
