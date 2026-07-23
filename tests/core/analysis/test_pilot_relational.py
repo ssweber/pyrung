@@ -7,6 +7,8 @@ child (steering unchanged), and distance counts the predicate once.
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
@@ -194,6 +196,36 @@ def test_literal_inequality_prereq_through_bool_chain() -> None:
     replay = path.replay()
     assert replay.state.tags["Alarm"] is True
     assert replay.state.tags["Temp"] > 75
+
+
+@pytest.mark.xfail(
+    reason="program-owned relational guards do not yet trace through producible values",
+    strict=True,
+)
+def test_program_owned_relational_guard_surfaces_active_clobber_permissive() -> None:
+    """An internal step range must expose both its starter and active clobber."""
+    Start = Bool("OwnedRange_Start", external=True)
+    Permissive = Bool("OwnedRange_Permissive", external=True)
+    Step = Int("OwnedRange_Step")
+    Up = Bool("OwnedRange_Up")
+
+    with Program() as prog:
+        with Rung(Start):
+            copy(40, Step)
+        with Rung(~Permissive):
+            copy(99, Step)
+        with Rung(Step >= 40, Step < 50):
+            out(Up)
+
+    events = []
+    path = pilot_how(PLC(prog), Up, max_scans=100, on_event=events.append)
+    assert path.reachable
+    tree = next(event.data["tree"] for event in events if event.kind == "iteration")
+
+    assert set(tree.steerable_leaves()) == {
+        (Start.name, True),
+        (Permissive.name, True),
+    }
 
 
 def test_relational_guard_defers_to_concrete_demand() -> None:
