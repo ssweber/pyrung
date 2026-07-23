@@ -207,6 +207,9 @@ an internal state or policy.
   operation's `AdvanceStep.progress` receipt is PILOT's observable evidence.
 - Learned or static route edges are suggestions. A live trial still passes the
   same verification gates.
+- Static charts enumerate every source match, exact edges before wildcard
+  edges. Callers own exclusions through `edge_allowed`: specificity is
+  precedence, never a pre-filter veto of a surviving wildcard route.
 - A program-written tag may be removed from the steerable set by recorded
   evidence. Empirical evidence never creates a new lever.
 - A correction is installed only in the exact guarded form that survived

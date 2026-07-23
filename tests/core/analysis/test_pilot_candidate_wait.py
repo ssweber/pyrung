@@ -51,6 +51,68 @@ def _action_route(from_value: int, to_value: int, action: str) -> TransitionRout
     )
 
 
+def _wildcard_action_route(to_value: int, action: str) -> TransitionRoute:
+    return TransitionRoute(
+        destination_tag="State",
+        destination_value=to_value,
+        request_tag=None,
+        request_value=None,
+        source_constraints=(),
+        enablers=((action, True),),
+        action_tags=frozenset({action}),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+    )
+
+
+def test_static_path_prefers_exact_edge_over_wildcard_match() -> None:
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(
+        role,
+        (
+            _wildcard_action_route(2, "Fallback"),
+            _action_route(0, 2, "Exact"),
+        ),
+    )
+
+    plan = graph.find_path(0, (2,), edge_allowed=lambda _edge: True)
+
+    assert plan is not None
+    assert plan.first_edge.action == ("Exact", True)
+
+
+def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() -> None:
+    """Same-destination BFS visitation must not erase the surviving fallback."""
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(
+        role,
+        (
+            _wildcard_action_route(2, "Fallback"),
+            _action_route(0, 2, "Exact"),
+        ),
+    )
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "Exact": False, "Fallback": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target_tag="State",
+        target_value=2,
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+    )
+
+    plan = _compass_route_plan(frame, ctx, {("Exact", True)})
+
+    assert plan is not None
+    assert plan.first_edge.action == ("Fallback", True)
+
+
 def test_live_route_query_filters_avoided_suffix_edges() -> None:
     """A legal first edge cannot smuggle an avoided later command into a plan."""
     role = PipelineRoles("State")

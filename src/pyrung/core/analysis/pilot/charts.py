@@ -491,9 +491,13 @@ def _rank_edges_for_state(
             wildcard.append(edge)
         elif _values_match(edge.from_value, state):
             exact.append(edge)
-    if exact:
-        return tuple(exact)
-    return tuple(wildcard)
+    # Exact source evidence is more specific, so BFS considers it first.  A
+    # wildcard remains a matching alternative, however: ``edge_allowed`` may
+    # reject every exact edge in this world because of a route constraint,
+    # avoid predicate, or contextual nogood.  Dropping wildcard edges here
+    # would turn ordering into an unconditional veto before the policy owner
+    # has evaluated either alternative.
+    return (*exact, *wildcard)
 
 
 # ===========================================================================

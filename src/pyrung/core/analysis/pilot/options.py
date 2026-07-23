@@ -394,7 +394,11 @@ def _compass_route_plan(
                 wait_edge_nogood(edge.role.channel_tag, edge.from_value, edge.to_value)
                 not in nogoods
             )
-        return ctx.route_allowed(edge.action) and not _avoid_forces(ctx, [edge.action], frame.snap)
+        return (
+            edge.action not in nogoods
+            and ctx.route_allowed(edge.action)
+            and not _avoid_forces(ctx, [edge.action], frame.snap)
+        )
 
     plans: list[StaticPath] = []
     for n in _all_nodes(frame.tree):
