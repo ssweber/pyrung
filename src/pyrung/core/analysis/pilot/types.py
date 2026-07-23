@@ -461,7 +461,7 @@ class _CorrectionReceipt:
     status: CorrectionStatus = CorrectionStatus.PROBATIONARY
 
     @property
-    def identity(self) -> tuple[tuple[str, Any], ...]:
+    def identity(self) -> tuple[tuple[Any, ...], ...]:
         return self.correction.identity
 
     @property
@@ -481,7 +481,7 @@ class _CorrectionReceipt:
 class _ConfirmedCorrection:
     """One replay-proven correction, including its exact executable lifetime."""
 
-    identity: tuple[tuple[str, Any], ...]
+    identity: tuple[tuple[Any, ...], ...]
     rungs: tuple[PilotRung, ...]
     sources: tuple[str, ...]
     justification: str
@@ -528,7 +528,7 @@ class _PilotState:
     correction_receipts: list[_CorrectionReceipt] = field(default_factory=list)
     correction_nogoods: dict[
         _StateKey,
-        set[tuple[tuple[str, Any], ...]],
+        set[tuple[tuple[Any, ...], ...]],
     ] = field(default_factory=dict)
     # Names of ``avoid=`` conditions that excluded a candidate/hold/scan somewhere
     # in the drive (Knowledge side — commits, never reverted).  A terminal stuck

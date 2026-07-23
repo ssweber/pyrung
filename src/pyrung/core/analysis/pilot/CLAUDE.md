@@ -205,6 +205,11 @@ pending policy is considered. `progress.py` first returns a plain
 decision to the receipts owned by the pending record. The retained
 `provisional_*` event names are compatibility vocabulary only; they do not name
 an internal state or policy.
+Correction nogoods are identities of replay-confirmed executable
+`PilotRung`s, composed from `_ops.py::_rung_identity`; guard and operation
+boundary are part of the disproved artifact. Raw `(tag, value)` hypotheses do
+not own a scope and cannot be compared with revoked evidence until
+investigation materializes their guarded installed form.
 
 ## Soundness and behavior invariants
 

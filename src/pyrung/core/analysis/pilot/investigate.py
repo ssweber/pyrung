@@ -74,7 +74,7 @@ _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
 _NESTED_MAX_BRANCHES = 8
 
 ActionPair = tuple[str, Any]
-CorrectionIdentity = tuple[tuple[str, Any], ...]
+CorrectionIdentity = tuple[tuple[Any, ...], ...]
 
 
 def _proposal_pair(proposal: Any) -> ActionPair:
@@ -84,6 +84,13 @@ def _proposal_pair(proposal: Any) -> ActionPair:
 
 
 def _proposal_identity(proposal: Any) -> tuple[str, Any]:
+    """Pre-install identity used only to compare generated hypotheses.
+
+    A hypothesis names the corrective write and optional operation boundary,
+    not its eventual installed lifetime.  Pair and ``PilotRung`` forms of the
+    same idea therefore remain equivalent during causal closure; durable
+    negative evidence uses :func:`correction_identity` only after scoping.
+    """
     if isinstance(proposal, PilotRung):
         return proposal.dest, (
             _semantic_key(proposal.value),
@@ -93,14 +100,26 @@ def _proposal_identity(proposal: Any) -> tuple[str, Any]:
     return tag, (_semantic_key(value), None)
 
 
-def correction_identity(proposals: Iterable[Any]) -> CorrectionIdentity:
-    """Stable correction identity, independent of its installed scope guard.
-
-    An owner-issued operation boundary is semantic: the same assignment may be
-    a different corrective operation when it hands off at a different fact.
-    """
+def _hypothesis_identity(proposals: Iterable[Any]) -> tuple[tuple[str, Any], ...]:
+    """Stable comparison key for proposals that may not own a scope yet."""
     pairs = map(_proposal_identity, proposals)
     return tuple(sorted(pairs, key=lambda pair: (pair[0], repr(pair[1]))))
+
+
+def correction_identity(rungs: Iterable[PilotRung]) -> CorrectionIdentity:
+    """Exact identity of an executable, replay-confirmed correction.
+
+    ``_rung_identity`` owns executable identity, including the guard and any
+    owner-issued operation boundary.  A generated pair is only a hypothesis;
+    it cannot become durable negative evidence until investigation gives it a
+    scope and confirms that exact installed form.
+    """
+    identities: list[tuple[Any, ...]] = []
+    for rung in rungs:
+        if not isinstance(rung, PilotRung):
+            raise TypeError("correction identity requires executable PilotRungs")
+        identities.append(_rung_identity(rung))
+    return tuple(sorted(identities, key=repr))
 
 
 ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
@@ -1568,12 +1587,12 @@ def investigate_deviation(
             ctx,
         )
         for candidate in nested:
-            identity = correction_identity(candidate.holds)
+            identity = _hypothesis_identity(candidate.holds)
             equivalent = next(
                 (
                     known
                     for known in observed_hypotheses
-                    if correction_identity(known.holds) == identity
+                    if _hypothesis_identity(known.holds) == identity
                 ),
                 None,
             )
@@ -1589,8 +1608,11 @@ def investigate_deviation(
         if not hypothesis.holds:
             _reject(hypothesis, "no-holds", "no holds proposed")
             continue
-        identity = correction_identity(hypothesis.holds)
-        if identity in excluded_corrections:
+        # A hypothesis made entirely of PilotRungs already owns its executable
+        # scope.  Raw pairs acquire one only after their exploratory replay.
+        if all(isinstance(hold, PilotRung) for hold in hypothesis.holds) and (
+            correction_identity(hypothesis.holds) in excluded_corrections
+        ):
             _reject(
                 hypothesis,
                 "correction-revoked",
@@ -1684,6 +1706,13 @@ def investigate_deviation(
                 ctx,
                 correction_progress_mark,
             )
+            if correction_identity(scoped) in excluded_corrections:
+                _reject(
+                    current,
+                    "correction-revoked",
+                    "correction was previously revoked after causing a later regression",
+                )
+                break
             required_progress = (*incident.bearing, *needed)
             if (
                 pdg is not None

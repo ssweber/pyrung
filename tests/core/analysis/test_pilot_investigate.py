@@ -55,7 +55,7 @@ from pyrung.core.analysis.pilot.investigate import (
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
-from pyrung.core.condition import CompareEq
+from pyrung.core.condition import CompareEq, CompareNe
 from pyrung.core.context import RungId
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
@@ -232,7 +232,7 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
 
 
 def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
-    """Correction nogoods select the next explanation, not an opposite overlay."""
+    """An exact guarded correction nogood selects the next explanation."""
     Bad = Bool("Revoked_Bad", external=True)
     Good = Bool("Revoked_Good", external=True)
     with Program(strict=False) as prog:
@@ -248,8 +248,10 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
         target_value=True,
         target_predicate=None,
     )
-    bad = InvestigationHypothesis("bad", ((Bad.name, True),), sources=(Bad.name,))
-    good = InvestigationHypothesis("good", ((Good.name, True),), sources=(Good.name,))
+    bad_rung = PilotRung(Bad.name, True, CompareEq(Bad, False))
+    good_rung = PilotRung(Good.name, True, CompareEq(Good, False))
+    bad = InvestigationHypothesis("bad", (bad_rung,), sources=(Bad.name,))
+    good = InvestigationHypothesis("good", (good_rung,), sources=(Good.name,))
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
         lambda *_args, **_kwargs: ([bad, good], set()),
@@ -286,12 +288,144 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
         _ground_test_incident(plc),
         ctx,
         replay,
-        excluded_corrections=frozenset((correction_identity(bad.holds),)),
+        excluded_corrections=frozenset((correction_identity((bad_rung,)),)),
     )
 
     assert result.confirmed and result.confirmed[0].kind == "good"
     assert replayed
     assert all(Bad.name not in {tag for tag, _value in attempt} for attempt in replayed)
+    assert tuple(rejection.slug for rejection in result.rejected) == ("correction-revoked",)
+
+
+def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
+    """Negative correction evidence names the guard that actually caused harm."""
+    Held = Bool("ScopedNogoodHeld", external=True)
+    Target = Bool("ScopedNogoodTarget")
+    Broad = Bool("ScopedNogoodBroad", external=True)
+    with Program(strict=False) as prog:
+        with Rung(Held):
+            out(Target)
+    plc = PLC(prog)
+    ctx = _make_ctx(
+        prog,
+        plc,
+        target_tag=Target.name,
+        target_value=True,
+        target_predicate=None,
+    )
+    hypothesis = InvestigationHypothesis(
+        "same-write-new-scope",
+        ((Held.name, True),),
+        sources=(Held.name,),
+    )
+    broad = PilotRung(Held.name, True, CompareEq(Broad, True))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([hypothesis], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+
+    replayed: list[tuple[Any, ...]] = []
+
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(True, None, dict(plc.state.tags), "incident solved")
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        replay,
+        excluded_corrections=frozenset((correction_identity((broad,)),)),
+    )
+
+    assert result.correction is not None
+    scoped = result.correction.rungs[0]
+    assert scoped.dest == broad.dest and scoped.value == broad.value
+    assert correction_identity((scoped,)) != correction_identity((broad,))
+    assert result.rejected == ()
+    assert len(replayed) == 2
+    assert replayed[0] == hypothesis.holds
+    assert replayed[1] == (scoped,)
+
+
+def test_raw_hypothesis_is_rejected_after_it_acquires_revoked_scope(monkeypatch):
+    """A raw pair is compared with negative evidence only in executable form."""
+    Held = Bool("ScopedExactHeld", external=True)
+    Target = Bool("ScopedExactTarget")
+    with Program(strict=False) as prog:
+        with Rung(Held):
+            out(Target)
+    plc = PLC(prog)
+    ctx = _make_ctx(
+        prog,
+        plc,
+        target_tag=Target.name,
+        target_value=True,
+        target_predicate=None,
+    )
+    hypothesis = InvestigationHypothesis(
+        "raw-pair",
+        ((Held.name, True),),
+        sources=(Held.name,),
+    )
+    revoked = PilotRung(Held.name, True, CompareNe(Target, True))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        lambda *_args, **_kwargs: ([hypothesis], set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        lambda *_args, **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+
+    replayed: list[tuple[Any, ...]] = []
+
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(True, None, dict(plc.state.tags), "incident solved")
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        replay,
+        excluded_corrections=frozenset((correction_identity((revoked,)),)),
+    )
+
+    assert result.correction is None
+    assert replayed == [hypothesis.holds]
     assert tuple(rejection.slug for rejection in result.rejected) == ("correction-revoked",)
 
 
