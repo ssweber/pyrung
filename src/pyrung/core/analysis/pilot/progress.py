@@ -1410,14 +1410,16 @@ def _investigate_and_revert(
         ctx, cp_fork, trial.fork_snap
     )
 
-    # Keep the failed action as a nogood in the world where it failed. A
-    # replay-confirmed correction creates a different world key, so the same
-    # action is naturally eligible there without deleting valid history.
+    # Keep the failed action as a nogood in the exact world where it was tried.
+    # ``cp_key`` owns the rollback destination and may precede clean intermediate
+    # actions inside one channel tenure; ``frame.key`` owns the action source.
+    # A replay-confirmed correction changes that source key, so the same action
+    # remains naturally eligible in the corrected executable world.
     regression_nogoods = set(investigation_nogoods)
     regression_nogoods.update(trial.regression_nogoods)
     if regression_nogoods:
         ctx.compass, _ = ctx.compass.apply(
-            tuple(ActionNogoodObservation(cp_key, ("pair", pair)) for pair in regression_nogoods)
+            tuple(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods)
         )
     # A regression inside pending motion returns to its local checkpoint
     # and keeps the bounded attempt open. Only an outer revert ends it.

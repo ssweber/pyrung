@@ -828,7 +828,7 @@ class TestRegression:
         assert not state.rungs
         assert state.work.state.tags["A"] is False
 
-    def test_regression_nogoods_recorded(self):
+    def test_regression_nogoods_recorded_at_action_source(self):
         from pyrung.core.analysis.pilot.compass import Compass
 
         cp_fork = _oneshot_plc()
@@ -843,7 +843,8 @@ class TestRegression:
         ctx = SimpleNamespace(compass=Compass())
         events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
-        assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("cpk",))
+        assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("f",))
+        assert ("X", True) not in ctx.compass.knowledge.nogood_pairs(("cpk",))
         assert ("X", True) in events[0].data["regression_nogoods"]
 
 
