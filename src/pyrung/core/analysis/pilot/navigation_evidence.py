@@ -17,6 +17,7 @@ from pyrung.core.analysis.pilot.navigation import (
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
+    pulse_identity,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -114,9 +115,11 @@ class NavigationEvidence:
                     )
                     not in pair_nogoods
                 )
+            exact_artifact = pulse_identity((edge.action, *edge.co_actions))
             return (
                 edge.action not in constraints.blocked_actions
                 and edge.action not in pair_nogoods
+                and not knowledge.act_is_nogood(world.world_key, exact_artifact)
                 and not _avoid_forces(world.context, [edge.action], world.snapshot)
             )
 

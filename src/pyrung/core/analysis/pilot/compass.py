@@ -494,13 +494,20 @@ class CompassKnowledge:
         return self.act_nogoods.get(world_key, frozenset())
 
     def nogood_pairs(self, world_key: tuple[Any, ...]) -> frozenset[ActionPair]:
+        """Pair-level rejections proven in *world_key*.
+
+        A legacy pair observation and a singleton Pulse both disprove one
+        action pair. A joint Pulse is a distinct executable artifact: its
+        primary pair remains eligible with a different co-action overlay.
+        """
+
         pairs: set[ActionPair] = set()
         for identity in self.nogood_identities(world_key):
             if len(identity) == 2 and identity[0] == "pair":
                 pairs.add(identity[1])
             elif len(identity) >= 2 and identity[0] == "pulse":
                 applied = identity[1]
-                if applied:
+                if isinstance(applied, tuple) and len(applied) == 1:
                     pairs.add(applied[0])
         return frozenset(pairs)
 

@@ -184,6 +184,11 @@ artifact, and an unreadable branch is not a fallback. Trace retains the best
 rejected branch when no pilotable alternative survives so the frontier remains
 visible. Root writer/OR locks stay with the inferred/explicit route lifecycle
 and are never redirected inside Trace.
+Static route selection applies the same boundary: it excludes the exact
+current-world ``(primary action, co-actions)`` Pulse artifact that failed, then
+may select a sibling edge carrying the same primary action under different
+co-actions. Pair-level consumers see only explicit pair rejections and
+singleton Pulses.
 
 `PendingDeparture` records a clean program departure whose progress is not yet
 conclusive. It names the stable owner of its rollback checkpoint, the owner of

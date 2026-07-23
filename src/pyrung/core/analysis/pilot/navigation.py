@@ -241,11 +241,17 @@ class RouteExhausted:
 OrientationResult = Bearing | NeedProbe | Stuck | RouteExhausted
 
 
+def pulse_identity(applied: tuple[_ActionPair, ...]) -> tuple[Any, ...]:
+    """Exact executable identity of one Pulse action overlay."""
+
+    return ("pulse", applied)
+
+
 def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     """Stable identity used for world-scoped empirical nogoods."""
 
     if isinstance(act, Pulse):
-        return ("pulse", act.applied)
+        return pulse_identity(act.applied)
     if isinstance(act, BatchPulse):
         return ("batch", act.source, act.actions)
     if isinstance(act, Coast):

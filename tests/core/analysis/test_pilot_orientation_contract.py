@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.navigation import (
     Stuck,
     TargetSpec,
     act_identity,
+    pulse_identity,
 )
 
 
@@ -295,6 +296,39 @@ def test_trace_rejections_require_exact_singleton_pulse_artifact() -> None:
     )
 
     assert _exact_rejected_actions(exclusions) == frozenset({first})
+
+
+def test_joint_pulse_nogood_does_not_reject_its_primary_pair() -> None:
+    primary = ("Start", True)
+    gate_a = ("GateA", True)
+    gate_b = ("GateB", True)
+    world = ("world",)
+    rejected = pulse_identity((primary, gate_a))
+
+    compass, changed = Compass().apply((ActionNogoodObservation(world, rejected),))
+
+    assert changed
+    assert compass.knowledge.act_is_nogood(world, rejected)
+    assert not compass.knowledge.act_is_nogood(
+        world,
+        pulse_identity((primary, gate_b)),
+    )
+    assert primary not in compass.knowledge.nogood_pairs(world)
+    assert not compass.knowledge.act_is_nogood(("other-world",), rejected)
+
+    singleton_world = ("singleton-world",)
+    legacy_world = ("legacy-world",)
+    compass, _ = compass.apply(
+        (
+            ActionNogoodObservation(
+                singleton_world,
+                pulse_identity((primary,)),
+            ),
+            ActionNogoodObservation(legacy_world, ("pair", primary)),
+        )
+    )
+    assert primary in compass.knowledge.nogood_pairs(singleton_world)
+    assert primary in compass.knowledge.nogood_pairs(legacy_world)
 
 
 def test_stale_bearing_cannot_execute() -> None:

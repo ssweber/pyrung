@@ -10,12 +10,20 @@ from pyrung.core.analysis.pilot.charts import (
     _edges_from_routes,
 )
 from pyrung.core.analysis.pilot.compass import (
+    ActionNogoodObservation,
     Compass,
     CompassObservation,
     NavigationCatalog,
 )
 from pyrung.core.analysis.pilot.currents import Producer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
+from pyrung.core.analysis.pilot.navigation import (
+    NavigationConstraints,
+    OrientationWorld,
+    TargetSpec,
+    pulse_identity,
+)
+from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.pilot.options import _build_candidates, _compass_route_plan
 from pyrung.core.analysis.pilot.trace import TraceNode
 
@@ -168,6 +176,103 @@ def test_direct_and_convergent_action_is_fanned_out_once() -> None:
         ("First", True),
         ("Second", True),
     ]
+
+
+def test_rejected_joint_route_falls_back_to_same_action_with_other_gate() -> None:
+    """A failed command recipe excludes that edge, not the command itself."""
+    primary = ("Start", True)
+    gate_a = ("GateA", True)
+    gate_b = ("GateB", True)
+    first = replace(
+        _action_route(0, 2, primary[0]),
+        edge_gates=(gate_a,),
+    )
+    second = replace(
+        _action_route(0, 2, primary[0]),
+        edge_gates=(gate_b,),
+    )
+    graph = StaticTransitionGraph(PipelineRoles("State"), (first, second))
+    world = ("world",)
+    compass, changed = Compass(NavigationCatalog(graphs=(graph,))).apply(
+        (
+            ActionNogoodObservation(
+                world,
+                pulse_identity((primary, gate_a)),
+            ),
+        )
+    )
+    frame = SimpleNamespace(
+        key=world,
+        snap={"State": 0, "Start": False, "GateA": False, "GateB": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target_tag="State",
+        target_value=2,
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+    )
+
+    plan = _compass_route_plan(
+        frame,
+        ctx,
+        set(compass.knowledge.nogood_pairs(world)),
+    )
+
+    assert changed
+    assert primary not in compass.knowledge.nogood_pairs(world)
+    assert plan is not None
+    assert plan.first_edge.action == primary
+    assert plan.first_edge.co_actions == (gate_b,)
+
+    target = TargetSpec("State", 2)
+    constraints = NavigationConstraints()
+    view = OrientationWorld(
+        world_key=world,
+        snapshot=frame.snap,
+        frame=frame,
+        state=SimpleNamespace(),
+        context=ctx,
+    )
+    assert isinstance(
+        NavigationEvidence.frontier_status(
+            view,
+            target,
+            constraints,
+            compass.knowledge,
+        ),
+        Reachable,
+    )
+
+    rejected_only_graph = StaticTransitionGraph(PipelineRoles("State"), (first,))
+    rejected_only, _ = Compass(NavigationCatalog(graphs=(rejected_only_graph,))).apply(
+        (
+            ActionNogoodObservation(
+                world,
+                pulse_identity((primary, gate_a)),
+            ),
+        )
+    )
+    rejected_only_ctx = SimpleNamespace(**vars(ctx))
+    rejected_only_ctx.compass = rejected_only
+    rejected_only_view = OrientationWorld(
+        world_key=world,
+        snapshot=frame.snap,
+        frame=frame,
+        state=SimpleNamespace(),
+        context=rejected_only_ctx,
+    )
+    assert not isinstance(
+        NavigationEvidence.frontier_status(
+            rejected_only_view,
+            target,
+            constraints,
+            rejected_only.knowledge,
+        ),
+        Reachable,
+    )
 
 
 def test_static_path_prefers_exact_edge_over_wildcard_match() -> None:

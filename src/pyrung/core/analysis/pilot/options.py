@@ -27,6 +27,7 @@ from pyrung.core.analysis.pilot.compass import (
     is_action,
     is_composite_action,
 )
+from pyrung.core.analysis.pilot.navigation import pulse_identity
 from pyrung.core.analysis.pilot.trace import (
     _all_nodes,
     _WriterAvailability,
@@ -394,8 +395,13 @@ def _compass_route_plan(
                 wait_edge_nogood(edge.role.channel_tag, edge.from_value, edge.to_value)
                 not in nogoods
             )
+        exact_artifact = pulse_identity((edge.action, *edge.co_actions))
         return (
             edge.action not in nogoods
+            and not ctx.compass.knowledge.act_is_nogood(
+                getattr(frame, "key", None),
+                exact_artifact,
+            )
             and ctx.route_allowed(edge.action)
             and not _avoid_forces(ctx, [edge.action], frame.snap)
         )
