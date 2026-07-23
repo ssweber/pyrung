@@ -105,6 +105,19 @@ def _is_pin_row(row: list[str]) -> bool:
     return bool(af and af.startswith("."))
 
 
+def _annotate_rung_rows(rows: list[list[str]], highlight_row: int) -> str:
+    """Render rung rows as CSV lines with carets under *highlight_row*'s AF cell."""
+    lines: list[str] = []
+    for r, row in enumerate(rows):
+        prefix = f"  row {r:>2} | "
+        lines.append(prefix + ",".join(row))
+        if r == highlight_row:
+            af_offset = len(",".join(row[:-1])) + (1 if len(row) > 1 else 0)
+            carets = " " * af_offset + "^" * max(1, len(row[-1]))
+            lines.append(" " * (len(prefix) - 2) + "| " + carets)
+    return "\n".join(lines)
+
+
 def _rows_are_blank(rows: list[list[str]]) -> bool:
     """Return True when every condition and AF cell in the rung is blank."""
     for row in rows:
@@ -883,7 +896,8 @@ def _analyze_single_rung(
             if row_index in pin_row_set:
                 if current_instruction is None:
                     raise ValueError(
-                        f"Pin row {row_index} must immediately follow its owning instruction row."
+                        f"Pin row {row_index} must immediately follow its owning instruction "
+                        f"row.\n{_annotate_rung_rows(rows, row_index)}"
                     )
 
                 match = _PIN_RE.match(af)
