@@ -27,9 +27,12 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.coast import BumpEvent, CoastSession
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
+    CausalOccurrence,
     DeviationIncident,
     InvestigationHypothesis,
     InvestigationRejection,
+    RegressionWitness,
+    ReplacementEvidence,
     ReplayIncident,
     ReplayJustification,
     ReplayOutcome,
@@ -41,6 +44,7 @@ from pyrung.core.analysis.pilot.investigate import (
     _precise_cause,
     _precise_causes,
     _regression_cause_replayed,
+    _shared_causal_suffix,
     build_deviation_incident,
     build_replay_fn,
     correction_identity,
@@ -52,6 +56,7 @@ from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq
+from pyrung.core.context import RungId
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
@@ -361,6 +366,134 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
 
     assert replayed, "the shadowed correction must not skip its hypothesis"
     assert result.correction is not None
+
+
+def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypatch):
+    """A retained replay fork supplies B; only A and then A+B are replayed."""
+    A = Bool("Nested_A", external=True)
+    B = Bool("Nested_B", external=True)
+    State = Int("Nested_State", default=3)
+    with Program(strict=False) as prog:
+        with Rung(A):
+            copy(8, State)
+        with Rung(B):
+            copy(8, State)
+    plc = PLC(prog)
+    replacement_plc = plc.fork()
+    ctx = _make_ctx(
+        prog,
+        plc,
+        target_tag=State.name,
+        target_value=17,
+        target_predicate=None,
+    )
+    incident = _ground_test_incident(plc)
+    first = InvestigationHypothesis("precise-cause", ((A.name, False),), sources=(A.name,))
+    second = InvestigationHypothesis("precise-cause", ((B.name, False),), sources=(B.name,))
+    occurrence_a = CausalOccurrence(RungId(None, 1), "Nested_Request", 8)
+    occurrence_b = CausalOccurrence(RungId(None, 2), State.name, 8)
+    replacement_witness = RegressionWitness(
+        channel_tag=State.name,
+        source=3,
+        departed=8,
+        landing=8,
+        departure_scan=2,
+        cause=(occurrence_b, occurrence_a),
+        causal_spine=frozenset({B.name, State.name, "Nested_Request"}),
+    )
+    replacement = ReplacementEvidence(
+        plc=replacement_plc,
+        incident=incident,
+        witness=replacement_witness,
+        shared_suffix=(occurrence_b, occurrence_a),
+    )
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._generate_deviation_hypotheses",
+        lambda source, *_args, **_kwargs: (
+            ([second] if source is replacement_plc else [first]),
+            frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._scoped_correction_rungs",
+        lambda _plc, holds, *_args: tuple(
+            hold if isinstance(hold, PilotRung) else PilotRung(hold[0], hold[1], A == A)
+            for hold in holds
+        ),
+    )
+
+    attempts: list[tuple[str, ...]] = []
+
+    def replay(holds):
+        tags = tuple(
+            hold.dest if isinstance(hold, PilotRung) else hold[0]
+            for hold in holds
+        )
+        attempts.append(tags)
+        if tags == (A.name,):
+            return ReplayOutcome(
+                True,
+                None,
+                dict(plc.state.tags),
+                "A silenced before B reproduced the departure",
+                ReplayJustification.NEUTRALIZED,
+                replacement=replacement,
+            )
+        return ReplayOutcome(
+            True,
+            None,
+            dict(plc.state.tags),
+            "composite neutralized the incident",
+            ReplayJustification.NEUTRALIZED,
+        )
+
+    result = investigate_deviation(plc, incident, ctx, replay)
+
+    assert result.correction is not None
+    assert {rung.dest for rung in result.correction.rungs} == {A.name, B.name}
+    assert attempts == [
+        (A.name,),
+        (A.name, B.name),
+        (A.name, B.name),
+    ]
+    assert all(attempt != (B.name,) for attempt in attempts)
+
+
+def test_shared_pipeline_does_not_group_a_different_bounded_landing():
+    """The same first hop and executor path need not be the same failed effect."""
+    shared = (
+        CausalOccurrence(RungId(None, 2), "State", 12),
+        CausalOccurrence(RungId(None, 1), "Request", 12),
+    )
+    recorded = RegressionWitness(
+        channel_tag="State",
+        source=11,
+        departed=12,
+        landing=9,
+        departure_scan=4,
+        cause=shared,
+        causal_spine=frozenset({"State", "Request", "DoorAlarm"}),
+    )
+    healthy_detour = RegressionWitness(
+        channel_tag="State",
+        source=11,
+        departed=12,
+        landing=6,
+        departure_scan=4,
+        cause=shared,
+        causal_spine=frozenset({"State", "Request"}),
+    )
+
+    assert _shared_causal_suffix(recorded, healthy_detour) == ()
 
 
 def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():
@@ -843,14 +976,14 @@ def test_replay_accepts_suppression_before_an_unrelated_executor_reuse():
 
 
 def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
-    """An indistinguishable replacement remains unresolved by bounded proof.
+    """A changed upstream owner is retained even when downstream writes match.
 
     The release timer and both executor rungs are identical in the recorded and
     replayed departures. The recorded branch is selected by ``PrimaryFault``;
     after that branch is corrected, a later timer selects the same writer for a
-    different operation. The bounded replacement-cause receipt separates the
-    operations and still conservatively declines this correction because the
-    recorded changed-write signature was reused.
+    different operation. The retained replacement witness separates the
+    upstream owners and gives investigation the exact fork on which to derive
+    the newly exposed correction.
     """
     PrimaryFault = Bool("ReplaySpine_PrimaryFault", external=True)
     Harmful = Bool("ReplaySpine_Harmful", external=True)
@@ -906,9 +1039,12 @@ def test_replay_composes_owner_spines_when_all_changed_writes_are_reused():
 
     unrelated = replay(((PrimaryFault.name, False),))
     assert unrelated.snapshot[State.name] == 8
-    assert not unrelated.accepted
-    assert unrelated.justification is None
+    assert unrelated.accepted
+    assert unrelated.justification is ReplayJustification.NEUTRALIZED
     assert Alternate.Done.name in unrelated.replacement_cause
+    assert unrelated.replacement is not None
+    assert unrelated.replacement.plc.state.tags[State.name] == 8
+    assert len(unrelated.replacement.shared_suffix) >= 2
 
     proposal_owned = replay(((Harmful.name, True),))
     assert not proposal_owned.accepted

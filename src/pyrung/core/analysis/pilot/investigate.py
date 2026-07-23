@@ -2,9 +2,9 @@
 
 The module constructs incident windows and replay functions, derives candidate
 holds from causal roots, writer enablers, and pinned scans, ranks those
-hypotheses, and returns the first explanation that survives counterfactual
-replay. It also provides the shorter excursion investigation used by trial
-verification.
+hypotheses, closes the first explanation over sibling causes exposed by its
+counterfactual replay, and returns the first composite that survives. It also
+provides the shorter excursion investigation used by trial verification.
 
 Investigation confirms a proposed correction but does not install it; recovery
 and installation belong to ``progress.py``.
@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 # Skiff escalation for a live-word-gated antagonist (excursion suppression).
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
 _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
+_NESTED_MAX_BRANCHES = 8
 
 ActionPair = tuple[str, Any]
 CorrectionIdentity = tuple[tuple[str, Any], ...]
@@ -147,6 +148,10 @@ class RegressionWitness:
     channel_tag: str
     source: Any
     departed: Any
+    # The bounded incident may pass through the same first channel edge and
+    # executor pipeline yet reach a different outcome. Keep that landing as
+    # part of the witness so nested investigation groups effects, not plumbing.
+    landing: Any
     departure_scan: int
     cause: tuple[CausalOccurrence, ...]
     causal_spine: frozenset[str]
@@ -155,6 +160,23 @@ class RegressionWitness:
     # departure scan. A correction may become active long after the incident
     # anchor, so lifecycle ownership cannot be reconstructed from the anchor.
     owner_snapshot: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ReplacementEvidence:
+    """A counterfactual branch that reproduced a channel departure.
+
+    ``plc`` is the replay fork that observed the branch.  Investigation needs
+    that exact history to derive a correction for the newly exposed cause;
+    replay owns observation, not interpretation. ``shared_suffix`` is ordered
+    effect-backward and contains the exact rung/write pipeline common to the
+    recorded and replacement causes of the same bounded channel outcome.
+    """
+
+    plc: Any
+    incident: DeviationIncident
+    witness: RegressionWitness
+    shared_suffix: tuple[CausalOccurrence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -216,6 +238,7 @@ class ReplayOutcome:
     # sibling hypotheses; replay itself does not know the incident's full
     # proposal set.
     replacement_cause: frozenset[str] = frozenset()
+    replacement: ReplacementEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -384,6 +407,7 @@ def incident_regression_witness(
         channel_tag=channel,
         source=effect.from_value,
         departed=effect.to_value,
+        landing=incident.after_snap.get(channel),
         departure_scan=departure.scan,
         cause=tuple(cause),
         causal_spine=frozenset(chase_chain_tags(plc, channel, scan=departure.scan)),
@@ -463,15 +487,15 @@ class _RegressionOwnership:
     replacement_replays_recorded: bool | None
     unrelated_departure: bool
     neutralized: bool
+    shared_suffix: tuple[CausalOccurrence, ...] = ()
 
 
-def _replacement_departure_cause(
-    plc: PLC,
+def _replacement_departure_scan(
     witness: RegressionWitness,
     events: Sequence[Any],
-) -> frozenset[str] | None:
-    """Causal spine of the first replacement departure in this bounded replay."""
-    departure_scan = next(
+) -> int | None:
+    """First counterfactual departure from the recorded channel source."""
+    return next(
         (
             event.scan
             for event in events
@@ -482,10 +506,55 @@ def _replacement_departure_cause(
         ),
         None,
     )
-    if departure_scan is None:
-        return None
-    tags = chase_chain_tags(plc, witness.channel_tag, scan=departure_scan)
-    return frozenset(tags) if tags else None
+
+
+def _same_occurrence(left: CausalOccurrence, right: CausalOccurrence) -> bool:
+    return (
+        left.rung == right.rung
+        and left.tag == right.tag
+        and _values_match(left.value, right.value)
+    )
+
+
+def _same_bounded_channel_outcome(
+    recorded: RegressionWitness,
+    replacement: RegressionWitness,
+) -> bool:
+    """Whether two witnesses describe the same bounded transition outcome.
+
+    The first departure identifies the participating transition. The landing
+    distinguishes another cause of the failure from a healthy path that merely
+    begins with the same transition and uses the same executor machinery.
+    """
+    return (
+        recorded.channel_tag == replacement.channel_tag
+        and _values_match(recorded.source, replacement.source)
+        and _values_match(recorded.departed, replacement.departed)
+        and _values_match(recorded.landing, replacement.landing)
+    )
+
+
+def _shared_causal_suffix(
+    recorded: RegressionWitness,
+    replacement: RegressionWitness | None,
+) -> tuple[CausalOccurrence, ...]:
+    """Exact downstream pipeline shared by two effect-backward witnesses.
+
+    ``CausalChain.steps`` and therefore :attr:`RegressionWitness.cause` are
+    effect-first. Their common prefix is the program's common downstream
+    suffix. One shared occurrence is normally only the generic channel
+    executor; two prove a participating transition plus its executor pipeline.
+    The bounded landing must also match: the same first hop through the same
+    plumbing can be a healthy detour rather than another cause of the failure.
+    """
+    if replacement is None or not _same_bounded_channel_outcome(recorded, replacement):
+        return ()
+    common: list[CausalOccurrence] = []
+    for left, right in zip(recorded.cause, replacement.cause, strict=False):
+        if not _same_occurrence(left, right):
+            break
+        common.append(left)
+    return tuple(common) if len(common) >= 2 else ()
 
 
 def _regression_ownership(
@@ -496,6 +565,7 @@ def _regression_ownership(
     *,
     start_scan: int,
     end_scan: int,
+    replacement_witness: RegressionWitness | None = None,
     prior_neutralized: bool = False,
 ) -> _RegressionOwnership:
     """Judge the recorded branch and any replacement inside its bounded replay.
@@ -513,14 +583,14 @@ def _regression_ownership(
         for event in bounded_events
         for tag, _before, after in event.transitions
     )
-    cause_silenced = not _regression_cause_replayed(
+    changed_writes_silenced = not _regression_cause_replayed(
         plc,
         witness,
         start_scan=start_scan,
         end_scan=end_scan,
     )
     replacement_cause = (
-        _replacement_departure_cause(plc, witness, bounded_events) if not source_preserved else None
+        replacement_witness.causal_spine if replacement_witness is not None else None
     )
     replacement_owned = (
         bool(proposal_tags & replacement_cause) if replacement_cause is not None else None
@@ -533,6 +603,14 @@ def _regression_ownership(
         and replacement_replays_recorded is False
         and replacement_owned is False
     )
+    shared_suffix = _shared_causal_suffix(witness, replacement_witness)
+    branch_replaced = (
+        bool(shared_suffix)
+        and replacement_replays_recorded is False
+        and replacement_owned is False
+    )
+    cause_silenced = changed_writes_silenced or branch_replaced
+    unrelated_departure = unrelated_departure and not shared_suffix
     del prior_neutralized
     return _RegressionOwnership(
         source_preserved=source_preserved,
@@ -541,7 +619,8 @@ def _regression_ownership(
         replacement_owned=replacement_owned,
         replacement_replays_recorded=replacement_replays_recorded,
         unrelated_departure=unrelated_departure,
-        neutralized=(source_preserved and cause_silenced) or unrelated_departure,
+        neutralized=(source_preserved and cause_silenced) or branch_replaced or unrelated_departure,
+        shared_suffix=shared_suffix,
     )
 
 
@@ -671,6 +750,28 @@ def build_replay_fn(
         incident_replay_end = probe.state.scan_id
         snap = dict(probe.state.tags)
         proposal_tags = {_proposal_pair(hold)[0] for hold in holds}
+        replacement_incident: DeviationIncident | None = None
+        replacement_witness: RegressionWitness | None = None
+        if regression_witness is not None:
+            replacement_scan = _replacement_departure_scan(
+                regression_witness,
+                session.events,
+            )
+            if replacement_scan is not None:
+                replacement_incident = build_deviation_incident(
+                    anchor_scan=cp_fork.state.scan_id,
+                    end_scan=incident_replay_end,
+                    action=(),
+                    bearing=((regression_witness.channel_tag, regression_witness.source),),
+                    before_snap=dict(cp_fork.state.tags),
+                    after_snap=snap,
+                    timeline=session.events,
+                    channel_tag=regression_witness.channel_tag,
+                )
+                replacement_witness = incident_regression_witness(
+                    probe,
+                    replacement_incident,
+                )
         ownership = (
             _regression_ownership(
                 probe,
@@ -679,6 +780,7 @@ def build_replay_fn(
                 proposal_tags,
                 start_scan=cp_fork.state.scan_id,
                 end_scan=incident_replay_end,
+                replacement_witness=replacement_witness,
             )
             if regression_witness is not None
             else None
@@ -788,6 +890,18 @@ def build_replay_fn(
                     ownership.replacement_cause or frozenset()
                     if ownership is not None
                     else frozenset()
+                ),
+                replacement=(
+                    ReplacementEvidence(
+                        plc=probe,
+                        incident=replacement_incident,
+                        witness=replacement_witness,
+                        shared_suffix=ownership.shared_suffix,
+                    )
+                    if ownership is not None
+                    and replacement_incident is not None
+                    and replacement_witness is not None
+                    else None
                 ),
             )
 
@@ -1315,6 +1429,65 @@ def _rank_hypotheses(
     return [h for _, h in sorted(enumerate(hypotheses), key=_key)]
 
 
+def _generate_deviation_hypotheses(
+    plc: PLC,
+    incident: DeviationIncident,
+    ctx: Any,
+    *,
+    installed: Mapping[str, Any] | None = None,
+) -> tuple[list[InvestigationHypothesis], frozenset[str]]:
+    """Generate and rank one incident's evidence-derived hypotheses."""
+    absence_hyps, absence_tags = _absence_root_correctives(
+        plc,
+        incident,
+        ctx,
+        exclude=frozenset(tag for tag, _value in incident.action),
+        installed=installed or {},
+    )
+    raw: list[InvestigationHypothesis] = list(absence_hyps)
+    raw.extend(_precise_causes(plc, incident, ctx))
+    raw.extend(
+        InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
+        for c in correct_enablers(plc, incident, ctx)
+    )
+    ranked = _rank_hypotheses(
+        plc,
+        _dedupe_hypotheses(raw),
+        incident,
+        ctx,
+        primal_extra=absence_tags,
+    )
+    return ranked, absence_tags
+
+
+def _compose_hypotheses(
+    base: InvestigationHypothesis,
+    addition: InvestigationHypothesis,
+) -> InvestigationHypothesis | None:
+    """Create a newly replayable union, declining contradictory operations."""
+    holds = list(base.holds)
+    seen = {_proposal_identity(hold) for hold in holds}
+    by_dest = {dest: value for dest, value in map(_proposal_pair, holds)}
+    for hold in addition.holds:
+        dest, value = _proposal_pair(hold)
+        if dest in by_dest and not _values_match(by_dest[dest], value):
+            return None
+        identity = _proposal_identity(hold)
+        if identity not in seen:
+            seen.add(identity)
+            holds.append(hold)
+            by_dest.setdefault(dest, value)
+    if len(holds) == len(base.holds):
+        return None
+    kind = base.kind if base.kind == addition.kind else "nested-cause"
+    return InvestigationHypothesis(
+        kind=kind,
+        holds=tuple(holds),
+        sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
+        detail=f"nested causal closure: {base.detail}; then {addition.detail}",
+    )
+
+
 def investigate_deviation(
     plc: PLC,
     incident: DeviationIncident,
@@ -1337,13 +1510,10 @@ def investigate_deviation(
        a guard-breaking assignment or an owner-declared accumulator operation.
     No upstream cone sweep.
 
-    Hypotheses are **competing explanations of one incident, not a bundle of
-    independent fixes**: they are ranked by causal primacy
-    (:func:`_rank_hypotheses`) and the FIRST hypothesis that survives the
-    static self-defeat check (*needed* — the checkpoint frontier) and the
-    replay is confirmed **alone**. A union of individually-replayed holds is an
-    untested configuration — installing exactly one keeps the installed set
-    exactly what was replayed. Hypotheses whose holds are *already installed*
+    Hypotheses are ranked by causal primacy. A counterfactual replacement with
+    the same bounded channel outcome and exact participating pipeline extends
+    the current hypothesis inside this investigation; the composite is then
+    replayed from the original checkpoint. Hypotheses whose holds are *already installed*
     (*installed*) are skipped, not re-confirmed: they were active when the
     incident happened, so a repeat regression at the same key escalates to the
     runner-up instead of re-anointing the incumbent.
@@ -1367,25 +1537,13 @@ def investigate_deviation(
         for rung in overlay.effective
         if _rung_identity(rung) in correction_ids
     }
-    absence_hyps, absence_tags = _absence_root_correctives(
+    hypotheses, _absence_tags = _generate_deviation_hypotheses(
         plc,
         incident,
         ctx,
-        # Protect only the action that launched this incident. Historical
-        # Pilot ownership is not causal evidence; deep cause replays the actual
-        # installed synthesis and can attribute an active or expired rule.
-        exclude=frozenset(tag for tag, _value in incident.action),
         installed=correction_active,
     )
-    raw: list[InvestigationHypothesis] = list(absence_hyps)
-    raw.extend(_precise_causes(plc, incident, ctx))
-    raw.extend(
-        InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
-        for c in correct_enablers(plc, incident, ctx)
-    )
-    hypotheses = _rank_hypotheses(
-        plc, _dedupe_hypotheses(raw), incident, ctx, primal_extra=absence_tags
-    )
+    observed_hypotheses = list(hypotheses)
     confirmed: list[InvestigationHypothesis] = []
     confirmed_correction: _ConfirmedCorrection | None = None
     rejected: list[InvestigationRejection] = []
@@ -1398,6 +1556,34 @@ def investigate_deviation(
 
     def _reject(hyp: InvestigationHypothesis, slug: str, detail: str) -> None:
         rejected.append(InvestigationRejection(hyp, slug, detail))
+
+    def _extend_from_replacement(
+        current: InvestigationHypothesis,
+        evidence: ReplacementEvidence,
+    ) -> InvestigationHypothesis | None:
+        """Derive the next cut from the retained fork and add it to *current*."""
+        nested, _absence = _generate_deviation_hypotheses(
+            evidence.plc,
+            evidence.incident,
+            ctx,
+        )
+        for candidate in nested:
+            identity = correction_identity(candidate.holds)
+            equivalent = next(
+                (
+                    known
+                    for known in observed_hypotheses
+                    if correction_identity(known.holds) == identity
+                ),
+                None,
+            )
+            chosen = equivalent or candidate
+            if equivalent is None:
+                observed_hypotheses.append(candidate)
+            composite = _compose_hypotheses(current, chosen)
+            if composite is not None:
+                return composite
+        return None
 
     for hypothesis in hypotheses:
         if not hypothesis.holds:
@@ -1453,11 +1639,46 @@ def investigate_deviation(
                 "vacuous no-op hold: every proposed value is already stable in the incident anchor",
             )
             continue
-        outcome = replay(hypothesis.holds)
-        if outcome.accepted:
+        current = hypothesis
+        seen_replacements: set[tuple[Any, ...]] = set()
+        for _nested_depth in range(_NESTED_MAX_BRANCHES + 1):
+            outcome = replay(current.holds)
+            if not outcome.accepted:
+                _reject(
+                    current,
+                    "exploratory-replay-failed",
+                    "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
+                )
+                break
+            replacement = outcome.replacement
+            if replacement is not None and replacement.shared_suffix:
+                fingerprint = tuple(
+                    (item.rung, item.tag, _semantic_key(item.value))
+                    for item in replacement.witness.cause
+                )
+                if fingerprint in seen_replacements:
+                    _reject(
+                        current,
+                        "nested-cause-cycle",
+                        "counterfactual replacement cause repeated inside one investigation",
+                    )
+                    break
+                seen_replacements.add(fingerprint)
+                extended = _extend_from_replacement(current, replacement)
+                if extended is None:
+                    _reject(
+                        current,
+                        "nested-cause-unresolved",
+                        "replacement reproduced the same bounded outcome and pipeline "
+                        "but yielded no additional corrective cut",
+                    )
+                    break
+                current = extended
+                continue
+
             scoped = _scoped_correction_rungs(
                 plc,
-                hypothesis.holds,
+                current.holds,
                 incident,
                 outcome,
                 ctx,
@@ -1482,19 +1703,48 @@ def investigate_deviation(
                 # guard limits where the pin applies, but cannot make it harmless
                 # while that context is active.
                 _reject(
-                    hypothesis,
+                    current,
                     "self-defeat",
                     "guarded correction defeats requested progress: "
                     f"needed={required_progress!r}, correction={tuple(scoped)!r}",
                 )
-                continue
+                break
             installed_outcome = replay(scoped)
+            installed_replacement = installed_outcome.replacement
+            if (
+                installed_outcome.accepted
+                and installed_replacement is not None
+                and installed_replacement.shared_suffix
+            ):
+                fingerprint = tuple(
+                    (item.rung, item.tag, _semantic_key(item.value))
+                    for item in installed_replacement.witness.cause
+                )
+                if fingerprint in seen_replacements:
+                    _reject(
+                        current,
+                        "nested-cause-cycle",
+                        "guarded replay repeated a counterfactual replacement cause",
+                    )
+                    break
+                seen_replacements.add(fingerprint)
+                extended = _extend_from_replacement(current, installed_replacement)
+                if extended is None:
+                    _reject(
+                        current,
+                        "nested-cause-unresolved",
+                        "guarded replacement reproduced the same bounded outcome and pipeline "
+                        "but yielded no additional corrective cut",
+                    )
+                    break
+                current = extended
+                continue
             if installed_outcome.accepted:
                 confirmed_hypothesis = InvestigationHypothesis(
-                    kind=hypothesis.kind,
+                    kind=current.kind,
                     holds=scoped,
-                    sources=hypothesis.sources,
-                    detail=hypothesis.detail,
+                    sources=current.sources,
+                    detail=current.detail,
                 )
                 confirmed.append(confirmed_hypothesis)
                 confirmed_correction = _ConfirmedCorrection(
@@ -1507,24 +1757,27 @@ def investigate_deviation(
                         else installed_outcome.reason or "replay-confirmed"
                     ),
                 )
-                break  # first confirmed wins — one intervention per incident
+                break
             _reject(
-                hypothesis,
+                current,
                 "guarded-replay-failed",
                 "guarded replay rejected: "
                 + (installed_outcome.reason or "no replay reason supplied"),
             )
-            continue
-        _reject(
-            hypothesis,
-            "exploratory-replay-failed",
-            "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
-        )
+            break
+        else:
+            _reject(
+                current,
+                "nested-cause-budget",
+                f"nested causal closure exceeded {_NESTED_MAX_BRANCHES} replacement branches",
+            )
+        if confirmed:
+            break  # first confirmed composite wins — one intervention per incident
 
     return InvestigationResult(
         correction=confirmed_correction,
         regression_nogoods=frozenset(),
-        hypotheses=tuple(hypotheses),
+        hypotheses=tuple(observed_hypotheses),
         confirmed=tuple(confirmed),
         rejected=tuple(rejected),
         unresolved=incident.changed_tags if not confirmed else (),
