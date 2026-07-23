@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 ActionPair = tuple[str, Any]
 Action = ActionPair
+ActionLookup = dict[tuple[str, str], tuple[ActionPair, ...]]
 ANY_FROM = object()
 
 
@@ -107,7 +108,7 @@ class StaticTransitionGraph:
         self,
         role: PipelineRoles,
         routes: tuple[TransitionRoute, ...],
-        action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]] | None = None,
+        action_lookup: ActionLookup | None = None,
         program_producers: dict[tuple[str, str], tuple[Any, ...]] | None = None,
     ) -> None:
         self.role = role
@@ -273,7 +274,7 @@ def _best_static_path(
 def _edges_from_routes(
     role: PipelineRoles,
     routes: tuple[TransitionRoute, ...],
-    action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
+    action_lookup: ActionLookup,
     program_producers: dict[tuple[str, str], tuple[Any, ...]] | None = None,
 ) -> tuple[StaticTransitionEdge, ...]:
     edges: list[StaticTransitionEdge] = []
@@ -283,9 +284,13 @@ def _edges_from_routes(
         from_values = _route_from_values(role, route)
         # Actions: directly-steerable enablers, plus enablers bridged through a
         # convergence pipeline to a steerable button (``CtrlCmd==1 -> CmdReset``).
-        action_pairs = _route_action_pairs(route) + _enabler_action_pairs(route, action_lookup)
+        action_pairs = _dedupe_action_pairs(
+            (*_route_action_pairs(route), *_enabler_action_pairs(route, action_lookup))
+        )
         if not action_pairs:
-            action_pairs = _constraint_action_pairs(role, route, action_lookup)
+            action_pairs = _dedupe_action_pairs(
+                _constraint_action_pairs(role, route, action_lookup)
+            )
         # Co-actions ride only on action-bearing (command) edges; the one-shot
         # edge gate (``rise(CmdChgRequest)``) must fire the same scan as the
         # button.  Completion edges have no edge gates → coast.
@@ -372,13 +377,19 @@ def _build_action_lookup(
     steerable: frozenset[str],
     opaque_loop: frozenset[str],
     evidence: Any,
-) -> dict[tuple[str, str], tuple[ActionPair, ...]]:
+) -> ActionLookup:
+    """Map an intermediate value to every primary action that can produce it.
+
+    The values are ordered alternatives, not a batch: ``_edges_from_routes``
+    fans them into distinct edges.  Only a route's ``edge_gates`` become
+    simultaneous co-actions.
+    """
     constraint_tags = {tag for route in routes for tag, _value in route.source_constraints}
     # Enabler tags too: a command's cause is a convergence enabler (``CtrlCmd``),
     # not a source constraint, and bridging it to the steerable button is what
     # makes a command edge fireable.
     constraint_tags |= {tag for route in routes for tag, _value in route.enablers}
-    lookup: dict[tuple[str, str], tuple[ActionPair, ...]] = {}
+    alternatives: dict[tuple[str, str], list[ActionPair]] = {}
     for tag in sorted(constraint_tags):
         if tag not in pdg.tags:
             continue
@@ -387,14 +398,15 @@ def _build_action_lookup(
                 continue
             pairs = _route_action_pairs(route)
             if pairs:
-                lookup[(tag, _value_key(route.destination_value))] = pairs
-    return lookup
+                key = (tag, _value_key(route.destination_value))
+                alternatives.setdefault(key, []).extend(pairs)
+    return {key: _dedupe_action_pairs(pairs) for key, pairs in alternatives.items()}
 
 
 def _constraint_action_pairs(
     role: PipelineRoles,
     route: TransitionRoute,
-    action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
+    action_lookup: ActionLookup,
 ) -> tuple[ActionPair, ...]:
     pairs: list[ActionPair] = []
     for tag, value in route.source_constraints:
@@ -416,7 +428,7 @@ def _route_action_pairs(route: TransitionRoute) -> tuple[ActionPair, ...]:
 
 def _enabler_action_pairs(
     route: TransitionRoute,
-    action_lookup: dict[tuple[str, str], tuple[ActionPair, ...]],
+    action_lookup: ActionLookup,
 ) -> tuple[ActionPair, ...]:
     """Bridge a route's non-steerable enablers to steerable actions.
 
@@ -467,6 +479,21 @@ def _dedupe_values(values: list[Any]) -> tuple[Any, ...]:
     for value in values:
         if not any(_values_match(value, seen) for seen in result):
             result.append(value)
+    return tuple(result)
+
+
+def _dedupe_action_pairs(
+    pairs: tuple[ActionPair, ...] | list[ActionPair],
+) -> tuple[ActionPair, ...]:
+    """Keep the first occurrence of each action without changing preference."""
+
+    seen: set[tuple[str, str]] = set()
+    result: list[ActionPair] = []
+    for tag, value in pairs:
+        key = (tag, _value_key(value))
+        if key not in seen:
+            seen.add(key)
+            result.append((tag, value))
     return tuple(result)
 
 

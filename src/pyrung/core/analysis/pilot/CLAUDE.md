@@ -210,6 +210,9 @@ an internal state or policy.
 - Static charts enumerate every source match, exact edges before wildcard
   edges. Callers own exclusions through `edge_allowed`: specificity is
   precedence, never a pre-filter veto of a surviving wildcard route.
+- A convergence lookup is an ordered multimap of primary-action alternatives.
+  Chart construction fans each alternative into its own edge; only a route's
+  `edge_gates` are simultaneous co-actions.
 - A program-written tag may be removed from the steerable set by recorded
   evidence. Empirical evidence never creates a new lever.
 - A correction is installed only in the exact guarded form that survived

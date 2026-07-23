@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from pyrung.core.analysis.pilot.charts import (
     StaticTransitionGraph,
     _best_static_path,
+    _build_action_lookup,
     _edges_from_routes,
 )
 from pyrung.core.analysis.pilot.compass import (
@@ -64,6 +65,109 @@ def _wildcard_action_route(to_value: int, action: str) -> TransitionRoute:
         writer_subroutine=None,
         call_site_gates=(),
     )
+
+
+def _convergence_action_route(action: str) -> TransitionRoute:
+    return TransitionRoute(
+        destination_tag="CtrlCmd",
+        destination_value=7,
+        request_tag=None,
+        request_value=None,
+        source_constraints=(),
+        enablers=((action, True),),
+        action_tags=frozenset({action}),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+    )
+
+
+def _convergence_consumer_route(*, direct_action: str | None = None) -> TransitionRoute:
+    enablers = (("CtrlCmd", 7),)
+    action_tags: frozenset[str] = frozenset()
+    if direct_action is not None:
+        enablers = ((direct_action, True), *enablers)
+        action_tags = frozenset({direct_action})
+    return TransitionRoute(
+        destination_tag="State",
+        destination_value=2,
+        request_tag=None,
+        request_value=None,
+        source_constraints=(("State", 0),),
+        enablers=enablers,
+        action_tags=action_tags,
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(0,),
+    )
+
+
+def test_convergent_actions_remain_ordered_independent_edges(monkeypatch) -> None:
+    """Commands reaching one intermediate value are alternatives, not a batch."""
+    first = _convergence_action_route("First")
+    second = _convergence_action_route("Second")
+
+    def routes_for_ctrl_cmd(*_args, **_kwargs):
+        return [first, second]
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.charts.expand_routes",
+        routes_for_ctrl_cmd,
+    )
+    consumer = _convergence_consumer_route()
+    lookup = _build_action_lookup(
+        (consumer,),
+        SimpleNamespace(tags={"CtrlCmd": object()}),
+        object(),
+        frozenset({"First", "Second"}),
+        frozenset(),
+        None,
+    )
+
+    assert lookup[("CtrlCmd", repr(7))] == (("First", True), ("Second", True))
+
+    graph = StaticTransitionGraph(PipelineRoles("State"), (consumer,), lookup)
+    assert [edge.action for edge in graph.edges] == [
+        ("First", True),
+        ("Second", True),
+    ]
+    assert all(not edge.co_actions for edge in graph.edges)
+    preferred = graph.find_path(0, (2,), edge_allowed=lambda _edge: True)
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "First": False, "Second": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target_tag="State",
+        target_value=2,
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+    )
+    fallback = _compass_route_plan(frame, ctx, {("First", True)})
+
+    assert preferred is not None
+    assert preferred.first_edge.action == ("First", True)
+    assert fallback is not None
+    assert fallback.first_edge.action == ("Second", True)
+
+
+def test_direct_and_convergent_action_is_fanned_out_once() -> None:
+    consumer = _convergence_consumer_route(direct_action="First")
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (consumer,),
+        {("CtrlCmd", repr(7)): (("First", True), ("Second", True))},
+    )
+
+    assert [edge.action for edge in graph.edges] == [
+        ("First", True),
+        ("Second", True),
+    ]
 
 
 def test_static_path_prefers_exact_edge_over_wildcard_match() -> None:
