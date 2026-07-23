@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.navigation import (
     ProbeRequest,
     Pulse,
     RouteExhausted,
+    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -215,7 +216,7 @@ def _read_committed_route(
     )
     for choice, tree in ranked:
         identity = trace_choice_identity(choice)
-        if identity in constraints.exhausted_root_routes:
+        if identity in constraints.skipped_root_routes:
             continue
         rejected = _route_rejected_actions(tree, world, exclusions)
         if rejected is not None:
@@ -312,7 +313,8 @@ def _probe_or_stuck(
     world: OrientationWorld,
     candidates: Any,
     reason: str,
-) -> NeedProbe | Stuck:
+    constraints: NavigationConstraints,
+) -> NeedProbe | Stuck | RouteUnproductive:
     frontier = _frontier(world, candidates)
     count = compass.knowledge.probe_count(world.world_key)
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
@@ -334,13 +336,27 @@ def _probe_or_stuck(
             provenance=("trace", "static-path", "learned-path"),
             trace=trace,
         )
+    evidence = (f"probe budget {count}",)
+    rationale = f"no admissible bearing remains after {count} probe round(s)"
+    if constraints.active_root_route is not None and world.root_route is not None:
+        return RouteUnproductive(
+            world_key=world.world_key,
+            route=world.root_route,
+            route_identity=trace_choice_identity(world.root_route),
+            reason_code=reason,
+            frontier=frontier,
+            exclusions=exclusions,
+            evidence=evidence,
+            rationale=rationale,
+            trace=trace,
+        )
     return Stuck(
         world_key=world.world_key,
         reason_code=reason,
         frontier=frontier,
         exclusions=exclusions,
-        evidence=(f"probe budget {count}",),
-        rationale=f"no admissible bearing remains after {count} probe round(s)",
+        evidence=evidence,
+        rationale=rationale,
         trace=trace,
     )
 
@@ -378,7 +394,7 @@ def orient(
     target: TargetSpec,
     constraints: NavigationConstraints,
 ) -> OrientationResult:
-    """Return one act, one probe request, or one structured stop.
+    """Return one act, one probe request, one route disposition, or one stop.
 
     The candidate reader still materializes all evidence-rich options so
     diagnostics and ranking remain inspectable.  This function is the only
@@ -576,6 +592,7 @@ def orient(
             world,
             candidates,
             candidates.stuck_reason,
+            constraints,
         )
 
     terminal: Coast | Dwell
@@ -594,4 +611,4 @@ def orient(
             rationale=rationale,
         )
 
-    return _probe_or_stuck(compass, world, candidates, "all_rejected")
+    return _probe_or_stuck(compass, world, candidates, "all_rejected", constraints)

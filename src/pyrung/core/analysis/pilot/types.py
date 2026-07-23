@@ -503,10 +503,10 @@ class _PilotState:
     watch_tags: list[str]
     last_wait_log: tuple[Any, ...] | None = None
     # One active inferred root-route commitment. It is re-traced from each live
-    # snapshot and survives score changes; only an exact current-world exhaustion
+    # snapshot and survives score changes; only a current-world route disposition
     # receipt revokes it. Explicit ``via=`` lives in context and is non-revocable.
     inferred_route_commitment: TraceChoice | None = None
-    exhausted_route_ids: dict[_StateKey, set[tuple[Any, ...]]] = field(default_factory=dict)
+    skipped_route_ids: dict[_StateKey, set[tuple[Any, ...]]] = field(default_factory=dict)
     # The target-relative progress gauge (gauge.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
     # built once at loop init; a None/empty gauge degrades consumers (verify

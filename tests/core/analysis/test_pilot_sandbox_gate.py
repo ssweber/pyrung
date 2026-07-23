@@ -243,7 +243,10 @@ def test_undeclared_word_stops_without_guessing_at_a_cause():
     path = pilot_how(plc, output, max_scans=600)
     assert not path.reachable, "an undeclared free word has no complete domain to probe"
     assert path.status is PlanStatus.STOPPED
-    assert path.reason == "No safe next action was found; still waiting on Output=True (have False)"
+    assert (
+        path.reason
+        == "No productive next action was found; still waiting on Output=True (have False)"
+    )
     assert "CfgWord" not in path.reason
 
 

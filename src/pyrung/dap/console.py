@@ -693,7 +693,7 @@ class _PilotProgressFormatter:
             return f"\n  Returning to the last good state{after_move}; no correction was found.\n"
 
         if kind == "stuck":
-            reason = str(data.get("reason") or "No safe next action was found.")
+            reason = str(data.get("reason") or "No productive next action was found.")
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
             prefix = (
                 "\n"

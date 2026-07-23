@@ -103,12 +103,12 @@ class TestPlanDisplay:
             reachable=False,
             target_tag="X",
             target_value=True,
-            reason="No safe next action was found; still waiting on Guard=True (have False)",
+            reason="No productive next action was found; still waiting on Guard=True (have False)",
             status=PlanStatus.STOPPED,
         )
         assert str(plan) == (
             "Stopped before reaching X=True.\n"
-            "  Reason: No safe next action was found.\n"
+            "  Reason: No productive next action was found.\n"
             "  Waiting for: Guard=True (have False)"
         )
 

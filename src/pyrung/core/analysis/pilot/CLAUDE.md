@@ -26,9 +26,10 @@ The exception is the user's explicit trace-route lock. `_prepare_route` chooses
 it once before the loop because `via=` expresses positive user intent. `avoid=`
 remains a constraint at every read/action/scan gate. An inferred root route is
 one revocable commitment, not a queued suffix: re-trace it from each current
-world until exact world-scoped rejections exhaust every live action, then revoke
-it and re-enumerate root routes from that world. A graph path or learned
-transition is evidence for the next action only.
+world until exact world-scoped rejections exhaust every live action or bounded
+reading finds no productive bearing, then revoke it and re-enumerate root routes
+from that world. A graph path or learned transition is evidence for the next
+action only.
 
 ### Read before probing
 
@@ -98,8 +99,10 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Inferred root-route lifecycle: `orientation.py` selects only when no inferred
-  commitment exists and returns `RouteExhausted`; `pilot.py` retains or revokes
-  that one receipt and remembers world-scoped exhausted route identities
+commitment exists and returns `RouteExhausted` for exact rejected-action
+exhaustion or `RouteUnproductive` after bounded reading finds no productive
+bearing; `pilot.py` retains or revokes that one receipt and remembers
+world-scoped skipped route identities
 - Writer eligibility and order: `trace.py::_rank_writers`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's unchanged-world proof: `program_step.py::read_program_step`
@@ -132,12 +135,15 @@ should consume the first owner's result.
 
 1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
 2. Compass reads trace, catalog, currents, constraints, and knowledge, then
-   returns exactly one `Bearing`, `NeedProbe`, or `Stuck`.
+   returns exactly one `Bearing`, `NeedProbe`, `RouteExhausted`,
+   `RouteUnproductive`, or `Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
    attempts, before any further orientation.
-5. A `RouteExhausted` result revokes only an inferred root-route commitment; an
+5. `RouteExhausted` records exact rejected-action exhaustion.
+   `RouteUnproductive` records an actionless inferred route after bounded
+   reading and probing. Either revokes an inferred root-route commitment; an
    exhausted explicit `via=` lock is terminal. The next iteration re-enumerates
    inferred alternatives from its then-current world.
 6. An accepted fork is committed and `progress.py` decides retention,

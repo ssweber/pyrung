@@ -691,7 +691,7 @@ class Plan:
                 if self.status is PlanStatus.CANNOT_REACH
                 else f"Stopped before reaching {goal}."
             )
-            reason = self.reason or "No safe next action was found."
+            reason = self.reason or "No productive next action was found."
             reason = reason.removeprefix("pilot: ").removeprefix("stuck: ")
             if "; still waiting on " in reason:
                 reason, waiting = reason.split("; still waiting on ", 1)

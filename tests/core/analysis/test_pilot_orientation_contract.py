@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.navigation import (
     NeedProbe,
     OrientationWorld,
     Pulse,
+    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -222,6 +223,33 @@ def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:
     )
     assert isinstance(result, Stuck)
     assert result.reason_code == "trace_opaque"
+
+
+def test_orient_returns_unproductive_after_budget_for_inferred_route(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    from pyrung.core.analysis.pilot.trace import TraceChoice
+
+    active = TraceChoice(id="route-a", label="A", route=("A",))
+    compass = Compass()
+    for _ in range(2):
+        compass, _ = compass.apply((ProbeExhaustedObservation(("world",)),))
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(stuck_reason="trace_opaque"),
+    )
+    world = replace(_world(compass), root_route=active)
+
+    result = compass.orient(
+        world,
+        TargetSpec("Target", True),
+        NavigationConstraints(active_root_route=active),
+    )
+
+    assert isinstance(result, RouteUnproductive)
+    assert result.route is active
+    assert result.reason_code == "trace_opaque"
+    assert result.evidence == ("probe budget 2",)
 
 
 def test_orient_does_not_mutate_world_context_or_knowledge(monkeypatch) -> None:

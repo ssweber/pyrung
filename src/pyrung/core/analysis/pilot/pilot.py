@@ -1,8 +1,8 @@
 """Public entry points and outer orchestration for PILOT drives.
 
 This module builds static/runtime context, prepares the user-selected trace
-route, and dispatches ``Bearing | NeedProbe | RouteExhausted | Stuck`` results
-from ``Compass``.
+route, and dispatches ``Bearing | NeedProbe | RouteExhausted |
+RouteUnproductive | Stuck`` results from ``Compass``.
 It invokes execution, applies observations, commits eligible forks, delegates
 post-commit recovery, and converts the event stream into public results.  It
 does not synthesize a navigation decision.
@@ -54,6 +54,7 @@ from pyrung.core.analysis.pilot.navigation import (
     OrientationWorld,
     Pulse,
     RouteExhausted,
+    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -480,11 +481,9 @@ def _with_avoid_reason(
     )
 
 
-def _stopped_reason(reason_code: str) -> str:
+def _stopped_reason(_reason_code: str) -> str:
     """Translate internal orientation taxonomy into an honest public stop."""
-    if reason_code == "all_rejected":
-        return "Every available action failed its trial"
-    return "No safe next action was found"
+    return "No productive next action was found"
 
 
 def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str, ...]:
@@ -916,9 +915,9 @@ def _pilot_loop_events(
             blocked_actions=ctx.blocked_route_actions,
             avoid_predicate=ctx.avoid_pred,
             active_root_route=state.inferred_route_commitment,
-            exhausted_root_routes=(
+            skipped_root_routes=(
                 frozenset(
-                    state.exhausted_route_ids.get(
+                    state.skipped_route_ids.get(
                         _pilot_world_key(
                             dict(state.work.state.tags),
                             state.key_config,
@@ -973,7 +972,7 @@ def _pilot_loop_events(
         )
 
         if isinstance(result, RouteExhausted):
-            state.exhausted_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
+            state.skipped_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
             if result.revocable:
                 state.inferred_route_commitment = None
             yield PilotEvent(
@@ -1012,6 +1011,23 @@ def _pilot_loop_events(
             )
             return
 
+        if isinstance(result, RouteUnproductive):
+            state.skipped_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
+            state.inferred_route_commitment = None
+            yield PilotEvent(
+                "route_unproductive",
+                state.work.state.scan_id,
+                {
+                    "route": result.route,
+                    "identity": result.route_identity,
+                    "reason_code": result.reason_code,
+                    "frontier": result.frontier,
+                    "exclusions": result.exclusions,
+                    "evidence": result.evidence,
+                },
+            )
+            continue
+
         if ctx.route is None and state.inferred_route_commitment is None:
             state.inferred_route_commitment = orientation_world.root_route
 
@@ -1029,8 +1045,13 @@ def _pilot_loop_events(
                 },
             )
             if not changed:
+                if state.inferred_route_commitment is not None:
+                    # The probe-count receipt changed even when its observations
+                    # did not. Re-orient once so Orientation can own the
+                    # inferred route's unproductive disposition.
+                    continue
                 terminal_reason = _with_avoid_reason(
-                    "No safe next action was found",
+                    "No productive next action was found",
                     state,
                     ctx,
                     frame,

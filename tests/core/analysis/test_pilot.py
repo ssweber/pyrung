@@ -372,6 +372,47 @@ def test_rejected_inferred_root_route_falls_back_to_alternate():
     assert any(CmdA.name in alt.label for alt in path.route.pivots[0].alternatives)
 
 
+def test_actionless_inferred_root_route_falls_back_to_productive_sibling():
+    """An inferred route with no bearing must not hide a reachable sibling."""
+    AutoUpPermissive = Bool("ActionlessRoute_AutoUpPermissive", readonly=True)
+    Up = Bool("ActionlessRoute_Up")
+    ManualUp = Bool("ActionlessRoute_ManualUp")
+    Output = Bool("ActionlessRoute_Output")
+
+    with Program() as logic:
+        with rung(AutoUpPermissive):
+            out(Up)
+
+        with rung(Or(Up, And(ManualUp, ~Up))):
+            out(Output)
+
+    manual = PLC(logic)
+    manual.patch({ManualUp.name: True})
+    manual.step()
+    assert manual.state.tags[Output.name] is True
+
+    via_manual = PLC(logic).how(Output, via=ManualUp, max_scans=200)
+    assert via_manual.reachable, via_manual.reason
+    assert via_manual.changes == {ManualUp.name: True}
+    assert via_manual.replay().state.tags[Output.name] is True
+
+    via_up = PLC(logic).how(Output, via=Up, max_scans=200)
+    assert not via_up.reachable
+
+    events = []
+    inferred = PLC(logic).how(Output, max_scans=200, on_event=events.append)
+    assert inferred.reachable, inferred.reason
+    assert inferred.changes == {ManualUp.name: True}
+    assert inferred.replay().state.tags[Output.name] is True
+    unproductive = [event for event in events if event.kind == "route_unproductive"]
+    assert len(unproductive) == 1
+    assert unproductive[0].data["route"].label == f"{Up.name}=True"
+    assert unproductive[0].data["frontier"] == (
+        (Output.name, True),
+        (Up.name, True),
+    )
+
+
 def test_rejected_nested_writer_falls_back_to_sibling_writer():
     """A root-only route must not hide an untried intermediate writer."""
 

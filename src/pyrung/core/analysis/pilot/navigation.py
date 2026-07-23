@@ -89,7 +89,7 @@ class NavigationConstraints:
     blocked_actions: frozenset[_ActionPair] = frozenset()
     avoid_predicate: Any = None
     active_root_route: TraceChoice | None = None
-    exhausted_root_routes: frozenset[_RouteIdentity] = frozenset()
+    skipped_root_routes: frozenset[_RouteIdentity] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -238,7 +238,27 @@ class RouteExhausted:
     trace: OrientationTrace
 
 
-OrientationResult = Bearing | NeedProbe | Stuck | RouteExhausted
+@dataclass(frozen=True)
+class RouteUnproductive:
+    """An inferred root route offers no productive bearing in this world.
+
+    Unlike :class:`RouteExhausted`, this does not claim that concrete actions
+    were tried and rejected. Orientation reached the end of its bounded
+    read/wait/probe escalation while the route remained actionless.
+    """
+
+    world_key: _StateKey
+    route: TraceChoice
+    route_identity: _RouteIdentity
+    reason_code: str
+    frontier: tuple[_ActionPair, ...]
+    exclusions: tuple[Any, ...]
+    evidence: tuple[Any, ...]
+    rationale: str
+    trace: OrientationTrace
+
+
+OrientationResult = Bearing | NeedProbe | Stuck | RouteExhausted | RouteUnproductive
 
 
 def pulse_identity(applied: tuple[_ActionPair, ...]) -> tuple[Any, ...]:
