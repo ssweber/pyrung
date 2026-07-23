@@ -90,7 +90,7 @@ def test_active_inferred_root_route_is_retraced_without_reranking(monkeypatch) -
     monkeypatch.setattr(
         orientation,
         "_trace_for_route",
-        lambda _world, _target, _constraints, route: (
+        lambda _world, _target, _constraints, route, _rejected: (
             committed_tree if route is active else pytest.fail("commitment changed")
         ),
     )
@@ -279,6 +279,22 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
     )
     assert isinstance(next_result, Bearing)
     assert next_result.act.action == second.pair
+
+
+def test_trace_rejections_require_exact_singleton_pulse_artifact() -> None:
+    from pyrung.core.analysis.pilot.orientation import _exact_rejected_actions
+
+    first = ("First", True)
+    second = ("Second", True)
+    exclusions = frozenset(
+        {
+            ("pulse", (first,)),
+            ("pulse", (second, ("Gate", True))),
+            ("pair", ("Legacy", True)),
+        }
+    )
+
+    assert _exact_rejected_actions(exclusions) == frozenset({first})
 
 
 def test_stale_bearing_cannot_execute() -> None:

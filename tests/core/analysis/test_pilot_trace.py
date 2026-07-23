@@ -7,6 +7,7 @@ from pyrung import (
     Bool,
     Counter,
     Int,
+    Or,
     Program,
     Real,
     Timer,
@@ -48,6 +49,42 @@ def _steerable_names(node: TraceNode) -> set[str]:
 def _known(logic: Program) -> dict:
     plc = PLC(logic)
     return plc._known_tags_by_name
+
+
+def test_rejection_on_unselected_or_arm_does_not_rerank():
+    """Only rejection of the arm this Or selected enables fallback."""
+
+    CmdB = Bool("OrScope_CmdB", external=True)
+    Dead = Bool("OrScope_Dead")
+    MidB = Bool("OrScope_MidB")
+    Target = Bool("OrScope_Target")
+
+    with Program() as logic:
+        with rung(Dead):
+            out(Dead)
+        with rung(CmdB):
+            out(MidB)
+        with rung(Or(Dead, MidB)):
+            out(Target)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snapshot = {tag: False for tag in (CmdB.name, Dead.name, MidB.name, Target.name)}
+
+    baseline = trace_back(Target.name, True, snapshot, pdg, logic, steerable)
+    unrelated = trace_back(
+        Target.name,
+        True,
+        snapshot,
+        pdg,
+        logic,
+        steerable,
+        rejected_actions=frozenset({(CmdB.name, True)}),
+    )
+
+    assert baseline.children[0].tag == Dead.name
+    assert unrelated.children[0].tag == Dead.name
+    assert unrelated.ordered_actions() == baseline.ordered_actions() == []
 
 
 # -- Test 1: Boolean chain --------------------------------------------------

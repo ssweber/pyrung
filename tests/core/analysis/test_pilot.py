@@ -372,6 +372,73 @@ def test_rejected_inferred_root_route_falls_back_to_alternate():
     assert any(CmdA.name in alt.label for alt in path.route.pivots[0].alternatives)
 
 
+def test_rejected_nested_writer_falls_back_to_sibling_writer():
+    """A root-only route must not hide an untried intermediate writer."""
+
+    CmdA = Bool("NestedWriter_CmdA", external=True)
+    CmdB = Bool("NestedWriter_CmdB", external=True)
+    Mid = Bool("NestedWriter_Mid")
+    Forbidden = Bool("NestedWriter_Forbidden")
+    Target = Bool("NestedWriter_Target")
+
+    with Program() as logic:
+        with rung(CmdA):
+            latch(Mid)
+            latch(Forbidden)
+        with rung(CmdB):
+            latch(Mid)
+        with rung(Mid):
+            latch(Target)
+
+    events = []
+    path = PLC(logic).how(
+        Target,
+        avoid=Forbidden,
+        max_scans=200,
+        on_event=events.append,
+    )
+
+    assert path.reachable, path.reason
+    tried = [event.data["candidate"]["tag"] for event in events if event.kind == "candidate_try"]
+    assert tried[:2] == [CmdA.name, CmdB.name]
+    assert path.changes.get(CmdA.name) is not True
+    assert path.changes.get(CmdB.name) is True
+    assert path.route is None
+
+
+def test_rejected_nested_or_arm_falls_back_to_sibling_arm():
+    """A rejected leaf redirects an unlocked nested Or without a root pivot."""
+
+    CmdA = Bool("NestedOr_CmdA", external=True)
+    CmdB = Bool("NestedOr_CmdB", external=True)
+    Mid = Bool("NestedOr_Mid")
+    Forbidden = Bool("NestedOr_Forbidden")
+    Target = Bool("NestedOr_Target")
+
+    with Program() as logic:
+        with rung(CmdA):
+            latch(Forbidden)
+        with rung(Or(CmdA, CmdB)):
+            latch(Mid)
+        with rung(Mid):
+            latch(Target)
+
+    events = []
+    path = PLC(logic).how(
+        Target,
+        avoid=Forbidden,
+        max_scans=200,
+        on_event=events.append,
+    )
+
+    assert path.reachable, path.reason
+    tried = [event.data["candidate"]["tag"] for event in events if event.kind == "candidate_try"]
+    assert tried[:2] == [CmdA.name, CmdB.name]
+    assert path.changes.get(CmdA.name) is not True
+    assert path.changes.get(CmdB.name) is True
+    assert path.route is None
+
+
 def test_explicit_via_keeps_alternate_root_route_locked_out():
     """Unlike an inferred preference, ``via=`` remains durable user intent."""
     CmdA = Bool("RouteVia_CmdA", external=True)

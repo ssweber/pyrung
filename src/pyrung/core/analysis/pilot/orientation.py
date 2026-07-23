@@ -49,6 +49,7 @@ def _trace_for_route(
     target: TargetSpec,
     constraints: NavigationConstraints,
     route: TraceChoice | None,
+    rejected_actions: frozenset[tuple[str, Any]],
 ) -> TraceNode:
     """Read one target tree under one root-route choice."""
 
@@ -69,6 +70,7 @@ def _trace_for_route(
             prior=ctx.domain_prior,
             avoid_pred=constraints.avoid_predicate,
             via_pred=ctx.via_pred,
+            rejected_actions=rejected_actions,
             harness=getattr(state.work, "_harness", None),
         )
     return trace_back(
@@ -85,7 +87,26 @@ def _trace_for_route(
         prior=ctx.domain_prior,
         avoid_pred=constraints.avoid_predicate,
         via_pred=ctx.via_pred,
+        rejected_actions=rejected_actions,
         harness=getattr(state.work, "_harness", None),
+    )
+
+
+def _exact_rejected_actions(exclusions: frozenset[Any]) -> frozenset[tuple[str, Any]]:
+    """Singleton action artifacts that Trace may use to rank alternatives.
+
+    A Pulse's complete applied tuple is the execution artifact. Only a
+    one-member tuple is equivalent to a trace leaf; projecting a rejected joint
+    act onto either member would discard an untested co-action context.
+    """
+
+    return frozenset(
+        identity[1][0]
+        for identity in exclusions
+        if len(identity) >= 2
+        and identity[0] == "pulse"
+        and isinstance(identity[1], tuple)
+        and len(identity[1]) == 1
     )
 
 
@@ -94,14 +115,11 @@ def _pair_has_exact_rejection(pair: tuple[str, Any], exclusions: frozenset[Any])
 
     A joint pulse is intentionally not projected onto its first member here.
     That identity disproves the joint act, not the same primary action under a
-    different context. Pair observations and single-member pulses are the only
-    evidence precise enough to exhaust a root route action.
+    different context. Only a single-member Pulse is precise enough to exhaust
+    a root route action.
     """
 
-    return any(
-        len(identity) >= 2 and identity[0] == "pulse" and tuple(identity[1]) == (pair,)
-        for identity in exclusions
-    )
+    return pair in _exact_rejected_actions(exclusions)
 
 
 def _route_rejected_actions(
@@ -155,12 +173,13 @@ def _read_committed_route(
         if key_config is not None
         else frozenset()
     )
+    rejected_actions = _exact_rejected_actions(exclusions)
 
     # Explicit positive user intent is a non-revocable lock. Candidate filtering
     # reports exhaustion, but the drive loop must stop instead of selecting an
     # alternative.
     if ctx.route is not None:
-        tree = _trace_for_route(world, target, constraints, ctx.route)
+        tree = _trace_for_route(world, target, constraints, ctx.route, rejected_actions)
         rejected = _route_rejected_actions(tree, world, exclusions)
         exhaustion = (
             (trace_choice_identity(ctx.route), rejected, False) if rejected is not None else None
@@ -169,14 +188,14 @@ def _read_committed_route(
 
     active = constraints.active_root_route
     if active is not None:
-        tree = _trace_for_route(world, target, constraints, active)
+        tree = _trace_for_route(world, target, constraints, active, rejected_actions)
         rejected = _route_rejected_actions(tree, world, exclusions)
         if rejected is not None:
             return active, tree, (trace_choice_identity(active), rejected, True)
         return active, tree, None
 
     if target.predicate is not None:
-        return None, _trace_for_route(world, target, constraints, None), None
+        return None, _trace_for_route(world, target, constraints, None, rejected_actions), None
 
     _choices, ranked = rank_trace_choices(
         target.tag,
@@ -191,6 +210,7 @@ def _read_committed_route(
         prior=ctx.domain_prior,
         avoid_pred=constraints.avoid_predicate,
         via_pred=ctx.via_pred,
+        rejected_actions=rejected_actions,
         harness=getattr(world.state.work, "_harness", None),
     )
     for choice, tree in ranked:
@@ -202,7 +222,7 @@ def _read_committed_route(
             return choice, tree, (identity, rejected, True)
         return choice, tree, None
 
-    return None, _trace_for_route(world, target, constraints, None), None
+    return None, _trace_for_route(world, target, constraints, None, rejected_actions), None
 
 
 def _read_world(

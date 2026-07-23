@@ -118,6 +118,10 @@ class _TraceEnv:
     prior: DomainPrior | None = None
     avoid_pred: Any = None
     via_pred: Any = None
+    # Exact singleton actions rejected in this executable world. Joint acts are
+    # intentionally absent: disproving ``A + B`` does not disprove either member
+    # under another co-action context.
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset()
     max_depth: int = 15
     # Installed Harness, when tracing on a fork that has one.  Lets the coast
     # disposition attach a harness-linked sensor's *driver* (the input that makes
@@ -153,6 +157,7 @@ def _env_for(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     via_pred: Any = None,
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
 ) -> _TraceEnv:
@@ -175,6 +180,7 @@ def _env_for(
         prior=prior,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
+        rejected_actions=rejected_actions,
         max_depth=max_depth,
         harness=harness,
         advance_index=build_advance_index(program, harness),
@@ -1450,6 +1456,7 @@ def trace_relational(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     via_pred: Any = None,
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
 ) -> TraceNode:
@@ -1473,6 +1480,7 @@ def trace_relational(
         prior=prior,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
+        rejected_actions=rejected_actions,
         max_depth=max_depth,
         harness=harness,
     )
@@ -1556,6 +1564,23 @@ def _route_pilotable(nodes: list[TraceNode]) -> bool:
     scoring alone would always prefer it over a live one.
     """
     return not any(_is_dead_end_leaf(leaf) for node in nodes for leaf in node.leaves())
+
+
+def _route_actions_rejected(nodes: list[TraceNode], env: _TraceEnv) -> bool:
+    """Whether this alternative is the exact disproved singleton artifact.
+
+    Compass owns and world-scopes the evidence. Trace consumes only exact
+    singleton actions admitted by Orientation, and uses them as an ordering
+    hint among otherwise viable unlocked alternatives. A multi-leaf branch is
+    a joint artifact and remains live until that exact joint act is tested.
+    """
+
+    actions = tuple(
+        dict.fromkeys(detail.pair for node in nodes for detail in node.ordered_action_details())
+    )
+    # Multiple leaves describe a different, still-untested joint artifact.
+    # Independent singleton failures cannot be composed into its rejection.
+    return len(actions) == 1 and actions[0] in env.rejected_actions
 
 
 def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
@@ -1801,14 +1826,7 @@ def _trace_expression(
         # branches — Or(rise(Input), SealIn) where SealIn is the tag
         # we're already tracing (the engineer knows the seal-in path
         # is circular and looks at the trigger instead).
-        best: list[TraceNode] | None = None
-        best_score: float = float("inf")
-        # via= dual of avoid=: among the surviving arms, prefer one that *forces*
-        # the requested condition.  Tracked separately so it only redirects when
-        # some arm actually touches the predicate — an Or that does not mention it
-        # falls back to the cheapest arm (no over-pruning).
-        best_via: list[TraceNode] | None = None
-        best_via_score: float = float("inf")
+        alternatives: list[tuple[list[TraceNode], int, bool, bool]] = []
         for term in expr.terms:
             if isinstance(term, Atom) and term.tag == self_tag:
                 continue
@@ -1832,24 +1850,40 @@ def _trace_expression(
                 continue
             if not candidate:
                 return []
-            score = sum(
+            structural_score = sum(
                 1
                 for c in candidate
                 if (not c.satisfied and not c.is_steerable and not c.pipeline_internal)
             )
-            if score < best_score:
-                best_score = score
-                best = candidate
-            if (
-                env.via_pred is not None
-                and _route_forces(candidate, env.snapshot, env.via_pred)
-                and score < best_via_score
-            ):
-                best_via_score = score
-                best_via = candidate
-        if best_via is not None:
-            return best_via
-        return best if best is not None else []
+            rejected = _route_actions_rejected(candidate, env)
+            forces_via = env.via_pred is not None and _route_forces(
+                candidate, env.snapshot, env.via_pred
+            )
+            alternatives.append((candidate, structural_score, rejected, forces_via))
+
+        via_alternatives = [alternative for alternative in alternatives if alternative[3]]
+        pool = via_alternatives or alternatives
+        if not pool:
+            return []
+
+        # Preserve the baseline ordering unless the arm it would select is the
+        # exact rejected singleton. A rejection belonging to some other arm in
+        # this Or is no reason to change direction.
+        selected = min(pool, key=lambda alternative: alternative[1])
+        if not selected[2]:
+            return selected[0]
+
+        # The selected arm was disproved in this world. Redirect only to an
+        # untried, pilotable alternative; if none survives, retain the rejected
+        # branch so the honest frontier remains visible.
+        fallbacks = [
+            alternative
+            for alternative in pool
+            if not alternative[2] and _route_pilotable(alternative[0])
+        ]
+        if fallbacks:
+            return min(fallbacks, key=lambda alternative: alternative[1])[0]
+        return selected[0]
 
     if isinstance(expr, Atom):
         target = _atom_target(expr)
@@ -1969,6 +2003,7 @@ def trace_back(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     via_pred: Any = None,
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
     _visited: set[tuple[str, Any]] | None = None,
@@ -1997,6 +2032,7 @@ def trace_back(
         prior=prior,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
+        rejected_actions=rejected_actions,
         max_depth=max_depth,
         harness=harness,
     )
@@ -2121,11 +2157,16 @@ def _trace_back(
     avoid_fallback: (
         tuple[list[TraceNode], int | None, _WriterAvailability, bool, set[tuple[str, Any]]] | None
     ) = None
+    rejected_fallback: (
+        tuple[list[TraceNode], int | None, _WriterAvailability, bool, set[tuple[str, Any]]] | None
+    ) = None
 
     for ri in ranked_writers:
         # Snapshot the (caller-shared) visited set so a tainted attempt can be
-        # rolled back cleanly before the next writer is tried.  Only when avoiding.
-        visited_before = set(_visited) if env.avoid_pred is not None else None
+        # rolled back cleanly before the next writer is tried.
+        visited_before = (
+            set(_visited) if env.avoid_pred is not None or env.rejected_actions else None
+        )
 
         rung_node = env.pdg.rung_nodes[ri]
         ro = resolve_rung(env.program, rung_node)
@@ -2391,6 +2432,45 @@ def _trace_back(
                 _visited.update(visited_before)
             continue
 
+        # Empirical fallback must lead to another executable recipe. A generic
+        # affine/copy writer may be structurally capable of producing the value
+        # yet recurse into an unreadable self-source. It cannot displace the
+        # rejected-but-pilotable branch.
+        if rejected_fallback is not None and not _route_pilotable([node]):
+            node.children.clear()
+            node.writer_rung = None
+            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
+            node.live_guard = False
+            writer_skips.append((ri, "unpilotable_alternative"))
+            if visited_before is not None:
+                _visited.clear()
+                _visited.update(visited_before)
+            continue
+
+        # Nested writers are read-side alternatives, not retained decisions.
+        # When every action this unlocked writer exposes was rejected in the
+        # exact current world, keep it as an honest fallback and read the next
+        # writer. A root/user lock remains binding; Orientation owns its
+        # exhaustion and possible revocation.
+        if locked_writer is None and env.rejected_actions and _route_actions_rejected([node], env):
+            if rejected_fallback is None:
+                rejected_fallback = (
+                    list(node.children),
+                    node.writer_rung,
+                    node.writer_availability,
+                    node.live_guard,
+                    set(_visited),
+                )
+            node.children.clear()
+            node.writer_rung = None
+            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
+            node.live_guard = False
+            writer_skips.append((ri, "empirically_rejected"))
+            if visited_before is not None:
+                _visited.clear()
+                _visited.update(visited_before)
+            continue
+
         break  # use first viable writer
 
     node.writer_skips = tuple(writer_skips)
@@ -2398,8 +2478,9 @@ def _trace_back(
     # No unavoided writer was accepted: restore the first tainted attempt so the
     # decline names the same tainted subtree today's first-viable break would
     # have (behavior identical to pre-avoid when there is no alternative).
-    if env.avoid_pred is not None and avoid_fallback is not None and node.writer_rung is None:
-        children, wr, wav, lg, visited_after = avoid_fallback
+    fallback = rejected_fallback or avoid_fallback
+    if fallback is not None and node.writer_rung is None:
+        children, wr, wav, lg, visited_after = fallback
         node.children.extend(children)
         node.writer_rung = wr
         node.writer_availability = wav
@@ -2737,6 +2818,7 @@ def rank_trace_choices(
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
     via_pred: Any = None,
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     harness: Any = None,
 ) -> tuple[tuple[TraceChoice, ...], tuple[tuple[TraceChoice, TraceNode], ...]]:
     """Enumerate and rank current-world root choices once.
@@ -2770,6 +2852,7 @@ def rank_trace_choices(
             pipeline_internal_tags=pipeline_internal_tags,
             route=choice,
             prior=prior,
+            rejected_actions=rejected_actions,
             harness=harness,
         )
         if avoid_pred is not None and _route_forces([tree], snapshot, avoid_pred):

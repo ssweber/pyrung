@@ -175,6 +175,16 @@ evidence. Static-edge overlays are narrower still: negative evidence attaches
 only when the trial exercised that edge's exact action/co-action set while its
 recorded concrete conditions held.
 
+Trace alternatives consume the same evidence without taking ownership of it.
+Orientation may project an exact current-world singleton Pulse rejection back
+to its identical trace leaf; it must not project a rejected joint act onto one
+member. Trace uses those exact leaf rejections only to order unlocked nested
+writer/OR alternatives. A multi-leaf branch is a distinct, still-untested joint
+artifact, and an unreadable branch is not a fallback. Trace retains the best
+rejected branch when no pilotable alternative survives so the frontier remains
+visible. Root writer/OR locks stay with the inferred/explicit route lifecycle
+and are never redirected inside Trace.
+
 `PendingDeparture` records a clean program departure whose progress is not yet
 conclusive. It names the stable owner of its rollback checkpoint, the owner of
 an optional saved-progress checkpoint, and a finite search-scan deadline.
