@@ -321,6 +321,61 @@ def _shared_cause(
     return result
 
 
+def occurrence_external_supports(
+    chain: CausalChain | None,
+    producer_rungs: frozenset[int],
+    steerable: frozenset[str],
+    accomplishments: frozenset[str],
+) -> tuple[tuple[str, Any], ...]:
+    """External supports on an exact producer occurrence's recorded branch.
+
+    ``cause()`` has already selected the fired writers and recursively explained
+    their steady enablers.  This reader only partitions that existing graph:
+    target-owned accomplishment tags are boundaries, while the first steerable
+    support on every remaining branch is returned.  It performs no history
+    lookup, writer search, or guard reconstruction.
+    """
+    if chain is None or not producer_rungs:
+        return ()
+    steps_by_tag: dict[str, list[Any]] = {}
+    for step in chain.steps:
+        steps_by_tag.setdefault(step.transition.tag_name, []).append(step)
+
+    supports: list[tuple[str, Any]] = []
+    seen_supports: set[tuple[str, str]] = set()
+    visited: set[str] = set()
+
+    def _add(tag: str, value: Any) -> None:
+        key = (tag, repr(value))
+        if key not in seen_supports:
+            seen_supports.add(key)
+            supports.append((tag, value))
+
+    def _walk(tag: str, value: Any) -> None:
+        if tag in accomplishments:
+            return
+        if tag in steerable:
+            _add(tag, value)
+            return
+        if tag in visited:
+            return
+        visited.add(tag)
+        for step in steps_by_tag.get(tag, ()):
+            for trigger in step.triggers:
+                _walk(trigger.tag_name, trigger.to_value)
+            for enabler in step.enablers:
+                _walk(enabler.tag_name, enabler.value)
+
+    for step in chain.steps:
+        if step.rung_index not in producer_rungs:
+            continue
+        for trigger in step.triggers:
+            _walk(trigger.tag_name, trigger.to_value)
+        for enabler in step.enablers:
+            _walk(enabler.tag_name, enabler.value)
+    return tuple(supports)
+
+
 def _roots_from_chain(
     chain: CausalChain,
     plc: PLC,

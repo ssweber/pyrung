@@ -365,7 +365,9 @@ class TestVerifyGates:
 
     def test_intervention_cannot_erase_banked_gauge_work(self):
         before = {"Step": 3, "Target": False}
-        after = {"Step": 0, "Target": False}
+        # Even manufacturing the requested Target value does not pardon a
+        # reset-to-floor intervention.
+        after = {"Step": 0, "Target": True}
         pulse = SimpleNamespace(
             snap=after,
             coast_receipt=None,

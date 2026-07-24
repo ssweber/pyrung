@@ -278,6 +278,10 @@ class TraceAction:
     # AFTER_PREREQ ones so command-leaf sprawl on a cyclic state machine sinks
     # the counterfactual commands.  Availability orders, it never rejects.
     availability: _WriterAvailability = _WriterAvailability.AVAILABLE_NOW
+    # Exact selected writer nodes from the target down to this action.  This is
+    # a read receipt, not a second route: candidate policy can inspect necessary
+    # co-effects of the already-selected program path without retracing it.
+    writer_path: tuple[int, ...] = ()
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -452,6 +456,7 @@ class TraceNode:
         operation: OperationReceipt | None = None,
         guard_atoms: tuple[Any, ...] = (),
         operation_boundary: tuple[str, Any] | None = None,
+        writer_path: tuple[int, ...] = (),
     ) -> None:
         # Stage ordering remains structural: an unsatisfied enable ancestor puts
         # its leaves in stage 0. The exact operation boundary is broader than
@@ -470,6 +475,11 @@ class TraceNode:
         # the path from the target down to it (the And-rule — every writer in the
         # chain must fire).  Neutral (AVAILABLE_NOW) for nodes with no writer.
         node_availability = max(path_availability, self.writer_availability)
+        child_writer_path = (
+            (*writer_path, self.writer_rung)
+            if self.writer_rung is not None
+            else writer_path
+        )
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
         child_until = until
@@ -520,6 +530,7 @@ class TraceNode:
                 child_operation,
                 tuple(child_guard_atoms),
                 child_operation_boundary,
+                child_writer_path,
             )
         if self.is_steerable:
             key = (self.tag, self.value)
@@ -536,6 +547,7 @@ class TraceNode:
                 heuristic=self.heuristic,
                 note=self.note,
                 availability=node_availability,
+                writer_path=writer_path,
             )
             if key in seen:
                 index = next(i for i, existing in enumerate(out) if existing.pair == key)
@@ -551,6 +563,9 @@ class TraceNode:
                     heuristic=existing.heuristic or detail.heuristic,
                     note=existing.note or detail.note,
                     availability=max(existing.availability, detail.availability),
+                    writer_path=tuple(
+                        dict.fromkeys((*existing.writer_path, *detail.writer_path))
+                    ),
                 )
             else:
                 seen.add(key)

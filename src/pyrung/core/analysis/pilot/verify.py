@@ -516,19 +516,6 @@ def verify_gates(
                         avoid_names=tuple(wink),
                     )
 
-    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
-        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
-        return _AttemptResult(
-            trial=_trial_result(
-                attempt,
-                frame,
-                intent.target_observe_label,
-                gate_events,
-                bearing_stop_reason,
-            ),
-            gate_events=tuple(gate_events),
-        )
-
     # An intervention may explore a new frontier, but it may not erase
     # target-relative work the current world has already earned.  The gauge is
     # deliberately conservative: absent or unclassifiable coordinates yield
@@ -557,6 +544,23 @@ def verify_gates(
             trial=None,
             gate_events=tuple(gate_events),
             nogood_pairs=(frozenset({nogood_pair}) if nogood_pair is not None else frozenset()),
+        )
+
+    # Reaching the target does not pardon an intervention that got there by
+    # erasing already-earned work (for example, calling init so a completion
+    # bit momentarily reads true).  The banked-work veto therefore precedes
+    # target acceptance.
+    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
+        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
+        return _AttemptResult(
+            trial=_trial_result(
+                attempt,
+                frame,
+                intent.target_observe_label,
+                gate_events,
+                bearing_stop_reason,
+            ),
+            gate_events=tuple(gate_events),
         )
 
     spun = _gate_spin(

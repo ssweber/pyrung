@@ -237,6 +237,7 @@ def _assemble_world(
             heuristic=action.heuristic,
             note=action.note,
             availability=action.availability,
+            writer_path=action.writer_path,
         )
         for action in tree.ordered_action_details()
     )

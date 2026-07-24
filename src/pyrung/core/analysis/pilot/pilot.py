@@ -959,6 +959,15 @@ def _pilot_loop_events(
             _candidates_built_payload(candidates, state.lever_notes),
         )
 
+        if candidates.structural_nogoods:
+            ctx.compass, _ = ctx.compass.apply(
+                tuple(
+                    ActionNogoodObservation(frame.key, ("pair", pair))
+                    for pair in candidates.structural_nogoods
+                )
+            )
+            continue
+
         if isinstance(result, Bearing):
             state.recorded_root_route = orientation_world.root_route
 

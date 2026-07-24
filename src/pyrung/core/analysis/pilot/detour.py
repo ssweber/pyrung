@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
     _avoid_forces,
     _pilot_world_key,
     fork_with_rungs,
+)
+from pyrung.core.analysis.pilot.causal import (
+    _shared_cause,
+    occurrence_external_supports,
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
@@ -37,6 +42,37 @@ logger = logging.getLogger(__name__)
 # / landing_cap; the mechanism is CoastSession.settle_landing.
 
 
+class DepartureDisposition(StrEnum):
+    """Target-relative meaning of the exact producer that caused a departure."""
+
+    OWNED = "owned"
+    REACTIVE = "reactive"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class DepartureReading:
+    """A thin interpretation of one recorded channel occurrence.
+
+    ``cause`` remains the sole owner of causal reconstruction.  This receipt
+    only names the exact request producer(s) already present in that chain,
+    partitions their supports at target-owned Gauge accomplishments, and
+    carries the occurrence-local Gauge receipt used as durable tenure.
+    """
+
+    disposition: DepartureDisposition
+    occurrence_scan: int | None
+    source_scan: int | None
+    producer_rungs: tuple[int, ...] = ()
+    external_supports: tuple[tuple[str, Any], ...] = ()
+    progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
+    reason: str = ""
+
+    @property
+    def target_owned(self) -> bool:
+        return self.disposition is DepartureDisposition.OWNED
+
+
 @dataclass(frozen=True)
 class DepartureVerdict:
     """The classification of one channel departure, with its receipts."""
@@ -49,6 +85,11 @@ class DepartureVerdict:
     reentry_value: Any = None  # where the clean route re-enters, if found
     route: tuple[Any, ...] = ()  # channel values along the clean route
     progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
+    reading: DepartureReading = DepartureReading(
+        DepartureDisposition.UNKNOWN,
+        None,
+        None,
+    )
 
     @property
     def can_continue(self) -> bool:
@@ -141,6 +182,151 @@ def _edge_resurrects(
     return False
 
 
+def _request_producer_rungs(chain: Any, role: Any) -> tuple[int, ...]:
+    """Read exact initiating producers from an existing ``cause()`` chain.
+
+    The channel pipeline's request transition is the attribution boundary.
+    Its recorded triggers point at the command-register writes that initiated
+    this occurrence.  Following those already-recorded links does not search
+    writers, replay guards, or infer a second cause graph.
+    """
+    if chain is None or role is None:
+        return ()
+    request_step = next(
+        (
+            step
+            for step in chain.steps
+            if step.transition.tag_name in role.request_tags
+        ),
+        None,
+    )
+    if request_step is None:
+        return ()
+    triggers = {
+        (trigger.tag_name, trigger.scan_id, repr(trigger.to_value))
+        for trigger in request_step.triggers
+        if trigger.tag_name not in role.participating_tags
+    }
+    if not triggers:
+        return ()
+    producers = {
+        step.rung_index
+        for step in chain.steps
+        if (
+            step.transition.tag_name,
+            step.transition.scan_id,
+            repr(step.transition.to_value),
+        )
+        in triggers
+    }
+    return tuple(sorted(producers))
+
+
+def _is_hold_landing(ctx: _PilotContext, channel_tag: str, value: Any) -> bool:
+    """Whether the channel's declared value label identifies a Hold transaction."""
+    tag_ref = getattr(getattr(ctx, "pdg", None), "tags", {}).get(channel_tag)
+    choices = getattr(tag_ref, "choices", None) if tag_ref is not None else None
+    label = choices.get(value) if choices else None
+    normalized = "".join(character for character in str(label).casefold() if character.isalnum())
+    if normalized in {"holding", "held"}:
+        return True
+
+    # Some imported projects express PackML values through reference constants
+    # rather than ``choices=``.  The already-built static channel edge still
+    # carries the command-family action that names the transaction.
+    graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
+    for graph in graphs:
+        if graph.role.channel_tag != channel_tag:
+            continue
+        hold_values: list[Any] = []
+        for edge in graph.edges:
+            if edge.action is None:
+                continue
+            action_name = "".join(
+                character for character in edge.action[0].casefold() if character.isalnum()
+            )
+            if "hold" in action_name and "unhold" not in action_name:
+                hold_values.append(edge.to_value)
+        # The command edge commonly lands on transitional ``Holding`` and an
+        # actionless program edge completes it to ``Held``.
+        for current in hold_values:
+            if _values_match(current, value):
+                return True
+            if any(
+                edge.action is None
+                and _values_match(edge.from_value, current)
+                and _values_match(edge.to_value, value)
+                for edge in graph.edges
+            ):
+                return True
+    return False
+
+
+def _departure_reading(
+    chain: Any,
+    ctx: _PilotContext,
+    channel_tag: str,
+    settled_value: Any,
+    occurrence_scan: int | None,
+    progress: GaugeReceipt,
+    gauge: Any,
+) -> DepartureReading:
+    """Interpret exact cause identity against the selected target work."""
+    source_scan = chain.effect.scan_id - 1 if chain is not None else None
+    if not _is_hold_landing(ctx, channel_tag, settled_value):
+        return DepartureReading(
+            disposition=DepartureDisposition.UNKNOWN,
+            occurrence_scan=(chain.effect.scan_id if chain is not None else occurrence_scan),
+            source_scan=source_scan,
+            progress=progress,
+            reason="the landing is outside Held occurrence policy",
+        )
+    role = next(
+        (
+            candidate
+            for candidate in getattr(ctx, "pipeline_roles", ())
+            if candidate.channel_tag == channel_tag
+        ),
+        None,
+    )
+    producer_rungs = _request_producer_rungs(chain, role)
+    accomplishments = frozenset(
+        component.tag for component in getattr(gauge, "components", ()) or ()
+    )
+    has_target_gauge = bool(accomplishments)
+    external_supports = (
+        occurrence_external_supports(
+            chain,
+            frozenset(producer_rungs),
+            getattr(ctx, "steerable", frozenset()),
+            accomplishments,
+        )
+        if has_target_gauge
+        else ()
+    )
+    if producer_rungs and has_target_gauge and not external_supports:
+        disposition = DepartureDisposition.OWNED
+        reason = "exact departure producer is bounded by target Gauge accomplishments"
+    elif external_supports:
+        disposition = DepartureDisposition.REACTIVE
+        reason = (
+            "exact departure producer is conditional on external support, "
+            "not target Gauge work"
+        )
+    else:
+        disposition = DepartureDisposition.UNKNOWN
+        reason = "exact departure producer could not be attributed to selected target work"
+    return DepartureReading(
+        disposition=disposition,
+        occurrence_scan=(chain.effect.scan_id if chain is not None else occurrence_scan),
+        source_scan=source_scan,
+        producer_rungs=producer_rungs,
+        external_supports=external_supports,
+        progress=progress,
+        reason=reason,
+    )
+
+
 def classify_departure(
     state: _PilotState,
     ctx: _PilotContext,
@@ -148,9 +334,25 @@ def classify_departure(
     channel_tag: str,
     from_value: Any,
     source_snap: Any,
+    *,
+    occurrence_scan: int | None = None,
 ) -> DepartureVerdict:
     """Classify the channel departure the work fork is currently paused in."""
-    anchor_snap = dict(source_snap)
+    work = getattr(state, "work", None)
+    cause_scan = (
+        occurrence_scan
+        if occurrence_scan is not None
+        else getattr(getattr(work, "state", None), "scan_id", None)
+    )
+    chain = _shared_cause(work, channel_tag, cause_scan) if work is not None else None
+    if (
+        work is not None
+        and chain is not None
+        and chain.effect.scan_id > work.history.oldest_scan_id
+    ):
+        anchor_snap = dict(work.history.at(chain.effect.scan_id - 1).tags)
+    else:
+        anchor_snap = dict(source_snap)
     fork, receipt = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
     settle_scans = receipt.end_scan - receipt.start_scan
@@ -160,8 +362,20 @@ def classify_departure(
         if gauge is not None and getattr(gauge, "components", ())
         else GaugeReceipt((), (), "unknown")
     )
+    reading = _departure_reading(
+        chain,
+        ctx,
+        channel_tag,
+        settled_value,
+        occurrence_scan,
+        progress,
+        gauge,
+    )
 
     def _v(decision: str, reason: str, reentry: Any = None, route: tuple = ()) -> DepartureVerdict:
+        if decision == "continue" and reading.disposition is DepartureDisposition.REACTIVE:
+            decision = "unknown"
+            reason = f"{reading.reason}; {reason}"
         logger.debug(
             "departure: %s %r->%r (%d settle scans, %s): %s; %s",
             channel_tag,
@@ -181,6 +395,7 @@ def classify_departure(
             reentry_value=reentry,
             route=route,
             progress=progress,
+            reading=reading,
         )
 
     if receipt.stop_reason != "quiescent":

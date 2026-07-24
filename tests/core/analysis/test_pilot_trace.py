@@ -691,6 +691,11 @@ def test_subroutine_writer_selects_one_call_gate_by_wake():
     assert "x_SimFirst" not in action_tags
     assert details["x_Request"].provenance
     assert details["x_Request"].provenance[0].startswith("Main:R")
+    assert details["x_Request"].writer_path
+    assert any(
+        pdg.rung_nodes[ri].subroutine == "ApplyMode"
+        for ri in details["x_Request"].writer_path
+    )
 
 
 def test_subroutine_writer_reuses_its_call_gate_across_trace_occurrences():

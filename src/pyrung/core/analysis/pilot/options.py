@@ -86,6 +86,10 @@ class _CandidateList:
     route_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     wake_cap: int
+    # Exact actions whose already-selected writer path necessarily resets a
+    # Gauge component behind banked work. The drive loop records these as
+    # world-keyed nogoods and re-orients before executing them.
+    structural_nogoods: frozenset[_ActionPair] = frozenset()
     # Current-world facts that make this trace a continuation of live work.
     # Empty means the trace starts fresh work.  This is a discrete ordering
     # tier, recomputed on every read; it is never retained as route state.
@@ -877,6 +881,26 @@ def _build_candidates(
     ctx: Any,
 ) -> _CandidateList:
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
+    gauge = getattr(state, "gauge", None)
+    raw_detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
+    structural_nogoods: set[_ActionPair] = set()
+
+    def _detail_erases_banked_work(detail: TraceAction) -> bool:
+        if (
+            detail.pair not in key_nogoods
+            and gauge is not None
+            and gauge.writer_path_erases_banked_work(
+                frame.snap,
+                detail.writer_path,
+                ctx.pdg,
+            )
+        ):
+            structural_nogoods.add(detail.pair)
+            return True
+        return False
+
+    for detail in raw_detail_by_pair.values():
+        _detail_erases_banked_work(detail)
     # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
     # program clears them every scan, so their idiom is pulse-and-release.  Holding
     # one steady as a prerequisite would assert a momentary command (a mode-change
@@ -894,12 +918,12 @@ def _build_candidates(
         and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
     )
 
-    raw_detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
     active_trace_actions = tuple(
         pair
         for pair in frame.raw_trace_actions
         for detail in (raw_detail_by_pair.get(pair),)
         if pair not in ctx.blocked_route_actions
+        and pair not in structural_nogoods
         and (
             not _values_match(frame.snap.get(pair[0]), pair[1])
             or pair[0] in ctx.edge_tags
@@ -957,7 +981,6 @@ def _build_candidates(
         if detail is not None
         and detail.availability <= _WriterAvailability.AFTER_PREREQ
     )
-    gauge = getattr(state, "gauge", None)
     banked_trace_work = bool(
         trace_actions and gauge is not None and gauge.has_banked_work(frame.snap)
     )
@@ -1068,6 +1091,7 @@ def _build_candidates(
                 pair in active_trace_actions
                 or pair in ctx.blocked_route_actions
                 or pair in key_nogoods
+                or _detail_erases_banked_work(detail)
                 or not ctx.route_allowed(pair)
                 or (
                     _values_match(frame.snap.get(pair[0]), pair[1]) and pair[0] not in ctx.edge_tags
@@ -1425,6 +1449,7 @@ def _build_candidates(
         route_candidates=route_candidates,
         candidates=tuple(candidates),
         wake_cap=wake_cap,
+        structural_nogoods=frozenset(structural_nogoods),
         continuation_evidence=_current_work_evidence(
             frame,
             state,

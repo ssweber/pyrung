@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
+    DepartureDisposition,
     DepartureVerdict,
     classify_departure,
 )
@@ -304,6 +305,19 @@ def _monitor_trend(
             chan,
             departed_from,
             trial.before_snap,
+            occurrence_scan=next(
+                (
+                    event.scan
+                    for event in trial.timeline
+                    if any(
+                        tag == chan
+                        and _values_match(before, departed_from)
+                        and not _values_match(after, departed_from)
+                        for tag, before, after in event.transitions
+                    )
+                ),
+                state.work.state.scan_id,
+            ),
         )
         if verdict.can_continue:
             prescribed_departure = (
@@ -311,7 +325,14 @@ def _monitor_trend(
                 and trial.assessment is not None
                 and trial.assessment.agency is Agency.PILOT
             )
-            if verdict.progress.effect == "preserved" and not prescribed_departure:
+            if (
+                verdict.progress.effect == "preserved"
+                and not prescribed_departure
+                and (
+                    state.pending_departure is not None
+                    or verdict.reading.disposition is DepartureDisposition.REACTIVE
+                )
+            ):
                 # A clean route says the landing is usable, but a known-
                 # preserved progress receipt says this occurrence earned
                 # no program work. For ambient motion it may therefore be
@@ -321,10 +342,10 @@ def _monitor_trend(
                 # motion encountered during a prescribed coast remains
                 # ambient.
                 #
-                # This decision is occurrence-local. An already-open
-                # pending state changes only the rollback boundary; it
-                # must not suppress understanding the same physical departure.
-                # Investigation therefore runs before retention in both cases.
+                # Positive reactive attribution requires investigation on the
+                # first occurrence.  An already-open pending state retains the
+                # established compatibility rule: every preserved departure is
+                # concrete new evidence and must be understood before retention.
                 origin = _channel_recovery_origin(
                     state,
                     trial,
@@ -341,6 +362,7 @@ def _monitor_trend(
                     ctx,
                     origin=origin,
                     retain_if_unresolved=verdict,
+                    occurrence_requirements=verdict.reading.external_supports,
                 )
                 return
             if state.pending_departure is None:
@@ -366,6 +388,11 @@ def _monitor_trend(
             state,
             ctx,
             origin=origin,
+            occurrence_requirements=(
+                verdict.reading.external_supports
+                if verdict.reading.disposition is DepartureDisposition.REACTIVE
+                else ()
+            ),
         )
         return
 
@@ -1203,6 +1230,7 @@ def _investigate_and_revert(
     *,
     origin: _RecoveryOrigin,
     retain_if_unresolved: DepartureVerdict | None = None,
+    occurrence_requirements: tuple[tuple[str, Any], ...] = (),
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident from ``origin`` through the current world, replay-test
     corrective holds, install the confirmed ones, and revert to the selected
@@ -1345,6 +1373,7 @@ def _investigate_and_revert(
                 for rung in receipt.rungs
             ),
             correction_progress_mark=correction_progress_mark,
+            occurrence_requirements=occurrence_requirements,
             excluded_corrections=frozenset(excluded_corrections),
         )
         investigation_nogoods.update(investigation.regression_nogoods)

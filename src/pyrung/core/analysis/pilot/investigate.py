@@ -393,6 +393,29 @@ def _scoped_correction_rungs(
     return tuple(_rungs_from_proposals(plc, list(scoped_proposals), scope))
 
 
+def _discharges_occurrence_requirements(
+    proposals: tuple[Any, ...],
+    requirements: tuple[tuple[str, Any], ...],
+) -> bool:
+    """Whether *proposals* directly falsify every recorded support demand.
+
+    The requirements come from the already-recorded producer occurrence.  This
+    reader does not reconstruct its cause or widen a guard: it only recognizes
+    the correction that changes each exact external support away from the value
+    that made the producer conductive.
+    """
+    if not proposals or not requirements:
+        return False
+    demanded = {tag: value for tag, value in requirements}
+    corrected: set[str] = set()
+    for proposal in proposals:
+        tag, value = _proposal_pair(proposal)
+        if tag not in demanded or _values_match(value, demanded[tag]):
+            return False
+        corrected.add(tag)
+    return corrected == set(demanded)
+
+
 def _exploratory_correction_rungs(
     plc: PLC,
     proposals: tuple[Any, ...],
@@ -1635,6 +1658,7 @@ def investigate_deviation(
     installed_rungs: Sequence[Any] = (),
     correction_rungs: Sequence[Any] = (),
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
+    occurrence_requirements: tuple[tuple[str, Any], ...] = (),
     excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
@@ -1823,13 +1847,26 @@ def investigate_deviation(
                 current = extended
                 continue
 
+            # A target-work correction belongs to the exact Gauge occurrence.
+            # A correction that directly discharges this producer occurrence's
+            # recorded external supports instead belongs to the already-derived
+            # channel-source lifetime.  Its final installed form is still
+            # replayed below; this only selects between the two existing scopes.
+            scoped_progress_mark = (
+                ()
+                if _discharges_occurrence_requirements(
+                    current.holds,
+                    occurrence_requirements,
+                )
+                else correction_progress_mark
+            )
             scoped = _scoped_correction_rungs(
                 plc,
                 current.holds,
                 incident,
                 outcome,
                 ctx,
-                correction_progress_mark,
+                scoped_progress_mark,
             )
             if correction_identity(scoped) in excluded_corrections:
                 _reject(
