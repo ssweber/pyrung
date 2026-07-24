@@ -149,17 +149,11 @@
   ],
   "candidates": [
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
     "bearing_channel_value": 1,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
      true
@@ -169,22 +163,15 @@
      "Main:R22"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "Cmd_UnitModeChgRequest",
     "value": true
    },
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -194,7 +181,6 @@
      "ModeChange:R200"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "Cmd_Mode_Production",
     "value": true
    }
@@ -322,17 +308,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 2,
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "compass_score": [
-    50,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
     true
@@ -342,7 +322,6 @@
     "Main:R22"
    ],
    "route_prescribed": false,
-   "scored": true,
    "tag": "Cmd_UnitModeChgRequest",
    "value": true
   },
@@ -359,17 +338,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 2,
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "compass_score": [
-    50,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
     true
@@ -379,7 +352,6 @@
     "Main:R22"
    ],
    "route_prescribed": false,
-   "scored": true,
    "tag": "Cmd_UnitModeChgRequest",
    "value": true
   },
@@ -443,17 +415,11 @@
   ],
   "candidates": [
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": true,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -463,7 +429,6 @@
      "ModeChange:R200"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "Cmd_Mode_Production",
     "value": true
    }
@@ -587,17 +552,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 2,
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "compass_score": [
-    50,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": true,
    "pair": [
     "Cmd_Mode_Production",
     true
@@ -607,7 +566,6 @@
     "ModeChange:R200"
    ],
    "route_prescribed": false,
-   "scored": true,
    "tag": "Cmd_Mode_Production",
    "value": true
   },
@@ -624,17 +582,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 2,
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "compass_score": [
-    50,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": true,
    "pair": [
     "Cmd_Mode_Production",
     true
@@ -644,7 +596,6 @@
     "ModeChange:R200"
    ],
    "route_prescribed": false,
-   "scored": true,
    "tag": "Cmd_Mode_Production",
    "value": true
   },
@@ -716,17 +667,11 @@
   ],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -734,7 +679,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Clear",
     "value": true
    }
@@ -866,17 +810,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -884,7 +822,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -937,17 +874,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -955,7 +886,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -1077,17 +1007,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -1095,7 +1019,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Reset",
     "value": true
    }
@@ -1196,17 +1119,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -1214,7 +1131,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -1250,17 +1166,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -1268,7 +1178,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -1351,17 +1260,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -1369,7 +1272,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Start",
     "value": true
    }
@@ -1447,17 +1349,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1465,7 +1361,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1496,17 +1391,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1514,7 +1403,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1687,17 +1575,11 @@
   ],
   "candidates": [
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "i_BlowerFB",
     "bearing_channel_value": true,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "x_BlowerFB",
      true
@@ -1707,22 +1589,15 @@
      "ReadInputs:R305"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "x_BlowerFB",
     "value": true
    },
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "i_RotateFB",
     "bearing_channel_value": true,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "x_RotateFB",
      true
@@ -1732,7 +1607,6 @@
      "ReadInputs:R304"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "x_RotateFB",
     "value": true
    }
@@ -1911,13 +1785,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
        "value": true
       }
      ],
@@ -1938,7 +1812,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -1954,7 +1828,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -1970,13 +1844,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -2024,17 +1898,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -2042,7 +1910,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Start",
     "value": true
    }
@@ -2120,17 +1987,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -2138,7 +1999,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -2169,17 +2029,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -2187,7 +2041,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -2310,25 +2163,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 11
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "terminal": false,
+  "provisional": true,
   "trend": 11
  },
  {
@@ -2470,6 +2305,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 5
  },
  {
@@ -2581,6 +2417,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 3
  },
  {
@@ -2702,13 +2539,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
        "value": true
       }
      ],
@@ -2747,13 +2584,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       }
      ],
@@ -2904,7 +2741,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2923,7 +2760,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2939,7 +2776,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:6>>",
        "value": true
       }
      ],
@@ -3083,7 +2920,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_SailRelay",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:6>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:7>>",
        "value": true
       }
      ],
@@ -3114,7 +2951,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:7>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:8>>",
        "value": true
       }
      ],
@@ -3225,7 +3062,22 @@
   "kind": "trial_committed"
  },
  {
-  "kind": "trend_checkpoint",
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    102
+   ]
+  ],
+  "terminal": false,
   "trend": 3
  },
  {
@@ -3390,17 +3242,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -3408,7 +3254,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Unhold",
     "value": true
    }
@@ -3486,17 +3331,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -3504,7 +3343,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -3540,17 +3378,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -3558,7 +3390,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -3787,18 +3618,18 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "nested causal closure: latch A_Alm14_DoorOpen_Trig fired during incident; then latch A_Alm15_LintOpen_Trig fired during incident",
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
        "value": true
       }
      ],
@@ -3819,7 +3650,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
        "value": true
       }
      ],
@@ -3835,7 +3666,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
        "value": true
       }
      ],
@@ -3851,13 +3682,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:8>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
        "value": true
       }
      ],
@@ -3870,8 +3701,45 @@
      ]
     }
    ],
-   "rejected": 0,
-   "rejected_detail": [],
+   "rejected": 2,
+   "rejected_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
    "unresolved": []
   },
   "kind": "trend_regression",
@@ -3905,17 +3773,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -3923,7 +3785,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Unhold",
     "value": true
    }
@@ -4001,17 +3862,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -4019,7 +3874,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -4055,17 +3909,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -4073,7 +3921,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -4275,25 +4122,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 11
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 6,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    103
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    103
-   ]
-  ],
-  "terminal": false,
+  "provisional": true,
   "trend": 11
  },
  {
@@ -4435,6 +4264,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 5
  },
  {
@@ -4546,6 +4376,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 3
  },
  {
@@ -4667,13 +4498,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:11>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:11>>",
        "value": true
       }
      ],
@@ -4712,13 +4543,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       }
      ],
@@ -4836,7 +4667,22 @@
   "kind": "trial_committed"
  },
  {
-  "kind": "trend_checkpoint",
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 6,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    103
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    104
+   ]
+  ],
+  "terminal": false,
   "trend": 3
  },
  {
@@ -4947,7 +4793,7 @@
   "gauge_at_source": [
    [
     "Internal__Step",
-    105
+    107
    ]
   ],
   "kind": "provisional_started",
@@ -4962,7 +4808,7 @@
   "gauge_at_source": [
    [
     "Internal__Step",
-    105
+    107
    ]
   ],
   "kind": "provisional_promoted",
@@ -5001,17 +4847,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -5019,7 +4859,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Unhold",
     "value": true
    }
@@ -5097,17 +4936,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -5115,7 +4948,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -5151,17 +4983,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -5169,7 +4995,537 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 12,
+    "before": 11,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Unhold": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 3,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 12,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 14
+ },
+ {
+  "distance": 14,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_State_Completed=True (have False)",
+   "Sts_StateCurrent=17 (have 12)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_State_Completed",
+   true
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Completed",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "completion_frontier": [
+   [
+    "Sts_StateCompleteFlag",
+    true
+   ],
+   [
+    "Sts_StateCompleteBool",
+    1
+   ],
+   [
+    "Blower__init",
+    1
+   ],
+   [
+    "Rotate__init",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    2
+   ],
+   [
+    "Blower__x",
+    1
+   ],
+   [
+    "Rotate_CurStep",
+    2
+   ],
+   [
+    "Blower_Trans",
+    1
+   ],
+   [
+    "Blower_xCall",
+    1
+   ],
+   [
+    "Rotate_Trans",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    1
+   ]
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 12->6"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 7,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 6,
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 11,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [],
+  "from_trend": 7,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:12>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:12>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "hypotheses": 3,
+   "hypothesis_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "rejected": 2,
+   "rejected_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 3
+ },
+ {
+  "distance": 3,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_State_Completed=True (have False)",
+   "Sts_StateCurrent=17 (have 11)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_State_Completed",
+   true
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Completed",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Unhold",
+      true
+     ],
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 14,
+   "trend_before": 3
+  },
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -5371,25 +5727,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 11
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 6,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    107
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    107
-   ]
-  ],
-  "terminal": false,
+  "provisional": true,
   "trend": 11
  },
  {
@@ -5531,6 +5869,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 5
  },
  {
@@ -5642,6 +5981,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 3
  },
  {
@@ -5746,20 +6086,131 @@
   "to_value": 10
  },
  {
-  "channel_tag": "Sts_StateCurrent",
-  "classification": "continue",
-  "from_value": 6,
-  "gauge_at_source": [
+  "distance": 9,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_State_Completed=True (have False)",
+   "Sts_StateCurrent=17 (have 10)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Rotate_x=False (have True)",
+   "Blower_x=False (have True)",
+   "Rotate_xCall=0 (have 1)",
+   "Blower_xCall=0 (have 1)"
+  ],
+  "target": [
+   "Sts_State_Completed",
+   true
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Completed",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "completion_frontier": [
    [
-    "Internal__Step",
-    108
+    "Sts_StateCompleteFlag",
+    true
+   ],
+   [
+    "Sts_StateCompleteBool",
+    1
+   ],
+   [
+    "Rotate_x",
+    false
+   ],
+   [
+    "Blower_x",
+    false
+   ],
+   [
+    "Rotate_xCall",
+    0
+   ],
+   [
+    "Blower_xCall",
+    0
    ]
   ],
-  "kind": "provisional_started",
-  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
-  "requested_value": 16,
-  "route": [],
-  "settled_value": 11
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 10,
+     "request": [
+      "Sts_StateRequested",
+      11
+     ],
+     "to": 11
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 10->11"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 10->11"
+ },
+ {
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "confirmed",
+  "trend": 3,
+  "zoom_actual_value": 11,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 11
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
  },
  {
   "channel_tag": "Sts_StateCurrent",
@@ -5767,7 +6218,7 @@
   "gauge_at_source": [
    [
     "Internal__Step",
-    108
+    107
    ]
   ],
   "kind": "provisional_promoted",
@@ -5777,6 +6228,7 @@
     109
    ]
   ],
+  "terminal": false,
   "trend": 3
  },
  {
@@ -5806,17 +6258,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -5824,7 +6270,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Unhold",
     "value": true
    }
@@ -5902,17 +6347,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -5920,7 +6359,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -5956,17 +6394,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -5974,7 +6406,537 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 3 -> 14",
+    "event": "confirmed"
+   }
+  ],
+  "index": 0,
+  "kind": "candidate_accepted",
+  "watched_changes": [
+   {
+    "__type__": "TagChange",
+    "after": 12,
+    "before": 11,
+    "tag": "Sts_StateCurrent"
+   }
+  ]
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_State_Unhold": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "baseline_trend": 3,
+  "channel": "Sts_StateCurrent",
+  "channel_value": 12,
+  "kind": "trend_checkpoint",
+  "provisional": true,
+  "trend": 14
+ },
+ {
+  "distance": 14,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_State_Completed=True (have False)",
+   "Sts_StateCurrent=17 (have 12)",
+   "Sts_StateRequested=17 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Rotate__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower__x=1 (have 0)",
+   "Rotate_CurStep=2 (have 1)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Rotate_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "Sts_State_Completed",
+   true
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Completed",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "completion_frontier": [
+   [
+    "Sts_StateCompleteFlag",
+    true
+   ],
+   [
+    "Sts_StateCompleteBool",
+    1
+   ],
+   [
+    "Blower__init",
+    1
+   ],
+   [
+    "Rotate__init",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    2
+   ],
+   [
+    "Blower__x",
+    1
+   ],
+   [
+    "Rotate_CurStep",
+    2
+   ],
+   [
+    "Blower_Trans",
+    1
+   ],
+   [
+    "Blower_xCall",
+    1
+   ],
+   [
+    "Rotate_Trans",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    1
+   ]
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 12->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "zoom",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 12->6"
+ },
+ {
+  "bearing_stop_reason": "departed",
+  "ejected": true,
+  "kind": "zoom_accepted",
+  "observe_label": "zoom",
+  "outcome": "ambient",
+  "trend": 7,
+  "zoom_actual_value": 8,
+  "zoom_channel_tag": "Sts_StateCurrent",
+  "zoom_target_value": 6
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "zoom",
+  "reason": null,
+  "requested_value": 6,
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 12,
+  "kind": "departure_check_started",
+  "to_value": 8
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 11,
+  "kind": "investigation_started",
+  "to_value": 8
+ },
+ {
+  "channel_transitions": [],
+  "from_trend": 7,
+  "investigation": {
+   "confirmed": 1,
+   "confirmed_detail": [
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:13>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:13>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "hypotheses": 3,
+   "hypothesis_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    },
+    {
+     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      },
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "A_Alm15_LintOpen_Trig",
+      "x_DoorClosed",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "rejected": 2,
+   "rejected_detail": [
+    {
+     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_DoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm14_DoorOpen_Trig",
+      "x_DoorClosed"
+     ]
+    },
+    {
+     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_LintDoorClosed",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "value": true
+      }
+     ],
+     "kind": "latch-exposure",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_Alm15_LintOpen_Trig",
+      "x_LintDoorClosed"
+     ]
+    }
+   ],
+   "unresolved": []
+  },
+  "kind": "trend_regression",
+  "regression_nogoods": [],
+  "to_trend": 3
+ },
+ {
+  "distance": 3,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "Sts_State_Completed=True (have False)",
+   "Sts_StateCurrent=17 (have 11)",
+   "Sts_StateRequested=17 (have 0)"
+  ],
+  "target": [
+   "Sts_State_Completed",
+   true
+  ],
+  "watch_tags": [
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Completed",
+   "Sts_UnitModeCurrent"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 12,
+    "current_note": "",
+    "current_prescribed": false,
+    "influence_prescribed": false,
+    "pair": [
+     "Cmd_State_Unhold",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "tag": "Cmd_State_Unhold",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    17
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Unhold",
+      true
+     ],
+     "enablers": [],
+     "from": 11,
+     "request": [
+      "Sts_StateRequested",
+      12
+     ],
+     "to": 12
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 12,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 6,
+     "request": [
+      "Sts_StateRequested",
+      16
+     ],
+     "to": 16
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 16,
+     "request": [
+      "Sts_StateRequested",
+      17
+     ],
+     "to": 17
+    }
+   ],
+   "target_value": 17
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate": {
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
+   "tag": "Cmd_State_Unhold",
+   "value": true
+  },
+  "co_actions": [],
+  "index": 0,
+  "kind": "candidate_try",
+  "total": 1
+ },
+ {
+  "accepted_because": {
+   "gate_events": [
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "channel target reached",
+     "event": "channel-override-dead-end"
+    },
+    {
+     "__type__": "PilotGateEvent",
+     "detail": "distance 3 -> 14",
+     "event": "confirmed"
+    }
+   ],
+   "novel_key": true,
+   "state_key_changed": true,
+   "target_reached": false,
+   "trend_after": 14,
+   "trend_before": 3
+  },
+  "applied": [
+   [
+    "Cmd_State_Unhold",
+    true
+   ]
+  ],
+  "candidate_detail": {
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 12,
+   "current_note": "",
+   "current_prescribed": false,
+   "influence_prescribed": false,
+   "pair": [
+    "Cmd_State_Unhold",
+    true
+   ],
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": true,
    "tag": "Cmd_State_Unhold",
    "value": true
   },
@@ -6176,25 +7138,6 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 11
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 6,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    109
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    109
-   ]
-  ],
-  "terminal": false,
   "trend": 11
  },
  {
@@ -6568,13 +7511,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:10>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:14>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:10>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:14>>",
        "value": true
       }
      ],
@@ -6613,13 +7556,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       }
      ],
@@ -6959,6 +7902,34 @@
       [
        "S_DryerTemp_F",
        131
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "investigation",
+     "tags": [
+      [
+       "x_DoorClosed",
+       true
+      ],
+      [
+       "x_LintDoorClosed",
+       true
+      ]
+     ]
+    },
+    {
+     "__type__": "_HoldLogEntry",
+     "source": "investigation",
+     "tags": [
+      [
+       "x_DoorClosed",
+       true
+      ],
+      [
+       "x_LintDoorClosed",
+       true
       ]
      ]
     },
@@ -7761,6 +8732,27 @@
     "accelerators": [],
     "inputs": [
      [
+      "x_DoorClosed",
+      true
+     ],
+     [
+      "x_LintDoorClosed",
+      true
+     ]
+    ],
+    "kind": "force",
+    "label": "x_DoorClosed, x_LintDoorClosed",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
       "Cmd_State_Unhold",
       true
      ]
@@ -7885,6 +8877,49 @@
      "x_SailRelay"
     ],
     "transition": "Cmd_CtrlCmd 5 -> 4",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Sts_StateCurrent",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "S_DryerTemp_F",
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB",
+     "x_RotateSensor",
+     "x_SailRelay"
+    ],
+    "transition": "Blower_xCall 1 -> 0",
+    "waiting_for": [
+     "Ref_State_HELD"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "x_DoorClosed",
+      true
+     ],
+     [
+      "x_LintDoorClosed",
+      true
+     ]
+    ],
+    "kind": "force",
+    "label": "x_DoorClosed, x_LintDoorClosed",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "",
     "waiting_for": []
    },
    {
@@ -8015,7 +9050,7 @@
      ],
      [
       "A_TimeBetween1stScan_tmr.Acc",
-      6324
+      6323
      ],
      [
       "Blower_CurStep_tmr.Acc",

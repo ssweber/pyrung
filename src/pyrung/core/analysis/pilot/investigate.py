@@ -307,31 +307,72 @@ def _scoped_correction_rungs(
     101, for example, cannot keep owning the same input after the recipe earns
     Step 103 without a new proof for that occurrence.
 
-    Existing :class:`PilotRung` proposals already own their guards and pass
-    through unchanged.
+    An operation-bearing :class:`PilotRung` already owns its lifetime and
+    passes through unchanged. This scoper never manufactures operation
+    ownership: only a program/trace owner that can name the operation's actual
+    completion and progress conditions may issue that receipt. A guard-only
+    rung from causal exposure names where the harmful writer fired; for a
+    channel incident that is evidence about the correction, not its start
+    time. The replay-derived source scope replaces that exposure guard so
+    prerequisite inputs can settle before the harmful state begins.
     """
-    if all(isinstance(proposal, PilotRung) for proposal in proposals):
+    if all(
+        isinstance(proposal, PilotRung) and proposal.operation is not None
+        for proposal in proposals
+    ):
         return tuple(proposals)
 
+    scoped_proposals = tuple(
+        (proposal.dest, proposal.value)
+        if isinstance(proposal, PilotRung)
+        and proposal.operation is None
+        and (incident.channel_tag is not None or progress_mark)
+        else proposal
+        for proposal in proposals
+    )
+
     channel_tag = incident.channel_tag
+    exposure_guards = tuple(
+        proposal.guard
+        for proposal in proposals
+        if isinstance(proposal, PilotRung) and proposal.operation is None
+    )
     if (
         channel_tag is not None
         and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
         and (outcome.justification is ReplayJustification.NEUTRALIZED or outcome.landed)
     ):
-        from pyrung.core.condition import CompareEq, CompareNe
+        from pyrung.core.condition import AnyCondition, CompareEq, CompareNe
 
         before = incident.before_snap.get(channel_tag)
-        landing = (
-            before
-            if outcome.justification is ReplayJustification.NEUTRALIZED
-            else outcome.snapshot.get(channel_tag)
-        )
-        scope = (
-            CompareEq(channel, before)
-            if _values_match(landing, before)
-            else CompareNe(channel, landing)
-        )
+        if (
+            outcome.justification is ReplayJustification.NEUTRALIZED
+            and not outcome.landed
+            and exposure_guards
+        ):
+            # The bounded proof observed no safe landing. Preserve the exact
+            # source-through-exposure lifetime that succeeded exploratorily;
+            # narrowing back to the source would release the correction on the
+            # first harmful intermediate state.
+            scope = AnyCondition(CompareEq(channel, before), *exposure_guards)
+        else:
+            landing = outcome.snapshot.get(channel_tag) if outcome.landed else before
+            if outcome.landed and progress_mark and exposure_guards:
+                # Reaching the safe channel value is not yet an acknowledgment:
+                # the user program reads that landing on its next scan. Keep
+                # the correction across the observed source/intermediate/
+                # landing corridor until the Gauge coordinate advances.
+                scope = AnyCondition(
+                    CompareEq(channel, before),
+                    *exposure_guards,
+                    CompareEq(channel, landing),
+                )
+            else:
+                scope = (
+                    CompareEq(channel, before)
+                    if _values_match(landing, before)
+                    else CompareNe(channel, landing)
+                )
     else:
         scope = _target_unresolved_condition(
             plc,
@@ -339,17 +380,80 @@ def _scoped_correction_rungs(
             ctx.target_value,
             getattr(ctx, "target_predicate", None),
         )
+    coordinates = []
     if progress_mark:
         from pyrung.core.condition import AllCondition, CompareEq
 
-        coordinates = []
         for tag_name, value in progress_mark:
             tag = plc._known_tags_by_name.get(tag_name)
             if tag is None:
                 raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
             coordinates.append(CompareEq(tag, value))
         scope = AllCondition(scope, *coordinates)
-    return tuple(_rungs_from_proposals(plc, list(proposals), scope))
+    return tuple(_rungs_from_proposals(plc, list(scoped_proposals), scope))
+
+
+def _exploratory_correction_rungs(
+    plc: PLC,
+    proposals: tuple[Any, ...],
+    incident: DeviationIncident,
+    progress_mark: tuple[tuple[str, Any], ...],
+) -> tuple[Any, ...]:
+    """Test a raw correction only where the incident was observed.
+
+    A global exploratory hold is a broader intervention than the guarded fact
+    PILOT would install. It can therefore erase earlier, compatible work and
+    reject a locally-correct hypothesis for behavior the hypothesis would never
+    own. An exact Gauge mark is enough to keep that first replay at the incident;
+    the accepted outcome still supplies the narrower channel lifetime below.
+    """
+
+    from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
+
+    progress_coordinates = []
+    source_scope = None
+    channel_name = incident.channel_tag
+    if channel_name is not None:
+        channel = plc._known_tags_by_name.get(channel_name)
+        if channel is None:
+            raise KeyError(f"incident channel {channel_name!r} is not a program tag")
+        source_scope = CompareEq(channel, incident.before_snap.get(channel_name))
+    for tag_name, value in progress_mark:
+        tag = plc._known_tags_by_name.get(tag_name)
+        if tag is None:
+            raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
+        progress_coordinates.append(CompareEq(tag, value))
+    if source_scope is None and not progress_coordinates:
+        return proposals
+
+    result: list[PilotRung] = []
+    for proposal in proposals:
+        if isinstance(proposal, PilotRung) and proposal.operation is not None:
+            result.append(proposal)
+            continue
+        if isinstance(proposal, PilotRung):
+            # Causal exposure is where the harmful writer becomes conductive.
+            # Start in the source context and keep the input owned through that
+            # exposure; otherwise a Boolean overlay releases it on the first
+            # intermediate channel scan.
+            lifetime = (
+                AnyCondition(source_scope, proposal.guard)
+                if source_scope is not None
+                else proposal.guard
+            )
+            guard = (
+                AllCondition(lifetime, *progress_coordinates)
+                if progress_coordinates
+                else lifetime
+            )
+            result.append(PilotRung(proposal.dest, proposal.value, guard))
+            continue
+        guard_terms = (
+            *((source_scope,) if source_scope is not None else ()),
+            *progress_coordinates,
+        )
+        result.extend(_rungs_from_proposals(plc, [proposal], AllCondition(*guard_terms)))
+    return tuple(result)
 
 
 # ---------------------------------------------------------------------------
@@ -529,9 +633,7 @@ def _replacement_departure_scan(
 
 def _same_occurrence(left: CausalOccurrence, right: CausalOccurrence) -> bool:
     return (
-        left.rung == right.rung
-        and left.tag == right.tag
-        and _values_match(left.value, right.value)
+        left.rung == right.rung and left.tag == right.tag and _values_match(left.value, right.value)
     )
 
 
@@ -615,7 +717,10 @@ def _regression_ownership(
         bool(proposal_tags & replacement_cause) if replacement_cause is not None else None
     )
     replacement_replays_recorded = (
-        witness.causal_spine.issubset(replacement_cause) if replacement_cause is not None else None
+        _same_bounded_channel_outcome(witness, replacement_witness)
+        and witness.causal_spine.issubset(replacement_cause)
+        if replacement_cause is not None and replacement_witness is not None
+        else None
     )
     unrelated_departure = (
         replacement_cause is not None
@@ -624,9 +729,7 @@ def _regression_ownership(
     )
     shared_suffix = _shared_causal_suffix(witness, replacement_witness)
     branch_replaced = (
-        bool(shared_suffix)
-        and replacement_replays_recorded is False
-        and replacement_owned is False
+        bool(shared_suffix) and replacement_replays_recorded is False and replacement_owned is False
     )
     cause_silenced = changed_writes_silenced or branch_replaced
     unrelated_departure = unrelated_departure and not shared_suffix
@@ -817,7 +920,6 @@ def build_replay_fn(
         # neutralization. Check the floor at the bounded incident horizon.
         neutralized = ownership is not None and ownership.neutralized and not progress_erased
         source_preserved = ownership is not None and ownership.source_preserved
-        cause_silenced = ownership is not None and ownership.cause_silenced
         if logger.isEnabledFor(logging.DEBUG):
             roles = terminal_letrun_role_tags or ()
             logger.debug(
@@ -862,7 +964,11 @@ def build_replay_fn(
             ):
                 gauge_advanced = True
                 progressed = "target-relative progress advanced"
-            cause_repeated = regression_witness is not None and not cause_silenced
+            # Ownership already distinguishes masking from a genuine branch
+            # replacement. A healthy replacement may share generic executor
+            # writes with the recorded fault, so asking again whether every
+            # changed write disappeared would reject the observed safe landing.
+            cause_repeated = regression_witness is not None and not neutralized
             rejection_reason = (
                 "correction erased the recorded incident's progress receipt"
                 if progress_erased
@@ -889,7 +995,19 @@ def build_replay_fn(
                 reason=(progressed if accepted else rejection_reason) or rejection_reason,
                 # A coast that timed out mid-journey landed nowhere — its end
                 # snapshot must not seed a channel scope.
-                landed=reached,
+                landed=(
+                    reached
+                    or (
+                        neutralized
+                        and not source_preserved
+                        and replacement_witness is not None
+                        and regression_witness is not None
+                        and not _values_match(
+                            replacement_witness.landing,
+                            regression_witness.landing,
+                        )
+                    )
+                ),
                 justification=(
                     (
                         ReplayJustification.REACHED
@@ -1664,12 +1782,19 @@ def investigate_deviation(
         current = hypothesis
         seen_replacements: set[tuple[Any, ...]] = set()
         for _nested_depth in range(_NESTED_MAX_BRANCHES + 1):
-            outcome = replay(current.holds)
+            exploratory = _exploratory_correction_rungs(
+                plc,
+                current.holds,
+                incident,
+                correction_progress_mark,
+            )
+            outcome = replay(exploratory)
             if not outcome.accepted:
                 _reject(
                     current,
                     "exploratory-replay-failed",
-                    "raw replay rejected: " + (outcome.reason or "no replay reason supplied"),
+                    "exploratory replay rejected: "
+                    + (outcome.reason or "no replay reason supplied"),
                 )
                 break
             replacement = outcome.replacement

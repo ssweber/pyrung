@@ -29,7 +29,7 @@ from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
-from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
@@ -46,10 +46,12 @@ from pyrung.core.analysis.pilot.progress import (
     _deviation_bearing,
     _investigate_and_revert,
     _monitor_trend,
+    _open_pending_departure,
 )
 from pyrung.core.analysis.pilot.types import (
     DepartureAction,
     DepartureDecision,
+    MotionKind,
     PendingDeparture,
     PilotEvent,
     _Checkpoint,
@@ -146,12 +148,14 @@ def _pending_departure(
     progress_mark: tuple[tuple[str, Any], ...] = (),
     expires_at: int = 2000,
     opening_progress: GaugeReceipt | None = None,
+    from_value: Any = 9,
+    rollback_owner: Any = None,
 ) -> PendingDeparture:
     return PendingDeparture(
         channel_tag="State",
-        from_value=9,
+        from_value=from_value,
         progress_mark=progress_mark,
-        rollback_owner=state.checkpoints[-1].owner,
+        rollback_owner=rollback_owner or state.checkpoints[-1].owner,
         expires_at=expires_at,
         opening_progress=opening_progress or GaugeReceipt((), (), "unknown"),
     )
@@ -323,9 +327,8 @@ class TestCheckpoints:
         assert origin.before_snap == frame.snap
 
 
-def test_banked_ordinary_checkpoint_promotes_the_pending_departure():
-    """Improved-trend work banked while pending discharges its doubt:
-    the march is real, so a later expiry must never roll it back."""
+def test_improved_trace_distance_does_not_promote_pending_departure():
+    """Fewer open trace leaves are a local checkpoint, not banked work."""
     state = _make_state(best_trend=5, checkpoints=[_cp(("src",), _oneshot_plc(), 5)])
     state.pending_departure = _pending_departure(
         state,
@@ -336,10 +339,56 @@ def test_banked_ordinary_checkpoint_promotes_the_pending_departure():
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
-    assert [e.kind for e in events] == ["trend_checkpoint", "provisional_promoted"]
-    assert events[1].data["outcome"] == "banked ordinary progress"
-    assert state.pending_departure is None
-    assert len(state.checkpoints) == 2  # the march is kept, nothing collapsed
+    assert [e.kind for e in events] == ["trend_checkpoint"]
+    assert events[0].data["provisional"] is True
+    assert state.pending_departure is not None
+    assert len(state.checkpoints) == 2
+    assert state.best_trend == 3
+
+
+def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
+    source = _oneshot_plc()
+    source._state = source.state.with_tags({"State": 6, "Step": 105})
+    settled = source.fork()
+    settled._state = settled.state.with_tags({"State": 11, "Step": 107})
+    checkpoint = _cp(("source",), source, 5)
+    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+    state = _make_state(
+        best_trend=5,
+        checkpoints=[checkpoint],
+        work=source,
+        gauge=gauge,
+    )
+    trial = _make_trial(
+        5,
+        Outcome.AMBIENT_DRIFT,
+        before_snap={"State": 6, "Step": 105},
+        fork_snap={"State": 10, "Step": 105},
+        zoom_channel_tag="State",
+        zoom_target_value=16,
+    )
+    verdict = DepartureVerdict(
+        decision="continue",
+        reason="clean continuation",
+        settled_fork=settled,
+        settled_value=11,
+        settle_scans=1,
+        reentry_value=6,
+        route=(11, 12, 6),
+        progress=gauge.receipt(trial.before_snap, settled.state.tags),
+    )
+
+    events = _open_pending_departure(
+        verdict,
+        trial,
+        state,
+        SimpleNamespace(max_scans=10_000),
+        "State",
+    )
+
+    assert state.pending_departure is not None
+    assert state.pending_departure.progress_mark == (("Step", 107),)
+    assert events[0].data["gauge_at_source"] == (("Step", 107),)
 
 
 def test_pending_expiry_without_saved_progress_rolls_back():
@@ -1075,7 +1124,7 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
                 InvestigationRejection(
                     reject_a,
                     "exploratory-replay-failed",
-                    "raw replay rejected: watchdog still fired",
+                    "exploratory replay rejected: watchdog still fired",
                 ),
                 InvestigationRejection(
                     reject_b,
@@ -1098,4 +1147,7 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
         "guarded-replay-failed",
     ]
     # The human ground rides alongside the slug, unchanged.
-    assert rejected_detail[0]["ground"] == "raw replay rejected: watchdog still fired"
+    assert (
+        rejected_detail[0]["ground"]
+        == "exploratory replay rejected: watchdog still fired"
+    )

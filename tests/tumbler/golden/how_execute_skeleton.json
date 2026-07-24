@@ -123,17 +123,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -141,7 +135,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Clear",
     "value": true
    }
@@ -245,17 +238,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -263,7 +250,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -294,17 +280,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -312,7 +292,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -401,17 +380,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -419,7 +392,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Reset",
     "value": true
    }
@@ -500,17 +472,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -518,7 +484,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -549,17 +514,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -567,7 +526,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -640,17 +598,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -658,7 +610,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Start",
     "value": true
    }
@@ -716,17 +667,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -734,7 +679,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -765,17 +709,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -783,7 +721,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },

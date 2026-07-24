@@ -144,6 +144,31 @@ class Gauge:
                 return True
         return False
 
+    def has_banked_work(self, snap: Any) -> bool:
+        """Whether a component is ahead of one of its proved reset floors.
+
+        This is a current-world fact, not a comparison with PILOT history.  It
+        lets a fresh read recognize recipe work that the user program completed
+        before PILOT arrived: Step 103 is live work beyond the proved Step 101
+        reset, while a cold-boot Step 101 is not.
+        """
+
+        for component in self.components:
+            current = snap.get(component.tag)
+            if isinstance(current, bool) or not isinstance(current, (int, float)):
+                continue
+            for reset in component.resets:
+                floor = reset.value
+                if (
+                    not reset.resolved
+                    or isinstance(floor, bool)
+                    or not isinstance(floor, (int, float))
+                ):
+                    continue
+                if (current - floor) * component.direction > 0:
+                    return True
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Discrete provenance — "every satisfiable guard arm contains an event"

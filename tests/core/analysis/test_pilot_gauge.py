@@ -137,6 +137,8 @@ def test_step_chain_stepper_with_alias_resolved_reset() -> None:
     assert reset.value == 1
     assert reset.channel_tag == Mode.name
     assert reset.enabling_channel_values == (15,)
+    assert not gauge.has_banked_work({Step.name: 1})
+    assert gauge.has_banked_work({Step.name: 2})
 
     # Anchor-relative verdicts: ahead = advanced, equal = preserved,
     # a reset landing = behind (work destroyed).

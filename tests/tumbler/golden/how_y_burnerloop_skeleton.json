@@ -189,17 +189,11 @@
   ],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -207,22 +201,15 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Clear",
     "value": true
    },
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
     "bearing_channel_value": 1,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
      true
@@ -232,22 +219,15 @@
      "Main:R22"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "Cmd_UnitModeChgRequest",
     "value": true
    },
    {
-    "avail_tier": 2,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "compass_score": [
-     50,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -257,7 +237,6 @@
      "ModeChange:R200"
     ],
     "route_prescribed": false,
-    "scored": true,
     "tag": "Cmd_Mode_Production",
     "value": true
    }
@@ -372,17 +351,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -390,7 +363,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -451,17 +423,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -469,7 +435,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Clear",
    "value": true
   },
@@ -648,17 +613,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -666,7 +625,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Reset",
     "value": true
    }
@@ -737,17 +695,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -755,7 +707,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -791,17 +742,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -809,7 +754,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Reset",
    "value": true
   },
@@ -923,17 +867,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -941,7 +879,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Start",
     "value": true
    }
@@ -989,17 +926,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1007,7 +938,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1043,17 +973,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1061,7 +985,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1323,13 +1246,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
        "value": true
       }
      ],
@@ -1350,7 +1273,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -1366,7 +1289,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -1382,13 +1305,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:1>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
        "value": true
       }
      ],
@@ -1467,17 +1390,11 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "avail_tier": 0,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "compass_score": [
-     0,
-     0
-    ],
     "current_note": "",
     "current_prescribed": false,
     "influence_prescribed": false,
-    "over_wake": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -1485,7 +1402,6 @@
     "prescribed": true,
     "provenance": [],
     "route_prescribed": true,
-    "scored": false,
     "tag": "Cmd_State_Start",
     "value": true
    }
@@ -1533,17 +1449,11 @@
    ]
   ],
   "candidate": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1551,7 +1461,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1587,17 +1496,11 @@
    ]
   ],
   "candidate_detail": {
-   "avail_tier": 0,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "compass_score": [
-    0,
-    0
-   ],
    "current_note": "",
    "current_prescribed": false,
    "influence_prescribed": false,
-   "over_wake": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1605,7 +1508,6 @@
    "prescribed": true,
    "provenance": [],
    "route_prescribed": true,
-   "scored": false,
    "tag": "Cmd_State_Start",
    "value": true
   },
@@ -1835,25 +1737,7 @@
  },
  {
   "kind": "trend_checkpoint",
-  "trend": 10
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "terminal": false,
+  "provisional": true,
   "trend": 10
  },
  {
@@ -2048,13 +1932,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:2>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
        "value": true
       }
      ],
@@ -2093,13 +1977,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
        "value": true
       }
      ],
@@ -2205,6 +2089,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 5
  },
  {
@@ -2389,7 +2274,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2408,7 +2293,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:4>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
        "value": true
       }
      ],
@@ -2424,7 +2309,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:6>>",
        "value": true
       }
      ],
@@ -2523,6 +2408,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 5
  },
  {
@@ -2600,6 +2486,7 @@
  },
  {
   "kind": "trend_checkpoint",
+  "provisional": true,
   "trend": 3
  },
  {
@@ -2672,6 +2559,25 @@
   "applied": [],
   "candidate": {},
   "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "gauge_at_source": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "kind": "provisional_promoted",
+  "landing_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "terminal": true,
+  "trend": 0
  },
  {
   "kind": "finished",

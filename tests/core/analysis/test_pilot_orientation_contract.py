@@ -14,11 +14,11 @@ from pyrung.core.analysis.pilot.navigation import (
     Bearing,
     BearingObjective,
     Coast,
+    Dwell,
     NavigationConstraints,
     NeedProbe,
     OrientationWorld,
     Pulse,
-    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -35,6 +35,14 @@ class _Context:
     blocked_route_actions: frozenset = frozenset()
     avoid_pred: object = None
     route: object = None
+    pdg: object = None
+    program: object = None
+    steerable: frozenset = frozenset()
+    clear_only: frozenset = frozenset()
+    opaque_loop: frozenset = frozenset()
+    pipeline_internal_tags: frozenset = frozenset()
+    domain_prior: object = None
+    via_pred: object = None
 
 
 def _candidate(tag: str) -> SimpleNamespace:
@@ -46,6 +54,8 @@ def _candidate(tag: str) -> SimpleNamespace:
         route_prescribed=False,
         influence_prescribed=False,
         current_prescribed=False,
+        program_prescribed=False,
+        program_note="",
         bearing_channel_tag=None,
         bearing_channel_value=None,
     )
@@ -56,6 +66,7 @@ def _options(*candidates, stuck_reason=None):
         completion_frontier=(),
         route_plan=None,
         candidates=tuple(candidates),
+        continuation_evidence=(),
         prerequisite_rungs=(),
         wait_prescribed=False,
         wait_reason=None,
@@ -77,25 +88,19 @@ def _world(compass: Compass) -> OrientationWorld:
             tree=TraceNode("Target", True, satisfied=False),
             completion_frontier=(),
         ),
-        state=SimpleNamespace(key_config=None, rungs=()),
+        state=SimpleNamespace(key_config=None, rungs=(), work=SimpleNamespace()),
         context=context,
     )
 
 
-def test_active_inferred_root_route_is_retraced_without_reranking(monkeypatch) -> None:
-    """A score change cannot switch routes before an exhaustion boundary."""
+def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
-    active = TraceChoice(id="route-a", label="A", route=("A",))
-    committed_tree = object()
-    monkeypatch.setattr(
-        orientation,
-        "_trace_for_route",
-        lambda _world, _target, _constraints, route, _rejected: (
-            committed_tree if route is active else pytest.fail("commitment changed")
-        ),
-    )
+    route_a = TraceChoice(id="route-a", label="A", route=("A",))
+    route_b = TraceChoice(id="route-b", label="B", route=("B",))
+    tree_a = object()
+    tree_b = object()
     monkeypatch.setattr(
         orientation,
         "_route_rejected_actions",
@@ -104,18 +109,19 @@ def test_active_inferred_root_route_is_retraced_without_reranking(monkeypatch) -
     monkeypatch.setattr(
         orientation,
         "rank_trace_choices",
-        lambda *_args, **_kwargs: pytest.fail("active route was re-ranked"),
+        lambda *_args, **_kwargs: (
+            (route_a, route_b),
+            ((route_a, tree_a), (route_b, tree_b)),
+        ),
     )
 
-    selected, tree, exhaustion = orientation._read_committed_route(
+    routes = orientation._read_route_trees(
         _world(Compass()),
         TargetSpec("Target", True),
-        NavigationConstraints(active_root_route=active),
+        NavigationConstraints(),
     )
 
-    assert selected is active
-    assert tree is committed_tree
-    assert exhaustion is None
+    assert routes == ((route_a, tree_a), (route_b, tree_b))
 
 
 def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
@@ -148,6 +154,99 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert result.trace.world.frame is world.frame
     assert result.trace.candidates.candidates == (first,)
     assert not hasattr(result.trace, "readings")
+
+
+def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
+    from pyrung.core.analysis.pilot.options import _current_work_evidence
+    from pyrung.core.analysis.pilot.trace import TraceNode
+
+    frame = SimpleNamespace(
+        snap={"Heat_tmr_Acc": 2, "Heat_CurStep": 2},
+        tree=TraceNode(
+            "Target",
+            True,
+            children=[
+                TraceNode(
+                    "Heat_CurStep",
+                    3,
+                    satisfied=False,
+                    children=[
+                        TraceNode(
+                            "ContinueHeat",
+                            True,
+                            satisfied=False,
+                            is_steerable=True,
+                        )
+                    ],
+                )
+            ],
+        ),
+    )
+    state = SimpleNamespace(
+        rungs=(),
+        pending_departure=None,
+        committed_acts=(
+            SimpleNamespace(
+                context=SimpleNamespace(
+                    before_snap={"Heat_tmr_Acc": 0, "Heat_CurStep": 1},
+                    after_snap={"Heat_tmr_Acc": 2, "Heat_CurStep": 2},
+                    frontier_tags=("Heat_tmr_Acc",),
+                    channel_tag="Heat_tmr_Acc",
+                    motion=SimpleNamespace(
+                        value="coast-to-bearing",
+                        is_coast=True,
+                    ),
+                )
+            ),
+        ),
+        gauge=None,
+    )
+
+    assert _current_work_evidence(frame, state, None) == ("operation:Heat_CurStep",)
+
+
+def test_open_operation_maintenance_owns_before_a_sibling_intervention(
+    monkeypatch,
+) -> None:
+    """Keeping live work running is a continuation, not an actionless fallback."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    target = TargetSpec("Target", True)
+    first = SimpleNamespace(name="live")
+    second = SimpleNamespace(name="sibling")
+    maintain = Bearing(
+        ("world",),
+        Dwell(),
+        BearingObjective(target),
+    )
+    destroy = Bearing(
+        ("world",),
+        Pulse(
+            ("Destroy", True),
+            (("Destroy", True),),
+            _candidate("Destroy"),
+        ),
+        BearingObjective(target),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_orient_read",
+        lambda _compass, world, _target, _constraints: (
+            maintain if world is first else destroy
+        ),
+    )
+
+    selected, results = orientation._read_group(
+        compass,
+        (first, second),
+        target,
+        NavigationConstraints(),
+        maintenance_owns=True,
+    )
+
+    assert selected is maintain
+    assert results == (maintain,)
 
 
 def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
@@ -225,7 +324,7 @@ def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:
     assert result.reason_code == "trace_opaque"
 
 
-def test_orient_returns_unproductive_after_budget_for_inferred_route(monkeypatch) -> None:
+def test_orient_returns_stuck_after_budget_with_route_receipt(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
@@ -243,11 +342,10 @@ def test_orient_returns_unproductive_after_budget_for_inferred_route(monkeypatch
     result = compass.orient(
         world,
         TargetSpec("Target", True),
-        NavigationConstraints(active_root_route=active),
+        NavigationConstraints(),
     )
 
-    assert isinstance(result, RouteUnproductive)
-    assert result.route is active
+    assert isinstance(result, Stuck)
     assert result.reason_code == "trace_opaque"
     assert result.evidence == ("probe budget 2",)
 

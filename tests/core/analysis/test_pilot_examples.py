@@ -6,9 +6,9 @@ These drive ``pilot_how`` end-to-end on realistic programs.  Two kinds of case:
   *and* replays the returned path on a fresh PLC (two-oracle check, matching the
   convention in ``test_packml_diagnosis``).
 * **Frontier targets** — cases PILOT *should* solve but cannot yet, marked
-  ``xfail`` with a ``pilot:`` reason.  They assert the behaviour PILOT should
-  have, so the day it gains the capability the test **xpasses** and flags the
-  gap as closed (xfail is non-strict — an xpass is a signal, not a failure).
+  strict ``xfail`` with a ``pilot:`` reason.  They assert the behaviour PILOT
+  should have, so the day it gains the capability the test **xpasses** and
+  requires the marker to be removed.
 
 The example modules run an import-time simulation unless ``PYRUNG_DAP_ACTIVE``
 is set; PILOT only needs the program object, so we skip the demo run.

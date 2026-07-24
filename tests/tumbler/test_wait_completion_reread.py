@@ -20,6 +20,24 @@ GATE_MAX_SCANS = 20_000
 GATE_WALL_BUDGET_S = 240.0
 
 
+def test_cold_boot_first_bearing_is_the_current_state_boundary(tumbler_logic) -> None:
+    """Deep target leaves cannot hide the known edge out of ABORTED."""
+
+    plc = PLC(tumbler_logic, dt=0.010)
+    plc.step()
+    target = plc._known_tags_by_name["y_BurnerLoop"]
+
+    first_try = next(
+        event
+        for event in pilot_events(plc, target, max_scans=100)
+        if event.kind == "candidate_try"
+    )
+
+    assert first_try.data["candidate"]["pair"] == ("Cmd_State_Clear", True)
+    assert first_try.data["candidate"]["route_prescribed"] is True
+    assert first_try.data["candidate"]["bearing_channel_tag"] == "Sts_StateCurrent"
+
+
 def test_cold_boot_how_y_burnerloop_completes(tumbler_logic) -> None:
     """The silent-hang fixture end-to-end — the wait-edge design's phase-3 gate.
 

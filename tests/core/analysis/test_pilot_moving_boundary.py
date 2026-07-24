@@ -71,6 +71,6 @@ def test_pilot_renegotiates_a_moving_process_boundary() -> None:
     ]
     assert len({rung.value for rung in pv_corrections}) >= 2, pv_corrections
     assert all(rung.operation is None for rung in pv_corrections)
-    assert any(
-        event.data["revoked_corrections"] for event in events if event.kind == "trend_regression"
-    )
+    # Each concrete PV fact expires with its incident scope. It need not be
+    # globally revoked merely because the moving boundary later asks for a new
+    # concrete value.

@@ -371,10 +371,6 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
             or candidate.current_prescribed
             or candidate.program_prescribed
         ),
-        "scored": candidate.scored,
-        "avail_tier": candidate.avail_tier,
-        "over_wake": candidate.over_wake,
-        "compass_score": candidate.compass_score,
     }
 
 

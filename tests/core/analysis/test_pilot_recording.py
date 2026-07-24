@@ -1,15 +1,12 @@
 """PILOT decision-rationale recordings (recording only — zero behavior change).
 
-Three rich decisions PILOT used to compute and throw away are now carried on the
+Two rich decisions PILOT used to compute and throw away are now carried on the
 event stream and on :class:`Plan`:
 
-1. **Candidate rank rationale** — every ``candidate_*`` event's payload carries the
-   ``avail_tier`` / ``over_wake`` / ``compass_score`` that sorted it, and whether it
-   was ``scored`` or bypassed as a prescribed edge.
-2. **Writer-ranking rationale** — the traced node stashes the FULL ``_rank_writers``
+1. **Writer-ranking rationale** — the traced node stashes the FULL ``_rank_writers``
    ordering (winner + losers, each with its availability/bucket/clobber) plus the
    ranked writers the walk actively skipped.
-3. **Knowledge onto Plan** — ``journey`` / ``hold_log`` / ``lever_notes`` /
+2. **Knowledge onto Plan** — ``journey`` / ``hold_log`` / ``lever_notes`` /
    ``avoid_names`` are threaded off the drive's ``_PilotState`` onto the returned
    :class:`Plan`.
 """
@@ -110,11 +107,11 @@ def test_plan_manual_edit_is_hidden_only_by_matching_effective_owner() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Recording 1 — candidate rank rationale on the event payload
+# Recording 1 — candidate payload reports provenance, not a second policy score
 # ---------------------------------------------------------------------------
 
 
-def test_candidates_built_payload_carries_rank_rationale() -> None:
+def test_candidates_built_payload_carries_provenance_without_policy_scores() -> None:
     x_Go = Bool("x_Go", external=True)
     y_Out = Bool("y_Out")
     with Program() as logic:
@@ -130,22 +127,13 @@ def test_candidates_built_payload_carries_rank_rationale() -> None:
     )
     assert plan.reachable, plan.reason
 
-    # Every candidates_built payload exposes per-candidate rank rationale.
-    seen_scored = False
+    seen_candidate = False
     for ev in built:
         for cand in ev.data["candidates"]:
-            assert set(("avail_tier", "over_wake", "compass_score", "scored", "prescribed")) <= set(
-                cand
-            )
-            # A scored (non-prescribed) candidate carries measured dimensions.
-            if cand["scored"]:
-                seen_scored = True
-                assert isinstance(cand["avail_tier"], int)
-                assert isinstance(cand["over_wake"], bool)
-                assert isinstance(cand["compass_score"], tuple)
-                assert len(cand["compass_score"]) == 2
-                assert cand["prescribed"] is False
-    assert seen_scored, "expected at least one scored candidate carrying rank rationale"
+            seen_candidate = True
+            assert set(("provenance", "wake", "prescribed")) <= set(cand)
+            assert not {"avail_tier", "over_wake", "compass_score", "scored"} & set(cand)
+    assert seen_candidate
 
 
 # ---------------------------------------------------------------------------

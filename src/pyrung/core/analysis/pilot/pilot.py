@@ -1,8 +1,8 @@
 """Public entry points and outer orchestration for PILOT drives.
 
 This module builds static/runtime context, prepares the user-selected trace
-route, and dispatches ``Bearing | NeedProbe | RouteExhausted |
-RouteUnproductive | Stuck`` results from ``Compass``.
+constraint, and dispatches ``Bearing | NeedProbe | Stuck`` results from
+``Compass``.
 It invokes execution, applies observations, commits eligible forks, delegates
 post-commit recovery, and converts the event stream into public results.  It
 does not synthesize a navigation decision.
@@ -53,8 +53,6 @@ from pyrung.core.analysis.pilot.navigation import (
     NeedProbe,
     OrientationWorld,
     Pulse,
-    RouteExhausted,
-    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -766,7 +764,7 @@ def _finished_event(
             "steps": tuple(state.steps),
             "journey": tuple(state.journey),
             "knowledge": _knowledge_payload(state, ctx.compass),
-            "root_route": ctx.route or state.inferred_route_commitment,
+            "root_route": ctx.route or state.recorded_root_route,
             "work": state.work,
             "reason": reason,
             "plan_journal": _build_plan_journal(
@@ -786,7 +784,7 @@ def _stuck_event(
     reason: str,
     *,
     candidate_count: int,
-    diagnosis: Stuck | RouteExhausted | None = None,
+    diagnosis: Stuck | None = None,
 ) -> PilotEvent:
     """Build the common terminal-stuck diagnostic shape."""
 
@@ -919,21 +917,6 @@ def _pilot_loop_events(
         constraints = NavigationConstraints(
             blocked_actions=ctx.blocked_route_actions,
             avoid_predicate=ctx.avoid_pred,
-            active_root_route=state.inferred_route_commitment,
-            skipped_root_routes=(
-                frozenset(
-                    state.skipped_route_ids.get(
-                        _pilot_world_key(
-                            dict(state.work.state.tags),
-                            state.key_config,
-                            state.rungs,
-                        ),
-                        set(),
-                    )
-                )
-                if state.key_config is not None
-                else frozenset()
-            ),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
         trace = result.trace
@@ -976,65 +959,8 @@ def _pilot_loop_events(
             _candidates_built_payload(candidates, state.lever_notes),
         )
 
-        if isinstance(result, RouteExhausted):
-            state.skipped_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
-            if result.revocable:
-                state.inferred_route_commitment = None
-            yield PilotEvent(
-                "route_exhausted",
-                state.work.state.scan_id,
-                {
-                    "route": result.route,
-                    "identity": result.route_identity,
-                    "rejected_actions": result.rejected_actions,
-                    "revoked": result.revocable,
-                },
-            )
-            if result.revocable:
-                continue
-            terminal_reason = (
-                "Every available action on the requested via route failed its trial"
-                + _frontier_clause(frame)
-            )
-            yield _stuck_event(
-                state,
-                ctx,
-                frame,
-                terminal_reason,
-                candidate_count=len(candidates.candidates),
-                diagnosis=result,
-            )
-            if state.checkpoints:
-                state.load_world(state.checkpoints[-1].world)
-            yield _finished_event(
-                state,
-                ctx,
-                journal_channel_tags,
-                journal_acc_names,
-                reached=False,
-                reason=terminal_reason,
-            )
-            return
-
-        if isinstance(result, RouteUnproductive):
-            state.skipped_route_ids.setdefault(result.world_key, set()).add(result.route_identity)
-            state.inferred_route_commitment = None
-            yield PilotEvent(
-                "route_unproductive",
-                state.work.state.scan_id,
-                {
-                    "route": result.route,
-                    "identity": result.route_identity,
-                    "reason_code": result.reason_code,
-                    "frontier": result.frontier,
-                    "exclusions": result.exclusions,
-                    "evidence": result.evidence,
-                },
-            )
-            continue
-
-        if ctx.route is None and state.inferred_route_commitment is None:
-            state.inferred_route_commitment = orientation_world.root_route
+        if isinstance(result, Bearing):
+            state.recorded_root_route = orientation_world.root_route
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)
@@ -1049,36 +975,9 @@ def _pilot_loop_events(
                     "changed": changed,
                 },
             )
-            if not changed:
-                if state.inferred_route_commitment is not None:
-                    # The probe-count receipt changed even when its observations
-                    # did not. Re-orient once so Orientation can own the
-                    # inferred route's unproductive disposition.
-                    continue
-                terminal_reason = _with_avoid_reason(
-                    "No productive next action was found",
-                    state,
-                    ctx,
-                    frame,
-                ) + _frontier_clause(frame)
-                yield _stuck_event(
-                    state,
-                    ctx,
-                    frame,
-                    terminal_reason,
-                    candidate_count=0,
-                )
-                if state.checkpoints:
-                    state.load_world(state.checkpoints[-1].world)
-                yield _finished_event(
-                    state,
-                    ctx,
-                    journal_channel_tags,
-                    journal_acc_names,
-                    reached=False,
-                    reason=terminal_reason,
-                )
-                return
+            # The bounded probe-count receipt always changes navigation
+            # knowledge, even when no new live-guard observation was found.
+            # Re-read until Orientation returns the complete-world Stuck.
             continue
 
         if isinstance(result, Stuck):

@@ -333,8 +333,8 @@ def test_bool_output_routes_report_and_redirect():
     assert avoided.changes.get("ProdCmd") is not True
 
 
-def test_rejected_inferred_root_route_falls_back_to_alternate():
-    """A failed preferred route is evidence, not a permanent route lock."""
+def test_rejected_root_act_is_filtered_from_fresh_current_world_read():
+    """A failed act is evidence; no route cursor is advanced to find its sibling."""
     CmdA = Bool("RouteFallback_CmdA", external=True)
     CmdB = Bool("RouteFallback_CmdB", external=True)
     Forbidden = Bool("RouteFallback_Forbidden")
@@ -362,17 +362,16 @@ def test_rejected_inferred_root_route_falls_back_to_alternate():
     assert path.reachable, path.reason
     rejected = [event for event in events if event.kind == "candidate_rejected"]
     assert rejected[0].data["candidate"]["tag"] == CmdA.name
-    exhausted = [event for event in events if event.kind == "route_exhausted"]
-    assert len(exhausted) == 1
-    assert exhausted[0].data["rejected_actions"] == ((CmdA.name, True),)
-    assert exhausted[0].data["revoked"] is True
+    tried = [event.data["candidate"]["tag"] for event in events if event.kind == "candidate_try"]
+    assert tried[:2] == [CmdA.name, CmdB.name]
+    assert not any(event.kind.startswith("route_") for event in events)
     assert path.changes.get(CmdA.name) is not True
     assert path.changes.get(CmdB.name) is True
     assert path.route is not None and CmdB.name in path.route.label
     assert any(CmdA.name in alt.label for alt in path.route.pivots[0].alternatives)
 
 
-def test_actionless_inferred_root_route_falls_back_to_productive_sibling():
+def test_actionless_root_does_not_hide_productive_current_world_sibling():
     """An inferred route with no bearing must not hide a reachable sibling."""
     AutoUpPermissive = Bool("ActionlessRoute_AutoUpPermissive", readonly=True)
     Up = Bool("ActionlessRoute_Up")
@@ -404,13 +403,9 @@ def test_actionless_inferred_root_route_falls_back_to_productive_sibling():
     assert inferred.reachable, inferred.reason
     assert inferred.changes == {ManualUp.name: True}
     assert inferred.replay().state.tags[Output.name] is True
-    unproductive = [event for event in events if event.kind == "route_unproductive"]
-    assert len(unproductive) == 1
-    assert unproductive[0].data["route"].label == f"{Up.name}=True"
-    assert unproductive[0].data["frontier"] == (
-        (Output.name, True),
-        (Up.name, True),
-    )
+    tried = [event.data["candidate"]["tag"] for event in events if event.kind == "candidate_try"]
+    assert tried[0] == ManualUp.name
+    assert not any(event.kind.startswith("route_") for event in events)
 
 
 def test_rejected_nested_writer_falls_back_to_sibling_writer():
@@ -480,8 +475,8 @@ def test_rejected_nested_or_arm_falls_back_to_sibling_arm():
     assert path.route is None
 
 
-def test_explicit_via_keeps_alternate_root_route_locked_out():
-    """Unlike an inferred preference, ``via=`` remains durable user intent."""
+def test_explicit_via_keeps_alternate_current_world_work_out():
+    """Unlike inferred alternatives, ``via=`` remains durable user intent."""
     CmdA = Bool("RouteVia_CmdA", external=True)
     CmdB = Bool("RouteVia_CmdB", external=True)
     Forbidden = Bool("RouteVia_Forbidden")
@@ -508,9 +503,7 @@ def test_explicit_via_keeps_alternate_root_route_locked_out():
     )
 
     assert not path.reachable
-    exhausted = [event for event in events if event.kind == "route_exhausted"]
-    assert len(exhausted) == 1
-    assert exhausted[0].data["revoked"] is False
+    assert not any(event.kind.startswith("route_") for event in events)
     assert all(
         event.data["candidate"]["tag"] != CmdB.name
         for event in events

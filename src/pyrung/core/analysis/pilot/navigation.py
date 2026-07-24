@@ -17,8 +17,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
 T = TypeVar("T")
-_RouteIdentity = tuple[Any, ...]
-_RouteExhaustionReceipt = tuple[_RouteIdentity, tuple[_ActionPair, ...], bool]
 
 
 @dataclass(frozen=True)
@@ -88,8 +86,6 @@ class NavigationConstraints:
 
     blocked_actions: frozenset[_ActionPair] = frozenset()
     avoid_predicate: Any = None
-    active_root_route: TraceChoice | None = None
-    skipped_root_routes: frozenset[_RouteIdentity] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -109,9 +105,9 @@ class OrientationWorld:
     context: Any
     key_config: Any = None
     # Current-world root-route receipt selected by Orientation. This is one
-    # commitment, never a retained suffix of alternatives.
+    # read receipt used for execution/reporting, never a retained navigation
+    # commitment or suffix of alternatives.
     root_route: TraceChoice | None = None
-    route_exhaustion: _RouteExhaustionReceipt | None = None
 
 
 @dataclass(frozen=True)
@@ -225,40 +221,7 @@ class Stuck:
     trace: OrientationTrace | None = None
 
 
-@dataclass(frozen=True)
-class RouteExhausted:
-    """The active root-route commitment has no untried action in this world."""
-
-    world_key: _StateKey
-    route: TraceChoice
-    route_identity: _RouteIdentity
-    rejected_actions: tuple[_ActionPair, ...]
-    revocable: bool
-    rationale: str
-    trace: OrientationTrace
-
-
-@dataclass(frozen=True)
-class RouteUnproductive:
-    """An inferred root route offers no productive bearing in this world.
-
-    Unlike :class:`RouteExhausted`, this does not claim that concrete actions
-    were tried and rejected. Orientation reached the end of its bounded
-    read/wait/probe escalation while the route remained actionless.
-    """
-
-    world_key: _StateKey
-    route: TraceChoice
-    route_identity: _RouteIdentity
-    reason_code: str
-    frontier: tuple[_ActionPair, ...]
-    exclusions: tuple[Any, ...]
-    evidence: tuple[Any, ...]
-    rationale: str
-    trace: OrientationTrace
-
-
-OrientationResult = Bearing | NeedProbe | Stuck | RouteExhausted | RouteUnproductive
+OrientationResult = Bearing | NeedProbe | Stuck
 
 
 def pulse_identity(applied: tuple[_ActionPair, ...]) -> tuple[Any, ...]:

@@ -345,12 +345,14 @@ def _expand_pilot_rules(rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule,
             # Continuations come after every start rule. The last active write
             # therefore belongs to the operation whose owner says it is already
             # in flight, rather than to a competing value that merely remains
-            # eligible to start.
+            # eligible to start. The affirmative progress receipt replaces the
+            # start guard: requiring both would release the operation as soon as
+            # it left the context that started it.
             continuation_rules.append(
                 _ExpandedPilotRule(
                     rung_index,
                     rung,
-                    AllCondition(rung_guard, _DemandActive(progress)),
+                    _DemandActive(progress),
                     True,
                 )
             )

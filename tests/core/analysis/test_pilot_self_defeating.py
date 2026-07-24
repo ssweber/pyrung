@@ -267,7 +267,14 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
         replay,
     )
 
-    assert replayed == [progress_cut.holds]
+    assert len(replayed) == 1
+    assert tuple(
+        (proposal.dest, proposal.value)
+        if isinstance(proposal, PilotRung)
+        else proposal
+        for proposal in replayed[0]
+    ) == progress_cut.holds
+    assert all(isinstance(proposal, PilotRung) for proposal in replayed[0])
     assert result.correction is None
     assert result.rejected[0].hypothesis == progress_cut
     assert result.rejected[0].slug == "self-defeat"
@@ -593,7 +600,14 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
         needed=state.checkpoints[-1].objective.frontier,
     )
 
-    assert replayed == [(("InitFlag", 1),)]
+    assert len(replayed) == 1
+    assert tuple(
+        (proposal.dest, proposal.value)
+        if isinstance(proposal, PilotRung)
+        else proposal
+        for proposal in replayed[0]
+    ) == (("InitFlag", 1),)
+    assert all(isinstance(proposal, PilotRung) for proposal in replayed[0])
     assert result.correction is None
     assert result.confirmed == ()
     assert len(result.rejected) == 1

@@ -226,7 +226,6 @@ class TestCoastHoldingState:
         }
         assert True in seen and False in seen
 
-
 # ---------------------------------------------------------------------------
 # _threshold_crossed_snap
 # ---------------------------------------------------------------------------
@@ -455,6 +454,36 @@ class TestPilotRungs:
         plc.step()
         plc.step()
         assert plc.state.tags[In.name] is effective.value
+
+    def test_operation_progress_continues_after_its_start_guard_closes(self):
+        In = Bool("ProgressLifetime_In", external=True)
+        Start = Bool("ProgressLifetime_Start", external=True)
+        Progress = Bool("ProgressLifetime_Progress", external=True)
+        with Program() as prog:
+            with Rung(In, Start, Progress):
+                out(Bool("ProgressLifetime_Seen"))
+        plc = PLC(prog, dt=0.010)
+        operation = PilotRung(
+            In.name,
+            True,
+            Start,
+            OperationReceipt(
+                ~Progress,
+                ConditionDemand(CompareEq(Progress, True)),
+            ),
+        )
+        _set_rungs(plc, (operation,))
+
+        # The operation has left the context that started it, but its owner
+        # still reports affirmative in-flight progress.
+        plc.patch({Start.name: False, Progress.name: True})
+        plc.step()
+        plc.step()
+
+        receipt = _rung_execution_receipt((operation,), dict(plc.state.tags))
+        assert plc.state.tags[In.name] is True
+        assert receipt.rungs[0].continuation
+        assert receipt.owner(In.name) is operation
 
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
         prog, _In, Scope = _scoped_input_program()

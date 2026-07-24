@@ -400,14 +400,20 @@ def _monitor_trend(
 
     if trial.trend < state.best_trend:
         if state.pending_departure is not None:
-            promoted = _apply_departure_decision(
-                DepartureDecision(DepartureAction.PROMOTE, "banked ordinary progress"),
-                trial,
-                frame,
-                state,
-                ctx,
+            # Trace distance says this reading exposes fewer open leaves. That
+            # is useful locally, but it is not a receipt for program work and
+            # therefore cannot close an unresolved departure. Keep the local
+            # checkpoint so piloting can continue; Gauge alone decides whether
+            # the departed corridor earned anything durable.
+            state.checkpoints.append(
+                _Checkpoint(
+                    trial.new_key,
+                    state.snapshot_world(),
+                    trial.trend,
+                    trial.bearing_objective,
+                )
             )
-            assert promoted is not None
+            state.best_trend = trial.trend
             yield PilotEvent(
                 "trend_checkpoint",
                 state.work.state.scan_id,
@@ -415,9 +421,9 @@ def _monitor_trend(
                     "trend": state.best_trend,
                     "key": trial.new_key,
                     "checkpoint_count": len(state.checkpoints),
+                    "provisional": True,
                 },
             )
-            yield from promoted
             return
         state.checkpoints.append(
             _Checkpoint(
@@ -542,15 +548,16 @@ def _open_pending_departure(
 ) -> tuple[PilotEvent, ...]:
     """Record a clean departure whose progress is not yet conclusive."""
     gauge = state.gauge
-    # The exact pre-coast world remains the replay/rollback receipt. The
-    # pending progress mark starts at the observed departure world so work already
-    # earned during the coast is not counted a second time as side-motion
-    # progress (e.g. 101->103 must not prematurely promote before 103->105).
+    # The exact pre-coast world remains the replay/rollback receipt. Settle the
+    # landing before marking progress: movement completed by the departing
+    # operation belongs to that operation, not to the state it happened to land
+    # in. Only work earned after PILOT can read the departed world may validate
+    # staying there.
+    departed_from = trial.before_snap.get(chan)
+    _adopt_settled_departure(verdict, state)
     progress_mark = (
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
-    departed_from = trial.before_snap.get(chan)
-    _adopt_settled_departure(verdict, state)
     search_scan = state.search_scan
     state.pending_departure = PendingDeparture(
         channel_tag=chan,
@@ -694,9 +701,11 @@ def _assess_pending_departure(
     """Decide a pending departure from current progress evidence.
 
     Advanced promotes immediately. Behind is a proven regression and enters
-    the ordinary investigation/revert arm. Preserved or incomparable evidence
-    waits until the bounded attempt expires; expiration rolls back but
-    creates no regression nogood.
+    the ordinary investigation/revert arm. A same-mark return to the departed
+    channel's source is recovery evidence: investigate the round trip before
+    later progress can retroactively promote it. Other preserved or
+    incomparable evidence waits until the bounded attempt expires; expiration
+    rolls back but creates no regression nogood.
     """
     pending = state.pending_departure
     assert pending is not None
@@ -723,10 +732,12 @@ def _assess_pending_departure(
         and trial.assessment.progress is ProgressEffect.BEHIND
     ):
         outcome = "behind"
-    if outcome == "advanced" or reached:
+    if reached:
         return DepartureDecision(DepartureAction.PROMOTE, outcome)
     if outcome == "behind":
         return DepartureDecision(DepartureAction.REGRESS, outcome)
+    if outcome == "advanced":
+        return DepartureDecision(DepartureAction.PROMOTE, outcome)
     if state.search_scan < pending.expires_at:
         return DepartureDecision(DepartureAction.WAIT, outcome)
     return DepartureDecision(DepartureAction.EXPIRE, outcome)
@@ -1255,15 +1266,24 @@ def _investigate_and_revert(
             if step.scan_before >= cp_fork.state.scan_id
         )
         role_tags = coast_departure_tags(state, ctx)
+        regression_witness = incident_regression_witness(trial.fork, incident)
+        # A corrective fact belongs to the occurrence that exposed it. The
+        # witness carries the scan-entry snapshot for the harmful writer; its
+        # Gauge coordinates distinguish a late fault from earlier useful work
+        # inside the same coast. The rollback checkpoint is only where replay
+        # starts and is not corrective context.
+        correction_anchor = (
+            regression_witness.owner_snapshot
+            if regression_witness is not None and regression_witness.owner_snapshot is not None
+            else incident.before_snap
+        )
         correction_progress_mark = (
-            retain_if_unresolved.progress.source_mark
-            if retain_if_unresolved is not None
-            and retain_if_unresolved.progress.effect == "preserved"
+            state.gauge.mark(dict(correction_anchor))
+            if state.gauge is not None and state.gauge.components
             else ()
         )
         regression_progress_floor = dict(cp_fork.state.tags)
         regression_progress_floor.update(correction_progress_mark)
-        regression_witness = incident_regression_witness(trial.fork, incident)
         causally_revoked = _causally_harmful_corrections(
             state,
             regression_witness,
@@ -1439,7 +1459,6 @@ def _investigate_and_revert(
         # replay-confirmed remedy is therefore an ownership replacement, not a
         # second hold layered over the stale correction.
         correction_origin_key = state.checkpoints[-1].key
-        assert confirmed_correction is not None
         _install_confirmed_correction(
             state,
             confirmed_correction,

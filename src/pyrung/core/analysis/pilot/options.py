@@ -1,9 +1,10 @@
-"""Materialize and rank the action and wait options for one orientation.
+"""Materialize the action and wait options for one orientation.
 
 ``_build_candidates`` combines the current trace tree, constrained static
 routes, learned transitions, program-awaited actions, existing corrections,
-and prerequisite holds. It returns their priority order together with any
-prescribed wait, completion frontier, or no-bearing diagnosis.
+and prerequisite holds. It returns the current read's deterministic action
+order together with any prescribed wait, completion frontier, or no-bearing
+diagnosis.
 
 Candidate construction reads the current world and knowledge but does not
 execute a trial, apply observations, or commit state.
@@ -23,6 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
     _until_unresolved_condition,
     wait_edge_nogood,
 )
+from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.compass import (
     is_action,
     is_composite_action,
@@ -30,7 +32,6 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.navigation import pulse_identity
 from pyrung.core.analysis.pilot.trace import (
     _all_nodes,
-    _WriterAvailability,
     frontier_pairs,
     trace_back,
 )
@@ -72,17 +73,6 @@ class _Candidate:
     program_prescribed: bool = False
     program_note: str = ""
     program_context_actions: tuple[_ActionPair, ...] = ()
-    # Rank rationale — recorded at the scoring site (``_build_candidates``) and
-    # surfaced through ``recording._candidate_payload`` so every candidate event carries why
-    # it sorted where it did.  ``scored`` is False for a prescribed edge (the
-    # compass' explicit bearing), which *bypasses* scoring: ``avail_tier`` /
-    # ``over_wake`` / ``compass_score`` are then the forced (0, False, (0, 0))
-    # bypass values, not measured ones.  ``None`` before scoring runs.
-    avail_tier: int | None = None
-    over_wake: bool | None = None
-    compass_score: tuple[int, int] | None = None
-    scored: bool | None = None
-
     @property
     def pair(self) -> _ActionPair:
         return (self.tag, self.value)
@@ -96,6 +86,10 @@ class _CandidateList:
     route_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     wake_cap: int
+    # Current-world facts that make this trace a continuation of live work.
+    # Empty means the trace starts fresh work.  This is a discrete ordering
+    # tier, recomputed on every read; it is never retained as route state.
+    continuation_evidence: tuple[str, ...] = ()
     route_plan: StaticPath | None = None
     wait_prescribed: bool = False
     wait_reason: str | None = None
@@ -130,6 +124,94 @@ class _CandidateList:
     # orientation layer consumes its witnessed local boundary; recording keeps
     # the same value available for diagnostics.
     program_step: Any = None
+
+
+def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
+    """Concrete current-trace facts that can identify live work."""
+
+    anchors: list[_ActionPair] = []
+    via_hint = getattr(route, "via_hint", None)
+    if via_hint is not None:
+        anchors.append(via_hint)
+        return tuple(anchors)
+    for node in _all_nodes(tree):
+        if node.relational or node.value is None:
+            continue
+        pair = (node.tag, node.value)
+        if pair not in anchors:
+            anchors.append(pair)
+    return tuple(anchors)
+
+
+def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...]:
+    """Recognize work a technician can point to in the current world.
+
+    Reverted journey history and mere tenure are intentionally absent.  Every
+    reason is backed by a fact in the live revertible world and disappears as
+    soon as that fact is clobbered or the trace no longer depends on it.
+    """
+
+    anchors = _tree_work_anchors(frame.tree, route)
+    anchor_tags = {tag for tag, _value in anchors}
+    reasons: list[str] = []
+
+    def _matches_anchor(tag: str, value: Any) -> bool:
+        return any(
+            anchor_tag == tag and _values_match(anchor_value, value)
+            for anchor_tag, anchor_value in anchors
+        )
+
+    for rung in getattr(state, "rungs", ()):
+        tag = getattr(rung, "dest", None)
+        value = getattr(rung, "value", None)
+        if (
+            tag is not None
+            and _matches_anchor(tag, value)
+            and _values_match(frame.snap.get(tag), value)
+        ):
+            reasons.append(f"held:{tag}={value!r}")
+
+    pending = getattr(state, "pending_departure", None)
+    if pending is not None and pending.channel_tag in anchor_tags:
+        current = frame.snap.get(pending.channel_tag)
+        if not _values_match(current, pending.from_value):
+            reasons.append(f"pending:{pending.channel_tag}={current!r}")
+
+    committed = tuple(getattr(state, "committed_acts", ()))
+    if committed:
+        context = committed[-1].context
+        before = context.before_snap
+        after = context.after_snap
+        if getattr(context.motion, "is_coast", False):
+            tree_tags = {node.tag for node in _all_nodes(frame.tree)}
+            for tag, value in after.items():
+                if (
+                    tag in tree_tags
+                    and not _values_match(before.get(tag), value)
+                    and _values_match(frame.snap.get(tag), value)
+                ):
+                    reasons.append(f"operation:{tag}")
+
+        for tag, desired in anchors:
+            if (
+                tag in after
+                and not _values_match(before.get(tag), after.get(tag))
+                and _values_match(after.get(tag), desired)
+                and _values_match(frame.snap.get(tag), desired)
+            ):
+                reasons.append(f"established:{tag}={desired!r}")
+
+        gauge = getattr(state, "gauge", None)
+        components = getattr(gauge, "components", ()) if gauge is not None else ()
+        if (
+            gauge is not None
+            and components
+            and any(component.tag in anchor_tags for component in components)
+            and gauge.ordinal_advanced(before, after)
+        ):
+            reasons.append("gauge:advanced")
+
+    return tuple(dict.fromkeys(reasons))
 
 
 @dataclass(frozen=True)
@@ -212,7 +294,7 @@ def _diagnose_stuck_reason(
 
 
 # ---------------------------------------------------------------------------
-# Compass scoring / routing
+# Compass routing
 # ---------------------------------------------------------------------------
 
 
@@ -236,132 +318,6 @@ def _learned_edge_allowed(
             for pair in members
         )
     return wait_edge_nogood(tag, source, destination) not in key_nogoods
-
-
-def _compass_score(
-    pair: _ActionPair,
-    frame: Any,
-    ctx: Any,
-) -> tuple[int, int]:
-    """Rank candidates by learned transition progress for current needs.
-
-    Ordering, never rejection — the worst this returns is a high tier, so a
-    backward move is tried last, not vetoed.  A known move of a *channel*
-    register (``opaque_loop``) dominates: if the action drives a channel
-    register away from the goal, it ranks backward even when it incidentally
-    advances some lesser sub-need (steering ``C_Clear`` toward Stopped must not
-    look like progress just because it ticks an unrelated flag).
-    """
-    chan_forward: tuple[int, int] | None = None
-    chan_back: tuple[int, int] | None = None
-    best_forward: tuple[int, int] | None = None
-    best_regression: tuple[int, int] | None = None
-    saw_known = False
-    saw_no_change = False
-    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
-    for n in _all_nodes(frame.tree):
-        if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
-            continue
-        cur_val = frame.snap.get(n.tag)
-        if _values_match(cur_val, n.value):
-            continue
-
-        dest = ctx.compass.transition_dest(
-            n.tag,
-            cur_val,
-            pair,
-            world_key=frame.key,
-            snapshot=frame.snap,
-        )
-        if dest is None:
-            if pair in ctx.compass.probed_actions(
-                n.tag,
-                cur_val,
-                world_key=frame.key,
-                snapshot=frame.snap,
-            ):
-                saw_no_change = True
-            continue
-
-        saw_known = True
-        if _values_match(dest, n.value):
-            score = (0, 0)
-        else:
-            edge_allowed = lambda source, cause, destination, tag=n.tag: _learned_edge_allowed(
-                tag,
-                source,
-                cause,
-                destination,
-                frame,
-                ctx,
-                key_nogoods,
-            )
-            forward = ctx.compass.find_path(
-                n.tag,
-                dest,
-                n.value,
-                cause_allowed=edge_allowed,
-                world_key=frame.key,
-                snapshot=frame.snap,
-            )
-            if forward:
-                score = (1, len(forward))
-            else:
-                back = ctx.compass.find_path(
-                    n.tag,
-                    dest,
-                    cur_val,
-                    cause_allowed=edge_allowed,
-                    world_key=frame.key,
-                    snapshot=frame.snap,
-                )
-                if not back:
-                    continue
-                score = (150, len(back))
-
-        backward = score[0] >= 150
-        if n.tag in ctx.opaque_loop:
-            if backward:
-                chan_back = score if chan_back is None else min(chan_back, score)
-            else:
-                chan_forward = score if chan_forward is None else min(chan_forward, score)
-        elif backward:
-            best_regression = score if best_regression is None else min(best_regression, score)
-        else:
-            best_forward = score if best_forward is None else min(best_forward, score)
-
-    if chan_forward is not None:
-        return chan_forward
-    if chan_back is not None:
-        return chan_back
-    if best_forward is not None:
-        return best_forward
-    if best_regression is not None:
-        return best_regression
-    if saw_known:
-        return (25, 0)
-    if saw_no_change:
-        return (200, 0)
-    return (50, 0)
-
-
-def _availability_tier(detail: TraceAction | None) -> int:
-    """Demotion tier from a leaf's worst-on-path writer availability.
-
-    ``AVAILABLE_NOW`` / ``AFTER_PREREQ`` chains (tier 0) try before ``UNKNOWN``
-    chains (tier 1) before ``UNAVAILABLE_FROM_HERE`` chains (tier 2).  A leaf with
-    no trace detail (a route/influence candidate carried off the compass, not the
-    tree) is treated as tier 0 — its ordering is owned by the prescribed keys, not
-    by this signal.  Ordering only: nothing is ever dropped.
-    """
-    if detail is None:
-        return 0
-    avail = detail.availability
-    if avail <= _WriterAvailability.AFTER_PREREQ:
-        return 0
-    if avail == _WriterAvailability.UNKNOWN:
-        return 1
-    return 2
 
 
 def _compass_route_plan(
@@ -572,13 +528,10 @@ def _managed_boolean_rungs(
         if source is None:
             continue
         if value is False:
-            # The shared Boolean overlay already lowers every managed
-            # destination to False before applying its active True rules. A
-            # second False PilotRung duplicates that owner and, because it is
-            # appended last, can override a later incident-scoped correction.
-            # The current pulse/co-action still supplies the requested edge;
-            # subsequent scans inherit the overlay's ordinary release value.
-            lowered.add(detail.pair)
+            # The shared overlay will lower this input, but that lowering is
+            # still the live trace action. Keep it visible so PILOT gives the
+            # program one scan to observe the release before considering a
+            # command that closes the operation.
             continue
         active_owner = overlay.owner(tag)
         if active_owner is not None:
@@ -918,51 +871,6 @@ def _prescribe_wait(
     return _WaitPrescription(True, route_reason, details, frontier)
 
 
-def _rank_candidates(
-    cands: list[_Candidate],
-    frame: Any,
-    ctx: Any,
-    wake_cap: int,
-    detail_by_pair: dict[_ActionPair, TraceAction],
-) -> list[_Candidate]:
-    """Score and sort candidates; records each rank rationale onto the candidate.
-
-    A prescribed edge (route / influence / current) bypasses scoring and keeps
-    top priority; every other candidate is ordered by worst-on-path writer
-    availability, then wake, then compass progress.  ``index`` breaks every tie
-    so the candidate object itself is never compared.
-    """
-    scored: list[tuple[tuple[int, int, int, int, int], int, _Candidate]] = []
-    for index, candidate in enumerate(cands):
-        established = (
-            candidate.route_prescribed
-            or candidate.influence_prescribed
-            or candidate.current_prescribed
-        )
-        prescribed = established or candidate.program_prescribed
-        prescription_tier = 0 if established else 1 if candidate.program_prescribed else 2
-        base = (0, 0) if prescribed else _compass_score(candidate.pair, frame, ctx)
-        avail_tier = 0 if prescribed else _availability_tier(detail_by_pair.get(candidate.pair))
-        over_wake = (
-            0 if prescribed else int(candidate.wake is not None and candidate.wake > wake_cap)
-        )
-        candidate = replace(
-            candidate,
-            avail_tier=avail_tier,
-            over_wake=bool(over_wake),
-            compass_score=(base[0], base[1]),
-            scored=not prescribed,
-        )
-        scored.append(
-            (
-                (prescription_tier, avail_tier, over_wake, base[0], base[1]),
-                index,
-                candidate,
-            )
-        )
-    return [candidate for _score, _index, candidate in sorted(scored)]
-
-
 def _build_candidates(
     frame: Any,
     state: Any,
@@ -1034,14 +942,36 @@ def _build_candidates(
         active_trace_actions = tuple(p for p in active_trace_actions if p in establish_pairs)
         trace_action_details = establish_details
 
-    # Pending departure motion is only a fallback compass destination. A live
-    # backward trace remains the stronger, more local bearing; this is what lets
-    # PILOT finish work at the stopover before taking the proven return edge.
+    # A trace leaf whose selected writer is available now (or after its named
+    # prerequisite) is live local work. So is a trace continuation when Gauge
+    # can see work already banked beyond a proved reset floor: at recipe Step
+    # 103, open the door before Unhold even if the full future writer chain is
+    # conservatively unavailable. Unknown/unavailable leaves with no banked
+    # work do not veto the current process boundary; from ABORTED the charted
+    # Clear edge owns the move even though the deep target trace can already
+    # name a later mode-change request.
+    current_trace_actions = tuple(
+        pair
+        for pair in trace_actions
+        for detail in (detail_by_pair.get(pair),)
+        if detail is not None
+        and detail.availability <= _WriterAvailability.AFTER_PREREQ
+    )
+    gauge = getattr(state, "gauge", None)
+    banked_trace_work = bool(
+        trace_actions and gauge is not None and gauge.has_banked_work(frame.snap)
+    )
     live_plan = _compass_route_plan(frame, ctx, key_nogoods)
-    if getattr(state, "pending_departure", None) is not None and active_trace_actions:
-        route_plan = None
-    else:
-        route_plan = live_plan
+    route_plan = (
+        None
+        if current_trace_actions
+        or banked_trace_work
+        or (
+            getattr(state, "pending_departure", None) is not None
+            and active_trace_actions
+        )
+        else live_plan
+    )
     # A zoom iteration: the route's next edge is a completion (no action),
     # so the frontier self-advances under held state.  Prerequisites are the
     # level signals that must be held while timers accumulate.  A pending
@@ -1225,7 +1155,10 @@ def _build_candidates(
         trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)
         active_trace_actions = tuple(p for p in active_trace_actions if p[0] not in prereq_tags)
 
-    # Compass read: off-path masking and prescribed path from learned transitions.
+    # Learned motion is a fallback reading, not a second policy layered over
+    # the backward trace or a charted program edge.  If the live read already
+    # exposes a continuation, keep it; only consult learned transitions when
+    # the local/static readers are silent.
     inf_candidates: list[_ActionPair] = []
     prescribed_action: _ActionPair | None = None
     prescribed_batch: tuple[_ActionPair, ...] | None = None
@@ -1233,7 +1166,8 @@ def _build_candidates(
     # Stage 0 is the sole bearing while an establish gate is pending — silence the
     # compass so it can't prescribe a move on the target register past the closed
     # gate (or wait on a frontier that can't self-advance until the gate settles).
-    for n in [] if establish_pending else _all_nodes(frame.tree):
+    local_bearing_open = bool(trace_actions or route_candidates or _is_zoom)
+    for n in [] if establish_pending or local_bearing_open else _all_nodes(frame.tree):
         # Leaves only — with two "map unreadable here" exceptions where the
         # learned transition table is the only chart available: a live-guard
         # frontier (readable arm traced, so it has children, but the writer
@@ -1321,8 +1255,7 @@ def _build_candidates(
     # makes the target silently unreachable.  Here we only split the
     # over-cap actions off the *batch-facing* ``trace_actions`` (widening /
     # convergence co-pulse) so they don't poison a batch trial; they are added
-    # back as deprioritized individual candidates below and sink to the tail of
-    # the ranked list via the ``over_wake`` sort dimension.
+    # back as individual candidates below, after the ordinary trace actions.
     wake_cap = 20
     over_wake_actions: tuple[_ActionPair, ...] = ()
     if len(trace_actions) > 1:
@@ -1386,12 +1319,15 @@ def _build_candidates(
             ),
         )
 
-    for pair in trace_actions:
-        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
-            seen_cand.add(pair)
-            candidates.append(_candidate_for(pair))
+    # A chart candidate is the exact edge out of the current process state.
+    # File it before deeper backward-trace leaves; this is a source category,
+    # not a numeric rank, and is recomputed from the next world after every act.
     for pair in route_candidates:
         if ctx.route_allowed(pair) and pair not in seen_cand:
+            seen_cand.add(pair)
+            candidates.append(_candidate_for(pair))
+    for pair in trace_actions:
+        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in inf_candidates:
@@ -1399,8 +1335,8 @@ def _build_candidates(
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     # High-wake trace actions split off the batch above still get a turn as
-    # individual candidates — the ``over_wake`` sort dimension below just files
-    # them at the tail, so they are tried last rather than excluded outright.
+    # individual candidates. Construction order files them at the tail, so they
+    # are tried last rather than excluded outright.
     for pair in over_wake_actions:
         if pair not in ctx.blocked_route_actions and pair not in seen_cand:
             seen_cand.add(pair)
@@ -1415,7 +1351,7 @@ def _build_candidates(
     # behavior.  It appends *after* every read source, so a route/influence/trace
     # move keeps priority and this only matters where the loop is otherwise stuck.
     current_action = _current_bearing(frame, ctx)
-    if current_action is not None:
+    if current_action is not None and not candidates:
         pair = current_action.action
         if (
             ctx.route_allowed(pair)
@@ -1433,14 +1369,10 @@ def _build_candidates(
                     bearing_channel_value=current_action.to_state,
                 )
             )
-    # Writer-availability demotion (never veto): a command leaf whose writer chain
-    # cannot fire from the current live state sinks below leaves whose chain is
-    # reachable.  On a cyclic state machine every unsatisfied leaf across the
-    # machine contributes a command candidate (C_Clear, C_Reset, C_Start,
-    # mode-change… all at once); availability orders the counterfactual commands
-    # below the ones actually reachable, ahead of the wake/compass tie-breakers.
-    # Prescribed edges (the compass' explicit bearing) keep top priority.
-    candidates = _rank_candidates(candidates, frame, ctx, wake_cap, detail_by_pair)
+    # Preserve the readers' deterministic order. The backward trace already
+    # selected its writer and ordered its leaves; route/current/learned readers
+    # are admitted only after that local read is silent. Re-ranking this list
+    # would invent another navigation policy after the world was already read.
 
     # Zoom-wait mint: apply the reason from the early completion re-read (its
     # producers already entered the trace pool above).  An influence-path wait
@@ -1493,6 +1425,11 @@ def _build_candidates(
         route_candidates=route_candidates,
         candidates=tuple(candidates),
         wake_cap=wake_cap,
+        continuation_evidence=_current_work_evidence(
+            frame,
+            state,
+            getattr(ctx, "route", None),
+        ),
         route_plan=route_plan,
         wait_prescribed=wait_prescribed,
         wait_reason=wait_reason,

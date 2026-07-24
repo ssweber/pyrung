@@ -19,8 +19,6 @@ from pyrung.core.analysis.pilot.navigation import (
     OrientationWorld,
     ProbeRequest,
     Pulse,
-    RouteExhausted,
-    RouteUnproductive,
     Stuck,
     TargetSpec,
     act_identity,
@@ -28,6 +26,7 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _candidate_applied,
+    _current_work_evidence,
 )
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
@@ -36,7 +35,6 @@ from pyrung.core.analysis.pilot.trace import (
     frontier_pairs,
     rank_trace_choices,
     trace_back,
-    trace_choice_identity,
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import _IterationFrame
@@ -148,21 +146,16 @@ def _route_rejected_actions(
     return None
 
 
-def _read_committed_route(
+def _read_route_trees(
     world: OrientationWorld,
     target: TargetSpec,
     constraints: NavigationConstraints,
-) -> tuple[
-    TraceChoice | None,
-    TraceNode,
-    tuple[tuple[Any, ...], tuple[tuple[str, Any], ...], bool] | None,
-]:
-    """Read or select one root-route commitment in the current world.
+) -> tuple[tuple[TraceChoice | None, TraceNode], ...]:
+    """Read every admissible root alternative from this current world.
 
-    An active inferred route is re-traced without re-ranking. Selection happens
-    only when no inferred commitment exists. Exact exhaustion is returned as a
-    boundary for the drive loop to record and revoke; alternatives are then
-    re-enumerated from the next current-world Orientation call.
+    Explicit ``via=`` remains one constrained read.  Inferred alternatives are
+    not commitments or a queue: exact current-world rejections remove their
+    dead acts and the remaining trees are returned together for one decision.
     """
 
     ctx = world.context
@@ -176,27 +169,14 @@ def _read_committed_route(
     )
     rejected_actions = _exact_rejected_actions(exclusions)
 
-    # Explicit positive user intent is a non-revocable lock. Candidate filtering
-    # reports exhaustion, but the drive loop must stop instead of selecting an
-    # alternative.
+    # Explicit positive user intent is a constraint, so no unconstrained sibling
+    # is introduced when its current tree has no bearing.
     if ctx.route is not None:
         tree = _trace_for_route(world, target, constraints, ctx.route, rejected_actions)
-        rejected = _route_rejected_actions(tree, world, exclusions)
-        exhaustion = (
-            (trace_choice_identity(ctx.route), rejected, False) if rejected is not None else None
-        )
-        return ctx.route, tree, exhaustion
-
-    active = constraints.active_root_route
-    if active is not None:
-        tree = _trace_for_route(world, target, constraints, active, rejected_actions)
-        rejected = _route_rejected_actions(tree, world, exclusions)
-        if rejected is not None:
-            return active, tree, (trace_choice_identity(active), rejected, True)
-        return active, tree, None
+        return ((ctx.route, tree),)
 
     if target.predicate is not None:
-        return None, _trace_for_route(world, target, constraints, None, rejected_actions), None
+        return ((None, _trace_for_route(world, target, constraints, None, rejected_actions)),)
 
     _choices, ranked = rank_trace_choices(
         target.tag,
@@ -214,55 +194,36 @@ def _read_committed_route(
         rejected_actions=rejected_actions,
         harness=getattr(world.state.work, "_harness", None),
     )
-    for choice, tree in ranked:
-        identity = trace_choice_identity(choice)
-        if identity in constraints.skipped_root_routes:
-            continue
-        rejected = _route_rejected_actions(tree, world, exclusions)
-        if rejected is not None:
-            return choice, tree, (identity, rejected, True)
-        return choice, tree, None
+    live = tuple(
+        (choice, tree)
+        for choice, tree in ranked
+        if _route_rejected_actions(tree, world, exclusions) is None
+    )
+    if live:
+        return live
 
-    return None, _trace_for_route(world, target, constraints, None, rejected_actions), None
+    # Keep one complete, unlocked frontier for an honest terminal diagnosis
+    # when enumeration found no route or every exact act is already a nogood.
+    return ((None, _trace_for_route(world, target, constraints, None, rejected_actions)),)
 
 
-def _read_world(
+def _assemble_world(
     world: OrientationWorld,
     target: TargetSpec,
-    constraints: NavigationConstraints,
+    selected_route: TraceChoice | None,
+    tree: TraceNode,
+    key_config: _StateKeyConfig,
 ) -> OrientationWorld:
-    """Purely read one trace frame and compute its executable world key."""
+    """Assemble one alternative's complete immutable orientation frame."""
 
     state = world.state
-    ctx = world.context
-    snapshot = dict(state.work.state.tags)
-    world = replace(world, snapshot=snapshot)
-    selected_route, tree, route_exhaustion = _read_committed_route(world, target, constraints)
-    # The selected route is scoped to this Orientation receipt. Candidate
-    # construction and trial verification consume the same trace; the drive loop
-    # separately owns whether an inferred commitment survives the next read.
-    ctx = replace(ctx, route=selected_route)
+    ctx = replace(world.context, route=selected_route)
     world = replace(
         world,
         context=ctx,
         root_route=selected_route,
-        route_exhaustion=route_exhaustion,
     )
-    key_config = state.key_config
-    if key_config is None:
-        tree_tags = tree.pivot_tags() | {target.tag}
-        tree_tags.update(
-            node.tag
-            for node in tree.leaves()
-            if not node.is_steerable and not getattr(node, "pipeline_internal", False)
-        )
-        key_config = _StateKeyConfig(
-            stateful_names=tuple(sorted(tree_tags)),
-            done_specs=(),
-            threshold_vector_specs=(),
-            acc_indices=frozenset(),
-        )
-    key = _pilot_world_key(snapshot, key_config, state.rungs)
+    key = _pilot_world_key(world.snapshot, key_config, state.rungs)
     details = tuple(
         TraceAction(
             tag=action.tag,
@@ -280,7 +241,7 @@ def _read_world(
         for action in tree.ordered_action_details()
     )
     frame = _IterationFrame(
-        snap=snapshot,
+        snap=world.snapshot,
         tree=tree,
         key=key,
         distance_before=tree.unsatisfied_count(),
@@ -290,10 +251,50 @@ def _read_world(
     return replace(
         world,
         world_key=key,
-        snapshot=snapshot,
         frame=frame,
         key_config=key_config,
     )
+
+
+def _read_worlds(
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+) -> tuple[OrientationWorld, ...]:
+    """Read all current alternatives against one snapshot and one world key."""
+
+    snapshot = dict(world.state.work.state.tags)
+    seed = replace(world, snapshot=snapshot)
+    route_trees = _read_route_trees(seed, target, constraints)
+    key_config = world.state.key_config
+    if key_config is None:
+        tree_tags = {target.tag}
+        for _route, tree in route_trees:
+            tree_tags.update(tree.pivot_tags())
+            tree_tags.update(
+                node.tag
+                for node in tree.leaves()
+                if not node.is_steerable and not getattr(node, "pipeline_internal", False)
+            )
+        key_config = _StateKeyConfig(
+            stateful_names=tuple(sorted(tree_tags)),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+    return tuple(
+        _assemble_world(seed, target, route, tree, key_config) for route, tree in route_trees
+    )
+
+
+def _read_world(
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+) -> OrientationWorld:
+    """Compatibility reader for callers that deliberately constrain one route."""
+
+    return _read_worlds(world, target, constraints)[0]
 
 
 def _frontier(world: OrientationWorld, candidates: Any) -> tuple[tuple[str, Any], ...]:
@@ -313,8 +314,8 @@ def _probe_or_stuck(
     world: OrientationWorld,
     candidates: Any,
     reason: str,
-    constraints: NavigationConstraints,
-) -> NeedProbe | Stuck | RouteUnproductive:
+    _constraints: NavigationConstraints,
+) -> NeedProbe | Stuck:
     frontier = _frontier(world, candidates)
     count = compass.knowledge.probe_count(world.world_key)
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
@@ -338,18 +339,6 @@ def _probe_or_stuck(
         )
     evidence = (f"probe budget {count}",)
     rationale = f"no admissible bearing remains after {count} probe round(s)"
-    if constraints.active_root_route is not None and world.root_route is not None:
-        return RouteUnproductive(
-            world_key=world.world_key,
-            route=world.root_route,
-            route_identity=trace_choice_identity(world.root_route),
-            reason_code=reason,
-            frontier=frontier,
-            exclusions=exclusions,
-            evidence=evidence,
-            rationale=rationale,
-            trace=trace,
-        )
     return Stuck(
         world_key=world.world_key,
         reason_code=reason,
@@ -388,40 +377,21 @@ def _bearing(
     )
 
 
-def orient(
+def _orient_read(
     compass: Any,
     world: OrientationWorld,
     target: TargetSpec,
     constraints: NavigationConstraints,
 ) -> OrientationResult:
-    """Return one act, one probe request, one route disposition, or one stop.
+    """Materialize the best result from one already-read alternative."""
 
-    The candidate reader still materializes all evidence-rich options so
-    diagnostics and ranking remain inspectable.  This function is the only
-    component that converts those readings into the public orientation result.
-    """
-
-    # The internal context is built from the same immutable Compass value.  A
-    # mismatched handle would let a caller orient with stale knowledge.
-    if world.context.compass is not compass:
-        raise ValueError("orientation world is bound to a different Compass value")
-    read_context = replace(
-        world.context,
-        target_tag=target.tag,
-        target_value=target.value,
-        target_predicate=target.predicate,
-        blocked_route_actions=constraints.blocked_actions,
-        avoid_pred=constraints.avoid_predicate,
-    )
-    read_world = replace(world, context=read_context)
-    if read_world.frame is None:
-        read_world = _read_world(read_world, target, constraints)
+    if world.frame is None:
+        raise ValueError("single-alternative orientation requires a complete frame")
     candidates = _build_candidates(
-        read_world.frame,
-        read_world.state,
-        read_world.context,
+        world.frame,
+        world.state,
+        world.context,
     )
-    world = read_world
 
     if candidates.completion_frontier:
         # Candidate construction discovers the completion re-read, but
@@ -433,31 +403,6 @@ def orient(
                 world.frame,
                 completion_frontier=candidates.completion_frontier,
             ),
-        )
-
-    if world.route_exhaustion is not None:
-        route_identity, rejected_actions, revocable = world.route_exhaustion
-        assert world.root_route is not None
-        route_trace = OrientationTrace(
-            world_key=world.world_key,
-            world=world,
-            candidates=candidates,
-            considered_paths=(),
-            rankings=tuple(candidates.candidates),
-            exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
-        )
-        return RouteExhausted(
-            world_key=world.world_key,
-            route=world.root_route,
-            route_identity=route_identity,
-            rejected_actions=rejected_actions,
-            revocable=revocable,
-            rationale=(
-                "every live action on the inferred root route was rejected"
-                if revocable
-                else "every live action on the requested via route was rejected"
-            ),
-            trace=route_trace,
         )
 
     if candidates.wait_prescribed:
@@ -612,3 +557,123 @@ def orient(
         )
 
     return _probe_or_stuck(compass, world, candidates, "all_rejected", constraints)
+
+
+def _is_maintenance(result: OrientationResult) -> bool:
+    """Whether a read has no concrete continuation and can only let time pass."""
+
+    return isinstance(result, Bearing) and (
+        isinstance(result.act, Dwell)
+        or isinstance(result.act, Coast)
+        and result.act.mode == "terminal"
+    )
+
+
+def _read_group(
+    compass: Any,
+    worlds: tuple[OrientationWorld, ...],
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+    *,
+    maintenance_owns: bool = False,
+) -> tuple[OrientationResult | None, tuple[OrientationResult, ...]]:
+    """Read alternatives once under the caller's work-ownership disposition.
+
+    Alternative order remains the trace reader's deterministic order. There is
+    no cross-alternative score and no retained cursor. Fresh reads may look
+    past maintenance for a concrete bearing; once live work owns the group,
+    maintenance is itself the continuation and ends the read.
+    """
+
+    results: list[OrientationResult] = []
+    maintenance: OrientationResult | None = None
+    for world in worlds:
+        result = _orient_read(compass, world, target, constraints)
+        results.append(result)
+        if isinstance(result, Bearing):
+            if maintenance_owns or not _is_maintenance(result):
+                return result, tuple(results)
+            if maintenance is None:
+                maintenance = result
+    return maintenance, tuple(results)
+
+
+def _combined_nonbearing(results: tuple[OrientationResult, ...]) -> OrientationResult:
+    """Return one complete probe/stop after every current alternative was read."""
+
+    frontier = tuple(
+        dict.fromkeys(pair for result in results for pair in getattr(result, "frontier", ()))
+    )
+    probe = next((result for result in results if isinstance(result, NeedProbe)), None)
+    if probe is not None:
+        return replace(
+            probe,
+            frontier=frontier,
+            request=replace(probe.request, frontier=frontier),
+        )
+    stuck = next((result for result in results if isinstance(result, Stuck)), None)
+    if stuck is None:
+        raise RuntimeError("current-world alternatives produced no disposition")
+    return replace(stuck, frontier=frontier)
+
+
+def orient(
+    compass: Any,
+    world: OrientationWorld,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+) -> OrientationResult:
+    """Read all live work, choose its smallest continuation, and forget the read.
+
+    An open operation is read before fresh work. Within that operation the
+    ordinary single-read Orientation selects one act. No root alternative,
+    suffix, score, or "next route" position survives the observation.
+    """
+
+    if world.context.compass is not compass:
+        raise ValueError("orientation world is bound to a different Compass value")
+    read_context = replace(
+        world.context,
+        target_tag=target.tag,
+        target_value=target.value,
+        target_predicate=target.predicate,
+        blocked_route_actions=constraints.blocked_actions,
+        avoid_pred=constraints.avoid_predicate,
+    )
+    seed = replace(world, context=read_context)
+    worlds = (seed,) if seed.frame is not None else _read_worlds(seed, target, constraints)
+    open_worlds: list[OrientationWorld] = []
+    fresh_worlds: list[OrientationWorld] = []
+    for alternative in worlds:
+        evidence = _current_work_evidence(
+            alternative.frame,
+            alternative.state,
+            alternative.root_route,
+        )
+        (open_worlds if evidence else fresh_worlds).append(alternative)
+
+    # Live work owns the next move. If it has no concrete lever, its coast or
+    # dwell is still maintenance of that operation. If every apparent open
+    # residual yields no Bearing, the operation has closed; stale established
+    # facts do not prevent a fresh current-world read.
+    open_results: tuple[OrientationResult, ...] = ()
+    if open_worlds:
+        selected, open_results = _read_group(
+            compass,
+            tuple(open_worlds),
+            target,
+            constraints,
+            maintenance_owns=True,
+        )
+        if selected is not None:
+            return selected
+
+    selected, fresh_results = _read_group(
+        compass,
+        tuple(fresh_worlds),
+        target,
+        constraints,
+    )
+    if selected is not None:
+        return selected
+    return _combined_nonbearing((*open_results, *fresh_results))

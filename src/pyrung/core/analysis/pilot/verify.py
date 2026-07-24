@@ -34,6 +34,7 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
 from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
+    MotionKind,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
@@ -526,6 +527,36 @@ def verify_gates(
                 bearing_stop_reason,
             ),
             gate_events=tuple(gate_events),
+        )
+
+    # An intervention may explore a new frontier, but it may not erase
+    # target-relative work the current world has already earned.  The gauge is
+    # deliberately conservative: absent or unclassifiable coordinates yield
+    # ``unknown``, never a guessed veto.  Coasts are excluded here because a
+    # backward move during a coast is program motion owned by post-commit
+    # investigation/recovery, not a destructive operator choice.
+    gauge = getattr(state, "gauge", None)
+    if (
+        action_pairs
+        and intent.motion is MotionKind.INTERVENTION
+        and gauge is not None
+        and gauge.compare(frame.snap, trial.snap) == "behind"
+    ):
+        gate_events.append(
+            PilotGateEvent(
+                "banked-work",
+                "intervention would erase target-relative gauge progress",
+                evidence={
+                    "source_mark": gauge.mark(frame.snap),
+                    "landing_mark": gauge.mark(trial.snap),
+                    "effect": "behind",
+                },
+            )
+        )
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=(frozenset({nogood_pair}) if nogood_pair is not None else frozenset()),
         )
 
     spun = _gate_spin(

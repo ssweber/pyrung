@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
+from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.types import (
@@ -361,6 +362,40 @@ class TestVerifyGates:
         assert result.trial.zoom_target_value is True
         assert result.trial.motion is MotionKind.COAST_TO_BEARING
         assert result.trial.timeline == pulse.timeline
+
+    def test_intervention_cannot_erase_banked_gauge_work(self):
+        before = {"Step": 3, "Target": False}
+        after = {"Step": 0, "Target": False}
+        pulse = SimpleNamespace(
+            snap=after,
+            coast_receipt=None,
+            action_snap=after,
+            wait_snaps=(),
+            post_pulse_snap=after,
+        )
+        intent = _AttemptIntent(
+            bearing_objective=BearingObjective(TargetSpec("Target", True)),
+            action_pairs=(("Reset", True),),
+            applied=(("Reset", True),),
+            nogood_pair=("Reset", True),
+        )
+
+        result = verify_gates(
+            _ExecutedAttempt(pulse=pulse, intent=intent),
+            SimpleNamespace(snap=before),
+            SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
+            SimpleNamespace(
+                avoid_pred=None,
+                target_tag="Target",
+                target_value=True,
+                target_predicate=None,
+            ),
+        )
+
+        assert result.trial is None
+        assert result.nogood_pairs == frozenset({("Reset", True)})
+        assert result.gate_events[-1].event == "banked-work"
+        assert result.gate_events[-1].evidence["effect"] == "behind"
 
     @pytest.mark.skip(reason="stub")
     def test_avoid_predicate_rejects(self): ...

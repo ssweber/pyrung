@@ -178,7 +178,7 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
         InvestigationRejection(
             raw_reject,
             "exploratory-replay-failed",
-            "raw replay rejected: watchdog still fired",
+            "exploratory replay rejected: watchdog still fired",
         ),
         InvestigationRejection(
             guarded_reject,
@@ -568,10 +568,7 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
     attempts: list[tuple[str, ...]] = []
 
     def replay(holds):
-        tags = tuple(
-            hold.dest if isinstance(hold, PilotRung) else hold[0]
-            for hold in holds
-        )
+        tags = tuple(hold.dest if isinstance(hold, PilotRung) else hold[0] for hold in holds)
         attempts.append(tags)
         if tags == (A.name,):
             return ReplayOutcome(

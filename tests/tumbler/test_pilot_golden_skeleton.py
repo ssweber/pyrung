@@ -29,7 +29,7 @@ import pytest
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot._ops import PilotRung
-from pyrung.core.condition import CompareEq
+from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.tumbler import enter_production
 from tests.tumbler.bench import Bench
@@ -159,6 +159,16 @@ def _accepted_tags(skeleton: list[dict]) -> list[str]:
     ]
 
 
+def _assert_no_factory_reset(skeleton: list[dict]) -> None:
+    """Deep drives may not erase earned work to manufacture a fresh route."""
+
+    pressed = _all_action_tags(skeleton)
+    assert "Cmd_Reset2FactoryDefault" not in pressed, (
+        "pilot destroyed the current program while work was still available: "
+        f"{sorted(pressed)}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Workhorse: how(Sts_StateCurrent == 6) — the Execute drive
 # ---------------------------------------------------------------------------
@@ -196,6 +206,7 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
 
     finished = _finished(skeleton)
     _assert_zoom_tripwire(skeleton)
+    _assert_no_factory_reset(skeleton)
 
     # This drive DOES require Production mode (the recipe/completion path
     # runs through the production SFCs) — the mode-change discovery is part
@@ -241,6 +252,21 @@ def _hold_dest(hold) -> str | None:
     return None
 
 
+def _guard_equalities(condition) -> set[tuple[str, object]]:
+    """Literal equality facts nested anywhere in an And/Or guard."""
+
+    if isinstance(condition, CompareEq):
+        name = getattr(condition.tag, "name", None)
+        return {(name, condition.value)} if name is not None else set()
+    if isinstance(condition, (AllCondition, AnyCondition)):
+        return {
+            fact
+            for child in condition.conditions
+            for fact in _guard_equalities(child)
+        }
+    return set()
+
+
 def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     """The exact deep-chain route to the burner output."""
     events = _drive_bool_target(
@@ -254,6 +280,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     finished = _finished(skeleton)
     assert finished["reached"] is True, f"BurnerLoop drive did not reach: {finished}"
     _assert_zoom_tripwire(skeleton)
+    _assert_no_factory_reset(skeleton)
     assert any(
         tag == "x_RotateFB"
         for entry in skeleton
@@ -275,9 +302,10 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
         for dest in destinations
     )
 
-    # The first door correction owns the actual state-mapping condition from
-    # the recorded deep chain. The serialized golden records its class; this
-    # raw-object tripwire locks the operands too.
+    # The first door correction owns the actual Starting/Step-101 occurrence
+    # from the recorded deep chain. The exact corridor may be a nested state
+    # mapping condition; the raw-object tripwire requires both coordinates so
+    # regeneration cannot bless a global door hold.
     starting_door_rungs = [
         hold
         for event in events
@@ -287,9 +315,8 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
         for hold in hypothesis.get("holds", ())
         if isinstance(hold, PilotRung)
         and hold.dest in {"x_DoorClosed", "x_LintDoorClosed"}
-        and isinstance(hold.guard, CompareEq)
-        and hold.guard.tag.name == "Sts_StateCurrent"
-        and hold.guard.value == 3
+        and ("Sts_StateCurrent", 3) in _guard_equalities(hold.guard)
+        and ("Internal__Step", 101) in _guard_equalities(hold.guard)
     ]
     assert {rung.dest for rung in starting_door_rungs} == {
         "x_DoorClosed",
@@ -493,6 +520,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     )
     skeleton = extract_skeleton(events)
     _assert_zoom_tripwire(skeleton)
+    _assert_no_factory_reset(skeleton)
 
     # The program-owned route must earn completion without Pilot pressing the
     # avoided operator shortcut, and its record must show that it traversed the

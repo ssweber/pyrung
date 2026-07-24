@@ -428,15 +428,10 @@ def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
 
     assert built is not None
     assert [(candidate["tag"], candidate["value"]) for candidate in built] == [
-        (tags["C_Unhold"].name, True),
         (tags["Door"].name, False),
     ]
-    assert built[0]["route_prescribed"] is True
     assert tried is not None
-    assert tried["applied"] == (
-        (tags["C_Unhold"].name, True),
-        (tags["Door"].name, False),
-    )
+    assert tried["applied"] == ((tags["Door"].name, False),)
     assert all(tag != tags["C_Complete"].name for tag, _value in tried["applied"])
 
 
@@ -472,6 +467,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     later_candidates = None
     later_prerequisite_rungs = ()
     later_snapshot = None
+    later_try = None
     iteration_snapshot = {}
     for event in pilot_events(
         plc,
@@ -493,6 +489,8 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
             later_candidates = event.data["candidates"]
             later_prerequisite_rungs = event.data["prerequisite_rungs"]
             later_snapshot = iteration_snapshot
+        elif event.kind == "candidate_try" and later_candidates is not None:
+            later_try = event.data
             break
 
     assert departures, [event.kind for event in events]
@@ -535,8 +533,15 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     ]
     assert later_snapshot is not None
     later_pairs = [(candidate["tag"], candidate["value"]) for candidate in later_candidates]
-    assert later_pairs[0] == (tags["C_Unhold"].name, True)
-    assert later_candidates[0]["current_prescribed"] or later_candidates[0]["route_prescribed"]
+    # The earlier incident correction may already have supplied the open-door
+    # scan while the recipe-owned Hold settled. In that case step 105 is banked
+    # and Unhold is correctly the next move; asking for Door=False again would
+    # relearn work the current world already proves complete.
+    assert later_snapshot[tags["Door"].name] is False
+    assert later_snapshot[tags["Step"].name] == 105
+    assert later_pairs == [(tags["C_Unhold"].name, True)]
+    assert later_try is not None
+    assert later_try["applied"] == ((tags["C_Unhold"].name, True),)
     assert (
         (tags["Door"].name, False) in later_pairs
         or later_snapshot[tags["Door"].name] is False

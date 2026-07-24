@@ -203,10 +203,6 @@ _CANDIDATE_KEEP = (
     "current_note",
     "provenance",
     "prescribed",
-    "scored",
-    "avail_tier",
-    "over_wake",
-    "compass_score",
 )
 
 _ROUTE_PLAN_KEEP = ("needed", "channel_tag", "target_value", "path")
