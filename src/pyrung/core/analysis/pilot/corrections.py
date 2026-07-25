@@ -21,6 +21,8 @@ from pyrung.core.analysis.pilot._ops import (
     OperationReceipt,
     PilotRung,
     _hold_allowed,
+    _semantic_key,
+    _union_conditions,
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.advance import (
@@ -118,7 +120,7 @@ def causal_channel_guard(
     source-to-landing corridor.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition, resolve_rung
-    from pyrung.core.condition import AllCondition, AnyCondition
+    from pyrung.core.condition import AllCondition
 
     channel_name = incident.channel_tag
     pdg = getattr(ctx, "pdg", None)
@@ -127,7 +129,7 @@ def causal_channel_guard(
         return None
 
     terms: list[Any] = []
-    seen_terms: set[tuple[int, ...]] = set()
+    seen_terms: set[tuple[Any, ...]] = set()
     for source in source_tags:
         source_scan = next(
             (
@@ -228,7 +230,12 @@ def causal_channel_guard(
             ]
             if not conditions:
                 continue
-            term_key = tuple(id(condition) for condition in conditions)
+            # Two rungs can carry the same channel context (``StateCurrent == 3``
+            # from Starting's mapper and from its own hold).  Conditions compare
+            # by object identity, so keying on ``id`` admits both and the guard
+            # renders a duplicated disjunct.  ``_semantic_key`` is the search
+            # identity for exactly this.
+            term_key = tuple(_semantic_key(condition) for condition in conditions)
             term = conditions[0] if len(conditions) == 1 else AllCondition(*conditions)
             if term_key not in seen_terms:
                 seen_terms.add(term_key)
@@ -241,9 +248,7 @@ def causal_channel_guard(
             # are ancestry, not additional correction lifetimes.
             break
 
-    if not terms:
-        return None
-    return terms[0] if len(terms) == 1 else AnyCondition(*terms)
+    return _union_conditions(terms)
 
 
 def guard_correction_holds(

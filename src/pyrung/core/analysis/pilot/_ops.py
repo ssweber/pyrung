@@ -707,6 +707,36 @@ def _semantic_key(value: Any) -> Any:
     return (type(value).__module__, type(value).__qualname__, str(value))
 
 
+def _union_conditions(terms: Iterable[Any]) -> Any:
+    """One condition holding when any distinct term holds.
+
+    A scope such as an incident's source/exposure/landing corridor is assembled
+    by *role*, and two roles routinely name the same channel state -- the safe
+    landing is often the state an exposure guard already covers.  Disjunction
+    over those roles is a set union, so a repeated term is pure redundancy that
+    shows up in every rendered guard.  Conditions compare by object identity, so
+    ``_semantic_key`` is what makes "same term" decidable here.
+
+    First-occurrence order is preserved, a lone survivor is returned bare rather
+    than wrapped in a one-armed ``Or``, and no terms gives ``None``.
+    """
+    from pyrung.core.condition import AnyCondition
+
+    unique: list[Any] = []
+    seen: set[Any] = set()
+    for term in terms:
+        if term is None:
+            continue
+        key = _semantic_key(term)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(term)
+    if not unique:
+        return None
+    return unique[0] if len(unique) == 1 else AnyCondition(*unique)
+
+
 def _pilot_world_key(
     snap: dict[str, Any],
     cfg: _StateKeyConfig,

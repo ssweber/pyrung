@@ -74,6 +74,23 @@ class Condition(ABC):
         """Allow conditions to be used in sets/dicts."""
         return id(self)
 
+    def __repr__(self) -> str:
+        """Render as the pyrung source that built this condition.
+
+        The default object repr is an address, which makes a condition opaque
+        everywhere it is shown -- logs, exceptions, plan output, and golden
+        files.  :func:`~pyrung.core.validation.render.render_condition` is the
+        neutral owner of that text and never fails; import it lazily because it
+        reads this module's classes.  This is presentation only: ``==`` and
+        ``hash`` remain identity-based, so an equal repr is not equality.
+        """
+        try:
+            from pyrung.core.validation.render import render_condition
+
+            return render_condition(self)
+        except Exception:  # noqa: BLE001 - repr must never raise
+            return f"<{type(self).__name__}>"
+
 
 class CompareEq(Condition):
     """Equality comparison: tag == value or tag == other_tag."""

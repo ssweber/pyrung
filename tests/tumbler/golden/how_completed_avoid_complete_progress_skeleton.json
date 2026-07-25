@@ -1785,13 +1785,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
+       "guard": "And(Or(Sts_StateCurrent == 4, Sts_StateCurrent == 3), Internal__Step == 101)",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:1>>",
+       "guard": "And(Or(Sts_StateCurrent == 4, Sts_StateCurrent == 3), Internal__Step == 101)",
        "value": true
       }
      ],
@@ -1812,7 +1812,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "guard": "Sts_StateCurrent == 3",
        "value": true
       }
      ],
@@ -1828,7 +1828,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "guard": "Sts_StateCurrent == 3",
        "value": true
       }
      ],
@@ -1844,13 +1844,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "guard": "Sts_StateCurrent == 3",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:2>>",
+       "guard": "Sts_StateCurrent == 3",
        "value": true
       }
      ],
@@ -2539,13 +2539,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "Sts_StateCurrent == 6",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
+       "guard": "Sts_StateCurrent == 6",
        "value": true
       }
      ],
@@ -2584,13 +2584,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
+       "guard": "Sts_StateCurrent == 6",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:4>>",
+       "guard": "Sts_StateCurrent == 6",
        "value": true
       }
      ],
@@ -2741,7 +2741,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "And(~Rotate_SensorOffWD_tmr.Done, ~x_RotateSensor)",
        "value": true
       }
      ],
@@ -2760,7 +2760,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_RotateSensor",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:5>>",
+       "guard": "And(~Rotate_SensorOffWD_tmr.Done, ~x_RotateSensor)",
        "value": true
       }
      ],
@@ -2776,7 +2776,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:6>>",
+       "guard": "And(~A_TimeBetween1stScan_tmr.Done, ~Test_Simulate_1st_Scan)",
        "value": true
       }
      ],
@@ -2920,7 +2920,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_SailRelay",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:7>>",
+       "guard": "And(Sts_StateCurrent == 6, Internal__Step == 101)",
        "value": true
       }
      ],
@@ -2951,7 +2951,7 @@
       {
        "__type__": "PilotRung",
        "dest": "Test_Simulate_1st_Scan",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:8>>",
+       "guard": "And(~A_TimeBetween1stScan_tmr.Done, ~Test_Simulate_1st_Scan)",
        "value": true
       }
      ],
@@ -3902,13 +3902,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
+       "guard": "And(Or(Sts_StateCurrent == 11, Sts_StateCurrent == 12), Internal__Step == 107)",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:9>>",
+       "guard": "And(Or(Sts_StateCurrent == 11, Sts_StateCurrent == 12), Internal__Step == 107)",
        "value": true
       }
      ],
@@ -3929,7 +3929,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       }
      ],
@@ -3945,7 +3945,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       }
      ],
@@ -3961,13 +3961,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       }
      ],
@@ -3989,7 +3989,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       }
      ],
@@ -4007,7 +4007,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:10>>",
+       "guard": "Sts_StateCurrent == 12",
        "value": true
       }
      ],

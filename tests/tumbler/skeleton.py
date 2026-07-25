@@ -10,7 +10,9 @@ timestamps, dwell/duration counts, fork ids, memory/perf numbers.
 The output is JSON-serializable and deterministic: every set/frozenset is
 sorted (frozenset iteration order is PYTHONHASHSEED-salted — the #1
 cold-process determinism hazard), run-specific scan numbers are normalized,
-and object addresses become stable encounter-ordered tokens.
+conditions render as source text (``Sts_StateCurrent == 3``) rather than as an
+identity repr, and any remaining object addresses become stable
+encounter-ordered tokens.
 """
 
 from __future__ import annotations
@@ -132,7 +134,8 @@ def _jsonify(value: Any) -> Any:
     label = getattr(value, "label", None)
     if isinstance(label, str):
         return {"label": _scrub(label)}
-    # Expressions / conditions render deterministically via repr.
+    # Conditions and expressions render structurally via repr — ``Condition``
+    # renders its source text, so a guard change is visible in the diff.
     return _scrub(repr(value))
 
 

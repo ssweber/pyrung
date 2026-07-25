@@ -1,43 +1,136 @@
 # Candidate Construction Inner Loop
 
-## Observation
+## Status
 
-At `Internal__Step == 102`, the user program already owns an automatic boundary:
+The Step 102 symptom is fixed (c9d6f5ce). The architectural divide it exposed is
+not. This note is now the cleanup plan for that divide, plus the dead code the
+route removal in `TRACE_REFACTOR.md` R1 Step 3 left behind.
 
-1. `S_HeatAtTemp_tmr.Done` sets `Internal__TransBool`.
-2. The transition writer advances Step `101 -> 102`.
-3. The even-step writer advances Step `102 -> 103` on the next scan.
-4. Step 103 begins Cool. The program-owned Hold does not begin until Step 105.
+## What the symptom was
 
-PILOT should therefore coast one scan at Step 102 and re-read the Step 103 world.
-Instead, candidate construction's completion re-read can introduce
-`Cmd_Reset2FactoryDefault`, then lower it into a `PilotRung`, without returning
-control to the main PILOT loop.
+At `Internal__Step == 102` the program owns an automatic boundary: the even-step
+writer advances `102 -> 103` on the next scan, and Step 103 begins Cool. PILOT
+should coast one scan and re-read the Step 103 world.
 
-## Architectural read
+Instead `read_program_step` traced the selected producer at a one-scan
+projection and reported that frame's requirement as an unmet external input.
+Mid-crossing, that requirement belongs to the *next* world, so candidate
+construction lowered a future action into live work: `Cmd_Reset2FactoryDefault`,
+which is a real lever (`ProductionExecuteSteps` R1,
+`rung(Sts_State_Starting, C_P_FluffOnlyFlag): copy(109, Internal__Step)` jumps
+straight to Fluff) but belongs to a world PILOT is not in.
 
-This is a semantic inner planner inside `_build_candidates`:
+The disproof was already on the `ProgramStep` and unused. An input the program is
+genuinely stopped at is still required once its own motion finishes:
+
+| live step | `trace` requires | `next_trace` requires | verdict |
+| --- | --- | --- | --- |
+| 101 | `S_DryerTemp_F=131` | same -- persists | genuine input |
+| 102 | `Cmd_Reset2FactoryDefault` | `[]` -- dissolved | mid-crossing artifact |
+
+An owned advance is progress, not interference, so the reading is `KEEP_RUNNING`
+with the crossing as its immediate boundary. `INTERRUPTED` is wrong here: it sets
+`preserve_channels`, and `orientation.py::_orient_read` then targets the channel's
+*pre-motion* value, which already matches, so the coast moves nothing and the
+dead-end gate rejects it (`empty frontier, no pending effects`).
+
+## The divide that remains
+
+All of this still happens inside one `Compass.orient` call -- step 2 of the
+documented control flow -- before `steer.execute` runs:
 
 ```text
-main loop reads Step 102
-  -> candidate construction re-reads future completion
-  -> discovers and materializes another action
+pilot.py drive loop            <- main loop reads the world once
+  Compass.orient
+    orientation._orient_read
+      options._build_candidates
+        options._prescribe_wait
+          program_step.read_program_step
+            fork.step() x4     <- simulates a future world
+          -> _WaitPrescription(details=[...])
+        -> spliced into trace_actions / active_trace_actions
 ```
 
-That later action ingress can bypass admission applied to the original trace.
-`structural_nogoods` is a symptom: the inner decision needed a transport for
-rejecting work back in the outer loop.
+Sites, current line numbers:
 
-The intended ownership is:
+| # | site | what it does |
+| --- | --- | --- |
+| 1 | `options.py:751-786` | runs `read_program_step`; a 4-scan fork projection inside orientation |
+| 2 | `options.py:815-849` | `NEEDS_INPUT` returns `details = step.required_inputs` with `until=` composed in |
+| 3 | `options.py:643-699` | `_completion_reread` -- fresh `trace_back` per completion pair, every steerable leaf a candidate |
+| 4 | `options.py:1075-1104` | splices those details into `trace_actions` / `active_trace_actions`, downstream of the outer admission pass at 883-933 |
+| 5 | `options.py:92`, `pilot.py:962` | `structural_nogoods` + its `continue` -- the transport the inner decision needed to reject outward |
 
-```text
-main loop reads Step 102
-  -> program_step owns automatic 102 -> 103
-  -> coast one scan
-  -> main loop re-reads Step 103
-```
+Two different admission rules guard the same pool, and the inner one runs after
+the outer: the outer derives `trace_actions` by removing `key_nogoods`
+(`options.py:933`), then the inner appends into both `trace_actions` and
+`active_trace_actions` at 1102-1103.
 
-The next refactor should find where completion re-read crosses from describing
-the current automatic boundary into discovering/materializing future actions.
-`program_step` should terminate the current read with a coast bearing; candidate
-construction should not compete with that owned boundary.
+## Cleanup steps
+
+Ordered, because step 1 is the only one that is real work.
+
+1. **Teach the outer trace to carry the owned `until` boundary.** The comment at
+   `options.py:1083-1089` says outright that the broader target trace "could not
+   see" that lifetime. It is what makes the coast *hold* an input rather than
+   pulse it -- the step-101 `S_DryerTemp_F=131 until S_HeatAtTemp_tmr_Acc >=
+   Sts_P2_Dry_Tm` case depends on it. Either the outer trace learns the boundary,
+   or `_prescribe_wait` returns it as a separate receipt the outer admission
+   consumes. Not verified feasible; this is where to look first.
+2. **Strip `details` from `_WaitPrescription`** so it carries only a bearing:
+   prescribed, reason, boundary, frontier. Site 4 then has nothing to splice.
+3. **Delete `structural_nogoods`** -- 8 references: `options.py` (field at 92,
+   `_detail_erases_banked_work`, the 926 filter, the 1452 constructor arg),
+   `pilot.py:962-970`, `recording.py:294`, `devtools/watch_pilot_decisions.py`.
+   Check first whether it still fires from the *outer* trace; if it does, that is
+   a separate legitimate mechanism and only the inner call site goes.
+
+## Dead code after the route removal
+
+R1 Step 3 landed: `inferred_route_commitment`, `skipped_route_ids`,
+`skipped_root_routes`, `active_root_route`, `RouteExhausted`, and
+`RouteUnproductive` have zero `src/` references.
+
+Verified residue:
+
+- **`pilot/CLAUDE.md` documents machinery that no longer exists** -- the
+  inferred root-route lifecycle ownership row (105-111), `RouteExhausted` /
+  `RouteUnproductive` in the Compass result set (144-145), and control-flow
+  item 5 (150-153), plus the "exception is the user's explicit trace-route lock"
+  paragraph under *Recompute from the current world*. R1 Step 3's own exit
+  criterion asked for this and it was missed.
+- **`tests/tumbler/test_pilot_wip_dark_run_tool.py:215`** asserts
+  `row["baseline_result"] != "RouteUnproductive"`. That result type is gone, so
+  the assertion is vacuously true and can never fail again.
+- **`tests/tumbler/skeleton.py` address machinery** -- `_OBJECT_ADDRESS_RE`,
+  `_canonicalize_object_addresses` (used at 479), `_address_neutral_sort_key`
+  (used at 389). These existed only because `Condition` had no `__repr__`, so
+  guards serialized as `<CompareEq object at 0x...>`. Confirmed unused: all four
+  regenerated goldens contain zero `ADDR` tokens. Weigh removal against keeping
+  it as defensive scrubbing -- a future emitter that puts any other object repr
+  in a payload would reintroduce address nondeterminism, and this is the layer
+  that would absorb it.
+
+Still live, *not* dead -- these are R1 Step 4 targets and need its dark-compare
+equivalence gate before deletion: `TraceChoice` (33 src refs, carries `via=`),
+`_RouteDraft` (~25 sites in `trace.py`), `_RouteConflict` / `_RouteConflictPin`.
+`root_route` / `recorded_root_route` (11 refs) survive deliberately as
+*reporting* via `_report_selected_route`, which `TRACE_REFACTOR.md` sanctions
+("The public `Plan.route` / pivot description is reporting, not navigation").
+
+## Guard rendering
+
+Two defects found while reading installed holds, both fixed alongside:
+
+- `Condition` had no `__repr__`, so every guard was an address in logs,
+  exceptions, plan output, and goldens. `Condition.__repr__` now delegates to
+  `render_condition` (lazy import -- `render.py` imports *from* `condition.py`).
+  Presentation only: `==` and `hash` stay identity-based.
+- The corrective-hold scope rendered a duplicated disjunct,
+  `Or(Sts_StateCurrent == 4, Sts_StateCurrent == 3, Sts_StateCurrent == 3)`.
+  `investigate.py` builds the incident corridor by *role* -- source, exposure
+  guards, safe landing -- and two roles routinely name the same channel state.
+  The union is now collapsed on `_semantic_key` via `_ops.py::_union_conditions`.
+
+The goldens could not have caught either one: they stored guard *class names*
+only. They now store guard text, which is how the duplicate became provable.

@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _settle_delayed_effects,
     _target_unresolved_condition,
+    _union_conditions,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.causal import (
@@ -341,7 +342,7 @@ def _scoped_correction_rungs(
         and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
         and (outcome.justification is ReplayJustification.NEUTRALIZED or outcome.landed)
     ):
-        from pyrung.core.condition import AnyCondition, CompareEq, CompareNe
+        from pyrung.core.condition import CompareEq, CompareNe
 
         before = incident.before_snap.get(channel_tag)
         if (
@@ -353,7 +354,7 @@ def _scoped_correction_rungs(
             # source-through-exposure lifetime that succeeded exploratorily;
             # narrowing back to the source would release the correction on the
             # first harmful intermediate state.
-            scope = AnyCondition(CompareEq(channel, before), *exposure_guards)
+            scope = _union_conditions((CompareEq(channel, before), *exposure_guards))
         else:
             landing = outcome.snapshot.get(channel_tag) if outcome.landed else before
             if outcome.landed and progress_mark and exposure_guards:
@@ -361,10 +362,12 @@ def _scoped_correction_rungs(
                 # the user program reads that landing on its next scan. Keep
                 # the correction across the observed source/intermediate/
                 # landing corridor until the Gauge coordinate advances.
-                scope = AnyCondition(
-                    CompareEq(channel, before),
-                    *exposure_guards,
-                    CompareEq(channel, landing),
+                scope = _union_conditions(
+                    (
+                        CompareEq(channel, before),
+                        *exposure_guards,
+                        CompareEq(channel, landing),
+                    )
                 )
             else:
                 scope = (
