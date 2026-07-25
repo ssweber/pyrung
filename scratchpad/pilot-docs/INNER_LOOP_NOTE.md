@@ -2,9 +2,58 @@
 
 ## Status
 
-The Step 102 symptom is fixed (c9d6f5ce). The architectural divide it exposed is
-not. This note is now the cleanup plan for that divide, plus the dead code the
-route removal in `TRACE_REFACTOR.md` R1 Step 3 left behind.
+The Step 102 symptom is fixed (c9d6f5ce); the guard-rendering defects it exposed
+are fixed in e1f64fa7. The architectural divide is not. This note is now the
+cleanup plan for that divide, plus the dead code the route removal in
+`TRACE_REFACTOR.md` R1 Step 3 left behind.
+
+Not verified: `make test-tumbler` was never run against the regenerated goldens.
+The regen wrote what the code produced and `make test-pilot` / `make lint` are
+green, but the goldens' own replay is an open step.
+
+## Working on this
+
+**Do not drive `how()` from cold to reach a deep state.** Reaching Step 102 that
+way burns the `S_HeatAtTemp` dwell (360001 scans, 4-9 minutes per iteration).
+`tests/tumbler/bench.py::Bench.force_done(acc_tag, preset)` fast-forwards a
+minute-scale dwell by writing the accumulator straight to preset, so replaying
+stages 0-4 of `tests/tumbler/test_constructive_route.py` parks a PLC at
+`Internal__Step == 102` in about 15 seconds. Hand that `b.plc` to
+`pilot_events(...)` and instrument from there.
+
+**`test_constructive_route.py` is also the ground truth** for what PILOT
+*should* do, hand-driven cold to COMPLETED(17) without ever pressing the Complete
+command. Read it before judging a decision in this territory. The route after
+Step 102, off `ProductionExecuteSteps`:
+
+| step | rung | waits on | who supplies it |
+| --- | --- | --- | --- |
+| 102 | R25 (even-step) | nothing | program, next scan -> 103 |
+| 103 | R13/R14 | `S_CoolCycle_tmr` (`Sts_P4_Cooldown_Tm` min) | program (time) |
+| 104 | R26/R25 | nothing | program -> 105 |
+| 105 | R17 | issues `Cmd_CtrlCmd = Ref_Cmd_Hold` | program (the owned Hold) |
+| 105->106 | R18 | `~i_DoorClosed` | operator -- open the door |
+| 107 | R20 | `Sts_State_Execute` | operator -- Unhold back to Execute |
+| 108->109 | R26/R25 | nothing | program |
+| 109 | R21/R22 | `S_Fluffing_tmr` (`Sts_P3_Fluff_Tm` min) | program (time) |
+| -- | R23 | `rise(S_Fluffing_tmr.Done)` -> `Cmd_CtrlCmd = Ref_Cmd_Complete` | program |
+
+Tools and gates:
+
+- `devtools/watch_pilot_decisions.py` -- streams each decision with the DAP prose;
+  `--stop-action TAG=VALUE` halts the moment an action enters candidate
+  construction, which is how the original leak was caught.
+- `devtools/pilot_divergence.py` -- first changed golden decision without waiting
+  for the whole golden test.
+- `make test-pilot`, `make lint`, then
+  `PYRUNG_REGEN_GOLDEN=1 uv run pytest tests/tumbler/test_pilot_golden_skeleton.py`
+  (regen fails loudly by design; review the diff, commit, rerun without the flag).
+  Check the golden diff *after* the regen finishes -- reading the directory
+  mid-run compares half-written files.
+
+Baseline to regress against: the avoided-Complete skeleton is 178 events with 8
+let-run ejections and 2 `Cmd_State_Unhold` attempts (was 284 / 14 / 6 before
+c9d6f5ce).
 
 ## What the symptom was
 
