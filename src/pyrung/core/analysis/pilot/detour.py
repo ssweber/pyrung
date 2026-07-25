@@ -193,11 +193,7 @@ def _request_producer_rungs(chain: Any, role: Any) -> tuple[int, ...]:
     if chain is None or role is None:
         return ()
     request_step = next(
-        (
-            step
-            for step in chain.steps
-            if step.transition.tag_name in role.request_tags
-        ),
+        (step for step in chain.steps if step.transition.tag_name in role.request_tags),
         None,
     )
     if request_step is None:
@@ -310,8 +306,7 @@ def _departure_reading(
     elif external_supports:
         disposition = DepartureDisposition.REACTIVE
         reason = (
-            "exact departure producer is conditional on external support, "
-            "not target Gauge work"
+            "exact departure producer is conditional on external support, not target Gauge work"
         )
     else:
         disposition = DepartureDisposition.UNKNOWN

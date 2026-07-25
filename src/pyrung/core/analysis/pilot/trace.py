@@ -476,9 +476,7 @@ class TraceNode:
         # chain must fire).  Neutral (AVAILABLE_NOW) for nodes with no writer.
         node_availability = max(path_availability, self.writer_availability)
         child_writer_path = (
-            (*writer_path, self.writer_rung)
-            if self.writer_rung is not None
-            else writer_path
+            (*writer_path, self.writer_rung) if self.writer_rung is not None else writer_path
         )
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
@@ -563,9 +561,7 @@ class TraceNode:
                     heuristic=existing.heuristic or detail.heuristic,
                     note=existing.note or detail.note,
                     availability=max(existing.availability, detail.availability),
-                    writer_path=tuple(
-                        dict.fromkeys((*existing.writer_path, *detail.writer_path))
-                    ),
+                    writer_path=tuple(dict.fromkeys((*existing.writer_path, *detail.writer_path))),
                 )
             else:
                 seen.add(key)

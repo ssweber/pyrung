@@ -79,14 +79,12 @@ def main() -> None:
             continue
 
         candidates = tuple(
-            (candidate["tag"], candidate["value"])
-            for candidate in event.data["candidates"]
+            (candidate["tag"], candidate["value"]) for candidate in event.data["candidates"]
         )
         trace = tuple(event.data["trace_actions"])
         route = tuple(event.data["route_candidates"])
         prerequisites = tuple(
-            (rung.dest, rung.value)
-            for rung in event.data.get("prerequisite_rungs", ())
+            (rung.dest, rung.value) for rung in event.data.get("prerequisite_rungs", ())
         )
         structural_nogoods = tuple(event.data.get("structural_nogoods", ()))
         print(

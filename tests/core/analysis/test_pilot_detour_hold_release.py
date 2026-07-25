@@ -561,12 +561,8 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
         and reading.progress.source_mark == ((tags["Step"].name, 103),)
     )
     assert initial_reading.progress.effect == "preserved"
-    assert initial_reading.progress.source_mark == (
-        (tags["Step"].name, 103),
-    )
-    assert initial_reading.progress.landing_mark == (
-        (tags["Step"].name, 103),
-    )
+    assert initial_reading.progress.source_mark == ((tags["Step"].name, 103),)
+    assert initial_reading.progress.landing_mark == ((tags["Step"].name, 103),)
     assert initial_reading.external_supports == ((tags["Door"].name, False),)
 
     resolution = next(
@@ -620,9 +616,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     # departure settles.  Its source must still be the occurrence's 105—not
     # the coast's earlier 101/103 receipt.
     assert recipe_started.data["entry_progress"].effect == "advanced"
-    assert recipe_started.data["entry_progress"].source_mark == (
-        (tags["Step"].name, 105),
-    )
+    assert recipe_started.data["entry_progress"].source_mark == ((tags["Step"].name, 105),)
     recipe_promoted = next(
         event for event in events[recipe_index + 1 :] if event.kind == "provisional_promoted"
     )

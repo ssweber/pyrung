@@ -317,8 +317,7 @@ def _scoped_correction_rungs(
     prerequisite inputs can settle before the harmful state begins.
     """
     if all(
-        isinstance(proposal, PilotRung) and proposal.operation is not None
-        for proposal in proposals
+        isinstance(proposal, PilotRung) and proposal.operation is not None for proposal in proposals
     ):
         return tuple(proposals)
 
@@ -465,9 +464,7 @@ def _exploratory_correction_rungs(
                 else proposal.guard
             )
             guard = (
-                AllCondition(lifetime, *progress_coordinates)
-                if progress_coordinates
-                else lifetime
+                AllCondition(lifetime, *progress_coordinates) if progress_coordinates else lifetime
             )
             result.append(PilotRung(proposal.dest, proposal.value, guard))
             continue

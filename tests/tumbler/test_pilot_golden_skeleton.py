@@ -164,8 +164,7 @@ def _assert_no_factory_reset(skeleton: list[dict]) -> None:
 
     pressed = _all_action_tags(skeleton)
     assert "Cmd_Reset2FactoryDefault" not in pressed, (
-        "pilot destroyed the current program while work was still available: "
-        f"{sorted(pressed)}"
+        f"pilot destroyed the current program while work was still available: {sorted(pressed)}"
     )
 
 
@@ -259,11 +258,7 @@ def _guard_equalities(condition) -> set[tuple[str, object]]:
         name = getattr(condition.tag, "name", None)
         return {(name, condition.value)} if name is not None else set()
     if isinstance(condition, (AllCondition, AnyCondition)):
-        return {
-            fact
-            for child in condition.conditions
-            for fact in _guard_equalities(child)
-        }
+        return {fact for child in condition.conditions for fact in _guard_equalities(child)}
     return set()
 
 

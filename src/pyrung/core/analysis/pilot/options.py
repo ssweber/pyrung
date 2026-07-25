@@ -73,6 +73,7 @@ class _Candidate:
     program_prescribed: bool = False
     program_note: str = ""
     program_context_actions: tuple[_ActionPair, ...] = ()
+
     @property
     def pair(self) -> _ActionPair:
         return (self.tag, self.value)
@@ -978,8 +979,7 @@ def _build_candidates(
         pair
         for pair in trace_actions
         for detail in (detail_by_pair.get(pair),)
-        if detail is not None
-        and detail.availability <= _WriterAvailability.AFTER_PREREQ
+        if detail is not None and detail.availability <= _WriterAvailability.AFTER_PREREQ
     )
     banked_trace_work = bool(
         trace_actions and gauge is not None and gauge.has_banked_work(frame.snap)
@@ -989,10 +989,7 @@ def _build_candidates(
         None
         if current_trace_actions
         or banked_trace_work
-        or (
-            getattr(state, "pending_departure", None) is not None
-            and active_trace_actions
-        )
+        or (getattr(state, "pending_departure", None) is not None and active_trace_actions)
         else live_plan
     )
     # A zoom iteration: the route's next edge is a completion (no action),

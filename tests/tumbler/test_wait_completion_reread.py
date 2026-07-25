@@ -28,9 +28,7 @@ def test_cold_boot_first_bearing_is_the_current_state_boundary(tumbler_logic) ->
     target = plc._known_tags_by_name["y_BurnerLoop"]
 
     first_try = next(
-        event
-        for event in pilot_events(plc, target, max_scans=100)
-        if event.kind == "candidate_try"
+        event for event in pilot_events(plc, target, max_scans=100) if event.kind == "candidate_try"
     )
 
     assert first_try.data["candidate"]["pair"] == ("Cmd_State_Clear", True)

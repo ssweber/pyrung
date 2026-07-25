@@ -226,6 +226,7 @@ class TestCoastHoldingState:
         }
         assert True in seen and False in seen
 
+
 # ---------------------------------------------------------------------------
 # _threshold_crossed_snap
 # ---------------------------------------------------------------------------

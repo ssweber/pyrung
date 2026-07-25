@@ -51,7 +51,6 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.types import (
     DepartureAction,
     DepartureDecision,
-    MotionKind,
     PendingDeparture,
     PilotEvent,
     _Checkpoint,
@@ -1147,7 +1146,4 @@ def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
         "guarded-replay-failed",
     ]
     # The human ground rides alongside the slug, unchanged.
-    assert (
-        rejected_detail[0]["ground"]
-        == "exploratory replay rejected: watchdog still fired"
-    )
+    assert rejected_detail[0]["ground"] == "exploratory replay rejected: watchdog still fired"

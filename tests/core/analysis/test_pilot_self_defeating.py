@@ -268,12 +268,13 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
     )
 
     assert len(replayed) == 1
-    assert tuple(
-        (proposal.dest, proposal.value)
-        if isinstance(proposal, PilotRung)
-        else proposal
-        for proposal in replayed[0]
-    ) == progress_cut.holds
+    assert (
+        tuple(
+            (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
+            for proposal in replayed[0]
+        )
+        == progress_cut.holds
+    )
     assert all(isinstance(proposal, PilotRung) for proposal in replayed[0])
     assert result.correction is None
     assert result.rejected[0].hypothesis == progress_cut
@@ -602,9 +603,7 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
 
     assert len(replayed) == 1
     assert tuple(
-        (proposal.dest, proposal.value)
-        if isinstance(proposal, PilotRung)
-        else proposal
+        (proposal.dest, proposal.value) if isinstance(proposal, PilotRung) else proposal
         for proposal in replayed[0]
     ) == (("InitFlag", 1),)
     assert all(isinstance(proposal, PilotRung) for proposal in replayed[0])
