@@ -4,11 +4,18 @@ This is a read-only decision made before Compass chooses an action.  It projects
 the same controlled PLC world for a few scans, writer-locks the backward trace
 to the selected rung, and reports one of four plain outcomes:
 
-* keep running because a target-relative boundary moved;
+* keep running because a target-relative boundary moved, or because the program
+  is crossing a boundary it owns whose motion dissolves a requirement that was
+  read mid-crossing;
 * supply the currently unmet external input;
-* interrupted because the live pipeline moved before the producer could be
-  read as waiting;
+* interrupted because the live pipeline moved before the producer could be read
+  as waiting;
 * unclear because no safe forward claim can be made.
+
+An interruption is a reading, not a plan: it names the motion to observe and
+returns the decision to the caller. This module never materializes an action
+from the projected world, so a requirement that belongs to the world past an
+owned boundary cannot enter candidate construction as live work.
 """
 
 from __future__ import annotations
@@ -464,6 +471,48 @@ def read_program_step(
         )
 
     if required:
+        # The program may own an automatic boundary that is still crossing while
+        # this producer is read.  A requirement read mid-crossing describes the
+        # world *after* that boundary, not an input the program is stopped at:
+        # at a sequencer step that advances on its own, the next step's command
+        # would be surfaced as this step's live work.  The settled projection is
+        # the disproof -- an input the program is genuinely waiting on is still
+        # required once its own motion finishes.
+        #
+        # This is progress, not interference: report the crossing itself as the
+        # immediate boundary so the caller coasts to its landing and reads the
+        # settled world again, rather than acting on a requirement from it.
+        settled_required, _settled_context = _input_split(next_trace, after, resting or {})
+        settled_pairs = {action.pair for action in settled_required}
+        stale = tuple(action for action in required if action.pair not in settled_pairs)
+        # Nothing was patched into this projection, so every change is the
+        # program's own motion; an installed PILOT hold is excluded because its
+        # effect is PILOT's, not the program's.  Only a coordinate this trace
+        # actually read can be the boundary that invalidated it.
+        trace_tags = {node.tag for node in _nodes(trace)}
+        crossing = next(
+            (
+                (tag, after_value)
+                for tag, _before_value, after_value in projected_changes
+                if tag in trace_tags and tag not in getattr(ctx, "steerable", frozenset())
+            ),
+            None,
+        )
+        if stale and crossing is not None:
+            stale_names = ", ".join(sorted({action.tag for action in stale}))
+            return ProgramStep(
+                ProgramStepStatus.KEEP_RUNNING,
+                producer,
+                Eq(crossing[0], frozenset((crossing[1],))),
+                crossing[0],
+                projected_changes=projected_changes,
+                trace=trace,
+                next_trace=next_trace,
+                reason=(
+                    f"{crossing[0]} is crossing a boundary the program owns; "
+                    f"{stale_names} is not required once that motion settles"
+                ),
+            )
         return ProgramStep(
             ProgramStepStatus.NEEDS_INPUT,
             producer,

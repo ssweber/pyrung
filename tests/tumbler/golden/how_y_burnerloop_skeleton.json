@@ -1932,13 +1932,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "<pyrung.core.condition.AllCondition object at <ADDR:3>>",
+       "guard": "<pyrung.core.condition.CompareEq object at <ADDR:3>>",
        "value": true
       }
      ],

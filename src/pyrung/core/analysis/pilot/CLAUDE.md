@@ -51,6 +51,12 @@ Escalate according to what remains unreadable:
    not choose an action. Observed pipeline motion makes the reading interrupted
    even when the producer exposes no external input; the current transition
    owner must be observed before option ordering may select an alternative.
+   A requirement read while the program is crossing a boundary it owns belongs
+   to the world after that crossing, not to this one. The settled projection is
+   the disproof: an input the program is genuinely stopped at is still required
+   once its own motion finishes. Such a reading keeps running with the crossing
+   itself as the immediate boundary, so the caller coasts to its landing and the
+   drive loop reads the settled world again.
 5. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
 
@@ -329,7 +335,8 @@ investigation materializes their guarded installed form.
   estimates. Instruction semantics live in each instruction's `AdvanceProfile`.
 - `program_step.py` — read-only unchanged-world proof for one exact producer;
   reports the immediate boundary, unmet input, or a pipeline interruption that
-  must be observed before another route is selected.
+  must be observed before another route is selected. A requirement dissolved by
+  the program's own crossing is reported as that crossing, never as live work.
 - `navigation.py` — immutable evidence, act, result, target, constraint,
   target-relative Bearing objective, and world-view contracts.
 

@@ -77,6 +77,7 @@
 
 ### Fixes
 
+- `how()` no longer proposes a command that belongs to the world *after* a boundary the program advances by itself. Reading an automatic sequencer step mid-crossing could report the next step's operator command as this step's unmet input — on the tumbler, a factory-reset command surfaced while the program was already advancing its own step. Such a reading now coasts to the crossing's landing and re-reads the settled world, so the plan follows the program's own progress instead of acting on a requirement it has already left behind.
 - `reset()` now clears targets to their type's OFF/zero value (`False`, numeric `0`, or empty text) instead of restoring a tag's configured initialization default, with matching behavior in simulation, CircuitPython codegen, synthesis, and static analysis.
 - Codegen no longer silently drops a source contact wired to no output — a malformed OR-branch stacked on a continuation row without the tee/down-wiring a Click OR needs, which the analyzer pruned as a dead-end edge. `ladder_to_pyrung(..., validate=True)` (default) now raises `ValueError` naming the dropped contact and rung; a non-validating import warns instead of discarding it silently.
 - Codegen no longer omits the `Field` import when a `named_array`/`udt` declares a field whose retentive policy differs from its type default (e.g. a non-retentive `Int`), and no longer re-emits a single-field, stride-1 `named_array` as a duplicate plain `Block` (which mapped the same hardware twice and raised a duplicate-name conflict when the generated file ran).

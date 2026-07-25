@@ -7,6 +7,7 @@ from pyrung import (
     And,
     Bool,
     Int,
+    Or,
     Program,
     Rung,
     Timer,
@@ -26,7 +27,7 @@ from pyrung.core.analysis.pilot.program_step import (
     read_program_step,
 )
 from pyrung.core.analysis.steerable import compute_steerable
-from pyrung.core.crossing import Cmp
+from pyrung.core.crossing import Cmp, Eq
 
 
 def _timer_producer_program(
@@ -319,6 +320,85 @@ def test_pipeline_motion_interrupts_an_owned_boundary_without_external_input() -
     assert result.boundary == Cmp(timer.Acc.name, ">=", 1)
     assert result.preserve_channels == (state.name,)
     assert "operation reading is no longer current" in result.reason
+
+
+def _sequencer_program():
+    """One producer whose requirement differs on each side of an owned boundary.
+
+    ``SeqStep`` advances 2 -> 3 by itself, one scan behind the rung that gates
+    the command.  A trace taken mid-crossing still reads ``SeqStep == 2``, where
+    the only way through the gate's ``Or`` is the operator button; once the
+    advance settles that leaf is satisfied and the button is not wanted at all.
+    ``SeqReady`` keeps the producer short of its command in both worlds, so the
+    two readings differ only in what they ask the operator for.  ``SeqEnable``
+    parks the advance so the same program can also be read while it is genuinely
+    stopped at that button.
+    """
+    button = Bool("SeqButton", external=True)
+    enable = Bool("SeqEnable", external=True, default=True)
+    step = Int("SeqStep", default=2)
+    advance = Bool("SeqAdvance")
+    ready = Bool("SeqReady")
+    gate = Bool("SeqGate")
+    command = Int("SeqCommand")
+
+    with Program(strict=False) as program:
+        with Rung(And(Or(step == 3, button), ready)):
+            latch(gate)
+        with Rung(gate):
+            copy(10, command)
+        with Rung(advance):
+            copy(3, step)
+        with Rung(And(step == 2, enable)):
+            latch(advance)
+        with Rung(step == 4):
+            latch(ready)
+    return program, button, enable, step, command
+
+
+def _sequencer_producer(world, command):
+    return Producer(
+        rung_index=next(iter(world.pdg.writers_of[command.name])),
+        kind="program",
+        guard_tags=frozenset(("SeqGate",)),
+        co_writes=frozenset(),
+        command_tag=command.name,
+        command_value=10,
+    )
+
+
+def test_owned_step_advance_is_not_read_as_the_next_step_s_input() -> None:
+    """A requirement read mid-crossing belongs to the next world, not this one."""
+    program, button, _enable, step, command = _sequencer_program()
+    plc = PLC(program)
+    world = _world(program, plc)
+
+    result = read_program_step(world, _sequencer_producer(world, command), plc)
+
+    # The owned crossing is progress, not interference: it becomes the immediate
+    # boundary to coast to, and the next world's button is never surfaced.
+    assert result.status is ProgramStepStatus.KEEP_RUNNING
+    assert result.required_inputs == ()
+    assert result.channel == step.name
+    assert result.boundary == Eq(step.name, frozenset((3,)))
+    assert "crossing a boundary the program owns" in result.reason
+    assert f"{button.name} is not required once that motion settles" in result.reason
+
+
+def test_a_genuinely_awaited_input_survives_the_owned_motion_check() -> None:
+    """Program motion alone must not suppress a real stopped-at-input reading."""
+    program, button, enable, _step, command = _sequencer_program()
+    plc = PLC(program)
+    # Park the automatic advance: nothing moves on its own, so the button is
+    # what the producer is actually stopped at.
+    plc.patch({enable.name: False})
+    plc.step()
+    world = _world(program, plc)
+
+    result = read_program_step(world, _sequencer_producer(world, command), plc)
+
+    assert result.status is ProgramStepStatus.NEEDS_INPUT
+    assert tuple(action.pair for action in result.required_inputs) == ((button.name, True),)
 
 
 def test_input_must_reach_the_exact_producer_not_merely_move_its_channel() -> None:
