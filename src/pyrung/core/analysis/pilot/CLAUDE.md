@@ -22,14 +22,10 @@ Do not store a suffix of actions to execute later. Every iteration rebuilds the
 trace and candidate set from the current snapshot, static evidence, accumulated
 transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
-The exception is the user's explicit trace-route lock. `_prepare_route` chooses
-it once before the loop because `via=` expresses positive user intent. `avoid=`
-remains a constraint at every read/action/scan gate. An inferred root route is
-one revocable commitment, not a queued suffix: re-trace it from each current
-world until exact world-scoped rejections exhaust every live action or bounded
-reading finds no productive bearing, then revoke it and re-enumerate root routes
-from that world. A graph path or learned transition is evidence for the next
-action only.
+`via=` is durable positive user intent, but it constrains each current-world
+trace rather than supplying an action suffix. `avoid=` remains a constraint at
+every read/action/scan gate. A graph path, trace alternative, or learned
+transition is evidence for the next action only.
 
 ### Read before probing
 
@@ -104,21 +100,20 @@ Do not reproduce a decision in a second module for convenience. Shared callers
 should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
-- Inferred root-route lifecycle: `orientation.py` selects only when no inferred
-commitment exists and returns `RouteExhausted` for exact rejected-action
-exhaustion or `RouteUnproductive` after bounded reading finds no productive
-bearing; `pilot.py` retains or revokes that one receipt and remembers
-world-scoped skipped route identities
 - Writer eligibility and order: `trace.py::_rank_writers`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's unchanged-world proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
   `compass.py::Compass.orient` facade
+- Current-world continuation evidence: `options.py::_current_work_evidence`;
+  orientation groups live-work alternatives ahead of fresh alternatives
 - Target-relative Bearing objective: `orientation.py::_bearing`; the original
   `TargetSpec` and complete unresolved frontier travel unchanged through
   execution and verification, and recovery consumes that receipt rather than
   rebuilding intent from the global context
-- Option materialization and ranking evidence: `options.py::_build_candidates`
+- Option materialization and ranking evidence: `options.py::_build_candidates`;
+  `_admit_trace_details` applies the same admission rules to target,
+  completion, and exact-producer readings
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
@@ -141,22 +136,16 @@ world-scoped skipped route identities
 
 1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
 2. Compass reads trace, catalog, currents, constraints, and knowledge, then
-   returns exactly one `Bearing`, `NeedProbe`, `RouteExhausted`,
-   `RouteUnproductive`, or `Stuck`.
+   returns exactly one `Bearing`, `NeedProbe`, or `Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
    attempts, before any further orientation.
-5. `RouteExhausted` records exact rejected-action exhaustion.
-   `RouteUnproductive` records an actionless inferred route after bounded
-   reading and probing. Either revokes an inferred root-route commitment; an
-   exhausted explicit `via=` lock is terminal. The next iteration re-enumerates
-   inferred alternatives from its then-current world.
-6. An accepted fork is committed and `progress.py` decides retention,
+5. An accepted fork is committed and `progress.py` decides retention,
    pending continuation, investigation, or revert.
-7. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
+6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
    exhaustion mark are applied before orientation runs again.
-8. `Stuck` is terminal. No candidate list or route suffix survives an
+7. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
 
 Passing verification means "eligible to commit and assess", not "durable

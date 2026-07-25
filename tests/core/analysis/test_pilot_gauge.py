@@ -18,6 +18,7 @@ from pyrung import (
     rung,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.gauge import build_gauge
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -139,22 +140,91 @@ def test_step_chain_stepper_with_alias_resolved_reset() -> None:
     assert reset.enabling_channel_values == (15,)
     assert not gauge.has_banked_work({Step.name: 1})
     assert gauge.has_banked_work({Step.name: 2})
-    assert gauge.writer_path_erases_banked_work(
-        {Step.name: 2},
-        (reset.writer_rung,),
-        build_program_graph(logic),
-    )
-    assert not gauge.writer_path_erases_banked_work(
-        {Step.name: 1},
-        (reset.writer_rung,),
-        build_program_graph(logic),
-    )
 
     # Anchor-relative verdicts: ahead = advanced, equal = preserved,
     # a reset landing = behind (work destroyed).
     assert gauge.compare({Step.name: 2}, {Step.name: 3}) == "advanced"
     assert gauge.compare({Step.name: 2}, {Step.name: 2}) == "preserved"
     assert gauge.compare({Step.name: 2}, {Step.name: 1}) == "behind"
+
+
+def _banked_reset_alternative_program(*, initial_step: int):
+    """A destructive target writer followed by a work-preserving sibling."""
+
+    ResetTarget = Bool("BR_ResetTarget", external=True)
+    SafeTarget = Bool("BR_SafeTarget", external=True)
+    Advance = Bool("BR_Advance", external=True)
+    Step = Int("BR_Step", default=initial_step)
+    Done = Bool("BR_Done")
+    SafeWake1 = Bool("BR_SafeWake1")
+    SafeWake2 = Bool("BR_SafeWake2")
+    SafeWake3 = Bool("BR_SafeWake3")
+
+    with Program() as logic:
+        # Keep the destructive writer first so it is the first target route.
+        with rung(ResetTarget):
+            latch(Done)
+        # The destructive effect is a separate program consequence of the same
+        # action. Candidate construction sees an ordinary target writer; the
+        # interpreted trial and gauge own the whole-world verdict.
+        with rung(ResetTarget):
+            copy(1, Step)
+        with rung(SafeTarget):
+            latch(Done)
+            latch(SafeWake1)
+            latch(SafeWake2)
+            latch(SafeWake3)
+        with rung(Step == 2, rise(Advance)):
+            calc(Step + 1, Step)
+        with rung(Step == 3):
+            latch(Done)
+
+    return logic, ResetTarget, SafeTarget, Step, Done
+
+
+def test_loop_nogoods_a_destructive_candidate_then_uses_its_sibling() -> None:
+    """The live banked-work gate, not a construction filter, owns rejection."""
+
+    logic, ResetTarget, SafeTarget, Step, Done = _banked_reset_alternative_program(initial_step=2)
+    events = list(pilot_events(PLC(logic), Done, max_scans=100))
+
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
+    tried = [event.data["candidate"]["tag"] for event in events if event.kind == "candidate_try"]
+    assert tried.count(ResetTarget.name) == 1
+    assert SafeTarget.name in tried
+
+    rejection = next(
+        event
+        for event in events
+        if event.kind == "candidate_rejected" and event.data["candidate"]["tag"] == ResetTarget.name
+    )
+    assert rejection.data["gates"][-1].event == "banked-work"
+    assert rejection.data["gates"][-1].evidence["effect"] == "behind"
+
+    accepted = next(
+        event
+        for event in events
+        if event.kind == "candidate_accepted"
+        and event.data["candidate_detail"]["tag"] == SafeTarget.name
+    )
+    assert accepted.data["snapshot"][Step.name] == 2
+
+
+def test_reset_at_its_floor_is_not_rejected_as_banked_work() -> None:
+    """The same target writer remains legal when it destroys no earned work."""
+
+    logic, ResetTarget, _SafeTarget, Step, Done = _banked_reset_alternative_program(initial_step=1)
+    events = list(pilot_events(PLC(logic), Done, max_scans=100))
+
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
+    accepted = next(event for event in events if event.kind == "candidate_accepted")
+    assert accepted.data["candidate_detail"]["tag"] == ResetTarget.name
+    assert accepted.data["snapshot"][Step.name] == 1
+    assert not any(
+        gate.event == "banked-work" for event in events for gate in event.data.get("gates", ())
+    )
 
 
 def test_level_driven_counter_stays_out_of_the_gauge() -> None:

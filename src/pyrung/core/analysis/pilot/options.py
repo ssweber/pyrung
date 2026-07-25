@@ -87,10 +87,6 @@ class _CandidateList:
     route_candidates: tuple[_ActionPair, ...]
     candidates: tuple[_Candidate, ...]
     wake_cap: int
-    # Exact actions whose already-selected writer path necessarily resets a
-    # Gauge component behind banked work. The drive loop records these as
-    # world-keyed nogoods and re-orients before executing them.
-    structural_nogoods: frozenset[_ActionPair] = frozenset()
     # Current-world facts that make this trace a continuation of live work.
     # Empty means the trace starts fresh work.  This is a discrete ordering
     # tier, recomputed on every read; it is never retained as route state.
@@ -221,14 +217,31 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
 
 @dataclass(frozen=True)
 class _WaitPrescription:
-    """One grounded wait decision and the evidence that justified it."""
+    """One grounded wait bearing and the evidence that justified it.
+
+    Action details are deliberately absent.  Exact-producer and completion
+    readings enter the ordinary trace-admission pass before this bearing can be
+    executed; a wait receipt cannot materialize work by itself.
+    """
 
     prescribed: bool
     reason: str | None = None
-    details: tuple[TraceAction, ...] = ()
     frontier: tuple[_ActionPair, ...] = ()
     program_step: Any = None
     boundary: Any = None
+
+
+@dataclass(frozen=True)
+class _TraceAdmission:
+    """One application of the candidate pool's ordinary admission rules."""
+
+    active_actions: tuple[_ActionPair, ...]
+    actions: tuple[_ActionPair, ...]
+    details: tuple[TraceAction, ...]
+    detail_by_pair: dict[_ActionPair, TraceAction]
+    managed_boolean_rungs: tuple[PilotRung, ...]
+    establish_pending: bool
+    deferred_commands: tuple[_ActionPair, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -729,17 +742,18 @@ def _prescribe_wait(
     *,
     reason: str | None = None,
 ) -> _WaitPrescription:
-    """Mint a prescribed-wait bearing and re-read its charted completion.
+    """Mint a prescribed-wait bearing from one current-world edge read.
 
     The single owner of "a wait is prescribed" for all three mint sites.  A
     route completion edge (the zoom / fallback sites) must be *grounded* — a
     wildcard from-value has no dwell semantics, so it refuses the wait (returns
-    ``prescribed=False``).  Its charted ``completion`` pairs are re-read
-    (:func:`_completion_reread`): the steerable leaves feed the candidate
-    ranking and the unmet frontier names the true blocker.  An influence-path
-    wait passes ``edge=None`` with an explicit ``reason`` — always coastable,
-    nothing charted to re-read. Automatic sibling edges instead carry one
+    ``prescribed=False``).  An influence-path wait passes ``edge=None`` with an
+    explicit ``reason`` — always coastable. Automatic sibling edges carry one
     exact-producer ``ProgramStep`` reading in the returned prescription.
+
+    This function never returns actions.  :func:`_read_wait` collects any
+    completion or exact-producer details separately so `_build_candidates` can
+    pass them through ordinary trace admission.
     """
     if edge is None:
         return _WaitPrescription(True, reason)
@@ -826,24 +840,11 @@ def _prescribe_wait(
                         return _WaitPrescription(
                             False,
                             f"{route_reason}; owned boundary has no exact coast heading",
-                            details=step.required_inputs,
                             program_step=step,
                         )
-                    # Compose the exact-producer read with the ordinary
-                    # prerequisite/coast path. ``until`` gives each input the
-                    # same scoped lifetime trace uses for any self-advancing
-                    # operation; coast owns and verifies the resolved boundary.
-                    details = tuple(
-                        replace(
-                            action,
-                            until=handoff_by_action[action.pair].boundary,
-                        )
-                        for action in step.required_inputs
-                    )
                     return _WaitPrescription(
                         True,
                         (f"{route_reason}; supply its current input and hand off to {heading[0]}"),
-                        details=details,
                         frontier=(heading,),
                         program_step=step,
                         boundary=boundary,
@@ -856,7 +857,6 @@ def _prescribe_wait(
             return _WaitPrescription(
                 False,
                 f"{route_reason}; {step.reason}",
-                details=step.required_inputs,
                 frontier=frontier,
                 program_step=step,
             )
@@ -872,8 +872,132 @@ def _prescribe_wait(
             program_step=step,
         )
 
-    details, frontier = _completion_reread(edge, frame, state, ctx) if edge.completion else ((), ())
-    return _WaitPrescription(True, route_reason, details, frontier)
+    return _WaitPrescription(True, route_reason)
+
+
+def _program_input_details(prescription: _WaitPrescription) -> tuple[TraceAction, ...]:
+    """Read exact-producer inputs, consuming one proved shared lifetime.
+
+    Required inputs are ordinary action details unless ``_prescribe_wait``
+    proved that every input hands off to the same owned boundary.  Keeping that
+    collective proof in the prescription prevents partial or mixed handoffs
+    from quietly becoming prerequisite holds.
+    """
+
+    from pyrung.core.analysis.pilot.program_step import ProgramStepStatus
+
+    step = prescription.program_step
+    if step is None or step.status is not ProgramStepStatus.NEEDS_INPUT:
+        return ()
+    if not prescription.prescribed or prescription.boundary is None:
+        return tuple(step.required_inputs)
+    return tuple(replace(action, until=prescription.boundary) for action in step.required_inputs)
+
+
+def _read_wait(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    *,
+    reason: str | None = None,
+) -> tuple[_WaitPrescription, tuple[TraceAction, ...]]:
+    """Read one wait edge without admitting any action it discovers."""
+
+    prescription = _prescribe_wait(edge, frame, state, ctx, reason=reason)
+    details = _program_input_details(prescription)
+    if edge is not None and not edge.program_producers and edge.completion:
+        details, frontier = _completion_reread(edge, frame, state, ctx)
+        prescription = replace(prescription, frontier=frontier)
+    return prescription, details
+
+
+def _admit_trace_details(
+    details: tuple[TraceAction, ...],
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> _TraceAdmission:
+    """Apply one admission policy to every current-world trace reading.
+
+    The broad target trace and supplemental completion/program reads differ in
+    provenance, not privilege.  Duplicate details preserve the target trace's
+    evidence while composing an owned lifetime discovered by the narrower
+    read.  Nothing enters candidate ranking by being appended after this pass.
+    """
+
+    detail_by_pair: dict[_ActionPair, TraceAction] = {}
+    ordered_pairs: list[_ActionPair] = []
+    for detail in details:
+        pair = detail.pair
+        existing = detail_by_pair.get(pair)
+        if existing is None:
+            detail_by_pair[pair] = detail
+            ordered_pairs.append(pair)
+        elif existing.until is None and detail.until is not None:
+            detail_by_pair[pair] = replace(existing, until=detail.until)
+
+    active_trace_actions = tuple(
+        pair
+        for pair in ordered_pairs
+        for detail in (detail_by_pair[pair],)
+        if ctx.route_allowed(pair)
+        and (
+            not _values_match(frame.snap.get(pair[0]), pair[1])
+            or pair[0] in ctx.edge_tags
+            or detail.pulse
+            or detail.until is not None
+        )
+    )
+    trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
+    trace_action_details = tuple(detail_by_pair[pair] for pair in trace_actions)
+
+    managed_boolean_rungs, lowered_rung_pairs = _managed_boolean_rungs(
+        trace_action_details, frame, state, ctx
+    )
+    if lowered_rung_pairs:
+        trace_actions = tuple(pair for pair in trace_actions if pair not in lowered_rung_pairs)
+        active_trace_actions = tuple(
+            pair for pair in active_trace_actions if pair not in lowered_rung_pairs
+        )
+        trace_action_details = tuple(
+            detail for detail in trace_action_details if detail.pair not in lowered_rung_pairs
+        )
+
+    establish_details = tuple(detail for detail in trace_action_details if detail.establish)
+    establish_pending = bool(establish_details)
+    deferred_commands: tuple[_ActionPair, ...] = ()
+    if establish_pending:
+        establish_pairs = {detail.pair for detail in establish_details}
+        deferred_commands = tuple(pair for pair in trace_actions if pair not in establish_pairs)
+        trace_actions = tuple(pair for pair in trace_actions if pair in establish_pairs)
+        active_trace_actions = tuple(
+            pair for pair in active_trace_actions if pair in establish_pairs
+        )
+        trace_action_details = establish_details
+
+    return _TraceAdmission(
+        active_actions=active_trace_actions,
+        actions=trace_actions,
+        details=trace_action_details,
+        detail_by_pair=detail_by_pair,
+        managed_boolean_rungs=managed_boolean_rungs,
+        establish_pending=establish_pending,
+        deferred_commands=deferred_commands,
+    )
+
+
+def _wait_is_viable(
+    prescription: _WaitPrescription,
+    admitted_pairs: set[_ActionPair],
+) -> bool:
+    """A wait may coast only when all of its current inputs survived admission."""
+
+    required_pairs = {
+        detail.pair for detail in getattr(prescription.program_step, "required_inputs", ())
+    }
+    return prescription.prescribed and (not required_pairs or required_pairs <= admitted_pairs)
 
 
 def _build_candidates(
@@ -883,25 +1007,6 @@ def _build_candidates(
 ) -> _CandidateList:
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
     gauge = getattr(state, "gauge", None)
-    raw_detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
-    structural_nogoods: set[_ActionPair] = set()
-
-    def _detail_erases_banked_work(detail: TraceAction) -> bool:
-        if (
-            detail.pair not in key_nogoods
-            and gauge is not None
-            and gauge.writer_path_erases_banked_work(
-                frame.snap,
-                detail.writer_path,
-                ctx.pdg,
-            )
-        ):
-            structural_nogoods.add(detail.pair)
-            return True
-        return False
-
-    for detail in raw_detail_by_pair.values():
-        _detail_erases_banked_work(detail)
     # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
     # program clears them every scan, so their idiom is pulse-and-release.  Holding
     # one steady as a prerequisite would assert a momentary command (a mode-change
@@ -919,53 +1024,24 @@ def _build_candidates(
         and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
     )
 
-    active_trace_actions = tuple(
-        pair
-        for pair in frame.raw_trace_actions
-        for detail in (raw_detail_by_pair.get(pair),)
-        if pair not in ctx.blocked_route_actions
-        and pair not in structural_nogoods
-        and (
-            not _values_match(frame.snap.get(pair[0]), pair[1])
-            or pair[0] in ctx.edge_tags
-            or (detail is not None and (detail.pulse or detail.until is not None))
-        )
+    # This preliminary admission determines whether the broad target trace
+    # already owns the move. A selected wait edge may add a narrower current-
+    # world reading below; the combined pool is then admitted again through the
+    # same function before candidate ranking.
+    admitted = _admit_trace_details(
+        tuple(frame.raw_trace_action_details),
+        frame,
+        state,
+        ctx,
+        key_nogoods,
     )
-    trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
-    detail_by_pair = {detail.pair: detail for detail in frame.raw_trace_action_details}
-    trace_action_details = tuple(
-        detail_by_pair[pair] for pair in trace_actions if pair in detail_by_pair
-    )
-    managed_boolean_rungs, lowered_rung_pairs = _managed_boolean_rungs(
-        trace_action_details, frame, state, ctx
-    )
-    if lowered_rung_pairs:
-        trace_actions = tuple(pair for pair in trace_actions if pair not in lowered_rung_pairs)
-        active_trace_actions = tuple(
-            pair for pair in active_trace_actions if pair not in lowered_rung_pairs
-        )
-        trace_action_details = tuple(
-            detail for detail in trace_action_details if detail.pair not in lowered_rung_pairs
-        )
-
-    # Staged bearings: an ``establish`` action stands in stage 0 — it satisfies a
-    # table-enablement precondition (the mode that unblocks a mask-disabled state)
-    # whose effect is a settled cross-register recompute, so it cannot fire in the
-    # same scan as the stage-1 command it gates.  While any establish action is
-    # unsatisfied it is the *sole* bearing: the gated commands are deferred, and
-    # the compass (route/influence) is silenced so nothing drives the target
-    # register directly past the still-closed gate.  When the gate settles the
-    # re-trace stops surfacing it and stage 1 becomes the bearing — no plan, no
-    # done-check, just the lowest unmet stage.
-    establish_details = tuple(d for d in trace_action_details if d.establish)
-    establish_pending = bool(establish_details)
-    deferred_commands: tuple[_ActionPair, ...] = ()
-    if establish_pending:
-        establish_pairs = {d.pair for d in establish_details}
-        deferred_commands = tuple(p for p in trace_actions if p not in establish_pairs)
-        trace_actions = tuple(p for p in trace_actions if p in establish_pairs)
-        active_trace_actions = tuple(p for p in active_trace_actions if p in establish_pairs)
-        trace_action_details = establish_details
+    active_trace_actions = admitted.active_actions
+    trace_actions = admitted.actions
+    trace_action_details = admitted.details
+    detail_by_pair = admitted.detail_by_pair
+    managed_boolean_rungs = admitted.managed_boolean_rungs
+    establish_pending = admitted.establish_pending
+    deferred_commands = admitted.deferred_commands
 
     # A trace leaf whose selected writer is available now (or after its named
     # prerequisite) is live local work. So is a trace continuation when Gauge
@@ -1007,15 +1083,28 @@ def _build_candidates(
     # structurally possible Complete edge to the currently conductive Unhold
     # edge, without retaining a route suffix or poisoning another world.
     preflight_wait: _WaitPrescription | None = None
+    preflight_details: tuple[TraceAction, ...] = ()
+    preflight_admission: _TraceAdmission | None = None
     excluded_edges: set[tuple[Any, ...]] = set()
     while _is_zoom:
         assert route_plan is not None
-        preflight_wait = _prescribe_wait(route_plan.first_edge, frame, state, ctx)
-        if (
-            preflight_wait.prescribed
-            or preflight_wait.details
-            or not route_plan.first_edge.program_producers
-        ):
+        preflight_wait, preflight_details = _read_wait(route_plan.first_edge, frame, state, ctx)
+        preflight_admission = _admit_trace_details(
+            (*tuple(frame.raw_trace_action_details), *preflight_details),
+            frame,
+            state,
+            ctx,
+            key_nogoods,
+        )
+        admitted_pairs = {
+            *preflight_admission.actions,
+            *((rung.dest, rung.value) for rung in preflight_admission.managed_boolean_rungs),
+        }
+        wait_viable = _wait_is_viable(preflight_wait, admitted_pairs)
+        if preflight_wait.prescribed and not wait_viable:
+            preflight_wait = replace(preflight_wait, prescribed=False)
+        admitted_supplement = any(detail.pair in admitted_pairs for detail in preflight_details)
+        if wait_viable or admitted_supplement or not route_plan.first_edge.program_producers:
             break
         excluded_edges.add(route_plan.first_edge.identity)
         alternate = _compass_route_plan(
@@ -1028,6 +1117,8 @@ def _build_candidates(
             break
         route_plan = alternate
         preflight_wait = None
+        preflight_details = ()
+        preflight_admission = None
         _is_zoom = not establish_pending and route_plan.first_edge.action is None
 
     if _is_zoom or establish_pending:
@@ -1048,57 +1139,44 @@ def _build_candidates(
     program_step: Any = None
     program_pairs: set[_ActionPair] = set()
     advance_condition: Any = None
-    # The next iteration re-reads the wait: when the zoom's grounded completion edge carries a
-    # charted condition (charts.py), :func:`_prescribe_wait` re-traces it as
-    # ordinary transparent ladder and returns its producers + unmet frontier.  The
-    # producers enter the trace pool *before* the prerequisite split below, so a
-    # self-advancing producer (``x_RotateFB``, ``until Rotate_Trans``) is held for
-    # the coast and any remaining lever ranks as an ordinary candidate; the
-    # frontier rides to the terminal clause via the frame so a stall names the true
-    # blocker.  The wait's reason is applied at the mint site after scoring.
+    # A grounded completion edge may add a narrower current-world read below the
+    # opaque pipeline cut. Those details join the broad target details and the
+    # whole pool re-enters ordinary admission before prerequisite splitting.
     _zoom_wait_prescribed = False
     _zoom_wait_reason: str | None = None
     if _is_zoom:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
-        zoom_wait = preflight_wait or _prescribe_wait(route_plan.first_edge, frame, state, ctx)
+        if preflight_wait is None:
+            zoom_wait, supplemental_details = _read_wait(route_plan.first_edge, frame, state, ctx)
+        else:
+            zoom_wait = preflight_wait
+            supplemental_details = preflight_details
         _zoom_wait_prescribed = zoom_wait.prescribed
         _zoom_wait_reason = zoom_wait.reason
-        _comp_details = zoom_wait.details
         completion_frontier = zoom_wait.frontier
         program_step = zoom_wait.program_step
         advance_condition = zoom_wait.boundary
         if program_step is not None:
             program_pairs = {detail.pair for detail in program_step.required_inputs}
-        for detail in _comp_details:
-            pair = detail.pair
-            existing_detail = detail_by_pair.get(pair)
-            if (
-                existing_detail is not None
-                and existing_detail.until is None
-                and detail.until is not None
-            ):
-                # The completion re-read may discover the lifetime that the
-                # broader target trace could not see. Preserve the original
-                # action evidence while composing in that owned boundary.
-                detail_by_pair[pair] = replace(
-                    existing_detail,
-                    until=detail.until,
-                )
-            if (
-                pair in active_trace_actions
-                or pair in ctx.blocked_route_actions
-                or pair in key_nogoods
-                or _detail_erases_banked_work(detail)
-                or not ctx.route_allowed(pair)
-                or (
-                    _values_match(frame.snap.get(pair[0]), pair[1]) and pair[0] not in ctx.edge_tags
-                )
-            ):
-                continue
-            detail_by_pair.setdefault(pair, detail)
-            trace_actions = trace_actions + (pair,)
-            active_trace_actions = active_trace_actions + (pair,)
-            trace_action_details = trace_action_details + (detail,)
+        admitted = preflight_admission
+        if admitted is None:
+            admitted = _admit_trace_details(
+                (*tuple(frame.raw_trace_action_details), *supplemental_details),
+                frame,
+                state,
+                ctx,
+                key_nogoods,
+            )
+        active_trace_actions = admitted.active_actions
+        trace_actions = admitted.actions
+        trace_action_details = admitted.details
+        detail_by_pair = admitted.detail_by_pair
+        managed_boolean_rungs = admitted.managed_boolean_rungs
+        establish_pending = admitted.establish_pending
+        deferred_commands = admitted.deferred_commands
+        if establish_pending:
+            _is_zoom = False
+            _zoom_wait_prescribed = False
 
     # Prerequisite/command split: on zoom iterations, and on a self-advancing
     # coast leaf that has no compass route (a harness-linked sensor ramp, or a
@@ -1348,7 +1426,7 @@ def _build_candidates(
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in trace_actions:
-        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
+        if pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in inf_candidates:
@@ -1359,7 +1437,7 @@ def _build_candidates(
     # individual candidates. Construction order files them at the tail, so they
     # are tried last rather than excluded outright.
     for pair in over_wake_actions:
-        if pair not in ctx.blocked_route_actions and pair not in seen_cand:
+        if pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     # Program-owned current: when the target register is an opaque-loop channel
@@ -1417,7 +1495,7 @@ def _build_candidates(
         and not trace_actions
         and not wait_prescribed
     ):
-        fallback_wait = _prescribe_wait(route_plan.first_edge, frame, state, ctx)
+        fallback_wait, _fallback_details = _read_wait(route_plan.first_edge, frame, state, ctx)
         wait_prescribed = fallback_wait.prescribed
         wait_reason = fallback_wait.reason
         completion_frontier += fallback_wait.frontier
@@ -1446,7 +1524,6 @@ def _build_candidates(
         route_candidates=route_candidates,
         candidates=tuple(candidates),
         wake_cap=wake_cap,
-        structural_nogoods=frozenset(structural_nogoods),
         continuation_evidence=_current_work_evidence(
             frame,
             state,

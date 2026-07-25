@@ -24,8 +24,16 @@ from pyrung.core.analysis.pilot.navigation import (
     pulse_identity,
 )
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
-from pyrung.core.analysis.pilot.options import _build_candidates, _compass_route_plan
-from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.options import (
+    _admit_trace_details,
+    _build_candidates,
+    _compass_route_plan,
+    _program_input_details,
+    _wait_is_viable,
+    _WaitPrescription,
+)
+from pyrung.core.analysis.pilot.program_step import ProgramStepStatus
+from pyrung.core.analysis.pilot.trace import TraceAction, TraceNode
 
 
 def _route(from_value: int, to_value: int) -> TransitionRoute:
@@ -743,6 +751,88 @@ def test_prescribed_wait_suppresses_stuck_reason():
     assert candidates.wait_prescribed is True
     assert candidates.wait_reason == "let-run State: 6->16"
     assert candidates.stuck_reason is None
+
+
+def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
+    """A narrow completion read adds evidence, never a privileged candidate."""
+
+    lifetime = object()
+    outer = TraceAction("Keep", True)
+    supplemental = (
+        TraceAction("Keep", True, until=lifetime),
+        TraceAction("Blocked", True),
+        TraceAction("Nogood", True),
+    )
+    frame = SimpleNamespace(
+        snap={"Keep": True, "Blocked": False, "Nogood": False},
+    )
+    state = SimpleNamespace(rungs=())
+    ctx = SimpleNamespace(
+        route_allowed=lambda pair: pair != ("Blocked", True),
+        edge_tags=frozenset(),
+    )
+
+    admitted = _admit_trace_details(
+        (outer, *supplemental),
+        frame,
+        state,
+        ctx,
+        {("Nogood", True)},
+    )
+
+    # The supplemental read may enrich the already-admitted action's lifetime.
+    assert admitted.detail_by_pair[("Keep", True)].until is lifetime
+    # The same current-world and empirical filters apply to every source.
+    assert admitted.active_actions == (("Keep", True), ("Nogood", True))
+    assert admitted.actions == (("Keep", True),)
+    assert tuple(detail.pair for detail in admitted.details) == (("Keep", True),)
+
+
+def test_program_inputs_consume_only_a_prescribed_shared_lifetime() -> None:
+    """Partial handoffs stay actions; one proved boundary makes every input a hold."""
+
+    first = TraceAction("First", True)
+    second = TraceAction("Second", True)
+    mixed_step = SimpleNamespace(
+        status=ProgramStepStatus.NEEDS_INPUT,
+        required_inputs=(first, second),
+        # One available handoff must not enrich only part of the operation.
+        input_handoffs=(SimpleNamespace(action=first.pair, boundary=object()),),
+    )
+
+    raw = _program_input_details(
+        _WaitPrescription(False, program_step=mixed_step),
+    )
+
+    assert raw == (first, second)
+    assert all(detail.until is None for detail in raw)
+
+    shared_boundary = object()
+    held = _program_input_details(
+        _WaitPrescription(
+            True,
+            program_step=mixed_step,
+            boundary=shared_boundary,
+        ),
+    )
+
+    assert tuple(detail.pair for detail in held) == (first.pair, second.pair)
+    assert all(detail.until is shared_boundary for detail in held)
+
+
+def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> None:
+    """A rejected required input cannot authorize coasting the producer."""
+
+    required = (TraceAction("First", True), TraceAction("Blocked", True))
+    prescription = _WaitPrescription(
+        True,
+        program_step=SimpleNamespace(required_inputs=required),
+        boundary=object(),
+    )
+
+    assert not _wait_is_viable(prescription, {("First", True)})
+    assert _wait_is_viable(prescription, {("First", True), ("Blocked", True)})
+    assert not _wait_is_viable(replace(prescription, prescribed=False), set())
 
 
 def test_apply_reports_changed_and_returns_self_when_nothing_new():

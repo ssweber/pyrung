@@ -291,7 +291,6 @@ def _candidates_built_payload(
         "route_candidates": candidates.route_candidates,
         "route_plan": _route_plan_payload(candidates.route_plan),
         "wake_cap": candidates.wake_cap,
-        "structural_nogoods": candidates.structural_nogoods,
         "wait_prescribed": candidates.wait_prescribed,
         "wait_reason": candidates.wait_reason,
         "prerequisite_rungs": candidates.prerequisite_rungs,

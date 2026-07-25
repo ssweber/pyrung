@@ -86,21 +86,19 @@ def main() -> None:
         prerequisites = tuple(
             (rung.dest, rung.value) for rung in event.data.get("prerequisite_rungs", ())
         )
-        structural_nogoods = tuple(event.data.get("structural_nogoods", ()))
         print(
             "[decision] "
             f"scan={event.scan} "
             f"state={last_snapshot.get('Sts_StateCurrent')!r} "
             f"step={last_snapshot.get('Internal__Step')!r} "
             f"candidates={candidates!r} trace={trace!r} route={route!r} "
-            f"holds={prerequisites!r} nogooded={structural_nogoods!r}",
+            f"holds={prerequisites!r}",
             flush=True,
         )
         if (
             args.stop_action in candidates
             or args.stop_action in trace
             or args.stop_action in prerequisites
-            or args.stop_action in structural_nogoods
         ):
             for detail in event.data.get("trace_action_details", ()):
                 if detail.pair != args.stop_action:

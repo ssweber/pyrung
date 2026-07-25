@@ -170,49 +170,6 @@ class Gauge:
                     return True
         return False
 
-    def writer_path_erases_banked_work(
-        self,
-        snap: Any,
-        writer_path: tuple[int, ...],
-        pdg: ProgramGraph,
-    ) -> bool:
-        """Whether a selected trace writer path necessarily erases live work.
-
-        Exact reset writers are destructive directly.  An unconditional reset
-        inside a subroutine is also a necessary co-effect of selecting any
-        writer in that same invocation: calling the body executes both rungs.
-        Conditional sibling writers are deliberately excluded.
-        """
-        selected = set(writer_path)
-        selected_subroutines = {
-            pdg.rung_nodes[ri].subroutine
-            for ri in selected
-            if pdg.rung_nodes[ri].subroutine is not None
-        }
-        for component in self.components:
-            current = snap.get(component.tag)
-            if isinstance(current, bool) or not isinstance(current, (int, float)):
-                continue
-            for reset in component.resets:
-                floor = reset.value
-                if (
-                    floor is None
-                    or isinstance(floor, bool)
-                    or not isinstance(floor, (int, float))
-                    or (current - floor) * component.direction <= 0
-                ):
-                    continue
-                if reset.writer_rung in selected:
-                    return True
-                reset_scope = pdg.rung_nodes[reset.writer_rung].subroutine
-                if (
-                    reset.init_only
-                    and reset_scope is not None
-                    and reset_scope in selected_subroutines
-                ):
-                    return True
-        return False
-
 
 # ---------------------------------------------------------------------------
 # Discrete provenance — "every satisfiable guard arm contains an event"

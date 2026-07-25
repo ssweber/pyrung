@@ -212,4 +212,3 @@ def test_production_surfaces_productive_current_world_sibling() -> None:
     assert first["baseline_identity"] == expected
     assert first["shadow_identity"] == expected
     assert first["agree"] is True
-    assert all(row["baseline_result"] != "RouteUnproductive" for row in observer.rows)
