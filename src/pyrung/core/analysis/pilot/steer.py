@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _avoid_violations,
     _coast_holding_state,
     _coast_to_value,
+    _constraint_condition,
     _has_pending_effects,
     _pilot_world_key,
     _rung_identity,
@@ -895,6 +896,7 @@ def _letrun_zoom(
             ((route_channel_tag,) if route_channel_tag is not None else ()),
             budget=budget,
             reached_fn=lambda state: constraint_holds(boundary, state.tags) is True,
+            reached_condition=_constraint_condition(work, boundary),
             session=session,
         )
     else:

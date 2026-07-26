@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
     _coast_holding_state,
     _coast_to_value,
+    _constraint_condition,
     _has_pending_effects,
     _pilot_state_key,
     _pilot_world_key,
@@ -45,8 +46,17 @@ from pyrung.core.analysis.prove.absorb import (
 )
 from pyrung.core.analysis.prove.events import _StateKeyDoneSpec
 from pyrung.core.analysis.prove.results import PENDING
-from pyrung.core.condition import CompareEq
-from pyrung.core.crossing import Eq
+from pyrung.core.condition import (
+    AllCondition,
+    AnyCondition,
+    CompareEq,
+    CompareGe,
+    CompareGt,
+    CompareLe,
+    CompareLt,
+    CompareNe,
+)
+from pyrung.core.crossing import Cmp, Eq
 from pyrung.core.harness import Harness
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.instruction.timers import OnDelayInstruction
@@ -543,6 +553,53 @@ class TestPilotRungs:
         plc.patch({"Scope": True})
         plc.step()
         assert guard.evaluate(ScanContext(plc.state)) is False
+
+    def test_route_constraint_lowers_to_runtime_comparison(self):
+        Value = Int("ConstraintValue")
+        with Program() as prog:
+            with Rung():
+                copy(0, Value)
+
+        plc = PLC(prog, dt=0.010)
+        condition = _constraint_condition(plc, Cmp(Value.name, ">=", 50))
+
+        assert isinstance(condition, CompareGe)
+        assert condition.tag is Value
+        assert condition.value == 50
+
+    @pytest.mark.parametrize(
+        ("op", "condition_type"),
+        [
+            ("==", CompareEq),
+            ("!=", CompareNe),
+            ("<", CompareLt),
+            ("<=", CompareLe),
+            (">", CompareGt),
+            (">=", CompareGe),
+        ],
+    )
+    def test_route_constraint_supports_up_and_down_boundaries(self, op, condition_type):
+        Value = Int(f"ConstraintValue_{condition_type.__name__}")
+        with Program() as prog:
+            with Rung():
+                copy(0, Value)
+
+        condition = _constraint_condition(PLC(prog), Cmp(Value.name, op, 50))
+
+        assert isinstance(condition, condition_type)
+
+    def test_multivalue_equality_and_its_inverse_preserve_set_semantics(self):
+        prog, _In, Scope = _scoped_input_program()
+        plc = PLC(prog, dt=0.010)
+        constraint = Eq(Scope.name, frozenset({True, False}))
+
+        direct = _constraint_condition(plc, constraint)
+        inverse = _constraint_condition(plc, constraint, unresolved=True)
+
+        assert isinstance(direct, AnyCondition)
+        assert all(isinstance(term, CompareEq) for term in direct.conditions)
+        assert isinstance(inverse, AllCondition)
+        assert all(isinstance(term, CompareNe) for term in inverse.conditions)
 
 
 def _single_input_program():

@@ -345,15 +345,8 @@ def cycle_fold_until(
     """
     from pyrung.core.fold import (
         _acc_totals,
-        _do_fold,
         _harness_nearest_scan,
-        _mark_inert_soft,
-        _nearest_acc_crossing,
-        _nearest_mod_flip,
-        _runtime_soft_clocks,
-        _scans_to_clock_edge,
-        _visible_items,
-        _visible_items_match,
+        _OrdinaryFoldStrategy,
         fold_run_until,
     )
 
@@ -430,14 +423,7 @@ def cycle_fold_until(
     # Accumulators stay in — they are the monotone coordinates.
     ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
     significant_keys = frozenset(plc.state.tags) - ignore
-    ordinary_exclude = (
-        fold_ctx.acc_names
-        | fold_ctx.profile_fb_names
-        | fold_ctx.churn_excluded
-        | fold_ctx.modwrap_names
-        | fold_ctx.mirror_names
-        | fold_ctx.frozen_writes
-    )
+    ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons)
     ring: list[Mapping[str, Any]] = []
     ring_cap = max_period * (min_repeats + 2) + 4
     real_scans = 0
@@ -470,11 +456,7 @@ def cycle_fold_until(
         for registration in getattr(plc, "_monitors_by_id", {}).values()
     )
     ordinary_eligible = not active_scan_callbacks
-    kernel_budget = bool(
-        plc._synthesis is not None and getattr(plc._synthesis, "holds", ())
-    )
-    inert_soft: set[str] = set()
-    inert_run: dict[str, int] = {}
+    kernel_budget = bool(plc._synthesis is not None and getattr(plc._synthesis, "holds", ()))
     start_scan = plc.state.scan_id
 
     def _finish(reached: bool) -> bool:
@@ -512,13 +494,8 @@ def cycle_fold_until(
         return used < budget
 
     while _within_budget():
-        probe_ordinary = ordinary_eligible and (
-            since_ordinary_probe >= ordinary_probe_every - 1
-        )
-        if probe_ordinary:
-            before_tot = _acc_totals(plc._state, fold_ctx.sources)
-            before_vis = _visible_items(plc._state, ordinary_exclude)
-            before_ts = plc._state.timestamp
+        probe_ordinary = ordinary_eligible and (since_ordinary_probe >= ordinary_probe_every - 1)
+        ordinary_probe = ordinary.capture(plc) if probe_ordinary else None
         plc._consume_pause_request()
         plc._run_single_scan(consume_pause_request=False)
         real_scans += 1
@@ -530,67 +507,24 @@ def cycle_fold_until(
         # Layer 1: the ordinary plateau/crossing proof.  Probe periodically so
         # an active cycle does not pay for a full-tag comparison on every scan.
         # A failed probe still supplies a genuine scan to the cycle observer.
-        if probe_ordinary:
-            if _visible_items_match(plc._state, before_vis, ordinary_exclude):
-                promoted = _runtime_soft_clocks(fold_ctx, plc._state)
-                _mark_inert_soft(
-                    fold_ctx,
-                    inert_soft,
-                    inert_run,
-                    before_ts,
-                    plc._state.timestamp,
-                    promoted,
-                )
-                after_tot = _acc_totals(plc._state, fold_ctx.sources)
-                acc_scans = _nearest_acc_crossing(
-                    fold_ctx,
-                    before_tot,
-                    after_tot,
-                    plc._state,
-                    extra_comparisons,
-                )
-                mod_scans = _nearest_mod_flip(fold_ctx, plc._state, extra_comparisons)
-                candidates = [n for n in (acc_scans, mod_scans) if n is not None]
-                skip = min(candidates) - 1 if candidates else None
-
-                harness_scan = _harness_nearest_scan(plc)
-                if harness_scan is not None:
-                    gap = harness_scan - plc._state.scan_id - 1
-                    if gap >= 0:
-                        skip = min(skip, gap) if skip is not None else gap
-
-                clock_gap = _scans_to_clock_edge(
-                    fold_ctx,
-                    plc._state,
-                    frozenset(inert_soft),
-                    promoted,
-                )
-                if clock_gap is not None:
-                    skip = min(skip, clock_gap) if skip is not None else clock_gap
-
-                logical_room = (
-                    None if kernel_budget else budget - (plc.state.scan_id - start_scan)
-                )
-                if skip is not None and logical_room is not None:
-                    skip = min(skip, logical_room)
-                if (
-                    skip is not None
-                    and skip >= ordinary_min_skip
-                    and (not kernel_budget or real_scans < budget)
-                ):
-                    _do_fold(plc, skip, fold_ctx, before_tot, after_tot)
-                    real_scans += 1
-                    folds += 1
-                    ordinary_folds += 1
-                    ring.clear()
-                    since_detect = 0
-                    paused = plc._consume_pause_request()
-                    if predicate(plc.state) or paused:
-                        return _finish(bool(predicate(plc.state)))
-                    continue
-            else:
-                inert_soft.clear()
-                inert_run.clear()
+        if ordinary_probe is not None and (not kernel_budget or real_scans < budget):
+            logical_room = None if kernel_budget else budget - (plc.state.scan_id - start_scan)
+            advance = ordinary.try_fold(
+                plc,
+                ordinary_probe,
+                max_skip=logical_room,
+                min_skip=ordinary_min_skip,
+            )
+            if advance is not None:
+                real_scans += advance.kernel_scans
+                folds += 1
+                ordinary_folds += 1
+                ring.clear()
+                since_detect = 0
+                paused = plc._consume_pause_request()
+                if predicate(plc.state) or paused:
+                    return _finish(bool(predicate(plc.state)))
+                continue
 
         # SystemState tag maps are immutable persistent maps. Retain them
         # directly and let the detector read only the precomputed significant

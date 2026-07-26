@@ -42,7 +42,7 @@ from pyrung.core.analysis.pilot.coast import (
     value_bump,
 )
 from pyrung.core.analysis.pilot.steer import _settle_cone
-from pyrung.core.condition import AllCondition, CompareEq, CompareGe
+from pyrung.core.condition import AllCondition, AnyCondition, CompareEq, CompareGe, CompareNe
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -463,6 +463,75 @@ class TestPredicateBump:
 
         landing = _step_until(manual, lambda s: (s.tags.get("Temp") or 0) >= threshold)
         assert receipt.end_scan == landing
+
+    def test_equivalent_condition_makes_relational_target_foldable(self):
+        plc = PLC(_counter_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        acc = plc._known_tags_by_name["Counter_Acc"]
+        threshold = 700
+        bump = predicate_bump(
+            "target",
+            TARGET,
+            lambda s: (s.tags.get(acc.name) or 0) >= threshold,
+            condition=CompareGe(acc, threshold),
+            watched=(acc.name,),
+        )
+        session = CoastSession(plc)
+
+        receipt = session.seek([bump], budget=1000)
+
+        assert receipt.reached
+        assert plc.state.tags[acc.name] == threshold
+        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert receipt.kernel_scans <= 10
+
+
+class TestPenCondition:
+    def test_pen_compiles_current_baselines_as_any_tag_changed(self):
+        plc = PLC(_role_program(), dt=0.010)
+        session = CoastSession(plc)
+        session.arm_pens(("State", "Enable"))
+
+        bump = session._pen_bump()
+
+        assert isinstance(bump.condition, AnyCondition)
+        assert all(isinstance(term, CompareNe) for term in bump.condition.conditions)
+        assert {(term.tag.name, term.value) for term in bump.condition.conditions} == {
+            ("State", plc.state.tags["State"]),
+            ("Enable", plc.state.tags["Enable"]),
+        }
+
+    def test_pen_condition_rebuilds_after_rearm(self):
+        plc = PLC(_role_program(), dt=0.010)
+        session = CoastSession(plc)
+        session.arm_pens(("State",))
+        first = session._pen_bump()
+
+        plc.patch({"State": 9})
+        plc.step()
+        session.note_pens()
+        second = session._pen_bump()
+
+        assert first.condition.conditions[0].value != second.condition.conditions[0].value
+        assert second.condition.conditions[0].value == 9
+
+    def test_rearmed_pen_keeps_exact_timeline_while_target_folds(self):
+        plc = PLC(_blink_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        session = CoastSession(plc)
+        session.arm_pens(("Blink_Done",))
+
+        receipt = session.seek(
+            [value_bump(plc, "target", TARGET, "Target", True)],
+            budget=5000,
+        )
+
+        pen_events = [event for event in receipt.events if event.kind == "pen"]
+        assert receipt.reached
+        assert len(pen_events) >= 2
+        assert [event.scan for event in pen_events] == sorted({event.scan for event in pen_events})
 
 
 # ---------------------------------------------------------------------------

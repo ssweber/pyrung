@@ -241,7 +241,19 @@ class CoastSession:
         def _pred(s: Any) -> bool:
             return any(not _values_match(held, s.tags.get(t)) for t, held in pens.items())
 
-        return Bump(name="pen", kind=PEN, predicate=_pred, watched=tuple(pens), terminal=False)
+        from pyrung.core.condition import AnyCondition
+
+        condition = _departure_condition(self.plc, dict(pens), {})
+        if condition is not None and not isinstance(condition, AnyCondition):
+            condition = AnyCondition(condition)
+        return Bump(
+            name="pen",
+            kind=PEN,
+            predicate=_pred,
+            condition=condition,
+            watched=tuple(pens),
+            terminal=False,
+        )
 
     def seek(self, bumps: Iterable[Bump], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal bump fires; return the receipt.
@@ -265,7 +277,6 @@ class CoastSession:
             for t in b.watched:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
-        crossings, protected, clock_reads, scan_derived = _fold_metadata(armed)
         real_scans = 0
         folds = 0
         timer_quanta_replayed = 0
@@ -289,15 +300,16 @@ class CoastSession:
             now_fired = [b for b in armed if b.predicate(state)] if judge_before_run else []
             judge_before_run = False
             if not now_fired:
-                live = list(armed)
+                # Rebuild the pen condition from its live baselines every time
+                # it re-arms; its predicate already reads the same mutable map.
+                live = [self._pen_bump() if b.kind == PEN else b for b in armed]
+                crossings, protected, clock_reads, scan_derived = _fold_metadata(live)
 
                 def _any_pred(s: Any, _live: list[Bump] = live) -> bool:
                     return any(b.predicate(s) for b in _live)
 
                 declared_predicate_reads = (
-                    protected | clock_reads
-                    if all(b.condition is not None for b in live)
-                    else None
+                    protected | clock_reads if all(b.condition is not None for b in live) else None
                 )
 
                 # NOTE(phase 4): like the legacy coasts (run_until semantics), a
@@ -649,9 +661,16 @@ def predicate_bump(
     kind: str,
     predicate: Callable[[Any], bool],
     *,
+    condition: Any = None,
     watched: tuple[str, ...] = (),
     terminal: bool = True,
 ) -> Bump:
-    """Opaque-callable bump (a relational ``reached_fn``): no fold metadata,
-    plateau guard + watched-tag protection only."""
-    return Bump(name=name, kind=kind, predicate=predicate, watched=watched, terminal=terminal)
+    """Callable bump with optional equivalent Condition fold metadata."""
+    return Bump(
+        name=name,
+        kind=kind,
+        predicate=predicate,
+        condition=condition,
+        watched=watched,
+        terminal=terminal,
+    )

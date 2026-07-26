@@ -143,6 +143,102 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
     return _atom_condition(plc, atom, unresolved=True)
 
 
+def _constraint_condition(
+    plc: PLC,
+    constraint: Any,
+    *,
+    unresolved: bool = False,
+) -> Any | None:
+    """Lower a crossing ``Constraint`` to an equivalent runtime condition.
+
+    The constraint algebra is the planner's data-only language; coasts and
+    folding need the executable Condition language so they can expose exact
+    reads and crossing thresholds.  Unsupported constraint shapes return
+    ``None`` and leave the caller's predicate authoritative.
+    """
+    from pyrung.core.condition import (
+        AllCondition,
+        AnyCondition,
+        CompareEq,
+        CompareGe,
+        CompareGt,
+        CompareLe,
+        CompareLt,
+        CompareNe,
+    )
+    from pyrung.core.crossing import Cmp, Eq
+
+    if not isinstance(constraint, (Eq, Cmp)):
+        return None
+
+    tag = plc._known_tags_by_name.get(constraint.tag)
+    if tag is None:
+        # Static block ranges are intentionally lazy in the runner's tag
+        # inventory.  An advance profile still owns concrete Tag objects for
+        # its channels, so use that authoritative channel metadata.
+        from pyrung.core.analysis.pilot.advance import build_advance_index
+
+        owner = (
+            build_advance_index(plc.program, getattr(plc, "_harness", None)).resolve(constraint.tag)
+            if plc.program is not None
+            else None
+        )
+        if owner is not None:
+            tag = next(
+                (channel for channel in owner.profile.channels if channel.name == constraint.tag),
+                None,
+            )
+    if tag is None:
+        return None
+
+    if isinstance(constraint, Eq):
+        if not constraint.values:
+            return None
+        compare = CompareNe if unresolved else CompareEq
+        terms = [compare(tag, value) for value in constraint.values]
+        if len(terms) == 1:
+            return terms[0]
+        # not(x in {a, b}) == x != a AND x != b
+        return AllCondition(*terms) if unresolved else AnyCondition(*terms)
+
+    if constraint.bound_is_tag:
+        operand = plc._known_tags_by_name.get(str(constraint.bound))
+        if operand is None:
+            return None
+    else:
+        operand = constraint.bound
+    direct = {
+        "==": CompareEq,
+        "!=": CompareNe,
+        "<": CompareLt,
+        "<=": CompareLe,
+        ">": CompareGt,
+        ">=": CompareGe,
+        "eq": CompareEq,
+        "ne": CompareNe,
+        "lt": CompareLt,
+        "le": CompareLe,
+        "gt": CompareGt,
+        "ge": CompareGe,
+    }
+    inverse = {
+        "==": CompareNe,
+        "!=": CompareEq,
+        "<": CompareGe,
+        "<=": CompareGt,
+        ">": CompareLe,
+        ">=": CompareLt,
+        "eq": CompareNe,
+        "ne": CompareEq,
+        "lt": CompareGe,
+        "le": CompareGt,
+        "gt": CompareLe,
+        "ge": CompareLt,
+    }
+    comparison = (inverse if unresolved else direct).get(constraint.op)
+    return comparison(tag, operand) if comparison is not None else None
+
+
 def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
     """Lower an atom to its stated or still-unresolved condition."""
     from pyrung.core.condition import (
@@ -156,48 +252,15 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
     from pyrung.core.crossing import Cmp, Eq
     from pyrung.core.tag import Bool
 
-    tag = plc._known_tags_by_name.get(atom.tag)
-    if tag is None and unresolved:
-        # Static block ranges are intentionally lazy in the runner's tag
-        # inventory. An advance profile still owns concrete Tag objects for its
-        # channels, so use that authoritative channel metadata for the guard.
-        from pyrung.core.analysis.pilot.advance import build_advance_index
+    if isinstance(atom, (Eq, Cmp)):
+        condition = _constraint_condition(plc, atom, unresolved=unresolved)
+        if condition is None:
+            raise ValueError(f"constraint {atom!r} cannot lower to a runtime condition")
+        return condition
 
-        owner = build_advance_index(plc.program, getattr(plc, "_harness", None)).resolve(atom.tag)
-        if owner is not None:
-            tag = next(
-                (channel for channel in owner.profile.channels if channel.name == atom.tag),
-                None,
-            )
+    tag = plc._known_tags_by_name.get(atom.tag)
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
-    if unresolved and isinstance(atom, Eq):
-        if len(atom.values) != 1:
-            raise ValueError("a multi-value advance boundary cannot scope a PilotRung")
-        return CompareNe(tag, next(iter(atom.values)))
-    if unresolved and isinstance(atom, Cmp):
-        operand = (
-            plc._known_tags_by_name.get(str(atom.bound), atom.bound)
-            if atom.bound_is_tag
-            else atom.bound
-        )
-        inverse = {
-            "==": CompareNe,
-            "!=": CompareEq,
-            "<": CompareGe,
-            "<=": CompareGt,
-            ">": CompareLe,
-            ">=": CompareLt,
-            "eq": CompareNe,
-            "ne": CompareEq,
-            "lt": CompareGe,
-            "le": CompareGt,
-            "gt": CompareLe,
-            "ge": CompareLt,
-        }.get(atom.op)
-        if inverse is None:
-            raise ValueError(f"advance predicate {atom.op!r} cannot scope a PilotRung")
-        return inverse(tag, operand)
 
     form = atom.form
     operand = (
@@ -515,6 +578,7 @@ def _coast_holding_state(
     *,
     budget: int = _ZOOM_BUDGET,
     reached_fn: Callable[[Any], bool] | None = None,
+    reached_condition: Any = None,
     session: Any = None,
 ) -> CoastReceipt:
     """Generalized terminal let-run: coast toward the *global* target while
@@ -551,9 +615,15 @@ def _coast_holding_state(
     # session's fold dispatch — the single mechanism for "hold heading and let
     # scans pass", identical for the live zoom and the investigation replay coast.
     if reached_fn is not None:
-        # Relational target: the predicate is the goal; opaque to the fold by
-        # design (plateau guard + watched-tag protection only).
-        target = predicate_bump("target", TARGET, reached_fn, watched=(target_tag,))
+        # Relational target: the callable remains authoritative while the
+        # equivalent Condition supplies exact fold reads and crossings.
+        target = predicate_bump(
+            "target",
+            TARGET,
+            reached_fn,
+            condition=reached_condition,
+            watched=(target_tag,),
+        )
     else:
         target = value_bump(plc, "target", TARGET, target_tag, target_value)
 
