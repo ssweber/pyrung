@@ -729,6 +729,29 @@ class TestCausalVerbs:
 
         assert _format_pilot_progress(event) == "  State 6 -> 7 after 20 scans.\n"
 
+    def test_how_progress_reports_folded_and_kernel_work(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _format_pilot_progress
+
+        event = PilotEvent(
+            "zoom_accepted",
+            3897,
+            {
+                "scan_before": 100,
+                "scan_after": 3897,
+                "zoom_channel_tag": "State",
+                "zoom_before_value": 6,
+                "zoom_actual_value": 7,
+                "coast_skipped_scans": 3300,
+                "coast_kernel_scans": 497,
+            },
+        )
+
+        assert (
+            _format_pilot_progress(event)
+            == "  State 6 -> 7 after 3797 scans (3,300 folded; 497 kernel).\n"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Prove (always / never)

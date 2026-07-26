@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
@@ -72,6 +74,59 @@ class TestDetectCycle:
         snaps = [{"q": i * i} for i in range(6)]
         assert detect_cycle(snaps) is None
 
+    def test_certified_timer_quantum_canonicalizes_subtraction_noise(self) -> None:
+        # The newest anchor is one ULP high.  Exact subtraction produces
+        # unequal deltas even though both are the same one-quantum timer step.
+        snaps = [{"acc": 3.0}, {"acc": 4.0}, {"acc": math.nextafter(5.0, math.inf)}]
+        assert (
+            detect_cycle(
+                snaps,
+                monotone_allowed=frozenset({"acc"}),
+                max_period=1,
+            )
+            is None
+        )
+
+        cycle = detect_cycle(
+            snaps,
+            monotone_allowed=frozenset({"acc"}),
+            monotone_quanta={"acc": 1.0},
+            max_period=1,
+        )
+
+        assert cycle == _Cycle(period=1, monotone={"acc": 1.0})
+
+    def test_timer_quantum_does_not_admit_real_delta_mismatch(self) -> None:
+        snaps = [{"acc": 3.0}, {"acc": 4.0}, {"acc": 5.0001}]
+        assert (
+            detect_cycle(
+                snaps,
+                monotone_allowed=frozenset({"acc"}),
+                monotone_quanta={"acc": 1.0},
+                max_period=1,
+            )
+            is None
+        )
+
+    def test_timer_quantum_accounts_for_accumulated_fractional_carry_drift(self) -> None:
+        # Real minute-timer anchors from the tumbler, 100 scans apart.  Their
+        # difference includes 100 rounds through the hidden float carry.
+        snaps = [{"acc": 0.0} for _ in range(201)]
+        snaps[0] = {"acc": 0.20166666666666969}
+        snaps[100] = {"acc": 0.2183333333333373}
+        snaps[200] = {"acc": 0.2350000000000049}
+        cycle = detect_cycle(
+            snaps,
+            monotone_allowed=frozenset({"acc"}),
+            monotone_quanta={"acc": 0.010 / 60.0},
+            period_multiple_of=100,
+            max_period=100,
+        )
+
+        assert cycle is not None
+        assert cycle.period == 100
+        assert cycle.monotone["acc"] == pytest.approx(1.0 / 60.0)
+
     def test_smallest_period_wins(self) -> None:
         # A period-2 cycle would also "fit" period 4; detector must return 2.
         snaps = [{"osc": i % 2, "acc": i} for i in range(12)]
@@ -136,6 +191,31 @@ def _install_oscillator(plc: PLC, tag: str):
 
 
 class TestCycleFoldBitEqual:
+    def test_ordinary_plateau_fold_is_layered_ahead_of_cycle_detection(self) -> None:
+        Soak = Timer.clone("LayeredSoak")
+        Done = Bool("LayeredDone")
+        with Program() as program:
+            with Rung():
+                on_delay(Soak, 5000, "ms")
+            with Rung(Soak.Done):
+                out(Done)
+
+        folded = PLC(program)
+        folded.step()
+        stats: dict[str, int] = {}
+        reached = cycle_fold_until(
+            folded,
+            lambda state: state.tags.get(Done.name) is True,
+            budget=10_000,
+            predicate_reads=frozenset((Done.name,)),
+            stats=stats,
+        )
+
+        assert reached is True
+        assert stats["ordinary_folds"] >= 1
+        assert stats["cycle_folds"] == 0
+        assert stats["skipped_scans"] > 0
+
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
         # Reference: pure scan-by-scan (fold=False), oscillation running.
         ref = PLC(_active_hold_soak())
@@ -218,6 +298,42 @@ class TestCycleFoldBitEqual:
         assert cf.state.scan_id == ref.state.scan_id
         assert stats.get("sterile_cycle", 0) == 0
         assert stats["folds"] >= 1
+
+    def test_minute_timer_roundoff_still_folds_bit_equal(self) -> None:
+        Osc = Bool("MinuteOsc", external=True)
+        Soak = Timer.clone("MinuteSoak")
+        Done = Bool("MinuteDone")
+        Mirror = Bool("MinuteMirror")
+        with Program() as program:
+            with Rung(Osc):
+                out(Mirror)
+            with Rung():
+                on_delay(Soak, 2, "min")
+            with Rung(Soak.Done):
+                out(Done)
+
+        ref = PLC(program, dt=0.010)
+        ref.step()
+        _install_oscillator(ref, Osc.name)
+        ref.run_until(Done, max_cycles=20_000, fold=False)
+
+        folded = PLC(program, dt=0.010)
+        folded.step()
+        _install_oscillator(folded, Osc.name)
+        stats: dict[str, int] = {}
+        reached = cycle_fold_until(
+            folded,
+            lambda state: state.tags.get(Done.name) is True,
+            budget=20_000,
+            predicate_reads=frozenset((Done.name,)),
+            stats=stats,
+        )
+
+        assert reached is True
+        assert folded.state.tags == ref.state.tags
+        assert folded.state.scan_id == ref.state.scan_id
+        assert stats["folds"] >= 1
+        assert stats["real_scans"] < 500
 
     def test_subtick_time_drum_uses_its_current_step_preset(self) -> None:
         Osc = Bool("DrumOsc", external=True)

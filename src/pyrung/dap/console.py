@@ -606,10 +606,14 @@ class _PilotProgressFormatter:
             scan_before = data.get("scan_before")
             scan_after = data.get("scan_after", event.scan)
             span = scan_after - scan_before if scan_before is not None else None
+            skipped = data.get("coast_skipped_scans")
+            kernel = data.get("coast_kernel_scans")
             channel = data.get("zoom_channel_tag")
             before = data.get("zoom_before_value")
             after = data.get("zoom_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
+            if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
+                elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
             prefix = " " if self._wait_open or self._retry_open else "  "
             wait_channel = self._wait_channel
             resuming = self._resuming_open

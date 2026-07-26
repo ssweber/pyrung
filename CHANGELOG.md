@@ -62,6 +62,7 @@
 - `why()` traces through subroutines, grouping output by subroutine with section headers and a blocked-step legend.
 - `simplified()` carries subroutine call guards into the resolved Boolean form.
 - `run_until()`/`run_for()` **fold by default** (`fold=True`). Folding skips scans where nothing interesting happens — a timer counting, a counter accumulating, a clock ticking — and jumps straight to the next threshold crossing. A 5 s timer at 10 ms/scan finishes in a handful of steps instead of 500. Bit-equal to scan-by-scan. Opt out with `fold=False`.
+- **Folded waits now treat PilotRungs as ordinary rungs.** `run_until(fold=True)` and Pilot coasts analyze the full synthesis-plus-program rung surface, try the ordinary plateau/crossing fold before CycleFold, preserve fractional timer carry across cycle jumps, and report folded versus kernel scans in streamed `how` progress.
 - `when(condition).do(callback)` — runs a callback every scan the condition holds without pausing. Pairs with `patch` for reactive inputs. `run_until(fold=True)` steps scan-by-scan while a `.do()` hook fires.
 - `fork(history_budget=math.inf)` disables cache eviction, keeping the fork's entire lifetime replay-addressable.
 - **Declarative feedback specs.** `Physical(profile=…)` takes `Ramp(up=, down=)`, `Approach(toward=, rate=)`, or `Pulse(on_dwell=, off_dwell=)` instead of a Python function. Each lowers to plant rungs reading `sys.dt`, so rates are scan-independent, fold for free, and plan like any other logic. Specs round-trip through Click nickname comments.

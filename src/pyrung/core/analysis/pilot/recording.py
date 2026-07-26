@@ -483,6 +483,7 @@ def _diff_snapshots(
 def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
     """Render a ``zoom_accepted`` event payload."""
     motion = trial.channel_motion
+    receipt = trial.coast_receipt
     landed = trial.fork_snap.get(motion.channel_tag) if motion.channel_tag is not None else None
     return {
         "new_key": trial.new_key,
@@ -499,6 +500,13 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
+        "coast_logical_scans": receipt.logical_scans if receipt is not None else None,
+        "coast_kernel_scans": receipt.kernel_scans if receipt is not None else None,
+        "coast_skipped_scans": receipt.skipped_scans if receipt is not None else None,
+        "coast_macro_folds": receipt.macro_folds if receipt is not None else None,
+        "coast_timer_quanta_replayed": (
+            receipt.timer_quanta_replayed if receipt is not None else None
+        ),
         "snapshot": trial.fork_snap,
     }
 

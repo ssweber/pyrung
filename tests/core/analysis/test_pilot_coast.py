@@ -471,6 +471,45 @@ class TestPredicateBump:
 
 
 class TestCyclefoldDispatch:
+    def test_ordinary_fold_analyzes_pilot_rung_crossings(self):
+        Input = Bool("HoldAwareInput", external=True)
+        Tmr = Timer.clone("HoldAwareTmr")
+        Output = Bool("HoldAwareOutput")
+        with Program() as program:
+            with Rung():
+                on_delay(Tmr, 1000, "ms")
+            with Rung(Input):
+                out(Output)
+
+        def install(plc: PLC) -> None:
+            timer = plc._known_tags_by_name[Tmr.Acc.name]
+            _set_rungs(
+                plc,
+                [
+                    PilotRung(Input.name, True, timer < 500),
+                    PilotRung(Input.name, False, timer >= 500),
+                ],
+            )
+
+        reference = PLC(program, dt=0.010)
+        install(reference)
+        reference.run_until(Tmr.Done, max_cycles=500, fold=False)
+
+        folded = PLC(program, dt=0.010)
+        install(folded)
+        session = CoastSession(folded, kind="letrun")
+        receipt = session.seek(
+            [value_bump(folded, "target", TARGET, Tmr.Done.name, True)],
+            budget=500,
+        )
+
+        assert receipt.reached
+        assert folded.state.scan_id == reference.state.scan_id
+        assert folded.state.tags[Input.name] == reference.state.tags[Input.name] is False
+        assert folded.state.tags[Output.name] == reference.state.tags[Output.name] is False
+        assert folded.state.tags[Tmr.Acc.name] == reference.state.tags[Tmr.Acc.name]
+        assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+
     def test_oscillating_holds_dispatch_to_cyclefold(self):
         plc = PLC(_free_timer_program(), dt=0.010)
         plc.step()

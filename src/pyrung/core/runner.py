@@ -931,16 +931,24 @@ class PLC:
             cache = self._fold_context_cache = {}
         ctx = cache.get(key)
         if ctx is None:
+            from pyrung.core.analysis.pdg import build_program_graph
             from pyrung.core.fold import _build_fold_context
-
-            pdg = self._ensure_pdg()
             from pyrung.core.program import Program
 
-            program = self._program
+            program = self._soft_exec_program()
             if program is None:
                 program = Program.__new__(Program)
                 program.rungs = list(self._logic)
                 program.subroutines = {}
+            # Folding executes the soft machine, not merely the deployable user
+            # program.  Synthesis plant + PilotRungs are ordinary leading rungs,
+            # so their reads, writes, guards, and timer crossings belong in the
+            # same proof surface.  Reuse the bare PDG only when no bracket exists.
+            pdg = (
+                self._ensure_pdg()
+                if program is self._program
+                else build_program_graph(program)
+            )
             ctx = _build_fold_context(
                 self,
                 pdg,

@@ -1031,6 +1031,37 @@ class TestUnreadAccumulatorFold:
 
 
 # ---------------------------------------------------------------------------
+# Affine accumulator-view projection
+# ---------------------------------------------------------------------------
+
+
+class TestAffineAccumulatorViews:
+    def test_negated_view_threshold_is_projected_to_source(self) -> None:
+        from pyrung.core.analysis.pdg import build_program_graph
+        from pyrung.core.fold import _build_fold_context
+
+        Enable = Bool("Enable", external=True)
+        Tmr = Timer.clone("Tmr")
+        Remaining = Int("Remaining")
+        Done = Bool("Done")
+
+        with Program() as program:
+            with Rung(Enable):
+                on_delay(Tmr, 1000, "ms")
+            with Rung():
+                calc(1000 - Tmr.Acc, Remaining)
+            with Rung(Remaining < 500):
+                out(Done)
+
+        plc = PLC(program)
+        context = _build_fold_context(plc, build_program_graph(program), program)
+
+        assert Remaining.name in context.mirror_names
+        assert ("gt", 500) in context.comparisons[Tmr.Acc.name]
+        assert Remaining.name not in context.comparisons
+
+
+# ---------------------------------------------------------------------------
 # Frozen-rung write exclusion
 # ---------------------------------------------------------------------------
 

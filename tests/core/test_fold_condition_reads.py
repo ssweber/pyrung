@@ -247,7 +247,51 @@ class TestProtectedChurnExcludedRead:
 
 
 # ---------------------------------------------------------------------------
-# 4. Condition-read system clock (no rung reads it)
+# 4. Scan-local terminal exclusion
+# ---------------------------------------------------------------------------
+
+
+class TestScanLocalTerminalExclusion:
+    def test_unread_unconditionally_redefined_output_is_excluded(self) -> None:
+        Terminal = Int("Terminal")
+        Gate = Bool("Gate", external=True)
+        with Program() as program:
+            with Rung():
+                calc(1, Terminal)
+            with Rung(Gate):
+                calc(2, Terminal)
+
+        plc = PLC(program)
+        context = plc._ensure_fold_context()
+
+        assert "Terminal" in context.churn_excluded
+
+    def test_unread_conditional_latch_is_not_excluded(self) -> None:
+        Terminal = Int("Terminal")
+        Gate = Bool("Gate", external=True)
+        with Program() as program:
+            with Rung(Gate):
+                calc(2, Terminal)
+
+        plc = PLC(program)
+        context = plc._ensure_fold_context()
+
+        assert "Terminal" not in context.churn_excluded
+
+    def test_predicate_visible_terminal_is_never_discardable(self) -> None:
+        Terminal = Int("Terminal")
+        with Program() as program:
+            with Rung():
+                calc(1, Terminal)
+
+        plc = PLC(program)
+        context = plc._ensure_fold_context(frozenset({Terminal.name}))
+
+        assert "Terminal" not in context.churn_excluded
+
+
+# ---------------------------------------------------------------------------
+# 5. Condition-read system clock (no rung reads it)
 # ---------------------------------------------------------------------------
 
 

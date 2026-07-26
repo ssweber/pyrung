@@ -60,6 +60,7 @@ class _AccSource:
     kind: str  # "up" (on/off-delay, count-up) | "down" (count-down)
     timed: bool  # True: time-based (dt knob).  False: per-scan (acc patch).
     bidir: bool = False  # CountUp with down_condition — delta sign varies at runtime
+    unit: Any = None  # TimeUnit for timed sources; None for counters / synthetic sources.
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ def _collect_acc_sources(program: Any) -> list[_AccSource]:
             kind=kind,
             timed=timed,
             bidir=bidir,
+            unit=getattr(instr, "unit", None) if timed else None,
         )
     return list(out.values())
 
@@ -257,8 +259,12 @@ def _match_affine_selfcalc(expr: Any, tag: str) -> tuple[int, int | None] | None
     return None
 
 
-def _match_affine_of(expr: Any) -> tuple[str, int] | None:
-    """Match ``tag ± c``; return ``(tag_name, c)`` or ``None``."""
+def _match_affine_of(expr: Any) -> tuple[str, int, int] | None:
+    """Match ``scale * tag + offset`` for ``scale`` in ``{-1, +1}``.
+
+    The supported surface is deliberately small and exact: a bare tag,
+    ``tag ± literal``, ``literal + tag``, or ``literal - tag``.
+    """
     from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr
 
     def lit(e: Any) -> int | None:
@@ -271,6 +277,9 @@ def _match_affine_of(expr: Any) -> tuple[str, int] | None:
     def name(e: Any) -> str | None:
         return getattr(e.tag, "name", None) if isinstance(e, TagExpr) else None
 
+    direct = name(expr)
+    if direct is not None:
+        return (direct, 1, 0)
     if not isinstance(expr, BinaryExpr):
         return None
     if expr.symbol == "+":
@@ -278,11 +287,14 @@ def _match_affine_of(expr: Any) -> tuple[str, int] | None:
         if n is None or k is None:
             n, k = name(expr.right), lit(expr.left)
         if n is not None and k is not None:
-            return (n, k)
+            return (n, 1, k)
     elif expr.symbol == "-":
         n, k = name(expr.left), lit(expr.right)
         if n is not None and k is not None:
-            return (n, -k)
+            return (n, 1, -k)
+        n, k = name(expr.right), lit(expr.left)
+        if n is not None and k is not None:
+            return (n, -1, k)
     return None
 
 
@@ -402,6 +414,30 @@ def _unread_churn_tags(plc: PLC, pdg: ProgramGraph, program: Any) -> frozenset[s
         if _calc_self_referential(tag, pdg, program):
             out.add(tag)
     return frozenset(out)
+
+
+def _scan_local_terminal_tags(
+    plc: PLC,
+    pdg: ProgramGraph,
+    target_names: frozenset[str],
+) -> frozenset[str]:
+    """Unread outputs whose entry value is killed on every scan.
+
+    A merely unread tag is not automatically disposable: a conditional write
+    can latch a value produced only inside a skipped interval.  This narrower
+    class has no program readers and a proven unconditional first definition,
+    so every real landing scan reconstructs its exact value from the current
+    inputs.  Harness- and predicate-visible tags remain protected.
+    """
+    harness_names = _harness_referenced_names(plc)
+    return frozenset(
+        tag
+        for tag in pdg.writers_of
+        if tag not in harness_names
+        and tag not in target_names
+        and not pdg.all_readers_of.get(tag, frozenset())
+        and pdg.unconditional_write_before_read(tag)
+    )
 
 
 def _disjoint_churn_closures(
@@ -560,15 +596,15 @@ def _mirror_candidates(
     program: Any,
     target_names: frozenset[str],
     source_names: frozenset[str],
-) -> list[tuple[str, str, int]]:
-    """Structurally eligible acc mirrors: ``(mirror, source, k)``."""
+) -> list[tuple[str, str, int, int]]:
+    """Structurally eligible affine acc views: ``(view, source, scale, offset)``."""
     from pyrung.core.analysis.pdg import resolve_rung as _resolve_rung
     from pyrung.core.instruction.calc import CalcInstruction
     from pyrung.core.instruction.data_transfer import CopyInstruction
     from pyrung.core.tag import Tag
 
     harness_names = _harness_referenced_names(plc)
-    out: list[tuple[str, str, int]] = []
+    out: list[tuple[str, str, int, int]] = []
     for tag, writers in pdg.writers_of.items():
         if tag in harness_names or tag in target_names or tag in source_names:
             continue
@@ -583,13 +619,13 @@ def _mirror_candidates(
         ro = _resolve_rung(program, node)
         if ro is None:
             continue
-        matched: tuple[str, int] | None = None
+        matched: tuple[str, int, int] | None = None
         n_writers = 0
         for instr in ro._instructions:
             if isinstance(instr, CopyInstruction) and getattr(instr.dest, "name", None) == tag:
                 n_writers += 1
                 if isinstance(instr.source, Tag) and instr.convert is None and not instr.oneshot:
-                    matched = (instr.source.name, 0)
+                    matched = (instr.source.name, 1, 0)
             elif isinstance(instr, CalcInstruction) and getattr(instr.dest, "name", None) == tag:
                 n_writers += 1
                 m = _match_affine_of(instr.expression)
@@ -597,7 +633,7 @@ def _mirror_candidates(
                     matched = m
         if n_writers != 1 or matched is None or matched[0] not in source_names:
             continue
-        out.append((tag, matched[0], matched[1]))
+        out.append((tag, matched[0], matched[1], matched[2]))
     return out
 
 
@@ -753,6 +789,13 @@ def _build_fold_context(
             journal.add_note(
                 "fold: unread churn excluded from plateau guard: " + ", ".join(sorted(unread))
             )
+        terminals = _scan_local_terminal_tags(plc, pdg, target_names) - acc_names
+        churn_excluded |= terminals
+        if terminals and journal is not None:
+            journal.add_note(
+                "fold: scan-local terminal outputs excluded from plateau guard: "
+                + ", ".join(sorted(terminals))
+            )
 
     if advice is None or advice.has("fold_disjoint_churn"):
         disjoint = _disjoint_churn_closures(plc, pdg, program, target_names, skip_roots=unread)
@@ -799,7 +842,7 @@ def _build_fold_context(
                 mod_period = 4096
                 break
 
-    mirror_cands: list[tuple[str, str, int]] = []
+    mirror_cands: list[tuple[str, str, int, int]] = []
     if advice is None or advice.has("fold_derived_crossings"):
         mirror_cands = _mirror_candidates(
             plc, pdg, program, target_names, acc_names | modwrap_names
@@ -807,7 +850,7 @@ def _build_fold_context(
 
     watch = acc_names | profile_fb_names | modwrap_names
     comparisons, read_tags = _scan_rung_reads(
-        pdg, program, watch | frozenset(m for m, _a, _k in mirror_cands)
+        pdg, program, watch | frozenset(m for m, _a, _scale, _offset in mirror_cands)
     )
 
     # sys.scan_clock_toggle (scan_id % 2) and sys.scan_counter (scan_id %
@@ -827,7 +870,15 @@ def _build_fold_context(
     mirror_names: set[str] = set()
     if mirror_cands:
         merged = dict(comparisons)
-        for m, a, k in mirror_cands:
+        reverse_form = {
+            "lt": "gt",
+            "le": "ge",
+            "gt": "lt",
+            "ge": "le",
+            "eq": "eq",
+            "ne": "ne",
+        }
+        for m, a, scale, offset in mirror_cands:
             cmps = merged.get(m, ())
             (writer_ri,) = pdg.writers_of[m]
             if any(
@@ -835,13 +886,18 @@ def _build_fold_context(
             ) or not _mirror_reads_are_simple(m, pdg, program, writer_ri):
                 merged.pop(m, None)
                 continue
-            merged[a] = merged.get(a, ()) + tuple((f, t - k) for f, t in cmps)
+            projected = (
+                tuple((f, t - offset) for f, t in cmps)
+                if scale == 1
+                else tuple((reverse_form[f], offset - t) for f, t in cmps)
+            )
+            merged[a] = merged.get(a, ()) + projected
             merged.pop(m, None)
             mirror_names.add(m)
         comparisons = merged
         if mirror_names and journal is not None:
             journal.add_note(
-                "fold: acc-mirror thresholds translated onto their sources: "
+                "fold: affine acc-view thresholds translated onto their sources: "
                 + ", ".join(sorted(mirror_names))
             )
 

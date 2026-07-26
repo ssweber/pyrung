@@ -110,6 +110,8 @@ class CoastReceipt:
     # Exact accumulator destinations written by cycle folding, in execution
     # order. These are the manual edits needed to reproduce each jump ahead.
     advances: tuple[tuple[str, Any], ...] = ()
+    # Cheap scalar timer carry updates replayed in lieu of full kernel scans.
+    timer_quanta_replayed: int = 0
 
     @property
     def reached(self) -> bool:
@@ -244,11 +246,10 @@ class CoastSession:
     def seek(self, bumps: Iterable[Bump], *, budget: int) -> CoastReceipt:
         """Coast until the first armed terminal bump fires; return the receipt.
 
-        Uses ``cycle_fold_until`` when active oscillating holds are present
-        (the pet-timer soak must run every scan; the dt-knob would over-advance
-        the very timer the oscillation keeps reset) and the runner fold
-        otherwise — the same dispatch the legacy coasts used, now with the
-        bump vector's fold metadata threaded into both engines.
+        Uses the layered ``cycle_fold_until`` engine for every seek.  It tries
+        the ordinary plateau/crossing fold first (over the full synthesis +
+        program rung surface), then adds a cycle-preserving macro skip when
+        changing inner state defeats the ordinary plateau proof.
         """
         plc = self.plc
         armed: list[Bump] = list(bumps)
@@ -265,9 +266,9 @@ class CoastSession:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
         crossings, protected, clock_reads, scan_derived = _fold_metadata(armed)
-        active_rungs = bool(plc._synthesis is not None and plc._synthesis.holds)
         real_scans = 0
         folds = 0
+        timer_quanta_replayed = 0
         advances: list[tuple[str, Any]] = []
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
@@ -293,45 +294,37 @@ class CoastSession:
                 def _any_pred(s: Any, _live: list[Bump] = live) -> bool:
                     return any(b.predicate(s) for b in _live)
 
+                declared_predicate_reads = (
+                    protected | clock_reads
+                    if all(b.condition is not None for b in live)
+                    else None
+                )
+
                 # NOTE(phase 4): like the legacy coasts (run_until semantics), a
                 # seek always advances at least one scan before judging — a bump
                 # already true at arm time lands after one scan, not zero.  The
                 # immediate-landing rule ("a target stops the scan it holds")
                 # arrives with the golden regeneration in the verify/outcome phase.
-                if active_rungs:
-                    from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
+                from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
-                    stats: dict[str, int] = {}
-                    cycle_fold_until(
-                        plc,
-                        _any_pred,
-                        budget=remaining,
-                        fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
-                        extra_comparisons=crossings,
-                        predicate_reads=protected | clock_reads,
-                        stats=stats,
-                        advances=advances,
-                    )
-                    real_scans += stats.get("real_scans", 0)
-                    folds += stats.get("folds", 0)
-                    self._last_cyclefold_stats = stats
-                    # A certified sterile cycle is a *proof* no armed bump can
-                    # ever fire — the strongest form of timeout, arrived early.
-                    sterile = bool(stats.get("sterile_cycle"))
-                else:
-                    from pyrung.core.fold import fold_run_until
-
-                    stats = {}
-                    fold_run_until(
-                        plc,
-                        _any_pred,
-                        max_cycles=remaining,
-                        fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
-                        extra_comparisons=crossings,
-                        stats=stats,
-                    )
-                    real_scans += stats.get("kernel_scans", 0)
-                    folds += stats.get("macro_folds", 0)
+                stats: dict[str, int] = {}
+                cycle_fold_until(
+                    plc,
+                    _any_pred,
+                    budget=remaining,
+                    fold_ctx=plc._ensure_fold_context(protected, clock_reads, scan_derived),
+                    extra_comparisons=crossings,
+                    predicate_reads=declared_predicate_reads,
+                    stats=stats,
+                    advances=advances,
+                )
+                real_scans += stats.get("real_scans", 0)
+                folds += stats.get("folds", 0)
+                timer_quanta_replayed += stats.get("timer_quanta_replayed", 0)
+                self._last_cyclefold_stats = stats
+                # A certified sterile cycle is a *proof* no armed bump can
+                # ever fire — the strongest form of timeout, arrived early.
+                sterile = bool(stats.get("sterile_cycle"))
 
                 state = plc.state
                 now_fired = [b for b in armed if b.predicate(state)]
@@ -403,11 +396,13 @@ class CoastSession:
             real_scans=real_scans,
             folds=folds,
             advances=tuple(advances),
+            timer_quanta_replayed=timer_quanta_replayed,
         )
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "coast %s: %s at scan %d "
-                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds) "
+                "(%d logical scans, %d kernel scans, %d skipped, %d macro folds, "
+                "%d timer quanta replayed) "
                 "fired=%s%s",
                 self.kind,
                 receipt.stop_reason,
@@ -416,6 +411,7 @@ class CoastSession:
                 receipt.kernel_scans,
                 receipt.skipped_scans,
                 receipt.macro_folds,
+                receipt.timer_quanta_replayed,
                 ",".join(receipt.fired) or "-",
                 f" cyclefold={self._last_cyclefold_stats}" if self._last_cyclefold_stats else "",
             )
@@ -470,6 +466,7 @@ class CoastSession:
         stop_reason = "timeout"
         real_scans = 0
         folds = 0
+        timer_quanta_replayed = 0
         while True:
             remaining = cap - (plc.state.scan_id - start_scan)
             if remaining <= 0:
@@ -481,6 +478,7 @@ class CoastSession:
             )
             real_scans += receipt.real_scans
             folds += receipt.folds
+            timer_quanta_replayed += receipt.timer_quanta_replayed
             if receipt.stop_reason == "timeout":
                 # Silent through the whole confirmation window: landed.
                 stop_reason = "quiescent"
@@ -498,6 +496,7 @@ class CoastSession:
             budget=cap,
             real_scans=real_scans,
             folds=folds,
+            timer_quanta_replayed=timer_quanta_replayed,
         )
 
     def settle(

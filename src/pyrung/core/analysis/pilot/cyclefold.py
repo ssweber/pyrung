@@ -5,12 +5,14 @@ coordinate. ``cycle_fold_until`` advances that coordinate by whole periods,
 then executes one real period at normal scan time so cyclic tags retain their
 phase and time-dependent resets still run.
 
-If the period, monotone coordinate, or safe crossing cannot be established, the
-module declines to fold and the caller continues with ordinary scans.
+The coast loop first tries the ordinary plateau/crossing proof, then adds a
+cycle-preserving macro when changing inner state defeats that proof.  If
+neither can establish a safe jump, it continues with ordinary scans.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeGuard
@@ -41,10 +43,81 @@ def _is_number(v: Any) -> TypeGuard[int | float]:
     return not isinstance(v, bool) and isinstance(v, (int, float))
 
 
+def _canonical_quantized_delta(nums: Sequence[float], quantum: float) -> float | None:
+    """Canonicalize deltas that differ only by timer-arithmetic roundoff.
+
+    This is not a generic closeness check: every observed delta must be the
+    same nonzero integer number of a statically certified timer quantum, with
+    only the ULP error from the timer's per-tick carry recurrence and anchor
+    subtraction.
+    """
+    if not math.isfinite(quantum) or quantum <= 0 or len(nums) < 2:
+        return None
+    deltas = [nums[i] - nums[i + 1] for i in range(len(nums) - 1)]
+    if any(not math.isfinite(delta) for delta in deltas):
+        return None
+    ticks = round(deltas[0] / quantum)
+    if ticks == 0:
+        return None
+    expected = ticks * quantum
+    for i, delta in enumerate(deltas):
+        if round(delta / quantum) != ticks:
+            return None
+        # The anchors include the rounding history of ``ticks`` per-scan carry
+        # additions.  Bound that certified recurrence, plus storing and
+        # subtracting the anchors, instead of applying a generic epsilon.
+        local_ulp = max(
+            math.ulp(nums[i]),
+            math.ulp(nums[i + 1]),
+            math.ulp(expected),
+            math.ulp(quantum),
+        )
+        tolerance = 2.0 * (abs(ticks) + 4) * local_ulp
+        if abs(delta - expected) > tolerance:
+            return None
+    return expected
+
+
+def _split_timed_total(total: float) -> tuple[int, float]:
+    """Split a timer total, snapping only representational integer fuzz."""
+    nearest = round(total)
+    tolerance = 16.0 * (math.ulp(total) + math.ulp(float(nearest)))
+    if abs(total - nearest) <= tolerance:
+        total = float(nearest)
+    whole = math.floor(total)
+    return whole, total - whole
+
+
+def _replay_timed_quanta(
+    whole: int,
+    fraction: float,
+    quantum: float,
+    ticks: int,
+) -> tuple[int, float]:
+    """Replay only the timer carry recurrence for exact current-kernel parity.
+
+    Cycle certification uses a canonical mathematical quantum, but the timer
+    kernel stores a binary-float fractional carry.  Replaying this two-scalar
+    recurrence is vastly cheaper than executing skipped PLC scans and preserves
+    the kernel's exact crossing scan until that representation is changed.
+    """
+    if ticks <= 0:
+        return whole, fraction
+    if fraction == 0.0 and quantum.is_integer():
+        return whole + int(quantum) * ticks, 0.0
+    for _ in range(ticks):
+        units = quantum + fraction
+        integer_units = int(units)
+        whole += integer_units
+        fraction = units - integer_units
+    return whole, fraction
+
+
 def detect_cycle(
     snaps: Sequence[Mapping[str, Any]],
     *,
     monotone_allowed: frozenset[str] | None = None,
+    monotone_quanta: Mapping[str, float] | None = None,
     significant_keys: frozenset[str] | None = None,
     period_multiple_of: int = 1,
     max_period: int = 64,
@@ -76,6 +149,11 @@ def detect_cycle(
     failing the boundary-stable test until the window spans a full cycle.  ``None``
     trusts any constant-delta numeric — for tests / callers that have already
     bounded the input — and is **not** safe against modular tags.
+
+    *monotone_quanta* gives the per-scan quantum for certified timed
+    accumulators.  Those coordinates accept subtraction noise only when every
+    anchor delta is the same nonzero integer number of that quantum.  All other
+    numeric coordinates retain exact delta equality.
 
     *significant_keys* restricts classification to a fixed, caller-proven tag
     surface.  This lets callers retain immutable full-state snapshots instead
@@ -127,10 +205,17 @@ def detect_cycle(
                 break
             # Forward-in-time per-period deltas (newer − older) across anchor pairs.
             deltas = [nums[r] - nums[r + 1] for r in range(min_repeats)]
-            d0 = deltas[0]
-            if d0 == 0 or any(d != d0 for d in deltas):
-                ok = False
-                break
+            quantum = monotone_quanta.get(key) if monotone_quanta is not None else None
+            if quantum is not None:
+                d0 = _canonical_quantized_delta(nums, quantum)
+                if d0 is None:
+                    ok = False
+                    break
+            else:
+                d0 = deltas[0]
+                if d0 == 0 or any(d != d0 for d in deltas):
+                    ok = False
+                    break
             monotone[key] = d0
 
         if ok:
@@ -235,8 +320,11 @@ def cycle_fold_until(
     and each monotone accumulator's invariant ``acc == rate·(scan_id − start)`` is
     preserved because the patch and the scan_id stamp advance in lockstep.
 
-    *budget* counts **real** scans (the fold spends almost none — a soak of any
-    length costs only the warm-up + one landing period).  Returns whether
+    With active synthesis holds, *budget* counts kernel scans: a long proved
+    coast may advance far more logical scan IDs without exhausting Pilot's
+    work budget.  Without active holds it counts logical scans, matching
+    ordinary ``run_until(max_cycles=...)`` and confirmation-window policy.
+    Returns whether
     *predicate* holds at exit; ``stats`` (if given) collects logical scans,
     kernel scans, macro folds, skipped scans, and ``sterile_cycle`` for
     diagnostics.  The original ``real_scans`` / ``folds`` keys remain as
@@ -247,17 +335,27 @@ def cycle_fold_until(
     deterministic machine with held inputs loops forever, so no predicate over
     ring-covered tags can ever flip.  When the predicate's reads are all
     ring-covered and the harness has nothing scheduled or actively driving,
-    the coast stops immediately (``stats["sterile_cycle"] = 1``) instead of
-    burning the rest of its budget proving nothing new.
+    the coast macro-advances the remaining whole periods
+    (``stats["sterile_cycle"] = 1``) instead of executing them in the kernel.
 
     Soundness mirrors the runner fold: observe ≥ ``min_repeats`` periods before
     trusting the cycle, bound every jump at the nearest comparison/preset crossing,
     and re-detect after each landing (the ring is cleared, so a regime change forces
     fresh observation).  Fails closed everywhere it cannot certify a jump.
     """
-    import math
-
-    from pyrung.core.fold import _acc_totals, _harness_nearest_scan, fold_run_until
+    from pyrung.core.fold import (
+        _acc_totals,
+        _do_fold,
+        _harness_nearest_scan,
+        _mark_inert_soft,
+        _nearest_acc_crossing,
+        _nearest_mod_flip,
+        _runtime_soft_clocks,
+        _scans_to_clock_edge,
+        _visible_items,
+        _visible_items_match,
+        fold_run_until,
+    )
 
     if fold_ctx is None:
         fold_ctx = plc._ensure_fold_context()
@@ -318,17 +416,35 @@ def cycle_fold_until(
         return bool(predicate(plc.state))
     max_period = max(max_period, period_multiple_of * 4)
 
-    monotone_allowed = frozenset(s.acc_name for s in fold_ctx.sources if s.kind == "up")
+    monotone_allowed = frozenset(
+        s.acc_name for s in fold_ctx.sources if s.kind == "up" and not s.bidir
+    )
+    monotone_quanta = {
+        source.acc_name: source.unit.dt_to_units(dt)
+        for source in fold_ctx.sources
+        if source.acc_name in monotone_allowed and source.timed and source.unit is not None
+    }
     # Classify over the runner fold's *significant* set: drop the tags it already
     # treats as don't-care for the plateau (resolved-on-read-driven frozen writes,
     # unread churn, harness feedback) so they don't spuriously break the cycle.
     # Accumulators stay in — they are the monotone coordinates.
     ignore = fold_ctx.frozen_writes | fold_ctx.churn_excluded | fold_ctx.profile_fb_names
     significant_keys = frozenset(plc.state.tags) - ignore
+    ordinary_exclude = (
+        fold_ctx.acc_names
+        | fold_ctx.profile_fb_names
+        | fold_ctx.churn_excluded
+        | fold_ctx.modwrap_names
+        | fold_ctx.mirror_names
+        | fold_ctx.frozen_writes
+    )
     ring: list[Mapping[str, Any]] = []
     ring_cap = max_period * (min_repeats + 2) + 4
     real_scans = 0
     folds = 0
+    ordinary_folds = 0
+    cycle_folds = 0
+    timer_quanta_replayed = 0
     # The sterile proof holds only when every tag the predicate reads is
     # covered by the ring (an excluded tag could change without breaking the
     # observed cycle).  System clocks are safe uncovered: the period is
@@ -340,6 +456,25 @@ def cycle_fold_until(
     # re-observation window.  Every scan would only certify ≤7 scans sooner.
     detect_every = 8
     since_detect = 0
+    ordinary_probe_every = 8
+    ordinary_min_skip = ordinary_probe_every
+    # First probe after one detector cadence: initial hold/output transients
+    # settle before the plateau test, and ordinary arbitration runs immediately
+    # before the first cycle-certification attempt on that same scan.
+    since_ordinary_probe = 0
+    active_scan_callbacks = any(
+        not registration.removed and registration.enabled
+        for registration in getattr(plc, "_breakpoints_by_id", {}).values()
+    ) or any(
+        not registration.removed and registration.enabled
+        for registration in getattr(plc, "_monitors_by_id", {}).values()
+    )
+    ordinary_eligible = not active_scan_callbacks
+    kernel_budget = bool(
+        plc._synthesis is not None and getattr(plc._synthesis, "holds", ())
+    )
+    inert_soft: set[str] = set()
+    inert_run: dict[str, int] = {}
     start_scan = plc.state.scan_id
 
     def _finish(reached: bool) -> bool:
@@ -348,9 +483,12 @@ def cycle_fold_until(
             stats["logical_scans"] = logical_scans
             stats["kernel_scans"] = real_scans
             stats["macro_folds"] = folds
+            stats["ordinary_folds"] = ordinary_folds
+            stats["cycle_folds"] = cycle_folds
             stats["skipped_scans"] = logical_scans - real_scans
             stats["scan_by_scan_counterfactual"] = logical_scans
             stats["saved_kernel_scans"] = logical_scans - real_scans
+            stats["timer_quanta_replayed"] = timer_quanta_replayed
             stats["real_scans"] = real_scans
             stats["folds"] = folds
         return reached
@@ -369,13 +507,90 @@ def cycle_fold_until(
                 return False  # an analog coupling is still driving its ramp
         return True
 
-    while real_scans < budget:
+    def _within_budget() -> bool:
+        used = real_scans if kernel_budget else plc.state.scan_id - start_scan
+        return used < budget
+
+    while _within_budget():
+        probe_ordinary = ordinary_eligible and (
+            since_ordinary_probe >= ordinary_probe_every - 1
+        )
+        if probe_ordinary:
+            before_tot = _acc_totals(plc._state, fold_ctx.sources)
+            before_vis = _visible_items(plc._state, ordinary_exclude)
+            before_ts = plc._state.timestamp
         plc._consume_pause_request()
         plc._run_single_scan(consume_pause_request=False)
         real_scans += 1
+        since_ordinary_probe = 0 if probe_ordinary else since_ordinary_probe + 1
         paused = plc._consume_pause_request()
         if predicate(plc.state) or paused:
             return _finish(bool(predicate(plc.state)))
+
+        # Layer 1: the ordinary plateau/crossing proof.  Probe periodically so
+        # an active cycle does not pay for a full-tag comparison on every scan.
+        # A failed probe still supplies a genuine scan to the cycle observer.
+        if probe_ordinary:
+            if _visible_items_match(plc._state, before_vis, ordinary_exclude):
+                promoted = _runtime_soft_clocks(fold_ctx, plc._state)
+                _mark_inert_soft(
+                    fold_ctx,
+                    inert_soft,
+                    inert_run,
+                    before_ts,
+                    plc._state.timestamp,
+                    promoted,
+                )
+                after_tot = _acc_totals(plc._state, fold_ctx.sources)
+                acc_scans = _nearest_acc_crossing(
+                    fold_ctx,
+                    before_tot,
+                    after_tot,
+                    plc._state,
+                    extra_comparisons,
+                )
+                mod_scans = _nearest_mod_flip(fold_ctx, plc._state, extra_comparisons)
+                candidates = [n for n in (acc_scans, mod_scans) if n is not None]
+                skip = min(candidates) - 1 if candidates else None
+
+                harness_scan = _harness_nearest_scan(plc)
+                if harness_scan is not None:
+                    gap = harness_scan - plc._state.scan_id - 1
+                    if gap >= 0:
+                        skip = min(skip, gap) if skip is not None else gap
+
+                clock_gap = _scans_to_clock_edge(
+                    fold_ctx,
+                    plc._state,
+                    frozenset(inert_soft),
+                    promoted,
+                )
+                if clock_gap is not None:
+                    skip = min(skip, clock_gap) if skip is not None else clock_gap
+
+                logical_room = (
+                    None if kernel_budget else budget - (plc.state.scan_id - start_scan)
+                )
+                if skip is not None and logical_room is not None:
+                    skip = min(skip, logical_room)
+                if (
+                    skip is not None
+                    and skip >= ordinary_min_skip
+                    and (not kernel_budget or real_scans < budget)
+                ):
+                    _do_fold(plc, skip, fold_ctx, before_tot, after_tot)
+                    real_scans += 1
+                    folds += 1
+                    ordinary_folds += 1
+                    ring.clear()
+                    since_detect = 0
+                    paused = plc._consume_pause_request()
+                    if predicate(plc.state) or paused:
+                        return _finish(bool(predicate(plc.state)))
+                    continue
+            else:
+                inert_soft.clear()
+                inert_run.clear()
 
         # SystemState tag maps are immutable persistent maps. Retain them
         # directly and let the detector read only the precomputed significant
@@ -399,6 +614,7 @@ def cycle_fold_until(
         cyc = detect_cycle(
             ring,
             monotone_allowed=monotone_allowed,
+            monotone_quanta=monotone_quanta,
             significant_keys=significant_keys,
             period_multiple_of=period_multiple_of,
             max_period=max_period,
@@ -429,13 +645,24 @@ def cycle_fold_until(
             # read-frozen (every bound already crossed and receding), so
             # nothing observable can ever change.  If the predicate reads
             # only ring-covered tags and the harness has nothing scheduled
-            # or actively driving, this coast can never reach anything —
-            # stop now instead of burning the budget.
+            # or actively driving, this coast can never reach anything.  Spend
+            # the remaining logical budget by whole proved periods (preserving
+            # phase and inert accumulator state) rather than returning early:
+            # confirmation windows still require their scan IDs to elapse.
             if sterile_eligible and _harness_nearest_scan(plc) is None and _harness_quiet():
                 if stats is not None:
                     stats["sterile_cycle"] = 1
-                return _finish(False)
-            continue
+                if kernel_budget:
+                    return _finish(False)
+                logical_room = budget - (plc.state.scan_id - start_scan)
+                sterile_periods = logical_room // cyc.period
+                if sterile_periods >= 1:
+                    k = sterile_periods + 1
+                    live = 1
+                else:
+                    continue
+            else:
+                continue
 
         if k is None or k <= 1:
             if stats is not None:
@@ -446,6 +673,9 @@ def cycle_fold_until(
         # Fold whole periods only.  Bound by the crossing (k-1 periods) and by the
         # next scheduled harness feedback (a non-clock, non-comparison regime edge).
         periods_to_jump = k - 1
+        if not kernel_budget:
+            logical_room = budget - (plc.state.scan_id - start_scan)
+            periods_to_jump = min(periods_to_jump, max(0, logical_room // cyc.period))
         harness_scan = _harness_nearest_scan(plc)
         if harness_scan is not None:
             room = harness_scan - plc.state.scan_id - 1
@@ -464,10 +694,22 @@ def cycle_fold_until(
         for tag, delta in cyc.monotone.items():
             source = sources.get(tag)
             if source is not None and source.timed:
-                total = progress_now[tag] + delta * periods_to_jump
-                whole = int(total)
+                quantum = monotone_quanta.get(tag)
+                if quantum is not None:
+                    ticks_per_period = round(delta / quantum)
+                    ticks = ticks_per_period * periods_to_jump
+                    whole, fraction = _replay_timed_quanta(
+                        int(cur[tag]),
+                        float(plc._state.memory.get(f"_frac:{tag}", 0.0)),
+                        quantum,
+                        ticks,
+                    )
+                    timer_quanta_replayed += ticks
+                else:
+                    total = math.fsum((float(progress_now[tag]), delta * periods_to_jump))
+                    whole, fraction = _split_timed_total(total)
                 patches[tag] = whole
-                fractions[f"_frac:{tag}"] = total - whole
+                fractions[f"_frac:{tag}"] = fraction
             else:
                 patches[tag] = cur[tag] + round(delta * periods_to_jump)
         if advances is not None:
@@ -484,6 +726,7 @@ def cycle_fold_until(
             timestamp=plc._state.timestamp + jump_scans * dt,
         )
         folds += 1
+        cycle_folds += 1
         ring.clear()  # consecutive gap — re-observe before trusting the cycle again
 
     return _finish(bool(predicate(plc.state)))
