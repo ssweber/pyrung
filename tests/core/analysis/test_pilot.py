@@ -1610,13 +1610,13 @@ def test_compass_bfs_shortest_path():
     )
     assert changed
 
-    path = inf.find_path(tag, 0, 3)
+    path = inf.knowledge.find_path(tag, 0, 3)
     assert path == [action_d], f"BFS should find direct path, got {path}"
 
-    path_long = inf.find_path(tag, 0, 2)
+    path_long = inf.knowledge.find_path(tag, 0, 2)
     assert path_long == [action_a, action_b], f"Should find 2-step path, got {path_long}"
 
-    assert inf.find_path(tag, 0, 99) is None
+    assert inf.knowledge.find_path(tag, 0, 99) is None
 
 
 def test_compass_paths_include_wait_transitions():
@@ -1637,9 +1637,9 @@ def test_compass_paths_include_wait_transitions():
         )
     )
 
-    assert inf.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
-    assert inf.find_path(tag, 1, 6) == [WAIT, action_b]
-    assert inf.off_path_actions(tag, 1, 6) == {action_bad}
+    assert inf.knowledge.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
+    assert inf.knowledge.find_path(tag, 1, 6) == [WAIT, action_b]
+    assert inf.knowledge.off_path_actions(tag, 1, 6) == {action_bad}
 
 
 def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
@@ -1670,7 +1670,7 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
 
     available = {flat_probed, composite_probed, flat_unprobed, composite_unprobed}
 
-    result = inf.unprobed_actions(tag, from_val, available)
+    result = inf.knowledge.unprobed_actions(tag, from_val, available)
 
     # No exception, and the already-probed causes (flat or composite) are
     # excluded regardless of shape.
@@ -1682,7 +1682,7 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     assert result == [composite_unprobed, flat_unprobed]
 
     # Repeating the call is byte-for-byte the same — no ordering flakiness.
-    assert inf.unprobed_actions(tag, from_val, available) == result
+    assert inf.knowledge.unprobed_actions(tag, from_val, available) == result
 
 
 # upstream_candidates unit tests removed — function deleted with BFS search cut.
@@ -1750,7 +1750,9 @@ def test_single_calc_source_multi_tag_constant_base():
     """_single_calc_source hops through calc(CmdReg + Base, Pointer) when Base is constant."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _single_calc_source
+    from pyrung.core.analysis.pilot.static_expressions import (
+        single_calc_source as _single_calc_source,
+    )
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -1781,7 +1783,9 @@ def test_single_calc_source_multi_tag_constant_base():
 def test_single_calc_source_rejects_two_mutable_tags():
     """_single_calc_source rejects calc(A + B, Pointer) when both A and B are mutable."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _single_calc_source
+    from pyrung.core.analysis.pilot.static_expressions import (
+        single_calc_source as _single_calc_source,
+    )
 
     A = Int("A")
     B = Int("B")
@@ -1802,10 +1806,10 @@ def test_single_calc_source_rejects_two_mutable_tags():
 
 
 def test_invert_indirect_multi_tag_pointer():
-    """_invert_indirect follows calc(CmdReg + Base, Pointer) to CmdReg when Base is constant."""
+    """The tide-table inverter follows a constant-base pointer calc."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
-    from pyrung.core.analysis.pilot.trace import _invert_indirect
+    from pyrung.core.analysis.pilot.tide_tables import invert_indirect_copy
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
 
@@ -1845,7 +1849,7 @@ def test_invert_indirect_multi_tag_pointer():
             break
     assert ro is not None
 
-    result = _invert_indirect(ro, "Scratch", 3, snapshot, pdg, prog)
+    result = invert_indirect_copy(ro, "Scratch", 3, snapshot, pdg, prog)
     assert result is not None, (
         "_invert_indirect should invert through calc(CmdReg + Base) to find CmdReg values"
     )
@@ -1854,25 +1858,25 @@ def test_invert_indirect_multi_tag_pointer():
     assert 2 in vals, f"CmdReg=2 should produce ds[12]=3, got {vals}"
 
 
-def test_canonical_index_source_hops_constant_base_calc():
-    """evidence._canonical_index_source hops calc(CmdReg + Base, Pointer) to CmdReg.
+def test_route_table_model_hops_constant_base_calc_without_live_snapshot():
+    """The route-reading variant binds immutable defaults while hopping."""
+    from pyrung.click import ClickBlocks
+    from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
+    from pyrung.core.analysis.pilot.tide_tables import table_operand_from_copy
 
-    Regression for the divergent ``_single_calc_source``: evidence now shares the
-    trace (constant-tolerant) definition, so it hops through a calc that names a
-    constant (Base) beside the single mutable source (CmdReg), and binds Base to
-    its default so the address evaluator resolves without a live snapshot.
-    """
-    from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import _canonical_index_source
+    _x, _y, _c, _t, _ct, _sc, ds, *_rest = ClickBlocks()
 
     Base = Int("Base", default=10)
     CmdReg = Int("CmdReg")
     Pointer = Int("Pointer")
+    Scratch = Int("Scratch")
 
     @subroutine("ApplyMode")
     def apply_mode():
         with rung():
             calc(CmdReg + Base, Pointer)
+        with rung():
+            copy(ds[Pointer], Scratch)
 
     with Program() as prog:
         with rung(Bool("Go", external=True)):
@@ -1881,10 +1885,23 @@ def test_canonical_index_source_hops_constant_base_calc():
             call(apply_mode)
 
     pdg = build_program_graph(prog)
-    tag, eval_addr = _canonical_index_source("Pointer", lambda v: int(v), pdg, prog, None)
-    assert tag == "CmdReg", f"should hop through constant-base calc to CmdReg, got {tag}"
+    writer = next(iter(pdg.writers_of[Scratch.name]))
+    ro = resolve_rung(prog, pdg.rung_nodes[writer])
+    assert ro is not None
+    table = table_operand_from_copy(
+        ro,
+        Scratch.name,
+        {},
+        pdg,
+        prog,
+        single_mutable_index=False,
+        live_snapshot=False,
+        strict_hop_budget=False,
+    )
+    assert table is not None
+    assert table.index_tag == "CmdReg"
     # CmdReg=2 with the constant Base bound to its default (10) → address 12.
-    assert int(eval_addr(2)) == 12, f"eval_addr should bind Base default (10), got {eval_addr(2)}"
+    assert int(table.eval_addr(2)) == 12
 
 
 def test_expand_routes_punts_on_aggregate_writer():
@@ -2103,11 +2120,7 @@ def test_expand_routes_packml_state_machine():
 def test_expand_routes_indirect_jump_table_pipeline():
     """Indirect copy routes lift pointer scratch back to the request tag."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import (
-        expand_pipeline_need,
-        expand_routes,
-        infer_pipeline_roles,
-    )
+    from pyrung.core.analysis.pilot.evidence import expand_routes, infer_pipeline_roles
     from pyrung.core.analysis.steerable import compute_steerable
 
     CmdStart = Bool("CmdStart", external=True)
@@ -2169,21 +2182,11 @@ def test_expand_routes_indirect_jump_table_pipeline():
     assert "StateEnabled" in roles.trace_internal_tags
     assert "StateRequested" not in roles.trace_internal_tags
 
-    expansions = expand_pipeline_need("StateRequested", 3, (roles,), tuple(routes))
-    assert len(expansions) == 1
-    expansion = expansions[0]
-    assert expansion.role == roles
-    assert any(
-        ("StateCurrent", 4) in route.source_constraints
-        and ("StateComplete", True) in route.enablers
-        for route in expansion.routes
-    )
-
 
 def test_skiff_scan_suppresses_non_participants():
     """Skiff scans run full scans while pinning unrelated side effects."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles, roles_for_needed_tag
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.skiff import run_skiff_scan
     from pyrung.core.analysis.steerable import compute_steerable
 
@@ -2212,7 +2215,6 @@ def test_skiff_scan_suppresses_non_participants():
     pdg = build_program_graph(prog)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, prog)
     role = infer_pipeline_roles("StateCurrent", pdg, prog, steerable, frozenset())
-    assert roles_for_needed_tag("StateRequested", (role,)) == (role,)
 
     result = run_skiff_scan(
         plc,

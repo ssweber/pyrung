@@ -16,7 +16,6 @@ import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from itertools import product
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -49,12 +48,19 @@ from pyrung.core.analysis.pilot.corrections import (
     correct_enablers,
     guard_correction_holds,
 )
+from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
+    MotionKind,
+    _ActionPair,
     _ConfirmedCorrection,
+    _IterationFrame,
+    _Step,
+    _StepContext,
+    _TrialResult,
 )
 from pyrung.core.analysis.sp_values import (
     _values_match,
@@ -142,6 +148,54 @@ class ReplayStep:
     kind: str
     channel_tag: str | None = None
     channel_target: Any = None
+
+
+def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
+    """Map one recorded physical step and its operation context to replay."""
+
+    kind = {
+        MotionKind.INTERVENTION: "pulse",
+        MotionKind.COAST_TO_BEARING: "zoom",
+        MotionKind.COAST_HOLDING_WORLD: "letrun",
+    }[context.motion]
+    if kind == "zoom" and context.channel_tag is None:
+        kind = "dwell"
+    return ReplayStep(
+        inputs=tuple(step.inputs.items()),
+        scans=step.scans,
+        kind=kind,
+        channel_tag=context.channel_tag,
+        channel_target=context.channel_target,
+    )
+
+
+def _deviation_bearing(
+    trial: _TrialResult,
+    frame: _IterationFrame,
+    watch_tags: list[str],
+    frontier: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...]:
+    """Facts the failed operation actually held and then lost."""
+
+    needed_by_tag: dict[str, list[Any]] = {}
+    for tag, value in frontier:
+        needed_by_tag.setdefault(tag, []).append(value)
+    bearing: list[_ActionPair] = [
+        (tag, frame.snap.get(tag))
+        for tag in watch_tags
+        if not _values_match(frame.snap.get(tag), trial.fork_snap.get(tag))
+        and not any(
+            _values_match(trial.fork_snap.get(tag), needed) for needed in needed_by_tag.get(tag, ())
+        )
+    ]
+    channel = trial.channel_motion.channel_tag
+    if channel is not None:
+        source = trial.before_snap.get(channel)
+        landed = trial.fork_snap.get(channel)
+        if not _values_match(landed, source):
+            bearing = [(tag, value) for tag, value in bearing if tag != channel]
+            bearing.append((channel, source))
+    return tuple(bearing)
 
 
 @dataclass(frozen=True)
@@ -378,9 +432,9 @@ def _scoped_correction_rungs(
     else:
         scope = _target_unresolved_condition(
             plc,
-            ctx.target_tag,
-            ctx.target_value,
-            getattr(ctx, "target_predicate", None),
+            ctx.target.tag,
+            ctx.target.value,
+            ctx.target.predicate,
         )
     coordinates = []
     if progress_mark:
@@ -813,8 +867,8 @@ def build_replay_fn(
     incident = incident or ReplayIncident()
     resting = ctx.resting
     edge_tags = ctx.edge_tags
-    target_tag = ctx.target_tag
-    target_value = ctx.target_value
+    target_tag = ctx.target.tag
+    target_value = ctx.target.value
     pdg = ctx.pdg
     program = ctx.program
     steerable = ctx.steerable
@@ -1415,7 +1469,6 @@ def build_deviation_incident(
     before_snap: Mapping[str, Any],
     after_snap: Mapping[str, Any],
     timeline: Sequence[Any] = (),
-    program: Any = None,
     channel_tag: str | None = None,
 ) -> DeviationIncident:
     """Capture the facts inside the known off-course window.
@@ -1432,8 +1485,6 @@ def build_deviation_incident(
     engine select their own relevant profile tags from this complete set;
     incident construction never discards evidence on a consumer's behalf.
 
-    *program* is retained for call compatibility.  It no longer changes the
-    evidence recorded in the incident.
     """
     changed: set[str] = {t for event in timeline for t, _b, _a in event.transitions}
     changed.update(
@@ -1980,46 +2031,6 @@ def investigate_deviation(
 # ---------------------------------------------------------------------------
 
 
-def _hold_values(hold_value: Any) -> tuple[Any, ...]:
-    """The steady values a hold can pin its tag to: a scalar hold is that value;
-    a ``PilotRung`` contributes each of its rule target values (an
-    oscillation reaches each of them)."""
-    rules = getattr(hold_value, "rules", None)
-    if rules is not None:
-        return tuple(r.value for r in rules)
-    return (hold_value,)
-
-
-def hold_defeats_needed(
-    tag: str, hold_value: Any, needed: Sequence[tuple[str, Any]], pdg: Any, program: Any
-) -> bool:
-    """Whether holding *tag* at *hold_value* is **self-defeating**.
-
-    Held steady, ``tag == value`` is true every scan, so any rung that value alone
-    *forces* to fire runs every scan.  If such a rung writes a register the target
-    still *needs* (``needed`` = the checkpoint frontier's outstanding ``(tag,
-    value)`` pairs) to a literal contradicting the needed value, the hold pins
-    that register away from the goal forever and the coast can never reach the
-    target — e.g. ``Heat_xInit=1`` forces the shared-init rung that fills
-    ``Heat_CurStep := 1`` while the target needs ``Heat_CurStep = 3``.
-    Purely static (no long coast), name-free (dispatches on write-vs-need).
-
-    ``needed`` is ordered target-most first (``frontier_pairs`` walks the tree
-    breadth-first), so for a stepping register the *first* value per tag is the
-    requirement and deeper values are en-route stopovers (``Heat_CurStep`` needs
-    ``[3, 2, 1]``: 3 is the goal, 1 and 2 are how it gets there).  A steady
-    forced write pins the register at one value, so it must satisfy the
-    shallowest need — a write matching only a deeper stopover (``fill(1, …)``
-    against a needed 3) still pins progress short of the goal and defeats.
-
-    Direct contradictions are harmful too: a correction that actively writes a
-    required tag to another value is already a proof of self-defeat. The
-    writer walk below additionally catches an indirect pin where the held value
-    forces some other required register away from its need.
-    """
-    return _holds_defeat_needed(((tag, hold_value),), needed, pdg, program)
-
-
 def _active_rungs_defeat_needed(
     rungs: Sequence[PilotRung],
     needed: Sequence[tuple[str, Any]],
@@ -2038,58 +2049,6 @@ def _active_rungs_defeat_needed(
     overlay = _rung_execution_receipt(rungs, snapshot)
     active = [(rung.dest, rung.value) for rung in overlay.effective]
     return _holds_defeat_needed(active, needed, pdg, program)
-
-
-def _holds_defeat_needed(
-    holds: Sequence[tuple[str, Any]],
-    needed: Sequence[tuple[str, Any]],
-    pdg: Any,
-    program: Any,
-) -> bool:
-    """Static write-vs-need proof for one executable hold assignment."""
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr, _expr_forced_true
-    from pyrung.core.analysis.steerable import _literal_write
-
-    needed_first: dict[str, Any] = {}
-    for nt, nv in needed:
-        if isinstance(nv, Atom):
-            # A relational need (``PV < Lower``) carries its Atom, not a value —
-            # this static write-vs-need check can't reason about relations, so
-            # it honestly punts on that entry (never treats the Atom as a value).
-            continue
-        needed_first.setdefault(nt, nv)
-    if not needed_first:
-        return False
-    held_values: dict[str, tuple[Any, ...]] = {}
-    for tag, hold_value in holds:
-        held_values[tag] = _hold_values(hold_value)
-    if not held_values:
-        return False
-    if any(
-        tag in needed_first and any(not _values_match(value, needed_first[tag]) for value in values)
-        for tag, values in held_values.items()
-    ):
-        return True
-    for node in pdg.rung_nodes:
-        read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
-        if not read_tags:
-            continue
-        ro = resolve_rung(program, node)
-        if ro is None:
-            continue
-        expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
-        assignments = (
-            dict(zip(read_tags, values, strict=True))
-            for values in product(*(held_values[tag] for tag in read_tags))
-        )
-        if not any(_expr_forced_true(expr, assignment) is True for assignment in assignments):
-            continue
-        for nt, first_need in needed_first.items():
-            wv = _literal_write(ro, nt)
-            if wv is not None and not _values_match(wv, first_need):
-                return True
-    return False
 
 
 def _precise_causes(
@@ -2383,16 +2342,6 @@ def _precise_causes(
     return list(_dedupe_hypotheses(hypotheses))
 
 
-def _precise_cause(
-    plc: PLC,
-    incident: DeviationIncident,
-    ctx: Any,
-) -> InvestigationHypothesis | None:
-    """Compatibility helper returning the first exact causal frontier."""
-    hypotheses = _precise_causes(plc, incident, ctx)
-    return hypotheses[0] if hypotheses else None
-
-
 # ---------------------------------------------------------------------------
 # Hypothesis generation — absence roots (deep cause walk)
 # ---------------------------------------------------------------------------
@@ -2436,7 +2385,7 @@ def _analog_boundary_hold(
     sweep would invent levers from rungs that played no part in the incident.
     """
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.pilot.trace import (
+    from pyrung.core.analysis.pilot.static_expressions import (
         _atom_text,
         _heuristic_inequality_target,
         _resolve_inequality_target,

@@ -20,14 +20,18 @@ from pyrung import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung, _settle_delayed_effects
-from pyrung.core.analysis.pilot.currents import Producer, WorldView, sibling_producer_family
+from pyrung.core.analysis.pilot.currents import Producer, sibling_producer_family
 from pyrung.core.analysis.pilot.evidence import PipelineRoles
 from pyrung.core.analysis.pilot.program_step import (
     ProgramStepStatus,
+    _first_advance,
     read_program_step,
 )
+from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.types import WorldView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.crossing import Cmp, Eq
+from pyrung.core.instruction.advance import AdvanceStep
 
 
 def _timer_producer_program(
@@ -67,6 +71,25 @@ def _producer(world):
     assert family is not None
     assert len(family.program_owned) == 1
     return family.program_owned[0]
+
+
+def test_first_advance_preserves_depth_first_trace_order() -> None:
+    heat = AdvanceStep(Eq("HeatAcc", frozenset((60,))))
+    fluff = AdvanceStep(Eq("FluffAcc", frozenset((5,))))
+    tree = TraceNode(
+        "Command",
+        1,
+        children=[
+            TraceNode(
+                "HeatBranch",
+                True,
+                children=[TraceNode("HeatAcc", 60, advance=heat)],
+            ),
+            TraceNode("FluffAcc", 5, advance=fluff),
+        ],
+    )
+
+    assert _first_advance(tree) is heat
 
 
 def test_running_timer_proves_progress_at_the_immediate_boundary() -> None:

@@ -7,17 +7,27 @@ do not choose an action, apply knowledge, or mutate the drive world.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
 from pyrung.core.analysis.pilot._ops import _rung_execution_receipt, _rung_identity
+from pyrung.core.analysis.pilot.navigation import (
+    BatchPulse,
+    Coast,
+    Dwell,
+    Pulse,
+    act_identity,
+)
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
+    PilotEvent,
     TagChange,
+    _AttemptResult,
     _IterationFrame,
     _PilotContext,
     _PilotState,
+    _RecoveryOrigin,
     _StepContext,
     _TrialResult,
 )
@@ -29,9 +39,57 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Compass
 
 
+def _investigation_started_event(
+    trial: _TrialResult,
+    origin: _RecoveryOrigin,
+) -> PilotEvent:
+    """Announce expensive causal replay before it starts."""
+
+    channel_tag = trial.channel_motion.channel_tag
+    return PilotEvent(
+        "investigation_started",
+        trial.fork.state.scan_id,
+        {
+            "channel_tag": channel_tag,
+            "from_value": (
+                origin.before_snap.get(channel_tag) if channel_tag is not None else None
+            ),
+            "to_value": (trial.fork_snap.get(channel_tag) if channel_tag is not None else None),
+            "action": trial.applied,
+        },
+    )
+
+
+def _channel_transitions(
+    ctx: _PilotContext,
+    trial: _TrialResult,
+    checkpoint_fork: Any,
+    regressed_snap: Any,
+) -> tuple[tuple[str, Any, Any], ...]:
+    """Render the navigated channel transition a revert undoes."""
+
+    try:
+        checkpoint_snap = dict(getattr(checkpoint_fork.state, "tags", {}) or {})
+    except (AttributeError, TypeError):
+        checkpoint_snap = {}
+    transitions: list[tuple[str, Any, Any]] = []
+    channel_tags = tuple(
+        dict.fromkeys(
+            tag for tag in (ctx.target.tag, trial.channel_motion.channel_tag) if tag is not None
+        )
+    )
+    for channel_tag in channel_tags:
+        from_value = checkpoint_snap.get(channel_tag)
+        to_value = (regressed_snap or {}).get(channel_tag)
+        if (from_value is None and to_value is None) or _values_match(from_value, to_value):
+            continue
+        transitions.append((channel_tag, from_value, to_value))
+    return tuple(transitions)
+
+
 def _fmt_need(tag: str, value: Any, snap: dict[str, Any]) -> str:
     """Render one ``still_need`` display entry."""
-    from pyrung.core.analysis.pilot.trace import _atom_text
+    from pyrung.core.analysis.pilot.static_expressions import _atom_text
     from pyrung.core.analysis.simplified import Atom
 
     if isinstance(value, Atom):
@@ -263,7 +321,7 @@ def _iteration_payload(
 ) -> dict[str, Any]:
     still_need = [_fmt_need(t, v, frame.snap) for t, v in frontier_pairs(frame.tree, frame.snap)]
     return {
-        "target": (ctx.target_tag, ctx.target_value),
+        "target": (ctx.target.tag, ctx.target.value),
         "snapshot": frame.snap,
         "tree": frame.tree,
         "state_key": frame.key,
@@ -365,12 +423,7 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
         "program_context_actions": candidate.program_context_actions,
         "provenance": candidate.provenance,
         "wake": candidate.wake,
-        "prescribed": (
-            candidate.route_prescribed
-            or candidate.influence_prescribed
-            or candidate.current_prescribed
-            or candidate.program_prescribed
-        ),
+        "prescribed": candidate.source != "trace",
     }
 
 
@@ -429,23 +482,20 @@ def _diff_snapshots(
 
 def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
     """Render a ``zoom_accepted`` event payload."""
-    landed = (
-        trial.fork_snap.get(trial.zoom_channel_tag) if trial.zoom_channel_tag is not None else None
-    )
+    motion = trial.channel_motion
+    landed = trial.fork_snap.get(motion.channel_tag) if motion.channel_tag is not None else None
     return {
         "new_key": trial.new_key,
         "trend": trial.trend,
         "outcome": trial.outcome.value if trial.outcome else None,
         "observe_label": trial.observe_label,
-        "zoom_channel_tag": trial.zoom_channel_tag,
+        "zoom_channel_tag": motion.channel_tag,
         "zoom_before_value": (
-            trial.before_snap.get(trial.zoom_channel_tag)
-            if trial.zoom_channel_tag is not None
-            else None
+            trial.before_snap.get(motion.channel_tag) if motion.channel_tag is not None else None
         ),
-        "zoom_target_value": trial.zoom_target_value,
+        "zoom_target_value": motion.target_value,
         "zoom_actual_value": landed,
-        "bearing_stop_reason": trial.bearing_stop_reason,
+        "bearing_stop_reason": motion.stop_reason,
         "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
@@ -504,3 +554,103 @@ def _accepted_payload(
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
     }
+
+
+def _act_event(
+    phase: Literal["try", "rejected", "accepted"],
+    act: Any,
+    scan: int,
+    *,
+    rationale: str = "",
+    prerequisites: tuple[Any, ...] = (),
+    target_tag: str | None = None,
+    attempt: _AttemptResult | None = None,
+    trial: _TrialResult | None = None,
+    frame: _IterationFrame | None = None,
+    state: _PilotState | None = None,
+) -> PilotEvent | None:
+    """Render one navigation-act lifecycle event through a single kind dispatch."""
+
+    kind = act_identity(act)[0]
+    if kind == "pulse":
+        assert isinstance(act, Pulse)
+        if phase == "try":
+            return PilotEvent(
+                "candidate_try",
+                scan,
+                {
+                    "index": 0,
+                    "total": 1,
+                    "candidate": _candidate_payload(act.option),
+                    "applied": act.applied,
+                    "co_actions": tuple(pair for pair in act.applied if pair != act.action),
+                },
+            )
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent(
+                "candidate_rejected",
+                scan,
+                {
+                    "index": 0,
+                    "candidate": _candidate_payload(act.option),
+                    "applied": act.applied,
+                    "co_actions": tuple(pair for pair in act.applied if pair != act.action),
+                    "gates": attempt.gate_events,
+                },
+            )
+        assert trial is not None and frame is not None and state is not None
+        return PilotEvent(
+            "candidate_accepted",
+            scan,
+            _accepted_payload(act.option, trial, frame, state),
+        )
+
+    if kind in {"coast", "dwell"}:
+        assert isinstance(act, (Coast, Dwell))
+        if phase == "try":
+            channel_tag = target_tag
+            if isinstance(act, Coast) and act.mode == "bearing" and act.channel_tag is not None:
+                channel_tag = act.route_channel_tag or act.channel_tag
+            return PilotEvent(
+                "zoom",
+                scan,
+                {
+                    "prescribed": True,
+                    "reason": rationale,
+                    "prerequisite_rungs": prerequisites,
+                    "channel_tag": channel_tag,
+                },
+            )
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent("zoom_rejected", scan, {"gates": attempt.gate_events})
+        assert trial is not None
+        return PilotEvent("zoom_accepted", scan, _zoom_accepted_payload(trial))
+
+    assert kind == "batch" and isinstance(act, BatchPulse)
+    if phase == "try":
+        return None
+    label = "batch" if act.source == "learned" else "widening"
+    if phase == "rejected":
+        assert attempt is not None
+        return PilotEvent(
+            f"{label}_rejected",
+            scan,
+            {"actions": act.actions, "gates": attempt.gate_events},
+        )
+    assert trial is not None
+    return PilotEvent(
+        f"{label}_accepted",
+        scan,
+        {
+            "candidate": trial.candidate,
+            "applied": trial.applied,
+            "gates": trial.gate_events,
+            "new_key": trial.new_key,
+            "trend": trial.trend,
+            "snapshot": trial.fork_snap,
+            "scan_before": trial.scan_before,
+            "scan_after": trial.fork.state.scan_id,
+        },
+    )

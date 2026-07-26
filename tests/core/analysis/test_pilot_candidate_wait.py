@@ -28,12 +28,16 @@ from pyrung.core.analysis.pilot.options import (
     _admit_trace_details,
     _build_candidates,
     _compass_route_plan,
-    _program_input_details,
     _wait_is_viable,
     _WaitPrescription,
 )
-from pyrung.core.analysis.pilot.program_step import ProgramStepStatus
+from pyrung.core.analysis.pilot.program_step import (
+    ProgramInputHandoff,
+    ProgramStep,
+    ProgramStepStatus,
+)
 from pyrung.core.analysis.pilot.trace import TraceAction, TraceNode
+from pyrung.core.crossing import Eq
 
 
 def _route(from_value: int, to_value: int) -> TransitionRoute:
@@ -159,8 +163,7 @@ def test_convergent_actions_remain_ordered_independent_edges(monkeypatch) -> Non
     ctx = SimpleNamespace(
         compass=compass,
         opaque_loop=frozenset({"State"}),
-        target_tag="State",
-        target_value=2,
+        target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
         avoid_pred=None,
     )
@@ -217,8 +220,7 @@ def test_rejected_joint_route_falls_back_to_same_action_with_other_gate() -> Non
     ctx = SimpleNamespace(
         compass=compass,
         opaque_loop=frozenset({"State"}),
-        target_tag="State",
-        target_value=2,
+        target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
         avoid_pred=None,
     )
@@ -318,8 +320,7 @@ def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() ->
     ctx = SimpleNamespace(
         compass=compass,
         opaque_loop=frozenset({"State"}),
-        target_tag="State",
-        target_value=2,
+        target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
         avoid_pred=None,
     )
@@ -375,8 +376,7 @@ def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
     ctx = SimpleNamespace(
         compass=compass,
         opaque_loop=frozenset({"State"}),
-        target_tag="State",
-        target_value=2,
+        target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
         avoid_pred=lambda snap: snap.get("Forbidden") is True,
     )
@@ -434,16 +434,23 @@ def test_runtime_transitions_remain_distinct_in_exact_observed_worlds() -> None:
         )
     )
 
-    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap_a) == 8
-    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap_b) == 10
     assert (
-        compass.transition_dest(
+        compass.knowledge.transition_dest("State", 6, action, world_key=world, snapshot=snap_a) == 8
+    )
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world, snapshot=snap_b)
+        == 10
+    )
+    assert (
+        compass.knowledge.transition_dest(
             "State", 6, action, world_key=world, snapshot={**snap_b, "Recipe": "C"}
         )
         is None
     )
-    assert compass.has_transitions("State", world_key=world, snapshot=snap_a)
-    assert not compass.has_transitions("State", world_key=world, snapshot={**snap_b, "Recipe": "C"})
+    assert compass.knowledge.has_transitions("State", world_key=world, snapshot=snap_a)
+    assert not compass.knowledge.has_transitions(
+        "State", world_key=world, snapshot={**snap_b, "Recipe": "C"}
+    )
 
 
 def test_exact_world_and_applied_artifact_scope_negative_evidence() -> None:
@@ -465,8 +472,13 @@ def test_exact_world_and_applied_artifact_scope_negative_evidence() -> None:
     compass, _ = compass.apply(
         (CompassObservation("contradict", "State", action, 6, None, world_a, context, (action,)),)
     )
-    assert compass.transition_dest("State", 6, action, world_key=world_a, snapshot=snap) == 8
-    assert compass.transition_dest("State", 6, action, world_key=world_b, snapshot=snap) == 10
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world_a, snapshot=snap) == 8
+    )
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world_b, snapshot=snap)
+        == 10
+    )
 
     # The matching artifact is local: it removes A without touching B.
     compass, _ = compass.apply(
@@ -483,8 +495,14 @@ def test_exact_world_and_applied_artifact_scope_negative_evidence() -> None:
             ),
         )
     )
-    assert compass.transition_dest("State", 6, action, world_key=world_a, snapshot=snap) is None
-    assert compass.transition_dest("State", 6, action, world_key=world_b, snapshot=snap) == 10
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world_a, snapshot=snap)
+        is None
+    )
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world_b, snapshot=snap)
+        == 10
+    )
 
 
 def test_probe_marks_are_scoped_to_the_prospective_applied_context() -> None:
@@ -511,7 +529,7 @@ def test_probe_marks_are_scoped_to_the_prospective_applied_context() -> None:
     )
 
     assert (
-        compass.unprobed_actions(
+        compass.knowledge.unprobed_actions(
             "State",
             6,
             {probe},
@@ -521,7 +539,7 @@ def test_probe_marks_are_scoped_to_the_prospective_applied_context() -> None:
         )
         == []
     )
-    assert compass.unprobed_actions(
+    assert compass.knowledge.unprobed_actions(
         "State",
         6,
         {probe},
@@ -542,8 +560,14 @@ def test_exact_world_tombstone_overrides_global_seed_only_locally() -> None:
         (CompassObservation("contradict", "State", action, 6, None, world, context, (action,)),)
     )
 
-    assert compass.transition_dest("State", 6, action, world_key=world, snapshot=snap) is None
-    assert compass.transition_dest("State", 6, action, world_key=other_world, snapshot=snap) == 8
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=world, snapshot=snap)
+        is None
+    )
+    assert (
+        compass.knowledge.transition_dest("State", 6, action, world_key=other_world, snapshot=snap)
+        == 8
+    )
 
 
 def test_static_edge_negative_overlay_requires_exact_context_and_actions() -> None:
@@ -634,8 +658,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     ctx = SimpleNamespace(
         compass=compass,
         opaque_loop=frozenset({"State"}),
-        target_tag="State",
-        target_value=17,
+        target=TargetSpec("State", 17),
         route_allowed=lambda _pair: True,
         avoid_pred=None,
     )
@@ -742,8 +765,7 @@ def test_prescribed_wait_suppresses_stuck_reason():
         program=object(),
         route_allowed=lambda _pair: True,
         opaque_loop=frozenset(),
-        target_tag="State",
-        target_value=17,
+        target=TargetSpec("State", 17),
     )
 
     candidates = _build_candidates(frame, state, ctx)
@@ -788,36 +810,43 @@ def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     assert tuple(detail.pair for detail in admitted.details) == (("Keep", True),)
 
 
-def test_program_inputs_consume_only_a_prescribed_shared_lifetime() -> None:
+def test_program_step_derives_only_a_uniform_shared_input_lifetime() -> None:
     """Partial handoffs stay actions; one proved boundary makes every input a hold."""
 
     first = TraceAction("First", True)
     second = TraceAction("Second", True)
-    mixed_step = SimpleNamespace(
-        status=ProgramStepStatus.NEEDS_INPUT,
+    shared_boundary = Eq("Acc", frozenset((5,)))
+    mixed_step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
         required_inputs=(first, second),
         # One available handoff must not enrich only part of the operation.
-        input_handoffs=(SimpleNamespace(action=first.pair, boundary=object()),),
+        input_handoffs=(ProgramInputHandoff(first.pair, shared_boundary, "Acc"),),
     )
 
-    raw = _program_input_details(
-        _WaitPrescription(False, program_step=mixed_step),
-    )
+    assert mixed_step.uniform_handoff_boundary is None
+    assert mixed_step.inputs_with_lifetime == (first, second)
 
-    assert raw == (first, second)
-    assert all(detail.until is None for detail in raw)
-
-    shared_boundary = object()
-    held = _program_input_details(
-        _WaitPrescription(
-            True,
-            program_step=mixed_step,
-            boundary=shared_boundary,
+    shared_step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
+        required_inputs=(first, second),
+        input_handoffs=(
+            ProgramInputHandoff(first.pair, shared_boundary, "Acc"),
+            ProgramInputHandoff(second.pair, shared_boundary, "Acc"),
         ),
     )
 
-    assert tuple(detail.pair for detail in held) == (first.pair, second.pair)
-    assert all(detail.until is shared_boundary for detail in held)
+    assert shared_step.uniform_handoff_boundary is shared_boundary
+    assert tuple(detail.pair for detail in shared_step.inputs_with_lifetime) == (
+        first.pair,
+        second.pair,
+    )
+    assert all(detail.until is shared_boundary for detail in shared_step.inputs_with_lifetime)
 
 
 def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> None:
@@ -826,7 +855,10 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
     required = (TraceAction("First", True), TraceAction("Blocked", True))
     prescription = _WaitPrescription(
         True,
-        program_step=SimpleNamespace(required_inputs=required),
+        program_step=SimpleNamespace(
+            required_inputs=required,
+            required_pairs=frozenset(detail.pair for detail in required),
+        ),
         boundary=object(),
     )
 

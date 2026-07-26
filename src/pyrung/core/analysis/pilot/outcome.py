@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any
 
 from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
-from pyrung.core.analysis.pilot.types import _ActionPair
+from pyrung.core.analysis.pilot.types import ChannelMotion, _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 
@@ -149,10 +149,8 @@ def assess_outcome(
     chase_cause_roots: Any,
     *,
     route_prescribed: bool,
-    zoom_channel_tag: str | None = None,
-    zoom_target_value: Any = None,
-    zoom_progressed: bool = False,
-    zoom_stop_reason: str | None = None,
+    channel_motion: ChannelMotion,
+    channel_progressed: bool,
 ) -> TrialAssessment:
     """Judge a post-gate trial on independent evidence axes.
 
@@ -164,37 +162,15 @@ def assess_outcome(
     chart value is a departure and post-commit progress handling decides what
     that observed world means for target-relative progress.
     """
-    if (zoom_channel_tag is not None and zoom_progressed) or new_trend < frame.distance_before:
+    if (channel_motion.active and channel_progressed) or new_trend < frame.distance_before:
         progress = ProgressEffect.ADVANCED
     elif new_trend == frame.distance_before:
         progress = ProgressEffect.PRESERVED
     else:
         progress = ProgressEffect.BEHIND
 
-    if zoom_channel_tag is not None:
-        chan_actual = trial.snap.get(zoom_channel_tag)
-        chan_before = frame.snap.get(zoom_channel_tag)
-        # The coast's own receipt names what stopped it; when present it is
-        # the arm selector (a "paused" coast is judged like a timeout — the
-        # channel earned nothing).  Snapshot comparison is the fallback for
-        # trials without a receipt (settle-path zooms).
-        if zoom_stop_reason is not None:
-            bearing_reached = zoom_stop_reason == "reached"
-            channel_moved = zoom_stop_reason == "departed"
-        else:
-            snapshot_reached = _values_match(chan_actual, zoom_target_value)
-            observed_reached = any(
-                tag == zoom_channel_tag and _values_match(after, zoom_target_value)
-                for event in getattr(trial, "timeline", ())
-                for tag, _before, after in getattr(event, "transitions", ())
-            )
-            bearing_reached = snapshot_reached or (
-                observed_reached and _values_match(chan_actual, chan_before) and zoom_progressed
-            )
-            channel_moved = not _values_match(chan_actual, chan_before) or (
-                observed_reached and not snapshot_reached
-            )
-        if bearing_reached:
+    if channel_motion.active:
+        if channel_motion.reached:
             # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
             # That is a confirmed advance even when the *global* target's onward
             # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
@@ -207,7 +183,7 @@ def assess_outcome(
                 has_new_frontier,
                 True,
             )
-        if channel_moved:
+        if channel_motion.departed:
             # The channel moved, but not to the requested value.  Attribute the
             # move independently from its usefulness; post-commit handling may later prove the
             # resulting world advanced, regressed, or remains incomparable.
@@ -232,10 +208,10 @@ def assess_outcome(
         # Gauge-authoritative: trace-trend is a coordinate-relative count that
         # legitimately drops when the surrounding world shifts, so a frozen
         # channel must never be confirmed off an incidental trend drop — only
-        # the gauge (``zoom_progressed``) proves earned work here.  The honest
+        # the gauge (``channel_progressed``) proves earned work here. The honest
         # rejection is what frees the escalation ladder (terminal let-run,
         # skiff) to earn the holds this coast actually needs.
-        if zoom_progressed:
+        if channel_progressed:
             return TrialAssessment(
                 Agency.PROGRAM,
                 BearingEffect.UNCHANGED,

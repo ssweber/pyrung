@@ -8,40 +8,13 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace import TraceChoice
-
-T = TypeVar("T")
-
-
-@dataclass(frozen=True)
-class Known(Generic[T]):
-    """A reader established a value."""
-
-    value: T
-
-
-@dataclass(frozen=True)
-class Unknown:
-    """A reader could not resolve a frontier soundly."""
-
-    reason: str
-    frontier: tuple[_ActionPair, ...] = ()
-
-
-@dataclass(frozen=True)
-class Impossible:
-    """A complete proof established that an option cannot work."""
-
-    proof: str
-
-
-EvidenceResult = Known[T] | Unknown | Impossible
 
 
 @dataclass(frozen=True)

@@ -19,6 +19,7 @@ from typing import Any
 
 from pyrsistent import pvector
 
+import pyrung.core.analysis.pilot.recording as recording
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _append_rungs,
@@ -40,7 +41,8 @@ from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
     RegressionWitness,
     ReplayIncident,
-    ReplayStep,
+    _deviation_bearing,
+    _replay_step,
     build_deviation_incident,
     build_replay_fn,
     correction_identity,
@@ -72,8 +74,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _RecoveryOrigin,
-    _Step,
-    _StepContext,
     _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -104,6 +104,40 @@ def _pending_recovery_index(state: _PilotState, pending: PendingDeparture) -> in
 def _refresh_checkpoint(existing: _Checkpoint, receipt: _Checkpoint) -> _Checkpoint:
     """Refresh one stack slot without transferring its rollback ownership."""
     return replace(receipt, owner=existing.owner)
+
+
+def _trial_checkpoint(
+    trial: _TrialResult,
+    state: _PilotState,
+    *,
+    trend: int | None = None,
+) -> _Checkpoint:
+    """Snapshot one accepted trial using its owned target objective."""
+    assert trial.new_key is not None
+    resolved_trend = trial.trend if trend is None else trend
+    assert resolved_trend is not None
+    return _Checkpoint(
+        trial.new_key,
+        state.snapshot_world(),
+        resolved_trend,
+        trial.bearing_objective,
+    )
+
+
+def _provisional_payload(
+    pending: PendingDeparture,
+    *,
+    before_gauge: Mapping[str, Any] | None = None,
+    after_gauge: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Shared pending-departure fields with stable transcript key order."""
+    return {
+        "channel_tag": pending.channel_tag,
+        "from_value": pending.from_value,
+        **dict(before_gauge or {}),
+        "gauge_at_source": pending.progress_mark,
+        **dict(after_gauge or {}),
+    }
 
 
 def _checkpoint_recovery_origin(
@@ -166,45 +200,13 @@ def _channel_recovery_origin(
     )
 
 
-def _investigation_started_event(
-    trial: _TrialResult,
-    origin: _RecoveryOrigin,
-) -> PilotEvent:
-    """Announce expensive causal replay before it starts."""
-    channel_tag = trial.zoom_channel_tag
-    return PilotEvent(
-        "investigation_started",
-        trial.fork.state.scan_id,
-        {
-            "channel_tag": channel_tag,
-            "from_value": (
-                origin.before_snap.get(channel_tag) if channel_tag is not None else None
-            ),
-            "to_value": (trial.fork_snap.get(channel_tag) if channel_tag is not None else None),
-            "action": trial.applied,
-        },
-    )
-
-
 def _monitor_trend(
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
-    channel_ejection = (
-        trial.zoom_channel_tag is not None
-        and (
-            trial.assessment is not None
-            and trial.assessment.bearing is BearingEffect.DEPARTED
-            or trial.assessment is None
-            and trial.outcome == Outcome.AMBIENT_DRIFT
-        )
-        and not _values_match(
-            trial.fork_snap.get(trial.zoom_channel_tag),
-            trial.before_snap.get(trial.zoom_channel_tag),
-        )
-    )
+    channel_ejection = trial.channel_motion.departed
     # A pending departure changes only the rollback boundary. Every trial inside
     # it still passes through the ordinary trend,
     # regression, investigation, and retry machinery below. In particular, an
@@ -258,7 +260,7 @@ def _monitor_trend(
     # its exact channel-transition producer and upstream corrective levers are
     # recoverable, then revert to the pre-coast checkpoint.
     if channel_ejection:
-        chan = trial.zoom_channel_tag
+        chan = trial.channel_motion.channel_tag
         assert chan is not None
         departed_from = trial.before_snap.get(chan)
         investigated = bool(state.checkpoints)
@@ -268,7 +270,7 @@ def _monitor_trend(
             {
                 "channel_tag": chan,
                 "from_value": departed_from,
-                "requested_value": trial.zoom_target_value,
+                "requested_value": trial.channel_motion.target_value,
                 "to_value": trial.fork_snap.get(chan),
                 "observe_label": trial.observe_label,
                 "coast_span": (trial.scan_before, state.work.state.scan_id),
@@ -354,7 +356,7 @@ def _monitor_trend(
                     departed_from,
                 )
                 if trial.chase_regression_causes:
-                    yield _investigation_started_event(trial, origin)
+                    yield recording._investigation_started_event(trial, origin)
                 yield from _investigate_and_revert(
                     trial,
                     frame,
@@ -381,7 +383,7 @@ def _monitor_trend(
             departed_from,
         )
         if trial.chase_regression_causes:
-            yield _investigation_started_event(trial, origin)
+            yield recording._investigation_started_event(trial, origin)
         yield from _investigate_and_revert(
             trial,
             frame,
@@ -406,8 +408,8 @@ def _monitor_trend(
     # investigation must replay the action itself so it can discover the
     # missing hold and retry from the corrected PilotRungs world.
     if _bearing_satisfied(trial) and trial.trend > state.best_trend:
-        assert trial.zoom_channel_tag is not None
-        channel_tag = trial.zoom_channel_tag
+        assert trial.channel_motion.channel_tag is not None
+        channel_tag = trial.channel_motion.channel_tag
         previous = state.best_trend
         state.best_trend = trial.trend
         yield PilotEvent(
@@ -432,14 +434,7 @@ def _monitor_trend(
             # therefore cannot close an unresolved departure. Keep the local
             # checkpoint so piloting can continue; Gauge alone decides whether
             # the departed corridor earned anything durable.
-            state.checkpoints.append(
-                _Checkpoint(
-                    trial.new_key,
-                    state.snapshot_world(),
-                    trial.trend,
-                    trial.bearing_objective,
-                )
-            )
+            state.checkpoints.append(_trial_checkpoint(trial, state))
             state.best_trend = trial.trend
             yield PilotEvent(
                 "trend_checkpoint",
@@ -452,14 +447,7 @@ def _monitor_trend(
                 },
             )
             return
-        state.checkpoints.append(
-            _Checkpoint(
-                trial.new_key,
-                state.snapshot_world(),
-                trial.trend,
-                trial.bearing_objective,
-            )
-        )
+        state.checkpoints.append(_trial_checkpoint(trial, state))
         state.best_trend = trial.trend
         promoted_corrections = _promote_probationary_corrections(state)
         checkpoint_event = PilotEvent(
@@ -476,14 +464,7 @@ def _monitor_trend(
         return
 
     if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
-        state.checkpoints.append(
-            _Checkpoint(
-                trial.new_key,
-                state.snapshot_world(),
-                trial.trend,
-                trial.bearing_objective,
-            )
-        )
+        state.checkpoints.append(_trial_checkpoint(trial, state))
         yield PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
@@ -501,7 +482,7 @@ def _monitor_trend(
 
     origin = _checkpoint_recovery_origin(state, before_snap=frame.snap)
     if trial.chase_regression_causes:
-        yield _investigation_started_event(trial, origin)
+        yield recording._investigation_started_event(trial, origin)
     yield from _investigate_and_revert(
         trial,
         frame,
@@ -513,14 +494,7 @@ def _monitor_trend(
 
 def _bearing_satisfied(trial: _TrialResult) -> bool:
     """Whether trial verification proved the requested channel value."""
-    if trial.zoom_channel_tag is None:
-        return False
-    if trial.assessment is not None:
-        return trial.assessment.bearing is BearingEffect.SATISFIED
-    return _values_match(
-        trial.fork_snap.get(trial.zoom_channel_tag),
-        trial.zoom_target_value,
-    )
+    return trial.channel_motion.reached
 
 
 def _anchor_frame_receipt(
@@ -602,7 +576,7 @@ def _open_pending_departure(
             {
                 "channel_tag": chan,
                 "from_value": departed_from,
-                "requested_value": trial.zoom_target_value,
+                "requested_value": trial.channel_motion.target_value,
                 "settled_value": verdict.settled_value,
                 "reason": verdict.reason,
                 "route": verdict.route,
@@ -649,12 +623,7 @@ def _bank_pending_landing(trial: _TrialResult, state: _PilotState) -> None:
     """
     if trial.new_key is None or trial.trend is None:
         return
-    receipt = _Checkpoint(
-        trial.new_key,
-        state.snapshot_world(),
-        trial.trend,
-        trial.bearing_objective,
-    )
+    receipt = _trial_checkpoint(trial, state)
     if state.checkpoints and state.checkpoints[-1].key == trial.new_key:
         state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
     else:
@@ -705,16 +674,16 @@ def _record_pending_landing(
                 # Stable diagnostic vocabulary retained for existing consumers.
                 "provisional_promoted",
                 state.work.state.scan_id,
-                {
-                    "channel_tag": pending.channel_tag,
-                    "from_value": pending.from_value,
-                    "gauge_at_source": pending.progress_mark,
-                    "entry_progress": pending.opening_progress,
-                    "landing_mark": landing_mark,
-                    "trend": frame.distance_before,
-                    "checkpoint_count": len(state.checkpoints),
-                    "corridor_open": True,
-                },
+                _provisional_payload(
+                    pending,
+                    after_gauge={
+                        "entry_progress": pending.opening_progress,
+                        "landing_mark": landing_mark,
+                        "trend": frame.distance_before,
+                        "checkpoint_count": len(state.checkpoints),
+                        "corridor_open": True,
+                    },
+                ),
             ),
         )
     return ()
@@ -739,9 +708,9 @@ def _assess_pending_departure(
     now_snap = trial.fork_snap or {}
     reached = target_reached(
         now_snap,
-        ctx.target_tag,
-        ctx.target_value,
-        ctx.target_predicate,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
     )
     gauge = state.gauge
     anchor = dict(pending.progress_mark)
@@ -794,14 +763,7 @@ def _apply_departure_decision(
         del state.checkpoints[rollback_index + 1 :]
         promoted_trend = trial.trend if trial.trend is not None else 0
         if trial.new_key is not None:
-            state.checkpoints.append(
-                _Checkpoint(
-                    trial.new_key,
-                    state.snapshot_world(),
-                    promoted_trend,
-                    trial.bearing_objective,
-                )
-            )
+            state.checkpoints.append(_trial_checkpoint(trial, state, trend=promoted_trend))
         state.best_trend = promoted_trend
         promoted_corrections = _promote_probationary_corrections(state)
         return (
@@ -809,19 +771,19 @@ def _apply_departure_decision(
                 # Stable diagnostic vocabulary retained for existing consumers.
                 "provisional_promoted",
                 state.work.state.scan_id,
-                {
-                    "channel_tag": pending.channel_tag,
-                    "from_value": pending.from_value,
-                    "gauge_at_source": pending.progress_mark,
-                    "landing_mark": (
-                        state.gauge.mark(trial.fork_snap) if state.gauge is not None else ()
-                    ),
-                    "outcome": decision.progress,
-                    "trend": promoted_trend,
-                    "checkpoint_count": len(state.checkpoints),
-                    "terminal": trial.new_key is None,
-                    "promoted_corrections": promoted_corrections,
-                },
+                _provisional_payload(
+                    pending,
+                    after_gauge={
+                        "landing_mark": (
+                            state.gauge.mark(trial.fork_snap) if state.gauge is not None else ()
+                        ),
+                        "outcome": decision.progress,
+                        "trend": promoted_trend,
+                        "checkpoint_count": len(state.checkpoints),
+                        "terminal": trial.new_key is None,
+                        "promoted_corrections": promoted_corrections,
+                    },
+                ),
             ),
         )
     if decision.action is DepartureAction.REGRESS:
@@ -829,12 +791,10 @@ def _apply_departure_decision(
             # Stable diagnostic vocabulary retained for existing consumers.
             "provisional_regressed",
             state.work.state.scan_id,
-            {
-                "channel_tag": pending.channel_tag,
-                "from_value": pending.from_value,
-                "outcome": decision.progress,
-                "gauge_at_source": pending.progress_mark,
-            },
+            _provisional_payload(
+                pending,
+                before_gauge={"outcome": decision.progress},
+            ),
         )
         regression = _investigate_and_revert(
             trial,
@@ -860,113 +820,12 @@ def _apply_departure_decision(
             # Stable diagnostic vocabulary retained for existing consumers.
             "provisional_expired",
             state.work.state.scan_id,
-            {
-                "channel_tag": pending.channel_tag,
-                "from_value": pending.from_value,
-                "outcome": decision.progress,
-                "gauge_at_source": pending.progress_mark,
-            },
+            _provisional_payload(
+                pending,
+                before_gauge={"outcome": decision.progress},
+            ),
         ),
     )
-
-
-def _channel_transitions(
-    ctx: _PilotContext,
-    cp_fork: Any,
-    regressed_snap: Any,
-) -> tuple[tuple[str, Any, Any], ...]:
-    """Channel-register transitions a revert undoes: ``(tag, from, to)``.
-
-    ``from`` is the checkpoint value, ``to`` the regressed frame's value, for the
-    navigated channel (the target register) when it moved.  Recording only —
-    legibility so a destructive move (``S_StateCurrent 6->8`` Aborting) is
-    distinguishable from useful program-owned motion (``6->11`` Held) in the
-    transcript.  Scoped to the target bearing to keep the line focused; the
-    derived enable/mask pipeline registers are noise here, not navigable channels.
-    """
-    cp_snap: Any = {}
-    try:
-        cp_snap = dict(getattr(cp_fork.state, "tags", {}) or {})
-    except (AttributeError, TypeError):
-        cp_snap = {}
-    reg_snap = regressed_snap or {}
-
-    channels: list[str] = []
-    target_tag = getattr(ctx, "target_tag", None)
-    if target_tag is not None:
-        channels.append(target_tag)
-    if not channels:
-        return ()
-
-    out: list[tuple[str, Any, Any]] = []
-    for tag in channels:
-        fv = cp_snap.get(tag)
-        tv = reg_snap.get(tag)
-        if fv is None and tv is None:
-            continue
-        if not _values_match(fv, tv):
-            out.append((tag, fv, tv))
-    return tuple(out)
-
-
-def _replay_step(step: _Step, sc: _StepContext) -> ReplayStep:
-    """One physical step plus its owning operation context → a replay spec.
-
-    The kind is the RECORDED motion (pulse / zoom / letrun), never inferred
-    from position or input emptiness.  A coast step with no channel register
-    (the settle-path zoom) replays as a plain dwell, exactly the shape it ran
-    live. Every world-side step has an owning context by construction.
-    """
-    inputs = tuple(step.inputs.items())
-    kind = {
-        MotionKind.INTERVENTION: "pulse",
-        MotionKind.COAST_TO_BEARING: "zoom",
-        MotionKind.COAST_HOLDING_WORLD: "letrun",
-    }[sc.motion]
-    if kind == "zoom" and sc.channel_tag is None:
-        kind = "dwell"
-    return ReplayStep(
-        inputs=inputs,
-        scans=step.scans,
-        kind=kind,
-        channel_tag=sc.channel_tag,
-        channel_target=sc.channel_target,
-    )
-
-
-def _deviation_bearing(
-    trial: _TrialResult,
-    frame: _IterationFrame,
-    watch_tags: list[str],
-    frontier: tuple[_ActionPair, ...],
-) -> tuple[_ActionPair, ...]:
-    """Facts the failed operation actually held and then lost.
-
-    A zoom carries two different channel values: the source it launched from
-    and the destination it requested. Only the source can be a departure
-    bearing. Recording the unvisited destination here manufactures an
-    impossible ``departure_scan=None`` and leaves causal ranking without the
-    exact source-to-eject transition.
-    """
-    needed_by_tag: dict[str, list[Any]] = {}
-    for tag, value in frontier:
-        needed_by_tag.setdefault(tag, []).append(value)
-    bearing: list[_ActionPair] = [
-        (tag, frame.snap.get(tag))
-        for tag in watch_tags
-        if not _values_match(frame.snap.get(tag), trial.fork_snap.get(tag))
-        and not any(
-            _values_match(trial.fork_snap.get(tag), needed) for needed in needed_by_tag.get(tag, ())
-        )
-    ]
-    channel = trial.zoom_channel_tag
-    if channel is not None:
-        source = trial.before_snap.get(channel)
-        landed = trial.fork_snap.get(channel)
-        if not _values_match(landed, source):
-            bearing = [(tag, value) for tag, value in bearing if tag != channel]
-            bearing.append((channel, source))
-    return tuple(bearing)
 
 
 def _install_confirmed_correction(
@@ -1280,8 +1139,7 @@ def _investigate_and_revert(
             before_snap=origin.before_snap,
             after_snap=trial.fork_snap,
             timeline=window_timeline,
-            program=ctx.program,
-            channel_tag=trial.zoom_channel_tag,
+            channel_tag=trial.channel_motion.channel_tag,
         )
 
         # Replay re-arms each step's RECORDED session spec (kind + channel +
@@ -1328,8 +1186,8 @@ def _investigate_and_revert(
             replay_steps,
             ctx=ctx,
             incident=ReplayIncident(
-                channel_tag=trial.zoom_channel_tag,
-                channel_target=trial.zoom_target_value,
+                channel_tag=trial.channel_motion.channel_tag,
+                channel_target=trial.channel_motion.target_value,
                 terminal_role_tags=(
                     role_tags if trial.motion is MotionKind.COAST_HOLDING_WORLD else None
                 ),
@@ -1338,7 +1196,9 @@ def _investigate_and_revert(
                 # caller decision, not buried dispatch); the full role set only
                 # when no channel register is recognized.
                 watch_roles=(
-                    (trial.zoom_channel_tag,) if trial.zoom_channel_tag is not None else role_tags
+                    (trial.channel_motion.channel_tag,)
+                    if trial.channel_motion.channel_tag is not None
+                    else role_tags
                 ),
                 departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
                 regression_witness=regression_witness,
@@ -1423,13 +1283,13 @@ def _investigate_and_revert(
         # original rollback boundary, budget, and the actual first observed
         # landing. The classifier's later quiescent fork is evidence, not
         # permission to skip the next recomputation point.
-        assert trial.zoom_channel_tag is not None
+        assert trial.channel_motion.channel_tag is not None
         retained = PilotEvent(
             "departure_investigated",
             state.work.state.scan_id,
             {
-                "channel_tag": trial.zoom_channel_tag,
-                "from_value": trial.before_snap.get(trial.zoom_channel_tag),
+                "channel_tag": trial.channel_motion.channel_tag,
+                "from_value": trial.before_snap.get(trial.channel_motion.channel_tag),
                 "retained": True,
                 "progress": retain_if_unresolved.progress,
                 "investigation": investigation_payload,
@@ -1445,7 +1305,7 @@ def _investigate_and_revert(
                 trial,
                 state,
                 ctx,
-                trial.zoom_channel_tag,
+                trial.channel_motion.channel_tag,
             ),
         )
 
@@ -1455,8 +1315,8 @@ def _investigate_and_revert(
     # is a genuine error — printing the reverted channel edge separates them in
     # every transcript.  Read the channel value at the checkpoint (from) vs. the
     # regressed frame (to); a channel is any opaque-loop pipeline register.
-    channel_transitions: tuple[tuple[str, Any, Any], ...] = _channel_transitions(
-        ctx, cp_fork, trial.fork_snap
+    channel_transitions: tuple[tuple[str, Any, Any], ...] = recording._channel_transitions(
+        ctx, trial, cp_fork, trial.fork_snap
     )
 
     # Keep the failed action as a nogood in the exact world where it was tried.

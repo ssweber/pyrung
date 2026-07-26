@@ -747,25 +747,6 @@ def _resolve_steerable_action(
     )
 
 
-def _resolve_steerable_driver(
-    read_tag: str,
-    value: Any,
-    snap: Mapping[str, Any],
-    ctx: Any,
-    *,
-    steerable: frozenset[str] | None = None,
-) -> tuple[str, Any] | None:
-    """Compatibility projection for callers that genuinely need only a pair."""
-    action = _resolve_steerable_action(
-        read_tag,
-        value,
-        snap,
-        ctx,
-        steerable=steerable,
-    )
-    return None if action is None else action.pair
-
-
 def _cannot_hold_pairs(demand: Any, snap: Mapping[str, Any], ctx: Any) -> list[tuple[str, Any]]:
     """Coordinated steerable holds that stop one demanded condition.
 
@@ -913,18 +894,6 @@ def _resolve_partial_actions(
     return list(actions.values())
 
 
-def _resolve_partial(
-    partial: dict[str, Any],
-    snap: Mapping[str, Any],
-    ctx: Any,
-    *,
-    steerable: frozenset[str] | None = None,
-) -> list[ActionPair] | None:
-    """Compatibility projection of structural actions to action pairs."""
-    actions = _resolve_partial_actions(partial, snap, ctx, steerable=steerable)
-    return None if actions is None else [action.pair for action in actions]
-
-
 def _best_forcing_actions(
     condition: Any,
     reads: set[str],
@@ -943,18 +912,15 @@ def _best_forcing_actions(
     total.  ``None`` when no assignment is drivable — the honest decline the
     single-read path made for a missing lever, now generalized to conjunctions.
     """
-    from pyrung.core.analysis.pilot.tide_tables import _MAX_COMBOS, _MAX_FREE_INDICES
+    from pyrung.core.analysis.pilot.tide_tables import bounded_product
 
     order = tuple(sorted(reads))
-    if not order or len(order) > _MAX_FREE_INDICES:
+    if not order:
         return None
     domains = _read_domains(reads, snap, ctx)
     if domains is None:
         return None
-    total = 1
-    for dom in domains.values():
-        total *= len(dom)
-    if total > _MAX_COMBOS:
+    if bounded_product(domains.values()) is None:
         return None
 
     sets = _minimal_forcing_sets(condition, order, domains, satisfies, base)

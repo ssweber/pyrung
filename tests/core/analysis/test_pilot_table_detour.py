@@ -270,8 +270,9 @@ def _drive_to(plc, tags, state_value):
 def test_current_recognizes_ack_while_held() -> None:
     """The recognizer surfaces the ONE operator action the program is dwelling on
     at HELD — ``InterlockAck`` — a legal, non-avoided, state-moving push."""
-    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
+    from pyrung.core.analysis.pilot.currents import current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.types import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -297,6 +298,7 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
     from types import SimpleNamespace
 
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.navigation import TargetSpec
     from pyrung.core.analysis.pilot.options import _current_bearing
 
     logic, tags = _packml_table_detour_program()
@@ -318,7 +320,7 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
         evidence,
     )
     ctx = SimpleNamespace(
-        target_tag=tags["State"].name,
+        target=TargetSpec(tags["State"].name, tags["Completed"]),
         opaque_loop=opaque_loop,
         pdg=pdg,
         program=logic,
@@ -342,8 +344,9 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
 
 def test_current_reader_returns_structural_execute_readings() -> None:
     """The reader reports structure without deciding whether PILOT should wait."""
-    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
+    from pyrung.core.analysis.pilot.currents import current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.types import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -365,8 +368,9 @@ def test_current_reader_returns_structural_execute_readings() -> None:
 
 def test_current_reader_does_not_apply_avoid_policy() -> None:
     """Avoid filtering belongs to Compass, not the structural reader."""
-    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
+    from pyrung.core.analysis.pilot.currents import current_readings
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.types import WorldView
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)

@@ -32,8 +32,9 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
     Reachable,
 )
 from pyrung.core.analysis.pilot.outcome import assess_outcome
-from pyrung.core.analysis.pilot.trace import target_reached, trace_back
+from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     MotionKind,
     PilotGateEvent,
     _ActionPair,
@@ -57,11 +58,10 @@ class _DeadEndResult:
     has_new_frontier: bool = False
 
 
-def _owned_bearing_stop_reason(
+def _owned_channel_motion(
     trial: _PulseState,
-    channel_tag: str | None,
-    target_value: Any,
-) -> str | None:
+    motion: ChannelMotion,
+) -> ChannelMotion:
     """Interpret a raw coast receipt against verification's selected owner.
 
     An inner advance seek arms the outer route channel as its departure bump.
@@ -71,12 +71,21 @@ def _owned_bearing_stop_reason(
     boundaries retain their own ``reached`` receipt even when their scalar
     heading was crossed rather than equalled.
     """
+    if not motion.active:
+        return motion
+    channel_tag = motion.channel_tag
+    assert channel_tag is not None
+    if _values_match(trial.snap.get(channel_tag), motion.target_value):
+        return replace(motion, stop_reason="reached")
     receipt = trial.coast_receipt
-    if receipt is None:
-        return None
-    if channel_tag is not None and _values_match(trial.snap.get(channel_tag), target_value):
-        return "reached"
-    return receipt.stop_reason
+    if receipt is not None:
+        return replace(motion, stop_reason=receipt.stop_reason)
+    stop_reason = (
+        "departed"
+        if not _values_match(trial.snap.get(channel_tag), trial.action_snap.get(channel_tag))
+        else "timeout"
+    )
+    return replace(motion, stop_reason=stop_reason)
 
 
 def _trial_result(
@@ -84,7 +93,7 @@ def _trial_result(
     frame: Any,
     observe_label: str,
     gate_events: list[PilotGateEvent],
-    bearing_stop_reason: str | None,
+    channel_motion: ChannelMotion,
 ) -> _TrialResult:
     """Preserve one executed attempt as verification's accepted receipt."""
     trial = attempt.pulse
@@ -104,9 +113,7 @@ def _trial_result(
         regression_nogoods=intent.regression_nogoods,
         chase_regression_causes=intent.chase_regression_causes,
         gate_events=tuple(gate_events),
-        zoom_channel_tag=intent.channel_tag,
-        zoom_target_value=intent.channel_target,
-        bearing_stop_reason=bearing_stop_reason,
+        channel_motion=channel_motion,
         coast_receipt=trial.coast_receipt,
         timeline=trial.timeline,
     )
@@ -218,14 +225,9 @@ def _gate_spin(
                 ),
                 gate_events,
             )
-            return _PulseState(
+            return replace(
+                trial,
                 fork=result.retry_fork,
-                scan_before=trial.scan_before,
-                action_scan=trial.action_scan,
-                action_snap=trial.action_snap,
-                wait_snaps=trial.wait_snaps,
-                post_pulse_snap=trial.post_pulse_snap,
-                post_pulse_key=trial.post_pulse_key,
                 snap=retry_snap,
                 key=retry_key,
                 # The retry fork replaced the original pulse; its recorded
@@ -262,6 +264,7 @@ def _gate_cycle(
     state: Any,
     *,
     pending: bool,
+    ordinal_advanced: bool,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
@@ -272,8 +275,7 @@ def _gate_cycle(
     # A revisit by the key's lights that advanced an event-earned ordinal is a
     # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
     # the threshold-masked projection (see _gate_spin's twin check).
-    gauge = getattr(state, "gauge", None)
-    if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+    if ordinal_advanced:
         _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return True
     if not influence_prescribed:
@@ -306,12 +308,13 @@ def _gate_dead_end(
     state: Any,
     ctx: Any,
     *,
+    target: TargetSpec,
+    ordinal_advanced: bool,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
-    zoom_channel_tag: str | None = None,
-    zoom_target_value: Any = None,
+    channel_motion: ChannelMotion,
 ) -> _DeadEndResult | None:
     # A zoom that drove its channel register to the target value (e.g.
     # S_StateCurrent 3->6) is a confirmed advance, even if the global target's
@@ -320,31 +323,29 @@ def _gate_dead_end(
     # S_StateCurrent 6->8) is an AMBIENT_DRIFT the investigation must own — not a
     # stall.  Either way the trial must reach outcome classification, not be
     # discarded here; only a true stall (channel unchanged, no frontier) is a
-    # dead end.  (For command candidates zoom_channel_tag is None, so this gate
+    # dead end. (For command candidates the channel receipt is inactive, so this gate
     # is unchanged for them.)
-    channel_reached = zoom_channel_tag is not None and _values_match(
-        trial.snap.get(zoom_channel_tag), zoom_target_value
-    )
-    channel_moved = zoom_channel_tag is not None and not _values_match(
-        trial.snap.get(zoom_channel_tag), frame.snap.get(zoom_channel_tag)
-    )
+    channel_reached = channel_motion.reached
+    channel_moved = channel_motion.departed
     accept_override = influence_prescribed or channel_reached or channel_moved
     new_tree = trace_back(
-        ctx.target_tag,
-        ctx.target_value,
+        target.tag,
+        target.value,
         trial.snap,
         ctx.pdg,
         ctx.program,
         ctx.steerable,
         # Same writer ranking as the frame trace, or the trend/frontier this
         # gate computes drifts against the tree the candidate came from.
-        clear_only=getattr(ctx, "clear_only", frozenset()),
-        opaque_loop=ctx.opaque_loop,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        route=ctx.route,
-        prior=getattr(ctx, "domain_prior", None),
-        avoid_pred=ctx.avoid_pred,
-        via_pred=ctx.via_pred,
+        constraints=TraceReadConstraints(
+            clear_only=ctx.clear_only,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            route=ctx.route,
+            prior=ctx.domain_prior,
+            avoid_pred=ctx.avoid_pred,
+            via_pred=ctx.via_pred,
+        ),
     )
     new_trend = new_tree.unsatisfied_count()
     new_actions = set(new_tree.ordered_actions())
@@ -359,7 +360,7 @@ def _gate_dead_end(
             state=state,
             context=ctx,
         ),
-        TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate),
+        target,
         NavigationConstraints(ctx.blocked_route_actions, ctx.avoid_pred),
         ctx.compass.knowledge,
     )
@@ -405,8 +406,7 @@ def _gate_dead_end(
         # An event-earned ordinal advance is trend improvement the tree can't
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
-        gauge = getattr(state, "gauge", None)
-        if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+        if ordinal_advanced:
             _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
@@ -441,10 +441,8 @@ def _gate_dead_end(
             )
 
     genuinely_new_actions = bool(new_actions - action_inputs - old_actions)
-    old_unsat: set[tuple[str, Any]] = set()
-    frame.tree._collect_unsatisfied(old_unsat)
-    new_unsat: set[tuple[str, Any]] = set()
-    new_tree._collect_unsatisfied(new_unsat)
+    old_unsat = frame.tree.unsatisfied_conditions()
+    new_unsat = new_tree.unsatisfied_conditions()
     genuinely_new_conditions = bool(new_unsat - old_unsat)
     has_new_frontier = genuinely_new_actions or genuinely_new_conditions
     return _DeadEndResult(tree=new_tree, trend=new_trend, has_new_frontier=has_new_frontier)
@@ -470,16 +468,39 @@ def verify_gates(
     intent = attempt.intent
     action_pairs = intent.action_pairs
     nogood_pair = intent.nogood_pair
-    zoom_channel_tag = intent.channel_tag
-    zoom_target_value = intent.channel_target
+    channel_motion = _owned_channel_motion(trial, intent.channel_motion)
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     retry_avoid_names: list[str] = []
-    bearing_stop_reason = _owned_bearing_stop_reason(
-        trial,
-        zoom_channel_tag,
-        zoom_target_value,
-    )
+
+    def _reject(
+        *,
+        nogoods: Any = None,
+        avoid_names: Any = None,
+    ) -> _AttemptResult:
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods if nogoods is None else nogoods),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names if avoid_names is None else avoid_names),
+        )
+
+    def _accept_target() -> _AttemptResult:
+        gate_events.append(PilotGateEvent("target", f"{ctx.target.tag}={ctx.target.value!r}"))
+        return _AttemptResult(
+            trial=_trial_result(
+                attempt,
+                frame,
+                intent.target_observe_label,
+                gate_events,
+                channel_motion,
+            ),
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
+        )
 
     # ── Scan gate (avoid=) ────────────────────────────────────────────────
     # Settled state first (the original veto: never rest in the avoided region).
@@ -494,11 +515,9 @@ def verify_gates(
             gate_events.append(
                 PilotGateEvent("avoid", f"settled state matches avoid: {', '.join(settled)}")
             )
-            return _AttemptResult(
-                trial=None,
-                gate_events=tuple(gate_events),
-                nogood_pairs=frozenset({nogood_pair}) if nogood_pair is not None else frozenset(),
-                avoid_names=tuple(settled),
+            return _reject(
+                nogoods=({nogood_pair} if nogood_pair is not None else ()),
+                avoid_names=settled,
             )
         if not ctx.avoid_pred(frame.snap):
             for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
@@ -507,13 +526,9 @@ def verify_gates(
                     gate_events.append(
                         PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")
                     )
-                    return _AttemptResult(
-                        trial=None,
-                        gate_events=tuple(gate_events),
-                        nogood_pairs=(
-                            frozenset({nogood_pair}) if nogood_pair is not None else frozenset()
-                        ),
-                        avoid_names=tuple(wink),
+                    return _reject(
+                        nogoods=({nogood_pair} if nogood_pair is not None else ()),
+                        avoid_names=wink,
                     )
 
     # An intervention may explore a new frontier, but it may not erase
@@ -540,28 +555,21 @@ def verify_gates(
                 },
             )
         )
-        return _AttemptResult(
-            trial=None,
-            gate_events=tuple(gate_events),
-            nogood_pairs=(frozenset({nogood_pair}) if nogood_pair is not None else frozenset()),
+        return _reject(
+            nogoods=({nogood_pair} if nogood_pair is not None else intent.regression_nogoods)
         )
 
     # Reaching the target does not pardon an intervention that got there by
     # erasing already-earned work (for example, calling init so a completion
     # bit momentarily reads true).  The banked-work veto therefore precedes
     # target acceptance.
-    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
-        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
-        return _AttemptResult(
-            trial=_trial_result(
-                attempt,
-                frame,
-                intent.target_observe_label,
-                gate_events,
-                bearing_stop_reason,
-            ),
-            gate_events=tuple(gate_events),
-        )
+    if target_reached(
+        trial.snap,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    ):
+        return _accept_target()
 
     spun = _gate_spin(
         trial,
@@ -575,49 +583,33 @@ def verify_gates(
         avoid_names=retry_avoid_names,
     )
     if spun is None:
-        return _AttemptResult(
-            trial=None,
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            avoid_names=tuple(retry_avoid_names),
-        )
+        return _reject()
     trial = spun
     attempt = replace(attempt, pulse=trial)
 
-    if target_reached(trial.snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
-        gate_events.append(PilotGateEvent("target", f"{ctx.target_tag}={ctx.target_value!r}"))
-        return _AttemptResult(
-            trial=_trial_result(
-                attempt,
-                frame,
-                intent.target_observe_label,
-                gate_events,
-                bearing_stop_reason,
-            ),
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
-        )
+    if target_reached(
+        trial.snap,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    ):
+        return _accept_target()
 
     pending = _has_pending_effects(trial.fork)
+    gauge = getattr(state, "gauge", None)
+    ordinal_advanced = gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap)
     if not _gate_cycle(
         trial,
         frame,
         state,
         pending=pending,
+        ordinal_advanced=ordinal_advanced,
         influence_prescribed=intent.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
     ):
-        return _AttemptResult(
-            trial=None,
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
-        )
+        return _reject()
 
     dead_end = _gate_dead_end(
         trial,
@@ -625,21 +617,16 @@ def verify_gates(
         frame,
         state,
         ctx,
+        target=intent.bearing_objective.target,
+        ordinal_advanced=ordinal_advanced,
         influence_prescribed=intent.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
-        zoom_channel_tag=zoom_channel_tag,
-        zoom_target_value=zoom_target_value,
+        channel_motion=channel_motion,
     )
     if dead_end is None:
-        return _AttemptResult(
-            trial=None,
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
-        )
+        return _reject()
 
     assessment = assess_outcome(
         trial,
@@ -650,13 +637,8 @@ def verify_gates(
         dead_end.has_new_frontier,
         chase_cause_roots,
         route_prescribed=intent.route_prescribed,
-        zoom_channel_tag=zoom_channel_tag,
-        zoom_target_value=zoom_target_value,
-        zoom_progressed=(
-            getattr(state, "gauge", None) is not None
-            and state.gauge.ordinal_advanced(frame.snap, trial.snap)
-        ),
-        zoom_stop_reason=(bearing_stop_reason),
+        channel_motion=channel_motion,
+        channel_progressed=ordinal_advanced,
     )
 
     outcome = assessment.legacy_outcome
@@ -664,7 +646,7 @@ def verify_gates(
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
         _record_gate(
-            "ZOOM-STALL" if zoom_channel_tag is not None else "BAD-EDGE",
+            "ZOOM-STALL" if channel_motion.active else "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
             evidence={
@@ -675,20 +657,16 @@ def verify_gates(
                 "new_frontier": assessment.new_frontier,
                 "trend_before": frame.distance_before,
                 "trend_after": dead_end.trend,
-                "zoom_channel_tag": zoom_channel_tag,
-                "zoom_target_value": zoom_target_value,
+                "zoom_channel_tag": channel_motion.channel_tag,
+                "zoom_target_value": channel_motion.target_value,
                 "zoom_actual_value": (
-                    trial.snap.get(zoom_channel_tag) if zoom_channel_tag is not None else None
+                    trial.snap.get(channel_motion.channel_tag)
+                    if channel_motion.channel_tag is not None
+                    else None
                 ),
             },
         )
-        return _AttemptResult(
-            trial=None,
-            gate_events=tuple(gate_events),
-            nogood_pairs=frozenset(collected_nogoods),
-            confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
-        )
+        return _reject()
 
     gate_events.append(
         PilotGateEvent(outcome.value, f"distance {frame.distance_before} -> {dead_end.trend}")
@@ -701,7 +679,7 @@ def verify_gates(
                 frame,
                 intent.observe_label,
                 gate_events,
-                bearing_stop_reason,
+                channel_motion,
             ),
             new_key=trial.key,
             trend=dead_end.trend,

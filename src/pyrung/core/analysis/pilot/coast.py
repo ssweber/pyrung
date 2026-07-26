@@ -37,11 +37,9 @@ class CoastLimits:
     """The named policy horizons, centralized.  Values only — the *decision*
     of when each applies stays with its owner (one owner per decision)."""
 
-    zoom_budget: int = 10_000
     cone_floor: int = 2  # ladder logic takes ≤2 scans to propagate
     cone_ceiling: int = 16
     dwell_ceiling: int = 64
-    delayed_effects_budget: int = 2_000
     pulse_settle_scans: int = 4
     # A departure's own transition chain (Holding -> Held) completes in
     # scans-to-seconds; the channel must stay silent for a full second of

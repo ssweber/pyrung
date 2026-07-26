@@ -141,30 +141,6 @@ def detect_cycle(
 # ── Crossing bound (in period units) ─────────────────────────────────
 
 
-def _periods_to_crossing(
-    cyc: _Cycle,
-    state: SystemState,
-    fold_ctx: _FoldContext,
-    extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
-) -> int | None:
-    """Whole periods until the **first** regime change among the monotone coords.
-
-    A regime change is any comparison the program reads on a monotone coordinate
-    flipping, or that coordinate's timer/counter ``Done`` tripping (the preset
-    crossing).  Lifts ``core/fold``'s per-scan crossing arithmetic to per-period
-    granularity by passing the per-period delta as the rate.
-
-    Returns the nearest such crossing in periods (≥ 1), or ``None`` when there is
-    nothing to bound against or any threshold is unresolvable — both **fail
-    closed**: the caller then does not fold and steps instead, so a coordinate we
-    cannot bound is never skipped past.
-    """
-    k, live = _monotone_read_surface(cyc, state, fold_ctx, extra_comparisons) or (None, -1)
-    if live == 0:
-        return None  # all coordinates inert — caller handles via the surface split
-    return k
-
-
 def _monotone_read_surface(
     cyc: _Cycle,
     state: SystemState,

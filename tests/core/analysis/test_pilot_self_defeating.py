@@ -35,10 +35,10 @@ from pyrung.core.analysis.pilot.investigate import (
     _active_rungs_defeat_needed,
     _precise_causes,
     correction_identity,
-    hold_defeats_needed,
     investigate_deviation,
 )
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+from pyrung.core.analysis.pilot.options import hold_defeats_needed
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
@@ -54,6 +54,7 @@ from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
+    ChannelMotion,
     CorrectionStatus,
     _Checkpoint,
     _ConfirmedCorrection,
@@ -221,8 +222,7 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
         pipeline_internal_tags=frozenset(),
         route=None,
         compass=SimpleNamespace(action_tags=frozenset()),
-        target_tag=Channel.name,
-        target_value=99,
+        target=TargetSpec(Channel.name, 99),
     )
     incident = DeviationIncident(
         anchor_scan=anchor,
@@ -458,8 +458,7 @@ def _saboteur_scenario():
     ctx = SimpleNamespace(
         resting={"Go": False},
         edge_tags={"Go"},
-        target_tag="Out",
-        target_value=True,
+        target=TargetSpec("Out", True),
         pdg=pdg,
         program=prog,
         steerable=steerable,
@@ -519,8 +518,7 @@ def _saboteur_scenario():
         trend=1,  # misleadingly LOW — the ejection branch intercepts it
         outcome=Outcome.AMBIENT_DRIFT,
         chase_regression_causes=True,
-        zoom_channel_tag="State",
-        zoom_target_value=6,
+        channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
     )
     return state, trial, frame, ctx
 

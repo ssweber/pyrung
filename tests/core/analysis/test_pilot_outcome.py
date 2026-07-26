@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot.outcome import (
     assess_outcome,
     classify_outcome,
 )
+from pyrung.core.analysis.pilot.types import ChannelMotion
 
 
 def _zoom(
@@ -34,9 +35,12 @@ def _zoom(
         frontier,
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=True,
-        zoom_channel_tag="State",
-        zoom_target_value=16,
-        zoom_progressed=credential,
+        channel_motion=ChannelMotion(
+            "State",
+            16,
+            stop_reason="reached" if after == 16 else "timeout" if after == 11 else "departed",
+        ),
+        channel_progressed=credential,
     )
 
 
@@ -62,9 +66,8 @@ def test_action_receipt_survives_later_program_departure() -> None:
         False,
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
-        zoom_channel_tag="State",
-        zoom_target_value=16,
-        zoom_progressed=True,
+        channel_motion=ChannelMotion("State", 16, stop_reason="reached"),
+        channel_progressed=True,
     )
 
     assert assessment.bearing is BearingEffect.SATISFIED
@@ -88,8 +91,8 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
         False,
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
-        zoom_channel_tag="State",
-        zoom_target_value=16,
+        channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
+        channel_progressed=False,
     )
 
     assert assessment.bearing is BearingEffect.DEPARTED
@@ -113,8 +116,8 @@ def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
         True,
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=True,
-        zoom_channel_tag="State",
-        zoom_target_value=6,
+        channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+        channel_progressed=False,
     )
 
     assert assessment.agency is Agency.PROGRAM

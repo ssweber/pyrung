@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.partial_eval import partial_eval
 from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.static_expressions import (
+    simplified_expr_tags as _simplified_expr_tags,
+)
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Const, Or, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
@@ -47,21 +50,6 @@ class _WriterAvailability(IntEnum):
 
 
 _GUARD_CONTRADICTION = object()
-
-
-def _simplified_expr_tags(e: Any) -> set[str]:
-    """Tag names referenced by a simplified ``Atom``/``And``/``Or`` expression."""
-    if isinstance(e, Atom):
-        tags = {e.tag}
-        if e.operand_is_tag:
-            tags.add(e.operand)
-        return tags
-    if isinstance(e, (And, Or)):
-        out: set[str] = set()
-        for term in e.terms:
-            out |= _simplified_expr_tags(term)
-        return out
-    return set()
 
 
 def _guard_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
@@ -177,7 +165,7 @@ def _equality_gated_coil(
     constraint.  Lets :func:`_route_conflicts` catch a caller-gate mode that
     contradicts the mode the body requires, even across differently named tags.
     """
-    from pyrung.core.analysis.pilot.evidence import _channel_constraint
+    from pyrung.core.analysis.pilot.static_expressions import _channel_constraint
 
     if value is not True:
         return None
@@ -263,40 +251,28 @@ def _expr_availability(
                 else:
                     alias_states.append(_WriterAvailability.UNAVAILABLE_FROM_HERE)
             if alias_states:
-                if any(s == _WriterAvailability.AVAILABLE_NOW for s in alias_states):
-                    return _WriterAvailability.AVAILABLE_NOW
-                if any(s == _WriterAvailability.UNKNOWN for s in alias_states):
-                    return _WriterAvailability.UNKNOWN
-                return _WriterAvailability.UNAVAILABLE_FROM_HERE
+                return min(alias_states)
         if expr.tag in current_tags:
             return _WriterAvailability.UNAVAILABLE_FROM_HERE
         if expr.tag in steerable:
             return _WriterAvailability.AVAILABLE_NOW
         return _WriterAvailability.AFTER_PREREQ
     if isinstance(expr, And):
-        states = [
-            _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
-            for term in expr.terms
-        ]
-        if any(s == _WriterAvailability.UNAVAILABLE_FROM_HERE for s in states):
-            return _WriterAvailability.UNAVAILABLE_FROM_HERE
-        if any(s == _WriterAvailability.UNKNOWN for s in states):
-            return _WriterAvailability.UNKNOWN
-        if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
-            return _WriterAvailability.AFTER_PREREQ
-        return _WriterAvailability.AVAILABLE_NOW
+        return max(
+            (
+                _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
+                for term in expr.terms
+            ),
+            default=_WriterAvailability.AVAILABLE_NOW,
+        )
     if isinstance(expr, Or):
-        states = [
-            _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
-            for term in expr.terms
-        ]
-        if any(s == _WriterAvailability.AVAILABLE_NOW for s in states):
-            return _WriterAvailability.AVAILABLE_NOW
-        if any(s == _WriterAvailability.AFTER_PREREQ for s in states):
-            return _WriterAvailability.AFTER_PREREQ
-        if any(s == _WriterAvailability.UNKNOWN for s in states):
-            return _WriterAvailability.UNKNOWN
-        return _WriterAvailability.UNAVAILABLE_FROM_HERE
+        return min(
+            (
+                _expr_availability(term, snapshot, steerable, current_tags, pdg, program)
+                for term in expr.terms
+            ),
+            default=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+        )
     return _WriterAvailability.UNKNOWN
 
 

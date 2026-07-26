@@ -30,6 +30,7 @@ from pyrung.core.analysis.pilot._ops import (
     fork_with_rungs,
     wait_edge_nogood,
 )
+from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
@@ -42,8 +43,10 @@ from pyrung.core.analysis.pilot.navigation import (
     OrientationWorld,
     Pulse,
 )
+from pyrung.core.analysis.pilot.options import _CandidateSource
 from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     MotionKind,
     PilotGateEvent,
     _ActionPair,
@@ -193,7 +196,7 @@ def _apply_actions(
     # one-scan transient (STARTING → EXECUTE) and the post-settle check never
     # sees it.  Landing the fork on the transient lets verify confirm it.
     def _reached(tags: dict[str, Any]) -> bool:
-        return target_reached(tags, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+        return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
 
     if _reached(action_snap):
         wait_snaps: list[dict[str, Any]] = []
@@ -432,16 +435,19 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 bearing_objective=bearing.objective,
                 action_pairs=(act.action,),
                 applied=act.applied,
-                influence_prescribed=option.influence_prescribed,
+                influence_prescribed=option.source is _CandidateSource.INFLUENCE,
                 # A structural program-owned current is also an explicit bearing:
                 # if it opens a new frontier, commit it so progress monitoring can
                 # investigate and learn the corrective holds. It is not a static
                 # route suffix and never bypasses the live avoid gate.
-                route_prescribed=option.route_prescribed or option.current_prescribed,
+                route_prescribed=option.source
+                in {_CandidateSource.ROUTE, _CandidateSource.CURRENT},
                 nogood_pair=act.action,
                 regression_nogoods=frozenset({act.action}),
-                channel_tag=option.bearing_channel_tag,
-                channel_target=option.bearing_channel_value,
+                channel_motion=ChannelMotion(
+                    option.bearing_channel_tag,
+                    option.bearing_channel_value,
+                ),
             ),
             frame,
             state,
@@ -469,16 +475,10 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     if isinstance(act, Coast):
         if act.mode == "bearing":
             return _try_zoom(
-                act.channel_tag,
-                act.target_value,
-                act.route_prescribed,
+                act,
                 frame,
                 state,
                 ctx,
-                boundary=act.boundary,
-                route_channel_tag=act.route_channel_tag,
-                route_from_value=act.route_from_value,
-                route_target_value=act.route_target_value,
                 bearing_objective=bearing.objective,
             )
         return _try_terminal_letrun(frame, state, ctx, bearing.objective)
@@ -493,18 +493,12 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
 
 
 def _try_zoom(
-    channel_tag: str | None,
-    target_value: Any,
-    route_prescribed: bool,
+    coast: Coast,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
     *,
     bearing_objective: BearingObjective,
-    boundary: Any = None,
-    route_channel_tag: str | None = None,
-    route_from_value: Any = None,
-    route_target_value: Any = None,
 ) -> _AttemptResult:
     """Let-run zoom through the verify pipeline — same shape as _try_candidate.
 
@@ -526,12 +520,16 @@ def _try_zoom(
     # here (a recipe-gated automatic transition, a dwell that never arms).
     # Record it as a world-keyed nogood so the next iteration's route query walks
     # around the edge instead of re-burning the same sterile coast.
-    wait_channel = route_channel_tag or channel_tag
+    wait_channel = coast.route_channel_tag or coast.channel_tag
     wait_nogood = (
         wait_edge_nogood(
             wait_channel,
-            route_from_value if route_channel_tag is not None else snap_before.get(channel_tag),
-            route_target_value if route_channel_tag is not None else target_value,
+            (
+                coast.route_from_value
+                if coast.route_channel_tag is not None
+                else snap_before.get(coast.channel_tag)
+            ),
+            coast.route_target_value if coast.route_channel_tag is not None else coast.target_value,
         )
         if wait_channel is not None
         else None
@@ -544,12 +542,12 @@ def _try_zoom(
     session.arm_pens(_pen_tags(state, ctx))
     dwell, zoom_receipt = _letrun_zoom(
         fork,
-        channel_tag,
-        target_value,
+        coast.channel_tag,
+        coast.target_value,
         cone=_cone_tags(frame, ctx),
         session=session,
-        boundary=boundary,
-        route_channel_tag=route_channel_tag,
+        boundary=coast.boundary,
+        route_channel_tag=coast.route_channel_tag,
     )
 
     snap_after = dict(fork.state.tags)
@@ -590,10 +588,10 @@ def _try_zoom(
     departed_route = (
         zoom_receipt is not None
         and zoom_receipt.stop_reason == "departed"
-        and route_channel_tag is not None
+        and coast.route_channel_tag is not None
     )
-    verify_channel = route_channel_tag if departed_route else channel_tag
-    verify_target = route_target_value if departed_route else target_value
+    verify_channel = coast.route_channel_tag if departed_route else coast.channel_tag
+    verify_target = coast.route_target_value if departed_route else coast.target_value
     result = verify_gates(
         _ExecutedAttempt(
             pulse=trial,
@@ -601,10 +599,13 @@ def _try_zoom(
                 bearing_objective=bearing_objective,
                 observe_label="zoom",
                 target_observe_label="zoom-target",
-                route_prescribed=route_prescribed,
+                route_prescribed=coast.route_prescribed,
                 nogood_pair=wait_nogood,
-                channel_tag=verify_channel,
-                channel_target=verify_target,
+                channel_motion=ChannelMotion(
+                    verify_channel,
+                    verify_target,
+                    coast.boundary,
+                ),
                 motion=MotionKind.COAST_TO_BEARING,
             ),
         ),
@@ -656,8 +657,8 @@ def _try_terminal_letrun(
     # when the register hits an exact value — coast on the predicate so a sensor
     # ramp driven by a held prerequisite (Enable) stops the moment it crosses.
     reached_fn = (
-        (lambda s: target_reached(s.tags, ctx.target_tag, ctx.target_value, ctx.target_predicate))
-        if ctx.target_predicate is not None
+        (lambda s: target_reached(s.tags, ctx.target.tag, ctx.target.value, ctx.target.predicate))
+        if ctx.target.predicate is not None
         else None
     )
 
@@ -666,8 +667,8 @@ def _try_terminal_letrun(
     session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
         fork,
-        ctx.target_tag,
-        ctx.target_value,
+        ctx.target.tag,
+        ctx.target.value,
         role_tags,
         budget=budget,
         reached_fn=reached_fn,
@@ -695,7 +696,7 @@ def _try_terminal_letrun(
     #               investigation via the changed role as the deviation bearing.
     #   stall    -> nothing reached, no role moved: a true dead end; let the
     #               caller fall back to a bounded cone settle.
-    reached = target_reached(snap_after, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+    reached = target_reached(snap_after, ctx.target.tag, ctx.target.value, ctx.target.predicate)
     changed_channel = next(
         (t for t in role_tags if not _values_match(snap_after.get(t), start_roles[t])),
         None,
@@ -741,8 +742,7 @@ def _try_terminal_letrun(
                 bearing_objective=bearing_objective,
                 observe_label="letrun",
                 target_observe_label="letrun-target",
-                channel_tag=chan_tag,
-                channel_target=chan_val,
+                channel_motion=ChannelMotion(chan_tag, chan_val),
                 motion=MotionKind.COAST_HOLDING_WORLD,
             ),
         ),
@@ -783,7 +783,7 @@ def _try_terminal_dwell(
     snap_before = dict(fork.state.tags)
 
     def _reached(tags: dict[str, Any]) -> bool:
-        return target_reached(tags, ctx.target_tag, ctx.target_value, ctx.target_predicate)
+        return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
 
     ceiling = min(_LETRUN_DWELL_CEILING, max(2, ctx.max_scans - scan_before))
     session = CoastSession(fork, kind="settle")
@@ -883,21 +883,11 @@ def _letrun_zoom(
 
     budget = _ZOOM_BUDGET
     if boundary is not None:
-        from pyrung.core.analysis.pilot.advance import build_advance_index
         from pyrung.core.instruction.advance import constraint_holds
 
-        owner = build_advance_index(
-            work.program,
-            getattr(work, "_harness", None),
-        ).resolve(getattr(boundary, "tag", ""))
-        if owner is not None and owner.profile.linear is not None:
-            estimate = owner.profile.linear.estimate_scans(
-                boundary,
-                work.state.tags,
-                work._dt,
-            )
-            if estimate is not None:
-                budget = max(budget, estimate + 2)
+        estimate = estimate_owned_boundary_scans(work, boundary)
+        if estimate is not None:
+            budget = max(budget, estimate + 2)
         receipt = _coast_holding_state(
             work,
             channel_tag,

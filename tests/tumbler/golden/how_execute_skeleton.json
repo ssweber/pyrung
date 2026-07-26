@@ -756,25 +756,6 @@
   "kind": "trial_committed"
  },
  {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "terminal": true,
-  "trend": 0
- },
- {
   "kind": "finished",
   "knowledge": {
    "avoid_names": [],

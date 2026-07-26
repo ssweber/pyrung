@@ -15,7 +15,10 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.pilot.static_expressions import (
+    _channel_from_values,
+)
+from pyrung.core.analysis.pilot.tide_tables import _read_table, table_operand_from_copy
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -97,89 +100,6 @@ class PipelineRoles:
         )
 
 
-@dataclass(frozen=True)
-class PipelineNeedExpansion:
-    """Static routes that can satisfy a need owned by a pipeline."""
-
-    needed_tag: str
-    needed_value: Any
-    role: PipelineRoles
-    routes: tuple[TransitionRoute, ...]
-
-
-def roles_for_needed_tag(
-    needed_tag: str,
-    roles: tuple[PipelineRoles, ...],
-) -> tuple[PipelineRoles, ...]:
-    """Pipelines that can own a need for *needed_tag*.
-
-    A request tag is owned by the channel transition pipeline, not by a
-    standalone trace of the request register. That is the shape needed for
-    ``StateRequested=target`` to become "navigate the channel pipeline."
-    """
-
-    return tuple(
-        role for role in roles if needed_tag == role.channel_tag or needed_tag in role.request_tags
-    )
-
-
-def expand_pipeline_need(
-    needed_tag: str,
-    needed_value: Any,
-    roles: tuple[PipelineRoles, ...],
-    routes: tuple[TransitionRoute, ...],
-) -> tuple[PipelineNeedExpansion, ...]:
-    """Map a tag/value need onto owning pipeline routes.
-
-    For a channel tag, routes are matched by destination value. For a request
-    tag, routes are matched by the request value they write. This is the generic
-    bridge from ``need request=target`` to "navigate the channel pipeline."
-    """
-
-    expansions: list[PipelineNeedExpansion] = []
-    for role in roles_for_needed_tag(needed_tag, roles):
-        matched = tuple(
-            route
-            for route in routes
-            if _route_satisfies_need(route, role, needed_tag, needed_value)
-        )
-        if matched:
-            expansions.append(
-                PipelineNeedExpansion(
-                    needed_tag=needed_tag,
-                    needed_value=needed_value,
-                    role=role,
-                    routes=matched,
-                )
-            )
-    return tuple(expansions)
-
-
-def _route_satisfies_need(
-    route: TransitionRoute,
-    role: PipelineRoles,
-    needed_tag: str,
-    needed_value: Any,
-) -> bool:
-    if needed_tag == role.channel_tag:
-        return _values_match(route.destination_value, needed_value)
-    if needed_tag in role.request_tags:
-        return route.request_tag == needed_tag and _values_match(
-            route.request_value,
-            needed_value,
-        )
-    return False
-
-
-@dataclass(frozen=True)
-class _IndirectPipelineSource:
-    """An indirect-copy source whose pointer is driven by a request tag."""
-
-    request_tag: str
-    block: Any
-    eval_addr: Any
-
-
 # ---------------------------------------------------------------------------
 # Static route expansion (works on any program, no ExploreContext needed)
 # ---------------------------------------------------------------------------
@@ -229,7 +149,7 @@ def expand_routes(
     request_tags: set[str] = set()
     # {candidate_request_tag: {request_value: destination_value}}
     dest_maps: dict[str, dict[Any, Any]] = {}
-    indirect_sources: dict[str, list[_IndirectPipelineSource]] = {}
+    indirect_sources: dict[str, list[Any]] = {}
 
     for node_idx in writer_nodes:
         node = pdg.rung_nodes[node_idx]
@@ -277,16 +197,20 @@ def expand_routes(
             request_tags.add(written.source)
 
         elif written is UNKNOWN:
-            indirect = _indirect_pipeline_source(
+            indirect = table_operand_from_copy(
                 rung_obj,
                 target_tag,
+                {},
                 pdg,
                 program,
-                evidence,
+                evidence=evidence,
+                single_mutable_index=False,
+                live_snapshot=False,
+                strict_hop_budget=False,
             )
-            if indirect is not None:
-                request_tags.add(indirect.request_tag)
-                indirect_sources.setdefault(indirect.request_tag, []).append(indirect)
+            if indirect is not None and indirect.index_tag != target_tag:
+                request_tags.add(indirect.index_tag)
+                indirect_sources.setdefault(indirect.index_tag, []).append(indirect)
 
         elif isinstance(written, Aggregate):
             # Honest punt: an aggregate writer produces a runtime sum/count over
@@ -338,10 +262,19 @@ def expand_routes(
                 # Resolve via Literal target writers, else Affine passthrough
                 dest_value = dest_map.get(req_value, _MISSING)
                 if dest_value is _MISSING:
-                    dest_value = _destination_from_indirect(
-                        req_value,
-                        indirect_sources.get(request_tag, ()),
-                    )
+                    invalid = object()
+                    dest_value = None
+                    for source in indirect_sources.get(request_tag, ()):
+                        read = _read_table(
+                            source,
+                            req_value,
+                            {},
+                            coerce_index=True,
+                            invalid=invalid,
+                        )
+                        if read is not invalid:
+                            dest_value = read
+                            break
                 if dest_value is None:
                     dest_value = req_value
 
@@ -458,141 +391,6 @@ def _merge_condition_values(
     return merged
 
 
-def _indirect_pipeline_source(
-    rung_obj: Any,
-    target_tag: str,
-    pdg: ProgramGraph,
-    program: Any,
-    evidence: TransitionEvidence | None,
-) -> _IndirectPipelineSource | None:
-    """Return the request-tag view of an indirect copy writing *target_tag*."""
-    from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    src = None
-    for instr in getattr(rung_obj, "_instructions", ()):
-        if not isinstance(instr, CopyInstruction):
-            continue
-        if getattr(instr.dest, "name", None) != target_tag:
-            continue
-        if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
-            src = instr.source
-        break
-    if src is None:
-        return None
-
-    if isinstance(src, IndirectRef):
-        idx_tag = src.pointer.name
-        eval_addr: Any = lambda v: int(v)
-    else:
-        names = _expr_tag_names(src.expr)
-        if names is None or len(names) != 1:
-            return None
-        idx_tag = next(iter(names))
-        iexpr = src.expr
-        itag = idx_tag
-        eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView({}, {itag: v})))
-
-    request_tag, eval_addr = _canonical_index_source(
-        idx_tag,
-        eval_addr,
-        pdg,
-        program,
-        evidence,
-    )
-    if request_tag == target_tag:
-        return None
-    return _IndirectPipelineSource(
-        request_tag=request_tag,
-        block=src.block,
-        eval_addr=eval_addr,
-    )
-
-
-def _canonical_index_source(
-    idx_tag: str,
-    eval_addr: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    evidence: TransitionEvidence | None,
-) -> tuple[str, Any]:
-    """Hop pointer scratch back to the representative request tag."""
-    from pyrung.core.analysis.pilot.trace import _single_calc_source
-    from pyrung.core.analysis.sp_values import _SnapshotView
-
-    tag = idx_tag
-    for _ in range(3):
-        canonical = evidence.canonicalize(tag) if evidence is not None else None
-        if canonical is not None:
-            prev = eval_addr
-            rep = canonical.representative
-            scale = canonical.scale
-            offset = canonical.offset
-            eval_addr = lambda v, _prev=prev, _scale=scale, _offset=offset: _prev(
-                _scale * v + _offset
-            )
-            tag = rep
-            continue
-
-        # Unified with ``trace._single_calc_source`` — the single shared,
-        # constant-tolerant definition (a calc may reference immutable constant
-        # tags beside the one mutable index source, ``calc(CmdReg + Base, ptr)``).
-        calc_def = _single_calc_source(tag, pdg, program)
-        if calc_def is None:
-            break
-        expr, rep = calc_def
-        # The calc's non-source tags are immutable constants (no writers), so
-        # their value is their declared default.  Bind them here — evidence has
-        # no live snapshot — so ``Req + K`` evaluates instead of reading K as
-        # ``None``.  The overlay (``rep -> v``) still wins over the defaults.
-        const_env = _constant_calc_env(expr, rep, pdg)
-        prev = eval_addr
-        eval_addr = lambda v, _prev=prev, _expr=expr, _rep=rep, _env=const_env: _prev(
-            _expr.evaluate(_SnapshotView(_env, {_rep: v}))
-        )
-        tag = rep
-    return tag, eval_addr
-
-
-def _constant_calc_env(expr: Any, source_tag: str, pdg: ProgramGraph) -> dict[str, Any]:
-    """Default values for the immutable-constant tags an index calc reads.
-
-    ``_single_calc_source`` admits a calc that references constant tags beside
-    the single mutable index source (``calc(CmdReg + Base, ptr)``).  Those
-    constants are never written, so their value is their declared default —
-    return them so the address evaluator can resolve the expression without a
-    live snapshot.  The mutable *source_tag* is excluded (the caller binds it).
-    """
-    from pyrung.core.analysis.sp_values import _expr_tag_names
-
-    names = _expr_tag_names(expr) or set()
-    env: dict[str, Any] = {}
-    for name in names:
-        if name == source_tag:
-            continue
-        tag_obj = pdg.tags.get(name)
-        if tag_obj is not None:
-            env[name] = tag_obj.default
-    return env
-
-
-def _destination_from_indirect(
-    request_value: Any,
-    sources: Any,
-) -> Any | None:
-    """Read the destination value for one request value from an indirect table."""
-    for source in sources:
-        try:
-            addr = int(source.eval_addr(request_value))
-            source.block._validate_address(addr)
-        except (IndexError, TypeError, ValueError, ZeroDivisionError):
-            continue
-        _retentive, value = source.block._effective_slot_policy(addr)
-        return value
-    return None
-
-
 def _partition_conditions(
     cond_values: dict[str, frozenset[Any]],
     source_tags: set[str],
@@ -632,6 +430,21 @@ def _partition_conditions(
     return tuple(source), tuple(enablers), frozenset(actions)
 
 
+def _call_site_nodes(node: Any, pdg: ProgramGraph) -> tuple[Any, ...]:
+    """Main-routine PDG nodes that call the writer node's subroutine."""
+
+    if node.subroutine is None:
+        return ()
+    call_sites = pdg.call_site_rung_indices().get(node.subroutine, frozenset())
+    main_by_rung: dict[int, Any] = {}
+    for candidate in pdg.rung_nodes:
+        if candidate.subroutine is None and not candidate.branch_path:
+            main_by_rung.setdefault(candidate.rung_index, candidate)
+    return tuple(
+        main_by_rung[rung_index] for rung_index in sorted(call_sites) if rung_index in main_by_rung
+    )
+
+
 def _call_site_conditions(
     node: Any,
     pdg: ProgramGraph,
@@ -645,22 +458,10 @@ def _call_site_conditions(
     from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.analysis.sp_values import _extract_condition_values
 
-    call_sites = pdg.call_site_rung_indices().get(
-        node.subroutine,
-        frozenset(),
-    )
     gates: list[tuple[str, Any]] = []
 
-    main_by_rung: dict[int, int] = {}
-    for idx, n in enumerate(pdg.rung_nodes):
-        if n.subroutine is None and not n.branch_path:
-            main_by_rung.setdefault(n.rung_index, idx)
-
-    for cs_rung_idx in sorted(call_sites):
-        cs_node_idx = main_by_rung.get(cs_rung_idx)
-        if cs_node_idx is None:
-            continue
-        cs_rung = resolve_rung(program, pdg.rung_nodes[cs_node_idx])
+    for call_site in _call_site_nodes(node, pdg):
+        cs_rung = resolve_rung(program, call_site)
         if cs_rung is None:
             continue
         cs_sp = cs_rung.sp_tree()
@@ -672,88 +473,6 @@ def _call_site_conditions(
                 gates.append((tag, next(iter(values))))
 
     return tuple(gates)
-
-
-def _channel_from_values(
-    expr: Any,
-    channel_tag: str,
-    source_aliases: dict[tuple[str, Any], tuple[str, Any]] | None = None,
-) -> tuple[Any, ...]:
-    """Channel-register values a writer fires *from*, OR included.
-
-    Read straight off the writer's own condition so a disjunctive source
-    (``Or(StateCurrent==STOPPED, ==COMPLETED)``) survives as multiple from-values
-    where :func:`_partition_conditions` would have dropped it for being
-    multi-valued.
-
-    Alias state-flags are resolved through *source_aliases*, so a disjunction
-    written over *derived* flags (``Or(S_Execute, S_Suspended)`` meaning
-    ``StateCurrent in {6, 5}``) fans out the same way a direct
-    ``Or(StateCurrent==6, ==5)`` would.  This walks the condition tree directly
-    rather than :func:`_extract_condition_values`' collapsed dict, which drops an
-    ``Or`` whose branches constrain *different* tags — exactly the alias case —
-    before the alias map can resolve them, leaving the compass with an unguarded
-    ``ANY`` edge (Hold reachable from any state).
-
-    Empty when the writer names no channel value (an init/clear/fault rung —
-    not a navigable state transition).
-    """
-    constraint = _channel_constraint(expr, channel_tag, source_aliases or {})
-    if not constraint:
-        return ()
-    try:
-        return tuple(sorted(constraint))
-    except TypeError:
-        return tuple(constraint)
-
-
-def _channel_constraint(
-    expr: Any,
-    channel_tag: str,
-    source_aliases: dict[tuple[str, Any], tuple[str, Any]],
-) -> frozenset[Any] | None:
-    """Channel-register values satisfying *expr*, or ``None`` if unconstrained.
-
-    ``None`` is the top element (fires from any state): an ``And`` narrows it (a
-    term that constrains the channel register intersects), an ``Or`` widens it
-    (branches union) — but an ``Or`` branch that is itself unconstrained makes the
-    whole ``Or`` unconstrained, since the writer can then fire from any state via
-    that branch.  Atoms resolve both direct (``StateCurrent==N``) and alias
-    (``S_Execute`` → ``StateCurrent==6``) channel values.
-    """
-    from pyrung.core.analysis.simplified import And, Atom, Or
-    from pyrung.core.analysis.sp_values import _required_from_atom
-
-    if isinstance(expr, Atom):
-        pairs = _required_from_atom(expr)
-        if not pairs:
-            return None
-        vals: set[Any] = set()
-        for tag, value in pairs:
-            if tag == channel_tag:
-                vals.add(value)
-            else:
-                alias = source_aliases.get((tag, value))
-                if alias is not None and alias[0] == channel_tag:
-                    vals.add(alias[1])
-        return frozenset(vals) if vals else None
-    if isinstance(expr, And):
-        result: frozenset[Any] | None = None
-        for term in expr.terms:
-            c = _channel_constraint(term, channel_tag, source_aliases)
-            if c is None:
-                continue
-            result = c if result is None else (result & c)
-        return result
-    if isinstance(expr, Or):
-        union: frozenset[Any] = frozenset()
-        for term in expr.terms:
-            c = _channel_constraint(term, channel_tag, source_aliases)
-            if c is None:
-                return None
-            union |= c
-        return union
-    return None
 
 
 def _route_edge_gates(
@@ -794,16 +513,8 @@ def _route_edge_gates(
 
     visit_node(node)
 
-    if node.subroutine is not None:
-        call_sites = pdg.call_site_rung_indices().get(node.subroutine, frozenset())
-        main_by_rung: dict[int, int] = {}
-        for idx, n in enumerate(pdg.rung_nodes):
-            if n.subroutine is None and not n.branch_path:
-                main_by_rung.setdefault(n.rung_index, idx)
-        for cs_rung_idx in sorted(call_sites):
-            cs_node_idx = main_by_rung.get(cs_rung_idx)
-            if cs_node_idx is not None:
-                visit_node(pdg.rung_nodes[cs_node_idx])
+    for call_site in _call_site_nodes(node, pdg):
+        visit_node(call_site)
 
     return tuple(sorted(gates))
 

@@ -1487,7 +1487,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -1559,7 +1571,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -1719,7 +1743,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    4,
+    8
+   ]
+  ],
   "from_trend": 7,
   "investigation": {
    "confirmed": 1,
@@ -1836,7 +1866,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2002,6 +2044,12 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 1,
+    "before": 0,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
     "after": 3,
     "before": 4,
     "tag": "Sts_StateCurrent"
@@ -2070,7 +2118,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2139,7 +2199,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2275,7 +2347,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2385,7 +2469,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2473,7 +2569,13 @@
   "to_value": 10
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    10
+   ]
+  ],
   "from_trend": 9,
   "investigation": {
    "confirmed": 1,
@@ -2581,7 +2683,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2675,7 +2789,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    8
+   ]
+  ],
   "from_trend": 11,
   "investigation": {
    "confirmed": 1,
@@ -2760,7 +2880,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2854,7 +2986,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    8
+   ]
+  ],
   "from_trend": 11,
   "investigation": {
    "confirmed": 1,
@@ -2935,7 +3073,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3045,7 +3195,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3140,7 +3302,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3235,7 +3409,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3324,7 +3510,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3459,7 +3657,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3635,6 +3845,12 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 1,
+    "before": 0,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
     "after": 12,
     "before": 11,
     "tag": "Sts_StateCurrent"
@@ -3692,7 +3908,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -3836,7 +4064,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    11,
+    8
+   ]
+  ],
   "from_trend": 7,
   "investigation": {
    "confirmed": 1,
@@ -3990,7 +4224,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -4166,6 +4412,12 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 1,
+    "before": 0,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
     "after": 12,
     "before": 11,
     "tag": "Sts_StateCurrent"
@@ -4223,7 +4475,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -4377,7 +4641,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -4513,7 +4789,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -4623,7 +4911,19 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -4739,7 +5039,22 @@
    "Sts_StateCurrent",
    "Sts_StateRequested",
    "Sts_State_Completed",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB",
+   "Blower_x",
+   "Rotate_x",
+   "Rotate_xCall"
   ]
  },
  {

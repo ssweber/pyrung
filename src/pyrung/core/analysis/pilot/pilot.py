@@ -48,11 +48,9 @@ from pyrung.core.analysis.pilot.navigation import (
     Bearing,
     BearingObjective,
     Coast,
-    Dwell,
     NavigationConstraints,
     NeedProbe,
     OrientationWorld,
-    Pulse,
     Stuck,
     TargetSpec,
     act_identity,
@@ -67,20 +65,19 @@ from pyrung.core.analysis.pilot.progress import (
     _record_pending_landing,
 )
 from pyrung.core.analysis.pilot.recording import (
-    _accepted_payload,
+    _act_event,
     _build_plan_journal,
-    _candidate_payload,
     _candidates_built_payload,
     _frontier_clause,
     _iteration_payload,
     _knowledge_payload,
-    _zoom_accepted_payload,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceChoice,
+    TraceReadConstraints,
     _all_nodes,
     _route_forced_names,
     compute_edge_tags,
@@ -277,9 +274,7 @@ def _make_pilot_context(
     # kept off prerequisite holds and off preferred init/reset writer selection.
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
     return _PilotContext(
-        target_tag=target_tag,
-        target_value=target_value,
-        target_predicate=target_predicate,
+        target=TargetSpec(target_tag, target_value, target_predicate),
         pdg=pdg,
         program=program,
         steerable=steerable,
@@ -476,11 +471,11 @@ def _with_avoid_reason(
         return base
     if frame is not None:
         fr = frontier_pairs(frame.tree, frame.snap)
-        frontier = fr[0][0] if fr else ctx.target_tag
+        frontier = fr[0][0] if fr else ctx.target.tag
     else:
-        frontier = ctx.target_tag
+        frontier = ctx.target.tag
     return (
-        f"{base}: avoid excludes {', '.join(names)} (frontier {frontier}, target {ctx.target_tag})"
+        f"{base}: avoid excludes {', '.join(names)} (frontier {frontier}, target {ctx.target.tag})"
     )
 
 
@@ -502,33 +497,35 @@ def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str,
         return ()
     snap = frame.snap
     if not (
-        _target_is_value_route(ctx.target_predicate)
-        and not _values_match(snap.get(ctx.target_tag), ctx.target_value)
+        _target_is_value_route(ctx.target.predicate)
+        and not _values_match(snap.get(ctx.target.tag), ctx.target.value)
     ):
         return ()
     choices = enumerate_trace_choices(
-        ctx.target_tag,
-        ctx.target_value,
+        ctx.target.tag,
+        ctx.target.value,
         snap,
         ctx.pdg,
         ctx.program,
         steerable=ctx.steerable,
-        clear_only=getattr(ctx, "clear_only", frozenset()),
+        clear_only=ctx.clear_only,
+    )
+    read = TraceReadConstraints(
+        clear_only=ctx.clear_only,
+        opaque_loop=ctx.opaque_loop,
     )
     names: set[str] = set()
     survivor = False
     forced_any = False
     for ch in choices:
         tree = trace_back(
-            ctx.target_tag,
-            ctx.target_value,
+            ctx.target.tag,
+            ctx.target.value,
             snap,
             ctx.pdg,
             ctx.program,
             ctx.steerable,
-            clear_only=getattr(ctx, "clear_only", frozenset()),
-            opaque_loop=ctx.opaque_loop,
-            route=ch,
+            constraints=replace(read, route=ch),
         )
         forced = _route_forced_names([tree], snap, avoid)
         if forced:
@@ -542,21 +539,6 @@ def _avoid_route_names(frame: _IterationFrame, ctx: _PilotContext) -> tuple[str,
     # traced route) can hide members, so report the full avoid set that blocked
     # it, falling back to the observed names for a bare-callable avoid.
     return tuple(getattr(avoid, "names", ()) or sorted(names))
-
-
-def _diagnose_stuck(
-    frame: _IterationFrame,
-    candidates: Any,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> str:
-    if candidates.stuck_reason is not None:
-        base = candidates.stuck_reason
-    elif not candidates.candidates:
-        base = "no_candidates"
-    else:
-        base = "all_rejected"
-    return _with_avoid_reason(base, state, ctx, frame)
 
 
 def _record_attempt(
@@ -625,10 +607,10 @@ def _step_context(
         candidate=dict(trial.candidate),
         frontier_tags=frontier_tags,
         control_rungs=control_rungs,
-        channel_tag=trial.zoom_channel_tag,
+        channel_tag=trial.channel_motion.channel_tag,
         before_snap=dict(trial.before_snap),
         after_snap=dict(trial.fork_snap),
-        channel_target=trial.zoom_target_value,
+        channel_target=trial.channel_motion.target_value,
         timeline=trial.timeline,
         accelerators=tuple(getattr(trial.coast_receipt, "advances", ())),
     )
@@ -730,12 +712,7 @@ def _commit_trial(
     if trial.motion.is_coast:
         productive = (
             not key_was_seen
-            or (
-                trial.zoom_channel_tag is not None
-                and _values_match(
-                    trial.fork_snap.get(trial.zoom_channel_tag), trial.zoom_target_value
-                )
-            )
+            or trial.channel_motion.reached
             or (
                 state.gauge is not None
                 and state.gauge.ordinal_advanced(frame.snap, trial.fork_snap)
@@ -802,6 +779,39 @@ def _stuck_event(
     return PilotEvent("stuck", state.work.state.scan_id, data)
 
 
+def _stopped_events(
+    state: _PilotState,
+    ctx: _PilotContext,
+    frame: _IterationFrame | None,
+    reason: str,
+    journal_channel_tags: frozenset[str],
+    journal_acc_names: frozenset[str],
+    *,
+    candidate_count: int,
+    diagnosis: Stuck | None = None,
+) -> Iterator[PilotEvent]:
+    """Emit one failed terminal sequence and restore its checkpoint world."""
+
+    yield _stuck_event(
+        state,
+        ctx,
+        frame,
+        reason,
+        candidate_count=candidate_count,
+        diagnosis=diagnosis,
+    )
+    if state.checkpoints:
+        state.load_world(state.checkpoints[-1].world)
+    yield _finished_event(
+        state,
+        ctx,
+        journal_channel_tags,
+        journal_acc_names,
+        reached=False,
+        reason=reason,
+    )
+
+
 def _pilot_loop_events(
     plc: PLC,
     ctx: _PilotContext,
@@ -842,7 +852,7 @@ def _pilot_loop_events(
         state.gauge = build_gauge(
             ctx.pdg,
             ctx.program,
-            ctx.target_tag,
+            ctx.target.tag,
             ctx.key_config,
             steerable=ctx.steerable,
             clear_only=ctx.clear_only,
@@ -864,7 +874,7 @@ def _pilot_loop_events(
         "started",
         state.work.state.scan_id,
         {
-            "target": (ctx.target_tag, ctx.target_value),
+            "target": (ctx.target.tag, ctx.target.value),
             "steerable_count": len(ctx.steerable),
             "opaque_loop": ctx.opaque_loop,
             "pipeline_roles": ctx.pipeline_roles,
@@ -887,7 +897,7 @@ def _pilot_loop_events(
     last_frame: _IterationFrame | None = None
     while state.search_scan < ctx.max_scans:
         snap = dict(state.work.state.tags)
-        if target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate):
+        if target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate):
             _promote_probationary_corrections(state)
             if state.steps:
                 # The terminal let-run's span extends to the actual finish scan;
@@ -913,7 +923,7 @@ def _pilot_loop_events(
             context=ctx,
             key_config=state.key_config,
         )
-        target = TargetSpec(ctx.target_tag, ctx.target_value, ctx.target_predicate)
+        target = ctx.target
         constraints = NavigationConstraints(
             blocked_actions=ctx.blocked_route_actions,
             avoid_predicate=ctx.avoid_pred,
@@ -928,8 +938,7 @@ def _pilot_loop_events(
         last_frame = frame
         if state.key_config is None:
             state.key_config = orientation_world.key_config
-        if not state.watch_tags:
-            state.watch_tags.extend(sorted(frame.tree.pivot_tags()))
+        state.watch_tags.extend(sorted(frame.tree.pivot_tags() - set(state.watch_tags)))
         for action in frame.raw_trace_action_details:
             if action.note:
                 state.lever_notes[action.tag] = action.note
@@ -987,58 +996,30 @@ def _pilot_loop_events(
                 ctx,
                 frame,
             ) + _frontier_clause(frame)
-            yield _stuck_event(
+            yield from _stopped_events(
                 state,
                 ctx,
                 frame,
                 terminal_reason,
-                candidate_count=len(candidates.candidates) if candidates is not None else 0,
-                diagnosis=result,
-            )
-            if state.checkpoints:
-                state.load_world(state.checkpoints[-1].world)
-            yield _finished_event(
-                state,
-                ctx,
                 journal_channel_tags,
                 journal_acc_names,
-                reached=False,
-                reason=terminal_reason,
+                candidate_count=len(candidates.candidates) if candidates is not None else 0,
+                diagnosis=result,
             )
             return
 
         assert isinstance(result, Bearing)
         act = result.act
-        if isinstance(act, Pulse):
-            candidate = act.option
-            yield PilotEvent(
-                "candidate_try",
-                state.work.state.scan_id,
-                {
-                    "index": 0,
-                    "total": 1,
-                    "candidate": _candidate_payload(candidate),
-                    "applied": act.applied,
-                    "co_actions": tuple(pair for pair in act.applied if pair != act.action),
-                },
-            )
-        elif isinstance(act, (Coast, Dwell)):
-            yield PilotEvent(
-                "zoom",
-                state.work.state.scan_id,
-                {
-                    "prescribed": True,
-                    "reason": result.rationale,
-                    "prerequisite_rungs": result.prerequisites,
-                    "channel_tag": (
-                        act.route_channel_tag or act.channel_tag
-                        if isinstance(act, Coast)
-                        and act.mode == "bearing"
-                        and act.channel_tag is not None
-                        else ctx.target_tag
-                    ),
-                },
-            )
+        try_event = _act_event(
+            "try",
+            act,
+            state.work.state.scan_id,
+            rationale=result.rationale,
+            prerequisites=result.prerequisites,
+            target_tag=ctx.target.tag,
+        )
+        if try_event is not None:
+            yield try_event
 
         attempt = execute(result, orientation_world)
         _record_attempt(attempt, frame, state, ctx, result.objective)
@@ -1061,60 +1042,27 @@ def _pilot_loop_events(
             ctx.compass, _ = ctx.compass.apply(
                 (ActionNogoodObservation(frame.key, act_identity(act)),)
             )
-            if isinstance(act, Pulse):
-                yield PilotEvent(
-                    "candidate_rejected",
-                    state.work.state.scan_id,
-                    {
-                        "index": 0,
-                        "candidate": _candidate_payload(act.option),
-                        "applied": act.applied,
-                        "co_actions": tuple(pair for pair in act.applied if pair != act.action),
-                        "gates": attempt.gate_events,
-                    },
-                )
-            elif isinstance(act, (Coast, Dwell)):
-                yield PilotEvent(
-                    "zoom_rejected",
-                    state.work.state.scan_id,
-                    {"gates": attempt.gate_events},
-                )
-            else:
-                yield PilotEvent(
-                    "batch_rejected" if act.source == "learned" else "widening_rejected",
-                    state.work.state.scan_id,
-                    {"actions": act.actions, "gates": attempt.gate_events},
-                )
+            rejected_event = _act_event(
+                "rejected",
+                act,
+                state.work.state.scan_id,
+                attempt=attempt,
+            )
+            assert rejected_event is not None
+            yield rejected_event
             continue
 
         trial = attempt.trial
-        if isinstance(act, Pulse):
-            yield PilotEvent(
-                "candidate_accepted",
-                trial.fork.state.scan_id,
-                _accepted_payload(act.option, trial, frame, state),
-            )
-        elif isinstance(act, (Coast, Dwell)):
-            yield PilotEvent(
-                "zoom_accepted",
-                trial.fork.state.scan_id,
-                _zoom_accepted_payload(trial),
-            )
-        else:
-            yield PilotEvent(
-                "batch_accepted" if act.source == "learned" else "widening_accepted",
-                trial.fork.state.scan_id,
-                {
-                    "candidate": trial.candidate,
-                    "applied": trial.applied,
-                    "gates": trial.gate_events,
-                    "new_key": trial.new_key,
-                    "trend": trial.trend,
-                    "snapshot": trial.fork_snap,
-                    "scan_before": trial.scan_before,
-                    "scan_after": trial.fork.state.scan_id,
-                },
-            )
+        accepted_event = _act_event(
+            "accepted",
+            act,
+            trial.fork.state.scan_id,
+            trial=trial,
+            frame=frame,
+            state=state,
+        )
+        assert accepted_event is not None
+        yield accepted_event
         yield from _commit_and_monitor(trial, frame, state, ctx)
         state.last_wait_log = None
         continue
@@ -1125,10 +1073,8 @@ def _pilot_loop_events(
     # frontier, and revert to the last checkpoint like the stuck exits do
     # ("How we fail" #1 — every stop points at a named leaf).
     snap = dict(state.work.state.tags)
-    reached = target_reached(snap, ctx.target_tag, ctx.target_value, ctx.target_predicate)
-    if reached:
-        reason = "target reached"
-    else:
+    reached = target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate)
+    if not reached:
         frame = last_frame
         reason = _with_avoid_reason(
             f"budget exhausted ({ctx.max_scans} scans searched + {state.dwell_scans} waited)",
@@ -1136,22 +1082,23 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(frame)
-        yield _stuck_event(
+        yield from _stopped_events(
             state,
             ctx,
             frame,
             reason,
+            journal_channel_tags,
+            journal_acc_names,
             candidate_count=0,
         )
-        if state.checkpoints:
-            state.load_world(state.checkpoints[-1].world)
+        return
     yield _finished_event(
         state,
         ctx,
         journal_channel_tags,
         journal_acc_names,
-        reached=reached,
-        reason=reason,
+        reached=True,
+        reason="target reached",
     )
 
 
@@ -1295,9 +1242,11 @@ def _exclusive_route_actions(
             pdg,
             program,
             steerable,
-            clear_only=clear_only,
-            opaque_loop=opaque_loop,
-            route=selected,
+            constraints=TraceReadConstraints(
+                clear_only=clear_only,
+                opaque_loop=opaque_loop,
+                route=selected,
+            ),
         ).ordered_actions()
     )
     other_actions: set[tuple[str, Any]] = set()
@@ -1312,9 +1261,11 @@ def _exclusive_route_actions(
                 pdg,
                 program,
                 steerable,
-                clear_only=clear_only,
-                opaque_loop=opaque_loop,
-                route=option,
+                constraints=TraceReadConstraints(
+                    clear_only=clear_only,
+                    opaque_loop=opaque_loop,
+                    route=option,
+                ),
             ).ordered_actions()
         )
     return frozenset(other_actions - selected_actions)
@@ -1369,10 +1320,9 @@ def _report_selected_route(
     """Make the public route receipt name the route that actually finished.
 
     ``prepared`` describes the initially preferred fork so the engineer can see
-    its alternatives before execution. If that inferred commitment is later
-    exhausted and replaced, rotate the same root pivot around the route that
-    ultimately reached the target. This is reporting only; no alternative list
-    feeds back into navigation.
+    its alternatives before execution. If the route that ultimately reaches the
+    target differs, rotate the same root pivot around that result. This is
+    reporting only; no alternative list feeds back into navigation.
     """
 
     if prepared is None or selected is None or not prepared.pivots:
@@ -1432,8 +1382,8 @@ def _prepare_route(
 
     Only ``via=`` expresses a durable choice: it returns the selected
     ``route_lock`` and excludes actions belonging solely to other root routes.
-    An inferred default becomes one revocable session commitment instead; only
-    exact exhaustion releases it so another admissible route can be selected.
+    Without ``via=``, execution stays unlocked and each current-world read may
+    select any admissible root route.
 
     Returns ``(route_lock, blocked_route_actions, route_taken)``. All ``None``/
     empty when the target is not a multi-route value target, or when the
@@ -1455,10 +1405,12 @@ def _prepare_route(
         pdg,
         program,
         steerable,
-        clear_only=clear_only,
-        opaque_loop=opaque_loop,
-        avoid_pred=avoid_pred,
-        via_pred=via_pred,
+        constraints=TraceReadConstraints(
+            clear_only=clear_only,
+            opaque_loop=opaque_loop,
+            avoid_pred=avoid_pred,
+            via_pred=via_pred,
+        ),
     )
     if not choices:
         return None, frozenset(), None
@@ -1674,6 +1626,55 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
     return _parse_one(conditions[0])
 
 
+def _single_target_plan(
+    setup: _DriveSetup,
+    outcome: _DriveOutcome,
+    target_tag: str,
+    target_value: Any,
+    route_taken: RouteTaken | None,
+    *,
+    include_journal: bool,
+) -> Plan:
+    """Assemble the common fork/live single-target result without policy drift."""
+
+    linked_block = (
+        None
+        if outcome.reached
+        else _linked_feedback_block(
+            target_tag,
+            target_value,
+            setup.diag_snapshot,
+            setup.pdg,
+            setup.program,
+            setup.steerable,
+            _harness_couplings(setup.work),
+        )
+    )
+    return Plan(
+        reachable=outcome.reached,
+        target_tag=target_tag,
+        target_value=target_value,
+        fork=outcome.work if outcome.reached else None,
+        reason=linked_block or outcome.reason,
+        status=(
+            PlanStatus.REACHED
+            if outcome.reached
+            else PlanStatus.CANNOT_REACH
+            if linked_block is not None
+            else PlanStatus.STOPPED
+        ),
+        route=(
+            _report_selected_route(route_taken, outcome.root_route) if outcome.reached else None
+        ),
+        journal=outcome.journal if include_journal else (),
+        anchor_scan=setup.anchor_scan,
+        journey=outcome.journey,
+        hold_log=outcome.knowledge.get("hold_log", ()),
+        lever_notes=outcome.knowledge.get("lever_notes", {}),
+        avoid_names=outcome.knowledge.get("avoid_names", ()),
+    )
+
+
 def pilot_events(
     plc: PLC,
     *conditions: Any,
@@ -1752,42 +1753,33 @@ def pilot_how(
         on_event=on_event,
     )
 
-    linked_block = (
-        None
-        if outcome.reached
-        else _linked_feedback_block(
-            target_tag,
-            target_value,
-            setup.diag_snapshot,
-            setup.pdg,
-            setup.program,
-            setup.steerable,
-            _harness_couplings(setup.work),
-        )
+    return _single_target_plan(
+        setup,
+        outcome,
+        target_tag,
+        target_value,
+        route_taken,
+        include_journal=True,
     )
-    reason = linked_block or outcome.reason
+
+
+def _failed_multi_plan(
+    label: str,
+    targets: tuple[_ActionPair, ...],
+    reason: str | None,
+    status: PlanStatus,
+    anchor_scan: int,
+) -> Plan:
+    """Build the one unreachable multi-target result shape."""
+
     return Plan(
-        reachable=outcome.reached,
-        target_tag=target_tag,
-        target_value=target_value,
-        fork=outcome.work if outcome.reached else None,
+        reachable=False,
+        target_tag=label,
+        target_value=True,
+        targets=targets,
         reason=reason,
-        status=(
-            PlanStatus.REACHED
-            if outcome.reached
-            else PlanStatus.CANNOT_REACH
-            if linked_block is not None
-            else PlanStatus.STOPPED
-        ),
-        route=(
-            _report_selected_route(route_taken, outcome.root_route) if outcome.reached else None
-        ),
-        journal=outcome.journal,
-        anchor_scan=setup.anchor_scan,
-        journey=outcome.journey,
-        hold_log=outcome.knowledge.get("hold_log", ()),
-        lever_notes=outcome.knowledge.get("lever_notes", {}),
-        avoid_names=outcome.knowledge.get("avoid_names", ()),
+        status=status,
+        anchor_scan=anchor_scan,
     )
 
 
@@ -1825,14 +1817,12 @@ def _pilot_how_multi(
         targets,
     )
     if not ok:
-        return Plan(
-            reachable=False,
-            target_tag=label,
-            target_value=True,
-            targets=goal_pairs,
-            reason=reason,
-            status=PlanStatus.CANNOT_REACH,
-            anchor_scan=setup.anchor_scan,
+        return _failed_multi_plan(
+            label,
+            goal_pairs,
+            reason,
+            PlanStatus.CANNOT_REACH,
+            setup.anchor_scan,
         )
 
     work = setup.work
@@ -1870,32 +1860,28 @@ def _pilot_how_multi(
         journal_steps.extend(outcome.journal)
         if not outcome.reached:
             detail = f"; {outcome.reason}" if outcome.reason else ""
-            return Plan(
-                reachable=False,
-                target_tag=label,
-                target_value=True,
-                targets=goal_pairs,
-                reason=(
+            return _failed_multi_plan(
+                label,
+                goal_pairs,
+                (
                     f"pilot: could not establish {t_tag}={t_val!r} while holding the "
                     f"other target(s){detail}"
                 ),
-                status=PlanStatus.STOPPED,
-                anchor_scan=setup.anchor_scan,
+                PlanStatus.STOPPED,
+                setup.anchor_scan,
             )
 
     final = dict(work.state.tags)
     unmet = [(tt, tv) for tt, tv, tp in targets if not target_reached(final, tt, tv, tp)]
     if unmet:
         names = ", ".join(f"{tt}={tv!r}" for tt, tv in unmet)
-        return Plan(
-            reachable=False,
-            target_tag=label,
-            target_value=True,
-            targets=goal_pairs,
-            reason=f"pilot: reached each target individually but {names} did not hold "
+        return _failed_multi_plan(
+            label,
+            goal_pairs,
+            f"pilot: reached each target individually but {names} did not hold "
             "simultaneously (clobbered during co-establishment).",
-            status=PlanStatus.STOPPED,
-            anchor_scan=setup.anchor_scan,
+            PlanStatus.STOPPED,
+            setup.anchor_scan,
         )
     # recording: threaded from the LAST target's drive only (multi runs the loop
     # sequentially per target; the last drive's Knowledge is what survives on ``work``).
@@ -1940,42 +1926,11 @@ def pilot_drive(
     )
     outcome = _pilot_loop(setup.work, ctx)
 
-    # A live failure without a harness-link explanation falls back to the
-    # loop's own terminal diagnostic (``stuck: …`` / ``budget exhausted``) so
-    # an unreachable target always carries a reason ("How we fail" #2).
-    linked_block = (
-        None
-        if outcome.reached
-        else _linked_feedback_block(
-            target_tag,
-            target_value,
-            setup.diag_snapshot,
-            setup.pdg,
-            setup.program,
-            setup.steerable,
-            _harness_couplings(setup.work),
-        )
-    )
-    reason = linked_block or outcome.reason
-    return Plan(
-        reachable=outcome.reached,
-        target_tag=target_tag,
-        target_value=target_value,
-        fork=outcome.work if outcome.reached else None,
-        reason=reason,
-        status=(
-            PlanStatus.REACHED
-            if outcome.reached
-            else PlanStatus.CANNOT_REACH
-            if linked_block is not None
-            else PlanStatus.STOPPED
-        ),
-        route=(
-            _report_selected_route(route_taken, outcome.root_route) if outcome.reached else None
-        ),
-        anchor_scan=setup.anchor_scan,
-        journey=outcome.journey,
-        hold_log=outcome.knowledge.get("hold_log", ()),
-        lever_notes=outcome.knowledge.get("lever_notes", {}),
-        avoid_names=outcome.knowledge.get("avoid_names", ()),
+    return _single_target_plan(
+        setup,
+        outcome,
+        target_tag,
+        target_value,
+        route_taken,
+        include_journal=False,
     )

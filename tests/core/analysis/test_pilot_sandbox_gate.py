@@ -273,12 +273,12 @@ def test_compass_contradict_falsifies_seeded_edge():
 
     compass = Compass()
     compass, _ = compass.apply((CompassObservation("edge", "State", ("Cmd", True), 1, 6),))
-    assert compass.find_path("State", 1, 6) == [("Cmd", True)]
+    assert compass.knowledge.find_path("State", 1, 6) == [("Cmd", True)]
 
     compass, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
     assert changed is True
-    assert compass.find_path("State", 1, 6) is None
-    assert compass.unprobed_actions("State", 1, {("Cmd", True)}) == []
+    assert compass.knowledge.find_path("State", 1, 6) is None
+    assert compass.knowledge.unprobed_actions("State", 1, {("Cmd", True)}) == []
     # Idempotent: the tombstone stays and no new knowledge is reported.
     same, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
     assert same is compass

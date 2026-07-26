@@ -1095,7 +1095,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -1235,7 +1243,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    4,
+    8
+   ]
+  ],
   "from_trend": 23,
   "investigation": {
    "confirmed": 1,
@@ -1383,7 +1397,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -1529,6 +1551,12 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 1,
+    "before": 0,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
     "after": 3,
     "before": 4,
     "tag": "Sts_StateCurrent"
@@ -1618,7 +1646,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -1782,7 +1818,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -1862,7 +1906,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -1921,7 +1973,13 @@
   "to_value": 10
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    10
+   ]
+  ],
   "from_trend": 19,
   "investigation": {
    "confirmed": 1,
@@ -2051,7 +2109,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2129,7 +2195,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2204,7 +2278,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2263,7 +2345,13 @@
   "to_value": 8
  },
  {
-  "channel_transitions": [],
+  "channel_transitions": [
+   [
+    "Sts_StateCurrent",
+    6,
+    8
+   ]
+  ],
   "from_trend": 5,
   "investigation": {
    "confirmed": 1,
@@ -2370,7 +2458,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2448,7 +2544,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2524,7 +2628,15 @@
    "Sts_State_Starting",
    "Sts_UnitModeCurrent",
    "o_BurnerLoop",
-   "y_BurnerLoop"
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
   ]
  },
  {
@@ -2545,7 +2657,7 @@
   "reason": "hold the current macro-state and allow program motion"
  },
  {
-  "bearing_stop_reason": "reached",
+  "bearing_stop_reason": null,
   "ejected": false,
   "kind": "zoom_accepted",
   "observe_label": "letrun-target",

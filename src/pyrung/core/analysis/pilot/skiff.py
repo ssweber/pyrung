@@ -282,7 +282,7 @@ def probe_live_guard_frontiers(
         # Pass 1: single actions.
         edge_found = False
         budget = max_probes
-        for probe in ctx.compass.unprobed_actions(
+        for probe in ctx.compass.knowledge.unprobed_actions(
             node.tag,
             cur_val,
             set(singles),
@@ -315,7 +315,7 @@ def probe_live_guard_frontiers(
                 for pair in itertools.combinations(singles, 2)
                 if pair[0][0] != pair[1][0]
             ]
-            for composite in ctx.compass.unprobed_actions(
+            for composite in ctx.compass.knowledge.unprobed_actions(
                 node.tag,
                 cur_val,
                 set(pairs),
@@ -346,7 +346,7 @@ def probe_live_guard_frontiers(
                 for group in itertools.combinations(singles, 3)
                 if len({pair[0] for pair in group}) == 3
             ]
-            for composite in ctx.compass.unprobed_actions(
+            for composite in ctx.compass.knowledge.unprobed_actions(
                 node.tag,
                 cur_val,
                 set(triples),

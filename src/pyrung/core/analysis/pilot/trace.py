@@ -24,15 +24,17 @@ from pyrung.core.analysis.pilot.availability import (
     _equality_gated_coil,
     _reduce_guard_by_fire_pins,
     _reduce_guard_by_pin,
-    _simplified_expr_tags,
     _writer_availability,
     _WriterAvailability,
 )
 from pyrung.core.analysis.pilot.static_expressions import (
-    index_values as _index_values,
+    _atom_text,
+    _heuristic_inequality_target,
+    _resolve_inequality_target,
+    single_calc_source,
 )
 from pyrung.core.analysis.pilot.static_expressions import (
-    single_calc_source as _single_calc_source,
+    simplified_expr_tags as _simplified_expr_tags,
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
@@ -46,11 +48,9 @@ from pyrung.core.analysis.simplified import (
 )
 from pyrung.core.analysis.sp_values import (
     _FLIP_FORM,
-    _chase_inequality_source,
     _expr_tag_names,
     _invert_affine,
     _required_from_atom,
-    _satisfying_value,
     _values_match,
     _writer_for_tag,
     _writer_projection,
@@ -230,6 +230,77 @@ class TraceChoice:
 
     def or_lock_map(self) -> dict[tuple[str, str], int]:
         return {(tag, key): index for tag, key, index in self.or_locks}
+
+
+@dataclass(frozen=True)
+class TraceReadConstraints:
+    """The complete caller-owned constraint set for one backward trace read."""
+
+    clear_only: frozenset[str] = frozenset()
+    opaque_loop: frozenset[str] = frozenset()
+    pipeline_internal_tags: frozenset[str] = frozenset()
+    route: TraceChoice | None = None
+    prior: DomainPrior | None = None
+    avoid_pred: Any = None
+    via_pred: Any = None
+    rejected_actions: frozenset[tuple[str, Any]] = frozenset()
+    harness: Any = None
+
+    @classmethod
+    def from_context(
+        cls,
+        ctx: Any,
+        work: Any,
+        *,
+        route: TraceChoice | None,
+        avoid_pred: Any,
+        rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
+    ) -> TraceReadConstraints:
+        """Read the invariant trace constraints from an explicit pilot context."""
+
+        return cls(
+            clear_only=ctx.clear_only,
+            opaque_loop=ctx.opaque_loop,
+            pipeline_internal_tags=ctx.pipeline_internal_tags,
+            route=route,
+            prior=ctx.domain_prior,
+            avoid_pred=avoid_pred,
+            via_pred=ctx.via_pred,
+            rejected_actions=rejected_actions,
+            harness=getattr(work, "_harness", None),
+        )
+
+    def env(
+        self,
+        snapshot: dict[str, Any],
+        pdg: ProgramGraph,
+        program: Any,
+        steerable: frozenset[str],
+        *,
+        writer_locks: dict[tuple[str, Any], int] | None = None,
+        or_locks: dict[tuple[str, str], int] | None = None,
+        max_depth: int = 15,
+    ) -> _TraceEnv:
+        """Lower this read receipt to Trace's recursive environment."""
+
+        return _env_for(
+            snapshot,
+            pdg,
+            program,
+            steerable,
+            clear_only=self.clear_only,
+            opaque_loop=self.opaque_loop,
+            pipeline_internal_tags=self.pipeline_internal_tags,
+            route=self.route,
+            writer_locks=writer_locks,
+            or_locks=or_locks,
+            prior=self.prior,
+            avoid_pred=self.avoid_pred,
+            via_pred=self.via_pred,
+            rejected_actions=self.rejected_actions,
+            max_depth=max_depth,
+            harness=self.harness,
+        )
 
 
 @dataclass(frozen=True)
@@ -600,9 +671,14 @@ class TraceNode:
         count tracks tree *size*, which the cyclic state machine inflates
         (~2x on the burner), drowning the Layer 4 trend signal.
         """
+        return len(self.unsatisfied_conditions())
+
+    def unsatisfied_conditions(self) -> set[tuple[str, Any]]:
+        """Distinct unresolved, non-steerable conditions in this trace."""
+
         seen: set[tuple[str, Any]] = set()
         self._collect_unsatisfied(seen)
-        return len(seen)
+        return seen
 
     def _collect_unsatisfied(self, seen: set[tuple[str, Any]]) -> None:
         if self.relational:
@@ -654,8 +730,15 @@ class TraceNode:
             child._collect_dead_end_parents(out)
 
 
-def _all_nodes(tree: TraceNode) -> list[TraceNode]:
-    """Collect all nodes in a TraceNode tree (breadth-first)."""
+def _all_nodes(tree: TraceNode, *, depth_first: bool = False) -> list[TraceNode]:
+    """Collect all nodes in a TraceNode tree in the requested stable order."""
+
+    if depth_first:
+        result = [tree]
+        for child in tree.children:
+            result.extend(_all_nodes(child, depth_first=True))
+        return result
+
     result: list[TraceNode] = [tree]
     i = 0
     while i < len(result):
@@ -754,240 +837,6 @@ def _atom_target(
     if form in {"ne", "lt", "le", "gt", "ge"}:
         return None
     return None
-
-
-#: strict-inequality nudge for a Real tag with no domain grid — small and
-#: positive so the fork-verified fallback lands just past the threshold rather
-#: than a whole integer beyond it (the ``+1`` unit assumption).
-_REAL_STRICT_EPSILON = 1e-6
-
-
-def _domain_granularity(domain: tuple[Any, ...]) -> Any:
-    """The spacing of a finite numeric *domain* — its smallest positive step.
-
-    ``(0, 2, 4, 6)`` → ``2``; ``(0, 5, 10)`` → ``5``.  ``None`` when the domain
-    holds fewer than two numeric values (no step to infer)."""
-    nums = sorted(v for v in domain if isinstance(v, (int, float)) and not isinstance(v, bool))
-    diffs = [b - a for a, b in zip(nums, nums[1:], strict=False) if b > a]
-    return min(diffs) if diffs else None
-
-
-def _strict_inequality_step(tag: str, prior: DomainPrior | None, pdg: ProgramGraph | None) -> Any:
-    """The amount to step past a strict-inequality threshold for *tag*.
-
-    A Real tag steps by :data:`_REAL_STRICT_EPSILON` (a whole ``+1`` overshoots
-    an analog boundary); a tag with a non-unit prover domain steps by the
-    domain's granularity; everything else keeps the integer unit ``1``."""
-    from pyrung.core.tag import TagType
-
-    if pdg is not None:
-        tag_ref = pdg.tags.get(tag)
-        if tag_ref is not None and getattr(tag_ref, "type", None) is TagType.REAL:
-            return _REAL_STRICT_EPSILON
-    domain = None
-    if prior is not None:
-        domain = (prior.nd_domains or {}).get(tag)
-        if domain is None:
-            domain = (prior.stateful_domains or {}).get(tag)
-    if domain:
-        step = _domain_granularity(domain)
-        if step is not None:
-            return step
-    return 1
-
-
-def _resolve_inequality_target(
-    atom: Atom,
-    snapshot: dict[str, Any],
-    prior: DomainPrior | None = None,
-    pdg: ProgramGraph | None = None,
-) -> tuple[str, Any] | None:
-    """Resolve an inequality atom to a ``(tag, satisfying_value)`` target.
-
-    Three-stage, mirroring the walk engine
-    (``sp_values._chase_inequality_source``):
-
-    1. *Domain-aware* — when the prover gives the compare tag (or its affine
-       source) a pipeline domain, chase to that source and pick the nearest
-       **in-domain** satisfying value.  Reachable by construction, and this is
-       what re-enables literal-operand inequalities on steerable analog/word
-       inputs (``ModeSel >= 1``) that the pre-domain code dropped.
-    2. *Program-owned domain* — when ExploreContext gives a logic-written tag
-       a finite stateful domain, pick a satisfying value and let ``_trace_back``
-       follow the writer that produces it. This is proposal evidence only; the
-       interpreted fork still verifies the route.
-    3. *Snapshot-boundary fallback* — no domain.  A tag-name operand
-       (``PV >= Lower``) is a computed-threshold comparison: resolve the
-       operand from *snapshot* and steer toward ``operand`` (``ge``/``le``) or
-       one step past it (strict ``gt``/``lt`` — an epsilon for a Real tag, the
-       domain granularity for a non-unit domain, else the integer unit; see
-       ``_strict_inequality_step``, which reads the tag type off *pdg*). A
-       literal operand on a domain-less logic-written tag remains a punt.
-    """
-    operand = atom.operand
-    operand_is_tag = atom.operand_is_tag
-    if operand_is_tag:
-        resolved = snapshot.get(operand)
-        if resolved is None:
-            return None
-        threshold = resolved
-    else:
-        threshold = operand
-
-    if prior is not None and prior.nd_domains:
-        hit = _chase_inequality_source(
-            atom.tag, atom.form, threshold, prior.nd_domains, prior.func_deps
-        )
-        if hit is not None:
-            return hit
-        # Monotone fallback (joint two-input steering): the compare tag has its
-        # own domain but the partner-frozen threshold is unsatisfiable within it
-        # (``A > 8`` over ``A ∈ 0..5`` while ``B`` is still 0).  Steer to the domain
-        # extreme in the form's direction — each operand ratchets toward its bound
-        # and the partner re-points next scan, so a sum/difference that no single
-        # move can satisfy converges across scans rather than dead-ending.
-        domain = prior.nd_domains.get(atom.tag)
-        if domain and atom.form in _FLIP_FORM:
-            try:
-                extreme = max(domain) if atom.form in ("gt", "ge") else min(domain)
-            except (TypeError, ValueError):
-                extreme = None
-            if extreme is not None and not _values_match(snapshot.get(atom.tag), extreme):
-                return (atom.tag, extreme)
-
-    stateful_domain = (
-        prior.stateful_domains.get(atom.tag)
-        if prior is not None and prior.stateful_domains
-        else None
-    )
-    if stateful_domain and atom.form in {"lt", "le", "gt", "ge"}:
-        value = _satisfying_value(atom.form, threshold, stateful_domain)
-        if value is not None:
-            # ExploreContext canonicalizes integral domain members as ints. A
-            # witness lives in the comparison boundary's coordinate, so retain
-            # a floating boundary's scalar representation (``0.0 + 1`` remains
-            # ``1.0``) rather than leaking the domain key's canonical ``1`` into
-            # the public trace.
-            if (
-                isinstance(threshold, float)
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-            ):
-                value = float(value)
-            return (atom.tag, value)
-
-    if atom.form == "ne":
-        # A disequality has no single satisfying value; with a finite domain, steer
-        # to any in-domain value other than the excluded one (preferring one we are
-        # not already at).  No domain → drop (the safe punt), same as an
-        # unresolvable literal-operand guard.
-        domain = prior.nd_domains.get(atom.tag) if prior is not None and prior.nd_domains else None
-        if domain:
-            cur = snapshot.get(atom.tag)
-            alts = [v for v in domain if not _values_match(v, threshold)]
-            pick = next((v for v in alts if not _values_match(v, cur)), alts[0] if alts else None)
-            if pick is not None:
-                return (atom.tag, pick)
-        return None
-
-    if not operand_is_tag:
-        return None
-    if atom.form in ("ge", "le"):
-        return (atom.tag, threshold)
-    if (
-        atom.form in ("gt", "lt")
-        and isinstance(threshold, (int, float))
-        and not isinstance(threshold, bool)
-    ):
-        step = _strict_inequality_step(atom.tag, prior, pdg)
-        return (atom.tag, threshold + step if atom.form == "gt" else threshold - step)
-    return None
-
-
-def _declared_float_bounds(tag: str, pdg: ProgramGraph | None) -> tuple[Any, Any]:
-    """Raw declared ``(min, max)`` for *tag* off the program graph, else ``(None, None)``.
-
-    Reads the tag declaration's numeric bounds directly — deliberately NOT
-    ``_declared_domain`` (which is the sound int-enumeration used for
-    rejection/probing and stays untouched).  These bounds only *clamp* a
-    heuristic proposal; they never reject anything.
-    """
-    if pdg is None:
-        return (None, None)
-    ref = pdg.tags.get(tag)
-    if ref is None:
-        return (None, None)
-    return (getattr(ref, "min", None), getattr(ref, "max", None))
-
-
-def _heuristic_inequality_target(
-    atom: Atom,
-    snapshot: dict[str, Any],
-    steerable: frozenset[str],
-    pdg: ProgramGraph | None,
-) -> tuple[Any, str] | None:
-    """Stage-3 heuristic value proposal for an ordered comparison on a
-    **steerable** free numeric word — fired only after
-    :func:`_resolve_inequality_target` returned ``None``.
-
-    The value is not guessed: it solves the boundary exactly (``threshold`` for
-    ``ge``/``le``; ``threshold ± _strict_inequality_step`` for strict forms)
-    against the snapshot-frozen partner.  A declared ``min``/``max`` clamps the
-    proposal; when the clamped value no longer satisfies the relation, propose
-    the bound extreme in the form's direction only if that is an actual move
-    (the ratchet — the partner lever re-points against the new snapshot next
-    trace), else no lever.
-
-    Returns ``(value, marker)`` where *marker* is the honesty sentence appended
-    to the lever note, or ``None``.  The proposal is a trial like any other —
-    replay-verified as an ordinary trial and never used for rejection,
-    dead-end proof, or domain fabrication.
-    """
-    if atom.form not in ("lt", "le", "gt", "ge"):
-        return None
-    if atom.tag not in steerable:
-        return None
-    operand = atom.operand
-    threshold = snapshot.get(operand) if atom.operand_is_tag else operand
-    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
-        return None
-
-    if atom.form in ("ge", "le"):
-        value = threshold
-    else:
-        step = _strict_inequality_step(atom.tag, None, pdg)
-        value = threshold + step if atom.form == "gt" else threshold - step
-
-    lo, hi = _declared_float_bounds(atom.tag, pdg)
-    clamped = value
-    if lo is not None and clamped < lo:
-        clamped = lo
-    if hi is not None and clamped > hi:
-        clamped = hi
-    if clamped != value:
-        satisfies = {
-            "lt": clamped < threshold,
-            "le": clamped <= threshold,
-            "gt": clamped > threshold,
-            "ge": clamped >= threshold,
-        }[atom.form]
-        if not satisfies and _values_match(snapshot.get(atom.tag), clamped):
-            return None  # already at the extreme — no move left, no lever
-        value = clamped
-
-    return (value, "heuristic value; relation is the requirement, not this number")
-
-
-#: form -> operator symbol, for rendering lever notes.
-_FORM_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
-
-
-def _atom_text(atom: Atom) -> str:
-    """Render an inequality atom for a lever note (``PV < Lower``)."""
-    op = _FORM_SYMBOL.get(atom.form, atom.form)
-    operand = atom.operand
-    rhs = operand if isinstance(operand, str) else repr(operand)
-    return f"{atom.tag} {op} {rhs}"
 
 
 @dataclass(frozen=True)
@@ -1602,6 +1451,7 @@ def trace_relational(
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
+    constraints: TraceReadConstraints | None = None,
 ) -> TraceNode:
     """Backward trace for a relational *target* predicate (``A op B``).
 
@@ -1611,11 +1461,7 @@ def trace_relational(
     relational node (or a coast leaf / dead-end) as the tree root; a satisfied
     predicate yields a ``satisfied`` leaf (the drive loop's early-exit owns it).
     """
-    env = _env_for(
-        snapshot,
-        pdg,
-        program,
-        steerable,
+    read = constraints or TraceReadConstraints(
         clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
@@ -1624,9 +1470,9 @@ def trace_relational(
         avoid_pred=avoid_pred,
         via_pred=via_pred,
         rejected_actions=rejected_actions,
-        max_depth=max_depth,
         harness=harness,
     )
+    env = read.env(snapshot, pdg, program, steerable, max_depth=max_depth)
     nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
     if nodes:
         root = nodes[0]
@@ -2157,6 +2003,7 @@ def trace_back(
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
+    constraints: TraceReadConstraints | None = None,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
@@ -2169,23 +2016,25 @@ def trace_back(
     recursion instead of a dozen kwargs.  A ``TraceChoice`` resolves to its lock
     maps here, once.
     """
-    env = _env_for(
-        snapshot,
-        pdg,
-        program,
-        steerable,
+    read = constraints or TraceReadConstraints(
         clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
         route=route,
-        writer_locks=writer_locks,
-        or_locks=or_locks,
         prior=prior,
         avoid_pred=avoid_pred,
         via_pred=via_pred,
         rejected_actions=rejected_actions,
-        max_depth=max_depth,
         harness=harness,
+    )
+    env = read.env(
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        writer_locks=writer_locks,
+        or_locks=or_locks,
+        max_depth=max_depth,
     )
     return _trace_back(env, tag, value, _visited=_visited, _ancestry=_ancestry, _depth=_depth)
 
@@ -2545,7 +2394,9 @@ def _trace_back(
 
         # Indirect copy: block[pointer] → invert the lookup table.
         if not node.children:
-            inv = _invert_indirect(ro, tag, value, env.snapshot, env.pdg, env.program)
+            from pyrung.core.analysis.pilot.tide_tables import invert_indirect_copy
+
+            inv = invert_indirect_copy(ro, tag, value, env.snapshot, env.pdg, env.program)
             if inv is not None:
                 idx_tag, idx_vals = inv
                 for iv in idx_vals:
@@ -3001,12 +2852,6 @@ def route_rung_order(choice: TraceChoice) -> tuple[int, ...]:
     return ()
 
 
-def trace_choice_identity(choice: TraceChoice) -> tuple[Any, ...]:
-    """Stable structural identity for one root route commitment."""
-
-    return (choice.writer_locks, choice.or_locks)
-
-
 def rank_trace_choices(
     tag: str,
     value: Any,
@@ -3023,6 +2868,7 @@ def rank_trace_choices(
     via_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     harness: Any = None,
+    constraints: TraceReadConstraints | None = None,
 ) -> tuple[tuple[TraceChoice, ...], tuple[tuple[TraceChoice, TraceNode], ...]]:
     """Enumerate and rank current-world root choices once.
 
@@ -3032,6 +2878,16 @@ def rank_trace_choices(
     not independently re-derived at the two ownership boundaries.
     """
 
+    read = constraints or TraceReadConstraints(
+        clear_only=clear_only,
+        opaque_loop=opaque_loop,
+        pipeline_internal_tags=pipeline_internal_tags,
+        prior=prior,
+        avoid_pred=avoid_pred,
+        via_pred=via_pred,
+        rejected_actions=rejected_actions,
+        harness=harness,
+    )
     choices = enumerate_trace_choices(
         tag,
         value,
@@ -3039,7 +2895,7 @@ def rank_trace_choices(
         pdg,
         program,
         steerable=steerable,
-        clear_only=clear_only,
+        clear_only=read.clear_only,
     )
     traced: list[tuple[TraceChoice, TraceNode]] = []
     for choice in choices:
@@ -3050,17 +2906,11 @@ def rank_trace_choices(
             pdg,
             program,
             steerable,
-            clear_only=clear_only,
-            opaque_loop=opaque_loop,
-            pipeline_internal_tags=pipeline_internal_tags,
-            route=choice,
-            prior=prior,
-            rejected_actions=rejected_actions,
-            harness=harness,
+            constraints=replace(read, route=choice, avoid_pred=None, via_pred=None),
         )
-        if avoid_pred is not None and _route_forces([tree], snapshot, avoid_pred):
+        if read.avoid_pred is not None and _route_forces([tree], snapshot, read.avoid_pred):
             continue
-        if via_pred is not None and not _route_forces([tree], snapshot, via_pred):
+        if read.via_pred is not None and not _route_forces([tree], snapshot, read.via_pred):
             continue
         traced.append((choice, tree))
     if not traced:
@@ -3336,7 +3186,7 @@ def compute_reference_constants(
     for ptr in list(pointer_tags):
         tag = ptr
         for _ in range(3):
-            defn = _single_calc_source(tag, pdg, program)
+            defn = single_calc_source(tag, pdg, program)
             if defn is None:
                 break
             _expr, rep = defn
@@ -3846,60 +3696,6 @@ def _table_enablement_prereqs(
                 best.data_flow = "enable"
                 prereqs.append(best)
     return prereqs
-
-
-def _invert_indirect(
-    ro: Any,
-    tag: str,
-    value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-) -> tuple[str, list[Any]] | None:
-    """Invert an indirect copy: find which index values produce *value*.
-
-    For ``copy(block[ptr], tag)`` or ``copy(block[expr], tag)``, read the
-    block from the snapshot and find which pointer values land on a slot
-    holding *value*.  Hops through calc-defined scratch pointers
-    (e.g. ``calc(S_StateRequested + 150, idx)``).
-
-    Returns ``(index_tag, [matching_values])`` or ``None``.
-
-    This is the single-table / identity-predicate slice of the constant-table
-    inversion generalized by ``tide_tables.solve_table_predicate`` (N tables, an
-    arbitrary predicate).  Both share ``table_from_indirect_src`` (operand model)
-    and ``_read_table`` (slot read).
-    """
-    from pyrung.core.analysis.pilot.tide_tables import _read_table, table_from_indirect_src
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
-
-    # Find the indirect copy instruction writing our tag.
-    src = None
-    for instr in ro._instructions:
-        if not isinstance(instr, CopyInstruction):
-            continue
-        if getattr(instr.dest, "name", None) != tag:
-            continue
-        if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
-            src = instr.source
-        break
-    if src is None:
-        return None
-
-    # Model the source as ``table[eval_addr(index)]``, then keep the plausible
-    # index values whose slot holds our target.
-    table = table_from_indirect_src(src, snapshot, pdg, program)
-    if table is None or table.index_tag == tag:
-        return None
-    inverting = [
-        v
-        for v in _index_values(table.index_tag, snapshot, pdg, program)
-        if _values_match(_read_table(table, v, snapshot), value)
-    ]
-    if not inverting:
-        return None
-    return table.index_tag, inverting
 
 
 def _visit_key(tag: str, value: Any) -> tuple[str, Any]:

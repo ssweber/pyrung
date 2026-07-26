@@ -30,6 +30,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
+from pyrung.core.analysis.pilot.investigate import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
@@ -43,12 +44,12 @@ from pyrung.core.analysis.pilot.progress import (
     _anchor_frame_receipt,
     _apply_departure_decision,
     _channel_recovery_origin,
-    _deviation_bearing,
     _investigate_and_revert,
     _monitor_trend,
     _open_pending_departure,
 )
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     DepartureAction,
     DepartureDecision,
     PendingDeparture,
@@ -189,7 +190,14 @@ class TestCheckpoints:
             (("State", 17),),
         )
         trial = _make_trial(3, Outcome.CONFIRMED, bearing_objective=objective)
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["trend"] == 3
@@ -203,7 +211,14 @@ class TestCheckpoints:
         # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(3, Outcome.CONFIRMED)
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["flat"] is True
@@ -215,7 +230,14 @@ class TestCheckpoints:
         # pre-frontier checkpoint and high-water mark must survive.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
         trial = _make_trial(8, Outcome.FRONTIER)
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         assert [e.kind for e in events] == ["trend_checkpoint"]
         assert events[0].data["frontier"] is True
@@ -233,12 +255,18 @@ class TestCheckpoints:
             15,
             Outcome.CONFIRMED,
             bearing_objective=objective,
-            zoom_channel_tag="State",
-            zoom_target_value=3,
+            channel_motion=ChannelMotion("State", 3, stop_reason="reached"),
             fork_snap={"State": 3},
         )
 
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         assert [event.kind for event in events] == ["trend_checkpoint"]
         assert events[0].data["channel"] == "State"
@@ -265,8 +293,7 @@ class TestCheckpoints:
             15,
             Outcome.CONFIRMED,
             bearing_objective=objective,
-            zoom_channel_tag="State",
-            zoom_target_value=3,
+            channel_motion=ChannelMotion("State", 3, stop_reason="reached"),
             fork_snap={"State": 3},
         )
 
@@ -334,7 +361,7 @@ def test_improved_trace_distance_does_not_promote_pending_departure():
         progress_mark=(("Step", 101),),
     )
     trial = _make_trial(3, Outcome.CONFIRMED)
-    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+    ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
@@ -363,8 +390,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         Outcome.AMBIENT_DRIFT,
         before_snap={"State": 6, "Step": 105},
         fork_snap={"State": 10, "Step": 105},
-        zoom_channel_tag="State",
-        zoom_target_value=16,
+        channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
     )
     verdict = DepartureVerdict(
         decision="continue",
@@ -401,7 +427,7 @@ def test_pending_expiry_without_saved_progress_rolls_back():
         expires_at=0,  # already past — the attempt is out of budget
     )
     trial = _make_trial(5, Outcome.CONFIRMED)
-    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+    ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
@@ -419,7 +445,7 @@ def test_pending_expiry_restores_the_current_checkpoint_artifact():
     corrected = replace(checkpoint, key=("corrected",), trend=4)
     state.checkpoints[0] = corrected
     trial = _make_trial(5, Outcome.CONFIRMED)
-    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+    ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
@@ -451,7 +477,7 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
             _make_trial(4, Outcome.CONFIRMED),
             frame,
             state,
-            SimpleNamespace(target_tag="State", target_value=17, target_predicate=None),
+            SimpleNamespace(target=TargetSpec("State", 17)),
         )
     )
     assert [event.kind for event in events] == ["provisional_expired"]
@@ -513,7 +539,7 @@ def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
         trial,
         _frame(),
         state,
-        SimpleNamespace(target_tag="State"),
+        SimpleNamespace(target=TargetSpec("State", None)),
     )
 
     assert events is not None
@@ -564,7 +590,7 @@ def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypat
         trial,
         _frame(),
         state,
-        SimpleNamespace(target_tag="State"),
+        SimpleNamespace(target=TargetSpec("State", None)),
     )
 
     assert events is not None
@@ -591,7 +617,7 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
         expires_at=50,
     )
     trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
-    ctx = SimpleNamespace(target_tag="State", target_value=17, target_predicate=None)
+    ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
@@ -608,8 +634,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         Outcome.AMBIENT_DRIFT,
         before_snap={"State": 2},
         fork_snap={"State": 4},
-        zoom_channel_tag="State",
-        zoom_target_value=17,
+        channel_motion=ChannelMotion("State", 17, stop_reason="departed"),
     )
     state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
     state.pending_departure = _pending_departure(
@@ -639,9 +664,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         _investigate,
     )
     ctx = SimpleNamespace(
-        target_tag="State",
-        target_value=17,
-        target_predicate=None,
+        target=TargetSpec("State", 17),
     )
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
@@ -676,8 +699,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         Outcome.AMBIENT_DRIFT,
         before_snap={"State": 9},
         fork_snap={"State": 2},
-        zoom_channel_tag="State",
-        zoom_target_value=1,
+        channel_motion=ChannelMotion("State", 1, stop_reason="departed"),
         route_prescribed=True,
         assessment=TrialAssessment(
             agency=Agency.PILOT,
@@ -713,9 +735,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         _unexpected_investigation,
     )
     ctx = SimpleNamespace(
-        target_tag="State",
-        target_value=17,
-        target_predicate=None,
+        target=TargetSpec("State", 17),
         max_scans=100,
     )
 
@@ -765,8 +785,7 @@ def _seal_in_regression_inputs():
     ctx = SimpleNamespace(
         resting={"Command": False},
         edge_tags={"Command"},
-        target_tag="Out",
-        target_value=True,
+        target=TargetSpec("Out", True),
         pdg=pdg,
         program=prog,
         steerable=steerable,
@@ -851,7 +870,14 @@ class TestRegression:
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
         work_before = state.work
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         assert [e.kind for e in events] == ["trend_regression"]
         assert events[0].data["from_trend"] == 6
@@ -870,7 +896,14 @@ class TestRegression:
 
         state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
         trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
-        tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
 
         state.work.step()
         assert not state.rungs
@@ -888,7 +921,10 @@ class TestRegression:
             chase_regression_causes=False,
             regression_nogoods=frozenset({("X", True)}),
         )
-        ctx = SimpleNamespace(compass=Compass())
+        ctx = SimpleNamespace(
+            compass=Compass(),
+            target=TargetSpec("State", 17),
+        )
         events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
         assert ("X", True) in ctx.compass.knowledge.nogood_pairs(("f",))
@@ -913,13 +949,19 @@ class TestLetrunEjection:
             2,  # lower than best_trend — would normally checkpoint
             Outcome.AMBIENT_DRIFT,
             observe_label="letrun",
-            zoom_channel_tag="S",
-            zoom_target_value=1,
+            channel_motion=ChannelMotion("S", 1, stop_reason="departed"),
             before_snap={"S": 0},
             fork_snap={"S": 2},
             chase_regression_causes=False,
         )
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
         # The ejection is announced, then handed to investigation/revert.
         assert [e.kind for e in events] == [
             "letrun_ejection",
@@ -936,8 +978,7 @@ class TestLetrunEjection:
         trial = _make_trial(
             2,
             Outcome.AMBIENT_DRIFT,
-            zoom_channel_tag="State",
-            zoom_target_value=1,
+            channel_motion=ChannelMotion("State", 1, stop_reason="departed"),
             before_snap={"State": 6},
             fork_snap={"State": 10},
         )
@@ -969,7 +1010,12 @@ class TestLetrunEjection:
             _investigate,
         )
 
-        events = _monitor_trend(trial, _frame(), state, SimpleNamespace())
+        events = _monitor_trend(
+            trial,
+            _frame(),
+            state,
+            SimpleNamespace(target=TargetSpec("State", 17)),
+        )
         assert next(events).kind == "letrun_ejection"
         assert classified is False
         assert next(events).kind == "departure_check_started"
@@ -987,12 +1033,18 @@ class TestLetrunEjection:
             3,
             Outcome.AMBIENT_DRIFT,
             observe_label="letrun",
-            zoom_channel_tag="S",
-            zoom_target_value=1,
+            channel_motion=ChannelMotion("S", 1, stop_reason="departed"),
             before_snap={"S": 0},
             fork_snap={"S": 2},
         )
-        events = tuple(_monitor_trend(trial, _frame(), state, SimpleNamespace()))
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
         assert [e.kind for e in events] == ["letrun_ejection"]
         assert events[0].data["investigated"] is False
         assert events[0].data["reason"] == "no checkpoint to revert to"
@@ -1056,8 +1108,7 @@ def test_zoom_accepted_payload_records_requested_and_landed():
     trial = _make_trial(
         7,
         Outcome.AMBIENT_DRIFT,
-        zoom_channel_tag="State",
-        zoom_target_value=6,
+        channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
         fork_snap={"State": 8},
     )
     payload = _zoom_accepted_payload(trial)
@@ -1073,9 +1124,7 @@ def test_zoom_accepted_payload_records_owned_bearing_receipt():
     trial = _make_trial(
         7,
         Outcome.CONFIRMED,
-        zoom_channel_tag="Acc",
-        zoom_target_value=4,
-        bearing_stop_reason="reached",
+        channel_motion=ChannelMotion("Acc", 4, stop_reason="reached"),
         fork_snap={"Acc": 5},
     )
 
@@ -1091,8 +1140,7 @@ def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
     trial = _make_trial(
         7,
         Outcome.AMBIENT_DRIFT,
-        zoom_channel_tag="State",
-        zoom_target_value=16,
+        channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
         before_snap={"State": 6},
         fork_snap={"State": 8},
     )

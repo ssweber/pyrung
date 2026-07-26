@@ -31,30 +31,35 @@ transition is evidence for the next action only.
 
 Escalate according to what remains unreadable:
 
+Every rung consumes the instruction-owned `AdvanceProfile` contract: one next
+operation, the observable boundary for the next read, and an optional
+`AdvanceStep.progress` receipt. The receipt is owner-declared evidence that an
+operation is active when a quantized scalar cannot change on the next scan;
+fractional accumulator state remains simulator execution state, not public
+PILOT evidence.
+
 1. `trace.py` follows writers, guards, copies, calculations, and
    instruction-owned cross-scan state through `advance.py`.
 2. `availability.py`, `evidence.py`, `tide_tables.py`, and `currents.py` extend
    that read with current-state guards, pipeline structure, finite
    constant-backed tables, and program-awaited actions.
-3. An `AdvanceProfile` states one next operation: conditions to hold or pulse,
-   the observable boundary at which PILOT must read the world again, and an
-   optional `AdvanceStep.progress` receipt. The receipt is owner-declared
-   evidence that the operation is active when a quantized scalar (for example a
-   seconds accumulator) cannot change on the next scan; fractional accumulator
-   state remains simulator execution state, not public PILOT evidence.
-4. `program_step.py` checks one exact producer in an unchanged fork and reports
-   keep running, needs input, interrupted pipeline motion, or unclear. It does
-   not choose an action. Observed pipeline motion makes the reading interrupted
-   even when the producer exposes no external input; the current transition
-   owner must be observed before option ordering may select an alternative.
+3. `program_step.py` checks one exact producer in an otherwise-unchanged fork,
+   plus one counterfactual input patch per required input, and reports keep
+   running, needs input, interrupted pipeline motion, or unclear. It does not
+   choose an action. Observed pipeline motion makes the reading interrupted even
+   when the producer exposes no external input; the current transition owner
+   must be observed before option ordering may select an alternative.
    A requirement read while the program is crossing a boundary it owns belongs
    to the world after that crossing, not to this one. The settled projection is
    the disproof: an input the program is genuinely stopped at is still required
    once its own motion finishes. Such a reading keeps running with the crossing
    itself as the immediate boundary, so the caller coasts to its landing and the
    drive loop reads the settled world again.
-5. `skiff.py` runs isolated fork probes only for a genuinely unreadable
+4. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
+
+The line between exact-producer proof and skiff is who may return an action, not
+who may probe: `program_step.py` only reports a reading; skiff may propose one.
 
 An incomplete static read returns an unresolved requirement. It does not invent
 an edge or silently convert uncertainty into impossibility.
@@ -79,9 +84,8 @@ Pending-departure expiry rolls the world back without creating a nogood.
 Every repeated activity must either consume a finite budget or accumulate
 durable knowledge that prevents byte-identical repetition.
 
-- `max_scans` and pending-departure lifetimes use the same committed `search_scan`
-  coordinate. Accepted instruction-owned coast dwell is credited separately
-  and cannot expire either bound.
+- `_PilotState.search_scan` owns both `max_scans` and pending-departure
+  lifetimes; accepted instruction-owned coast dwell is credited separately.
 - Skiff retries use a per-world-key budget and continue only when
   `Compass.apply` reports new knowledge.
 - Pending program motion has a finite scan budget and exact rollback
@@ -102,7 +106,7 @@ should consume the first owner's result.
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
-- One exact producer's unchanged-world proof: `program_step.py::read_program_step`
+- One exact producer's counterfactual proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
   `compass.py::Compass.orient` facade
 - Current-world continuation evidence: `options.py::_current_work_evidence`;
@@ -111,32 +115,27 @@ should consume the first owner's result.
   `TargetSpec` and complete unresolved frontier travel unchanged through
   execution and verification, and recovery consumes that receipt rather than
   rebuilding intent from the global context
-- Option materialization and ranking evidence: `options.py::_build_candidates`;
-  `_admit_trace_details` applies the same admission rules to target,
-  completion, and exact-producer readings
+- Option materialization and ranking: `options.py::_build_candidates`; its
+  action-free `_WaitPrescription` and `_admit_trace_details` make wait isolation
+  and single admission structural
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
-- Coast-departure channel ownership: `_ops.py::coast_departure_tags`; inferred
-  pipeline channels remain sentinels, Gauge retains monotone progress
-  coordinates, and an exact stateful target without a Gauge owner is the
-  discrete fallback channel
+- Coast-departure channel ownership: `_ops.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`
 - Corrective hypothesis derivation: `corrections.py`
 - Corrective hypothesis replay and confirmation: `investigate.py`
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
-- Temporary-logic execution ownership: `_ops.py::_rung_execution_receipt`,
-  produced from the same expanded branches `_set_rungs` installs; investigation,
-  causal revocation, and recording consume its effective owner rather than
-  re-evaluating raw guards
+- Temporary-logic execution ownership: `_ops.py::_rung_execution_receipt` over
+  the same `_expand_pilot_rules` branches installed by `_set_rungs`
 
 ## Actual control flow
 
 1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
-2. Compass reads trace, catalog, currents, constraints, and knowledge, then
-   returns exactly one `Bearing`, `NeedProbe`, or `Stuck`.
+2. Compass reads trace, catalog, currents, constraints, and knowledge;
+   `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
@@ -214,8 +213,8 @@ investigation materializes their guarded installed form.
 
 ## Soundness and behavior invariants
 
-- Writers that can produce the requested value remain eligible.
-  Availability and wake/clobber heuristics order; they do not reject.
+- Writer eligibility and ordering: `trace.py::_rank_writers`; availability is
+  only a sort key, never a rejection
 - "Still needed" has separate meanings:
   `frontier_pairs` reports unresolved needs in the selected trace tree;
   `_writer_projection` checks a writer under its fire-time overlay;
@@ -234,8 +233,8 @@ investigation materializes their guarded installed form.
 - A convergence lookup is an ordered multimap of primary-action alternatives.
   Chart construction fans each alternative into its own edge; only a route's
   `edge_gates` are simultaneous co-actions.
-- A program-written tag may be removed from the steerable set by recorded
-  evidence. Empirical evidence never creates a new lever.
+- Static lever ownership: `Compass.action_tags`; `CompassKnowledge` cannot
+  express a new lever.
 - A correction is installed only in the exact guarded form that survived
   replay, and only one competing explanation is installed for an incident.
 - An accumulator correction asks only the owner that completed in the recorded
@@ -263,22 +262,15 @@ investigation materializes their guarded installed form.
   active correction receipts may renegotiate their concrete value from a later
   incident boundary; prerequisites and route holds cannot enter the correction
   lifecycle merely because they compile to the same rung type.
-- Every investigation returns one correction artifact containing the exact
-  guarded rungs, causal sources, identity, and replay justification it proved;
-  consumers do not reconstruct that artifact from parallel result fields.
-  Excursion verification additionally rechecks the corrected replay against
-  `avoid=`. The shared installer rejects forged identities and already-owned
-  rungs, then records a lifecycle receipt containing that correction artifact
-  without copying or recompiling it. Prerequisite installation likewise reuses
-  an identical existing rung without claiming it; the first installer remains
-  its sole owner. Hold-log tag summaries are derived from their exact rungs.
-  Installation banks active correction artifacts into every revert anchor;
-  revocation removes them from every anchor symmetrically. The runner, world
-  key, checkpoint state, and receipt must therefore name the same rungs.
-- A terminal coast consumes the same channel-owner set during execution and
-  incident replay. Exact stateful target motion that Gauge does not own is a
-  recorded channel departure; it cannot be flattened into a timeout merely
-  because pipeline inference found no operator-request role.
+- Correction lifecycle ownership: `_ConfirmedCorrection`, `_CorrectionReceipt`,
+  and the derived `_HoldLogEntry.tags` / `_StepContext.steady_holds` properties.
+  Excursion verification rechecks corrected replay against `avoid=`. The shared
+  installer rejects forged identities and already-owned rungs; prerequisite
+  installation reuses an identical rung without claiming it. Installation
+  banks active corrections into every revert anchor, and revocation removes
+  them symmetrically.
+- Coast channel ownership across execution and replay:
+  `_ops.py::coast_departure_tags`
 - Coast predicates decide bump truth. Compiled conditions provide fold metadata
   only. Every reported crossing lands on a real recorded scan.
 - Cycle folding, table inversion, producer recognition, and departure
@@ -322,10 +314,8 @@ investigation materializes their guarded installed form.
   families; Compass owns filtering and ambiguity policy.
 - `advance.py` — unambiguous instruction-owned channel lookup and boundary
   estimates. Instruction semantics live in each instruction's `AdvanceProfile`.
-- `program_step.py` — read-only unchanged-world proof for one exact producer;
-  reports the immediate boundary, unmet input, or a pipeline interruption that
-  must be observed before another route is selected. A requirement dissolved by
-  the program's own crossing is reported as that crossing, never as live work.
+- `program_step.py` — counterfactual proof for one exact producer; reports a
+  boundary, unmet input, or interruption but never an action.
 - `navigation.py` — immutable evidence, act, result, target, constraint,
   target-relative Bearing objective, and world-view contracts.
 

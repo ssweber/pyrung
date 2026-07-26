@@ -11,24 +11,15 @@ import functools
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import _condition_to_expr
 from pyrung.core.instruction.advance import (
     AdvanceProfile,
-    AdvanceStep,
     ConditionDemand,
-    Constraint,
-    constraint_holds,
 )
 from pyrung.core.validation._common import walk_instructions
-
-if TYPE_CHECKING:
-    from pyrung.core.runner import PLC
-
-_DEFAULT_DT = 0.01
-_MEASURE_BUDGET = 2000
 
 
 @dataclass(frozen=True)
@@ -112,20 +103,20 @@ def build_advance_index(program: Any, harness: Any = None) -> AdvanceIndex:
     )
 
 
-def next_advance(
-    channel: str,
-    constraint: Constraint,
-    snapshot: Mapping[str, Any],
-    program: Any,
-    harness: Any = None,
-) -> tuple[AdvanceOwner, AdvanceStep] | None:
-    """Plan one operation for an unambiguously owned channel."""
+def estimate_owned_boundary_scans(plc: Any, boundary: Any) -> int | None:
+    """Estimate a boundary using its owner and the runner's timing instruments."""
 
-    owner = build_advance_index(program, harness).resolve(channel)
-    if owner is None:
+    owner = build_advance_index(
+        plc.program,
+        getattr(plc, "_harness", None),
+    ).resolve(getattr(boundary, "tag", ""))
+    if owner is None or owner.profile.linear is None:
         return None
-    step = owner.profile.plan(constraint, snapshot)
-    return None if step is None else (owner, step)
+    return owner.profile.linear.estimate_scans(
+        boundary,
+        plc.state.tags,
+        plc._dt,
+    )
 
 
 def demand_holds(demand: ConditionDemand | None, snapshot: Mapping[str, Any]) -> bool:
@@ -135,43 +126,3 @@ def demand_holds(demand: ConditionDemand | None, snapshot: Mapping[str, Any]) ->
         return True
     actual = _eval_expr_from_state(_condition_to_expr(demand.condition), dict(snapshot))
     return actual is bool(demand.value)
-
-
-def estimate_scans(
-    owner: AdvanceOwner,
-    constraint: Constraint,
-    plc: PLC,
-    *,
-    fork: PLC | None = None,
-    budget: int = _MEASURE_BUDGET,
-) -> int | None:
-    """Estimate scans to a boundary, measuring a prepared fork if necessary."""
-
-    profile = owner.profile
-    dt = float(getattr(plc, "_dt", _DEFAULT_DT) or _DEFAULT_DT)
-    if profile.linear is not None:
-        analytic = profile.linear.estimate_scans(constraint, plc.state.tags, dt)
-        if analytic is not None:
-            return analytic
-    return None if fork is None else measure_scans(constraint, fork, budget=budget)
-
-
-def measure_scans(
-    constraint: Constraint,
-    fork: PLC,
-    *,
-    budget: int = _MEASURE_BUDGET,
-) -> int | None:
-    """Run a prepared fork until the named boundary, without guessing."""
-
-    if constraint_holds(constraint, fork.state.tags) is True:
-        return 0
-    start = fork.state.scan_id
-    fork.run_until(
-        lambda state: constraint_holds(constraint, state.tags) is True,
-        max_cycles=budget,
-        fold=True,
-    )
-    if constraint_holds(constraint, fork.state.tags) is not True:
-        return None
-    return fork.state.scan_id - start

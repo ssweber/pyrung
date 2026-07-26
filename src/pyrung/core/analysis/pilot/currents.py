@@ -12,7 +12,6 @@ policy, and they never execute the program or retain a route.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,30 +24,6 @@ from pyrung.core.analysis.sp_values import (
     _written_value_for_tag,
 )
 from pyrung.core.crossing import Affine, Literal
-
-
-@dataclass(frozen=True)
-class WorldView:
-    """A minimal :class:`WalkContext` a caller assembles from a live frame.
-
-    ``_PilotContext`` carries every field a ``WalkContext`` names except the
-    live ``snapshot`` (which lives on the iteration frame), so options.py
-    builds one of these from ``frame.snap`` plus the context constants.  It is a
-    world-describing view only — no route/recursion control.
-    """
-
-    snapshot: Mapping[str, Any]
-    pdg: Any
-    program: Any
-    steerable: frozenset[str]
-    opaque_loop: frozenset[str]
-    prior: Any = None
-    clear_only: frozenset[str] = frozenset()
-    pipeline_internal_tags: frozenset[str] = frozenset()
-    pipeline_roles: tuple[Any, ...] = ()
-    avoid_pred: Any = None
-    via_pred: Any = None
-    harness: Any = None
 
 
 @dataclass(frozen=True)

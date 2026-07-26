@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Literal, TypeGuard, cast
@@ -17,6 +17,9 @@ from pyrung.core.analysis.pilot.charts import (
     ActionPair,
     PipelineSlice,
     StaticTransitionGraph,
+    _applied_key,
+    _canonical_applied,
+    _context_value_key,
 )
 from pyrung.core.analysis.pilot.navigation import (
     NavigationConstraints,
@@ -41,7 +44,48 @@ __all__ = [
     "WaitCause",
     "is_action",
     "is_composite_action",
+    "unique_legal_current_reading",
 ]
+
+
+def unique_legal_current_reading(
+    world: Any,
+    channel_tag: str,
+    pipeline_roles: Any,
+    *,
+    route_allowed: Callable[[ActionPair], bool],
+    action_avoided: Callable[[ActionPair], bool],
+    awaits_operator: bool = False,
+) -> Any:
+    """Return the one legal current reading under the caller's stated policy."""
+
+    from pyrung.core.analysis.pilot.currents import (
+        current_readings,
+        sibling_producer_family,
+    )
+
+    def _awaits_operator(reading: Any) -> bool:
+        signature = reading.command_writes or ((reading.command_tag, reading.command_value),)
+        automatic_owners = []
+        for tag, value in signature:
+            family = sibling_producer_family(world, tag, value)
+            automatic_owners.append(
+                family is not None
+                and any(producer.kind != "operator" for producer in family.producers)
+            )
+        # A shared request strobe may have automatic writers while the command
+        # discriminator remains operator-only. The automatic path subsumes the
+        # push only when it owns every supplied command-gate component.
+        return not automatic_owners or not all(automatic_owners)
+
+    legal = tuple(
+        reading
+        for reading in current_readings(world, channel_tag, pipeline_roles)
+        if route_allowed(reading.action)
+        and not action_avoided(reading.action)
+        and (not awaits_operator or _awaits_operator(reading))
+    )
+    return legal[0] if len(legal) == 1 else None
 
 
 # ===========================================================================
@@ -178,27 +222,6 @@ def _canon(value: Any) -> Any:
     return int(value) if isinstance(value, bool) else value
 
 
-def _context_value_key(value: Any) -> Any:
-    """Hashable exact identity for one observed snapshot value."""
-    if value is None or isinstance(value, bool | int | float | str | bytes):
-        return _canon(value)
-    if isinstance(value, tuple | list):
-        return tuple(_context_value_key(item) for item in value)
-    if isinstance(value, set | frozenset):
-        return tuple(sorted((_context_value_key(item) for item in value), key=repr))
-    if isinstance(value, dict):
-        return tuple(
-            sorted(
-                (
-                    (_context_value_key(key), _context_value_key(member))
-                    for key, member in value.items()
-                ),
-                key=repr,
-            )
-        )
-    return (type(value).__module__, type(value).__qualname__, repr(value))
-
-
 def _evidence_scope_key(
     world_key: tuple[Any, ...] | None,
     context: Iterable[ActionPair] | None = None,
@@ -212,16 +235,6 @@ def _evidence_scope_key(
         world_key,
         tuple(sorted(((tag, _context_value_key(value)) for tag, value in context))),
     )
-
-
-def _canonical_applied(applied: Iterable[ActionPair]) -> tuple[ActionPair, ...]:
-    """Canonical effective action overlay (last write per tag, tag ordered)."""
-    return tuple(sorted(dict(applied).items()))
-
-
-def _applied_key(applied: Iterable[ActionPair]) -> tuple[tuple[str, Any], ...]:
-    """Hashable identity of the complete action overlay used by a trial."""
-    return tuple((tag, _context_value_key(value)) for tag, value in _canonical_applied(applied))
 
 
 def _observation_applied(observation: CompassObservation) -> tuple[ActionPair, ...]:
@@ -295,33 +308,6 @@ def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
     """
     pairs: tuple[ActionPair, ...] = action if is_composite_action(action) else (action,)
     return tuple((str(t), repr(v)) for t, v in pairs)
-
-
-def _observation_exercised_edge(
-    observation: CompassObservation,
-    edge: Any,
-) -> bool:
-    """Whether the runtime trial exercised this exact static artifact.
-
-    Matching a primary button is insufficient: the chart edge may require
-    same-scan co-actions or concrete guard/enabler values. Negative evidence
-    can only overlay the edge when all of those facts were present in the
-    observed pre-transition context plus the applied action overlay.
-    """
-    if observation.world_key is None:
-        # Deliberately global seeded observations retain the legacy API.
-        return True
-    context = dict(observation.context)
-    exact_applied = _observation_applied(observation)
-    applied = dict(exact_applied)
-    overlay = {**context, **applied}
-    required_actions = () if edge.action is None else (edge.action, *edge.co_actions)
-    if _applied_key(exact_applied) != _applied_key(required_actions):
-        return False
-    for tag, value in (*edge.source_constraints, *edge.enablers):
-        if tag not in overlay or not _values_match(overlay[tag], value):
-            return False
-    return True
 
 
 # ===========================================================================
@@ -888,20 +874,6 @@ class Compass:
 
         return orient(self, world, target, constraints)
 
-    def has_transitions(
-        self,
-        tag: str,
-        *,
-        world_key: tuple[Any, ...] | None | object = _ALL_CONTEXTS,
-        snapshot: dict[str, Any] | None = None,
-    ) -> bool:
-        # True iff a real edge was ever recorded for *tag* (a CONTRADICTED
-        # tombstone still counts — it *was* an edge), matching the old
-        # ``tag in self._transitions`` (which stayed True after contradict
-        # emptied the per-tag dict).  A tag carrying only NO_CHANGE probe marks
-        # never had a transition, so it reads False as it did before.
-        return self.knowledge.has_transitions(tag, world_key=world_key, snapshot=snapshot)
-
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""
 
@@ -932,7 +904,7 @@ class Compass:
                     )
                     if not (cause_matches and _values_match(edge.from_value, observation.from_val)):
                         continue
-                    if not _observation_exercised_edge(observation, edge):
+                    if not edge.exercised_by(observation, _observation_applied(observation)):
                         continue
                     if observation.kind == "edge":
                         # An alternate observed destination does not globally
@@ -959,114 +931,3 @@ class Compass:
         if not changed:
             return self, False
         return replace(self, knowledge=knowledge), True
-
-    def find_path(
-        self,
-        tag: str,
-        from_val: Any,
-        to_val: Any,
-        *,
-        cause_allowed: Any = None,
-        world_key: tuple[Any, ...] | None = None,
-        snapshot: dict[str, Any] | None = None,
-    ) -> list[TransitionCause] | None:
-        """BFS shortest transition-cause sequence through the learned table.
-
-        Traverses only **live** edges — CONTRADICTED and NO_CHANGE tombstones
-        are skipped, so a falsified edge never shadows a genuine path (they used
-        to be deleted; a tombstone that still matched would change behavior).
-        """
-        return self.knowledge.find_path(
-            tag,
-            from_val,
-            to_val,
-            cause_allowed=cause_allowed,
-            world_key=world_key,
-            snapshot=snapshot,
-        )
-
-    def unprobed_actions(
-        self,
-        tag: str,
-        from_val: Any,
-        available_actions: set[Action] | frozenset[Action],
-        *,
-        world_key: tuple[Any, ...] | None = None,
-        snapshot: dict[str, Any] | None = None,
-        applied_context: tuple[ActionPair, ...] | None = None,
-    ) -> list[Action]:
-        """Available actions not yet tried from *from_val* for *tag*.
-
-        ``available_actions`` may mix flat actions with skiff-learned
-        composite (pair-probe) causes — sort with :func:`_action_sort_key`,
-        not the bare tuple order, so the two shapes never get compared
-        directly (see its docstring for the crash that guards against).
-        """
-        return self.knowledge.unprobed_actions(
-            tag,
-            from_val,
-            available_actions,
-            world_key=world_key,
-            snapshot=snapshot,
-            applied_context=applied_context,
-        )
-
-    def probed_actions(
-        self,
-        tag: str,
-        from_val: Any,
-        *,
-        world_key: tuple[Any, ...] | None = None,
-        snapshot: dict[str, Any] | None = None,
-        applied: tuple[ActionPair, ...] | None = None,
-    ) -> set[Action]:
-        """Actions already probed from *from_val* for *tag*.
-
-        Every entry key — live edge or tombstone — is a probe mark, so this
-        reads the whole entry table (the old ``_probed`` set was exactly the
-        union of every write's key).
-        """
-        return self.knowledge.probed_actions(
-            tag,
-            from_val,
-            world_key=world_key,
-            snapshot=snapshot,
-            applied=applied,
-        )
-
-    def transition_dest(
-        self,
-        tag: str,
-        from_val: Any,
-        cause: TransitionCause,
-        *,
-        world_key: tuple[Any, ...] | None = None,
-        snapshot: dict[str, Any] | None = None,
-    ) -> Any | None:
-        """Observed destination for one transition cause from *from_val*."""
-        return self.knowledge.transition_dest(
-            tag, from_val, cause, world_key=world_key, snapshot=snapshot
-        )
-
-    def off_path_actions(
-        self,
-        tag: str,
-        from_val: Any,
-        to_val: Any,
-        *,
-        world_key: tuple[Any, ...] | None = None,
-        snapshot: dict[str, Any] | None = None,
-    ) -> set[Action]:
-        """Actions known to move *tag* away from the BFS path toward *to_val*.
-
-        Once we know the shortest path, any action from the current state
-        that goes to a state NOT on that path (or with no path to the
-        target) is off-path and should be tried after path actions.
-        """
-        return self.knowledge.off_path_actions(
-            tag,
-            from_val,
-            to_val,
-            world_key=world_key,
-            snapshot=snapshot,
-        )

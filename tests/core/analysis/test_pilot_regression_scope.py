@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot import progress
+from pyrung.core.analysis.pilot import progress, recording
 from pyrung.core.analysis.pilot.types import _RecoveryOrigin
 
 
@@ -57,7 +57,7 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
         anchor_scan=10,
         before_snap={},
     )
-    monkeypatch.setattr(progress, "_channel_transitions", lambda *_args: ())
+    monkeypatch.setattr(recording, "_channel_transitions", lambda *_args: ())
     monkeypatch.setattr(progress, "_revoke_corrections", lambda *_args: ())
 
     progress._investigate_and_revert(

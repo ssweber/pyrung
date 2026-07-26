@@ -28,6 +28,7 @@ from pyrung.core.analysis.pilot.causal import (
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
+from pyrung.core.analysis.pilot.compass import unique_legal_current_reading
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 from pyrung.core.analysis.pilot.navigation import BearingObjective
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
@@ -450,14 +451,14 @@ def classify_departure(
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
     # progress is structural (state + command handshake) and exposes no gauge.
-    from pyrung.core.analysis.pilot.currents import WorldView, current_readings
+    from pyrung.core.analysis.pilot.types import WorldView
 
     current_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
     if not all(hasattr(ctx, name) for name in current_context):
         qualifier = "chart has no clean route" if saw_graph else "no chart or current evidence"
         return _v("unknown", qualifier)
 
-    readings = current_readings(
+    current = unique_legal_current_reading(
         WorldView(
             snapshot=dict(fork.state.tags),
             pdg=ctx.pdg,
@@ -468,15 +469,14 @@ def classify_departure(
         ),
         channel_tag,
         ctx.pipeline_roles,
+        route_allowed=route_allowed,
+        action_avoided=lambda action: _avoid_forces(
+            ctx,
+            [action],
+            dict(fork.state.tags),
+        ),
     )
-    legal_readings = tuple(
-        reading
-        for reading in readings
-        if route_allowed(reading.action)
-        and not _avoid_forces(ctx, [reading.action], dict(fork.state.tags))
-    )
-    if len(legal_readings) == 1:
-        current = legal_readings[0]
+    if current is not None:
         return _v("continue", current.note, current.to_state, (settled_value,))
     return _v(
         "unknown",

@@ -26,12 +26,14 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _candidate_applied,
+    _CandidateSource,
     _current_work_evidence,
 )
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
     TraceNode,
+    TraceReadConstraints,
     frontier_pairs,
     rank_trace_choices,
     trace_back,
@@ -55,6 +57,13 @@ def _trace_for_route(
     state = world.state
     ctx = world.context
     snapshot = world.snapshot
+    read = TraceReadConstraints.from_context(
+        ctx,
+        state.work,
+        route=route,
+        avoid_pred=constraints.avoid_predicate,
+        rejected_actions=rejected_actions,
+    )
     if target.predicate is not None:
         return trace_relational(
             target.predicate,
@@ -62,15 +71,7 @@ def _trace_for_route(
             ctx.pdg,
             ctx.program,
             ctx.steerable,
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=route,
-            prior=ctx.domain_prior,
-            avoid_pred=constraints.avoid_predicate,
-            via_pred=ctx.via_pred,
-            rejected_actions=rejected_actions,
-            harness=getattr(state.work, "_harness", None),
+            constraints=read,
         )
     return trace_back(
         target.tag,
@@ -79,15 +80,7 @@ def _trace_for_route(
         ctx.pdg,
         ctx.program,
         ctx.steerable,
-        clear_only=ctx.clear_only,
-        opaque_loop=ctx.opaque_loop,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        route=route,
-        prior=ctx.domain_prior,
-        avoid_pred=constraints.avoid_predicate,
-        via_pred=ctx.via_pred,
-        rejected_actions=rejected_actions,
-        harness=getattr(state.work, "_harness", None),
+        constraints=read,
     )
 
 
@@ -109,22 +102,10 @@ def _exact_rejected_actions(exclusions: frozenset[Any]) -> frozenset[tuple[str, 
     )
 
 
-def _pair_has_exact_rejection(pair: tuple[str, Any], exclusions: frozenset[Any]) -> bool:
-    """Whether current-world evidence rejected this exact one-action choice.
-
-    A joint pulse is intentionally not projected onto its first member here.
-    That identity disproves the joint act, not the same primary action under a
-    different context. Only a single-member Pulse is precise enough to exhaust
-    a root route action.
-    """
-
-    return pair in _exact_rejected_actions(exclusions)
-
-
 def _route_rejected_actions(
     tree: Any,
     world: OrientationWorld,
-    exclusions: frozenset[Any],
+    rejected_actions: frozenset[tuple[str, Any]],
 ) -> tuple[tuple[str, Any], ...] | None:
     """Exact rejected actions when every live action on *tree* is exhausted."""
 
@@ -141,7 +122,7 @@ def _route_rejected_actions(
             or detail.until is not None
         ):
             active.append(pair)
-    if active and all(_pair_has_exact_rejection(pair, exclusions) for pair in active):
+    if active and all(pair in rejected_actions for pair in active):
         return tuple(active)
     return None
 
@@ -185,19 +166,18 @@ def _read_route_trees(
         ctx.pdg,
         ctx.program,
         ctx.steerable,
-        clear_only=ctx.clear_only,
-        opaque_loop=ctx.opaque_loop,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        prior=ctx.domain_prior,
-        avoid_pred=constraints.avoid_predicate,
-        via_pred=ctx.via_pred,
-        rejected_actions=rejected_actions,
-        harness=getattr(world.state.work, "_harness", None),
+        constraints=TraceReadConstraints.from_context(
+            ctx,
+            world.state.work,
+            route=None,
+            avoid_pred=constraints.avoid_predicate,
+            rejected_actions=rejected_actions,
+        ),
     )
     live = tuple(
         (choice, tree)
         for choice, tree in ranked
-        if _route_rejected_actions(tree, world, exclusions) is None
+        if _route_rejected_actions(tree, world, rejected_actions) is None
     )
     if live:
         return live
@@ -286,16 +266,6 @@ def _read_worlds(
     return tuple(
         _assemble_world(seed, target, route, tree, key_config) for route, tree in route_trees
     )
-
-
-def _read_world(
-    world: OrientationWorld,
-    target: TargetSpec,
-    constraints: NavigationConstraints,
-) -> OrientationWorld:
-    """Compatibility reader for callers that deliberately constrain one route."""
-
-    return _read_worlds(world, target, constraints)[0]
 
 
 def _frontier(world: OrientationWorld, candidates: Any) -> tuple[tuple[str, Any], ...]:
@@ -437,46 +407,21 @@ def _orient_read(
             if program_step is not None
             else None
         )
+        heading = program_heading if program_heading is not None else advance_boundary
+        route_prescribed = route_plan is not None
+        route_channel = route_plan.role.channel_tag if route_plan is not None else None
+        route_from = route_plan.first_edge.from_value if route_plan is not None else None
+        route_target = route_plan.first_edge.to_value if route_plan is not None else None
+        preserve_route_heading = route_prescribed and heading is not None
         act = Coast(
             "bearing",
-            channel_tag=(
-                program_heading[0]
-                if program_heading is not None
-                else advance_boundary[0]
-                if advance_boundary is not None
-                else route_plan.role.channel_tag
-                if route_plan is not None
-                else None
-            ),
-            target_value=(
-                program_heading[1]
-                if program_heading is not None
-                else advance_boundary[1]
-                if advance_boundary is not None
-                else route_plan.first_edge.to_value
-                if route_plan is not None
-                else None
-            ),
+            channel_tag=heading[0] if heading is not None else route_channel,
+            target_value=heading[1] if heading is not None else route_target,
             boundary=candidates.advance_condition,
-            route_prescribed=route_plan is not None,
-            route_channel_tag=(
-                route_plan.role.channel_tag
-                if route_plan is not None
-                and (program_heading is not None or advance_boundary is not None)
-                else None
-            ),
-            route_from_value=(
-                route_plan.first_edge.from_value
-                if route_plan is not None
-                and (program_heading is not None or advance_boundary is not None)
-                else None
-            ),
-            route_target_value=(
-                route_plan.first_edge.to_value
-                if route_plan is not None
-                and (program_heading is not None or advance_boundary is not None)
-                else None
-            ),
+            route_prescribed=route_prescribed,
+            route_channel_tag=route_channel if preserve_route_heading else None,
+            route_from_value=route_from if preserve_route_heading else None,
+            route_target_value=route_target if preserve_route_heading else None,
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _bearing(
@@ -511,8 +456,8 @@ def _orient_read(
             rationale=(
                 option.current_note
                 or getattr(option, "program_note", None)
-                or ("static route edge" if option.route_prescribed else "")
-                or ("learned transition" if option.influence_prescribed else "")
+                or ("static route edge" if option.source is _CandidateSource.ROUTE else "")
+                or ("learned transition" if option.source is _CandidateSource.INFLUENCE else "")
                 or "ranked trace action"
             ),
         )
@@ -635,9 +580,7 @@ def orient(
         raise ValueError("orientation world is bound to a different Compass value")
     read_context = replace(
         world.context,
-        target_tag=target.tag,
-        target_value=target.value,
-        target_predicate=target.predicate,
+        target=target,
         blocked_route_actions=constraints.blocked_actions,
         avoid_pred=constraints.avoid_predicate,
     )

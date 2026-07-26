@@ -1470,7 +1470,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -1540,58 +1552,24 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
-  "active_trace_actions": [
-   [
-    "x_BlowerFB",
-    true
-   ],
-   [
-    "x_RotateFB",
-    true
-   ]
-  ],
-  "candidates": [
-   {
-    "bearing_channel_tag": "i_BlowerFB",
-    "bearing_channel_value": true,
-    "current_note": "",
-    "current_prescribed": false,
-    "influence_prescribed": false,
-    "pair": [
-     "x_BlowerFB",
-     true
-    ],
-    "prescribed": false,
-    "provenance": [
-     "ReadInputs:R305"
-    ],
-    "route_prescribed": false,
-    "tag": "x_BlowerFB",
-    "value": true
-   },
-   {
-    "bearing_channel_tag": "i_RotateFB",
-    "bearing_channel_value": true,
-    "current_note": "",
-    "current_prescribed": false,
-    "influence_prescribed": false,
-    "pair": [
-     "x_RotateFB",
-     true
-    ],
-    "prescribed": false,
-    "provenance": [
-     "ReadInputs:R304"
-    ],
-    "route_prescribed": false,
-    "tag": "x_RotateFB",
-    "value": true
-   }
-  ],
+  "active_trace_actions": [],
+  "candidates": [],
   "completion_frontier": [
    [
     "x_BlowerFB",
@@ -1700,16 +1678,7 @@
    "target_value": 17
   },
   "stuck_reason": null,
-  "trace_actions": [
-   [
-    "x_BlowerFB",
-    true
-   ],
-   [
-    "x_RotateFB",
-    true
-   ]
-  ],
+  "trace_actions": [],
   "wait_prescribed": true,
   "wait_reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -1879,7 +1848,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2048,6 +2029,12 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 1,
+    "before": 0,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
     "after": 3,
     "before": 4,
     "tag": "Sts_StateCurrent"
@@ -2114,7 +2101,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2181,7 +2180,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2318,7 +2329,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2429,7 +2452,19 @@
    "Cmd_UnitModeChgReqBool",
    "Sts_StateCurrent",
    "Sts_StateRequested",
-   "Sts_UnitModeCurrent"
+   "Sts_UnitModeCurrent",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Blower__x",
+   "Blower_xCall",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag",
+   "i_BlowerFB",
+   "i_RotateFB"
   ]
  },
  {
@@ -2575,6 +2610,42 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
+    "after": 0,
+    "before": 3,
+    "tag": "Blower_CurStep"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 0,
+    "before": 1,
+    "tag": "Blower__init"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 0,
+    "before": 1,
+    "tag": "Blower__x"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 0,
+    "before": 1,
+    "tag": "Blower_xCall"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 0,
+    "before": 3,
+    "tag": "Rotate_CurStep"
+   },
+   {
+    "__type__": "TagChange",
+    "after": 0,
+    "before": 1,
+    "tag": "Rotate__init"
+   },
+   {
+    "__type__": "TagChange",
     "after": 17,
     "before": 6,
     "tag": "Sts_StateCurrent"
@@ -2592,25 +2663,6 @@
    "Cmd_State_Complete": true
   },
   "kind": "trial_committed"
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "kind": "provisional_promoted",
-  "landing_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "terminal": true,
-  "trend": 0
  },
  {
   "kind": "finished",

@@ -27,10 +27,7 @@ from pyrung import (
     time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.advance import (
-    build_advance_index,
-    estimate_scans,
-)
+from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import DeviationIncident
 from pyrung.core.analysis.steerable import compute_steerable
@@ -98,18 +95,6 @@ class TestAdvanceIndex:
         assert index.resolve(timer.Acc.name) is None
         assert len(index.conflict(timer.Acc.name)) == 2
         assert "ambiguous" in (index.conflict_message(timer.Acc.name) or "")
-
-    def test_estimates_scans_with_explicit_dt(self):
-        from pyrung.core.crossing import Eq
-
-        prog = _plain_timer_program()
-        plc = PLC(prog, dt=0.010)
-        plc.step()
-        owner = build_advance_index(prog).resolve("T_Done")
-        assert owner is not None
-        # 50 ms / (10 units per 10 ms scan) = 5 scans to Done from acc=0.
-        target = Eq("T_Done", frozenset((True,)))
-        assert estimate_scans(owner, target, plc) == 5
 
 
 class TestSequencerAdvance:

@@ -8,6 +8,7 @@ from pyrung import PLC, Bool, Int, Program, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung, _append_rungs, _set_rungs
 from pyrung.core.analysis.pilot.compass import Compass
+from pyrung.core.analysis.pilot.navigation import TargetSpec
 from pyrung.core.analysis.pilot.options import _build_candidates
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
@@ -110,9 +111,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         program=logic,
         route_allowed=lambda _pair: True,
         opaque_loop=frozenset(),
-        target_tag=state_tag.name,
-        target_value=ready,
-        target_predicate=None,
+        target=TargetSpec(state_tag.name, ready),
         resting={door_closed.name: False},
     )
 

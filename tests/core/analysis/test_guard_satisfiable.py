@@ -1,17 +1,16 @@
-"""Unit tests for ``tide_tables.guard_satisfiable``.
+"""Unit tests for ``tide_tables.guard_verdict``.
 
 The primitive answers "given the values a writer *forces* (``fixed`` — its copy
 source, plus any context), could its guard be satisfied by some assignment of the
 remaining free operands over their finite domains?"  It is **punt-biased**:
 
-- ``False`` only when the guard is *provably unsatisfiable* over complete finite
-  free-tag domains → the caller may soundly reject the writer (producibility);
-- ``True`` in every other case — satisfiable, undecidable (a ``None`` term), a
-  free tag with no known finite domain, or an enumeration guardrail exceeded.
+- ``GUARD_DEAD`` only when the guard is *provably unsatisfiable* over complete
+  finite free-tag domains, so the caller may soundly reject the writer;
+- ``GUARD_SAT`` when a satisfying assignment exists;
+- ``GUARD_PUNT`` for undecidable terms, unknown domains, or exceeded guardrails.
 
-It generalizes the narrow ``trace._reduce_guard_by_pin`` source-only check; it is
-NOT yet wired into the writer-rejection arm (there is no live multi-condition
-producibility case demanding it), so these tests pin the primitive in isolation.
+It generalizes the narrow ``trace._reduce_guard_by_pin`` source-only check and is
+consumed by the trace writer-rejection arm.
 """
 
 from __future__ import annotations
@@ -20,7 +19,12 @@ import pytest
 
 from pyrung.core import Bool, Int, Program, Rung, copy
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.tide_tables import guard_satisfiable
+from pyrung.core.analysis.pilot.tide_tables import (
+    GUARD_DEAD,
+    GUARD_PUNT,
+    GUARD_SAT,
+    guard_verdict,
+)
 from pyrung.core.analysis.simplified import And, Atom, Or
 
 # Free-tag domains are supplied explicitly via ``domains=``, so the program only
@@ -42,9 +46,9 @@ def ctx():
     return prog, build_program_graph(prog)
 
 
-def _sat(ctx, expr, fixed, *, domains=None, snapshot=None):
+def _verdict(ctx, expr, fixed, *, domains=None, snapshot=None):
     prog, pdg = ctx
-    return guard_satisfiable(
+    return guard_verdict(
         expr,
         fixed=fixed,
         snapshot=snapshot or {},
@@ -60,12 +64,12 @@ def _sat(ctx, expr, fixed, *, domains=None, snapshot=None):
 def test_source_only_disequality_violated_is_unsat(ctx):
     """``src != 0`` with the copy pinning ``src == 0`` — the writer can never emit
     it, so provably unsatisfiable."""
-    assert _sat(ctx, Atom("src", "ne", 0), {"src": 0}) is False
+    assert _verdict(ctx, Atom("src", "ne", 0), {"src": 0}) == GUARD_DEAD
 
 
 def test_source_only_disequality_satisfied_is_sat(ctx):
     """``src != 0`` with the pin ``src == 2`` — the pin satisfies the guard."""
-    assert _sat(ctx, Atom("src", "ne", 0), {"src": 2}) is True
+    assert _verdict(ctx, Atom("src", "ne", 0), {"src": 2}) == GUARD_SAT
 
 
 # --- Multi-tag conjunction (the case the narrow check could not decide) -------
@@ -75,14 +79,14 @@ def test_multitag_and_with_satisfiable_partner_is_sat(ctx):
     """``And(src == 2, Mode == 1)`` — ``Mode`` is steerable to a satisfying value,
     so the writer must NOT be rejected."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is True
+    assert _verdict(ctx, expr, {"src": 2}, domains=_MODE) == GUARD_SAT
 
 
 def test_multitag_and_with_unsatisfiable_partner_is_unsat(ctx):
     """``And(src == 2, Mode == 9)`` with ``Mode ∈ {1,2,3}`` — no assignment
     satisfies it, so provably unsatisfiable."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 9)))
-    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is False
+    assert _verdict(ctx, expr, {"src": 2}, domains=_MODE) == GUARD_DEAD
 
 
 # --- Disjunction --------------------------------------------------------------
@@ -92,14 +96,14 @@ def test_or_with_one_live_arm_is_sat(ctx):
     """``Or(src == 5, Mode == 1)`` with the pin ``src == 2`` — the ``Mode`` arm is
     steerable, so satisfiable."""
     expr = Or(terms=(Atom("src", "eq", 5), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is True
+    assert _verdict(ctx, expr, {"src": 2}, domains=_MODE) == GUARD_SAT
 
 
 def test_or_all_arms_dead_is_unsat(ctx):
     """``Or(src == 5, Mode == 9)`` with ``src == 2`` and ``Mode ∈ {1,2,3}`` — every
     arm is dead over the domains."""
     expr = Or(terms=(Atom("src", "eq", 5), Atom("Mode", "eq", 9)))
-    assert _sat(ctx, expr, {"src": 2}, domains=_MODE) is False
+    assert _verdict(ctx, expr, {"src": 2}, domains=_MODE) == GUARD_DEAD
 
 
 # --- Punts (the safe, never-reject direction) --------------------------------
@@ -108,28 +112,28 @@ def test_or_all_arms_dead_is_unsat(ctx):
 def test_free_tag_without_finite_domain_punts(ctx):
     """A free operand with no resolvable finite domain (a live word) → keep."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Live", "eq", 7)))
-    assert _sat(ctx, expr, {"src": 2}) is True
+    assert _verdict(ctx, expr, {"src": 2}) == GUARD_PUNT
 
 
 def test_undecidable_term_punts(ctx):
     """An undecidable term (``rise`` — needs an edge, ``None`` in a single state)
     is never a proof of ``False``, so the guard punts rather than rejects."""
     expr = Or(terms=(Atom("Mode", "rise", True), Atom("Mode", "eq", 9)))
-    assert _sat(ctx, expr, {}, domains=_MODE) is True
+    assert _verdict(ctx, expr, {}, domains=_MODE) == GUARD_PUNT
 
 
 def test_too_many_free_tags_punts(ctx):
     """More free tags than the enumeration guardrail allows → keep."""
     expr = And(terms=tuple(Atom(t, "eq", 1) for t in ("a", "b", "c", "d")))
     doms = {t: (1,) for t in ("a", "b", "c", "d")}
-    assert _sat(ctx, expr, {}, domains=doms) is True
+    assert _verdict(ctx, expr, {}, domains=doms) == GUARD_PUNT
 
 
 def test_combo_explosion_punts(ctx):
     """A free-domain product past the ``_MAX_COMBOS`` guardrail → keep."""
     expr = And(terms=(Atom("a", "eq", 1), Atom("b", "eq", 1), Atom("c", "eq", 1)))
     doms = {t: tuple(range(20)) for t in ("a", "b", "c")}  # 20^3 = 8000 > 4096
-    assert _sat(ctx, expr, {}, domains=doms) is True
+    assert _verdict(ctx, expr, {}, domains=doms) == GUARD_PUNT
 
 
 # --- Fully-pinned multi-tag (no free operands) -------------------------------
@@ -138,13 +142,13 @@ def test_combo_explosion_punts(ctx):
 def test_fully_pinned_contradiction_is_unsat(ctx):
     """When every operand is pinned, a definite ``False`` is unsatisfiable."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {"src": 2, "Mode": 2}) is False
+    assert _verdict(ctx, expr, {"src": 2, "Mode": 2}) == GUARD_DEAD
 
 
 def test_fully_pinned_satisfied_is_sat(ctx):
     """When every operand is pinned and the guard holds, satisfiable."""
     expr = And(terms=(Atom("src", "eq", 2), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {"src": 2, "Mode": 1}) is True
+    assert _verdict(ctx, expr, {"src": 2, "Mode": 1}) == GUARD_SAT
 
 
 # --- Bool free operand (the gap this fix closes) ------------------------------
@@ -158,27 +162,27 @@ def test_bool_free_operand_unsatisfiable_is_unsat(ctx):
     """``Flag == True`` and ``Flag == False`` can never both hold — no assignment
     over ``(False, True)`` satisfies the conjunction, so provably unsatisfiable."""
     expr = And(terms=(Atom("Flag", "eq", True), Atom("Flag", "eq", False)))
-    assert _sat(ctx, expr, {}) is False
+    assert _verdict(ctx, expr, {}) == GUARD_DEAD
 
 
 def test_bool_free_operand_satisfiable_is_sat(ctx):
     """``Flag == True`` is satisfied by the ``Flag=True`` assignment."""
     expr = Atom("Flag", "eq", True)
-    assert _sat(ctx, expr, {}) is True
+    assert _verdict(ctx, expr, {}) == GUARD_SAT
 
 
 def test_mixed_bool_and_int_enumeration_is_sat(ctx):
     """``And(Flag == True, Mode == 1)`` — enumerating the Bool domain alongside an
     explicit int domain finds the satisfying combination."""
     expr = And(terms=(Atom("Flag", "eq", True), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {}, domains=_MODE) is True
+    assert _verdict(ctx, expr, {}, domains=_MODE) == GUARD_SAT
 
 
 def test_mixed_bool_and_int_no_combo_satisfies_is_unsat(ctx):
     """``And(Flag == True, Flag == False, Mode == 1)`` — the Bool contradiction
     kills every combo regardless of ``Mode``, so provably unsatisfiable."""
     expr = And(terms=(Atom("Flag", "eq", True), Atom("Flag", "eq", False), Atom("Mode", "eq", 1)))
-    assert _sat(ctx, expr, {}, domains=_MODE) is False
+    assert _verdict(ctx, expr, {}, domains=_MODE) == GUARD_DEAD
 
 
 def test_bool_operand_combo_cap_counts_toward_guardrail(ctx):
@@ -189,4 +193,4 @@ def test_bool_operand_combo_cap_counts_toward_guardrail(ctx):
     attempt to enumerate instead of punting."""
     expr = And(terms=(Atom("Flag", "eq", True), Atom("Big", "eq", 1)))
     doms = {"Big": tuple(range(2049))}
-    assert _sat(ctx, expr, {}, domains=doms) is True
+    assert _verdict(ctx, expr, {}, domains=doms) == GUARD_PUNT

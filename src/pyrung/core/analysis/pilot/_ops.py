@@ -123,12 +123,12 @@ def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
     """
     channels = list(dict.fromkeys(role.channel_tag for role in ctx.pipeline_roles))
     config = state.key_config
-    target = ctx.target_tag
+    target = ctx.target.tag
     gauge_tags = {
         component.tag for component in getattr(getattr(state, "gauge", None), "components", ())
     }
     if (
-        getattr(ctx, "target_predicate", None) is None
+        ctx.target.predicate is None
         and config is not None
         and target in config.stateful_names
         and target not in gauge_tags
@@ -140,6 +140,11 @@ def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
 
 def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
     """Lower a trace completion ``Atom`` to its still-unresolved condition."""
+    return _atom_condition(plc, atom, unresolved=True)
+
+
+def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
+    """Lower an atom to its stated or still-unresolved condition."""
     from pyrung.core.condition import (
         CompareEq,
         CompareGe,
@@ -149,9 +154,10 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
         CompareNe,
     )
     from pyrung.core.crossing import Cmp, Eq
+    from pyrung.core.tag import Bool
 
     tag = plc._known_tags_by_name.get(atom.tag)
-    if tag is None:
+    if tag is None and unresolved:
         # Static block ranges are intentionally lazy in the runner's tag
         # inventory. An advance profile still owns concrete Tag objects for its
         # channels, so use that authoritative channel metadata for the guard.
@@ -165,11 +171,11 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
             )
     if tag is None:
         raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
-    if isinstance(atom, Eq):
+    if unresolved and isinstance(atom, Eq):
         if len(atom.values) != 1:
             raise ValueError("a multi-value advance boundary cannot scope a PilotRung")
         return CompareNe(tag, next(iter(atom.values)))
-    if isinstance(atom, Cmp):
+    if unresolved and isinstance(atom, Cmp):
         operand = (
             plc._known_tags_by_name.get(str(atom.bound), atom.bound)
             if atom.bound_is_tag
@@ -192,50 +198,30 @@ def _until_unresolved_condition(plc: PLC, atom: Any) -> Any:
         if inverse is None:
             raise ValueError(f"advance predicate {atom.op!r} cannot scope a PilotRung")
         return inverse(tag, operand)
+
     form = atom.form
     operand = (
         plc._known_tags_by_name.get(atom.operand, atom.operand)
         if atom.operand_is_tag
         else atom.operand
     )
-    if form in ("xic", "truthy"):
-        return CompareEq(tag, False)
-    if form == "xio":
-        return CompareEq(tag, True)
-    inverse = {
-        "eq": CompareNe,
-        "ne": CompareEq,
-        "lt": CompareGe,
-        "le": CompareGt,
-        "gt": CompareLe,
-        "ge": CompareLt,
-    }.get(form)
-    if inverse is None:
-        raise ValueError(f"trace predicate {form!r} cannot scope a PilotRung")
-    return inverse(tag, operand)
+    if unresolved:
+        if form in ("xic", "truthy"):
+            return CompareEq(tag, False)
+        if form == "xio":
+            return CompareEq(tag, True)
+        inverse = {
+            "eq": CompareNe,
+            "ne": CompareEq,
+            "lt": CompareGe,
+            "le": CompareGt,
+            "gt": CompareLe,
+            "ge": CompareLt,
+        }.get(form)
+        if inverse is None:
+            raise ValueError(f"trace predicate {form!r} cannot scope a PilotRung")
+        return inverse(tag, operand)
 
-
-def _atom_condition(plc: PLC, atom: Any) -> Any:
-    """Lower a trace ``Atom`` to the condition it states, without inversion."""
-    from pyrung.core.condition import (
-        CompareEq,
-        CompareGe,
-        CompareGt,
-        CompareLe,
-        CompareLt,
-        CompareNe,
-    )
-    from pyrung.core.tag import Bool
-
-    tag = plc._known_tags_by_name.get(atom.tag)
-    if tag is None:
-        raise KeyError(f"pilot rung guard tag {atom.tag!r} is not a program tag")
-    form = atom.form
-    operand = (
-        plc._known_tags_by_name.get(atom.operand, atom.operand)
-        if atom.operand_is_tag
-        else atom.operand
-    )
     if form in ("xic", "truthy"):
         return tag
     if form == "xio":
@@ -743,15 +729,7 @@ def _pilot_world_key(
     rungs: Any,
 ) -> tuple[Any, ...]:
     """Identity of an executable PILOT world: PLC projection plus PilotRungs."""
-    rung_key = tuple(
-        (
-            rung.dest,
-            _semantic_key(rung.value),
-            _semantic_key(rung.guard),
-            _semantic_key(rung.operation),
-        )
-        for rung in rungs
-    )
+    rung_key = tuple(_rung_identity(rung) for rung in rungs)
     return (_pilot_state_key(snap, cfg), rung_key)
 
 
@@ -893,11 +871,6 @@ def _has_pending_effects(fork: PLC) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _route_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
-    route_allowed = getattr(ctx, "route_allowed", None)
-    return bool(route_allowed(pair)) if route_allowed is not None else True
-
-
 def _avoid_snap_names(avoid: Any, snap: dict[str, Any]) -> tuple[str, ...]:
     """Names of the avoid conditions *snap* trips (``()`` when avoid is None).
 
@@ -951,7 +924,8 @@ def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())
-    if tag in action_tags or not _route_allowed(ctx, pair):
+    route_allowed = getattr(ctx, "route_allowed", None)
+    if tag in action_tags or (route_allowed is not None and not route_allowed(pair)):
         return False
     # A hold that drives an avoided tag is a path that depends on it — inadmissible.
     return not _avoid_forces(ctx, [pair])

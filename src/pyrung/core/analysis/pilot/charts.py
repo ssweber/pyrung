@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +29,37 @@ ActionPair = tuple[str, Any]
 Action = ActionPair
 ActionLookup = dict[tuple[str, str], tuple[ActionPair, ...]]
 ANY_FROM = object()
+
+
+def _context_value_key(value: Any) -> Any:
+    """Hashable exact identity for one observed snapshot value."""
+    if value is None or isinstance(value, bool | int | float | str | bytes):
+        return int(value) if isinstance(value, bool) else value
+    if isinstance(value, tuple | list):
+        return tuple(_context_value_key(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_context_value_key(item) for item in value), key=repr))
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    (_context_value_key(key), _context_value_key(member))
+                    for key, member in value.items()
+                ),
+                key=repr,
+            )
+        )
+    return (type(value).__module__, type(value).__qualname__, repr(value))
+
+
+def _canonical_applied(applied: Iterable[ActionPair]) -> tuple[ActionPair, ...]:
+    """Canonical effective action overlay (last write per tag, tag ordered)."""
+    return tuple(sorted(dict(applied).items()))
+
+
+def _applied_key(applied: Iterable[ActionPair]) -> tuple[tuple[str, Any], ...]:
+    """Hashable identity of the complete action overlay used by a trial."""
+    return tuple((tag, _context_value_key(value)) for tag, value in _canonical_applied(applied))
 
 
 # ===========================================================================
@@ -83,6 +114,23 @@ class StaticTransitionEdge:
             tuple((tag, repr(value)) for tag, value in self.enablers),
             tuple((tag, repr(value)) for tag, value in self.completion),
             tuple(producer.rung_index for producer in self.program_producers),
+        )
+
+    def exercised_by(
+        self,
+        observation: Any,
+        applied: tuple[ActionPair, ...],
+    ) -> bool:
+        """Whether a runtime trial exercised this exact static artifact."""
+        if observation.world_key is None:
+            return True
+        required = () if self.action is None else (self.action, *self.co_actions)
+        if _applied_key(applied) != _applied_key(required):
+            return False
+        overlay = {**dict(observation.context), **dict(applied)}
+        return all(
+            tag in overlay and _values_match(overlay[tag], value)
+            for tag, value in (*self.source_constraints, *self.enablers)
         )
 
 
@@ -204,7 +252,8 @@ def build_static_transition_graphs(
             opaque_loop,
             evidence,
         )
-        from pyrung.core.analysis.pilot.currents import WorldView, sibling_producer_family
+        from pyrung.core.analysis.pilot.currents import sibling_producer_family
+        from pyrung.core.analysis.pilot.types import WorldView
 
         world = WorldView(
             snapshot={name: getattr(tag, "default", None) for name, tag in pdg.tags.items()},

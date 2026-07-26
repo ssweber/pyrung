@@ -1,8 +1,9 @@
-"""Prove whether one exact program producer can keep running unchanged.
+"""Prove whether one exact program producer can keep running.
 
 This is a read-only decision made before Compass chooses an action.  It projects
-the same controlled PLC world for a few scans, writer-locks the backward trace
-to the selected rung, and reports one of four plain outcomes:
+an otherwise-unchanged controlled PLC world for a few scans, plus one
+counterfactual input patch per required input, writer-locks the backward trace to
+the selected rung, and reports one of four plain outcomes:
 
 * keep running because a target-relative boundary moved, or because the program
   is crossing a boundary it owns whose motion dissolves a requirement that was
@@ -21,8 +22,9 @@ owned boundary cannot enter candidate construction as live work.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
@@ -31,6 +33,7 @@ from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceNode,
+    _all_nodes,
     trace_back,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -73,24 +76,43 @@ class ProgramStep:
     # producer could be read as waiting. The executable response is to preserve
     # the live value and observe that motion, not to choose an alternate route.
     preserve_channels: tuple[str, ...] = ()
+    handoff_by_action: Mapping[tuple[str, Any], ProgramInputHandoff] = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    uniform_handoff_boundary: Eq | Cmp | None = field(init=False, default=None)
+    required_pairs: frozenset[tuple[str, Any]] = field(init=False, default=frozenset())
+    inputs_with_lifetime: tuple[TraceAction, ...] = field(init=False, default=())
 
-
-def _nodes(root: TraceNode) -> list[TraceNode]:
-    result = [root]
-    for child in root.children:
-        result.extend(_nodes(child))
-    return result
-
-
-def _first_boundary(root: TraceNode) -> Eq | Cmp | None:
-    for node in _nodes(root):
-        if node.advance is not None and not node.satisfied:
-            return node.advance.until
-    return None
+    def __post_init__(self) -> None:
+        handoffs = {handoff.action: handoff for handoff in self.input_handoffs}
+        required_pairs = frozenset(action.pair for action in self.required_inputs)
+        boundary: Eq | Cmp | None = None
+        if required_pairs and required_pairs <= handoffs.keys():
+            required_handoffs = tuple(handoffs[action.pair] for action in self.required_inputs)
+            candidate = required_handoffs[0].boundary
+            if all(handoff.boundary == candidate for handoff in required_handoffs):
+                boundary = candidate
+        object.__setattr__(self, "handoff_by_action", MappingProxyType(handoffs))
+        object.__setattr__(self, "uniform_handoff_boundary", boundary)
+        object.__setattr__(self, "required_pairs", required_pairs)
+        object.__setattr__(
+            self,
+            "inputs_with_lifetime",
+            (
+                tuple(replace(action, until=boundary) for action in self.required_inputs)
+                if boundary is not None
+                else self.required_inputs
+            ),
+        )
 
 
 def _first_advance(root: TraceNode) -> AdvanceStep | None:
-    for node in _nodes(root):
+    # Producer traces are ordered execution paths: the first boundary is the
+    # first unsatisfied advance in depth-first trace order, not the shallowest
+    # advance anywhere in the tree.
+    for node in _all_nodes(root, depth_first=True):
         if node.advance is not None and not node.satisfied:
             return node.advance
     return None
@@ -226,7 +248,8 @@ def _input_handoffs(
         fork.patch(patch)
         fork.step()
         trace = _trace_exact(ctx, producer, dict(fork.state.tags))
-        boundary = _first_boundary(trace)
+        advance = _first_advance(trace)
+        boundary = advance.until if advance is not None else None
         if boundary is None or index.resolve(boundary.tag) is None:
             continue
         handoffs.append(
@@ -300,11 +323,16 @@ def read_program_step(
 
     index = build_advance_index(ctx.program, getattr(fork, "_harness", None))
     owner = index.resolve(boundary.tag) if boundary is not None else None
-    before_distance = (
-        owner.profile.linear.distance(boundary, trace_snapshot)
-        if owner is not None and owner.profile.linear is not None and boundary is not None
-        else None
-    )
+    linear = owner.profile.linear if owner is not None else None
+
+    def _distance(snapshot: Mapping[str, Any]) -> Any:
+        return (
+            linear.distance(boundary, snapshot)
+            if linear is not None and boundary is not None
+            else None
+        )
+
+    before_distance = _distance(trace_snapshot)
     boundary_was_reached = (
         constraint_holds(boundary, trace_snapshot) is True if boundary is not None else False
     )
@@ -318,13 +346,8 @@ def read_program_step(
             break
         if boundary is not None and constraint_holds(boundary, current) is True:
             break
-        if (
-            boundary is not None
-            and owner is not None
-            and owner.profile.linear is not None
-            and before_distance is not None
-        ):
-            current_distance = owner.profile.linear.distance(boundary, current)
+        if boundary is not None and before_distance is not None:
+            current_distance = _distance(current)
             if current_distance is not None and current_distance < before_distance:
                 break
 
@@ -338,7 +361,7 @@ def read_program_step(
         runs,
     )
     next_trace = _trace_exact(ctx, producer, after)
-    relevant = {node.tag for node in (*_nodes(trace), *_nodes(next_trace))} | {
+    relevant = {node.tag for node in (*_all_nodes(trace), *_all_nodes(next_trace))} | {
         producer.command_tag,
         *producer.co_writes,
     }
@@ -353,41 +376,58 @@ def read_program_step(
         if not _values_match(before.get(role.channel_tag), after.get(role.channel_tag))
     )
 
-    if inputs_blocked_here:
-        names = ", ".join(action.tag for action in inputs_blocked_here)
+    def _step(
+        status: ProgramStepStatus,
+        *,
+        step_boundary: Eq | Cmp | None = boundary,
+        channel: str | None = None,
+        required_inputs: tuple[TraceAction, ...],
+        context: tuple[tuple[str, Any], ...] = (),
+        handoffs: tuple[ProgramInputHandoff, ...] = (),
+        reason: str,
+        preserve_channels: tuple[str, ...] = (),
+    ) -> ProgramStep:
         return ProgramStep(
-            ProgramStepStatus.UNCLEAR,
+            status,
             producer,
-            boundary,
-            boundary.tag if boundary is not None else producer.command_tag,
+            step_boundary,
+            (
+                channel
+                if channel is not None
+                else step_boundary.tag
+                if step_boundary is not None
+                else producer.command_tag
+            ),
+            required_inputs=required_inputs,
+            context_actions=context,
+            input_handoffs=handoffs,
             projected_changes=projected_changes,
             trace=trace,
             next_trace=next_trace,
+            reason=reason,
+            preserve_channels=preserve_channels,
+        )
+
+    if inputs_blocked_here:
+        names = ", ".join(action.tag for action in inputs_blocked_here)
+        return _step(
+            ProgramStepStatus.UNCLEAR,
+            required_inputs=(),
             reason=f"{names} is not accepted by the current program state",
         )
 
     if repeated_producer:
-        return ProgramStep(
+        return _step(
             ProgramStepStatus.UNCLEAR,
-            producer,
-            boundary,
-            boundary.tag if boundary is not None else producer.command_tag,
             required_inputs=required,
-            context_actions=context_actions,
-            input_handoffs=input_handoffs,
-            projected_changes=projected_changes,
-            trace=trace,
-            next_trace=next_trace,
+            context=context_actions,
+            handoffs=input_handoffs,
             reason="the selected producer ran more than once with occurrence-specific state",
         )
 
     if boundary is not None:
         boundary_reached = constraint_holds(boundary, after) is True
-        after_distance = (
-            owner.profile.linear.distance(boundary, after)
-            if owner is not None and owner.profile.linear is not None
-            else None
-        )
+        after_distance = _distance(after)
         moved_closer = (
             before_distance is not None
             and after_distance is not None
@@ -400,28 +440,17 @@ def read_program_step(
                 if moved_closer or boundary_reached
                 else "the owner reports progress through its operation witness"
             )
-            return ProgramStep(
+            return _step(
                 ProgramStepStatus.KEEP_RUNNING,
-                producer,
-                boundary,
-                boundary.tag,
-                projected_changes=projected_changes,
-                trace=trace,
-                next_trace=next_trace,
+                required_inputs=(),
                 reason=reason,
             )
         if boundary_was_reached:
-            return ProgramStep(
+            return _step(
                 ProgramStepStatus.UNCLEAR,
-                producer,
-                boundary,
-                boundary.tag,
                 required_inputs=required,
-                context_actions=context_actions,
-                input_handoffs=input_handoffs,
-                projected_changes=projected_changes,
-                trace=trace,
-                next_trace=next_trace,
+                context=context_actions,
+                handoffs=input_handoffs,
                 reason="the boundary was ready but the selected result did not survive the scan",
             )
 
@@ -430,39 +459,25 @@ def read_program_step(
             producer.command_tag,
             frozenset((producer.command_value,)),
         )
-        return ProgramStep(
+        return _step(
             ProgramStepStatus.KEEP_RUNNING,
-            producer,
-            command_boundary,
-            producer.command_tag,
-            projected_changes=projected_changes,
-            trace=trace,
-            next_trace=next_trace,
+            step_boundary=command_boundary,
+            required_inputs=(),
             reason="the selected producer reaches its commanded value",
         )
 
     if writer_runs:
-        return ProgramStep(
+        return _step(
             ProgramStepStatus.UNCLEAR,
-            producer,
-            boundary,
-            boundary.tag if boundary is not None else producer.command_tag,
-            projected_changes=projected_changes,
-            trace=trace,
-            next_trace=next_trace,
+            required_inputs=(),
             reason="the selected producer wrote its value but it did not survive a later write",
         )
 
     if departed_channels:
         names = ", ".join(departed_channels)
-        return ProgramStep(
+        return _step(
             ProgramStepStatus.INTERRUPTED,
-            producer,
-            boundary,
-            boundary.tag if boundary is not None else producer.command_tag,
-            projected_changes=projected_changes,
-            trace=trace,
-            next_trace=next_trace,
+            required_inputs=(),
             reason=(
                 f"{names} moved while checking the selected producer; "
                 "its operation reading is no longer current"
@@ -489,7 +504,7 @@ def read_program_step(
         # program's own motion; an installed PILOT hold is excluded because its
         # effect is PILOT's, not the program's.  Only a coordinate this trace
         # actually read can be the boundary that invalidated it.
-        trace_tags = {node.tag for node in _nodes(trace)}
+        trace_tags = {node.tag for node in _all_nodes(trace)}
         crossing = next(
             (
                 (tag, after_value)
@@ -500,40 +515,26 @@ def read_program_step(
         )
         if stale and crossing is not None:
             stale_names = ", ".join(sorted({action.tag for action in stale}))
-            return ProgramStep(
+            return _step(
                 ProgramStepStatus.KEEP_RUNNING,
-                producer,
-                Eq(crossing[0], frozenset((crossing[1],))),
-                crossing[0],
-                projected_changes=projected_changes,
-                trace=trace,
-                next_trace=next_trace,
+                step_boundary=Eq(crossing[0], frozenset((crossing[1],))),
+                channel=crossing[0],
+                required_inputs=(),
                 reason=(
                     f"{crossing[0]} is crossing a boundary the program owns; "
                     f"{stale_names} is not required once that motion settles"
                 ),
             )
-        return ProgramStep(
+        return _step(
             ProgramStepStatus.NEEDS_INPUT,
-            producer,
-            boundary,
-            boundary.tag if boundary is not None else producer.command_tag,
             required_inputs=required,
-            context_actions=context_actions,
-            input_handoffs=input_handoffs,
-            projected_changes=projected_changes,
-            trace=trace,
-            next_trace=next_trace,
+            context=context_actions,
+            handoffs=input_handoffs,
             reason="the exact producer is stopped at an external input",
         )
 
-    return ProgramStep(
+    return _step(
         ProgramStepStatus.UNCLEAR,
-        producer,
-        boundary,
-        boundary.tag if boundary is not None else producer.command_tag,
-        projected_changes=projected_changes,
-        trace=trace,
-        next_trace=next_trace,
+        required_inputs=(),
         reason="the exact producer did not make target-relative progress",
     )

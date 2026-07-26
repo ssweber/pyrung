@@ -37,6 +37,7 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
+from pyrung.core.analysis.pilot.navigation import TargetSpec
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -100,9 +101,7 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "route": None,
         "compass": SimpleNamespace(action_tags=frozenset()),
         "pipeline_roles": (),
-        "target_tag": "Phase",
-        "target_value": 17,
-        "target_predicate": None,
+        "target": TargetSpec("Phase", 17),
         "domain_prior": None,
         "clear_only": frozenset(),
     }
@@ -110,7 +109,7 @@ def _ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
     return SimpleNamespace(**ns)
 
 
-def _incident(plc: PLC, prog: Program, anchor: int, before: dict[str, Any]):
+def _incident(plc: PLC, anchor: int, before: dict[str, Any]):
     return build_deviation_incident(
         anchor_scan=anchor,
         end_scan=plc.state.scan_id,
@@ -126,7 +125,6 @@ def _incident(plc: PLC, prog: Program, anchor: int, before: dict[str, Any]):
                 (("Phase", 6, plc.state.tags["Phase"]),),
             ),
         ),
-        program=prog,
         channel_tag="Phase",
     )
 
@@ -137,7 +135,7 @@ class TestAbsenceRootGeneration:
     def test_sail_named_deepest_first(self) -> None:
         plc, _cp, anchor, before = _drive_to_abort()
         prog = plc._sail_trap_prog
-        incident = _incident(plc, prog, anchor, before)
+        incident = _incident(plc, anchor, before)
         ctx = _ctx(prog, plc)
 
         hyps, primal = _absence_root_correctives(plc, incident, ctx)
@@ -152,7 +150,7 @@ class TestAbsenceRootGeneration:
     def test_pilot_touched_roots_excluded(self) -> None:
         plc, _cp, anchor, before = _drive_to_abort()
         prog = plc._sail_trap_prog
-        incident = _incident(plc, prog, anchor, before)
+        incident = _incident(plc, anchor, before)
         ctx = _ctx(prog, plc)
 
         hyps, primal = _absence_root_correctives(plc, incident, ctx, exclude=frozenset({"Sail"}))
@@ -199,7 +197,7 @@ class TestAnalogAbsenceRoot:
     def test_temp_boundary_hold_generated(self) -> None:
         plc, _cp, anchor, before = _drive_to_abort(_cold_heater_program)
         prog = plc._sail_trap_prog
-        incident = _incident(plc, prog, anchor, before)
+        incident = _incident(plc, anchor, before)
         ctx = _ctx(prog, plc)
 
         hyps, primal = _absence_root_correctives(plc, incident, ctx)
@@ -214,7 +212,7 @@ class TestAnalogAbsenceRoot:
     def test_analog_root_confirmed_by_replay(self) -> None:
         plc, cp, anchor, before = _drive_to_abort(_cold_heater_program)
         prog = plc._sail_trap_prog
-        incident = _incident(plc, prog, anchor, before)
+        incident = _incident(plc, anchor, before)
         ctx = _ctx(prog, plc)
         witness = incident_regression_witness(plc, incident)
         assert witness is not None
@@ -261,7 +259,7 @@ class TestAbsenceRootConfirmation:
     def test_confirms_sail_over_suspend(self) -> None:
         plc, cp, anchor, before = _drive_to_abort()
         prog = plc._sail_trap_prog
-        incident = _incident(plc, prog, anchor, before)
+        incident = _incident(plc, anchor, before)
         ctx = _ctx(prog, plc)
         witness = incident_regression_witness(plc, incident)
         assert witness is not None

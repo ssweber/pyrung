@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Real, Rung, copy
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.analysis.pilot.advance import build_advance_index, estimate_scans
+from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.crossing import Cmp
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Approach, Physical, Ramp
@@ -44,14 +44,6 @@ def test_analog_coupling_resolves_via_accumulator() -> None:
     assert owner.profile.linear.direction == 1
 
 
-def test_analog_coupling_boundary_estimate_is_analytic() -> None:
-    plc, prog = _installed_plc()
-    owner = build_advance_index(prog, harness=plc._harness).resolve("Temp")
-    assert owner is not None
-    # +1.0 units/s * 0.01 dt = 0.01/scan; 5.0 / 0.01 = 500 scans from cold
-    assert estimate_scans(owner, Cmp("Temp", ">=", 5), plc) == 500
-
-
 def test_advance_condition_reads_enable() -> None:
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
@@ -73,8 +65,7 @@ def test_no_harness_excludes_couplings() -> None:
 
 def test_nonlinear_profile_falls_back_to_empirical() -> None:
     # A first-order Approach (slope depends on the current value) cannot be
-    # solved analytically: rate_per_scan raises, scans_until -> None.  Without a
-    # fork, the analytic estimate returns None (the caller would then measure).
+    # solved analytically: rate_per_scan raises, scans_until -> None.
     fo_sensor = Physical("FoSensor", profile=Approach(toward=10.0, rate=0.4))
     Enable = Bool("Enable", external=True)
     Temp = Real("Temp", physical=fo_sensor, link="Enable")
@@ -87,7 +78,10 @@ def test_nonlinear_profile_falls_back_to_empirical() -> None:
 
     owner = build_advance_index(prog, harness=plc._harness).resolve("Temp")
     assert owner is not None
-    assert estimate_scans(owner, Cmp("Temp", ">=", 5), plc) is None
+    assert owner.profile.linear is not None
+    assert (
+        owner.profile.linear.estimate_scans(Cmp("Temp", ">=", 5), plc.state.tags, plc._dt) is None
+    )
 
 
 # ── 1b: planner wiring — the driver hold is attached + the coast solves ──────

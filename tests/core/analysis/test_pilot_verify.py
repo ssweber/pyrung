@@ -24,6 +24,7 @@ from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     MotionKind,
     _AttemptIntent,
     _ConfirmedCorrection,
@@ -33,7 +34,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.verify import (
     _gate_cycle,
     _gate_spin,
-    _owned_bearing_stop_reason,
+    _owned_channel_motion,
     verify_gates,
 )
 from pyrung.core.condition import CompareEq
@@ -50,7 +51,7 @@ def test_outer_owner_rebases_inner_departure_receipt_to_reached():
         coast_receipt=SimpleNamespace(stop_reason="departed"),
     )
 
-    assert _owned_bearing_stop_reason(trial, "State", 6) == "reached"
+    assert _owned_channel_motion(trial, ChannelMotion("State", 6)).reached
 
 
 def test_relational_owner_retains_its_crossing_receipt_after_overshoot():
@@ -59,7 +60,7 @@ def test_relational_owner_retains_its_crossing_receipt_after_overshoot():
         coast_receipt=SimpleNamespace(stop_reason="reached"),
     )
 
-    assert _owned_bearing_stop_reason(trial, "Acc", 4) == "reached"
+    assert _owned_channel_motion(trial, ChannelMotion("Acc", 4)).reached
 
 
 def test_wrong_outer_landing_retains_departure_receipt():
@@ -68,7 +69,7 @@ def test_wrong_outer_landing_retains_departure_receipt():
         coast_receipt=SimpleNamespace(stop_reason="departed"),
     )
 
-    assert _owned_bearing_stop_reason(trial, "State", 6) == "departed"
+    assert _owned_channel_motion(trial, ChannelMotion("State", 6)).departed
 
 
 class TestGateSpin:
@@ -265,6 +266,7 @@ class TestGateCycle:
             SimpleNamespace(snap={}),
             SimpleNamespace(seen_keys={key}, gauge=None),
             pending=False,
+            ordinal_advanced=False,
             influence_prescribed=False,
             nogood_pair=("Cmd", True),
             gate_events=gates,
@@ -332,8 +334,7 @@ class TestVerifyGates:
             route_prescribed=True,
             regression_nogoods=frozenset({(source.name, True)}),
             chase_regression_causes=False,
-            channel_tag=target.name,
-            channel_target=True,
+            channel_motion=ChannelMotion(target.name, True),
             motion=MotionKind.COAST_TO_BEARING,
         )
 
@@ -343,9 +344,7 @@ class TestVerifyGates:
             SimpleNamespace(),
             SimpleNamespace(
                 avoid_pred=None,
-                target_tag=target.name,
-                target_value=True,
-                target_predicate=None,
+                target=TargetSpec(target.name, True),
             ),
         )
 
@@ -358,8 +357,9 @@ class TestVerifyGates:
         assert result.trial.route_prescribed is True
         assert result.trial.regression_nogoods == intent.regression_nogoods
         assert result.trial.chase_regression_causes is False
-        assert result.trial.zoom_channel_tag == intent.channel_tag
-        assert result.trial.zoom_target_value is True
+        assert result.trial.channel_motion.channel_tag == intent.channel_motion.channel_tag
+        assert result.trial.channel_motion.target_value is True
+        assert result.trial.channel_motion.reached
         assert result.trial.motion is MotionKind.COAST_TO_BEARING
         assert result.trial.timeline == pulse.timeline
 
@@ -374,6 +374,7 @@ class TestVerifyGates:
             action_snap=after,
             wait_snaps=(),
             post_pulse_snap=after,
+            confirmed_correction=None,
         )
         intent = _AttemptIntent(
             bearing_objective=BearingObjective(TargetSpec("Target", True)),
@@ -388,9 +389,7 @@ class TestVerifyGates:
             SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
             SimpleNamespace(
                 avoid_pred=None,
-                target_tag="Target",
-                target_value=True,
-                target_predicate=None,
+                target=TargetSpec("Target", True),
             ),
         )
 
@@ -398,6 +397,39 @@ class TestVerifyGates:
         assert result.nogood_pairs == frozenset({("Reset", True)})
         assert result.gate_events[-1].event == "banked-work"
         assert result.gate_events[-1].evidence["effect"] == "behind"
+
+    def test_banked_batch_nogoods_every_regressive_action(self):
+        before = {"Step": 3, "Target": False}
+        after = {"Step": 0, "Target": True}
+        pulse = SimpleNamespace(
+            snap=after,
+            coast_receipt=None,
+            action_snap=after,
+            wait_snaps=(),
+            post_pulse_snap=after,
+            confirmed_correction=None,
+        )
+        actions = (("Reset", True), ("ResetGate", True))
+        intent = _AttemptIntent(
+            bearing_objective=BearingObjective(TargetSpec("Target", True)),
+            action_pairs=actions,
+            applied=actions,
+            regression_nogoods=frozenset(actions),
+        )
+
+        result = verify_gates(
+            _ExecutedAttempt(pulse=pulse, intent=intent),
+            SimpleNamespace(snap=before),
+            SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
+            SimpleNamespace(
+                avoid_pred=None,
+                target=TargetSpec("Target", True),
+            ),
+        )
+
+        assert result.trial is None
+        assert result.gate_events[-1].event == "banked-work"
+        assert result.nogood_pairs == frozenset(actions)
 
     @pytest.mark.skip(reason="stub")
     def test_avoid_predicate_rejects(self): ...

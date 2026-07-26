@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Callable, Collection, Iterable, Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +27,23 @@ logger = logging.getLogger(__name__)
 # is punted rather than silently sampled.
 _MAX_FREE_INDICES = 3
 _MAX_COMBOS = 4096
+
+
+def bounded_product(
+    domains: Iterable[Collection[Any]],
+) -> Iterator[tuple[Any, ...]] | None:
+    """Return the finite Cartesian product, or punt past enumeration guardrails."""
+
+    finite_domains = tuple(domains)
+    if len(finite_domains) > _MAX_FREE_INDICES:
+        return None
+    total = 1
+    for domain in finite_domains:
+        total *= len(domain)
+    if total > _MAX_COMBOS:
+        return None
+    return itertools.product(*finite_domains)
+
 
 _CMP = {
     "==": lambda a, b: a == b,
@@ -68,6 +86,106 @@ class PredicateSolution:
         return {t: sorted(vs) for t, vs in out.items()}
 
 
+@dataclass(frozen=True)
+class _CalcSolutions:
+    """Exact satisfying assignments produced by the shared finite solver."""
+
+    free_tags: tuple[str, ...]
+    assignments: tuple[dict[str, Any], ...]
+
+
+def _solve_calc_assignments(
+    result_tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    fixed: dict[str, Any] | None,
+    domains: dict[str, tuple[Any, ...]] | None,
+    accept: Callable[[Any], bool],
+    allow_free_sources: bool,
+    require_complete_domains: bool,
+) -> _CalcSolutions | None:
+    """Model, enumerate, and evaluate one finite ``calc`` preimage."""
+
+    fixed = dict(fixed or {})
+    domains = domains or {}
+    calc_expr = _sole_calc_expr(result_tag, pdg, program)
+    if calc_expr is None:
+        return None
+
+    from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
+
+    operand_tags = _expr_tag_names(calc_expr)
+    if not operand_tags:
+        return None
+
+    consts: dict[str, Any] = {}
+    tables: dict[str, _TableOperand] = {}
+    free_sources: list[str] = []
+    for tag in operand_tags:
+        if allow_free_sources and tag == result_tag:
+            return None
+        if tag in fixed:
+            consts[tag] = fixed[tag]
+            continue
+        table = _model_table_operand(tag, snapshot, pdg, program)
+        if table is not None:
+            tables[tag] = table
+            continue
+        if allow_free_sources and _is_complete_domain(tag, pdg, domains):
+            free_sources.append(tag)
+            continue
+        cval = _model_constant(tag, snapshot, pdg)
+        if cval is not None:
+            consts[tag] = cval
+            continue
+        return None
+
+    free_tags: list[str] = list(free_sources)
+    for table in tables.values():
+        idx = table.index_tag
+        if idx not in fixed and idx not in free_tags:
+            free_tags.append(idx)
+
+    free_domains: list[tuple[Any, ...]] = []
+    for tag in free_tags:
+        if require_complete_domains:
+            if not _is_complete_domain(tag, pdg, domains):
+                return None
+            domain = _guard_operand_domain(tag, snapshot, pdg, program, domains)
+        else:
+            domain = _index_domain(tag, snapshot, pdg, program, domains)
+        if domain is None or (require_complete_domains and not domain):
+            return None
+        free_domains.append(domain)
+
+    combinations = bounded_product(free_domains)
+    if combinations is None:
+        return None
+
+    satisfying: list[dict[str, Any]] = []
+    for combo in combinations:
+        free_asn = dict(zip(free_tags, combo, strict=True))
+        overlay: dict[str, Any] = dict(consts)
+        overlay.update((tag, free_asn[tag]) for tag in free_sources)
+        for tag, table in tables.items():
+            index_value = free_asn.get(table.index_tag, fixed.get(table.index_tag))
+            value = _read_table(table, index_value, snapshot)
+            if value is None:
+                break
+            overlay[tag] = value
+        else:
+            try:
+                actual = calc_expr.evaluate(_SnapshotView(snapshot, overlay))
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            if accept(actual):
+                satisfying.append(free_asn)
+
+    return _CalcSolutions(tuple(free_tags), tuple(satisfying))
+
+
 def solve_table_predicate(
     result_tag: str,
     target_value: Any,
@@ -93,89 +211,28 @@ def solve_table_predicate(
     """
     if op not in _CMP:
         return None
-    fixed = dict(fixed or {})
-    domains = domains or {}
-
-    calc_expr = _sole_calc_expr(result_tag, pdg, program)
-    if calc_expr is None:
-        return None
-
-    from pyrung.core.analysis.sp_values import _expr_tag_names
-
-    operand_tags = _expr_tag_names(calc_expr)
-    if not operand_tags:
-        return None
-
-    # Model every operand: constant value, or a constant-table lookup whose
-    # index register is the free variable we enumerate.
-    consts: dict[str, Any] = {}
-    tables: dict[str, _TableOperand] = {}
-    for tag in operand_tags:
-        if tag in fixed:
-            consts[tag] = fixed[tag]
-            continue
-        table = _model_table_operand(tag, snapshot, pdg, program)
-        if table is not None:
-            tables[tag] = table
-            continue
-        cval = _model_constant(tag, snapshot, pdg)
-        if cval is not None:
-            consts[tag] = cval
-            continue
-        return None  # a genuinely live operand — punt, do not fabricate
-
-    # Free variables = the distinct index registers of the table operands, minus
-    # any pinned by context.
-    free_tags: list[str] = []
-    for table in tables.values():
-        idx = table.index_tag
-        if idx not in fixed and idx not in free_tags:
-            free_tags.append(idx)
-    if len(free_tags) > _MAX_FREE_INDICES:
-        return None
-
-    free_domains: list[tuple[Any, ...]] = []
-    for idx in free_tags:
-        dom = _index_domain(idx, snapshot, pdg, program, domains)
-        if dom is None:
-            return None  # unknown/unbounded index domain — punt
-        free_domains.append(dom)
-
-    total = 1
-    for dom in free_domains:
-        total *= len(dom)
-    if total > _MAX_COMBOS:
-        return None
-
-    from pyrung.core.analysis.sp_values import _SnapshotView
-
     predicate = _CMP[op]
-    satisfying: list[dict[str, Any]] = []
-    for combo in itertools.product(*free_domains):
-        free_asn = dict(zip(free_tags, combo, strict=True))
-        overlay: dict[str, Any] = dict(consts)
-        ok = True
-        for tag, table in tables.items():
-            iv = free_asn.get(table.index_tag, fixed.get(table.index_tag))
-            val = _read_table(table, iv, snapshot)
-            if val is None:
-                ok = False
-                break
-            overlay[tag] = val
-        if not ok:
-            continue
-        try:
-            actual = calc_expr.evaluate(_SnapshotView(snapshot, overlay))
-        except (TypeError, ValueError, ZeroDivisionError):
-            continue
-        if predicate(actual, target_value):
-            satisfying.append(free_asn)
-
-    if not satisfying:
+    solved = _solve_calc_assignments(
+        result_tag,
+        snapshot,
+        pdg,
+        program,
+        fixed=fixed,
+        domains=domains,
+        accept=lambda actual: predicate(actual, target_value),
+        allow_free_sources=False,
+        require_complete_domains=False,
+    )
+    if solved is None:
+        return None
+    if not solved.assignments:
         # A real, sound answer: the predicate is unsatisfiable over the domains
         # (the state is disabled in every mode).  Represent as empty assignments.
-        return PredicateSolution(free_tags=tuple(free_tags), assignments=())
-    return PredicateSolution(free_tags=tuple(free_tags), assignments=tuple(satisfying))
+        return PredicateSolution(free_tags=solved.free_tags, assignments=())
+    return PredicateSolution(
+        free_tags=solved.free_tags,
+        assignments=solved.assignments,
+    )
 
 
 def solve_calc_preimage(
@@ -223,100 +280,28 @@ def solve_calc_preimage(
     "no pin" result, distinct from ``None`` (punt); a rejection, if any, is the
     guard-verdict path's concern, not this pin derivation's.
     """
-    fixed = dict(fixed or {})
-    domains = domains or {}
-
-    calc_expr = _sole_calc_expr(result_tag, pdg, program)
-    if calc_expr is None:
+    solved = _solve_calc_assignments(
+        result_tag,
+        snapshot,
+        pdg,
+        program,
+        fixed=fixed,
+        domains=domains,
+        accept=lambda actual: actual == target_value,
+        allow_free_sources=True,
+        require_complete_domains=True,
+    )
+    if solved is None:
         return None
-
-    from pyrung.core.analysis.sp_values import _expr_tag_names, _SnapshotView
-
-    operand_tags = _expr_tag_names(calc_expr)
-    if not operand_tags:
-        return None
-
-    # Model every operand: a fixed/constant value, a constant-table lookup whose
-    # index is a free variable, or a free source register we enumerate directly.
-    consts: dict[str, Any] = {}
-    tables: dict[str, _TableOperand] = {}
-    free_sources: list[str] = []
-    for tag in operand_tags:
-        if tag == result_tag:
-            return None  # self-referential — cannot invert
-        if tag in fixed:
-            consts[tag] = fixed[tag]
-            continue
-        table = _model_table_operand(tag, snapshot, pdg, program)
-        if table is not None:
-            tables[tag] = table
-            continue
-        if _is_complete_domain(tag, pdg, domains):
-            free_sources.append(tag)
-            continue
-        cval = _model_constant(tag, snapshot, pdg)
-        if cval is not None:
-            consts[tag] = cval
-            continue
-        return None  # a genuinely-live operand — punt, do not fabricate
-
-    # Free variables: the free source operands plus the distinct index registers
-    # of the table operands, minus anything pinned by context.
-    free_tags: list[str] = list(free_sources)
-    for table in tables.values():
-        idx = table.index_tag
-        if idx not in fixed and idx not in free_tags:
-            free_tags.append(idx)
-    if len(free_tags) > _MAX_FREE_INDICES:
-        return None
-
-    free_domains: list[tuple[Any, ...]] = []
-    for t in free_tags:
-        # Pin soundness: only a provably-complete finite domain may enumerate.
-        if not _is_complete_domain(t, pdg, domains):
-            return None
-        dom = _guard_operand_domain(t, snapshot, pdg, program, domains)
-        if not dom:
-            return None
-        free_domains.append(dom)
-
-    total = 1
-    for dom in free_domains:
-        total *= len(dom)
-    if total > _MAX_COMBOS:
-        return None
-
-    satisfying: list[dict[str, Any]] = []
-    for combo in itertools.product(*free_domains):
-        free_asn = dict(zip(free_tags, combo, strict=True))
-        overlay: dict[str, Any] = dict(consts)
-        for t in free_sources:
-            overlay[t] = free_asn[t]
-        ok = True
-        for tag, table in tables.items():
-            iv = free_asn.get(table.index_tag, fixed.get(table.index_tag))
-            val = _read_table(table, iv, snapshot)
-            if val is None:
-                ok = False
-                break
-            overlay[tag] = val
-        if not ok:
-            continue
-        try:
-            actual = calc_expr.evaluate(_SnapshotView(snapshot, overlay))
-        except (TypeError, ValueError, ZeroDivisionError):
-            continue
-        if actual == target_value:
-            satisfying.append(free_asn)
 
     # FORCED pins: a free tag is pinned iff every satisfying assignment agrees on
     # its value.  No satisfying assignment ⇒ no preimage ⇒ no pin (never invent a
     # rejection here — that is the guard-verdict path's concern).
     forced: dict[str, Any] = {}
-    for t in free_tags:
-        vals = {asn[t] for asn in satisfying}
+    for tag in solved.free_tags:
+        vals = {assignment[tag] for assignment in solved.assignments}
         if len(vals) == 1:
-            forced[t] = next(iter(vals))
+            forced[tag] = next(iter(vals))
     return forced
 
 
@@ -337,11 +322,9 @@ def _is_complete_domain(tag: str, pdg: ProgramGraph, domains: dict[str, tuple[An
     return tag_ref is not None and getattr(tag_ref, "type", None) is TagType.BOOL
 
 
-# Three-valued guard verdicts (see :func:`guard_verdict`).  ``guard_satisfiable``
-# is exactly ``guard_verdict(...) != GUARD_DEAD``; the extra ``PUNT``/``SAT`` split
-# lets a caller distinguish "found a satisfying assignment" from "genuinely could
-# not read the guard" (a live word / undecidable term) without changing the
-# boolean's public contract.
+# Three-valued guard verdicts (see :func:`guard_verdict`).  The ``PUNT``/``SAT``
+# split lets callers distinguish "found a satisfying assignment" from "genuinely
+# could not read the guard" (a live word / undecidable term).
 GUARD_SAT = "sat"
 GUARD_DEAD = "dead"
 GUARD_PUNT = "punt"
@@ -356,9 +339,12 @@ def guard_verdict(
     program: Any,
     domains: dict[str, tuple[Any, ...]] | None = None,
 ) -> str:
-    """Three-valued sibling of :func:`guard_satisfiable`: the *why* behind ``True``.
+    """Whether a writer guard can fire under the pins the writer imposes.
 
-    Same enumerate-and-evaluate machinery, but reports which of three cases holds:
+    Generalizes the narrow copy-source producibility check
+    (``trace._reduce_guard_by_pin``) from a source-only conjunct to the whole
+    simplified ``And``/``Or``/``Atom`` guard. It enumerates complete finite
+    domains for the remaining free operands and reports one of three cases:
 
     - :data:`GUARD_DEAD` — *provably unsatisfiable*: every assignment over complete
       finite free-tag domains evaluates definitely ``False`` (or a fully-pinned
@@ -375,14 +361,16 @@ def guard_verdict(
     ``fixed`` pins what the writer *forces* — its copy/calc source and any context.
     Free tags are the remaining guard operands; a Bool free operand resolves to the
     trivial ``(False, True)`` domain via ``_guard_operand_domain``, everything else
-    to a finite integer domain (or ``None`` → punt).
+    to a finite integer domain (or ``None`` → punt). Enumeration is deliberately
+    punt-biased: unknown domains, undecidable terms, and exceeded guardrails can
+    never reject a writer the loop might still drive.
     """
-    from pyrung.core.analysis.pilot.availability import _simplified_expr_tags
+    from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 
     domains = domains or {}
     overlay_base = {**snapshot, **fixed}
-    free = sorted(_simplified_expr_tags(expr) - set(fixed))
+    free = sorted(simplified_expr_tags(expr) - set(fixed))
 
     if not free:
         # Fully pinned — ``False`` is a proof of unsat; ``True`` a proof of sat;
@@ -394,9 +382,6 @@ def guard_verdict(
             return GUARD_DEAD
         return GUARD_PUNT
 
-    if len(free) > _MAX_FREE_INDICES:
-        return GUARD_PUNT  # too wide to enumerate soundly
-
     free_domains: list[tuple[Any, ...]] = []
     for tag in free:
         dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
@@ -404,14 +389,12 @@ def guard_verdict(
             return GUARD_PUNT  # unknown/unbounded domain
         free_domains.append(dom)
 
-    total = 1
-    for dom in free_domains:
-        total *= len(dom)
-    if total > _MAX_COMBOS:
+    combinations = bounded_product(free_domains)
+    if combinations is None:
         return GUARD_PUNT
 
     saw_unknown = False
-    for combo in itertools.product(*free_domains):
+    for combo in combinations:
         overlay = {**overlay_base, **dict(zip(free, combo, strict=True))}
         verdict = _eval_expr_from_state(expr, overlay)
         if verdict is True:
@@ -421,56 +404,6 @@ def guard_verdict(
     # No assignment was definitely True: punt if any was undecidable, else the
     # guard is provably unsatisfiable over the domains.
     return GUARD_PUNT if saw_unknown else GUARD_DEAD
-
-
-def guard_satisfiable(
-    expr: Any,
-    *,
-    fixed: dict[str, Any],
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-    program: Any,
-    domains: dict[str, tuple[Any, ...]] | None = None,
-) -> bool:
-    """Whether a writer guard *may* be satisfiable given the pins the writer imposes.
-
-    Generalizes the narrow copy-source producibility check (``trace._reduce_guard_
-    by_pin``) from "a source-only conjunct the pin settles" to "is the whole guard
-    satisfiable over the free operands' finite domains".  Same enumerate-and-
-    evaluate technique as :func:`solve_table_predicate`, but over an arbitrary
-    simplified ``And``/``Or``/``Atom`` guard evaluated by the three-valued
-    ``_eval_expr_from_state`` (not a single ``calc``-result comparison).
-
-    ``fixed`` pins what the writer *forces* — its copy source (``src == src_val``)
-    and any context (e.g. the transition's target state).  Free tags are the
-    remaining guard operands; each is resolved to a finite domain and the guard is
-    enumerated over their Cartesian product.
-
-    Returns ``False`` **only** when the guard is *provably unsatisfiable* — every
-    assignment over *complete finite* free-tag domains evaluates definitely
-    ``False`` — so the caller may soundly reject the writer (it can never fire to
-    produce the value).  Returns ``True`` in every other case: a satisfying
-    assignment exists, or the guard is undecidable (a ``None`` term — ``rise``/
-    ``fall``, a stale calc-result the tree can't resolve), or a free tag has no
-    known finite domain, or the enumeration guardrails are exceeded.  ``True`` is
-    the punt-biased default: it never rejects a writer the loop might still drive.
-
-    Thin boolean over :func:`guard_verdict` — ``True`` for ``SAT``/``PUNT``,
-    ``False`` for ``DEAD`` — preserved as the stable public contract; callers that
-    need the ``PUNT`` vs ``SAT`` distinction (trace's rejection arm) call
-    :func:`guard_verdict` directly.
-    """
-    return (
-        guard_verdict(
-            expr,
-            fixed=fixed,
-            snapshot=snapshot,
-            pdg=pdg,
-            program=program,
-            domains=domains,
-        )
-        != GUARD_DEAD
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +437,6 @@ def _model_table_operand(
     """Model *tag* as ``table[eval_addr(index_tag)]`` if its sole writer is an
     indirect copy out of a table."""
     from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.instruction.data_transfer import CopyInstruction
-    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 
     writers = pdg.writers_of.get(tag, frozenset())
     if len(writers) != 1:
@@ -513,21 +444,40 @@ def _model_table_operand(
     ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
     if ro is None:
         return None
-    src = None
-    for instr in ro._instructions:
-        if not isinstance(instr, CopyInstruction):
-            continue
-        if getattr(instr.dest, "name", None) != tag:
-            continue
-        if isinstance(instr.source, (IndirectRef, IndirectExprRef)):
-            src = instr.source
-        break
-    if src is None:
-        return None
-    table = table_from_indirect_src(src, snapshot, pdg, program)
+    table = table_operand_from_copy(ro, tag, snapshot, pdg, program)
     if table is None or table.index_tag == tag:
         return None
     return table
+
+
+def table_operand_from_copy(
+    rung: Any,
+    tag: str,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    **model_options: Any,
+) -> _TableOperand | None:
+    """Find and model the indirect-copy source in one exact writer."""
+
+    from pyrung.core.instruction.data_transfer import CopyInstruction
+    from pyrung.core.memory_block import IndirectExprRef, IndirectRef
+
+    for instruction in rung._instructions:
+        if not isinstance(instruction, CopyInstruction):
+            continue
+        if getattr(instruction.dest, "name", None) != tag:
+            continue
+        if isinstance(instruction.source, (IndirectRef, IndirectExprRef)):
+            return table_from_indirect_src(
+                instruction.source,
+                snapshot,
+                pdg,
+                program,
+                **model_options,
+            )
+        return None
+    return None
 
 
 def table_from_indirect_src(
@@ -535,6 +485,11 @@ def table_from_indirect_src(
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
     program: Any,
+    *,
+    evidence: Any = None,
+    single_mutable_index: bool = True,
+    live_snapshot: bool = True,
+    strict_hop_budget: bool = True,
 ) -> _TableOperand | None:
     """Model an ``IndirectRef``/``IndirectExprRef`` copy source as a
     :class:`_TableOperand`: the index register plus an ``address(index)``
@@ -555,26 +510,47 @@ def table_from_indirect_src(
         names = _expr_tag_names(src.expr)
         if not names:
             return None
-        mutable = {n for n in names if pdg.writers_of.get(n)}
-        if len(mutable) != 1:
+        candidates = (
+            {name for name in names if pdg.writers_of.get(name)} if single_mutable_index else names
+        )
+        if len(candidates) != 1:
             return None
-        idx_tag = next(iter(mutable))
+        idx_tag = next(iter(candidates))
         iexpr = src.expr
         itag = idx_tag
-        eval_addr = lambda v: int(iexpr.evaluate(_SnapshotView(snapshot, {itag: v})))  # noqa: E731
+        address_snapshot = snapshot if live_snapshot else {}
+        eval_addr = lambda v: int(  # noqa: E731
+            iexpr.evaluate(_SnapshotView(address_snapshot, {itag: v}))
+        )
     else:
         return None
 
     for _ in range(3):
+        canonical = evidence.canonicalize(idx_tag) if evidence is not None else None
+        if canonical is not None:
+            previous = eval_addr
+            scale = canonical.scale
+            offset = canonical.offset
+            eval_addr = lambda v, _prev=previous, _scale=scale, _offset=offset: _prev(
+                _scale * v + _offset
+            )
+            idx_tag = canonical.representative
+            continue
+
         defn = single_calc_source(idx_tag, pdg, program)
         if defn is None:
             break
         cexpr, hop_src = defn
+        calc_snapshot = snapshot if live_snapshot else _constant_calc_env(cexpr, hop_src, pdg)
 
         def _hopped(
-            v: int, _prev: Any = eval_addr, _cexpr: Any = cexpr, _src: str = hop_src
+            v: int,
+            _prev: Any = eval_addr,
+            _cexpr: Any = cexpr,
+            _src: str = hop_src,
+            _snapshot: dict[str, Any] = calc_snapshot,
         ) -> int:
-            mid = int(_cexpr.evaluate(_SnapshotView(snapshot, {_src: v})))
+            mid = int(_cexpr.evaluate(_SnapshotView(_snapshot, {_src: v})))
             return _prev(mid)
 
         eval_addr = _hopped
@@ -584,25 +560,72 @@ def table_from_indirect_src(
         # cannot be fully resolved within the supported hop count.  Punt cleanly
         # rather than model a table indexed by a still-computed pointer — a
         # partially-resolved ``eval_addr`` would fabricate a lookup.
-        if single_calc_source(idx_tag, pdg, program) is not None:
+        if strict_hop_budget and single_calc_source(idx_tag, pdg, program) is not None:
             return None
 
     return _TableOperand(index_tag=idx_tag, eval_addr=eval_addr, block=src.block)
 
 
-def _read_table(table: _TableOperand, index_value: Any, snapshot: dict[str, Any]) -> Any | None:
+def _constant_calc_env(expr: Any, source_tag: str, pdg: ProgramGraph) -> dict[str, Any]:
+    """Declared defaults for immutable constants beside one mutable calc source."""
+
+    from pyrung.core.analysis.sp_values import _expr_tag_names
+
+    names = _expr_tag_names(expr) or set()
+    return {
+        name: pdg.tags[name].default for name in names if name != source_tag and name in pdg.tags
+    }
+
+
+def _read_table(
+    table: _TableOperand,
+    index_value: Any,
+    snapshot: dict[str, Any],
+    *,
+    coerce_index: bool = False,
+    invalid: Any = None,
+) -> Any | None:
     """Value at ``table[index_value]`` — snapshot slot else declared default."""
-    if not isinstance(index_value, int) or isinstance(index_value, bool):
-        return None
+    if coerce_index:
+        try:
+            index_value = int(index_value)
+        except (TypeError, ValueError):
+            return invalid
+    elif not isinstance(index_value, int) or isinstance(index_value, bool):
+        return invalid
     try:
         addr = table.eval_addr(index_value)
         table.block._validate_address(addr)
     except (IndexError, TypeError, ValueError, ZeroDivisionError):
-        return None
+        return invalid
     slot_name = table.block._effective_slot_name(addr)
     if slot_name in snapshot:
         return snapshot[slot_name]
     return table.block._effective_slot_policy(addr)[1]  # (retentive, default)
+
+
+def invert_indirect_copy(
+    rung: Any,
+    tag: str,
+    value: Any,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+) -> tuple[str, list[Any]] | None:
+    """Invert the indirect copy in *rung* into matching index values."""
+
+    from pyrung.core.analysis.pilot.static_expressions import index_values
+    from pyrung.core.analysis.sp_values import _values_match
+
+    table = table_operand_from_copy(rung, tag, snapshot, pdg, program)
+    if table is None or table.index_tag == tag:
+        return None
+    matching = [
+        index
+        for index in index_values(table.index_tag, snapshot, pdg, program)
+        if _values_match(_read_table(table, index, snapshot), value)
+    ]
+    return (table.index_tag, matching) if matching else None
 
 
 def _model_constant(
@@ -625,7 +648,7 @@ def _guard_operand_domain(
     program: Any,
     domains: dict[str, tuple[Any, ...]],
 ) -> tuple[Any, ...] | None:
-    """Finite value domain for a free *guard* operand — :func:`guard_satisfiable`'s
+    """Finite value domain for a free *guard* operand — :func:`guard_verdict`'s
     resolver, distinct from :func:`_index_domain` (which is also used by
     :func:`solve_table_predicate` for table INDEX registers, where a Bool domain
     would be meaningless).

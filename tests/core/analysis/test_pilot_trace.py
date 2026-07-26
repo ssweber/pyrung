@@ -24,11 +24,11 @@ from pyrung import (
     time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     _env_for,
     _rank_writers,
-    _resolve_inequality_target,
     _rewrite_internal_compare,
     _scan_transient_rest,
     _trace_back,

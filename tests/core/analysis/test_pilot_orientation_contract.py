@@ -24,14 +24,13 @@ from pyrung.core.analysis.pilot.navigation import (
     act_identity,
     pulse_identity,
 )
+from pyrung.core.analysis.pilot.options import _CandidateSource
 
 
 @dataclass
 class _Context:
     compass: Compass
-    target_tag: str = "Target"
-    target_value: object = True
-    target_predicate: object = None
+    target: TargetSpec = TargetSpec("Target", True)
     blocked_route_actions: frozenset = frozenset()
     avoid_pred: object = None
     route: object = None
@@ -50,6 +49,7 @@ def _candidate(tag: str) -> SimpleNamespace:
         tag=tag,
         value=True,
         pair=(tag, True),
+        source=_CandidateSource.TRACE,
         current_note="",
         route_prescribed=False,
         influence_prescribed=False,
@@ -66,7 +66,6 @@ def _options(*candidates, stuck_reason=None):
         completion_frontier=(),
         route_plan=None,
         candidates=tuple(candidates),
-        continuation_evidence=(),
         prerequisite_rungs=(),
         wait_prescribed=False,
         wait_reason=None,

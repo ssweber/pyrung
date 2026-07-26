@@ -77,7 +77,7 @@ def test_fill_band_static_punts() -> None:
     """The sound resolver stays sound: a literal-operand inequality on the
     domain-less free word has no derivable value — ``None`` (the escalation
     trigger for the heuristic stage, which must NOT live in this function)."""
-    from pyrung.core.analysis.pilot.trace import _resolve_inequality_target
+    from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 
     prog, _ = _fill_band_program()
     pdg = build_program_graph(prog)

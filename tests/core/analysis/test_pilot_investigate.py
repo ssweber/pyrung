@@ -3,7 +3,7 @@
 Coverage targets:
 - build_replay_fn: bounded vs unbounded judgment
 - investigate_deviation: hypothesis generation pipeline
-- _precise_cause, _latch_exposure_hypotheses, _done_boundary_hypotheses
+- _precise_causes, _latch_exposure_hypotheses, _done_boundary_hypotheses
 - investigate_excursion: excursion diagnosis and retry
 """
 
@@ -41,7 +41,6 @@ from pyrung.core.analysis.pilot.investigate import (
     _first_timeline_departure,
     _hold_allowed,
     _hold_is_noop,
-    _precise_cause,
     _precise_causes,
     _regression_cause_replayed,
     _shared_causal_suffix,
@@ -52,6 +51,7 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_deviation,
     investigate_excursion,
 )
+from pyrung.core.analysis.pilot.navigation import TargetSpec
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
@@ -60,8 +60,16 @@ from pyrung.core.context import RungId
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
+_DEFAULT_TARGET = TargetSpec("", None)
 
-def _make_ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
+
+def _make_ctx(
+    prog: Program,
+    plc: PLC,
+    *,
+    target: TargetSpec = _DEFAULT_TARGET,
+    **overrides: Any,
+) -> SimpleNamespace:
     """Minimal duck-typed context for the hypothesis generators.
 
     The generators read ``pdg``, ``program``, ``steerable``, ``opaque_loop``,
@@ -78,6 +86,7 @@ def _make_ctx(prog: Program, plc: PLC, **overrides: Any) -> SimpleNamespace:
         "pipeline_internal_tags": frozenset(),
         "route": None,
         "compass": SimpleNamespace(action_tags=frozenset()),
+        "target": target,
     }
     ns.update(overrides)
     return SimpleNamespace(**ns)
@@ -95,8 +104,7 @@ def _make_replay_context(prog: Program, plc: PLC, target_tag: str, target_value:
     return SimpleNamespace(
         resting={t: False for t in steerable if isinstance(plc.state.tags.get(t), bool)},
         edge_tags=set(),
-        target_tag=target_tag,
-        target_value=target_value,
+        target=TargetSpec(target_tag, target_value),
         pdg=pdg,
         program=prog,
         steerable=steerable,
@@ -244,9 +252,7 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
     ctx = _make_ctx(
         prog,
         plc,
-        target_tag="Revoked_GoodOut",
-        target_value=True,
-        target_predicate=None,
+        target=TargetSpec("Revoked_GoodOut", True),
     )
     bad_rung = PilotRung(Bad.name, True, CompareEq(Bad, False))
     good_rung = PilotRung(Good.name, True, CompareEq(Good, False))
@@ -309,9 +315,7 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
     ctx = _make_ctx(
         prog,
         plc,
-        target_tag=Target.name,
-        target_value=True,
-        target_predicate=None,
+        target=TargetSpec(Target.name, True),
     )
     hypothesis = InvestigationHypothesis(
         "same-write-new-scope",
@@ -379,9 +383,7 @@ def test_raw_hypothesis_is_rejected_after_it_acquires_revoked_scope(monkeypatch)
     ctx = _make_ctx(
         prog,
         plc,
-        target_tag=Target.name,
-        target_value=True,
-        target_predicate=None,
+        target=TargetSpec(Target.name, True),
     )
     hypothesis = InvestigationHypothesis(
         "raw-pair",
@@ -517,9 +519,7 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
     ctx = _make_ctx(
         prog,
         plc,
-        target_tag=State.name,
-        target_value=17,
-        target_predicate=None,
+        target=TargetSpec(State.name, 17),
     )
     incident = _ground_test_incident(plc)
     first = InvestigationHypothesis("precise-cause", ((A.name, False),), sources=(A.name,))
@@ -1414,12 +1414,12 @@ class TestTerminalLetrunNoChannelRegister:
 
 
 # ---------------------------------------------------------------------------
-# _precise_cause — single cause()-chain walk from first departure
+# _precise_causes — cause()-chain walks from departures
 # ---------------------------------------------------------------------------
 
 
-class TestPreciseCause:
-    """_precise_cause: single cause walk to steerable input, early exit."""
+class TestPreciseCauses:
+    """_precise_causes: cause walks to steerable inputs."""
 
     def test_guard_expiry_keeps_external_destinations_on_frontier(self):
         """Exact PILOT authorship must not erase the released field levers."""
@@ -1472,9 +1472,10 @@ class TestPreciseCause:
             channel_tag=State.name,
         )
 
-        hypothesis = _precise_cause(plc, incident, _make_ctx(prog, plc))
+        hypotheses = _precise_causes(plc, incident, _make_ctx(prog, plc))
 
-        assert hypothesis is not None
+        assert hypotheses
+        hypothesis = hypotheses[0]
         assert set(hypothesis.holds) == {
             (Door.name, True),
             (LintDoor.name, True),
@@ -1531,9 +1532,10 @@ class TestPreciseCause:
             channel_tag="Precise_State",
         )
 
-        hypothesis = _precise_cause(plc, incident, _make_ctx(prog, plc))
+        hypotheses = _precise_causes(plc, incident, _make_ctx(prog, plc))
 
-        assert hypothesis is not None
+        assert hypotheses
+        hypothesis = hypotheses[0]
         assert hypothesis.kind == "precise-cause"
         assert {(hold.dest, hold.value) for hold in hypothesis.holds} == {
             ("Precise_DoorClosed", True),
@@ -2674,69 +2676,6 @@ class TestBuildDeviationIncident:
         )
         assert incident.departures == ()
         assert incident.departure_scan is None
-
-    def test_program_does_not_narrow_factual_changed_tags(self):
-        """Incident evidence stays complete when a Program is supplied.
-
-        Timer consumers select their Done/accumulator profile tags locally;
-        constructing the incident must not erase unrelated recorded movement.
-        """
-        from pyrung.core.analysis.pilot.advance import iter_advance_owners
-
-        prog, _tmr = _watchdog_program()
-        plc = PLC(prog, dt=0.010)
-        plc.patch({"Enable": True})
-        plc.step()
-        anchor = plc.state.scan_id
-        for _ in range(20):
-            plc.step()  # timer fires: Tmr.Done, Alarm, Target all change
-        assert plc.state.tags["Alarm"] is True
-
-        before = dict(plc.history.at(anchor).tags)
-        after = dict(plc.state.tags)
-        end = plc.state.scan_id
-        dones = {
-            owner.profile.done.name
-            for owner in iter_advance_owners(prog)
-            if owner.profile.done is not None
-        }
-        # Recorded evidence: the watchdog's Done bit fired in the window.
-        timeline = tuple(
-            BumpEvent("pen", "pen", end, ((name, False, after.get(name)),))
-            for name in sorted(dones)
-            if after.get(name) is True
-        )
-        full = build_deviation_incident(
-            anchor_scan=anchor,
-            end_scan=end,
-            action=(),
-            bearing=(("Target", True),),
-            before_snap=before,
-            after_snap=after,
-            timeline=timeline,
-        )
-        restricted = build_deviation_incident(
-            anchor_scan=anchor,
-            end_scan=end,
-            action=(),
-            bearing=(("Target", True),),
-            before_snap=before,
-            after_snap=after,
-            timeline=timeline,
-            program=prog,
-        )
-
-        profile_tags = {
-            tag.name
-            for owner in iter_advance_owners(prog)
-            for tag in (owner.profile.done, owner.profile.accumulator)
-            if tag is not None
-        }
-        # Program metadata does not change the factual incident.
-        assert "Alarm" in full.changed_tags
-        assert restricted.changed_tags == full.changed_tags
-        # The watchdog's Done bit actually fired in the window, so it survives.
-        assert dones & set(restricted.changed_tags) & profile_tags
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.gauge import GaugeReceipt
-    from pyrung.core.analysis.pilot.navigation import BearingObjective
+    from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -44,6 +44,28 @@ class MotionKind(Enum):
     @property
     def is_coast(self) -> bool:
         return self is not MotionKind.INTERVENTION
+
+
+@dataclass(frozen=True)
+class ChannelMotion:
+    """One requested channel boundary and verification's owned landing."""
+
+    channel_tag: str | None = None
+    target_value: Any = None
+    boundary: Any = None
+    stop_reason: str | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.channel_tag is not None
+
+    @property
+    def reached(self) -> bool:
+        return self.stop_reason == "reached"
+
+    @property
+    def departed(self) -> bool:
+        return self.stop_reason == "departed"
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +104,24 @@ class WalkContext(Protocol):
     steerable: frozenset[str]
     opaque_loop: frozenset[str]
     prior: DomainPrior | None
+
+
+@dataclass(frozen=True)
+class WorldView:
+    """Minimal :class:`WalkContext` assembled from one live frame."""
+
+    snapshot: Mapping[str, Any]
+    pdg: Any
+    program: Any
+    steerable: frozenset[str]
+    opaque_loop: frozenset[str]
+    prior: Any = None
+    clear_only: frozenset[str] = frozenset()
+    pipeline_internal_tags: frozenset[str] = frozenset()
+    pipeline_roles: tuple[Any, ...] = ()
+    avoid_pred: Any = None
+    via_pred: Any = None
+    harness: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -335,13 +375,7 @@ class PilotGateEvent:
 
 @dataclass
 class _PilotContext:
-    target_tag: str
-    target_value: Any
-    # Live relational target predicate (``A op B`` Atom) when how() was given a
-    # comparison; None for Tag / equality targets.  When set, the drive loop
-    # traces it via trace_relational and judges "reached" by evaluating the
-    # predicate (target_reached), not equality on (target_tag, target_value).
-    target_predicate: Any
+    target: TargetSpec
     pdg: ProgramGraph
     program: Any
     steerable: frozenset[str]
@@ -359,8 +393,8 @@ class _PilotContext:
     pipeline_roles: tuple[PipelineRoles, ...]
     pipeline_internal_tags: frozenset[str]
     # An explicit user ``via=`` lock through a multi-route value trace, or None.
-    # Inferred commitment lifecycle lives in _PilotState; the final Plan.route
-    # receipt is reporting only and never feeds back into execution.
+    # The final Plan.route receipt is reporting only and never feeds back into
+    # execution.
     route: TraceChoice | None
     blocked_route_actions: frozenset[_ActionPair]
     max_scans: int
@@ -688,8 +722,7 @@ class _AttemptIntent:
     nogood_pair: _ActionPair | None = None
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
-    channel_tag: str | None = None
-    channel_target: Any = None
+    channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
     motion: MotionKind = MotionKind.INTERVENTION
 
 
@@ -731,12 +764,11 @@ class _TrialResult:
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
-    zoom_channel_tag: str | None = None
-    zoom_target_value: Any = None
-    # The coast receipt interpreted against the operation that verification
-    # actually owns.  The raw receipt may say ``departed`` when an inner seek
-    # stopped because its outer route channel reached the requested landing.
-    bearing_stop_reason: str | None = None
+    # The requested boundary and its verification-owned landing. The raw coast
+    # receipt may say ``departed`` when an inner seek stopped because its outer
+    # route channel reached the requested landing; verification rebases that
+    # observation exactly once before constructing this result.
+    channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
     # See _PulseState.coast_receipt — carried through verify onto the result.
     coast_receipt: Any = None
     # See _PulseState.timeline — carried through verify onto the result.
