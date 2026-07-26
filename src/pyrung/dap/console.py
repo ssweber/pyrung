@@ -245,6 +245,15 @@ def _cmd_pause(adapter: Any, _expression: str) -> ConsoleResult:
     return ConsoleResult("Pausing after current scan")
 
 
+@register("stop", usage="stop", group="execution", hint="(cancels a running analysis)")
+def _cmd_stop(adapter: Any, _expression: str) -> ConsoleResult:
+    # Reaching this handler means we already hold ``_state_lock``, so by
+    # definition nothing long-running is in flight. ``pyrung live`` intercepts
+    # ``stop`` in LiveServer._handle, ahead of the lock, which is the path that
+    # can actually interrupt a command.
+    return ConsoleResult("Nothing running.")
+
+
 @register("step", usage="step [N]", group="execution")
 def _cmd_step(adapter: Any, expression: str) -> ConsoleResult:
     parts = expression.strip().split()
@@ -804,8 +813,13 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         return conds if len(conds) != 1 else conds[0]
 
     progress = _PilotProgressFormatter()
+    cancel = getattr(adapter, "_cancel", None)
 
     def _on_pilot_event(event: Any) -> None:
+        # Poll for `stop` before formatting: the planner drives this callback
+        # once per round, so this is the cancellation point for `how`.
+        if cancel is not None:
+            cancel.check("how")
         fragment = progress.format(event)
         if fragment is not None:
             adapter._send_event("output", {"category": "console", "output": fragment})

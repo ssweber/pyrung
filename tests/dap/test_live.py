@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from pyrung.dap.adapter import DAPAdapter
+from pyrung.dap.cancel import CancelToken, ConsoleCancelled
 from pyrung.dap.live import list_sessions, send_command
 from pyrung.dap.protocol import read_message
 
@@ -90,6 +93,30 @@ def live_session(tmp_path: Path):
     yield adapter, out_stream, session_name
     if adapter._live_server is not None:
         adapter._live_server.stop()
+
+
+@pytest.fixture()
+def slow_verb():
+    """Register a `slowtest` verb that blocks under the state lock until cancelled.
+
+    Stands in for `how` -- it polls the cancel token the same way, without
+    needing a program big enough for the planner to take a measurable while.
+    """
+    from pyrung.dap import console as console_mod
+
+    started = threading.Event()
+
+    @console_mod.register("slowtest", usage="slowtest", group="")
+    def _cmd_slowtest(adapter: Any, _expression: str) -> console_mod.ConsoleResult:
+        started.set()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            adapter._cancel.check("slowtest")
+            time.sleep(0.01)
+        return console_mod.ConsoleResult("completed")
+
+    yield started
+    console_mod._REGISTRY.pop("slowtest", None)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +203,87 @@ class TestClientServer:
     def test_connection_refused_for_bad_session(self):
         with pytest.raises((ConnectionRefusedError, FileNotFoundError)):
             send_command("nonexistent_session_xyz", "help")
+
+
+# ---------------------------------------------------------------------------
+# Cooperative cancellation
+# ---------------------------------------------------------------------------
+
+
+class TestCancelToken:
+    def test_check_is_quiet_until_requested(self):
+        token = CancelToken()
+        token.check()
+        assert token.requested is False
+
+    def test_check_raises_after_request(self):
+        token = CancelToken()
+        token.request()
+        assert token.requested is True
+        with pytest.raises(ConsoleCancelled, match="how cancelled"):
+            token.check("how")
+
+    def test_reset_clears_the_flag(self):
+        token = CancelToken()
+        token.request()
+        token.reset()
+        assert token.requested is False
+        token.check()
+
+
+class TestStopCommand:
+    def test_stop_with_nothing_running(self, live_session: Any):
+        _adapter, _out, session_name = live_session
+        ok, text = send_command(session_name, "stop")
+        assert ok is True
+        assert text == "Nothing running."
+
+    def test_stop_cancels_inflight_command(self, live_session: Any, slow_verb: threading.Event):
+        _adapter, _out, session_name = live_session
+        result: dict[str, Any] = {}
+
+        def _run() -> None:
+            ok, text = send_command(session_name, "slowtest")
+            result["ok"], result["text"] = ok, text
+
+        worker = threading.Thread(target=_run, daemon=True)
+        worker.start()
+        assert slow_verb.wait(5.0), "slowtest never started"
+
+        # The command now holds _state_lock. This must still be answered.
+        ok, text = send_command(session_name, "stop")
+        assert ok is True
+        assert "Stop requested" in text
+        assert "slowtest" in text
+
+        worker.join(5.0)
+        assert not worker.is_alive(), "cancelled command did not unwind"
+        assert result["ok"] is False
+        assert "slowtest cancelled" in result["text"]
+
+    def test_session_usable_after_cancel(self, live_session: Any, slow_verb: threading.Event):
+        _adapter, _out, session_name = live_session
+
+        worker = threading.Thread(
+            target=lambda: send_command(session_name, "slowtest"), daemon=True
+        )
+        worker.start()
+        assert slow_verb.wait(5.0)
+        send_command(session_name, "stop")
+        worker.join(5.0)
+        assert not worker.is_alive()
+
+        # The stale stop flag must not poison the next command.
+        ok, text = send_command(session_name, "step 1")
+        assert ok is True, text
+        assert "Stepped" in text
+
+    def test_inflight_cleared_after_normal_completion(self, live_session: Any):
+        _adapter, _out, session_name = live_session
+        ok, _text = send_command(session_name, "step 1")
+        assert ok is True
+        ok, text = send_command(session_name, "stop")
+        assert text == "Nothing running."
 
 
 # ---------------------------------------------------------------------------

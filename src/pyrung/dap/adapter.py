@@ -18,6 +18,7 @@ from pyrung.core.state import SystemState
 from pyrung.dap import execution_flow
 from pyrung.dap.args import parse_args
 from pyrung.dap.breakpoints import BreakpointManager, SourceBreakpoint
+from pyrung.dap.cancel import CancelToken
 from pyrung.dap.formatter import DAPFormatter
 from pyrung.dap.handlers import (
     breakpoint_requests,
@@ -73,6 +74,7 @@ class DAPAdapter:
         self._pause_event = threading.Event()
         self._stop_event = threading.Event()
         self._state_lock = threading.Lock()
+        self._cancel = CancelToken()
         self._formatter = DAPFormatter()
         self._session = DebugSession()
 
