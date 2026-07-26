@@ -69,10 +69,11 @@ if TYPE_CHECKING:
 _SENTINEL = object()  # distinguishes "not passed" from None/False
 
 _CHECKPOINT_INTERVAL_DEFAULT = 200
-# How many checkpoint-interval slabs to keep live at once.  A causal backward
-# walk touches only a handful of distinct intervals; this bounds slab memory
-# while covering a walk's working set without re-replay.
-_REPLAY_SLAB_MAX_ANCHORS = 8
+# One causal working set, independent of checkpoint spacing.  Checkpoints may
+# intentionally be sparse (or skipped by live folding); they are replay anchors,
+# not a license to materialize the entire gap into memory.
+_REPLAY_SLAB_SCANS = 1024
+_REPLAY_SLAB_MAX_ANCHORS = 1
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
@@ -643,6 +644,11 @@ class PLC:
         self._dt_override_for_next_scan: float | None = None
         self._replay_mode: bool = False
         self._compiled_replay_kernel: CompiledKernel | None | bool = None
+        # Constant-size instrumentation for the most recent sparse point seek.
+        # This is deliberately not a per-scan trace: replay folding must not
+        # trade CPU savings for memory proportional to the skipped interval.
+        self._last_replay_seek_stats: dict[str, int] = {}
+        self._last_replay_slab_stats: dict[str, int] = {}
         # The synthesis-bracketed compilation unit for soft-exec replay (holds +
         # user + plant), built lazily and cached.  ``None`` ⇒ no synthesis (use
         # the bare program).  Invalidated by the harness when the overlay changes.
@@ -944,11 +950,7 @@ class PLC:
             # program.  Synthesis plant + PilotRungs are ordinary leading rungs,
             # so their reads, writes, guards, and timer crossings belong in the
             # same proof surface.  Reuse the bare PDG only when no bracket exists.
-            pdg = (
-                self._ensure_pdg()
-                if program is self._program
-                else build_program_graph(program)
-            )
+            pdg = self._ensure_pdg() if program is self._program else build_program_graph(program)
             ctx = _build_fold_context(
                 self,
                 pdg,
@@ -1509,7 +1511,7 @@ class PLC:
         ``replay_to → fork → history.at → replay_to`` loop.  Direct
         lookups (current tip, recent-state window, checkpoint dict,
         the pinned initial state) terminate immediately; the slab cache
-        covers the full checkpoint interval around a miss so that
+        covers a bounded window behind a miss so that
         consecutive ``history.at()`` calls in causal backward walks
         resolve as dict lookups instead of independent replays.
         """
@@ -1523,52 +1525,72 @@ class PLC:
         if scan_id == self._initial_scan_id:
             return self._initial_state
         if self._initial_scan_id <= scan_id <= self._state.scan_id:
-            anchor = self._nearest_checkpoint_at_or_before(scan_id)
-            anchor_scan = anchor if anchor is not None else self._initial_scan_id
-            slab = self._replay_slabs.get(anchor_scan)
-            if slab is not None and scan_id in slab:
-                return slab[scan_id]
+            for slab_key in reversed(self._replay_slabs):
+                slab = self._replay_slabs[slab_key]
+                if scan_id in slab:
+                    self._replay_slabs.pop(slab_key)
+                    self._replay_slabs[slab_key] = slab
+                    return slab[scan_id]
             return self._replay_slab_fill(scan_id)
         raise KeyError(scan_id)
 
     def _replay_slab_fill(self, scan_id: int) -> SystemState:
-        """Populate the single-slot replay slab for the checkpoint interval
-        containing *scan_id* and return the requested state.
+        """Populate one bounded causal slab and return *scan_id*.
 
-        Evicts any previously cached slab — memory is bounded to one
-        interval's worth of states at a time.
+        A folded tail may be far from its last checkpoint. Positioning and
+        materialization are separate: fold the run-up when the executable World
+        is provably stable, then retain only one fixed-size working set.
         """
         anchor = self._nearest_checkpoint_at_or_before(scan_id)
         anchor_scan = anchor if anchor is not None else self._initial_scan_id
-        next_cp = self._nearest_checkpoint_at_or_after(scan_id)
-        if next_cp is not None and next_cp > anchor_scan:
-            slab_end = next_cp
-        else:
-            # No checkpoint ahead of *scan_id* — it lives in the tail past the
-            # last retained checkpoint.  The slab MUST reach *scan_id*: folding
-            # leaves checkpoints sparse and irregular (committed scans rarely
-            # land on ``interval`` multiples), so ``anchor + interval`` routinely
-            # falls short of *scan_id* and every ``at()`` in a causal walk would
-            # refill the same short slab and then ``replay_to`` to the tail
-            # anyway — replaying one interval many times over.  Extend at least
-            # one interval (amortization) but never stop before *scan_id*; we
-            # replay ``anchor -> scan_id`` regardless, so caching that whole path
-            # is free and turns repeated tail reads into dict hits.
-            slab_end = min(
-                self._state.scan_id, max(scan_id, anchor_scan + self._checkpoint_interval)
+        # Causal walks move backward from the requested point.  End the slab at
+        # the miss and retain its preceding neighborhood, never an arbitrarily
+        # large checkpoint interval.
+        slab_start = max(
+            anchor_scan + 1,
+            scan_id - _REPLAY_SLAB_SCANS + 1,
+        )
+        slab_end = scan_id
+
+        positioned_with_fold = False
+        kernel = self._compiled_replay_supported_kernel()
+        synthesis = self._synthesis
+        stable_bare_world = synthesis is None or synthesis.is_empty()
+        if slab_start > anchor_scan + 1 and kernel is not None:
+            # With PilotRungs installed, dense compiled positioning preserves
+            # HEAD's current-World replay semantics while still avoiding a
+            # second, run-up-sized state log.  Ordinary folding is enabled only
+            # for the stable bare World; historical World epochs are not yet
+            # represented in the scan log, so synthesis replay fails closed.
+            positioned = self._replay_to_compiled(
+                slab_start - 1,
+                kernel,
+                fold=stable_bare_world,
             )
-        states = self._replay_range(anchor_scan + 1, slab_end)
-        slab: dict[int, SystemState] = {}
-        expected = anchor_scan + 1
-        for s in states:
-            slab[expected] = s
-            expected += 1
+            states = self._replay_range_from_compiled(
+                positioned,
+                slab_start,
+                slab_end,
+                kernel,
+            )
+            positioned_with_fold = stable_bare_world
+        else:
+            states = self._replay_range(anchor_scan + 1, slab_end)
+            if slab_start > anchor_scan + 1:
+                states = [state for state in states if state.scan_id >= slab_start]
+        slab = {state.scan_id: state for state in states}
         # Store under the anchor, marking it most-recently-used, and evict the
         # oldest anchors past the cap.
-        self._replay_slabs.pop(anchor_scan, None)
-        self._replay_slabs[anchor_scan] = slab
+        slab_key = slab_start - 1
+        self._replay_slabs.pop(slab_key, None)
+        self._replay_slabs[slab_key] = slab
         while len(self._replay_slabs) > _REPLAY_SLAB_MAX_ANCHORS:
             self._replay_slabs.pop(next(iter(self._replay_slabs)))
+        self._last_replay_slab_stats = {
+            "runup_scans": max(0, slab_start - anchor_scan - 1),
+            "materialized_states": len(slab),
+            "folded_runup": int(positioned_with_fold),
+        }
         if scan_id in slab:
             return slab[scan_id]
         return self.replay_to(scan_id).current_state
@@ -1888,7 +1910,13 @@ class PLC:
 
         return replay
 
-    def _replay_to_compiled(self, target_scan_id: int, kernel: CompiledKernel) -> PLC:
+    def _replay_to_compiled(
+        self,
+        target_scan_id: int,
+        kernel: CompiledKernel,
+        *,
+        fold: bool = False,
+    ) -> PLC:
         anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
@@ -1910,7 +1938,35 @@ class PLC:
             replay._input_overrides._forces.clear()
             replay._input_overrides._forces.update(log.force_changes_by_scan[anchor])
 
-        for scan_id in range(anchor_scan_id + 1, target_scan_id + 1):
+        strategy = None
+        event_scans: tuple[int, ...] = ()
+        if fold and anchor_scan_id < target_scan_id:
+            from pyrung.core.fold import _OrdinaryFoldStrategy
+
+            strategy = _OrdinaryFoldStrategy(self._ensure_fold_context())
+            boundaries = (
+                set(log.patches_by_scan)
+                | set(log.rtc_base_changes)
+                | set(log.io_submits_by_scan)
+                | set(log.io_drains_by_scan)
+                | {event.at_scan_id for event in log.lifecycle_events}
+            )
+            # Checkpoints repeat the full force map even when it did not
+            # change.  Only an effective replacement is a replay boundary.
+            effective_forces: Mapping[str, Any] = {}
+            for force_scan in sorted(log.force_changes_by_scan):
+                next_forces = log.force_changes_by_scan[force_scan]
+                if force_scan > anchor_scan_id and next_forces != effective_forces:
+                    boundaries.add(force_scan)
+                effective_forces = next_forces
+            event_scans = tuple(
+                sorted(scan for scan in boundaries if anchor_scan_id < scan <= target_scan_id)
+            )
+
+        scan_id = anchor_scan_id + 1
+        event_index = 0
+        kernel_scans = 0
+        while scan_id <= target_scan_id:
             for event in lifecycle_by_scan.get(scan_id, []):
                 _apply_lifecycle_to_replay(replay, event)
             if scan_id in log.force_changes_by_scan:
@@ -1921,7 +1977,14 @@ class PLC:
                 replay._set_rtc_internal(base, base_sim_time)
             if scan_id in log.patches_by_scan:
                 replay.patch(log.patches_by_scan[scan_id])
+
+            probe = (
+                strategy.capture_state(replay._materialize_replay_state())
+                if strategy is not None
+                else None
+            )
             replay.step_replay()
+            kernel_scans += 1
             for record in log.io_submits_by_scan.get(scan_id, {}).values():
                 for tag_name, value in record.tag_writes:
                     replay.apply_replay_io_write(tag_name, value)
@@ -1929,10 +1992,52 @@ class PLC:
                 for tag_name, value in record.tag_writes:
                     replay.apply_replay_io_write(tag_name, value)
 
+            scan_id += 1
+            if strategy is None or probe is None or scan_id > target_scan_id:
+                continue
+
+            state = replay._materialize_replay_state()
+            while event_index < len(event_scans) and event_scans[event_index] <= state.scan_id:
+                event_index += 1
+            max_skip = target_scan_id - state.scan_id
+            if event_index < len(event_scans):
+                max_skip = min(max_skip, event_scans[event_index] - state.scan_id - 1)
+            plan = strategy.plan(
+                state,
+                probe,
+                max_skip=max_skip,
+                endpoint_is_boundary=True,
+            )
+            if plan is None:
+                continue
+
+            from pyrung.core.fold import _fold_patches
+
+            patches = _fold_patches(
+                state,
+                plan.skip,
+                strategy.ctx,
+                probe.totals,
+                plan.after_totals,
+            )
+            if patches:
+                replay.patch(patches)
+            replay.step_replay(logical_scans=plan.skip)
+            kernel_scans += 1
+            state = replay._materialize_replay_state()
+            strategy.finish(state, probe, plan)
+            scan_id = state.scan_id + 1
+
         for event in lifecycle_by_scan.get(target_scan_id + 1, []):
             _apply_lifecycle_to_replay(replay, event)
 
         state = replay._materialize_replay_state()
+        if fold:
+            self._last_replay_seek_stats = {
+                "logical_scans": target_scan_id - anchor_scan_id,
+                "kernel_scans": kernel_scans,
+                "folded_scans": target_scan_id - anchor_scan_id - kernel_scans,
+            }
         return self._fork_from_reconstructed_state(
             state,
             rtc_at_state=replay._rtc_at_sim_time(state.timestamp),
@@ -1961,6 +2066,36 @@ class PLC:
         if kernel is None:
             return self._replay_to_interpreted(target_scan_id)
         return self._replay_to_compiled(target_scan_id, kernel)
+
+    def _replay_seek(self, target_scan_id: int) -> PLC:
+        """Position a disposable replay at one endpoint without a dense slab.
+
+        Point-state consumers need an exact historical endpoint, not every
+        intermediate ``SystemState`` promised by ``History.range``. Keep those
+        contracts separate and route large sparse gaps through this seam.
+
+        Compiled replay uses the same ordinary-fold proof as live execution,
+        clamped to the requested endpoint and every effective scan-log event.
+        It retains only the proof's two endpoint states; no skipped-scan log or
+        dense history slab is constructed.
+        """
+        if target_scan_id < self._initial_scan_id:
+            raise ValueError(
+                f"target_scan_id must be >= {self._initial_scan_id}, got {target_scan_id}"
+            )
+        if target_scan_id > self._state.scan_id:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} is beyond current tip {self._state.scan_id}"
+            )
+        if target_scan_id < self._scan_log.base_scan:
+            raise ValueError(
+                f"target_scan_id {target_scan_id} predates the log horizon "
+                f"({self._scan_log.base_scan}); those scans have been trimmed"
+            )
+        kernel = self._compiled_replay_supported_kernel()
+        if kernel is None:
+            return self._replay_to_interpreted(target_scan_id)
+        return self._replay_to_compiled(target_scan_id, kernel, fold=True)
 
     def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:
         """Reconstruct the rung-trace dict for a historical scan.
@@ -2056,9 +2191,10 @@ class PLC:
 
         # Only the *target* scan needs to run interpreted (to capture each rung's
         # at-fire-time ConditionView).  Position the fork at ``target - 1`` from
-        # the historical state cache/slab instead of doing an independent
-        # ``replay_to`` for every capture miss; the small runtime envelope below
-        # restores the force map and effective RTC that the final scan needs.
+        # the shared historical slab.  A causal walk asks for many adjacent and
+        # repeated points, so the bounded slab is intentional amortization; its
+        # refill may use a folded compiled run-up without throwing that locality
+        # away.
         prev_scan = target_scan_id - 1
         if prev_scan >= self._initial_scan_id and prev_scan >= self._scan_log.base_scan:
             prev_state = self._state_at(prev_scan)
@@ -2225,6 +2361,68 @@ class PLC:
             else:
                 replay.step_replay()
 
+        return results
+
+    def _replay_range_from_compiled(
+        self,
+        positioned: PLC,
+        start_scan_id: int,
+        end_scan_id: int,
+        kernel: CompiledKernel,
+    ) -> list[SystemState]:
+        """Materialize one bounded range after a separately-positioned run-up.
+
+        ``positioned`` must be at ``start_scan_id - 1``.  The caller may have
+        reached it with folded compiled replay; this second phase deliberately
+        executes every requested scan and retains exactly those states for the
+        causal slab.
+        """
+        if positioned.state.scan_id != start_scan_id - 1:
+            raise ValueError(
+                "positioned replay must be at start_scan_id - 1 "
+                f"(got {positioned.state.scan_id}, expected {start_scan_id - 1})"
+            )
+
+        log = self._scan_log.snapshot()
+        lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
+        for event in log.lifecycle_events:
+            lifecycle_by_scan.setdefault(event.at_scan_id, []).append(event)
+
+        replay = CompiledPLC(
+            self._soft_exec_program(),
+            initial_state=positioned.state,
+            dt=self._dt,
+            compiled=kernel,
+        )
+        replay._set_rtc_internal(
+            positioned._rtc_at_sim_time(positioned.state.timestamp),
+            positioned.state.timestamp,
+        )
+        replay._input_overrides._forces.clear()
+        replay._input_overrides._forces.update(positioned._input_overrides.forces)
+
+        results: list[SystemState] = []
+        for scan_id in range(start_scan_id, end_scan_id + 1):
+            for event in lifecycle_by_scan.get(scan_id, []):
+                _apply_lifecycle_to_replay(replay, event)
+            if scan_id in log.force_changes_by_scan:
+                replay._input_overrides._forces.clear()
+                replay._input_overrides._forces.update(log.force_changes_by_scan[scan_id])
+            if scan_id in log.rtc_base_changes:
+                base, base_sim_time = log.rtc_base_changes[scan_id]
+                replay._set_rtc_internal(base, base_sim_time)
+            if scan_id in log.patches_by_scan:
+                replay.patch(log.patches_by_scan[scan_id])
+            replay.step()
+            for record in log.io_submits_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            for record in log.io_drains_by_scan.get(scan_id, {}).values():
+                for tag_name, value in record.tag_writes:
+                    replay.apply_replay_io_write(tag_name, value)
+            if log.io_submits_by_scan.get(scan_id) or log.io_drains_by_scan.get(scan_id):
+                replay._materialize_replay_state()
+            results.append(replay.current_state)
         return results
 
     def _replay_range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:

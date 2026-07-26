@@ -19,11 +19,14 @@ from pyrung.core.kernel import CompiledKernel, ReplayKernel
 from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
+    _CLOCK_HALF_PERIODS,
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
     READ_ONLY_SYSTEM_TAG_NAMES,
     SYSTEM_TAGS_BY_NAME,
     SystemPointRuntime,
+    clock_high,
+    system,
 )
 from pyrung.core.tag import Tag
 from pyrung.core.time_mode import TimeMode
@@ -469,7 +472,7 @@ class CompiledPLC:
         ctx.blocks_live = False
         self._flush_blocks_tracked(tracked)
 
-        self._capture_previous_states()
+        self._capture_previous_states(effective_dt=self._dt, normal_dt=self._dt)
         self._system_runtime.on_scan_end(scan_ctx)
         self._discover_new_commit_tags()
 
@@ -485,10 +488,27 @@ class CompiledPLC:
         self._sync_runtime_flags_from_state()
         return self._state
 
-    def step_replay(self) -> None:
-        """Lightweight step for replay — no SystemState construction."""
+    def step_replay(self, *, logical_scans: int = 1) -> None:
+        """Run one lightweight replay step, possibly as a certified macro scan.
+
+        ``logical_scans > 1`` is reserved for the shared fold proof.  The
+        program executes once with aggregate ``dt`` while scan id and clock
+        memory land where the equivalent ordinary scans would have left them.
+        """
+        if logical_scans < 1:
+            raise ValueError("logical_scans must be >= 1")
         self._ensure_running()
 
+        normal_dt = self._dt
+        effective_dt = logical_scans * normal_dt
+        scan_time_extrema = {
+            name: self._kernel.tags.get(name, _MISSING)
+            for name in (
+                system.sys.scan_time_min_ms.name,
+                system.sys.scan_time_max_ms.name,
+            )
+        }
+        self._dt = effective_dt
         ctx = _KernelRuntimeContext(
             tags=self._kernel.tags,
             memory=self._kernel.memory,
@@ -498,40 +518,56 @@ class CompiledPLC:
             blocks=self._kernel.blocks,
         )
         scan_ctx = cast(ScanContext, ctx)
-        self._system_runtime.on_scan_start(scan_ctx)
+        try:
+            self._system_runtime.on_scan_start(scan_ctx)
 
-        if self._kernel.memory.get("_dt") != self._dt:
-            ctx.set_memory("_dt", self._dt)
+            if self._kernel.memory.get("_dt") != effective_dt:
+                ctx.set_memory("_dt", effective_dt)
 
-        self._materialize_system_tags(ctx)
+            self._materialize_system_tags(ctx)
 
-        # Single block bracket (see :meth:`step`): the plant pass lags the
-        # command by one scan on replay exactly as it did live, then the drain,
-        # main pass, and post-logic forces hand off through the shared block
-        # arrays (no per-scan reload; see :meth:`_open_block_bracket`).
-        tracked = self._open_block_bracket()
-        ctx.blocks_live = True
-        if self._compiled.pre_step_fn is not None:
-            self._run_kernel_pass(self._compiled.pre_step_fn)
-        self._input_overrides.apply_pre_scan(scan_ctx)
-        self._run_kernel_pass(self._compiled.step_fn)
-        self._input_overrides.apply_post_logic(scan_ctx)
-        ctx.blocks_live = False
-        self._flush_blocks_tracked(tracked)
+            # Single block bracket (see :meth:`step`): the plant pass lags the
+            # command by one scan on replay exactly as it did live, then the drain,
+            # main pass, and post-logic forces hand off through the shared block
+            # arrays (no per-scan reload; see :meth:`_open_block_bracket`).
+            tracked = self._open_block_bracket()
+            ctx.blocks_live = True
+            if self._compiled.pre_step_fn is not None:
+                self._run_kernel_pass(self._compiled.pre_step_fn)
+            self._input_overrides.apply_pre_scan(scan_ctx)
+            self._run_kernel_pass(self._compiled.step_fn)
+            self._input_overrides.apply_post_logic(scan_ctx)
+            ctx.blocks_live = False
+            self._flush_blocks_tracked(tracked)
 
-        for name in self._compiled.edge_tags:
-            if name in self._kernel.tags:
-                self._kernel.prev[name] = self._kernel.tags[name]
+            self._capture_previous_states(
+                effective_dt=effective_dt,
+                normal_dt=normal_dt,
+                ctx=ctx,
+            )
+            self._system_runtime.on_scan_end(scan_ctx)
+            if logical_scans > 1:
+                # The large dt advances timers, but it is not a historical scan
+                # duration and must not inflate the fixed-step diagnostics.
+                for name, value in scan_time_extrema.items():
+                    if value is _MISSING:
+                        self._kernel.tags.pop(name, None)
+                    else:
+                        self._kernel.tags[name] = value
+            self._discover_new_commit_tags()
 
-        self._system_runtime.on_scan_end(scan_ctx)
-        self._discover_new_commit_tags()
-
-        self._kernel.scan_id += 1
-        self._kernel.timestamp += self._dt
+            self._kernel.scan_id += logical_scans
+            self._kernel.timestamp += effective_dt
+        finally:
+            self._dt = normal_dt
+            if logical_scans > 1:
+                # Aggregate dt is an execution device, not part of the recorded
+                # endpoint.  Historical fixed-step scans leave normal dt in
+                # memory, so normalize it before materialization.
+                self._kernel.memory["_dt"] = normal_dt
 
     def _materialize_replay_state(self) -> SystemState:
         """Build SystemState from current kernel state (replay fast path)."""
-        self._capture_previous_states()
         state = SystemState(
             scan_id=self._kernel.scan_id,
             timestamp=self._kernel.timestamp,
@@ -612,13 +648,32 @@ class CompiledPLC:
     def _should_seed_tag(self, name: str) -> bool:
         return name not in self._block_element_names or name in self._materialized_block_tag_names
 
-    def _capture_previous_states(self) -> None:
+    def _capture_previous_states(
+        self,
+        *,
+        effective_dt: float,
+        normal_dt: float,
+        ctx: _KernelRuntimeContext | None = None,
+    ) -> None:
+        """Capture edge memory at the true scan immediately before a landing."""
+        prior_clock_ts = self._kernel.timestamp + effective_dt - normal_dt
         for name in self._compiled.edge_tags:
-            if name in self._kernel.tags:
+            half_period = _CLOCK_HALF_PERIODS.get(name)
+            if half_period is not None and half_period > 0:
+                value = clock_high(prior_clock_ts, half_period)
+            elif name in self._kernel.tags:
                 value = self._kernel.tags[name]
-                self._kernel.prev[name] = value
-                if name not in _DERIVED_TAG_NAMES:
-                    self._kernel.memory[f"_prev:{name}"] = value
+            elif ctx is not None:
+                resolved, resolved_value = self._system_runtime.resolve(
+                    name, cast(ScanContext, ctx)
+                )
+                if not resolved:
+                    continue
+                value = resolved_value
+            else:
+                continue
+            self._kernel.prev[name] = value
+            self._kernel.memory[f"_prev:{name}"] = value
 
     def _committed_tags(self) -> dict[str, Any]:
         return {

@@ -898,7 +898,10 @@ def build_replay_fn(
         # One session spans the whole replay. The channel pen proves whether the
         # incident's source context was preserved; exact rung-firing timelines
         # independently prove whether its recorded causal branch replayed.
-        session = CoastSession(probe, kind="replay")
+        # ReplayStep.scans is the recorded incident's logical window.  Active
+        # hypothesis holds must not reinterpret it as a fresh kernel-work
+        # allowance and coast beyond the evidence being replayed.
+        session = CoastSession(probe, kind="replay", kernel_budget=False)
         # The last coast step IS the incident's eject coast; its receipt is the
         # bump-local verdict ("did the recorded departure reproduce?") the
         # judgment below reads alongside the endpoint snapshot.

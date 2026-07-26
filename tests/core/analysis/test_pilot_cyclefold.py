@@ -8,6 +8,7 @@ import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
 from pyrung.core import system
+from pyrung.core.analysis.pilot._ops import PilotRung, _set_rungs
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
 from pyrung.core.runner import PLC
 
@@ -191,6 +192,36 @@ def _install_oscillator(plc: PLC, tag: str):
 
 
 class TestCycleFoldBitEqual:
+    def test_recorded_window_can_budget_logical_scans_with_active_holds(self) -> None:
+        Held = Bool("LogicalBudgetHeld", external=True)
+        Mirror = Bool("LogicalBudgetMirror")
+        Soak = Timer.clone("LogicalBudgetSoak")
+        with Program() as program:
+            with Rung(Held):
+                out(Mirror)
+            with Rung():
+                on_delay(Soak, 50_000, "ms")
+
+        replay = PLC(program)
+        replay.step()
+        _set_rungs(replay, (PilotRung(Held.name, True, ~Soak.Done),))
+        start_scan = replay.state.scan_id
+        stats: dict[str, int] = {}
+
+        reached = cycle_fold_until(
+            replay,
+            lambda _state: False,
+            budget=100,
+            kernel_budget=False,
+            stats=stats,
+        )
+
+        assert reached is False
+        assert replay.state.scan_id - start_scan == 100
+        assert stats["logical_scans"] == 100
+        assert stats["kernel_scans"] < 20
+        assert stats["ordinary_folds"] >= 1
+
     def test_ordinary_plateau_fold_is_layered_ahead_of_cycle_detection(self) -> None:
         Soak = Timer.clone("LayeredSoak")
         Done = Bool("LayeredDone")

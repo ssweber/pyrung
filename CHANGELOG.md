@@ -115,6 +115,7 @@
 - Recompiled PackML replay kernels stay at ≈0.035 ms/scan instead of regressing to ≈0.49 ms/scan, and full state-materializing `CompiledPLC` scans drop from ≈0.49 to 0.16 ms/scan.
 - `cause()` attribution and `how()` planning no longer stall on cold-start over dense state machines: forks reuse the parent index and results are memoized per `(tag, scan)`.
 - `cause()` over long folded histories ≈3× faster: replay slabs reach the folded scan directly via compiled replay instead of an interpreted run-up.
+- Corrective-candidate replay now folds inside the recorded logical evidence window instead of treating folded scans as extra search allowance; the tumbler's 1,031-scan watchdog candidates execute 331 kernels and fall from as much as 19.3 s to about 2.0 s.
 - Compiled replay — the state reconstruction behind `cause()`/`how()` — steps ≈2.5× faster (9.2 → 3.7 ms/scan on BurnerLoop): each scan updates the previous tag/memory maps in place via structural sharing instead of rebuilding them from scratch, and the plant and main passes now share a single block load/flush instead of one each.
 - Recorded `cause()` derives input transitions from `ScanLog` on demand, dropping the duplicate input log.
 - Verifier context (`always()`/`never()`/`reachable_states()`) builds faster — domain fixpoint runs once, PDG queries memoized.

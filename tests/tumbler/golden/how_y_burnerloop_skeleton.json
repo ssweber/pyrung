@@ -2376,22 +2376,6 @@
    "hypotheses": 2,
    "hypothesis_detail": [
     {
-     "detail": "reset Rotate_SensorOffWD_tmr_Done: x_RotateSensor=True until Eq(tag='x_RotateSensor', values=frozenset({True}))",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_RotateSensor",
-       "guard": "And(~Rotate_SensorOffWD_tmr.Done, ~x_RotateSensor)",
-       "value": true
-      }
-     ],
-     "kind": "liveness",
-     "sources": [
-      "Rotate_SensorOffWD_tmr_Done",
-      "x_RotateSensor"
-     ]
-    },
-    {
      "detail": "reset A_TimeBetween1stScan_tmr_Done: Test_Simulate_1st_Scan=True until Eq(tag='Test_Simulate_1st_Scan', values=frozenset({True}))",
      "holds": [
       {
@@ -2406,10 +2390,45 @@
       "A_TimeBetween1stScan_tmr_Done",
       "Test_Simulate_1st_Scan"
      ]
+    },
+    {
+     "detail": "reset Rotate_SensorOffWD_tmr_Done: x_RotateSensor=True until Eq(tag='x_RotateSensor', values=frozenset({True}))",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "x_RotateSensor",
+       "guard": "And(~Rotate_SensorOffWD_tmr.Done, ~x_RotateSensor)",
+       "value": true
+      }
+     ],
+     "kind": "liveness",
+     "sources": [
+      "Rotate_SensorOffWD_tmr_Done",
+      "x_RotateSensor"
+     ]
     }
    ],
-   "rejected": 0,
-   "rejected_detail": [],
+   "rejected": 1,
+   "rejected_detail": [
+    {
+     "detail": "reset A_TimeBetween1stScan_tmr_Done: Test_Simulate_1st_Scan=True until Eq(tag='Test_Simulate_1st_Scan', values=frozenset({True}))",
+     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
+     "holds": [
+      {
+       "__type__": "PilotRung",
+       "dest": "Test_Simulate_1st_Scan",
+       "guard": "And(~A_TimeBetween1stScan_tmr.Done, ~Test_Simulate_1st_Scan)",
+       "value": true
+      }
+     ],
+     "kind": "liveness",
+     "slug": "exploratory-replay-failed",
+     "sources": [
+      "A_TimeBetween1stScan_tmr_Done",
+      "Test_Simulate_1st_Scan"
+     ]
+    }
+   ],
    "unresolved": []
   },
   "kind": "trend_regression",
@@ -2900,7 +2919,60 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
+    "accelerators": [
+     [
+      "A_ModeTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "A_ModeTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "A_StateTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "A_StateTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "Blower_CurStep_tmr.Acc",
+      3
+     ],
+     [
+      "Blower_tmr.Acc",
+      3
+     ],
+     [
+      "Rotate_CurStep_tmr.Acc",
+      3
+     ],
+     [
+      "Rotate_CurStep_tmr.Acc",
+      4
+     ],
+     [
+      "Rotate_SensorOffWD_tmr.Acc",
+      4
+     ],
+     [
+      "Rotate_tmr.Acc",
+      3
+     ],
+     [
+      "Rotate_tmr.Acc",
+      8
+     ],
+     [
+      "_1stScanDebounce_tmr.Acc",
+      4
+     ],
+     [
+      "_1stScanDebounce_tmr.Acc",
+      9
+     ]
+    ],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",
@@ -2975,7 +3047,44 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [],
+    "accelerators": [
+     [
+      "A_CTmr_Prd_Execute.Acc",
+      0
+     ],
+     [
+      "A_ModeTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "A_StateTimeCurrent_tmr.Acc",
+      0
+     ],
+     [
+      "A_TimeBetween1stScan_tmr.Acc",
+      9
+     ],
+     [
+      "Blower_CurStep_tmr.Acc",
+      9
+     ],
+     [
+      "Blower_tmr.Acc",
+      13
+     ],
+     [
+      "HeatDelay_Tmr.Acc",
+      9
+     ],
+     [
+      "Rotate_CurStep_tmr.Acc",
+      14
+     ],
+     [
+      "Rotate_tmr.Acc",
+      18
+     ]
+    ],
     "inputs": [],
     "kind": "coast",
     "label": "HeatDelay_Tmr_Done",

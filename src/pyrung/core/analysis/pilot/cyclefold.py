@@ -103,7 +103,7 @@ def _replay_timed_quanta(
     """
     if ticks <= 0:
         return whole, fraction
-    if fraction == 0.0 and quantum.is_integer():
+    if fraction == 0.0 and float(quantum).is_integer():
         return whole + int(quantum) * ticks, 0.0
     for _ in range(ticks):
         units = quantum + fraction
@@ -299,6 +299,7 @@ def cycle_fold_until(
     predicate: Callable[[SystemState], bool],
     *,
     budget: int,
+    kernel_budget: bool | None = None,
     fold_ctx: _FoldContext | None = None,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     max_period: int = 64,
@@ -320,10 +321,11 @@ def cycle_fold_until(
     and each monotone accumulator's invariant ``acc == rate·(scan_id − start)`` is
     preserved because the patch and the scan_id stamp advance in lockstep.
 
-    With active synthesis holds, *budget* counts kernel scans: a long proved
-    coast may advance far more logical scan IDs without exhausting Pilot's
-    work budget.  Without active holds it counts logical scans, matching
-    ordinary ``run_until(max_cycles=...)`` and confirmation-window policy.
+    By default, active synthesis holds make *budget* count kernel scans: a long
+    proved live coast may advance farther logically without exhausting PILOT's
+    work budget.  ``kernel_budget=False`` gives recorded counterfactual replay
+    an exact logical window instead; its budget is historical evidence, not a
+    live search allowance.
     Returns whether
     *predicate* holds at exit; ``stats`` (if given) collects logical scans,
     kernel scans, macro folds, skipped scans, and ``sterile_cycle`` for
@@ -456,7 +458,8 @@ def cycle_fold_until(
         for registration in getattr(plc, "_monitors_by_id", {}).values()
     )
     ordinary_eligible = not active_scan_callbacks
-    kernel_budget = bool(plc._synthesis is not None and getattr(plc._synthesis, "holds", ()))
+    if kernel_budget is None:
+        kernel_budget = bool(plc._synthesis is not None and getattr(plc._synthesis, "holds", ()))
     start_scan = plc.state.scan_id
 
     def _finish(reached: bool) -> bool:

@@ -1504,23 +1504,14 @@ def _mark_inert_soft(
             inert_soft.add(name)
 
 
-def _do_fold(
-    runner: PLC,
+def _fold_patches(
+    state: SystemState,
     skip: int,
     ctx: _FoldContext,
     before_tot: dict[str, float],
     after_tot: dict[str, float],
-) -> None:
-    """Fold ``skip`` pure-accumulation scans into one real step.
-
-    Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
-    one step); per-scan counters can't be moved by time, so their accumulators
-    are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
-    supplies the final increment, keeping every source in phase.
-
-    Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
-    retains control over pause consumption.
-    """
+) -> dict[str, int]:
+    """Return the non-time projections needed before a macro landing scan."""
     patches: dict[str, int] = {}
 
     for src in ctx.sources:
@@ -1538,15 +1529,36 @@ def _do_fold(
         raw_delta = int(round(prog_delta if src.kind == "up" else -prog_delta))
         if raw_delta == 0:
             continue
-        raw_acc = int(runner.state.tags.get(src.acc_name, 0) or 0)
+        raw_acc = int(state.tags.get(src.acc_name, 0) or 0)
         patches[src.acc_name] = raw_acc + (skip - 1) * raw_delta
 
     for mw in ctx.modwrap:
-        raw = runner.state.tags.get(mw.name, 0)
+        raw = state.tags.get(mw.name, 0)
         if isinstance(raw, bool) or not isinstance(raw, int):
             continue
         patches[mw.name] = (raw + (skip - 1) * mw.c) % mw.m
 
+    return patches
+
+
+def _do_fold(
+    runner: PLC,
+    skip: int,
+    ctx: _FoldContext,
+    before_tot: dict[str, float],
+    after_tot: dict[str, float],
+) -> None:
+    """Fold ``skip`` pure-accumulation scans into one real step.
+
+    Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
+    one step); per-scan counters can't be moved by time, so their accumulators
+    are patched forward by ``(skip-1)*delta`` and the step's own ``execute``
+    supplies the final increment, keeping every source in phase.
+
+    Uses ``_run_single_scan(consume_pause_request=False)`` so the caller
+    retains control over pause consumption.
+    """
+    patches = _fold_patches(runner.state, skip, ctx, before_tot, after_tot)
     if patches:
         runner.patch(patches)
 
@@ -1571,6 +1583,22 @@ class _FoldAdvance:
 
     logical_scans: int
     kernel_scans: int = 1
+
+
+@dataclass(frozen=True)
+class _FoldPlan:
+    """A certified ordinary-fold landing, independent of its executor.
+
+    The proof needs the states on either side of one genuine probe scan.  It
+    does not need to know whether the eventual macro step is interpreted or
+    compiled.  Keeping the plan separate lets historical replay use the same
+    crossing, clock, and plateau proof without constructing a second history.
+    """
+
+    skip: int
+    after_totals: dict[str, float]
+    promoted: frozenset[str]
+    pre_fold_timestamp: float
 
 
 class _OrdinaryFoldStrategy:
@@ -1608,11 +1636,111 @@ class _OrdinaryFoldStrategy:
         affine views, and proven unobservable/frozen writes). Everything else
         is the plateau guard: one changed value declines the fold.
         """
+        return self.capture_state(runner._state)
+
+    def capture_state(self, state: SystemState) -> _FoldProbe:
+        """Capture a probe from a state-only executor such as compiled replay."""
         return _FoldProbe(
-            totals=_acc_totals(runner._state, self.ctx.sources),
-            visible=_visible_items(runner._state, self.exclude),
-            timestamp=runner._state.timestamp,
+            totals=_acc_totals(state, self.ctx.sources),
+            visible=_visible_items(state, self.exclude),
+            timestamp=state.timestamp,
         )
+
+    def plan(
+        self,
+        state: SystemState,
+        probe: _FoldProbe,
+        *,
+        max_skip: int | None = None,
+        min_skip: int = 1,
+        harness_scan: int | None = None,
+        endpoint_is_boundary: bool = False,
+    ) -> _FoldPlan | None:
+        """Certify a macro landing after a completed probe scan.
+
+        Replay may set ``endpoint_is_boundary`` when ``max_skip`` denotes one
+        exact requested state or the scan immediately preceding a recorded
+        input event.  Live run loops leave it false: their budget is not a
+        semantic program boundary, and preserving their established cadence
+        matters to PILOT's bounded correction lifecycle.
+        """
+        if not _visible_items_match(state, probe.visible, self.exclude):
+            self.inert_soft.clear()
+            self.inert_run.clear()
+            return None
+
+        promoted = _runtime_soft_clocks(self.ctx, state)
+        _mark_inert_soft(
+            self.ctx,
+            self.inert_soft,
+            self.inert_run,
+            probe.timestamp,
+            state.timestamp,
+            promoted,
+        )
+        after_totals = _acc_totals(state, self.ctx.sources)
+        acc_scans = _nearest_acc_crossing(
+            self.ctx,
+            probe.totals,
+            after_totals,
+            state,
+            self.extra_comparisons,
+        )
+        mod_scans = _nearest_mod_flip(
+            self.ctx,
+            state,
+            self.extra_comparisons,
+        )
+        candidates = [n for n in (acc_scans, mod_scans) if n is not None]
+        skip = min(candidates) - 1 if candidates else None
+
+        if harness_scan is not None:
+            gap = harness_scan - state.scan_id - 1
+            if gap >= 0:
+                skip = min(skip, gap) if skip is not None else gap
+
+        clock_gap = _scans_to_clock_edge(
+            self.ctx,
+            state,
+            frozenset(self.inert_soft),
+            promoted,
+        )
+        if clock_gap is not None:
+            skip = min(skip, clock_gap) if skip is not None else clock_gap
+        if max_skip is not None:
+            if skip is not None:
+                skip = min(skip, max_skip)
+            elif endpoint_is_boundary:
+                skip = max_skip
+        if skip is None or skip < min_skip:
+            return None
+        return _FoldPlan(
+            skip=skip,
+            after_totals=after_totals,
+            promoted=promoted,
+            pre_fold_timestamp=state.timestamp,
+        )
+
+    def finish(
+        self,
+        state: SystemState,
+        probe: _FoldProbe,
+        plan: _FoldPlan,
+    ) -> _FoldAdvance:
+        """Update window-local clock evidence after an executor lands *plan*."""
+        if _visible_items_match(state, probe.visible, self.exclude):
+            _mark_inert_soft(
+                self.ctx,
+                self.inert_soft,
+                self.inert_run,
+                plan.pre_fold_timestamp,
+                state.timestamp,
+                plan.promoted,
+            )
+        else:
+            self.inert_soft.clear()
+            self.inert_run.clear()
+        return _FoldAdvance(logical_scans=plan.skip)
 
     def try_fold(
         self,
@@ -1623,85 +1751,18 @@ class _OrdinaryFoldStrategy:
         min_skip: int = 1,
     ) -> _FoldAdvance | None:
         """Fold after a completed probe, or return ``None`` if proof declines."""
-        # Observe-before-skip: the caller has executed one genuine scan.  A
-        # visible change means the current regime is not a pure accumulation
-        # plateau, so discard soft-clock evidence gathered in the old window.
-        if not _visible_items_match(runner._state, probe.visible, self.exclude):
-            self.inert_soft.clear()
-            self.inert_run.clear()
-            return None
-
-        # Saturation-rescuable clocks become soft only in the current state.
-        # A clock is marked inert after both polarities have crossed without a
-        # visible effect; one quiet edge cannot prove the opposite edge quiet.
-        promoted = _runtime_soft_clocks(self.ctx, runner._state)
-        _mark_inert_soft(
-            self.ctx,
-            self.inert_soft,
-            self.inert_run,
-            probe.timestamp,
-            runner._state.timestamp,
-            promoted,
-        )
-        after_totals = _acc_totals(runner._state, self.ctx.sources)
-        acc_scans = _nearest_acc_crossing(
-            self.ctx,
-            probe.totals,
-            after_totals,
-            runner._state,
-            self.extra_comparisons,
-        )
-        mod_scans = _nearest_mod_flip(
-            self.ctx,
-            runner._state,
-            self.extra_comparisons,
-        )
-        candidates = [n for n in (acc_scans, mod_scans) if n is not None]
-        skip = min(candidates) - 1 if candidates else None
-
-        # Scheduled harness feedback is an external regime boundary.  The fold
-        # may land immediately before it, never jump across it.
         harness_scan = _harness_nearest_scan(runner)
-        if harness_scan is not None:
-            gap = harness_scan - runner._state.scan_id - 1
-            if gap >= 0:
-                skip = min(skip, gap) if skip is not None else gap
-
-        # Every read clock that has not proved inert is likewise a boundary:
-        # land on its next edge so rise()/fall() memory remains scan-exact.
-        clock_gap = _scans_to_clock_edge(
-            self.ctx,
+        plan = self.plan(
             runner._state,
-            frozenset(self.inert_soft),
-            promoted,
+            probe,
+            max_skip=max_skip,
+            min_skip=min_skip,
+            harness_scan=harness_scan,
         )
-        if clock_gap is not None:
-            skip = min(skip, clock_gap) if skip is not None else clock_gap
-        if skip is None:
+        if plan is None:
             return None
-        if max_skip is not None:
-            skip = min(skip, max_skip)
-        if skip < min_skip:
-            return None
-
-        # _do_fold executes the landing scan for real.  Recheck the visible
-        # surface afterward: a crossing that changed the regime clears the
-        # accumulated inert-clock proof; a quiet edge extends it.
-        pre_fold_timestamp = runner._state.timestamp
-        _do_fold(runner, skip, self.ctx, probe.totals, after_totals)
-        if _visible_items_match(runner._state, probe.visible, self.exclude):
-            _mark_inert_soft(
-                self.ctx,
-                self.inert_soft,
-                self.inert_run,
-                pre_fold_timestamp,
-                runner._state.timestamp,
-                promoted,
-            )
-        else:
-            self.inert_soft.clear()
-            self.inert_run.clear()
-        return _FoldAdvance(logical_scans=skip)
+        _do_fold(runner, plan.skip, self.ctx, probe.totals, plan.after_totals)
+        return self.finish(runner._state, probe, plan)
 
 
 # ── 13. Runner integration ──────────────────────────────────────────

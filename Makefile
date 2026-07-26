@@ -22,6 +22,7 @@ test-prove:
 
 test-pilot:
 	uv run pytest tests/core/analysis/ -k "pilot" -q
+	uv run pytest tests/tumbler/ -q
 
 test-tumbler:
 	uv run pytest tests/tumbler/ -q
