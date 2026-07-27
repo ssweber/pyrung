@@ -63,6 +63,7 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     CorrectionStatus,
     DepartureAction,
     DepartureBasis,
@@ -70,6 +71,8 @@ from pyrung.core.analysis.pilot.types import (
     MotionKind,
     PendingDeparture,
     PilotEvent,
+    TargetReached,
+    _AcceptedTrial,
     _ActionPair,
     _Checkpoint,
     _CheckpointOwner,
@@ -80,7 +83,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _RecoveryOrigin,
-    _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -113,17 +115,18 @@ def _refresh_checkpoint(existing: _Checkpoint, receipt: _Checkpoint) -> _Checkpo
 
 
 def _trial_checkpoint(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     state: _PilotState,
     *,
     trend: int | None = None,
 ) -> _Checkpoint:
     """Snapshot one accepted trial using its owned target objective."""
-    assert trial.new_key is not None
-    resolved_trend = trial.trend if trend is None else trend
-    assert resolved_trend is not None
+    verified = trial.verification
+    if not isinstance(verified, AssessedMotion):
+        raise ValueError("target acceptance has no trend checkpoint")
+    resolved_trend = verified.trend if trend is None else trend
     return _Checkpoint(
-        trial.new_key,
+        verified.new_key,
         state.snapshot_world(),
         resolved_trend,
         trial.bearing_objective,
@@ -164,7 +167,7 @@ def _checkpoint_recovery_origin(
 
 def _channel_recovery_origin(
     state: _PilotState,
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     channel_tag: str,
     channel_value: Any,
@@ -207,7 +210,7 @@ def _channel_recovery_origin(
 
 
 def _monitor_trend(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -231,7 +234,8 @@ def _monitor_trend(
             yield from applied
             return
 
-    if trial.new_key is None or trial.trend is None:
+    verified = trial.verification
+    if isinstance(verified, TargetReached):
         return
 
     assert state.best_trend is not None
@@ -241,13 +245,13 @@ def _monitor_trend(
     # checkpoint and high-water mark alive: if the new world keeps drifting
     # away, the next verify pass should revert to the pre-frontier checkpoint
     # and chase the PLC-side cause.
-    if trial.outcome == Outcome.FRONTIER:
+    if verified.outcome == Outcome.FRONTIER:
         yield PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
             {
-                "trend": trial.trend,
-                "key": trial.new_key,
+                "trend": verified.trend,
+                "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
                 "frontier": True,
                 "baseline_trend": state.best_trend,
@@ -329,9 +333,7 @@ def _monitor_trend(
         )
         if verdict.can_continue:
             prescribed_departure = (
-                trial.route_prescribed
-                and trial.assessment is not None
-                and trial.assessment.agency is Agency.PILOT
+                trial.route_prescribed and verified.assessment.agency is Agency.PILOT
             )
             if (
                 verdict.progress.movement is GaugeMovement.UNCHANGED
@@ -413,17 +415,17 @@ def _monitor_trend(
     # progress banks a checkpoint; if later motion ejects into Alarm,
     # investigation must replay the action itself so it can discover the
     # missing hold and retry from the corrected PilotRungs world.
-    if _bearing_satisfied(trial) and trial.trend > state.best_trend:
+    if _bearing_satisfied(trial) and verified.trend > state.best_trend:
         assert trial.channel_motion.channel_tag is not None
         channel_tag = trial.channel_motion.channel_tag
         previous = state.best_trend
-        state.best_trend = trial.trend
+        state.best_trend = verified.trend
         yield PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
             {
-                "trend": trial.trend,
-                "key": trial.new_key,
+                "trend": verified.trend,
+                "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
                 "channel": channel_tag,
                 "channel_value": trial.fork_snap.get(channel_tag),
@@ -433,7 +435,7 @@ def _monitor_trend(
         )
         return
 
-    if trial.trend < state.best_trend:
+    if verified.trend < state.best_trend:
         if state.pending_departure is not None:
             # Trace distance says this reading exposes fewer open leaves. That
             # is useful locally, but it is not a receipt for program work and
@@ -441,27 +443,27 @@ def _monitor_trend(
             # checkpoint so piloting can continue; Gauge alone decides whether
             # the departed corridor earned anything durable.
             state.checkpoints.append(_trial_checkpoint(trial, state))
-            state.best_trend = trial.trend
+            state.best_trend = verified.trend
             yield PilotEvent(
                 "trend_checkpoint",
                 state.work.state.scan_id,
                 {
                     "trend": state.best_trend,
-                    "key": trial.new_key,
+                    "key": verified.new_key,
                     "checkpoint_count": len(state.checkpoints),
                     "provisional": True,
                 },
             )
             return
         state.checkpoints.append(_trial_checkpoint(trial, state))
-        state.best_trend = trial.trend
+        state.best_trend = verified.trend
         promoted_corrections = _promote_probationary_corrections(state)
         checkpoint_event = PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
             {
                 "trend": state.best_trend,
-                "key": trial.new_key,
+                "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
                 "promoted_corrections": promoted_corrections,
             },
@@ -469,21 +471,21 @@ def _monitor_trend(
         yield checkpoint_event
         return
 
-    if trial.trend == state.best_trend and trial.outcome == Outcome.CONFIRMED:
+    if verified.trend == state.best_trend and verified.outcome == Outcome.CONFIRMED:
         state.checkpoints.append(_trial_checkpoint(trial, state))
         yield PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
             {
                 "trend": state.best_trend,
-                "key": trial.new_key,
+                "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
                 "flat": True,
             },
         )
         return
 
-    if trial.trend <= state.best_trend or not state.checkpoints:
+    if verified.trend <= state.best_trend or not state.checkpoints:
         return
 
     origin = _checkpoint_recovery_origin(state, before_snap=frame.snap)
@@ -498,7 +500,7 @@ def _monitor_trend(
     )
 
 
-def _bearing_satisfied(trial: _TrialResult) -> bool:
+def _bearing_satisfied(trial: _AcceptedTrial) -> bool:
     """Whether trial verification proved the requested channel value."""
     return trial.channel_motion.reached
 
@@ -528,7 +530,7 @@ def _anchor_frame_receipt(
 
 
 def _anchor_bearing_receipt(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
 ) -> None:
@@ -548,7 +550,7 @@ def _anchor_bearing_receipt(
 
 def _open_pending_departure(
     verdict: DepartureVerdict,
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     state: _PilotState,
     ctx: _PilotContext,
     chan: str,
@@ -618,7 +620,7 @@ def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> i
     return scan_before
 
 
-def _bank_pending_landing(trial: _TrialResult, state: _PilotState) -> None:
+def _bank_pending_landing(trial: _AcceptedTrial, state: _PilotState) -> None:
     """Keep a local recovery receipt inside an existing pending departure.
 
     Retaining an investigated departure is not evidence of earned target
@@ -627,10 +629,11 @@ def _bank_pending_landing(trial: _TrialResult, state: _PilotState) -> None:
     the next recomputed operation. Promotion or expiry restores the exact
     checkpoint receipts owned by ``PendingDeparture``.
     """
-    if trial.new_key is None or trial.trend is None:
+    verified = trial.verification
+    if isinstance(verified, TargetReached):
         return
     receipt = _trial_checkpoint(trial, state)
-    if state.checkpoints and state.checkpoints[-1].key == trial.new_key:
+    if state.checkpoints and state.checkpoints[-1].key == verified.new_key:
         state.checkpoints[-1] = _refresh_checkpoint(state.checkpoints[-1], receipt)
     else:
         state.checkpoints.append(receipt)
@@ -696,7 +699,7 @@ def _record_pending_landing(
 
 
 def _assess_pending_departure(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> DepartureDecision:
@@ -725,11 +728,12 @@ def _assess_pending_departure(
     # into a worse target-relative world (for example, a recipe step increments
     # while an unsafe Unhold enters Aborted). Trial attribution is the narrower
     # causal fact and must win over that incidental ordinal movement.
+    verified = trial.verification
     if (
-        trial.assessment is not None
-        and trial.assessment.agency is Agency.PILOT
-        and trial.assessment.bearing is BearingEffect.DEPARTED
-        and trial.assessment.progress is ProgressEffect.BEHIND
+        isinstance(verified, AssessedMotion)
+        and verified.assessment.agency is Agency.PILOT
+        and verified.assessment.bearing is BearingEffect.DEPARTED
+        and verified.assessment.progress is ProgressEffect.BEHIND
     ):
         caused_regression = True
     else:
@@ -760,7 +764,7 @@ def _departure_event_outcome(decision: DepartureDecision) -> str:
 
 def _apply_departure_decision(
     decision: DepartureDecision,
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -780,8 +784,9 @@ def _apply_departure_decision(
     state.pending_departure = None
     if decision.action is DepartureAction.PROMOTE:
         del state.checkpoints[rollback_index + 1 :]
-        promoted_trend = trial.trend if trial.trend is not None else 0
-        if trial.new_key is not None:
+        verified = trial.verification
+        promoted_trend = verified.trend if isinstance(verified, AssessedMotion) else 0
+        if isinstance(verified, AssessedMotion):
             state.checkpoints.append(_trial_checkpoint(trial, state, trend=promoted_trend))
         state.best_trend = promoted_trend
         promoted_corrections = _promote_probationary_corrections(state)
@@ -799,7 +804,7 @@ def _apply_departure_decision(
                         "outcome": _departure_event_outcome(decision),
                         "trend": promoted_trend,
                         "checkpoint_count": len(state.checkpoints),
-                        "terminal": trial.new_key is None,
+                        "terminal": isinstance(verified, TargetReached),
                         "promoted_corrections": promoted_corrections,
                     },
                 ),
@@ -1101,7 +1106,7 @@ def _revoke_corrections(
 
 
 def _investigate_and_revert(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -1118,6 +1123,9 @@ def _investigate_and_revert(
     ejection may anchor at the coast start. The origin owns that distinction;
     recovery derives the end from the committed world it is about to revert.
     """
+    verified = trial.verification
+    if not isinstance(verified, AssessedMotion):
+        raise ValueError("target acceptance cannot enter regression investigation")
     checkpoint_index = _checkpoint_index(state, origin.checkpoint_owner)
     checkpoint = state.checkpoints[checkpoint_index]
     cp_key, cp_world, cp_trend = checkpoint.key, checkpoint.world, checkpoint.trend
@@ -1380,7 +1388,7 @@ def _investigate_and_revert(
             "trend_regression",
             state.work.state.scan_id,
             {
-                "from_trend": trial.trend,
+                "from_trend": verified.trend,
                 "to_trend": cp_trend,
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),

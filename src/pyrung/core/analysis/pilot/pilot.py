@@ -90,7 +90,9 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
 )
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     PilotEvent,
+    _AcceptedTrial,
     _ActionPair,
     _Checkpoint,
     _CommittedAct,
@@ -99,7 +101,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotState,
     _Step,
     _StepContext,
-    _TrialResult,
     _World,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -577,7 +578,7 @@ def _record_attempt(
 
 
 def _step_context(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
 ) -> _StepContext:
@@ -617,7 +618,7 @@ def _step_context(
 
 
 def _commit_and_monitor(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
@@ -637,11 +638,15 @@ def _commit_and_monitor(
     # Knowledge handling may have installed an excursion correction after verification built the
     # trial.  The accepted world key must describe that effective rung overlay,
     # not the pre-correction one used by the diagnostic fork.
-    if trial.new_key is not None:
+    verified = trial.verification
+    if isinstance(verified, AssessedMotion):
         assert state.key_config is not None
         trial = replace(
             trial,
-            new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
+            verification=replace(
+                verified,
+                new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
+            ),
         )
     _commit_trial(trial, frame, state, ctx)
     yield PilotEvent(
@@ -658,14 +663,15 @@ def _commit_and_monitor(
 
 
 def _commit_trial(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
-    key_was_seen = trial.new_key is not None and trial.new_key in state.seen_keys
-    if trial.new_key is not None:
-        state.seen_keys.add(trial.new_key)
+    verified = trial.verification
+    key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
+    if isinstance(verified, AssessedMotion):
+        state.seen_keys.add(verified.new_key)
     # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
     # narrow ``trial.candidate``.  Replay and live apply must reproduce every input

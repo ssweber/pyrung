@@ -23,15 +23,16 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.outcome import Outcome
 from pyrung.core.analysis.pilot.trace import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     PilotEvent,
     TagChange,
+    _AcceptedTrial,
     _AttemptResult,
     _IterationFrame,
     _PilotContext,
     _PilotState,
     _RecoveryOrigin,
     _StepContext,
-    _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.validation.render import operand_name
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
 
 
 def _investigation_started_event(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     origin: _RecoveryOrigin,
 ) -> PilotEvent:
     """Announce expensive causal replay before it starts."""
@@ -66,7 +67,7 @@ def _investigation_started_event(
 
 def _channel_transitions(
     ctx: _PilotContext,
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     checkpoint_fork: Any,
     regressed_snap: Any,
 ) -> tuple[tuple[str, Any, Any], ...]:
@@ -516,15 +517,17 @@ def _diff_snapshots(
     return tuple(changes)
 
 
-def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
+def _zoom_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
     """Render a ``zoom_accepted`` event payload."""
     motion = trial.channel_motion
     receipt = trial.coast_receipt
+    verified = trial.verification
+    assessed = verified if isinstance(verified, AssessedMotion) else None
     landed = trial.fork_snap.get(motion.channel_tag) if motion.channel_tag is not None else None
     return {
-        "new_key": trial.new_key,
-        "trend": trial.trend,
-        "outcome": trial.outcome.value if trial.outcome else None,
+        "new_key": assessed.new_key if assessed is not None else None,
+        "trend": assessed.trend if assessed is not None else None,
+        "outcome": assessed.outcome.value if assessed is not None else None,
         "observe_label": trial.observe_label,
         "zoom_channel_tag": motion.channel_tag,
         "zoom_before_value": (
@@ -533,7 +536,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
         "zoom_target_value": motion.target_value,
         "zoom_actual_value": landed,
         "bearing_stop_reason": motion.stop_reason,
-        "ejected": trial.outcome == Outcome.AMBIENT_DRIFT,
+        "ejected": assessed is not None and assessed.outcome is Outcome.AMBIENT_DRIFT,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
         "coast_logical_scans": receipt.logical_scans if receipt is not None else None,
@@ -549,10 +552,12 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
 
 def _accepted_payload(
     policy: ActPolicy,
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
 ) -> dict[str, Any]:
+    verified = trial.verification
+    assessed = verified if isinstance(verified, AssessedMotion) else None
     watched_tags = set(state.watch_tags)
     action_tags = {tag for tag, _value in trial.applied}
     target_relevant = set(frame.tree.pivot_tags()) | action_tags
@@ -578,9 +583,9 @@ def _accepted_payload(
         "accepted_because": {
             "gate_events": trial.gate_events,
             "trend_before": frame.distance_before,
-            "trend_after": trial.trend,
-            "state_key_changed": trial.new_key is not None and trial.new_key != frame.key,
-            "novel_key": trial.new_key is not None and trial.new_key not in state.seen_keys,
+            "trend_after": assessed.trend if assessed is not None else None,
+            "state_key_changed": (assessed is not None and assessed.new_key != frame.key),
+            "novel_key": (assessed is not None and assessed.new_key not in state.seen_keys),
             "target_reached": _values_match(
                 trial.fork_snap.get(frame.tree.tag),
                 frame.tree.value,
@@ -592,8 +597,8 @@ def _accepted_payload(
             "post_pulse": trial.post_pulse_snap,
             "after_settle": trial.fork_snap,
         },
-        "new_key": trial.new_key,
-        "trend": trial.trend,
+        "new_key": assessed.new_key if assessed is not None else None,
+        "trend": assessed.trend if assessed is not None else None,
         "snapshot": trial.fork_snap,
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
@@ -609,7 +614,7 @@ def _act_event(
     prerequisites: tuple[Any, ...] = (),
     target_tag: str | None = None,
     attempt: _AttemptResult | None = None,
-    trial: _TrialResult | None = None,
+    trial: _AcceptedTrial | None = None,
     frame: _IterationFrame | None = None,
     state: _PilotState | None = None,
 ) -> PilotEvent | None:
@@ -687,6 +692,8 @@ def _act_event(
             {"actions": act.actions, "gates": attempt.gate_events},
         )
     assert trial is not None
+    verified = trial.verification
+    assessed = verified if isinstance(verified, AssessedMotion) else None
     return PilotEvent(
         f"{label}_accepted",
         scan,
@@ -694,8 +701,8 @@ def _act_event(
             "candidate": trial.candidate,
             "applied": trial.applied,
             "gates": trial.gate_events,
-            "new_key": trial.new_key,
-            "trend": trial.trend,
+            "new_key": assessed.new_key if assessed is not None else None,
+            "trend": assessed.trend if assessed is not None else None,
             "snapshot": trial.fork_snap,
             "scan_before": trial.scan_before,
             "scan_after": trial.fork.state.scan_id,

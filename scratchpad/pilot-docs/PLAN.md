@@ -106,48 +106,10 @@ its meaning.
 
 This is the main cleanup program. Items are ordered by leverage.
 
-### B4. Replace `_TrialResult`'s flattened optional fields with verification variants
-
-**Current dehydration chain**
-
-The original `Bearing` + physical `_PulseState` become `_ExecutedAttempt`;
-`verify._trial_result` copies their fields into `_TrialResult`; ordinary acceptance then `replace()`s
-`new_key`, `trend`, `outcome`, and `assessment`.
-
-Target acceptance intentionally lacks those four fields, while ordinary accepted
-motion requires them. One dataclass expresses both states with optionals, and
-`progress.py` repeatedly checks for `None`. `outcome` is also stored beside the
-`TrialAssessment` from which it is derived.
-
-**Required shape**
-
-- Preserve the executed-attempt object inside the accepted receipt instead of
-  copying its objective, action artifact, labels, motion, coast receipt, timeline,
-  and causal policy field by field.
-- Represent target acceptance and assessed-motion acceptance as explicit typed
-  variants, or give both a required verification receipt with distinct variants.
-- Make legacy `Outcome` a property of `TrialAssessment`; never store both.
-- Type `CoastReceipt` and `BumpEvent` at the trial seam instead of `Any`.
-- `progress`, `recording`, and commit code consume the verification object and
-  properties. They do not reconstruct its interpretation from snapshots.
-
-**Why**
-
-An accepted trial is the central package receipt. Making its variants explicit
-removes a large class of "field happens to be None on this path" reasoning.
-
-**LOC:** roughly -40 to -90.
-
-**Risk:** high because the receipt crosses verify, pilot, recording, progress, and
-investigation. Land after B3 so it composes stable objects.
-
-**Gate:** all verify/outcome/progress/recording tests, departure tests, then full
-pilot and Tumbler.
-
 ### B5. Let committed operation context embed execution evidence instead of rebuilding it
 
 `pilot._step_context` currently reconstructs a durable operation record from
-`_TrialResult`, `_IterationFrame`, and `_PilotState`: frontier tags, control rungs,
+`_AcceptedTrial`, `_IterationFrame`, and `_PilotState`: frontier tags, control rungs,
 channel heading, before/after snapshots, timeline, and coast accelerators.
 
 Some facts are commit-owned (`control_rungs`); others already belong to the
@@ -558,7 +520,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Trial evidence continuity:** B4, then B5.
+1. **Trial evidence continuity:** B5.
 2. **Shared decisions:** C1 and C2.
 3. **Control flow:** D1/D2/D3.
 4. **Recovery continuity:** B6, then D4.

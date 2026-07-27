@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
+from pyrung.core.analysis.pilot.coast import BumpEvent
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import (
@@ -38,8 +39,10 @@ from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, U
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     ChannelMotion,
     MotionKind,
+    TargetReached,
     _ConfirmedCorrection,
     _ExecutedAttempt,
     _IterationFrame,
@@ -420,7 +423,7 @@ class TestVerifyGates:
             post_pulse_key=("post",),
             snap=after,
             key=("target",),
-            timeline=("recorded-event",),
+            timeline=(BumpEvent("recorded", "pen", 4, ()),),
         )
         objective = BearingObjective(
             TargetSpec(target.name, True),
@@ -446,6 +449,9 @@ class TestVerifyGates:
         )
 
         assert result.trial is not None
+        assert result.trial.attempt.pulse is pulse
+        assert result.trial.attempt.bearing is bearing
+        assert isinstance(result.trial.verification, TargetReached)
         assert result.trial.fork is pulse.fork
         assert result.trial.candidate == dict(policy.action_pairs)
         assert result.trial.applied == policy.applied
@@ -462,6 +468,27 @@ class TestVerifyGates:
         assert result.trial.gauge_receipt.any_forward
         assert result.trial.gauge_receipt.source_mark == (("VerifyStep", 1),)
         assert result.trial.gauge_receipt.landing_mark == (("VerifyStep", 2),)
+
+    def test_assessed_motion_requires_an_accepted_assessment(self):
+        from pyrung.core.analysis.pilot.outcome import (
+            Agency,
+            BearingEffect,
+            ProgressEffect,
+            TrialAssessment,
+        )
+
+        with pytest.raises(ValueError, match="requires an accepted assessment"):
+            AssessedMotion(
+                new_key=("rejected",),
+                trend=3,
+                assessment=TrialAssessment(
+                    agency=Agency.PILOT,
+                    bearing=BearingEffect.DEPARTED,
+                    progress=ProgressEffect.BEHIND,
+                    new_frontier=False,
+                    accepted=False,
+                ),
+            )
 
     def test_spin_replacement_owns_a_new_gauge_receipt(self, monkeypatch):
         source = Bool("RetryReceiptSource", external=True)

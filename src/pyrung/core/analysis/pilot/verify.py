@@ -35,14 +35,16 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
 from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     ChannelMotion,
     MotionKind,
     PilotGateEvent,
+    TargetReached,
+    _AcceptedTrial,
     _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
     _PulseState,
-    _TrialResult,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -106,37 +108,22 @@ def _owned_channel_motion(
     return replace(motion, stop_reason=stop_reason)
 
 
-def _trial_result(
+def _accepted_trial(
     attempt: _ExecutedAttempt,
     frame: Any,
-    observe_label: str,
     gate_events: list[PilotGateEvent],
     channel_motion: ChannelMotion,
     gauge_receipt: GaugeReceipt,
-) -> _TrialResult:
+    verification: TargetReached | AssessedMotion,
+) -> _AcceptedTrial:
     """Preserve one executed attempt as verification's accepted receipt."""
-    trial = attempt.pulse
-    bearing = attempt.bearing
-    policy = bearing.act.policy
-    return _TrialResult(
-        fork=trial.fork,
-        scan_before=trial.scan_before,
-        candidate=dict(policy.action_pairs),
-        applied=policy.applied,
-        before_snap=frame.snap,
-        post_pulse_snap=trial.post_pulse_snap,
-        fork_snap=trial.snap,
-        observe_label=observe_label,
-        bearing_objective=bearing.objective,
-        route_prescribed=policy.route_prescribed,
-        motion=policy.motion,
-        regression_nogoods=policy.regression_nogoods,
-        chase_regression_causes=policy.chase_regression_causes,
+    return _AcceptedTrial(
+        attempt=attempt,
+        source_snapshot=frame.snap,
+        channel_motion=channel_motion,
         gauge_receipt=gauge_receipt,
         gate_events=tuple(gate_events),
-        channel_motion=channel_motion,
-        coast_receipt=trial.coast_receipt,
-        timeline=trial.timeline,
+        verification=verification,
     )
 
 
@@ -536,13 +523,13 @@ def verify_gates(
     def _accept_target() -> _AttemptResult:
         gate_events.append(PilotGateEvent("target", f"{ctx.target.tag}={ctx.target.value!r}"))
         return _AttemptResult(
-            trial=_trial_result(
+            trial=_accepted_trial(
                 attempt,
                 frame,
-                policy.target_observe_label,
                 gate_events,
                 channel_motion,
                 gauge_receipt,
+                TargetReached(),
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
@@ -736,19 +723,17 @@ def verify_gates(
     )
 
     return _AttemptResult(
-        trial=replace(
-            _trial_result(
-                attempt,
-                frame,
-                policy.observe_label,
-                gate_events,
-                channel_motion,
-                gauge_receipt,
+        trial=_accepted_trial(
+            attempt,
+            frame,
+            gate_events,
+            channel_motion,
+            gauge_receipt,
+            AssessedMotion(
+                new_key=trial.key,
+                trend=dead_end.trend,
+                assessment=assessment,
             ),
-            new_key=trial.key,
-            trend=dead_end.trend,
-            outcome=outcome,
-            assessment=assessment,
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),

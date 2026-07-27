@@ -37,9 +37,21 @@ from pyrung.core.analysis.pilot.investigate import (
     correction_identity,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
+    BatchPulse,
+    Bearing,
+    BearingObjective,
+    TargetSpec,
+)
 from pyrung.core.analysis.pilot.options import hold_defeats_needed
-from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    ProgressEffect,
+    TrialAssessment,
+)
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
     _causally_harmful_corrections,
@@ -53,14 +65,18 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     BearingDeparture,
     ChannelMotion,
     CorrectionStatus,
+    MotionKind,
+    _AcceptedTrial,
     _Checkpoint,
     _ConfirmedCorrection,
     _CorrectionReceipt,
+    _ExecutedAttempt,
     _PilotState,
-    _TrialResult,
+    _PulseState,
     _World,
 )
 from pyrung.core.analysis.steerable import compute_steerable
@@ -501,24 +517,49 @@ def _saboteur_scenario():
         ],
         watch_tags=["State"],
     )
-    trial = _TrialResult(
+    source_snapshot = dict(cp_fork.state.tags)
+    landing_snapshot = dict(work.state.tags)
+    policy = ActPolicy(
+        source=ActSource.TRACE,
+        motion=MotionKind.COAST_HOLDING_WORLD,
+    )
+    pulse = _PulseState(
         fork=work,
         scan_before=anchor,
-        candidate={},
-        applied=(),
-        before_snap=dict(cp_fork.state.tags),
-        post_pulse_snap=dict(work.state.tags),
-        fork_snap=dict(work.state.tags),
-        observe_label="letrun",
-        bearing_objective=BearingObjective(
-            TargetSpec("Out", True),
-            cp_frontier,
-        ),
-        new_key=("ejected",),
-        trend=1,  # misleadingly LOW — the ejection branch intercepts it
-        outcome=Outcome.AMBIENT_DRIFT,
-        chase_regression_causes=True,
+        action_scan=anchor,
+        action_snap=source_snapshot,
+        wait_snaps=(),
+        post_pulse_snap=landing_snapshot,
+        post_pulse_key=("post-pulse",),
+        snap=landing_snapshot,
+        key=("ejected",),
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+    )
+    trial = _AcceptedTrial(
+        attempt=_ExecutedAttempt(
+            pulse=pulse,
+            bearing=Bearing(
+                world_key=("source",),
+                act=BatchPulse(policy),
+                objective=BearingObjective(
+                    TargetSpec("Out", True),
+                    cp_frontier,
+                ),
+            ),
+        ),
+        source_snapshot=source_snapshot,
+        channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+        verification=AssessedMotion(
+            new_key=("ejected",),
+            trend=1,  # misleadingly LOW — the ejection branch intercepts it
+            assessment=TrialAssessment(
+                agency=Agency.PROGRAM,
+                bearing=BearingEffect.DEPARTED,
+                progress=ProgressEffect.PRESERVED,
+                new_frontier=False,
+                accepted=True,
+            ),
+        ),
     )
     return state, trial, frame, ctx
 

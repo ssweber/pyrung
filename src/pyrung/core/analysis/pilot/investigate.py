@@ -56,12 +56,12 @@ from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
     MotionKind,
+    _AcceptedTrial,
     _ActionPair,
     _ConfirmedCorrection,
     _IterationFrame,
     _Step,
     _StepContext,
-    _TrialResult,
 )
 from pyrung.core.analysis.sp_values import (
     _values_match,
@@ -171,7 +171,7 @@ def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
 
 
 def _deviation_bearing(
-    trial: _TrialResult,
+    trial: _AcceptedTrial,
     frame: _IterationFrame,
     watch_tags: list[str],
     frontier: tuple[_ActionPair, ...],

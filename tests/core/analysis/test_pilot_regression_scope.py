@@ -5,7 +5,28 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot import progress, recording
-from pyrung.core.analysis.pilot.types import _RecoveryOrigin
+from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
+    BatchPulse,
+    Bearing,
+    BearingObjective,
+    TargetSpec,
+)
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    ProgressEffect,
+    TrialAssessment,
+)
+from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
+    ChannelMotion,
+    _AcceptedTrial,
+    _ExecutedAttempt,
+    _PulseState,
+    _RecoveryOrigin,
+)
 
 
 class _RecordingCompass:
@@ -46,11 +67,44 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
     compass = _RecordingCompass()
     ctx = SimpleNamespace(compass=compass)
     frame = SimpleNamespace(key=source_key)
-    trial = SimpleNamespace(
-        chase_regression_causes=False,
-        regression_nogoods=frozenset({("Action", True)}),
-        trend=4,
-        fork_snap={},
+    policy = ActPolicy(
+        source=ActSource.WIDENING,
+        action_pairs=(("Action", True),),
+        applied=(("Action", True),),
+    )
+    pulse = _PulseState(
+        fork=checkpoint_work,
+        scan_before=10,
+        action_scan=10,
+        action_snap={},
+        wait_snaps=(),
+        post_pulse_snap={},
+        post_pulse_key=("post-pulse",),
+        snap={},
+        key=("landing",),
+    )
+    trial = _AcceptedTrial(
+        attempt=_ExecutedAttempt(
+            pulse=pulse,
+            bearing=Bearing(
+                world_key=source_key,
+                act=BatchPulse(policy),
+                objective=BearingObjective(TargetSpec("Target", True)),
+            ),
+        ),
+        source_snapshot={},
+        channel_motion=ChannelMotion(),
+        verification=AssessedMotion(
+            new_key=pulse.key,
+            trend=4,
+            assessment=TrialAssessment(
+                agency=Agency.PILOT,
+                bearing=BearingEffect.DEPARTED,
+                progress=ProgressEffect.BEHIND,
+                new_frontier=False,
+                accepted=True,
+            ),
+        ),
     )
     origin = _RecoveryOrigin(
         checkpoint_owner=owner,

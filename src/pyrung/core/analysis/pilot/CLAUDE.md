@@ -143,6 +143,14 @@ should consume the first owner's result.
   Orientation, recording, option assembly, and tests consume those owners
   directly; `CandidateRead` does not flatten them into a second scalar surface.
 - Local trial gates: `verify.py::verify_gates`
+- Accepted trial verification: `verify.py::verify_gates` preserves the exact
+  `_ExecutedAttempt` inside one `_AcceptedTrial`. Its required verification is
+  either the `TargetReached` marker or an `AssessedMotion` carrying the accepted
+  state key, trend, and `TrialAssessment`; legacy `Outcome` is derived from that
+  assessment. Progress and recording narrow the variant before consuming
+  assessed-motion facts. The source snapshot, verification-owned channel
+  landing, gauge receipt, and gate events are the only evidence added around the
+  attempt.
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may use the live harness to propose a
   coupling driver; `verify.py::_gate_dead_end` omits that model and

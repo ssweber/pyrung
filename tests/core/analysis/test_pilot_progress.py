@@ -13,8 +13,8 @@ multi-step program (``TestCheckpointStream``).  The individual ``_monitor_trend`
 branches — flat checkpoint, frontier, regression, letrun-ejection — cannot be
 forced deterministically from a small program (PILOT's gates reject worsening
 moves; real regressions arise from AMBIENT_DRIFT in large state machines like the
-burner).  Those branches are therefore driven with controlled ``_TrialResult``
-objects over real PLC forks, which is both deterministic and precise.
+burner). Those branches are therefore driven with controlled `_AcceptedTrial`
+receipts over real PLC forks, which is both deterministic and precise.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
 from pyrung.core.analysis.pilot.gauge import (
     Gauge,
@@ -37,7 +38,14 @@ from pyrung.core.analysis.pilot.gauge import (
     GaugeReceipt,
 )
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
-from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
+    BatchPulse,
+    Bearing,
+    BearingObjective,
+    TargetSpec,
+)
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -56,18 +64,23 @@ from pyrung.core.analysis.pilot.progress import (
     _open_pending_departure,
 )
 from pyrung.core.analysis.pilot.types import (
+    AssessedMotion,
     ChannelMotion,
     DepartureAction,
     DepartureBasis,
     DepartureDecision,
+    MotionKind,
     PendingDeparture,
     PilotEvent,
+    TargetReached,
+    _AcceptedTrial,
     _Checkpoint,
     _CommittedAct,
+    _ExecutedAttempt,
     _PilotState,
+    _PulseState,
     _Step,
     _StepContext,
-    _TrialResult,
     _World,
 )
 from pyrung.core.analysis.steerable import compute_steerable
@@ -131,23 +144,87 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
     return _PilotState(**base)
 
 
-def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _TrialResult:
-    base: dict[str, Any] = {
-        "fork": _oneshot_plc(),
-        "scan_before": 0,
-        "candidate": {},
-        "applied": (),
-        "before_snap": {},
-        "post_pulse_snap": {},
-        "fork_snap": {},
-        "observe_label": "pulse",
-        "bearing_objective": BearingObjective(TargetSpec("State", 17)),
-        "new_key": ("k",),
-        "trend": trend,
-        "outcome": outcome,
-    }
-    base.update(over)
-    return _TrialResult(**base)
+def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
+    """Build a structurally honest accepted trial for focused policy tests."""
+    fork = over.pop("fork", _oneshot_plc())
+    scan_before = over.pop("scan_before", 0)
+    before_snap = over.pop("before_snap", {})
+    post_pulse_snap = over.pop("post_pulse_snap", {})
+    fork_snap = over.pop("fork_snap", {})
+    objective = over.pop(
+        "bearing_objective",
+        BearingObjective(TargetSpec("State", 17)),
+    )
+    candidate = over.pop("candidate", {})
+    action_pairs = tuple(candidate.items())
+    applied = over.pop("applied", ())
+    regression_nogoods = over.pop("regression_nogoods", None)
+    if regression_nogoods is not None:
+        action_pairs = tuple(regression_nogoods)
+    route_prescribed = over.pop("route_prescribed", False)
+    chase_regression_causes = over.pop("chase_regression_causes", True)
+    observe_label = over.pop("observe_label", None)
+    motion = over.pop("motion", MotionKind.INTERVENTION)
+    if observe_label == "letrun":
+        motion = MotionKind.COAST_HOLDING_WORLD
+    source = (
+        ActSource.ROUTE
+        if route_prescribed
+        else ActSource.WIDENING
+        if not chase_regression_causes
+        else ActSource.TRACE
+    )
+    policy = ActPolicy(
+        source=source,
+        action_pairs=action_pairs,
+        applied=applied,
+        motion=motion,
+    )
+    pulse = _PulseState(
+        fork=fork,
+        scan_before=scan_before,
+        action_scan=scan_before,
+        action_snap=dict(before_snap),
+        wait_snaps=(),
+        post_pulse_snap=post_pulse_snap,
+        post_pulse_key=("post",),
+        snap=fork_snap,
+        key=over.pop("new_key", ("k",)),
+        coast_receipt=over.pop("coast_receipt", None),
+        timeline=over.pop("timeline", ()),
+        channel_motion=over.pop("pulse_channel_motion", ChannelMotion()),
+    )
+    assessment = over.pop("assessment", None)
+    if assessment is None:
+        bearing_effect = {
+            Outcome.CONFIRMED: BearingEffect.SATISFIED,
+            Outcome.FRONTIER: BearingEffect.EXPOSED,
+            Outcome.AMBIENT_DRIFT: BearingEffect.DEPARTED,
+        }[outcome]
+        assessment = TrialAssessment(
+            agency=Agency.PROGRAM,
+            bearing=bearing_effect,
+            progress=ProgressEffect.PRESERVED,
+            new_frontier=outcome is Outcome.FRONTIER,
+            accepted=True,
+        )
+    trial = _AcceptedTrial(
+        attempt=_ExecutedAttempt(
+            pulse=pulse,
+            bearing=Bearing(
+                world_key=("source",),
+                act=BatchPulse(policy),
+                objective=objective,
+            ),
+        ),
+        source_snapshot=before_snap,
+        channel_motion=over.pop("channel_motion", ChannelMotion()),
+        gauge_receipt=over.pop("gauge_receipt", GaugeReceipt()),
+        gate_events=over.pop("gate_events", ()),
+        verification=AssessedMotion(pulse.key, trend, assessment),
+    )
+    assert not over, f"unsupported trial overrides: {sorted(over)}"
+    return trial
 
 
 def _pending_departure(
@@ -443,6 +520,30 @@ def test_pending_expiry_without_saved_progress_rolls_back():
     assert state.pending_departure is None
     assert len(state.checkpoints) == 1  # rolled back to the boundary
     assert state.best_trend == 5
+
+
+def test_target_acceptance_resolves_pending_departure_before_returning():
+    """The marker variant still applies pending-departure promotion policy."""
+    checkpoint = _cp(("src",), _oneshot_plc(), 5)
+    state = _make_state(best_trend=5, checkpoints=[checkpoint])
+    state.pending_departure = _pending_departure(state)
+    trial = replace(
+        _make_trial(5, Outcome.CONFIRMED, fork_snap={"State": 17}),
+        verification=TargetReached(),
+    )
+
+    events = tuple(
+        _monitor_trend(
+            trial,
+            _frame(),
+            state,
+            SimpleNamespace(target=TargetSpec("State", 17)),
+        )
+    )
+
+    assert [event.kind for event in events] == ["provisional_promoted"]
+    assert events[0].data["terminal"] is True
+    assert state.pending_departure is None
 
 
 def test_pilot_caused_regression_does_not_rewrite_forward_gauge_evidence():
@@ -835,7 +936,7 @@ def _seal_in_regression_inputs():
         pipeline_internal_tags=frozenset(),
         route=None,
         pipeline_roles=(),
-        compass=SimpleNamespace(action_tags=frozenset()),
+        compass=Compass(),
     )
     frame = SimpleNamespace(
         snap={"Out": False},
@@ -889,7 +990,13 @@ class TestRegression:
             TargetSpec("Completed", True),
             (("State", 17), ("RotateFeedback", True)),
         )
-        trial = replace(trial, bearing_objective=objective)
+        trial = replace(
+            trial,
+            attempt=replace(
+                trial.attempt,
+                bearing=replace(trial.bearing, objective=objective),
+            ),
+        )
         assert state.checkpoints[-1].objective is not objective
         captured: list[tuple[tuple[str, Any], ...]] = []
 

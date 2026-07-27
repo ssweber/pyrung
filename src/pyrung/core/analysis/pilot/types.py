@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
 
+from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 
 if TYPE_CHECKING:
@@ -22,7 +23,12 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.navigation import Bearing, BearingObjective, TargetSpec
+    from pyrung.core.analysis.pilot.navigation import (
+        ActPolicy,
+        Bearing,
+        BearingObjective,
+        TargetSpec,
+    )
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -722,11 +728,11 @@ class _PulseState:
     # The CoastReceipt of the trial's coast (zoom / terminal let-run), when the
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
-    coast_receipt: Any = None
+    coast_receipt: CoastReceipt | None = None
     # The trial session's full event timeline (pen marks + bump landings across
     # pulse, settle, and coast) — stamped onto the committed step context so
     # incident construction reads recorded evidence, not history re-diffs.
-    timeline: tuple[Any, ...] = ()
+    timeline: tuple[BumpEvent, ...] = ()
     # A spin excursion may replace this trial with a replay-corrected fork.
     # Carry that exact correction with the fork so later gates cannot detach or
     # reconstruct the operation they are judging.
@@ -746,53 +752,125 @@ class _ExecutedAttempt:
 
 
 @dataclass(frozen=True)
-class _TrialResult:
-    fork: PLC
-    scan_before: int
-    # The narrow candidate choice (e.g. ``{C_Start: True}``) — what to record on
-    # the recorded step is ``applied`` (the full set including co-actions), not
-    # this.  See ``_Step.inputs``.
-    candidate: dict[str, Any]
-    applied: tuple[_ActionPair, ...]
-    before_snap: dict[str, Any]
-    post_pulse_snap: dict[str, Any]
-    fork_snap: dict[str, Any]
-    observe_label: str
-    # Orientation's complete target-relative objective for the executed
-    # bearing. Recovery consumes this receipt; it must not reconstruct intent
-    # from the global target after the act has landed elsewhere.
-    bearing_objective: BearingObjective
-    # The act followed an explicit Compass/current bearing. Preserve this
-    # intent through verification so post-commit departure policy can
-    # distinguish a prescribed tide-table edge from merely ambient motion
-    # that happens to have a clean continuation.
-    route_prescribed: bool = False
-    motion: MotionKind = MotionKind.INTERVENTION
-    new_key: _StateKey | None = None
-    trend: int | None = None
-    outcome: Outcome | None = None
-    assessment: TrialAssessment | None = None
-    # Verification's exact target-relative comparison for this accepted fork.
-    # Later consumers apply it; they do not recompute the same before/after
-    # comparison from the dehydrated snapshots.
+class TargetReached:
+    """Verification accepted the fork because the user's target is true."""
+
+
+@dataclass(frozen=True)
+class AssessedMotion:
+    """Verification accepted one classified non-target landing."""
+
+    new_key: _StateKey
+    trend: int
+    assessment: TrialAssessment
+
+    def __post_init__(self) -> None:
+        if not self.assessment.accepted:
+            raise ValueError("assessed motion requires an accepted assessment")
+
+    @property
+    def outcome(self) -> Outcome:
+        """Legacy event vocabulary derived from the owned assessment."""
+        return self.assessment.legacy_outcome
+
+
+TrialVerification = TargetReached | AssessedMotion
+
+
+@dataclass(frozen=True)
+class _AcceptedTrial:
+    """One accepted execution with verification's evidence and judgment.
+
+    The executed attempt remains intact. Shared execution and policy views below
+    are derived from that owner; only verification-owned evidence is stored
+    alongside it.
+    """
+
+    attempt: _ExecutedAttempt
+    source_snapshot: dict[str, Any]
+    channel_motion: ChannelMotion
+    verification: TrialVerification
     gauge_receipt: GaugeReceipt = field(default_factory=GaugeReceipt)
-    regression_nogoods: frozenset[_ActionPair] = frozenset()
-    chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
-    # The requested boundary and its verification-owned landing. The raw coast
-    # receipt may say ``departed`` when an inner seek stopped because its outer
-    # route channel reached the requested landing; verification rebases that
-    # observation exactly once before constructing this result.
-    channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
-    # See _PulseState.coast_receipt — carried through verify onto the result.
-    coast_receipt: Any = None
-    # See _PulseState.timeline — carried through verify onto the result.
-    timeline: tuple[Any, ...] = ()
+
+    @property
+    def pulse(self) -> _PulseState:
+        return self.attempt.pulse
+
+    @property
+    def bearing(self) -> Bearing:
+        return self.attempt.bearing
+
+    @property
+    def policy(self) -> ActPolicy:
+        return self.bearing.act.policy
+
+    @property
+    def fork(self) -> PLC:
+        return self.pulse.fork
+
+    @property
+    def scan_before(self) -> int:
+        return self.pulse.scan_before
+
+    @property
+    def candidate(self) -> dict[str, Any]:
+        return dict(self.policy.action_pairs)
+
+    @property
+    def applied(self) -> tuple[_ActionPair, ...]:
+        return self.policy.applied
+
+    @property
+    def before_snap(self) -> dict[str, Any]:
+        return self.source_snapshot
+
+    @property
+    def post_pulse_snap(self) -> dict[str, Any]:
+        return self.pulse.post_pulse_snap
+
+    @property
+    def fork_snap(self) -> dict[str, Any]:
+        return self.pulse.snap
+
+    @property
+    def observe_label(self) -> str:
+        if isinstance(self.verification, TargetReached):
+            return self.policy.target_observe_label
+        return self.policy.observe_label
+
+    @property
+    def bearing_objective(self) -> BearingObjective:
+        return self.bearing.objective
+
+    @property
+    def route_prescribed(self) -> bool:
+        return self.policy.route_prescribed
+
+    @property
+    def motion(self) -> MotionKind:
+        return self.policy.motion
+
+    @property
+    def regression_nogoods(self) -> frozenset[_ActionPair]:
+        return self.policy.regression_nogoods
+
+    @property
+    def chase_regression_causes(self) -> bool:
+        return self.policy.chase_regression_causes
+
+    @property
+    def coast_receipt(self) -> CoastReceipt | None:
+        return self.pulse.coast_receipt
+
+    @property
+    def timeline(self) -> tuple[BumpEvent, ...]:
+        return self.pulse.timeline
 
 
 @dataclass(frozen=True)
 class _AttemptResult:
-    trial: _TrialResult | None
+    trial: _AcceptedTrial | None
     gate_events: tuple[PilotGateEvent, ...] = ()
     nogood_pairs: frozenset[_ActionPair] = frozenset()
     confirmed_correction: _ConfirmedCorrection | None = None
