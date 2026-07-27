@@ -410,6 +410,29 @@ class RungFiringTimelines(Generic[K]):
                 fired.add(rung_index)
         return fired
 
+    def latest_firing_scan_at_or_before(
+        self,
+        rung_indices: frozenset[K],
+        scan_id: int,
+    ) -> int | None:
+        """Latest scan ``<= scan_id`` where any selected rung fired.
+
+        Range payloads already prove that their rung fired on every covered
+        scan, independent of whether the tracked write map is empty, filtered,
+        arithmetic, or fired-only.  This lets recorded causal attribution jump
+        between actual candidate-writer occurrences instead of replaying every
+        intervening scan merely to discover that none executed.
+        """
+        best: int | None = None
+        for rung_index in rung_indices:
+            timeline = self._timelines.get(rung_index)
+            if not timeline:
+                continue
+            candidate = _latest_scan_in_ranges_at_or_before(timeline, scan_id)
+            if candidate is not None and (best is None or candidate > best):
+                best = candidate
+        return best
+
     def ever_fired(self) -> set[K]:
         """Rung indices with at least one range in their timeline."""
         return {idx for idx, tl in self._timelines.items() if tl}
@@ -876,3 +899,21 @@ def _binary_search_range(timeline: list[RungFiringRange], scan_id: int) -> RungF
         else:
             return r
     return None
+
+
+def _latest_scan_in_ranges_at_or_before(
+    timeline: list[RungFiringRange],
+    scan_id: int,
+) -> int | None:
+    """Latest covered scan at or before ``scan_id`` in a sorted range list."""
+    lo, hi = 0, len(timeline)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if timeline[mid].start_scan_id <= scan_id:
+            lo = mid + 1
+        else:
+            hi = mid
+    if lo == 0:
+        return None
+    range_ = timeline[lo - 1]
+    return min(scan_id, range_.end_scan_id)

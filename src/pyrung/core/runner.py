@@ -72,7 +72,7 @@ _CHECKPOINT_INTERVAL_DEFAULT = 200
 # One causal working set, independent of checkpoint spacing.  Checkpoints may
 # intentionally be sparse (or skipped by live folding); they are replay anchors,
 # not a license to materialize the entire gap into memory.
-_REPLAY_SLAB_SCANS = 1024
+_REPLAY_SLAB_SCANS = 1600
 _REPLAY_SLAB_MAX_ANCHORS = 1
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
@@ -811,13 +811,9 @@ class PLC:
         ``run()``) and debug (DAP ``pyrungStepScan`` / continue) scan
         paths via ``ScanContext.capturing_rung``.
 
-        .. todo::
-
-            A rung whose condition is True but whose writes are identical to
-            the already-pending values will not appear here.  This is an
-            acceptable approximation for causal-chain attribution; for
-            accurate cold-rung detection a ``_last_condition_result`` field
-            on ``Rung`` may be needed later.
+        A rung that attempted a write but only reasserted the already-pending
+        value appears with an empty write map. This preserves exact execution
+        identity for causal attribution without claiming an effective value.
         """
         target = self._playhead if scan_id is None else scan_id
         if (
@@ -844,6 +840,38 @@ class PLC:
         ):
             return self._causal_parent._node_firings_at(target)
         return self._node_firing_timelines.at(target)
+
+    def _node_latest_firing_at_or_before(
+        self,
+        rung_ids: frozenset[RungId],
+        scan_id: int,
+    ) -> int | None:
+        """Latest retained execution of any selected node at/before a scan."""
+        if (
+            self._causal_parent is not None
+            and scan_id <= self._initial_scan_id
+            and self._causal_parent.history.contains(scan_id)
+        ):
+            return self._causal_parent._node_latest_firing_at_or_before(rung_ids, scan_id)
+        main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
+        nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
+        candidates = [
+            self._rung_firing_timelines.latest_firing_scan_at_or_before(main, scan_id),
+            self._node_firing_timelines.latest_firing_scan_at_or_before(nested, scan_id),
+        ]
+        # A fork owns only executions after its boundary. A miss in that suffix
+        # does not prove the writer never ran: merge the latest retained parent
+        # occurrence so sparse held support can cross the fork exactly.
+        if self._causal_parent is not None and self._causal_parent.history.contains(
+            self._initial_scan_id
+        ):
+            candidates.append(
+                self._causal_parent._node_latest_firing_at_or_before(
+                    rung_ids,
+                    min(scan_id, self._initial_scan_id),
+                )
+            )
+        return max((candidate for candidate in candidates if candidate is not None), default=None)
 
     def _resolve_node_rung(self, rung_id: RungId) -> Rung | None:
         """Resolve a recorded node identity without exposing synthetic indices."""
@@ -1071,6 +1099,7 @@ class PLC:
             scan_log=self._scan_log,
             initial_tags=self._initial_state.tags,
             node_firings_fn=self._node_firings_at,
+            node_previous_firing_fn=self._node_latest_firing_at_or_before,
             node_rung_fn=self._resolve_node_rung,
             node_views_fn=self._replay_node_views_at,
             node_runs_fn=self._replay_rung_runs_at,
@@ -1541,15 +1570,20 @@ class PLC:
         materialization are separate: fold the run-up when the executable World
         is provably stable, then retain only one fixed-size working set.
         """
-        anchor = self._nearest_checkpoint_at_or_before(scan_id)
-        anchor_scan = anchor if anchor is not None else self._initial_scan_id
-        # Causal walks move backward from the requested point.  End the slab at
-        # the miss and retain its preceding neighborhood, never an arbitrarily
-        # large checkpoint interval.
-        slab_start = max(
-            anchor_scan + 1,
+        desired_start = max(
+            self._initial_scan_id + 1,
             scan_id - _REPLAY_SLAB_SCANS + 1,
         )
+        # Anchor the slab's whole desired window, not the individual miss.
+        # A causal walk routinely crosses replay checkpoints while moving
+        # backward; choosing the checkpoint immediately before each miss would
+        # truncate the nominal slab and make the one-slot cache ping-pong.
+        anchor = self._nearest_checkpoint_at_or_before(desired_start - 1)
+        anchor_scan = anchor if anchor is not None else self._initial_scan_id
+        # Causal walks move backward from the requested point.  End the slab at
+        # the miss and retain one contiguous preceding neighborhood, including
+        # across intermediate replay checkpoints.
+        slab_start = max(anchor_scan + 1, desired_start)
         slab_end = scan_id
 
         positioned_with_fold = False

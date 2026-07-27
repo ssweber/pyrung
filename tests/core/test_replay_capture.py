@@ -95,13 +95,41 @@ def test_sparse_replay_seek_folds_to_exact_endpoint_across_recorded_events() -> 
     slab_state = source._state_at(2999)
 
     assert dict(slab_state.tags) == dict(expected.tags)
-    assert len(next(iter(source._replay_slabs.values()))) == 1024
+    assert len(next(iter(source._replay_slabs.values()))) == 1600
     assert source._last_replay_slab_stats == {
-        "runup_scans": 1975,
-        "materialized_states": 1024,
+        "runup_scans": 1399,
+        "materialized_states": 1600,
         "folded_runup": 1,
     }
     assert source._state_at(2998).scan_id == 2998
+
+
+def test_causal_slab_spans_intermediate_checkpoints_as_one_contiguous_window() -> None:
+    timer = Timer.clone("CheckpointSpanningSlabTmr")
+
+    with Program(strict=False) as program:
+        with Rung():
+            on_delay(timer, 50_000, "ms")
+
+    source = PLC(program, dt=0.01, checkpoint_interval=200)
+    source.run(2200)
+    source._recent_state_cache.clear()
+    source._recent_state_cache_bytes = 0
+    source._cache_state(source.current_state)
+
+    state = source._state_at(2199)
+    slab = next(iter(source._replay_slabs.values()))
+
+    assert state.scan_id == 2199
+    assert min(slab) == 600
+    assert max(slab) == 2199
+    assert len(slab) == 1600
+    assert source._last_replay_slab_stats == {
+        "runup_scans": 199,
+        "materialized_states": 1600,
+        "folded_runup": 1,
+    }
+    assert source._state_at(601) is slab[601]
 
 
 def test_sparse_replay_seek_preserves_clock_edge_memory() -> None:

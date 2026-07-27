@@ -74,6 +74,24 @@ def test_latch_fires_and_records() -> None:
     assert firings[0]["Latched"] is True
 
 
+def test_noop_reassertion_retains_an_empty_firing_occurrence() -> None:
+    Enable = Bool("NoopEnable")
+    Latched = Bool("NoopLatched")
+
+    with Program() as logic:
+        with Rung(Enable):
+            latch(Latched)
+        with Rung(Enable):
+            latch(Latched)
+
+    runner = PLC(logic, record_all_tags=True)
+    runner.patch({Enable.name: True})
+    runner.step()
+
+    assert runner.rung_firings(scan_id=1)[0]["NoopLatched"] is True
+    assert runner.rung_firings(scan_id=1)[1] == pmap()
+
+
 def test_multiple_rungs_write_different_tags() -> None:
     """Each rung's writes should be independent entries in firings."""
     A = Bool("A")

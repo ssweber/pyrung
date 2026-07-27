@@ -604,6 +604,61 @@ class TestEdgeCases:
         assert starting_step.transition.scan_id == child.state.scan_id - 1
         assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
 
+    def test_deep_enabler_jumps_to_sparse_prior_writer(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Held support uses the firing index instead of replaying an idle gap."""
+        Seed = Bool("SparseWriterSeed", external=True)
+        CallMap = Bool("SparseWriterCall", external=True)
+        DoorClosed = Bool("SparseWriterDoorClosed", external=True)
+        Starting = Bool("SparseWriterStarting")
+        Alarm = Bool("SparseWriterAlarm")
+
+        @subroutine("sparse_map")
+        def sparse_map():
+            with rung(Seed):
+                latch(Starting)
+
+        with Program() as prog:
+            with Rung(Starting, ~DoorClosed):
+                latch(Alarm)
+            with Rung(CallMap):
+                call(sparse_map)
+
+        plc = PLC(prog)
+        plc.patch(
+            {
+                Seed.name: True,
+                CallMap.name: True,
+                DoorClosed.name: True,
+            }
+        )
+        plc.step()
+        child = plc.fork(history_budget=float("inf"))
+        child.patch({Seed.name: False, CallMap.name: False})
+        child.run(400)
+        child.patch({DoorClosed.name: False})
+        child.step()
+
+        capture_scans: list[int] = []
+        original_capture = PLC._replay_capture_at
+
+        def observed_capture(source: PLC, scan_id: int):
+            capture_scans.append(scan_id)
+            return original_capture(source, scan_id)
+
+        monkeypatch.setattr(PLC, "_replay_capture_at", observed_capture)
+        chain = child.cause(Alarm.name, scan=child.state.scan_id, deep=True)
+
+        assert chain is not None
+        starting_step = next(
+            step for step in chain.steps if step.transition.tag_name == Starting.name
+        )
+        assert starting_step.transition.scan_id == 1
+        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {(Seed.name, True)}
+        assert len(set(capture_scans)) < 20
+
     def test_fork_boundary_cause_uses_parent_execution_evidence(self) -> None:
         """The fork point was executed by the parent, not reconstructed by the child."""
         Trigger = Bool("Trigger", external=True)

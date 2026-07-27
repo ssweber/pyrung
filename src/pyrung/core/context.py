@@ -560,13 +560,13 @@ class ScanContext:
     ) -> dict[str, Any] | None:
         """Diff a closed capture scope's journal into its firing writes.
 
-        Returns the (PDG-filtered) ``{tag: value}`` written during the
-        scope, or ``None`` if the scope made no write at all.  A non-empty
-        raw diff that the consumed-tags filter empties still returns ``{}``
-        — the rung fired, which ``query.cold_rungs`` / ``query.hot_rungs``
-        and ``effect()``'s PDG fallback both need; consumers that care
-        about per-tag values (like ``cause()``'s value-match) see the
-        filtered view and fall through cleanly when it's empty.
+        Returns the (PDG-filtered) effective ``{tag: value}`` written during
+        the scope, or ``None`` only when the scope attempted no write at all.
+        A no-op reassertion and a non-empty raw diff emptied by the consumed-
+        tags filter both return ``{}``: the exact values remain unknown, but
+        the range-encoded firing timeline retains that this writer occurrence
+        executed. Consumers needing attempted values replay only that indexed
+        occurrence.
         """
         if not journal:
             return None
@@ -577,7 +577,7 @@ class ScanContext:
             if old is _MISSING or old != pending[name]
         }
         if not raw_writes:
-            return None
+            return {}
         if retain_all_writes:
             return raw_writes
         consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None

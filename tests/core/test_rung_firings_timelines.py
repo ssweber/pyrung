@@ -645,6 +645,20 @@ def test_ever_fired_and_fired_on_queries() -> None:
     assert timelines.fired_on(3) == set()
 
 
+def test_latest_firing_scan_jumps_across_gaps_and_contiguous_ranges() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(0, 1, {"A": True})
+    timelines.append(0, 2, {"A": True})
+    timelines.append(0, 5, {"A": False})
+    timelines.append(1, 4, {})
+    timelines.append(1, 7, {})
+
+    assert timelines.latest_firing_scan_at_or_before(frozenset({0}), 4) == 2
+    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 6) == 5
+    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 100) == 7
+    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 0) is None
+
+
 # ---------------------------------------------------------------------------
 # Sweep-on-log-trim eviction
 # ---------------------------------------------------------------------------

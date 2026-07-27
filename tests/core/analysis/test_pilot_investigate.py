@@ -504,6 +504,48 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
     assert result.correction is not None
 
 
+def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(monkeypatch):
+    """An operation-owned correction is not replayed twice unchanged."""
+    Held = Bool("ReplayOnceHeld", external=True)
+    Progress = Bool("ReplayOnceProgress", external=True)
+    Never = Bool("ReplayOnceNever", external=True)
+    with Program(strict=False) as prog:
+        with Rung(Held):
+            out(Bool("ReplayOnceOut"))
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc)
+    proposal = PilotRung(
+        Held.name,
+        False,
+        ~Never,
+        OperationReceipt(~Held, ConditionDemand(CompareEq(Progress, True))),
+    )
+    hypothesis = InvestigationHypothesis("operation-owned", (proposal,))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._generate_deviation_hypotheses",
+        lambda *_args, **_kwargs: ((hypothesis,), set()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        lambda *_args, **_kwargs: False,
+    )
+    replayed: list[tuple[Any, ...]] = []
+
+    def replay(holds):
+        replayed.append(tuple(holds))
+        return ReplayOutcome(True, None, dict(plc.state.tags), "confirmed")
+
+    result = investigate_deviation(plc, _ground_test_incident(plc), ctx, replay)
+
+    assert result.correction is not None
+    assert result.correction.rungs == (proposal,)
+    assert replayed == [(proposal,)]
+
+
 def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypatch):
     """A retained replay fork supplies B; only A and then A+B are replayed."""
     A = Bool("Nested_A", external=True)

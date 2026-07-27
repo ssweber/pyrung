@@ -1954,7 +1954,11 @@ def investigate_deviation(
                     f"needed={required_progress!r}, correction={tuple(scoped)!r}",
                 )
                 break
-            installed_outcome = replay(scoped)
+            # Operation-owned proposals and already-exact guards can survive
+            # scoping unchanged. Replay is deterministic from the retained
+            # incident checkpoint, so an identical executable correction has
+            # already proved its installed form in the exploratory pass.
+            installed_outcome = outcome if scoped == exploratory else replay(scoped)
             installed_replacement = installed_outcome.replacement
             if (
                 installed_outcome.accepted

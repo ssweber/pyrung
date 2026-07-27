@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
@@ -64,6 +65,7 @@ def recorded_cause(
     scan_log: Any = None,  # ScanLog | None
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
+    node_previous_firing_fn: Any = None,  # Callable[[frozenset[RungId], int], int | None]
     node_rung_fn: Any = None,  # Callable[[RungId], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
     node_runs_fn: Any = None,  # Callable[[int], tuple[RungRun, ...]] | None
@@ -140,6 +142,7 @@ def recorded_cause(
         scan_log=scan_log,
         initial_tags=initial_tags,
         node_firings_fn=node_firings_fn,
+        node_previous_firing_fn=node_previous_firing_fn,
         node_rung_fn=node_rung_fn,
         node_views_fn=node_views_fn,
         node_views_cache=node_views_cache,
@@ -456,6 +459,34 @@ def _cross_via_registry(
     return tuple(triggers), tuple(enablers)
 
 
+def _indexed_prior_firing_scans(
+    lookup: Any,
+    candidate_rungs: frozenset[RungId],
+    start_scan: int,
+    oldest_scan: int,
+) -> Iterator[int]:
+    """Yield actual candidate-writer executions newest-first.
+
+    The lookup is authoritative when it returns a valid scan or ``None``.
+    A malformed/legacy callback degrades to the old linear scan rather than
+    risking a missing causal writer.
+    """
+    cursor = start_scan
+    while cursor >= oldest_scan:
+        try:
+            scan = lookup(candidate_rungs, cursor)
+        except Exception:  # noqa: BLE001
+            yield from range(cursor, oldest_scan - 1, -1)
+            return
+        if scan is None:
+            return
+        if not isinstance(scan, int) or scan < oldest_scan or scan > cursor:
+            yield from range(cursor, oldest_scan - 1, -1)
+            return
+        yield scan
+        cursor = scan - 1
+
+
 def _walk_backward(
     *,
     logic: list[Rung],
@@ -473,6 +504,7 @@ def _walk_backward(
     scan_log: Any = None,
     initial_tags: Any = None,
     node_firings_fn: Any = None,
+    node_previous_firing_fn: Any = None,
     node_rung_fn: Any = None,
     node_views_fn: Any = None,
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
@@ -590,6 +622,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_previous_firing_fn=node_previous_firing_fn,
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
@@ -666,9 +699,23 @@ def _walk_backward(
             # same scan. In that shape the current frame truthfully says the
             # mapper is no longer conductive; the exact support is the most
             # recent earlier frame where a replayed writer maintained the held
-            # value. Walk retained history newest-first and stop at the first
-            # execution-proven, value-proven writer.
-            for prior_scan in range(scan_id - 1, history.oldest_scan_id - 1, -1):
+            # value. The range-encoded firing index includes no-op reassertions,
+            # so jump between actual static-writer executions. Older/custom
+            # runners without that index retain the linear fail-closed path.
+            candidate_rungs = frozenset(
+                RungId(pdg.rung_nodes[node_idx].subroutine, pdg.rung_nodes[node_idx].rung_index)
+                for node_idx in pdg.writers_of.get(name, frozenset())
+            )
+            if node_previous_firing_fn is not None and candidate_rungs:
+                prior_scans: Any = _indexed_prior_firing_scans(
+                    node_previous_firing_fn,
+                    candidate_rungs,
+                    scan_id - 1,
+                    history.oldest_scan_id,
+                )
+            else:
+                prior_scans = range(scan_id - 1, history.oldest_scan_id - 1, -1)
+            for prior_scan in prior_scans:
                 prior_writers = _replayed_writers_from_pdg(
                     pdg=pdg,
                     program=program,
@@ -705,6 +752,7 @@ def _walk_backward(
             scan_log=scan_log,
             initial_tags=initial_tags,
             node_firings_fn=node_firings_fn,
+            node_previous_firing_fn=node_previous_firing_fn,
             node_rung_fn=node_rung_fn,
             node_views_fn=node_views_fn,
             node_views_cache=node_views_cache,
@@ -838,6 +886,7 @@ def _walk_backward(
                     scan_log=scan_log,
                     initial_tags=initial_tags,
                     node_firings_fn=node_firings_fn,
+                    node_previous_firing_fn=node_previous_firing_fn,
                     node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
@@ -906,6 +955,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_previous_firing_fn=node_previous_firing_fn,
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
@@ -1182,6 +1232,7 @@ def _walk_backward(
                         scan_log=scan_log,
                         initial_tags=initial_tags,
                         node_firings_fn=node_firings_fn,
+                        node_previous_firing_fn=node_previous_firing_fn,
                         node_rung_fn=node_rung_fn,
                         node_views_fn=node_views_fn,
                         node_views_cache=node_views_cache,
@@ -1217,6 +1268,7 @@ def _walk_backward(
                     scan_log=scan_log,
                     initial_tags=initial_tags,
                     node_firings_fn=node_firings_fn,
+                    node_previous_firing_fn=node_previous_firing_fn,
                     node_rung_fn=node_rung_fn,
                     node_views_fn=node_views_fn,
                     node_views_cache=node_views_cache,
