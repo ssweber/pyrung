@@ -3,6 +3,25 @@
 One working plan. Supersedes the earlier LOC-first version of this file and the
 deleted predecessor reports.
 
+## Cold-start protocol
+
+Before taking an item:
+
+- Read this file and `src/pyrung/core/analysis/pilot/CLAUDE.md`.
+- Inspect the current HEAD and worktree. Baseline SHAs, counts, and descriptions
+  below are historical grounding, not substitutes for reading today's code.
+- Re-ground every claim at the named module and symbol. Treat each "required
+  shape" as a proposed route to the objective, not as a specification to
+  implement despite contrary evidence.
+- If a supposedly broken path is unreachable under current invariants, prove and
+  delete it rather than adding machinery to support an artificial case. Correct
+  this plan when its premise is inaccurate.
+- Preserve unrelated concurrent work. Keep one ownership decision in one
+  conventional commit.
+- Use focused tests while iterating, then run `make test-pilot` as the final gate.
+- Remove the landed item and update `pilot/CLAUDE.md` so the next conversation
+  starts from the new ownership boundary.
+
 ## Purpose
 
 Make PILOT easier to understand before asking it to do more.
@@ -40,8 +59,8 @@ fields, or hiding policy behind a generic callback does not count as simplificat
 
 ## Grounded baseline (2026-07-26)
 
-Current HEAD is `af3060a4`. The package is 33 Python files and about 26.3k lines.
-The mechanical ownership pass is already landed.
+The audit behind this plan was recorded at `af3060a4`, when the package was 33
+Python files and about 26.3k lines. The mechanical ownership pass had landed.
 
 The current tree already has several of the receipt structures the predecessor
 plan proposed:
