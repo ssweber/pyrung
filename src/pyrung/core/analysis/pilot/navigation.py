@@ -8,9 +8,10 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
+from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -83,21 +84,113 @@ class OrientationWorld:
     root_route: TraceChoice | None = None
 
 
+class ActSource(StrEnum):
+    """The one provenance category Orientation assigned to an act."""
+
+    ROUTE = "route"
+    TRACE = "trace"
+    INFLUENCE = "influence"
+    CURRENT = "current"
+    PROGRAM = "program"
+    LEARNED = "learned"
+    WIDENING = "widening"
+    TERMINAL = "terminal"
+
+
+@dataclass(frozen=True)
+class ChannelHeading:
+    """A channel boundary declared by navigation, before execution observes it."""
+
+    channel_tag: str
+    target_value: Any
+    boundary: Any = None
+
+
+@dataclass(frozen=True)
+class ActPolicy:
+    """Navigation-owned meaning carried unchanged through one execution.
+
+    ``heading`` is a declaration, not a claim about where execution landed.
+    VERIFY combines it with the physical trial receipt when it owns that
+    interpretation. Diagnostic provenance lives here too, so recording reads
+    the same artifact that execution and verification consume.
+    """
+
+    source: ActSource
+    action_pairs: tuple[_ActionPair, ...] = ()
+    applied: tuple[_ActionPair, ...] = ()
+    nogood_pair: _ActionPair | None = None
+    heading: ChannelHeading | None = None
+    motion: MotionKind = MotionKind.INTERVENTION
+    provenance: tuple[str, ...] = ()
+    wake: int | None = None
+    note: str = ""
+    context_actions: tuple[_ActionPair, ...] = ()
+
+    @property
+    def primary_action(self) -> _ActionPair | None:
+        return self.action_pairs[0] if len(self.action_pairs) == 1 else None
+
+    @property
+    def observe_label(self) -> str:
+        if self.source is ActSource.LEARNED:
+            return "batch"
+        if self.source is ActSource.WIDENING:
+            return "width"
+        if self.motion is MotionKind.COAST_TO_BEARING:
+            return "zoom"
+        if self.motion is MotionKind.COAST_HOLDING_WORLD:
+            return "letrun"
+        return "accept"
+
+    @property
+    def target_observe_label(self) -> str:
+        return f"{self.observe_label}-target" if self.observe_label != "accept" else "target"
+
+    @property
+    def influence_prescribed(self) -> bool:
+        return self.source in {ActSource.INFLUENCE, ActSource.LEARNED}
+
+    @property
+    def route_prescribed(self) -> bool:
+        return self.source in {ActSource.ROUTE, ActSource.CURRENT}
+
+    @property
+    def regression_nogoods(self) -> frozenset[_ActionPair]:
+        return frozenset(self.action_pairs)
+
+    @property
+    def chase_regression_causes(self) -> bool:
+        return self.source not in {ActSource.LEARNED, ActSource.WIDENING}
+
+
 @dataclass(frozen=True)
 class Pulse:
-    """One pulse act, including any atomic co-actions."""
+    """One pulse act whose policy owns the exact action artifact."""
 
-    action: _ActionPair
-    applied: tuple[_ActionPair, ...]
-    option: Any
+    policy: ActPolicy
+
+    @property
+    def action(self) -> _ActionPair:
+        action = self.policy.primary_action
+        if action is None:
+            raise ValueError("a Pulse policy must declare exactly one primary action")
+        return action
+
+    @property
+    def applied(self) -> tuple[_ActionPair, ...]:
+        return self.policy.applied
 
 
 @dataclass(frozen=True)
 class BatchPulse:
-    """One atomic joint pulse."""
+    """One atomic joint pulse governed by the common act policy."""
 
-    actions: tuple[_ActionPair, ...]
-    source: Literal["learned", "widening"]
+    policy: ActPolicy
+
+    @property
+    def actions(self) -> tuple[_ActionPair, ...]:
+        return self.policy.action_pairs
 
 
 @dataclass(frozen=True)
@@ -111,12 +204,12 @@ class Coast:
     """
 
     mode: Literal["bearing", "terminal"]
+    policy: ActPolicy
     channel_tag: str | None = None
     target_value: Any = None
     # The owner's original relation. ``target_value`` is its exact observable
     # heading; execution keeps this proof for progress and coast estimates.
     boundary: Any = None
-    route_prescribed: bool = False
     route_channel_tag: str | None = None
     route_from_value: Any = None
     route_target_value: Any = None
@@ -125,6 +218,8 @@ class Coast:
 @dataclass(frozen=True)
 class Dwell:
     """One bounded verified dwell after a terminal coast receipt."""
+
+    policy: ActPolicy = ActPolicy(ActSource.TERMINAL, motion=MotionKind.COAST_HOLDING_WORLD)
 
 
 NavigationAct = Pulse | BatchPulse | Coast | Dwell
@@ -209,7 +304,7 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     if isinstance(act, Pulse):
         return pulse_identity(act.applied)
     if isinstance(act, BatchPulse):
-        return ("batch", act.source, act.actions)
+        return ("batch", act.policy.source.value, act.actions)
     if isinstance(act, Coast):
         identity = (
             "coast",

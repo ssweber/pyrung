@@ -29,7 +29,6 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     coast_departure_tags,
     fork_with_rungs,
-    wait_edge_nogood,
 )
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
@@ -38,20 +37,16 @@ from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation,
 from pyrung.core.analysis.pilot.navigation import (
     BatchPulse,
     Bearing,
-    BearingObjective,
     Coast,
     Dwell,
     OrientationWorld,
     Pulse,
 )
-from pyrung.core.analysis.pilot.options import _CandidateSource
 from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
-    MotionKind,
     PilotGateEvent,
     _ActionPair,
-    _AttemptIntent,
     _AttemptResult,
     _ExecutedAttempt,
     _HoldLogEntry,
@@ -336,13 +331,14 @@ def _compass_observations(
 
 
 def _try_action_batch(
-    intent: _AttemptIntent,
+    bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
     *,
     record_influence_action: Action | None = None,
 ) -> _AttemptResult:
+    policy = bearing.act.policy
     # ── Action gate (avoid=) ──────────────────────────────────────────────
     # Before the pulse: a candidate whose overlaid action makes the avoid
     # predicate true is a path that depends on the avoided condition — reject it
@@ -351,7 +347,7 @@ def _try_action_batch(
     # the predicate.  nogood the choice so the next iteration stops surfacing it
     # (candidates filters nogoods), and record the names so the terminal decline
     # can point at what excluded the path.
-    avoid_names = _avoid_violations(ctx, intent.applied, frame.snap)
+    avoid_names = _avoid_violations(ctx, policy.applied, frame.snap)
     if avoid_names:
         return _AttemptResult(
             trial=None,
@@ -359,12 +355,12 @@ def _try_action_batch(
                 PilotGateEvent("avoid", f"action would enter avoid: {', '.join(avoid_names)}"),
             ),
             nogood_pairs=(
-                frozenset({intent.nogood_pair}) if intent.nogood_pair is not None else frozenset()
+                frozenset({policy.nogood_pair}) if policy.nogood_pair is not None else frozenset()
             ),
             avoid_names=tuple(avoid_names),
         )
 
-    trial = _apply_actions(intent.applied, frame, state, ctx)
+    trial = _apply_actions(policy.applied, frame, state, ctx)
     key_config = state.key_config
     assert key_config is not None
 
@@ -379,7 +375,7 @@ def _try_action_batch(
                 ctx,
                 contradict_no_change=True,
                 world_key=_pilot_world_key(frame.snap, key_config, state.rungs),
-                applied=intent.applied,
+                applied=policy.applied,
                 fork=trial.fork,
                 scan=trial.action_scan,
             )
@@ -400,7 +396,7 @@ def _try_action_batch(
         wait_before = wait_after
 
     result = verify_gates(
-        _ExecutedAttempt(pulse=trial, intent=intent),
+        _ExecutedAttempt(pulse=trial, bearing=bearing),
         frame,
         state,
         ctx,
@@ -433,26 +429,8 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
 
     act = bearing.act
     if isinstance(act, Pulse):
-        option = act.option
         return _try_action_batch(
-            _AttemptIntent(
-                bearing_objective=bearing.objective,
-                action_pairs=(act.action,),
-                applied=act.applied,
-                influence_prescribed=option.source is _CandidateSource.INFLUENCE,
-                # A structural program-owned current is also an explicit bearing:
-                # if it opens a new frontier, commit it so progress monitoring can
-                # investigate and learn the corrective holds. It is not a static
-                # route suffix and never bypasses the live avoid gate.
-                route_prescribed=option.source
-                in {_CandidateSource.ROUTE, _CandidateSource.CURRENT},
-                nogood_pair=act.action,
-                regression_nogoods=frozenset({act.action}),
-                channel_motion=ChannelMotion(
-                    option.bearing_channel_tag,
-                    option.bearing_channel_value,
-                ),
-            ),
+            bearing,
             frame,
             state,
             ctx,
@@ -460,18 +438,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         )
     if isinstance(act, BatchPulse):
         return _try_action_batch(
-            _AttemptIntent(
-                bearing_objective=bearing.objective,
-                action_pairs=act.actions,
-                applied=act.actions,
-                observe_label="batch" if act.source == "learned" else "width",
-                target_observe_label=(
-                    "batch-target" if act.source == "learned" else "width-target"
-                ),
-                influence_prescribed=act.source == "learned",
-                regression_nogoods=frozenset(act.actions),
-                chase_regression_causes=False,
-            ),
+            bearing,
             frame,
             state,
             ctx,
@@ -479,15 +446,14 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     if isinstance(act, Coast):
         if act.mode == "bearing":
             return _try_zoom(
-                act,
+                bearing,
                 frame,
                 state,
                 ctx,
-                bearing_objective=bearing.objective,
             )
-        return _try_terminal_letrun(frame, state, ctx, bearing.objective)
+        return _try_terminal_letrun(bearing, frame, state, ctx)
     if isinstance(act, Dwell):
-        return _try_terminal_dwell(frame, state, ctx, bearing.objective)
+        return _try_terminal_dwell(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
@@ -497,12 +463,10 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
 
 
 def _try_zoom(
-    coast: Coast,
+    bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    *,
-    bearing_objective: BearingObjective,
 ) -> _AttemptResult:
     """Let-run zoom through the verify pipeline — same shape as _try_candidate.
 
@@ -516,28 +480,11 @@ def _try_zoom(
     investigation layer should own bounded incident analysis and replay-tested
     corrective holds.
     """
+    coast = bearing.act
+    assert isinstance(coast, Coast)
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
-
-    # A rejected wait is evidence about THIS world: the edge did not complete
-    # here (a recipe-gated automatic transition, a dwell that never arms).
-    # Record it as a world-keyed nogood so the next iteration's route query walks
-    # around the edge instead of re-burning the same sterile coast.
-    wait_channel = coast.route_channel_tag or coast.channel_tag
-    wait_nogood = (
-        wait_edge_nogood(
-            wait_channel,
-            (
-                coast.route_from_value
-                if coast.route_channel_tag is not None
-                else snap_before.get(coast.channel_tag)
-            ),
-            coast.route_target_value if coast.route_channel_tag is not None else coast.target_value,
-        )
-        if wait_channel is not None
-        else None
-    )
 
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_rungs installs
@@ -576,6 +523,14 @@ def _try_zoom(
         )
         wait_before = wait_after
 
+    departed_route = (
+        zoom_receipt is not None
+        and zoom_receipt.stop_reason == "departed"
+        and coast.route_channel_tag is not None
+    )
+    verify_channel = coast.route_channel_tag if departed_route else coast.channel_tag
+    verify_target = coast.route_target_value if departed_route else coast.target_value
+
     trial = _PulseState(
         fork=fork,
         scan_before=scan_before,
@@ -588,32 +543,15 @@ def _try_zoom(
         key=key_after,
         coast_receipt=zoom_receipt,
         timeline=session.events,
+        channel_motion=ChannelMotion(
+            verify_channel,
+            verify_target,
+            coast.boundary,
+        ),
     )
 
-    departed_route = (
-        zoom_receipt is not None
-        and zoom_receipt.stop_reason == "departed"
-        and coast.route_channel_tag is not None
-    )
-    verify_channel = coast.route_channel_tag if departed_route else coast.channel_tag
-    verify_target = coast.route_target_value if departed_route else coast.target_value
     result = verify_gates(
-        _ExecutedAttempt(
-            pulse=trial,
-            intent=_AttemptIntent(
-                bearing_objective=bearing_objective,
-                observe_label="zoom",
-                target_observe_label="zoom-target",
-                route_prescribed=coast.route_prescribed,
-                nogood_pair=wait_nogood,
-                channel_motion=ChannelMotion(
-                    verify_channel,
-                    verify_target,
-                    coast.boundary,
-                ),
-                motion=MotionKind.COAST_TO_BEARING,
-            ),
-        ),
+        _ExecutedAttempt(pulse=trial, bearing=bearing),
         frame,
         state,
         ctx,
@@ -622,10 +560,10 @@ def _try_zoom(
 
 
 def _try_terminal_letrun(
+    bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    bearing_objective: BearingObjective,
 ) -> _AttemptResult:
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
@@ -739,19 +677,11 @@ def _try_terminal_letrun(
         key=key_after,
         coast_receipt=letrun_receipt,
         timeline=session.events,
+        channel_motion=ChannelMotion(chan_tag, chan_val),
     )
 
     result = verify_gates(
-        _ExecutedAttempt(
-            pulse=trial,
-            intent=_AttemptIntent(
-                bearing_objective=bearing_objective,
-                observe_label="letrun",
-                target_observe_label="letrun-target",
-                channel_motion=ChannelMotion(chan_tag, chan_val),
-                motion=MotionKind.COAST_HOLDING_WORLD,
-            ),
-        ),
+        _ExecutedAttempt(pulse=trial, bearing=bearing),
         frame,
         state,
         ctx,
@@ -760,10 +690,10 @@ def _try_terminal_letrun(
 
 
 def _try_terminal_dwell(
+    bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    bearing_objective: BearingObjective,
 ) -> _AttemptResult:
     """Run one bounded repeated dwell through the shared trial gates.
 
@@ -841,15 +771,7 @@ def _try_terminal_dwell(
     # the "letrun" observe labels so commit folds the steady holds into the
     # recorded inputs the same way (the coast's driver is the held context).
     result = verify_gates(
-        _ExecutedAttempt(
-            pulse=trial,
-            intent=_AttemptIntent(
-                bearing_objective=bearing_objective,
-                observe_label="letrun",
-                target_observe_label="letrun-target",
-                motion=MotionKind.COAST_HOLDING_WORLD,
-            ),
-        ),
+        _ExecutedAttempt(pulse=trial, bearing=bearing),
         frame,
         state,
         ctx,

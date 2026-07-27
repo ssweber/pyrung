@@ -11,6 +11,8 @@ from pyrung.core.analysis.pilot.compass import (
     ProbeExhaustedObservation,
 )
 from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
     Bearing,
     BearingObjective,
     Coast,
@@ -24,7 +26,6 @@ from pyrung.core.analysis.pilot.navigation import (
     act_identity,
     pulse_identity,
 )
-from pyrung.core.analysis.pilot.options import _CandidateSource
 
 
 @dataclass
@@ -49,7 +50,7 @@ def _candidate(tag: str) -> SimpleNamespace:
         tag=tag,
         value=True,
         pair=(tag, True),
-        source=_CandidateSource.TRACE,
+        source=ActSource.TRACE,
         current_note="",
         route_prescribed=False,
         influence_prescribed=False,
@@ -58,10 +59,18 @@ def _candidate(tag: str) -> SimpleNamespace:
         program_note="",
         bearing_channel_tag=None,
         bearing_channel_value=None,
+        provenance=(),
+        wake=None,
+        program_context_actions=(),
     )
 
 
-def _options(*candidates, stuck_reason=None):
+def _options(
+    *candidates,
+    stuck_reason=None,
+    prescribed_batch=None,
+    active_trace_actions=(),
+):
     return SimpleNamespace(
         completion_frontier=(),
         route_plan=None,
@@ -69,8 +78,8 @@ def _options(*candidates, stuck_reason=None):
         prerequisite_rungs=(),
         wait_prescribed=False,
         wait_reason=None,
-        prescribed_batch=None,
-        active_trace_actions=(),
+        prescribed_batch=prescribed_batch,
+        active_trace_actions=active_trace_actions,
         stuck_reason=stuck_reason,
     )
 
@@ -145,6 +154,10 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert isinstance(result, Bearing)
     assert isinstance(result.act, Pulse)
     assert result.act.action == ("First", True)
+    assert result.act.policy.source is ActSource.TRACE
+    assert result.act.policy.action_pairs == (("First", True),)
+    assert result.act.policy.applied == (("First", True),)
+    assert not hasattr(result.act, "option")
     assert result.objective.target == TargetSpec("Target", True)
     assert result.objective.frontier == ()
     assert not hasattr(result, "path")
@@ -153,6 +166,35 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert result.trace.world.frame is world.frame
     assert result.trace.candidates.candidates == (first,)
     assert not hasattr(result.trace, "readings")
+
+
+def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+    from pyrung.core.analysis.pilot.navigation import BatchPulse
+
+    actions = (("First", True), ("Gate", True))
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(prescribed_batch=actions),
+    )
+
+    compass = Compass()
+    result = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, BatchPulse)
+    assert result.act.policy.source is ActSource.LEARNED
+    assert result.act.policy.action_pairs == actions
+    assert result.act.policy.applied == actions
+    assert result.act.policy.observe_label == "batch"
+    assert result.act.policy.target_observe_label == "batch-target"
+    assert result.act.policy.influence_prescribed
+    assert not result.act.policy.chase_regression_causes
 
 
 def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
@@ -222,9 +264,12 @@ def test_open_operation_maintenance_owns_before_a_sibling_intervention(
     destroy = Bearing(
         ("world",),
         Pulse(
-            ("Destroy", True),
-            (("Destroy", True),),
-            _candidate("Destroy"),
+            ActPolicy(
+                source=ActSource.TRACE,
+                action_pairs=(("Destroy", True),),
+                applied=(("Destroy", True),),
+                nogood_pair=("Destroy", True),
+            )
         ),
         BearingObjective(target),
     )
@@ -283,9 +328,9 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
 def test_coast_act_carries_only_immediate_heading() -> None:
     act = Coast(
         "bearing",
+        ActPolicy(source=ActSource.ROUTE),
         channel_tag="State",
         target_value=2,
-        route_prescribed=True,
     )
 
     assert act.channel_tag == "State"
@@ -477,7 +522,14 @@ def test_stale_bearing_cannot_execute() -> None:
     )
     bearing = Bearing(
         world_key=("stale",),
-        act=Pulse(("Cmd", True), (("Cmd", True),), _candidate("Cmd")),
+        act=Pulse(
+            ActPolicy(
+                source=ActSource.TRACE,
+                action_pairs=(("Cmd", True),),
+                applied=(("Cmd", True),),
+                nogood_pair=("Cmd", True),
+            )
+        ),
         objective=BearingObjective(TargetSpec("Target", True)),
     )
     with pytest.raises(StaleBearingError):

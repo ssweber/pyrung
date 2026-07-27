@@ -5,11 +5,18 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
+from pyrung.core.analysis.pilot._ops import (
+    _pilot_world_key,
+    _StateKeyConfig,
+    wait_edge_nogood,
+)
 from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
     BatchPulse,
     Bearing,
     BearingObjective,
+    ChannelHeading,
     Coast,
     Dwell,
     NavigationConstraints,
@@ -26,7 +33,6 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _candidate_applied,
-    _CandidateSource,
     _current_work_evidence,
 )
 from pyrung.core.analysis.pilot.trace import (
@@ -39,7 +45,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
-from pyrung.core.analysis.pilot.types import _IterationFrame
+from pyrung.core.analysis.pilot.types import MotionKind, _IterationFrame
 from pyrung.core.analysis.sp_values import _values_match
 
 _PROBE_BUDGET = 2
@@ -348,6 +354,27 @@ def _bearing(
     )
 
 
+def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolicy:
+    """Materialize one private candidate as navigation's durable act policy."""
+
+    heading = (
+        ChannelHeading(option.bearing_channel_tag, option.bearing_channel_value)
+        if option.bearing_channel_tag is not None
+        else None
+    )
+    return ActPolicy(
+        source=option.source,
+        action_pairs=(option.pair,),
+        applied=applied,
+        nogood_pair=option.pair,
+        heading=heading,
+        provenance=option.provenance,
+        wake=option.wake,
+        note=option.current_note or option.program_note,
+        context_actions=option.program_context_actions,
+    )
+
+
 def _orient_read(
     compass: Any,
     world: OrientationWorld,
@@ -413,12 +440,33 @@ def _orient_read(
         route_from = route_plan.first_edge.from_value if route_plan is not None else None
         route_target = route_plan.first_edge.to_value if route_plan is not None else None
         preserve_route_heading = route_prescribed and heading is not None
+        channel_tag = heading[0] if heading is not None else route_channel
+        target_value = heading[1] if heading is not None else route_target
+        wait_channel = route_channel or channel_tag
+        wait_nogood = (
+            wait_edge_nogood(
+                wait_channel,
+                route_from if route_channel is not None else world.snapshot.get(wait_channel),
+                route_target if route_channel is not None else target_value,
+            )
+            if wait_channel is not None
+            else None
+        )
         act = Coast(
             "bearing",
-            channel_tag=heading[0] if heading is not None else route_channel,
-            target_value=heading[1] if heading is not None else route_target,
+            ActPolicy(
+                source=ActSource.ROUTE if route_prescribed else ActSource.PROGRAM,
+                nogood_pair=wait_nogood,
+                heading=(
+                    ChannelHeading(channel_tag, target_value, candidates.advance_condition)
+                    if channel_tag is not None
+                    else None
+                ),
+                motion=MotionKind.COAST_TO_BEARING,
+            ),
+            channel_tag=channel_tag,
+            target_value=target_value,
             boundary=candidates.advance_condition,
-            route_prescribed=route_prescribed,
             route_channel_tag=route_channel if preserve_route_heading else None,
             route_from_value=route_from if preserve_route_heading else None,
             route_target_value=route_target if preserve_route_heading else None,
@@ -433,7 +481,14 @@ def _orient_read(
             )
 
     if candidates.prescribed_batch:
-        act = BatchPulse(tuple(candidates.prescribed_batch), "learned")
+        actions = tuple(candidates.prescribed_batch)
+        act = BatchPulse(
+            ActPolicy(
+                source=ActSource.LEARNED,
+                action_pairs=actions,
+                applied=actions,
+            )
+        )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _bearing(
                 world,
@@ -445,7 +500,7 @@ def _orient_read(
 
     for option in candidates.candidates:
         applied = _candidate_applied(option, candidates, world.context)
-        act = Pulse(option.pair, applied, option)
+        act = Pulse(_pulse_policy(option, applied))
         if compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             continue
         return _bearing(
@@ -456,8 +511,8 @@ def _orient_read(
             rationale=(
                 option.current_note
                 or getattr(option, "program_note", None)
-                or ("static route edge" if option.source is _CandidateSource.ROUTE else "")
-                or ("learned transition" if option.source is _CandidateSource.INFLUENCE else "")
+                or ("static route edge" if option.source is ActSource.ROUTE else "")
+                or ("learned transition" if option.source is ActSource.INFLUENCE else "")
                 or "ranked trace action"
             ),
         )
@@ -467,7 +522,14 @@ def _orient_read(
     # call recomputes before considering another width.
     active = tuple(candidates.active_trace_actions)
     for width in range(2, len(active) + 1):
-        act = BatchPulse(active[:width], "widening")
+        actions = active[:width]
+        act = BatchPulse(
+            ActPolicy(
+                source=ActSource.WIDENING,
+                action_pairs=actions,
+                applied=actions,
+            )
+        )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _bearing(
                 world,
@@ -488,10 +550,21 @@ def _orient_read(
 
     terminal: Coast | Dwell
     if compass.knowledge.coast_receipt(world.world_key) is None:
-        terminal = Coast("terminal")
+        terminal = Coast(
+            "terminal",
+            ActPolicy(
+                source=ActSource.TERMINAL,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+            ),
+        )
         rationale = "hold the current macro-state and allow program motion"
     else:
-        terminal = Dwell()
+        terminal = Dwell(
+            ActPolicy(
+                source=ActSource.TERMINAL,
+                motion=MotionKind.COAST_HOLDING_WORLD,
+            )
+        )
         rationale = "terminal coast already observed; run one verified dwell"
     if not compass.knowledge.act_is_nogood(world.world_key, act_identity(terminal)):
         return _bearing(

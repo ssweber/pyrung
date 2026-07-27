@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.gauge import GaugeReceipt
-    from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+    from pyrung.core.analysis.pilot.navigation import Bearing, BearingObjective, TargetSpec
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -723,24 +723,10 @@ class _PulseState:
     # Carry that exact correction with the fork so later gates cannot detach or
     # reconstruct the operation they are judging.
     confirmed_correction: _ConfirmedCorrection | None = None
-
-
-@dataclass(frozen=True)
-class _AttemptIntent:
-    """Navigation's declared act and the policy verification must preserve."""
-
-    bearing_objective: BearingObjective
-    action_pairs: tuple[_ActionPair, ...] = ()
-    applied: tuple[_ActionPair, ...] = ()
-    observe_label: str = "accept"
-    target_observe_label: str = "target"
-    influence_prescribed: bool = False
-    route_prescribed: bool = False
-    nogood_pair: _ActionPair | None = None
-    regression_nogoods: frozenset[_ActionPair] = frozenset()
-    chase_regression_causes: bool = True
+    # Execution-owned channel selection. Navigation may declare a heading on
+    # its ActPolicy, but only a physical coast can identify a terminal
+    # departure or choose between an inner boundary and its outer route edge.
     channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
-    motion: MotionKind = MotionKind.INTERVENTION
 
 
 @dataclass(frozen=True)
@@ -748,7 +734,7 @@ class _ExecutedAttempt:
     """One declared attempt paired with the exact physical evidence it produced."""
 
     pulse: _PulseState
-    intent: _AttemptIntent
+    bearing: Bearing
 
 
 @dataclass(frozen=True)

@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.analysis.graph import PlanStep
 from pyrung.core.analysis.pilot._ops import _rung_execution_receipt, _rung_identity
 from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
     BatchPulse,
     Coast,
     Dwell,
@@ -37,6 +39,7 @@ from pyrung.core.validation.render import operand_name
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.compass import Compass
+    from pyrung.core.analysis.pilot.options import _Candidate
 
 
 def _investigation_started_event(
@@ -342,7 +345,7 @@ def _candidates_built_payload(
     candidates: Any, lever_notes: dict[str, str] | None = None
 ) -> dict[str, Any]:
     return {
-        "candidates": tuple(_candidate_payload(c) for c in candidates.candidates),
+        "candidates": tuple(_candidate_read_payload(c) for c in candidates.candidates),
         "trace_actions": candidates.trace_actions,
         "trace_action_details": candidates.trace_action_details,
         "active_trace_actions": candidates.active_trace_actions,
@@ -407,7 +410,35 @@ def _program_step_payload(step: Any) -> dict[str, Any] | None:
     }
 
 
-def _candidate_payload(candidate: Any) -> dict[str, Any]:
+def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
+    pair = policy.primary_action
+    if pair is None:
+        raise ValueError("candidate recording requires one primary action")
+    tag, value = pair
+    return {
+        "tag": tag,
+        "value": value,
+        "pair": pair,
+        "influence_prescribed": policy.influence_prescribed,
+        "route_prescribed": policy.source is ActSource.ROUTE,
+        "bearing_channel_tag": (policy.heading.channel_tag if policy.heading is not None else None),
+        "bearing_channel_value": (
+            policy.heading.target_value if policy.heading is not None else None
+        ),
+        "current_prescribed": policy.source is ActSource.CURRENT,
+        "current_note": policy.note if policy.source is ActSource.CURRENT else "",
+        "program_prescribed": policy.source is ActSource.PROGRAM,
+        "program_note": policy.note if policy.source is ActSource.PROGRAM else "",
+        "program_context_actions": policy.context_actions,
+        "provenance": policy.provenance,
+        "wake": policy.wake,
+        "prescribed": policy.source is not ActSource.TRACE,
+    }
+
+
+def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
+    """Render one unselected option reading before Orientation owns an act."""
+
     return {
         "tag": candidate.tag,
         "value": candidate.value,
@@ -423,7 +454,7 @@ def _candidate_payload(candidate: Any) -> dict[str, Any]:
         "program_context_actions": candidate.program_context_actions,
         "provenance": candidate.provenance,
         "wake": candidate.wake,
-        "prescribed": candidate.source != "trace",
+        "prescribed": candidate.source is not ActSource.TRACE,
     }
 
 
@@ -512,7 +543,7 @@ def _zoom_accepted_payload(trial: _TrialResult) -> dict[str, Any]:
 
 
 def _accepted_payload(
-    candidate: Any,
+    policy: ActPolicy,
     trial: _TrialResult,
     frame: _IterationFrame,
     state: _PilotState,
@@ -535,9 +566,9 @@ def _accepted_payload(
     return {
         "index": 0,
         "candidate": trial.candidate,
-        "candidate_detail": _candidate_payload(candidate),
+        "candidate_detail": _candidate_payload(policy),
         "applied": trial.applied,
-        "co_actions": tuple(pair for pair in trial.applied if pair != candidate.pair),
+        "co_actions": tuple(pair for pair in trial.applied if pair != policy.primary_action),
         "gates": trial.gate_events,
         "accepted_because": {
             "gate_events": trial.gate_events,
@@ -589,7 +620,7 @@ def _act_event(
                 {
                     "index": 0,
                     "total": 1,
-                    "candidate": _candidate_payload(act.option),
+                    "candidate": _candidate_payload(act.policy),
                     "applied": act.applied,
                     "co_actions": tuple(pair for pair in act.applied if pair != act.action),
                 },
@@ -601,7 +632,7 @@ def _act_event(
                 scan,
                 {
                     "index": 0,
-                    "candidate": _candidate_payload(act.option),
+                    "candidate": _candidate_payload(act.policy),
                     "applied": act.applied,
                     "co_actions": tuple(pair for pair in act.applied if pair != act.action),
                     "gates": attempt.gate_events,
@@ -611,7 +642,7 @@ def _act_event(
         return PilotEvent(
             "candidate_accepted",
             scan,
-            _accepted_payload(act.option, trial, frame, state),
+            _accepted_payload(act.policy, trial, frame, state),
         )
 
     if kind in {"coast", "dwell"}:
@@ -639,7 +670,7 @@ def _act_event(
     assert kind == "batch" and isinstance(act, BatchPulse)
     if phase == "try":
         return None
-    label = "batch" if act.source == "learned" else "widening"
+    label = "batch" if act.policy.observe_label == "batch" else "widening"
     if phase == "rejected":
         assert attempt is not None
         return PilotEvent(

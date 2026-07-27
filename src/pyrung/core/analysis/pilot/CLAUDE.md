@@ -123,6 +123,13 @@ should consume the first owner's result.
   `TargetSpec` and complete unresolved frontier travel unchanged through
   execution and verification, and recovery consumes that receipt rather than
   rebuilding intent from the global context
+- Navigation act policy: `orientation.py::_orient_read` materializes one
+  immutable `navigation.ActPolicy` from the selected private option or wait.
+  `steer.execute` applies that declared policy without decoding provenance;
+  `_ExecutedAttempt` carries the original `Bearing` beside physical
+  `_PulseState` evidence, and recording renders the same policy. A
+  `ChannelHeading` is navigation's declaration; a coast's selected landing
+  remains execution evidence on `_PulseState`.
 - Option materialization and ranking: `options.py::_build_candidates`; its
   `WaitRead` keeps each wait prescription attached to its discovered inputs,
   and `_AdmittedWait` carries both through the ordinary admission policy before

@@ -265,6 +265,12 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     """The scan gate receives every real settle snapshot, not only its endpoint."""
     from pyrung.core.analysis.pilot import steer
     from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
+    from pyrung.core.analysis.pilot.navigation import (
+        Bearing,
+        BearingObjective,
+        Dwell,
+        TargetSpec,
+    )
     from pyrung.core.analysis.pilot.types import _AttemptResult
 
     Run = Bool("Run", default=True)
@@ -307,7 +313,12 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
 
     monkeypatch.setattr(steer, "verify_gates", _verify)
 
-    steer._try_terminal_dwell(frame, state, ctx, SimpleNamespace())
+    bearing = Bearing(
+        frame.key,
+        Dwell(),
+        BearingObjective(TargetSpec("Target", True)),
+    )
+    steer._try_terminal_dwell(bearing, frame, state, ctx)
 
     assert any(snap["Mid"] is True for snap in captured["wait_snaps"])
     assert captured["wait_snaps"][-1]["Target"] is True

@@ -23,14 +23,22 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
-from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+from pyrung.core.analysis.pilot.navigation import (
+    ActPolicy,
+    ActSource,
+    BatchPulse,
+    Bearing,
+    BearingObjective,
+    ChannelHeading,
+    Pulse,
+    TargetSpec,
+)
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
-    _AttemptIntent,
     _ConfirmedCorrection,
     _ExecutedAttempt,
     _IterationFrame,
@@ -415,20 +423,17 @@ class TestVerifyGates:
             TargetSpec(target.name, True),
             (("CompletionState", 17),),
         )
-        intent = _AttemptIntent(
-            bearing_objective=objective,
+        policy = ActPolicy(
+            source=ActSource.ROUTE,
             action_pairs=((source.name, True),),
             applied=((source.name, True), ("VerifyCoaction", False)),
-            target_observe_label="bearing-target",
-            route_prescribed=True,
-            regression_nogoods=frozenset({(source.name, True)}),
-            chase_regression_causes=False,
-            channel_motion=ChannelMotion(target.name, True),
+            heading=ChannelHeading(target.name, True),
             motion=MotionKind.COAST_TO_BEARING,
         )
+        bearing = Bearing(("world",), Pulse(policy), objective)
 
         result = verify_gates(
-            _ExecutedAttempt(pulse=pulse, intent=intent),
+            _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
             SimpleNamespace(),
             SimpleNamespace(
@@ -439,14 +444,14 @@ class TestVerifyGates:
 
         assert result.trial is not None
         assert result.trial.fork is pulse.fork
-        assert result.trial.candidate == dict(intent.action_pairs)
-        assert result.trial.applied == intent.applied
-        assert result.trial.observe_label == intent.target_observe_label
+        assert result.trial.candidate == dict(policy.action_pairs)
+        assert result.trial.applied == policy.applied
+        assert result.trial.observe_label == policy.target_observe_label
         assert result.trial.bearing_objective is objective
         assert result.trial.route_prescribed is True
-        assert result.trial.regression_nogoods == intent.regression_nogoods
-        assert result.trial.chase_regression_causes is False
-        assert result.trial.channel_motion.channel_tag == intent.channel_motion.channel_tag
+        assert result.trial.regression_nogoods == policy.regression_nogoods
+        assert result.trial.chase_regression_causes is policy.chase_regression_causes
+        assert result.trial.channel_motion.channel_tag == policy.heading.channel_tag
         assert result.trial.channel_motion.target_value is True
         assert result.trial.channel_motion.reached
         assert result.trial.motion is MotionKind.COAST_TO_BEARING
@@ -464,16 +469,19 @@ class TestVerifyGates:
             wait_snaps=(),
             post_pulse_snap=after,
             confirmed_correction=None,
+            channel_motion=ChannelMotion(),
         )
-        intent = _AttemptIntent(
-            bearing_objective=BearingObjective(TargetSpec("Target", True)),
+        objective = BearingObjective(TargetSpec("Target", True))
+        policy = ActPolicy(
+            source=ActSource.TRACE,
             action_pairs=(("Reset", True),),
             applied=(("Reset", True),),
             nogood_pair=("Reset", True),
         )
+        bearing = Bearing(("world",), Pulse(policy), objective)
 
         result = verify_gates(
-            _ExecutedAttempt(pulse=pulse, intent=intent),
+            _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
             SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
             SimpleNamespace(
@@ -497,17 +505,19 @@ class TestVerifyGates:
             wait_snaps=(),
             post_pulse_snap=after,
             confirmed_correction=None,
+            channel_motion=ChannelMotion(),
         )
         actions = (("Reset", True), ("ResetGate", True))
-        intent = _AttemptIntent(
-            bearing_objective=BearingObjective(TargetSpec("Target", True)),
+        objective = BearingObjective(TargetSpec("Target", True))
+        policy = ActPolicy(
+            source=ActSource.WIDENING,
             action_pairs=actions,
             applied=actions,
-            regression_nogoods=frozenset(actions),
         )
+        bearing = Bearing(("world",), BatchPulse(policy), objective)
 
         result = verify_gates(
-            _ExecutedAttempt(pulse=pulse, intent=intent),
+            _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
             SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
             SimpleNamespace(

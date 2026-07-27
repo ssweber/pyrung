@@ -73,8 +73,8 @@ plan proposed:
 - `program_step.ProgramStep` derives `handoff_by_action`,
   `uniform_handoff_boundary`, `required_pairs`, and `inputs_with_lifetime` once in
   `__post_init__`.
-- `options._CandidateSource` replaces four stored provenance booleans on
-  `_Candidate`; the compatibility booleans are derived properties.
+- `navigation.ActSource` replaces four stored provenance booleans on the private
+  `_Candidate`, then travels inside the selected act's immutable `ActPolicy`.
 - `trace.TraceReadConstraints` owns the common trace-read bundle.
 - `_HoldLogEntry.tags` and `_StepContext.steady_holds` are derived from executable
   rung evidence rather than stored in parallel.
@@ -137,55 +137,6 @@ Use `devtools/pilot_divergence.py` for the first changed decision and
 ## B. Preserve objects across module seams
 
 This is the main cleanup program. Items are ordered by leverage.
-
-### B1. Carry navigation policy intact from option materialization into verification
-
-**Current dehydration chain**
-
-`options._Candidate` -> `navigation.Pulse.option: Any` ->
-`steer.execute` interprets the private `_CandidateSource` ->
-`types._AttemptIntent` stores parallel booleans and scalars ->
-`verify` consumes those reconstructed fields.
-
-`steer.py` currently imports `_CandidateSource` from `options.py` and decides:
-
-- whether a Pulse is influence-prescribed;
-- whether route/current provenance deserves prescribed-bearing policy;
-- which channel/value forms `ChannelMotion`;
-- which nogoods and causal-chase policy apply.
-
-Batch source literals are decoded a second way in the same dispatcher.
-Execution is therefore re-deciding navigation policy instead of executing a
-declared act.
-
-**Required shape**
-
-- Give each `NavigationAct` a typed, immutable verification policy constructed by
-  the navigation owner. Exact names are secondary; the object must carry source
-  category, action artifact, observation labels, nogood scope, causal policy, and
-  optional channel heading together.
-- `Bearing` remains the declaration. `steer.execute` validates freshness, installs
-  prerequisites, and executes the act; it does not interpret candidate provenance.
-- `_ExecutedAttempt` carries the original bearing/act policy plus physical
-  execution evidence. Remove `_AttemptIntent` fields that duplicate the act.
-- Recording consumes the same candidate/policy object; it must not require a
-  parallel diagnostic copy.
-
-Prefer eliminating the `_Candidate` crossing entirely or moving its cross-module
-contract to `navigation.py`; do not leave `Pulse.option: Any`.
-
-**Why**
-
-One navigation decision should survive execution unchanged. This removes the
-highest-value dehydrate/rehydrate seam and makes source-specific behavior visible
-on the declared act.
-
-**LOC:** about -30 to -60.
-
-**Risk:** medium; wide but intended to be behavior-preserving.
-
-**Gate:** `test_pilot_orientation_contract.py`, `test_pilot_candidate_wait.py`,
-`test_pilot_steer.py`, `test_pilot_verify.py`, recording tests, then Tumbler.
 
 ### B2. Make `_CandidateList` a composition of owned readings, not a flattened state bag
 
@@ -279,8 +230,8 @@ precision and invites later modules to decide the comparison again.
 
 **Current dehydration chain**
 
-`_PulseState` + `_AttemptIntent` become `_ExecutedAttempt`; `verify._trial_result`
-copies their fields into `_TrialResult`; ordinary acceptance then `replace()`s
+The original `Bearing` + physical `_PulseState` become `_ExecutedAttempt`;
+`verify._trial_result` copies their fields into `_TrialResult`; ordinary acceptance then `replace()`s
 `new_key`, `trend`, `outcome`, and `assessment`.
 
 Target acceptance intentionally lacks those four fields, while ordinary accepted
@@ -308,7 +259,7 @@ removes a large class of "field happens to be None on this path" reasoning.
 **LOC:** roughly -40 to -90.
 
 **Risk:** high because the receipt crosses verify, pilot, recording, progress, and
-investigation. Land after B1 and B3 so it composes stable objects.
+investigation. Land after B3 so it composes stable objects.
 
 **Gate:** all verify/outcome/progress/recording tests, departure tests, then full
 pilot and Tumbler.
@@ -727,7 +678,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Navigation continuity:** B1, then B2.
+1. **Navigation continuity:** B2.
 2. **Trial evidence continuity:** B3, B4, then B5.
 3. **Shared decisions:** C1 and C2.
 4. **Control flow:** D1/D2/D3.

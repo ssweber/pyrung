@@ -342,9 +342,16 @@ class TestSimultaneousTerminals:
         assert receipt.reached
 
     def test_target_and_avoid_same_scan_preserve_typed_avoid_evidence(self):
-        from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+        from pyrung.core.analysis.pilot.navigation import (
+            ActPolicy,
+            ActSource,
+            Bearing,
+            BearingObjective,
+            Pulse,
+            TargetSpec,
+        )
         from pyrung.core.analysis.pilot.types import (
-            _AttemptIntent,
+            ChannelMotion,
             _AvoidMember,
             _AvoidPredicate,
             _ExecutedAttempt,
@@ -390,10 +397,17 @@ class TestSimultaneousTerminals:
                     wait_snaps=(),
                     post_pulse_snap=before,
                     confirmed_correction=None,
+                    channel_motion=ChannelMotion(),
                 ),
-                intent=_AttemptIntent(
-                    bearing_objective=BearingObjective(target_spec),
-                    nogood_pair=("Enable", True),
+                bearing=Bearing(
+                    ("world",),
+                    Pulse(
+                        ActPolicy(
+                            source=ActSource.TRACE,
+                            nogood_pair=("Enable", True),
+                        )
+                    ),
+                    BearingObjective(target_spec),
                 ),
             ),
             SimpleNamespace(snap=before),

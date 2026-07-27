@@ -114,21 +114,22 @@ def _trial_result(
 ) -> _TrialResult:
     """Preserve one executed attempt as verification's accepted receipt."""
     trial = attempt.pulse
-    intent = attempt.intent
+    bearing = attempt.bearing
+    policy = bearing.act.policy
     return _TrialResult(
         fork=trial.fork,
         scan_before=trial.scan_before,
-        candidate=dict(intent.action_pairs),
-        applied=intent.applied,
+        candidate=dict(policy.action_pairs),
+        applied=policy.applied,
         before_snap=frame.snap,
         post_pulse_snap=trial.post_pulse_snap,
         fork_snap=trial.snap,
         observe_label=observe_label,
-        bearing_objective=intent.bearing_objective,
-        route_prescribed=intent.route_prescribed,
-        motion=intent.motion,
-        regression_nogoods=intent.regression_nogoods,
-        chase_regression_causes=intent.chase_regression_causes,
+        bearing_objective=bearing.objective,
+        route_prescribed=policy.route_prescribed,
+        motion=policy.motion,
+        regression_nogoods=policy.regression_nogoods,
+        chase_regression_causes=policy.chase_regression_causes,
         gate_events=tuple(gate_events),
         channel_motion=channel_motion,
         coast_receipt=trial.coast_receipt,
@@ -488,10 +489,23 @@ def verify_gates(
     converge here.
     """
     trial = attempt.pulse
-    intent = attempt.intent
-    action_pairs = intent.action_pairs
-    nogood_pair = intent.nogood_pair
-    channel_motion = _owned_channel_motion(trial, intent.channel_motion)
+    bearing = attempt.bearing
+    policy = bearing.act.policy
+    action_pairs = policy.action_pairs
+    nogood_pair = policy.nogood_pair
+    declared_motion = (
+        ChannelMotion(
+            policy.heading.channel_tag,
+            policy.heading.target_value,
+            policy.heading.boundary,
+        )
+        if policy.heading is not None
+        else ChannelMotion()
+    )
+    channel_motion = _owned_channel_motion(
+        trial,
+        trial.channel_motion if trial.channel_motion.active else declared_motion,
+    )
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     retry_avoid_names: list[str] = []
@@ -515,7 +529,7 @@ def verify_gates(
             trial=_trial_result(
                 attempt,
                 frame,
-                intent.target_observe_label,
+                policy.target_observe_label,
                 gate_events,
                 channel_motion,
             ),
@@ -576,7 +590,7 @@ def verify_gates(
     gauge = getattr(state, "gauge", None)
     if (
         action_pairs
-        and intent.motion is MotionKind.INTERVENTION
+        and policy.motion is MotionKind.INTERVENTION
         and gauge is not None
         and gauge.compare(frame.snap, trial.snap) == "behind"
     ):
@@ -592,7 +606,7 @@ def verify_gates(
             )
         )
         return _reject(
-            nogoods=({nogood_pair} if nogood_pair is not None else intent.regression_nogoods)
+            nogoods=({nogood_pair} if nogood_pair is not None else policy.regression_nogoods)
         )
 
     # Reaching the target does not pardon an intervention that got there by
@@ -640,7 +654,7 @@ def verify_gates(
         state,
         pending=pending,
         ordinal_advanced=ordinal_advanced,
-        influence_prescribed=intent.influence_prescribed,
+        influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -653,9 +667,9 @@ def verify_gates(
         frame,
         state,
         ctx,
-        target=intent.bearing_objective.target,
+        target=bearing.objective.target,
         ordinal_advanced=ordinal_advanced,
-        influence_prescribed=intent.influence_prescribed,
+        influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -672,7 +686,7 @@ def verify_gates(
         dead_end.trend,
         dead_end.has_new_frontier,
         chase_cause_roots,
-        route_prescribed=intent.route_prescribed,
+        route_prescribed=policy.route_prescribed,
         channel_motion=channel_motion,
         channel_progressed=ordinal_advanced,
     )
@@ -713,7 +727,7 @@ def verify_gates(
             _trial_result(
                 attempt,
                 frame,
-                intent.observe_label,
+                policy.observe_label,
                 gate_events,
                 channel_motion,
             ),

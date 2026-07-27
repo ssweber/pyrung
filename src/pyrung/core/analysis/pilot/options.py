@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from itertools import product
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,7 +32,7 @@ from pyrung.core.analysis.pilot.compass import (
     is_composite_action,
     unique_legal_current_reading,
 )
-from pyrung.core.analysis.pilot.navigation import pulse_identity
+from pyrung.core.analysis.pilot.navigation import ActSource, pulse_identity
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     _all_nodes,
@@ -52,21 +51,13 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-class _CandidateSource(StrEnum):
-    ROUTE = "route"
-    TRACE = "trace"
-    INFLUENCE = "influence"
-    CURRENT = "current"
-    PROGRAM = "program"
-
-
 @dataclass(frozen=True)
 class _Candidate:
     """One action option with exactly one provenance category."""
 
     tag: str
     value: Any
-    source: _CandidateSource
+    source: ActSource
     provenance: tuple[str, ...] = ()
     wake: int | None = None
     # The first compass edge's executable promise. Trial verification uses this for every
@@ -92,19 +83,19 @@ class _Candidate:
 
     @property
     def route_prescribed(self) -> bool:
-        return self.source is _CandidateSource.ROUTE
+        return self.source is ActSource.ROUTE
 
     @property
     def influence_prescribed(self) -> bool:
-        return self.source is _CandidateSource.INFLUENCE
+        return self.source is ActSource.INFLUENCE
 
     @property
     def current_prescribed(self) -> bool:
-        return self.source is _CandidateSource.CURRENT
+        return self.source is ActSource.CURRENT
 
     @property
     def program_prescribed(self) -> bool:
-        return self.source is _CandidateSource.PROGRAM
+        return self.source is ActSource.PROGRAM
 
 
 @dataclass(frozen=True)
@@ -1460,13 +1451,13 @@ def _build_candidates(
             tag=pair[0],
             value=pair[1],
             source=(
-                _CandidateSource.ROUTE
+                ActSource.ROUTE
                 if pair in route_candidate_set
-                else _CandidateSource.INFLUENCE
+                else ActSource.INFLUENCE
                 if prescribed_action is not None and pair == prescribed_action
-                else _CandidateSource.PROGRAM
+                else ActSource.PROGRAM
                 if pair in program_pairs
-                else _CandidateSource.TRACE
+                else ActSource.TRACE
             ),
             provenance=detail.provenance if detail is not None else (),
             wake=(
@@ -1549,7 +1540,7 @@ def _build_candidates(
             candidates.append(
                 replace(
                     _candidate_for(pair),
-                    source=_CandidateSource.CURRENT,
+                    source=ActSource.CURRENT,
                     current_note=current_action.note,
                     bearing_channel_tag=ctx.target.tag,
                     bearing_channel_value=current_action.to_state,
@@ -1628,13 +1619,13 @@ def _candidate_applied(
 
     # A route-prescribed command carries its co-actions (the one-shot edge gate);
     # they must fire in the same scan or the command rung never executes.
-    if candidate.source is _CandidateSource.ROUTE:
+    if candidate.source is ActSource.ROUTE:
         for co in candidates.route_co_actions:
             if co[0] not in seen:
                 actions.append(co)
                 seen.add(co[0])
 
-    if candidate.source is _CandidateSource.PROGRAM:
+    if candidate.source is ActSource.PROGRAM:
         for co in candidate.program_context_actions:
             # A pulse's own release/assert sequence is handled by _apply_pulse;
             # only independent context belongs in the atomic action set.
