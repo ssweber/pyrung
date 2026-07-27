@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import Bool, Program, Rung, out
+from pyrung import Bool, Int, Program, Real, Rung, copy, out
+from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
     _pilot_world_key,
@@ -23,21 +24,27 @@ from pyrung.core.analysis.pilot._ops import (
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Unknown
+from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
     _AttemptIntent,
     _ConfirmedCorrection,
     _ExecutedAttempt,
+    _IterationFrame,
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import (
     _gate_cycle,
+    _gate_dead_end,
     _gate_spin,
     _owned_channel_motion,
     verify_gates,
 )
 from pyrung.core.condition import CompareEq
+from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -284,6 +291,88 @@ class TestGateCycle:
 
 class TestGateDeadEnd:
     """Dead-end gate — frontier must be non-empty or async pending."""
+
+    def test_harness_model_is_not_post_trial_proof(self, monkeypatch):
+        """VERIFY requires the executed fork's live ramp, not its planning model."""
+        enable = Bool("VerifyHarness_Enable", external=True)
+        temp = Real(
+            "VerifyHarness_Temp",
+            physical=Physical("VerifyHarness_Sensor", profile=Ramp(up=1.0, down=-0.5)),
+            link=enable.name,
+        )
+        target = Int("VerifyHarness_Target")
+        with Program() as program:
+            with Rung(enable, temp >= 5.0):
+                copy(1, target)
+
+        plc = PLC(program, dt=0.010)
+        install_harness(plc)
+        pdg = build_program_graph(program)
+        captured_reads = []
+
+        def _post_trial_trace(*_args, constraints, **_kwargs):
+            captured_reads.append(constraints)
+            return TraceNode(target.name, 1)
+
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify.trace_back",
+            _post_trial_trace,
+        )
+        monkeypatch.setattr(
+            NavigationEvidence,
+            "frontier_status",
+            staticmethod(lambda *_args, **_kwargs: Unknown("no continuation")),
+        )
+
+        initial_snap = dict(plc.state.tags)
+        frame = _IterationFrame(
+            snap=initial_snap,
+            tree=TraceNode(target.name, 1),
+            key=("before",),
+            distance_before=1,
+            raw_trace_actions=(),
+            raw_trace_action_details=(),
+        )
+        state = SimpleNamespace()
+        ctx = SimpleNamespace(
+            pdg=pdg,
+            program=program,
+            steerable=frozenset({enable.name}),
+            clear_only=frozenset(),
+            opaque_loop=frozenset(),
+            pipeline_internal_tags=frozenset(),
+            route=None,
+            domain_prior=None,
+            avoid_pred=None,
+            via_pred=None,
+            blocked_route_actions=frozenset(),
+            compass=SimpleNamespace(knowledge=object()),
+        )
+
+        def _read(fork, key):
+            snap = dict(fork.state.tags)
+            return _gate_dead_end(
+                SimpleNamespace(fork=fork, snap=snap, key=key),
+                (),
+                frame,
+                state,
+                ctx,
+                target=TargetSpec(target.name, 1),
+                ordinal_advanced=False,
+                influence_prescribed=False,
+                nogood_pair=None,
+                gate_events=[],
+                collected_nogoods=[],
+                channel_motion=ChannelMotion(),
+            )
+
+        assert _read(plc, ("quiet",)) is None
+
+        plc.patch({enable.name: True})
+        plc.step()
+        assert _read(plc, ("ramping",)) is not None
+        assert len(captured_reads) == 2
+        assert all(read.harness is None for read in captured_reads)
 
     @pytest.mark.skip(reason="stub")
     def test_empty_frontier_is_dead_end(self): ...

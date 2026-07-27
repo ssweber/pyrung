@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from pyrung import (
     PLC,
     Bool,
@@ -24,9 +26,11 @@ from pyrung import (
     time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
+    TraceReadConstraints,
     _env_for,
     _rank_writers,
     _rewrite_internal_compare,
@@ -35,10 +39,12 @@ from pyrung.core.analysis.pilot.trace import (
     _TraceEnv,
     compute_reference_constants,
     trace_back,
+    trace_relational,
 )
 from pyrung.core.analysis.simplified import Atom
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.memory_block import Block
+from pyrung.core.physical import Physical, Ramp
 from pyrung.core.tag import TagType
 
 
@@ -374,6 +380,52 @@ def test_duplicate_action_merges_owned_lifetime_evidence():
 
     assert len(details) == 1
     assert details[0].until == Atom("Stage", "eq", 1)
+
+
+def test_context_trace_uses_live_harness_to_surface_ramp_driver():
+    """Planning may read a coupling to propose its real driver."""
+    enable = Bool("HarnessTrace_Enable", external=True)
+    temp = Real(
+        "HarnessTrace_Temp",
+        physical=Physical("HarnessTrace_Sensor", profile=Ramp(up=1.0, down=-0.5)),
+        link=enable.name,
+    )
+    stage = Int("HarnessTrace_Stage")
+    with Program() as logic:
+        with rung(enable, temp >= 5.0):
+            copy(1, stage)
+
+    plc = PLC(logic, dt=0.010)
+    feedback = install_harness(plc)
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, logic) - feedback
+    ctx = SimpleNamespace(
+        clear_only=frozenset(),
+        opaque_loop=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        domain_prior=None,
+        via_pred=None,
+    )
+
+    read = TraceReadConstraints.from_context(
+        ctx,
+        plc,
+        route=None,
+        avoid_pred=None,
+    )
+    tree = trace_relational(
+        Atom(temp.name, "ge", 5.0),
+        dict(plc.state.tags),
+        pdg,
+        logic,
+        steerable,
+        constraints=read,
+    )
+
+    assert read.harness is plc._harness
+    assert temp.name in feedback
+    assert temp.name not in steerable
+    assert tree.ordered_actions() == [(enable.name, True)]
 
 
 def _program_advance_counter():

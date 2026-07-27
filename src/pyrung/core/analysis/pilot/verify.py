@@ -354,6 +354,9 @@ def _gate_dead_end(
         ctx.steerable,
         # Same writer ranking as the frame trace, or the trend/frontier this
         # gate computes drifts against the tree the candidate came from.
+        # Deliberately omit the live harness: Orientation may use its coupling
+        # model to propose a driver, but post-trial proof comes only from
+        # executed evidence or _has_pending_effects(trial.fork) below.
         constraints=TraceReadConstraints(
             clear_only=ctx.clear_only,
             opaque_loop=ctx.opaque_loop,

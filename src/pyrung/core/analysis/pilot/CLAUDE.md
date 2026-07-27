@@ -128,6 +128,10 @@ should consume the first owner's result.
   and `_AdmittedWait` carries both through the ordinary admission policy before
   a coast can be selected
 - Local trial gates: `verify.py::verify_gates`
+- Physical planning versus proof: orientation's
+  `TraceReadConstraints.from_context` may use the live harness to propose a
+  coupling driver; `verify.py::_gate_dead_end` omits that model and
+  `_ops.py::_has_pending_effects` reads the executed fork for continued motion
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`; execution arms
   trial-start-clear members, `CoastReceipt.avoided` derives exact firings from
   typed events, and VERIFY consumes that receipt before target acceptance
@@ -241,6 +245,10 @@ investigation materializes their guarded installed form.
   operation's `AdvanceStep.progress` receipt is PILOT's observable evidence.
 - Learned or static route edges are suggestions. A live trial still passes the
   same verification gates.
+- A planning trace may read the live harness to identify a physical driver.
+  VERIFY's post-trial dead-end trace deliberately omits that proposal model;
+  continued physical motion needs executed evidence or a live pending effect on
+  the exact trial fork.
 - Static charts enumerate every source match, exact edges before wildcard
   edges. Callers own exclusions through `edge_allowed`: specificity is
   precedence, never a pre-filter veto of a surviving wildcard route.

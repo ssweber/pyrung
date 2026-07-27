@@ -134,36 +134,6 @@ preset)` to park at `Internal__Step == 102`; do not drive `how()` from cold.
 Use `devtools/pilot_divergence.py` for the first changed decision and
 `devtools/watch_pilot_decisions.py --stop-action TAG=VALUE` for candidate entry.
 
----
-
-## A. Correctness preconditions
-
-These are active soundness or contract issues. Keep their diffs separate from the
-ownership refactors below.
-
-### A3. Lock VERIFY's deliberate omission of the live harness
-
-`orientation._trace_for_route` / `_read_route_trees` use
-`TraceReadConstraints.from_context`, including the live harness, as a planning
-model. `verify._gate_dead_end` deliberately constructs a post-trial read without
-that harness and separately checks live
-`_has_pending_effects(trial.fork)`.
-
-The rationale is coherent: proposal may model hypothetical harness motion; proof
-must use the executed receipt or a currently pending live effect. Preserve the
-asymmetry unless a counterexample disproves it.
-
-**Work:** add a focused harness-linked ramp test. The harness may identify the
-driver during orientation, but VERIFY accepts continued motion only from executed
-or live-pending evidence.
-
-**LOC:** tests/documentation only unless the test finds a real rejected-progress
-case.
-
-**Risk:** low.
-
-**Gate:** `test_pilot_verify.py`, `test_pilot_trace.py`.
-
 ## B. Preserve objects across module seams
 
 This is the main cleanup program. Items are ordered by leverage.
@@ -757,14 +727,13 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Correctness:** A3.
-2. **Navigation continuity:** B1, then B2.
-3. **Trial evidence continuity:** B3, B4, then B5.
-4. **Shared decisions:** C1 and C2.
-5. **Control flow:** D1/D2/D3.
-6. **Recovery continuity:** B6, then D4.
-7. **Compiled residual replay:** E1, E2, then E3.
-8. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Navigation continuity:** B1, then B2.
+2. **Trial evidence continuity:** B3, B4, then B5.
+3. **Shared decisions:** C1 and C2.
+4. **Control flow:** D1/D2/D3.
+5. **Recovery continuity:** B6, then D4.
+6. **Compiled residual replay:** E1, E2, then E3.
+7. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
