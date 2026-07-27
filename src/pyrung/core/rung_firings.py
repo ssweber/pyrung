@@ -433,6 +433,38 @@ class RungFiringTimelines(Generic[K]):
                 best = candidate
         return best
 
+    def latest_value_transition_scan_at_or_before(
+        self,
+        rung_indices: frozenset[K],
+        tag_name: str,
+        value: Any,
+        scan_id: int,
+        *,
+        missing_is_unknown: bool = True,
+    ) -> int | None:
+        """Latest selected range position that may establish ``tag_name == value``.
+
+        Known nonmatching payloads are skipped at range granularity. Missing
+        tag data and fired-only payloads remain conservative candidates: the
+        caller must validate those scans. A stable pattern contributes only its
+        range start, not every later reassertion of the same value.
+        """
+        best: int | None = None
+        for rung_index in rung_indices:
+            timeline = self._timelines.get(rung_index)
+            if not timeline:
+                continue
+            candidate = _latest_potential_value_transition_at_or_before(
+                timeline,
+                tag_name,
+                value,
+                scan_id,
+                missing_is_unknown=missing_is_unknown,
+            )
+            if candidate is not None and (best is None or candidate > best):
+                best = candidate
+        return best
+
     def ever_fired(self) -> set[K]:
         """Rung indices with at least one range in their timeline."""
         return {idx for idx, tl in self._timelines.items() if tl}
@@ -917,3 +949,83 @@ def _latest_scan_in_ranges_at_or_before(
         return None
     range_ = timeline[lo - 1]
     return min(scan_id, range_.end_scan_id)
+
+
+def _latest_potential_value_transition_at_or_before(
+    timeline: list[RungFiringRange],
+    tag_name: str,
+    value: Any,
+    scan_id: int,
+    *,
+    missing_is_unknown: bool,
+) -> int | None:
+    """Latest potential transition to *value* from compressed range payloads."""
+    lo, hi = 0, len(timeline)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if timeline[mid].start_scan_id <= scan_id:
+            lo = mid + 1
+        else:
+            hi = mid
+
+    for index in range(lo - 1, -1, -1):
+        range_ = timeline[index]
+        effective_end = min(scan_id, range_.end_scan_id)
+        if effective_end < range_.start_scan_id:
+            continue
+        payload = range_.payload
+        if isinstance(payload, PatternRef):
+            if (
+                tag_name not in payload.pattern
+                and missing_is_unknown
+                or tag_name in payload.pattern
+                and payload.pattern[tag_name] == value
+            ):
+                return range_.start_scan_id
+            continue
+        if isinstance(payload, AlternatingRun):
+            for candidate in (effective_end, effective_end - 1):
+                if candidate < range_.start_scan_id:
+                    continue
+                parity = (candidate - range_.start_scan_id) % 2
+                pattern = payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
+                if (
+                    tag_name not in pattern
+                    and missing_is_unknown
+                    or tag_name in pattern
+                    and pattern[tag_name] == value
+                ):
+                    other = payload.pattern_on_odd if parity == 0 else payload.pattern_on_even
+                    if (
+                        tag_name in other
+                        and tag_name in pattern
+                        and other[tag_name] == pattern[tag_name]
+                    ):
+                        return range_.start_scan_id
+                    return candidate
+            continue
+        if isinstance(payload, ArithmeticRun):
+            if tag_name not in payload.base_pattern:
+                if missing_is_unknown:
+                    return effective_end
+                continue
+            base = payload.base_pattern[tag_name]
+            delta = payload.deltas.get(tag_name)
+            if delta is None:
+                if base == value:
+                    return range_.start_scan_id
+                continue
+            try:
+                offset = int((value - base) // delta)
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+            candidate = range_.start_scan_id + offset
+            if (
+                range_.start_scan_id <= candidate <= effective_end
+                and base + delta * offset == value
+            ):
+                return candidate
+            continue
+        # FiredOnly proves execution but deliberately discarded its value.
+        return range_.start_scan_id
+    return None

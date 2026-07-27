@@ -70,6 +70,55 @@ def test_history_latest_returns_chronological_window_with_bounds() -> None:
     assert runner.history.latest(-3) == []
 
 
+def test_previous_transition_queries_value_and_scan_boundary() -> None:
+    Enable = Bool("HistoryTransitionEnable", external=True)
+    Light = Bool("HistoryTransitionLight")
+
+    with Program() as program:
+        with Rung(Enable):
+            out(Light)
+
+    runner = PLC(program)
+    runner.patch({Enable.name: True})
+    runner.step()
+    runner.patch({Enable.name: False})
+    runner.step()
+    runner.patch({Enable.name: True})
+    runner.step()
+
+    latest = runner.history.previous_transition(Light)
+    previous_false = runner.history.previous_transition(Light.name, to=False)
+    bounded_true = runner.history.previous_transition(Light, to=True, at_or_before=2)
+
+    assert latest is not None
+    assert (latest.scan_id, latest.from_value, latest.to_value) == (3, False, True)
+    assert previous_false is not None
+    assert (previous_false.scan_id, previous_false.from_value, previous_false.to_value) == (
+        2,
+        True,
+        False,
+    )
+    assert bounded_true is not None
+    assert (bounded_true.scan_id, bounded_true.to_value) == (1, True)
+    assert runner.history.previous_transition(Light, to=None) is None
+
+
+def test_previous_transition_uses_recorded_external_input_changes() -> None:
+    Input = Bool("HistoryTransitionInput", external=True)
+    runner = PLC(logic=[])
+    runner.patch({Input.name: True})
+    runner.step()
+
+    transition = runner.history.previous_transition(Input, to=True)
+
+    assert transition is not None
+    assert (transition.tag_name, transition.scan_id, transition.to_value) == (
+        Input.name,
+        1,
+        True,
+    )
+
+
 def test_unbounded_history_retains_all_scans() -> None:
     runner = PLC(logic=[])
     runner.run(cycles=6)

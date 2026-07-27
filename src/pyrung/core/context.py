@@ -458,12 +458,11 @@ class ScanContext:
     def _finish_observed_capture(self, journal: dict[str, Any]) -> dict[str, Any]:
         """Close an observer journal and retain every attempted tag write.
 
-        Ordinary firing capture stores effective writes compactly.  An observed
-        scan answers a different question: which value did this exact rung
-        occurrence attempt to write, even when an earlier writer had already
-        placed the same value in the pending scan image?  The journal keys are
-        the exact write footprint, so reading their final pending values keeps
-        that evidence without changing the normal firing timelines.
+        Ordinary firing capture stores the final attempted value per scope. An
+        observed scan additionally preserves every rung occurrence, its entry
+        view, and its read footprint. The journal keys are the exact write
+        footprint, so reading their final pending values retains the attempted
+        values for that occurrence.
         """
         popped = self._capture_stack.pop()
         if popped is not journal:
@@ -558,32 +557,25 @@ class ScanContext:
     def _finalize_capture(
         self, journal: dict[str, Any], *, retain_all_writes: bool = False
     ) -> dict[str, Any] | None:
-        """Diff a closed capture scope's journal into its firing writes.
+        """Close a capture scope into its attempted firing writes.
 
-        Returns the (PDG-filtered) effective ``{tag: value}`` written during
-        the scope, or ``None`` only when the scope attempted no write at all.
-        A no-op reassertion and a non-empty raw diff emptied by the consumed-
-        tags filter both return ``{}``: the exact values remain unknown, but
-        the range-encoded firing timeline retains that this writer occurrence
-        executed. Consumers needing attempted values replay only that indexed
-        occurrence.
+        Returns the (PDG-filtered) final ``{tag: attempted_value}`` for the
+        scope, or ``None`` only when the scope attempted no write at all.
+        Recording attempts consistently matters when a later writer reasserts
+        the already-pending value: it still owns an execution occurrence, and
+        the range encoder can compact that stable value while causal lookup
+        skips known-nonmatching attempts without replaying them.
         """
         if not journal:
             return None
         pending = self._tags_pending
-        raw_writes = {
-            name: pending[name]
-            for name, old in journal.items()
-            if old is _MISSING or old != pending[name]
-        }
-        if not raw_writes:
-            return {}
+        attempted_writes = {name: pending[name] for name in journal}
         if retain_all_writes:
-            return raw_writes
+            return attempted_writes
         consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
         if consumed is None:
-            return raw_writes
-        return {name: val for name, val in raw_writes.items() if name in consumed}
+            return attempted_writes
+        return {name: val for name, val in attempted_writes.items() if name in consumed}
 
     @property
     def rung_firings(self) -> PMap:

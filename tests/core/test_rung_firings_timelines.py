@@ -659,6 +659,38 @@ def test_latest_firing_scan_jumps_across_gaps_and_contiguous_ranges() -> None:
     assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 0) is None
 
 
+def test_latest_value_transition_skips_reassertions_and_nonmatching_ranges() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(0, 1, {"A": 1})
+    timelines.append(0, 2, {"A": 2})
+    timelines.append(0, 3, {"A": 3})
+    timelines.append(1, 4, {"A": True})
+    timelines.append(1, 5, {"A": False})
+    timelines.append(1, 6, {"A": True})
+
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 2, 99) == 2
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 4, 99) is None
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({1}), "A", True, 6) == 6
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({1}), "A", False, 6) == 5
+
+
+def test_latest_value_transition_keeps_missing_payload_as_unknown() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(0, 7, {})
+
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 42, 10) == 7
+    assert (
+        timelines.latest_value_transition_scan_at_or_before(
+            frozenset({0}),
+            "A",
+            42,
+            10,
+            missing_is_unknown=False,
+        )
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # Sweep-on-log-trim eviction
 # ---------------------------------------------------------------------------

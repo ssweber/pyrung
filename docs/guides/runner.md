@@ -213,12 +213,23 @@ runner = PLC(logic)  # 100 MB default cache, all scans addressable
 
 runner.history.at(5)          # state at scan 5
 runner.history.range(3, 7)    # [scan 3, 4, 5, 6]
+
+transition = runner.history.previous_transition(
+    Step,
+    to=101,
+    at_or_before=runner.playhead,
+)
 runner.history.latest(10)     # up to 10 most recent (oldest → newest)
 ```
 
 Every scan from 0 to the current tip is addressable.  Recent scans are served
 from an in-memory state cache (byte-bounded, default 100 MB); older scans are
 reconstructed on demand from the scan log and checkpoints.
+
+`previous_transition()` returns the latest matching recorded transition, or
+`None`. It uses compressed history indexes where available, independent of
+whether the underlying history is encoded as stable, alternating, arithmetic,
+or opaque ranges.
 
 To bound memory on long runs, set a retention window:
 

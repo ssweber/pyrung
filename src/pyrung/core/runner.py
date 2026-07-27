@@ -811,9 +811,9 @@ class PLC:
         ``run()``) and debug (DAP ``pyrungStepScan`` / continue) scan
         paths via ``ScanContext.capturing_rung``.
 
-        A rung that attempted a write but only reasserted the already-pending
-        value appears with an empty write map. This preserves exact execution
-        identity for causal attribution without claiming an effective value.
+        Values are attempted writes, including a later writer reasserting the
+        already-pending value. Transition consumers compare committed state;
+        causal execution consumers retain the exact writer occurrence.
         """
         target = self._playhead if scan_id is None else scan_id
         if (
@@ -868,6 +868,58 @@ class PLC:
             candidates.append(
                 self._causal_parent._node_latest_firing_at_or_before(
                     rung_ids,
+                    min(scan_id, self._initial_scan_id),
+                )
+            )
+        return max((candidate for candidate in candidates if candidate is not None), default=None)
+
+    def _node_latest_value_transition_at_or_before(
+        self,
+        rung_ids: frozenset[RungId],
+        tag_name: str,
+        value: Any,
+        scan_id: int,
+    ) -> int | None:
+        """Latest retained selected-node range that may establish a value."""
+        if (
+            self._causal_parent is not None
+            and scan_id <= self._initial_scan_id
+            and self._causal_parent.history.contains(scan_id)
+        ):
+            return self._causal_parent._node_latest_value_transition_at_or_before(
+                rung_ids,
+                tag_name,
+                value,
+                scan_id,
+            )
+        main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
+        nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
+        retained = self._consumed_tags_for_capture()
+        missing_is_unknown = retained is not None and tag_name not in retained
+        candidates = [
+            self._rung_firing_timelines.latest_value_transition_scan_at_or_before(
+                main,
+                tag_name,
+                value,
+                scan_id,
+                missing_is_unknown=missing_is_unknown,
+            ),
+            self._node_firing_timelines.latest_value_transition_scan_at_or_before(
+                nested,
+                tag_name,
+                value,
+                scan_id,
+                missing_is_unknown=missing_is_unknown,
+            ),
+        ]
+        if self._causal_parent is not None and self._causal_parent.history.contains(
+            self._initial_scan_id
+        ):
+            candidates.append(
+                self._causal_parent._node_latest_value_transition_at_or_before(
+                    rung_ids,
+                    tag_name,
+                    value,
                     min(scan_id, self._initial_scan_id),
                 )
             )
@@ -1099,7 +1151,7 @@ class PLC:
             scan_log=self._scan_log,
             initial_tags=self._initial_state.tags,
             node_firings_fn=self._node_firings_at,
-            node_previous_firing_fn=self._node_latest_firing_at_or_before,
+            node_previous_firing_fn=self._node_latest_value_transition_at_or_before,
             node_rung_fn=self._resolve_node_rung,
             node_views_fn=self._replay_node_views_at,
             node_runs_fn=self._replay_rung_runs_at,

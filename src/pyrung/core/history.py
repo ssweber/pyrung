@@ -20,8 +20,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.causal.models import Transition
     from pyrung.core.runner import PLC
     from pyrung.core.state import SystemState
+
+_ANY_TRANSITION_VALUE = object()
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,69 @@ class History:
     def scan_ids(self) -> Sequence[int]:
         """Return the addressable scan ids as a ``range`` (oldest -> newest)."""
         return range(self._plc._initial_scan_id, self._plc._state.scan_id + 1)
+
+    def previous_transition(
+        self,
+        tag: Any,
+        *,
+        to: Any = _ANY_TRANSITION_VALUE,
+        at_or_before: int | None = None,
+    ) -> Transition | None:
+        """Return the latest matching transition at or before a scan.
+
+        The query is independent of the history encoder's representation:
+        stable, alternating, and arithmetic firing ranges jump to compressed
+        candidates; input changes use the scan log; opaque ranges fall back
+        conservatively. ``to`` may be any tag value, including ``None``.
+        """
+        from pyrung.core.analysis.causal.history import (
+            _find_last_transition_scan,
+            _find_transition_at_scan,
+        )
+
+        name = getattr(tag, "name", tag)
+        if not isinstance(name, str):
+            raise TypeError("tag must be a Tag or tag-name string")
+        newest = self.newest_scan_id
+        if at_or_before is None:
+            cursor = newest + 1
+        else:
+            if not isinstance(at_or_before, int):
+                raise TypeError("at_or_before must be an int or None")
+            cursor = min(at_or_before, newest) + 1
+        oldest = self.oldest_scan_id
+        if cursor <= oldest:
+            return None
+
+        plc = self._plc
+        pdg = plc._ensure_pdg() if plc._logic else None
+        while cursor > oldest:
+            scan_id = _find_last_transition_scan(
+                self,
+                name,
+                cursor,
+                timelines=plc._rung_firing_timelines,
+                pdg=pdg,
+                scan_log=plc._scan_log,
+                initial_tags=plc._initial_state.tags,
+            )
+            if scan_id is None:
+                return None
+            transition = _find_transition_at_scan(
+                self,
+                name,
+                scan_id,
+                timelines=plc._rung_firing_timelines,
+                pdg=pdg,
+                scan_log=plc._scan_log,
+                initial_tags=plc._initial_state.tags,
+            )
+            if transition is not None and (
+                to is _ANY_TRANSITION_VALUE or transition.to_value == to
+            ):
+                return transition
+            cursor = scan_id
+        return None
 
     def at_or_before_timestamp(self, timestamp: float) -> SystemState | None:
         """Return the latest state with ``state.timestamp <= timestamp``.

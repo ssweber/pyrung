@@ -65,7 +65,7 @@ def recorded_cause(
     scan_log: Any = None,  # ScanLog | None
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
-    node_previous_firing_fn: Any = None,  # Callable[[frozenset[RungId], int], int | None]
+    node_previous_firing_fn: Any = None,  # Callable[[frozenset[RungId], str, Any, int], int | None]
     node_rung_fn: Any = None,  # Callable[[RungId], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
     node_runs_fn: Any = None,  # Callable[[int], tuple[RungRun, ...]] | None
@@ -459,13 +459,15 @@ def _cross_via_registry(
     return tuple(triggers), tuple(enablers)
 
 
-def _indexed_prior_firing_scans(
+def _indexed_value_transition_scans(
     lookup: Any,
     candidate_rungs: frozenset[RungId],
+    tag_name: str,
+    to_value: Any,
     start_scan: int,
     oldest_scan: int,
 ) -> Iterator[int]:
-    """Yield actual candidate-writer executions newest-first.
+    """Yield candidate-writer range positions that may establish a value.
 
     The lookup is authoritative when it returns a valid scan or ``None``.
     A malformed/legacy callback degrades to the old linear scan rather than
@@ -474,7 +476,7 @@ def _indexed_prior_firing_scans(
     cursor = start_scan
     while cursor >= oldest_scan:
         try:
-            scan = lookup(candidate_rungs, cursor)
+            scan = lookup(candidate_rungs, tag_name, to_value, cursor)
         except Exception:  # noqa: BLE001
             yield from range(cursor, oldest_scan - 1, -1)
             return
@@ -663,75 +665,55 @@ def _walk_backward(
         deep.absence_visited.add(absence_key)
 
         writer_scan = scan_id
-        observed_writers = _recorded_writers_from_firings(
-            pdg=pdg,
-            program=program,
-            logic=logic,
-            history=history,
-            rung_firings_fn=rung_firings_fn,
-            node_firings_fn=node_firings_fn,
-            node_rung_fn=node_rung_fn,
-            tag_name=name,
-            scan_id=scan_id,
-            to_value=value,
+        observed_writers: list[tuple[int, Rung, str | None]] = []
+        # A held support is explained by the occurrence that established its
+        # value, not by every later rung execution that reasserted it. Stable,
+        # alternating, and arithmetic firing ranges name compressed transition
+        # candidates; validate each against committed state before replaying
+        # the exact writer occurrence.
+        candidate_rungs = frozenset(
+            RungId(pdg.rung_nodes[node_idx].subroutine, pdg.rung_nodes[node_idx].rung_index)
+            for node_idx in pdg.writers_of.get(name, frozenset())
         )
-        if not observed_writers:
-            # The firing timeline records effective writes, so a rung that
-            # re-asserted the already-held value is intentionally absent.
-            # On-demand replay separately records which exact rungs executed
-            # and what each saw at entry.  Combine that execution evidence
-            # with the PDG's writer identity; never infer execution merely
-            # because a static writer's guard is true in the committed frame.
-            observed_writers = _replayed_writers_from_pdg(
+        if node_previous_firing_fn is not None and candidate_rungs:
+            prior_scans: Any = _indexed_value_transition_scans(
+                node_previous_firing_fn,
+                candidate_rungs,
+                name,
+                value,
+                scan_id,
+                history.oldest_scan_id,
+            )
+        else:
+            prior_scans = range(scan_id, history.oldest_scan_id - 1, -1)
+        for prior_scan in prior_scans:
+            transition = _find_transition_at_scan(
+                history,
+                name,
+                prior_scan,
+                timelines=timelines,
+                pdg=pdg,
+                scan_log=scan_log,
+                initial_tags=initial_tags,
+            )
+            if transition is None or transition.to_value != value:
+                continue
+            prior_writers = _replayed_writers_from_pdg(
                 pdg=pdg,
                 program=program,
                 logic=logic,
                 tag_name=name,
                 to_value=value,
-                scan_id=scan_id,
+                scan_id=prior_scan,
                 node_views_fn=node_views_fn,
                 node_views_cache=node_views_cache,
                 node_runs_fn=node_runs_fn,
                 node_runs_cache=node_runs_cache,
             )
-        if not observed_writers:
-            # The consumer can run before a later rung changes the alias in the
-            # same scan. In that shape the current frame truthfully says the
-            # mapper is no longer conductive; the exact support is the most
-            # recent earlier frame where a replayed writer maintained the held
-            # value. The range-encoded firing index includes no-op reassertions,
-            # so jump between actual static-writer executions. Older/custom
-            # runners without that index retain the linear fail-closed path.
-            candidate_rungs = frozenset(
-                RungId(pdg.rung_nodes[node_idx].subroutine, pdg.rung_nodes[node_idx].rung_index)
-                for node_idx in pdg.writers_of.get(name, frozenset())
-            )
-            if node_previous_firing_fn is not None and candidate_rungs:
-                prior_scans: Any = _indexed_prior_firing_scans(
-                    node_previous_firing_fn,
-                    candidate_rungs,
-                    scan_id - 1,
-                    history.oldest_scan_id,
-                )
-            else:
-                prior_scans = range(scan_id - 1, history.oldest_scan_id - 1, -1)
-            for prior_scan in prior_scans:
-                prior_writers = _replayed_writers_from_pdg(
-                    pdg=pdg,
-                    program=program,
-                    logic=logic,
-                    tag_name=name,
-                    to_value=value,
-                    scan_id=prior_scan,
-                    node_views_fn=node_views_fn,
-                    node_views_cache=node_views_cache,
-                    node_runs_fn=node_runs_fn,
-                    node_runs_cache=node_runs_cache,
-                )
-                if prior_writers:
-                    writer_scan = prior_scan
-                    observed_writers = prior_writers
-                    break
+            if prior_writers:
+                writer_scan = prior_scan
+                observed_writers = prior_writers
+                break
         if not observed_writers:
             _add_root(name, value, "unattributed", None, hop_trail)
             return
@@ -1297,7 +1279,7 @@ def _replayed_writers_from_pdg(
     node_runs_fn: Any = None,
     node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
 ) -> list[tuple[int, Rung, str | None]]:
-    """Resolve writers omitted by the effective-write timeline from replay evidence.
+    """Resolve writers not identified precisely by the compact timeline.
 
     ``writers_of`` says which rungs *can* write the tag.  It does not prove a
     subroutine was called, or even that a main rung was reached.  The runner's

@@ -656,7 +656,10 @@ class TestEdgeCases:
             step for step in chain.steps if step.transition.tag_name == Starting.name
         )
         assert starting_step.transition.scan_id == 1
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {(Seed.name, True)}
+        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {
+            (Seed.name, True),
+            (CallMap.name, True),
+        }
         assert len(set(capture_scans)) < 20
 
     def test_fork_boundary_cause_uses_parent_execution_evidence(self) -> None:
