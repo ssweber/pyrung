@@ -141,60 +141,6 @@ Use `devtools/pilot_divergence.py` for the first changed decision and
 These are active soundness or contract issues. Keep their diffs separate from the
 ownership refactors below.
 
-### A1. Make `avoid=` observable throughout every coast, or state a narrower contract
-
-**Current ownership failure**
-
-`verify.verify_gates` owns the scan veto but can inspect only evidence execution
-chose to retain. Pulse settles and channel-less zooms carry per-scan snapshots.
-Folded seeks, terminal let-run, and terminal dwell expose only their endpoint to
-the current gate.
-
-`coast.CoastSession.seek` is the only place that can make a folded span observable:
-its armed `Bump`s supply both the authoritative predicate and the fold metadata.
-`verify` should consume the resulting receipt; it cannot reconstruct skipped
-execution afterward.
-
-**Required shape**
-
-- `runner._compile_avoid` / `types._AvoidMember` must retain condition metadata for
-  condition-like members instead of discarding it after rendering the name.
-- Execution arms one named avoid bump per condition-like member only when the
-  trial starts clear. Starting inside an avoided state must still permit a trial
-  that exits it.
-- `CoastReceipt` records the exact avoided member(s) that fired. VERIFY consumes
-  that receipt before target acceptance, including the simultaneous
-  target-and-avoid case.
-- Scan-by-scan settle paths carry their existing trajectory/receipt through
-  `_PulseState`; do not retrofit folding machinery onto them.
-- Choose and test the opaque-callable policy explicitly:
-  - disable folding while an opaque avoid is armed, preserving the full contract
-    at a performance cost; or
-  - document that opaque callables are endpoint/real-scan constraints and reserve
-    the every-logical-scan guarantee for condition-like avoids.
-  Do not silently claim full folded coverage for a predicate with no readable
-  condition.
-
-**Why**
-
-This is a user-visible safety property. The observation must be owned where scans
-are executed or folded, then carried to the gate as evidence.
-
-**LOC:** roughly +40 to +70 source and focused tests. The receipt may remove some
-snapshot-loop special cases later, but correctness is not a net-LOC exercise.
-
-**Risk:** medium-high; newly observed avoid crossings can move goldens and callable
-policy can affect long-coast performance.
-
-**Gate:** `test_pilot_avoid_gates.py`, `test_pilot_coast.py`,
-`test_pilot_cyclefold.py`, then Tumbler. Include folded wink, settle wink,
-start-inside escape, opaque callable, and simultaneous target/avoid cases.
-
-**Documentation coupled to landing:** correct the overclaim in
-`pilot/CLAUDE.md`, `verify.verify_gates`, `CHANGELOG.md`, and
-`docs/guides/analysis-diagnosis.md`. If A1 does not land next, weaken the two
-shipped documents immediately.
-
 ### A2. Put complete-domain enforcement inside `tide_tables.guard_verdict`
 
 **Current ownership failure**
@@ -842,14 +788,13 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Correctness:** A1/A2/A3.
+1. **Correctness:** A2/A3.
 2. **Navigation continuity:** B1, then B2.
 3. **Trial evidence continuity:** B3, B4, then B5.
 4. **Shared decisions:** C1 and C2.
 5. **Control flow:** D1/D2/D3.
 6. **Recovery continuity:** B6, then D4.
-7. **Compiled residual replay:** E1, E2, then E3, after A1 establishes the
-   folded-avoid observation contract.
+7. **Compiled residual replay:** E1, E2, then E3.
 8. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its

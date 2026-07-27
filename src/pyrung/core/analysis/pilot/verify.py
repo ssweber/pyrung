@@ -58,6 +58,23 @@ class _DeadEndResult:
     has_new_frontier: bool = False
 
 
+def _avoid_names_after_clear(
+    avoid: Any,
+    start: dict[str, Any],
+    observed: dict[str, Any],
+) -> tuple[str, ...]:
+    """Avoid members clear at *start* that fire in one later observation.
+
+    Compiled unions own the per-member distinction. A bare callable retains the
+    legacy aggregate rule: starting true exempts its later snapshots.
+    """
+
+    violated_after_clear = getattr(avoid, "violated_after_clear", None)
+    if violated_after_clear is not None:
+        return tuple(violated_after_clear(start, observed))
+    return () if bool(avoid(start)) else _avoid_snap_names(avoid, observed)
+
+
 def _owned_channel_motion(
     trial: _PulseState,
     motion: ChannelMotion,
@@ -197,14 +214,14 @@ def _gate_spin(
             retry_rungs = (*state.rungs, *result.correction.rungs)
             if ctx.avoid_pred is not None:
                 retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
-                if not ctx.avoid_pred(frame.snap):
-                    for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):
-                        retry_violations.extend(
-                            _avoid_snap_names(
-                                ctx.avoid_pred,
-                                result.retry_fork.history.at(scan).tags,
-                            )
+                for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):
+                    retry_violations.extend(
+                        _avoid_names_after_clear(
+                            ctx.avoid_pred,
+                            frame.snap,
+                            dict(result.retry_fork.history.at(scan).tags),
                         )
+                    )
                 if retry_violations:
                     names = tuple(dict.fromkeys(retry_violations))
                     avoid_names.extend(names)
@@ -462,7 +479,10 @@ def verify_gates(
     """Apply the shared trial gates to an executed pulse or coast.
 
     Runs avoid and target checks, then spin, cycle, and dead-end gates followed
-    by outcome classification. All steering execution modes converge here.
+    by outcome classification. Condition-like avoids fired by a folded coast
+    arrive on its receipt; opaque callables are checked only at endpoints and
+    real snapshots retained by execution. All steering execution modes
+    converge here.
     """
     trial = attempt.pulse
     intent = attempt.intent
@@ -504,12 +524,26 @@ def verify_gates(
 
     # ── Scan gate (avoid=) ────────────────────────────────────────────────
     # Settled state first (the original veto: never rest in the avoided region).
-    # Then transient coverage: a trial that started clear but blips the avoided
-    # condition true mid-trial — the pulse scan or any coast snapshot — is
-    # rejected too, so there is no "two-scan wink" where avoid is true mid-coast
-    # and false again by settlement.  Both arms nogood the choice and record the
-    # violated names for the terminal decline.
+    # Then transient coverage: retained pulse/settle snapshots plus the coast
+    # owner's exact avoid-firing receipt. Condition metadata makes skipped
+    # logical spans observable; opaque callables cover only real observations.
+    # Both arms nogood the choice and record the violated names for the terminal
+    # decline.
     if ctx.avoid_pred is not None:
+        coast_avoided = (
+            tuple(trial.coast_receipt.avoided) if trial.coast_receipt is not None else ()
+        )
+        if coast_avoided:
+            gate_events.append(
+                PilotGateEvent(
+                    "avoid",
+                    f"coast enters avoid: {', '.join(coast_avoided)}",
+                )
+            )
+            return _reject(
+                nogoods=({nogood_pair} if nogood_pair is not None else ()),
+                avoid_names=coast_avoided,
+            )
         settled = _avoid_snap_names(ctx.avoid_pred, trial.snap)
         if settled:
             gate_events.append(
@@ -519,17 +553,16 @@ def verify_gates(
                 nogoods=({nogood_pair} if nogood_pair is not None else ()),
                 avoid_names=settled,
             )
-        if not ctx.avoid_pred(frame.snap):
-            for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
-                wink = _avoid_snap_names(ctx.avoid_pred, snap)
-                if wink:
-                    gate_events.append(
-                        PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")
-                    )
-                    return _reject(
-                        nogoods=({nogood_pair} if nogood_pair is not None else ()),
-                        avoid_names=wink,
-                    )
+        for snap in (trial.action_snap, *trial.wait_snaps, trial.post_pulse_snap):
+            wink = _avoid_names_after_clear(ctx.avoid_pred, frame.snap, snap)
+            if wink:
+                gate_events.append(
+                    PilotGateEvent("avoid", f"transient scan enters avoid: {', '.join(wink)}")
+                )
+                return _reject(
+                    nogoods=({nogood_pair} if nogood_pair is not None else ()),
+                    avoid_names=wink,
+                )
 
     # An intervention may explore a new frontier, but it may not erase
     # target-relative work the current world has already earned.  The gauge is

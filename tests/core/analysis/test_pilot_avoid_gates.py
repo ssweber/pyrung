@@ -14,10 +14,10 @@ Three internal gates enforce it:
   pulses, prescribed batches and widening; ``candidates`` prerequisite holds;
   ``_hold_allowed`` for investigation-installed corrective holds) — a candidate
   whose overlaid action makes the predicate true is rejected *before* the pulse.
-* **Scan gate** (``verify.verify_gates``) — extended from settled-state-only to
-  transient coverage: the pulse scan and every coast snapshot, so there is no
-  "two-scan wink" where the avoided condition blips true mid-trial and settles
-  false again.
+* **Scan gate** (``coast.CoastSession`` -> ``verify.verify_gates``) —
+  condition-like members ride folded coasts as named bumps, while settle
+  trajectories preserve every real snapshot. Opaque callables observe only
+  endpoints, retained real snapshots, and kernel scans a fold executes.
 
 Arity: ``avoid=`` accepts one condition or a tuple/list = **union** of
 exclusions (each avoided independently); ``avoid=And(A, B)`` avoids only the
@@ -29,6 +29,10 @@ genuine avoid-exclusion, not a missing feature.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
 
 from pyrung import (
     PLC,
@@ -43,6 +47,7 @@ from pyrung import (
     copy,
     on_delay,
     out,
+    rise,
 )
 
 # ---------------------------------------------------------------------------
@@ -188,6 +193,143 @@ def test_avoid_transient_wink_is_rejected() -> None:
     path = plc.how(target, avoid=Bool("Mid"), max_scans=1500)
     assert not path.reachable
     assert "Mid" in (path.reason or ""), path.reason
+
+
+# ---------------------------------------------------------------------------
+# 3b. Folded coast and narrow opaque-callable policy
+# ---------------------------------------------------------------------------
+
+
+def _folded_wink_program() -> tuple[Program, object, object]:
+    """A long TON coast whose middle band is clear again at the target."""
+    Start = Bool("Start", external=True)
+    Run = Bool("Run")
+    Tmr = Timer.clone("Tmr")
+    Mid = Bool("Mid")
+    Target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung(Or(Start, Run)):
+            out(Run)
+        with Rung(Run):
+            on_delay(Tmr, 1000, "ms")
+        with Rung(And(Tmr.Acc >= 300, Tmr.Acc < 400)):
+            out(Mid)
+        with Rung(Tmr.Done):
+            out(Target)
+    return prog, Target, Mid
+
+
+def test_condition_avoid_rejects_wink_inside_folded_coast() -> None:
+    """A condition-like avoid is armed beside the coast target and survives folding."""
+    prog, target, mid = _folded_wink_program()
+
+    path = PLC(prog, dt=0.010).how(target, avoid=mid, max_scans=2000)
+
+    assert not path.reachable
+    assert "Mid" in (path.reason or ""), path.reason
+
+
+def test_opaque_avoid_is_endpoint_and_real_observed_scan_only() -> None:
+    """An opaque callable has no fold metadata, so skipped logical scans stay narrow."""
+    Start = Bool("Start", external=True)
+    Run = Bool("Run")
+    Tmr = Timer.clone("OpaqueTmr")
+    Target = Bool("OpaqueTarget")
+    with Program(strict=False) as prog:
+        with Rung(Or(Start, Run)):
+            out(Run)
+        with Rung(Run):
+            on_delay(Tmr, 1000, "ms")
+        with Rung(Tmr.Done):
+            out(Target)
+
+    path = PLC(prog, dt=0.010).how(
+        Target,
+        avoid=lambda snap: 300 <= (snap.get(Tmr.Acc.name) or 0) < 400,
+        max_scans=2000,
+    )
+
+    assert path.reachable, path.reason
+    assert path.replay().state.tags[Target.name] is True
+
+
+def test_edge_sensitive_avoid_is_rejected_clearly() -> None:
+    prog, target, _mid = _folded_wink_program()
+    trigger = Bool("EdgeAvoid")
+
+    with pytest.raises(ValueError, match=r"avoid=.*rise\(\)/fall\(\)"):
+        PLC(prog, dt=0.010).how(target, avoid=rise(trigger), max_scans=2000)
+
+
+def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
+    """The scan gate receives every real settle snapshot, not only its endpoint."""
+    from pyrung.core.analysis.pilot import steer
+    from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
+    from pyrung.core.analysis.pilot.types import _AttemptResult
+
+    Run = Bool("Run", default=True)
+    Step = Int("Step")
+    Mid = Bool("Mid")
+    Target = Bool("Target")
+    with Program(strict=False) as prog:
+        with Rung(Run, Step < 3):
+            calc(Step + 1, Step)
+        with Rung(Step == 2):
+            out(Mid)
+        with Rung(Step == 3):
+            out(Target)
+
+    work = PLC(prog, dt=0.010)
+    cfg = _StateKeyConfig((), (), (), frozenset())
+    snap = dict(work.state.tags)
+    frame = SimpleNamespace(
+        snap=snap,
+        key=_pilot_world_key(snap, cfg, ()),
+        tree=None,
+    )
+    state = SimpleNamespace(work=work, rungs=(), key_config=cfg, watch_tags=[])
+    ctx = SimpleNamespace(
+        target=SimpleNamespace(tag="Target", value=True, predicate=None),
+        max_scans=100,
+        program=None,
+        pipeline_roles=(),
+    )
+    captured: dict[str, tuple[dict[str, object], ...]] = {}
+
+    monkeypatch.setattr(steer, "fork_with_rungs", lambda plc, _rungs: plc.fork())
+    monkeypatch.setattr(steer, "_cone_tags", lambda _frame, _ctx: frozenset({"Step"}))
+    monkeypatch.setattr(steer, "_pen_tags", lambda _state, _ctx: frozenset())
+    monkeypatch.setattr(steer, "_compass_observations", lambda *args, **kwargs: ())
+
+    def _verify(attempt, *_args, **_kwargs):
+        captured["wait_snaps"] = attempt.pulse.wait_snaps
+        return _AttemptResult(trial=None)
+
+    monkeypatch.setattr(steer, "verify_gates", _verify)
+
+    steer._try_terminal_dwell(frame, state, ctx, SimpleNamespace())
+
+    assert any(snap["Mid"] is True for snap in captured["wait_snaps"])
+    assert captured["wait_snaps"][-1]["Target"] is True
+
+
+def test_start_inside_one_avoid_member_does_not_exempt_clear_sibling() -> None:
+    """Snapshot verification exempts members independently, not the whole union."""
+    from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+    from pyrung.core.analysis.pilot.verify import _avoid_names_after_clear
+
+    avoid = _AvoidPredicate(
+        (
+            _AvoidMember("A", lambda snap: bool(snap.get("A"))),
+            _AvoidMember("B", lambda snap: bool(snap.get("B"))),
+        )
+    )
+
+    start = {"A": True, "B": False}
+    observed = {"A": False, "B": True}
+
+    assert avoid.violated_after_clear(start, observed) == ("B",)
+    assert _avoid_names_after_clear(avoid, start, observed) == ("B",)
 
 
 # ---------------------------------------------------------------------------

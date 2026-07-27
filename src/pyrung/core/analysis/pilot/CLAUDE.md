@@ -24,8 +24,13 @@ transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
 `via=` is durable positive user intent, but it constrains each current-world
 trace rather than supplying an action suffix. `avoid=` remains a constraint at
-every read/action/scan gate. A graph path, trace alternative, or learned
-transition is evidence for the next action only.
+every read/action/scan gate. Condition-like avoids carry their runtime condition
+into trial coasts, so folding lands on any avoided crossing. Opaque callable
+avoids have no readable fold proof and are checked at endpoints, retained real
+snapshots, and kernel scans the coast actually executes; skipped logical scans
+are outside that narrower contract. `rise()`/`fall()` avoids are rejected
+because they are transitions rather than snapshot states. A graph path, trace
+alternative, or learned transition is evidence for the next action only.
 
 ### Read before probing
 
@@ -120,6 +125,9 @@ should consume the first owner's result.
   and `_AdmittedWait` carries both through the ordinary admission policy before
   a coast can be selected
 - Local trial gates: `verify.py::verify_gates`
+- Trial-coast avoid observation: `coast.py::CoastSession.seek`; execution arms
+  trial-start-clear members, `CoastReceipt.avoided` derives exact firings from
+  typed events, and VERIFY consumes that receipt before target acceptance
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
 - Coast-departure channel ownership: `_ops.py::coast_departure_tags`
@@ -220,8 +228,10 @@ investigation materializes their guarded installed form.
   `frontier_pairs` reports unresolved needs in the selected trace tree;
   `_writer_projection` checks a writer under its fire-time overlay;
   `_expr_availability` compares a guard with the live snapshot.
-- Avoidance is enforced when choosing a route, before applying an action, and
-  across every intermediate scan of a trial.
+- Avoidance is enforced when choosing a route and before applying an action.
+  Condition-like members are also enforced across every logical scan of a
+  pre-commit trial; opaque callables cover endpoints, retained real snapshots,
+  and executed kernel scans only.
 - Active-cycle detection, crossing arithmetic, and folded jumps read the same
   timed scalar coordinate: public accumulator plus its fractional remainder.
   The remainder proves continued execution to the simulator, while the
@@ -325,7 +335,8 @@ investigation materializes their guarded installed form.
 - `steer.py` — forked action/coast execution and invocation of trial gates.
 - `_ops.py` — shared PLC operations, world keys, temporary-logic compilation and
   effective-owner receipts, pulses, coast adapters, and action-admission checks.
-- `coast.py` — bump-driven coasts with exact-scan receipts.
+- `coast.py` — bump-driven coasts with exact-scan receipts, including typed
+  trial-avoid firings owned by execution.
 - `cyclefold.py` — proven active-cycle skipping during long waits.
 - `skiff.py` — finite isolated probes of unreadable frontiers.
 

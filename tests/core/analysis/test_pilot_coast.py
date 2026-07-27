@@ -19,6 +19,8 @@ Coverage targets (per the CoastSession v2 design):
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
@@ -30,6 +32,7 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
 )
 from pyrung.core.analysis.pilot.coast import (
+    AVOID,
     DEPARTURE,
     LIMITS,
     QUIESCENT,
@@ -42,7 +45,14 @@ from pyrung.core.analysis.pilot.coast import (
     value_bump,
 )
 from pyrung.core.analysis.pilot.steer import _settle_cone
-from pyrung.core.condition import AllCondition, AnyCondition, CompareEq, CompareGe, CompareNe
+from pyrung.core.condition import (
+    AllCondition,
+    AnyCondition,
+    CompareEq,
+    CompareGe,
+    CompareLt,
+    CompareNe,
+)
 from pyrung.core.harness import Harness
 from pyrung.core.physical import Physical
 from pyrung.core.runner import PLC
@@ -331,6 +341,68 @@ class TestSimultaneousTerminals:
         assert receipt.stop_reason == "reached"
         assert receipt.reached
 
+    def test_target_and_avoid_same_scan_preserve_typed_avoid_evidence(self):
+        from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+        from pyrung.core.analysis.pilot.types import (
+            _AttemptIntent,
+            _AvoidMember,
+            _AvoidPredicate,
+            _ExecutedAttempt,
+        )
+        from pyrung.core.analysis.pilot.verify import verify_gates
+
+        plc = PLC(_dual_output_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        before = dict(plc.state.tags)
+
+        b_tag = plc._known_tags_by_name["B"]
+        avoid = _AvoidPredicate(
+            (
+                _AvoidMember(
+                    name="B",
+                    pred=lambda snap: snap.get("B") is True,
+                    tags=frozenset({"B"}),
+                    condition=CompareEq(b_tag, True),
+                ),
+            )
+        )
+        session = CoastSession(plc)
+        session.arm_avoid(avoid)
+
+        receipt = session.seek(
+            [value_bump(plc, "target", TARGET, "A", True)],
+            budget=500,
+        )
+
+        assert receipt.stop_reason == "reached"
+        assert receipt.avoided == ("B",)
+        assert set(receipt.fired) == {"target", "B"}
+
+        target_spec = TargetSpec("A", True)
+        result = verify_gates(
+            _ExecutedAttempt(
+                pulse=SimpleNamespace(
+                    fork=plc,
+                    snap=dict(plc.state.tags),
+                    coast_receipt=receipt,
+                    action_snap=before,
+                    wait_snaps=(),
+                    post_pulse_snap=before,
+                    confirmed_correction=None,
+                ),
+                intent=_AttemptIntent(
+                    bearing_objective=BearingObjective(target_spec),
+                    nogood_pair=("Enable", True),
+                ),
+            ),
+            SimpleNamespace(snap=before),
+            SimpleNamespace(),
+            SimpleNamespace(avoid_pred=avoid, target=target_spec),
+        )
+        assert result.trial is None
+        assert result.avoid_names == ("B",)
+
 
 # ---------------------------------------------------------------------------
 # 4. Timeout
@@ -485,6 +557,80 @@ class TestPredicateBump:
         assert plc.state.tags[acc.name] == threshold
         assert session._last_cyclefold_stats["ordinary_folds"] >= 1
         assert receipt.kernel_scans <= 10
+
+
+class TestAvoidBump:
+    def test_member_true_at_trial_start_is_not_armed(self):
+        from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+
+        plc = PLC(_ramp_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()  # Temp == 1, already inside Temp < 3.
+        temp = plc._known_tags_by_name["Temp"]
+        avoid = _AvoidPredicate(
+            (
+                _AvoidMember(
+                    name="Temp < 3",
+                    pred=lambda snap: (snap.get("Temp") or 0) < 3,
+                    tags=frozenset({"Temp"}),
+                    condition=CompareLt(temp, 3),
+                ),
+            )
+        )
+        session = CoastSession(plc)
+        session.arm_avoid(avoid)
+
+        receipt = session.seek(
+            [
+                predicate_bump(
+                    "target",
+                    TARGET,
+                    lambda state: (state.tags.get("Temp") or 0) >= 5,
+                    condition=CompareGe(temp, 5),
+                    watched=("Temp",),
+                )
+            ],
+            budget=20,
+        )
+
+        assert receipt.reached
+        assert receipt.avoided == ()
+        assert plc.state.tags["Temp"] == 5
+
+    def test_opaque_member_firing_on_real_scan_stops_seek(self):
+        from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+
+        plc = PLC(_ramp_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        plc.step()
+        temp = plc._known_tags_by_name["Temp"]
+        opaque = _AvoidPredicate(
+            (
+                _AvoidMember(
+                    name="opaque Temp == 2",
+                    pred=lambda snap: snap.get("Temp") == 2,
+                ),
+            )
+        )
+        session = CoastSession(plc)
+        session.arm_avoid(opaque)
+
+        receipt = session.seek(
+            [
+                predicate_bump(
+                    "target",
+                    TARGET,
+                    lambda state: (state.tags.get("Temp") or 0) >= 5,
+                    condition=CompareGe(temp, 5),
+                    watched=("Temp",),
+                )
+            ],
+            budget=20,
+        )
+
+        assert receipt.stop_reason == AVOID
+        assert receipt.avoided == ("opaque Temp == 2",)
+        assert receipt.real_scans == 1
 
 
 class TestPenCondition:

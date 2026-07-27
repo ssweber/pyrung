@@ -3,6 +3,9 @@
 A ``Bump`` is a named state predicate. ``CoastSession`` advances with folding
 when safe, lands each crossing on a real recorded scan, re-arms nonterminal
 bumps, and records simultaneous terminal bumps in a ``CoastReceipt``.
+Steering execution may also arm trial-start-clear avoid bumps: readable
+conditions constrain folded logical spans, while opaque predicates observe only
+the real kernel scans a fold executes.
 
 The predicate callable decides whether a bump fired. An optional compiled
 condition supplies crossing and protected-read metadata for folding only; it
@@ -30,6 +33,7 @@ TARGET = "target"
 DEPARTURE = "departure"
 QUIESCENT = "quiescent"
 PEN = "pen"
+AVOID = "avoid"
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,21 @@ class CoastReceipt:
         """Logical scans advanced without an interpreter execution."""
         return self.logical_scans - self.kernel_scans
 
+    @property
+    def avoided(self) -> tuple[str, ...]:
+        """Avoid members that fired at this seek's landing.
+
+        This is derived from the typed event evidence rather than stored beside
+        it, so simultaneous target/avoid landings cannot disagree about what
+        the coast actually observed.
+        """
+
+        return tuple(
+            event.name
+            for event in self.events
+            if event.kind == AVOID and event.scan == self.end_scan
+        )
+
 
 def _fold_metadata(
     bumps: Iterable[Bump],
@@ -195,6 +214,7 @@ class CoastSession:
     pens: dict[str, Any] = field(default_factory=dict)
     _events: list[BumpEvent] = field(default_factory=list)
     _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
+    _avoid_bumps: tuple[Bump, ...] = field(default=(), init=False, repr=False)
 
     @property
     def events(self) -> tuple[BumpEvent, ...]:
@@ -234,6 +254,45 @@ class CoastSession:
         for t, _, after in transitions:
             self.pens[t] = after
 
+    def arm_avoid(self, avoid: Any) -> None:
+        """Arm clear ``avoid=`` members for folded seeks.
+
+        Arming is a trial-start decision.  A member already true at that point
+        is intentionally omitted so the trial may leave an avoided state.
+        Opaque callables are armed without fold metadata: they are checked on
+        real kernel scans while condition-like members additionally constrain
+        skipped logical spans.
+        """
+
+        members = getattr(avoid, "members", ()) if avoid is not None else ()
+        start = dict(self.plc.state.tags)
+        bumps: list[Bump] = []
+        for member in members:
+            condition = getattr(member, "condition", None)
+            try:
+                already_true = bool(member.pred(start))
+            except Exception:
+                already_true = False
+            if already_true:
+                continue
+
+            def _pred(state: Any, _member: Any = member) -> bool:
+                try:
+                    return bool(_member.pred(dict(state.tags)))
+                except Exception:
+                    return False
+
+            bumps.append(
+                Bump(
+                    name=member.name,
+                    kind=AVOID,
+                    predicate=_pred,
+                    condition=condition,
+                    watched=tuple(sorted(member.tags)),
+                )
+            )
+        self._avoid_bumps = tuple(bumps)
+
     def _pen_bump(self) -> Bump:
         """The armed pens as one nonterminal bump for :meth:`seek`.
 
@@ -268,7 +327,7 @@ class CoastSession:
         changing inner state defeats the ordinary plateau proof.
         """
         plc = self.plc
-        armed: list[Bump] = list(bumps)
+        armed: list[Bump] = [*bumps, *self._avoid_bumps]
         if not armed:
             raise ValueError("seek() requires at least one bump")
         if self.pens:

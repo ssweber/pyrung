@@ -33,7 +33,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
-from pyrung.core.analysis.pilot.coast import LIMITS, CoastSession
+from pyrung.core.analysis.pilot.coast import LIMITS, CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
 from pyrung.core.analysis.pilot.navigation import (
     BatchPulse,
@@ -175,6 +175,7 @@ def _apply_actions(
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     session = CoastSession(fork, kind="pulse")
+    session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     patch = {t: v for t, v in actions}
     needs_edge = any(t in ctx.edge_tags for t in patch)
@@ -208,8 +209,9 @@ def _apply_actions(
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.rungs)
+    delayed_receipts: list[CoastReceipt] = []
     if not _reached(post_pulse_snap):
-        _settle_delayed_effects(
+        delayed_receipts = _settle_delayed_effects(
             fork,
             frame.snap,
             key_config,
@@ -231,6 +233,7 @@ def _apply_actions(
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
         key=_pilot_world_key(fork_snap, key_config, state.rungs),
+        coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
         timeline=session.events,
     )
 
@@ -540,6 +543,7 @@ def _try_zoom(
     # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
     session = CoastSession(fork, kind="zoom")
+    session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     dwell, zoom_receipt = _letrun_zoom(
         fork,
@@ -665,6 +669,7 @@ def _try_terminal_letrun(
 
     budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
     session = CoastSession(fork, kind="letrun")
+    session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
         fork,
@@ -789,7 +794,7 @@ def _try_terminal_dwell(
     ceiling = min(_LETRUN_DWELL_CEILING, max(2, ctx.max_scans - scan_before))
     session = CoastSession(fork, kind="settle")
     session.arm_pens(_pen_tags(state, ctx))
-    _settle_cone(
+    dwell = _settle_cone(
         fork, _cone_tags(frame, ctx), floor=2, ceiling=ceiling, reached_fn=_reached, session=session
     )
 
@@ -823,7 +828,7 @@ def _try_terminal_dwell(
         scan_before=scan_before,
         action_scan=scan_before,
         action_snap=snap_before,
-        wait_snaps=(snap_after,),
+        wait_snaps=tuple(dwell),
         post_pulse_snap=snap_before,
         post_pulse_key=frame.key,
         snap=snap_after,

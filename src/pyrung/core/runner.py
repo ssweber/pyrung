@@ -449,14 +449,43 @@ def _render_avoid_expr(expr: Any) -> str:
     return type(expr).__name__
 
 
+def _avoid_expr_has_edge(expr: Any) -> bool:
+    """Whether a compiled property needs transition rather than snapshot state."""
+    if getattr(expr, "form", None) in {"rise", "fall"}:
+        return True
+    return any(_avoid_expr_has_edge(child) for child in getattr(expr, "terms", ()) or ())
+
+
+def _avoid_fold_condition(spec: Any, expr: Any) -> Any | None:
+    """Return executable fold metadata for one condition-like avoid.
+
+    Opaque callables have no expression and therefore no readable fold metadata.
+    """
+
+    if expr is None:
+        return None
+
+    from pyrung.core.condition import _as_condition, _normalize_and_condition
+
+    return _normalize_and_condition(
+        spec,
+        coerce=_as_condition,
+        empty_error="avoid condition cannot be empty",
+        group_empty_error="avoid condition group cannot be empty",
+    )
+
+
 def _compile_avoid(spec: Any) -> Any:
     """Compile ``avoid=`` into a :class:`_AvoidPredicate` (a **union**).
 
     Each condition is avoided independently: ``avoid=(A, B)`` / ``avoid=[A, B]``
     exclude a path that depends on *either*, while ``avoid=And(A, B)`` is a single
     member that excludes only the combined state.  Every member keeps its own
-    printable name so a decline can point at what it violated.  (``via=`` stays
-    a conjunction — see ``_compile_via``.)
+    printable name and condition fold metadata so a decline can point at what
+    it violated and a folded PILOT coast can observe it. Opaque callables retain
+    only their predicate; rise/fall transition conditions are rejected because
+    avoidance is defined over snapshots. (``via=`` stays a conjunction — see
+    ``_compile_via``.)
     """
     if spec is None:
         return None
@@ -467,8 +496,20 @@ def _compile_avoid(spec: Any) -> Any:
     members: list[Any] = []
     for cond in conds:
         pred, tags, expr = _compile_property(cond)
+        if _avoid_expr_has_edge(expr):
+            raise ValueError(
+                "avoid= does not support rise()/fall() transition conditions; "
+                "use a snapshot state condition or callable"
+            )
         name = _render_avoid_expr(expr) if expr is not None else ", ".join(tags or ()) or "avoid"
-        members.append(_AvoidMember(name=name, pred=pred, tags=frozenset(tags or ())))
+        members.append(
+            _AvoidMember(
+                name=name,
+                pred=pred,
+                tags=frozenset(tags or ()),
+                condition=_avoid_fold_condition(cond, expr),
+            )
+        )
     return _AvoidPredicate(tuple(members))
 
 

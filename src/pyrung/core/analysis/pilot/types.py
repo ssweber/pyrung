@@ -138,11 +138,16 @@ def _avoid_member_true(pred: Callable[[dict[str, Any]], bool], state: dict[str, 
 
 @dataclass(frozen=True)
 class _AvoidMember:
-    """One avoided condition, carrying its own printable name for declines."""
+    """One avoided snapshot condition and its optional coast fold metadata."""
 
     name: str
     pred: Callable[[dict[str, Any]], bool]
     tags: frozenset[str] = frozenset()
+    # The normalized runtime Condition equivalent to ``pred``.  CoastSession
+    # uses it only as fold/read metadata; ``pred`` remains authoritative.
+    # Opaque callables have none and therefore retain the narrower
+    # real-observed-scan contract.
+    condition: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,18 @@ class _AvoidPredicate:
 
     def violated(self, state: dict[str, Any]) -> tuple[str, ...]:
         return tuple(m.name for m in self.members if _avoid_member_true(m.pred, state))
+
+    def violated_after_clear(
+        self,
+        start: dict[str, Any],
+        state: dict[str, Any],
+    ) -> tuple[str, ...]:
+        """Members clear at trial start that are true in a later observation."""
+        return tuple(
+            member.name
+            for member in self.members
+            if not _avoid_member_true(member.pred, start) and _avoid_member_true(member.pred, state)
+        )
 
     @property
     def names(self) -> tuple[str, ...]:
