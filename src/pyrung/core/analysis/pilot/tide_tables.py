@@ -4,9 +4,9 @@ The solvers model indirect table operands, enumerate known finite index
 domains, and return satisfying assignments or calculation preimages for the
 backward trace. Unmodelled live operands produce no exact solution.
 
-Some helper paths can return plausible values for non-rejecting reads. A caller
-that uses a result to prove a guard impossible must first establish complete
-domains for every free tag; ``trace._writer_guard_verdict`` owns that gate.
+Some helper paths can return plausible values for non-rejecting reads.
+``guard_verdict`` owns the complete-domain gate before it returns a permanent
+guard rejection.
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ def solve_calc_preimage(
     same :data:`_MAX_FREE_INDICES` / :data:`_MAX_COMBOS` guardrails as the guard
     enumerators.  Any free variable lacking a complete domain ⇒ ``None``:
     plausible-value fallbacks (``_index_values`` / producible-literal chains) may
-    never pin, exactly as the completeness gate in ``trace._writer_guard_verdict``.
+    never pin, exactly as the completeness policy in :func:`guard_verdict`.
 
     Pin semantics — **FORCED values only**: a source is pinned to ``v`` iff *every*
     satisfying assignment projects that source to ``v`` (the shared per-source
@@ -308,12 +308,11 @@ def solve_calc_preimage(
 def _is_complete_domain(tag: str, pdg: ProgramGraph, domains: dict[str, tuple[Any, ...]]) -> bool:
     """Whether *tag* has a **provably-complete** finite value domain.
 
-    Mirrors the completeness gate in ``trace._writer_guard_verdict``: only a
-    Bool type (trivially ``(False, True)``) or an ``nd_domains`` entry (complete
-    by the prover's construction) qualifies.  The tide tables' softer fallbacks
-    (``_index_values`` / producible-literal chains) are only *plausible* value
-    sets — enumerating a pin/rejection over one would fabricate it — so they are
-    deliberately excluded here."""
+    Only a Bool type (trivially ``(False, True)``) or an ``nd_domains`` entry
+    (complete by the prover's construction) qualifies.  The tide tables' softer
+    fallbacks (``_index_values`` / producible-literal chains) are only
+    *plausible* value sets — enumerating a proof over one would fabricate it —
+    so they are deliberately excluded here."""
     from pyrung.core.tag import TagType
 
     if domains and tag in domains:
@@ -338,6 +337,7 @@ def guard_verdict(
     pdg: ProgramGraph,
     program: Any,
     domains: dict[str, tuple[Any, ...]] | None = None,
+    require_complete_domains: bool = True,
 ) -> str:
     """Whether a writer guard can fire under the pins the writer imposes.
 
@@ -358,12 +358,17 @@ def guard_verdict(
       ``SAT`` so the caller can flag a frontier gated by a genuinely-unreadable
       guard (the skiff's escalation signal).
 
-    ``fixed`` pins what the writer *forces* — its copy/calc source and any context.
-    Free tags are the remaining guard operands; a Bool free operand resolves to the
-    trivial ``(False, True)`` domain via ``_guard_operand_domain``, everything else
-    to a finite integer domain (or ``None`` → punt). Enumeration is deliberately
-    punt-biased: unknown domains, undecidable terms, and exceeded guardrails can
-    never reject a writer the loop might still drive.
+    ``fixed`` pins what the writer *forces* — its copy/calc source and any
+    context. By default, every free tag must pass :func:`_is_complete_domain`
+    before enumeration: a Bool supplies ``(False, True)`` and ``domains`` carries
+    prover-owned complete domains. Missing completeness returns
+    :data:`GUARD_PUNT` even when a softer plausible domain can be inferred.
+
+    ``require_complete_domains=False`` is an explicit escape for a caller that
+    independently owns the completeness proof or needs a model-relative
+    diagnostic. It preserves enumeration over plausible domains, but a
+    :data:`GUARD_DEAD` result in that mode must not drive permanent rejection.
+    Unknown domains, undecidable terms, and exceeded guardrails still punt.
     """
     from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
@@ -384,6 +389,8 @@ def guard_verdict(
 
     free_domains: list[tuple[Any, ...]] = []
     for tag in free:
+        if require_complete_domains and not _is_complete_domain(tag, pdg, domains):
+            return GUARD_PUNT
         dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
         if dom is None:
             return GUARD_PUNT  # unknown/unbounded domain

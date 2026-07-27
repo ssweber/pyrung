@@ -33,9 +33,6 @@ from pyrung.core.analysis.pilot.static_expressions import (
     _resolve_inequality_target,
     single_calc_source,
 )
-from pyrung.core.analysis.pilot.static_expressions import (
-    simplified_expr_tags as _simplified_expr_tags,
-)
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
 from pyrung.core.analysis.simplified import (
@@ -3539,16 +3536,11 @@ def _writer_guard_verdict(
     function of those plus the trace-invariant snapshot/domains, so one enumeration
     per distinct writer/pin/guard suffices for the whole ``trace_back`` recursion.
 
-    Soundness gate: a ``GUARD_DEAD`` proof is only valid over *complete* free-tag
-    domains.  The prover's ``nd_domains`` are complete by construction and a Bool
-    is trivially ``(False, True)``, but the tide tables' softer fallbacks
-    (``_index_values`` / producible-literal chains) are only *plausible* value
-    sets — enumerating a guard over an incomplete domain would fabricate a
-    rejection.  So we punt unless every free guard operand is either Bool-typed or
-    carries an ``nd_domains`` entry; only then is the enumeration sound.
+    ``guard_verdict`` owns the complete-domain requirement before returning
+    ``GUARD_DEAD``. This adapter owns only the writer's fire pins and trace-local
+    memoization.
     """
-    from pyrung.core.analysis.pilot.tide_tables import GUARD_PUNT, guard_verdict
-    from pyrung.core.tag import TagType
+    from pyrung.core.analysis.pilot.tide_tables import guard_verdict
 
     pins = _transition_fire_pins(env, ro, tag, value, reverse_result)
     key = (ri, tuple(sorted(pins.items(), key=lambda kv: kv[0])), _expr_route_key(guard_expr))
@@ -3557,20 +3549,6 @@ def _writer_guard_verdict(
         return cached
 
     nd_domains = env.prior.nd_domains if env.prior is not None else None
-    free = _simplified_expr_tags(guard_expr) - set(pins)
-
-    def _complete_domain(t: str) -> bool:
-        if nd_domains is not None and t in nd_domains:
-            return True
-        tag_ref = env.pdg.tags.get(t)
-        return tag_ref is not None and getattr(tag_ref, "type", None) is TagType.BOOL
-
-    if not all(_complete_domain(t) for t in free):
-        # A free operand lacks a provably-complete domain (a live word, or a tag
-        # the prover left unconstrained) — never fabricate a rejection.
-        env.guard_memo[key] = GUARD_PUNT
-        return GUARD_PUNT
-
     verdict = guard_verdict(
         guard_expr,
         fixed=pins,

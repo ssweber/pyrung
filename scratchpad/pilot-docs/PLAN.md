@@ -141,37 +141,6 @@ Use `devtools/pilot_divergence.py` for the first changed decision and
 These are active soundness or contract issues. Keep their diffs separate from the
 ownership refactors below.
 
-### A2. Put complete-domain enforcement inside `tide_tables.guard_verdict`
-
-**Current ownership failure**
-
-`guard_verdict` can return permanent `GUARD_DEAD` using soft, plausible operand
-domains. `trace._writer_guard_verdict` separately protects its call with a
-duplicate completeness check. The public decision owner is therefore unsafe
-without its one current caller's private precondition.
-
-**Required shape**
-
-- Add `require_complete_domains: bool = True` to `guard_verdict`.
-- When a free operand lacks a complete domain, return `GUARD_PUNT`, never
-  `GUARD_DEAD`.
-- Reuse `tide_tables._is_complete_domain`.
-- Delete trace's `_complete_domain` closure and pre-check; trace retains pin
-  derivation and memoization.
-
-**Why**
-
-The object that returns the rejection must own the proof requirement. A future
-caller should not be able to fabricate a permanent rejection by forgetting
-prose in `pilot/CLAUDE.md`.
-
-**LOC:** about -15 to -25.
-
-**Risk:** medium but contained.
-
-**Gate:** `test_pilot_rejection_arm.py`, `test_pilot_sandbox_gate.py`, and direct
-`guard_verdict` tests for complete and incomplete free domains.
-
 ### A3. Lock VERIFY's deliberate omission of the live harness
 
 `orientation._trace_for_route` / `_read_route_trees` use
@@ -788,7 +757,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Correctness:** A2/A3.
+1. **Correctness:** A3.
 2. **Navigation continuity:** B1, then B2.
 3. **Trial evidence continuity:** B3, B4, then B5.
 4. **Shared decisions:** C1 and C2.

@@ -46,7 +46,15 @@ def ctx():
     return prog, build_program_graph(prog)
 
 
-def _verdict(ctx, expr, fixed, *, domains=None, snapshot=None):
+def _verdict(
+    ctx,
+    expr,
+    fixed,
+    *,
+    domains=None,
+    snapshot=None,
+    require_complete_domains=True,
+):
     prog, pdg = ctx
     return guard_verdict(
         expr,
@@ -55,6 +63,7 @@ def _verdict(ctx, expr, fixed, *, domains=None, snapshot=None):
         pdg=pdg,
         program=prog,
         domains=domains or {},
+        require_complete_domains=require_complete_domains,
     )
 
 
@@ -107,6 +116,62 @@ def test_or_all_arms_dead_is_unsat(ctx):
 
 
 # --- Punts (the safe, never-reject direction) --------------------------------
+
+
+@pytest.fixture
+def incomplete_domain_ctx():
+    """A word with a plausible producer domain that is not provably complete."""
+    left = Bool("Left")
+    right = Bool("Right")
+    mode = Int("SoftMode")
+    with Program(strict=False) as prog:
+        with Rung(left):
+            copy(1, mode)
+        with Rung(right):
+            copy(2, mode)
+    snapshot = {"Left": False, "Right": False, "SoftMode": 0}
+    return prog, build_program_graph(prog), snapshot
+
+
+def test_plausible_but_incomplete_domain_punts_by_default(incomplete_domain_ctx):
+    """Producer literals are candidates, not a complete rejection domain."""
+    prog, pdg, snapshot = incomplete_domain_ctx
+    verdict = guard_verdict(
+        Atom("SoftMode", "eq", 9),
+        fixed={},
+        snapshot=snapshot,
+        pdg=pdg,
+        program=prog,
+    )
+    assert verdict == GUARD_PUNT
+
+
+def test_explicit_complete_domain_can_prove_dead(incomplete_domain_ctx):
+    """The same finite values are proof-bearing when supplied as a complete domain."""
+    prog, pdg, snapshot = incomplete_domain_ctx
+    verdict = guard_verdict(
+        Atom("SoftMode", "eq", 9),
+        fixed={},
+        snapshot=snapshot,
+        pdg=pdg,
+        program=prog,
+        domains={"SoftMode": (1, 2)},
+    )
+    assert verdict == GUARD_DEAD
+
+
+def test_incomplete_domain_opt_out_is_explicitly_model_relative(incomplete_domain_ctx):
+    """The compatibility escape preserves old soft-domain enumeration."""
+    prog, pdg, snapshot = incomplete_domain_ctx
+    verdict = guard_verdict(
+        Atom("SoftMode", "eq", 9),
+        fixed={},
+        snapshot=snapshot,
+        pdg=pdg,
+        program=prog,
+        require_complete_domains=False,
+    )
+    assert verdict == GUARD_DEAD
 
 
 def test_free_tag_without_finite_domain_punts(ctx):

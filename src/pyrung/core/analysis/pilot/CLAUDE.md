@@ -77,9 +77,10 @@ unlikely.
 
 A rejection is stronger: downstream code may never reconsider it. Static
 rejection therefore requires a complete finite domain, such as Bool, prover
-`nd_domains`, or declared `choices=`. In particular, callers using
-`tide_tables.py` to prove a guard impossible must pass through
-`trace._writer_guard_verdict`, which checks domain completeness first.
+`nd_domains`, or declared `choices=`. `tide_tables.guard_verdict` owns that
+completeness requirement before it can return permanent `GUARD_DEAD`;
+`trace._writer_guard_verdict` supplies writer fire pins and memoizes the owned
+verdict.
 
 Failure to make progress is not proof that a transition is impossible.
 Pending-departure expiry rolls the world back without creating a nogood.
@@ -110,6 +111,8 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
+- Permanent guard rejection: `tide_tables.py::guard_verdict`; trace supplies
+  writer fire pins and consumes the complete-domain verdict
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's counterfactual proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
@@ -310,7 +313,8 @@ investigation materializes their guarded installed form.
   writer ranking.
 - `availability.py` — current-state writer availability used for ordering.
 - `evidence.py` — pipeline-role inference and static transition-route expansion.
-- `tide_tables.py` — finite constant-backed table and calculation preimages.
+- `tide_tables.py` — finite constant-backed table and calculation preimages,
+  plus complete-domain guard verdicts.
 - `charts.py` — immutable static transition graphs, constrained path evidence,
   and opaque pipeline detection.
 - `static_expressions.py` — low-level static-expression helpers shared by trace
