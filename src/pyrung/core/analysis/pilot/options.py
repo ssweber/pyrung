@@ -1297,7 +1297,7 @@ def _build_candidates(
     wait: WaitRead | None = None
     program_step: Any = None
     program_pairs: set[_ActionPair] = set()
-    advance_condition: Any = None
+    advance_heading: ChannelHeading | None = None
     # A grounded completion edge may add a narrower current-world read below the
     # opaque pipeline cut. Those details join the broad target details and the
     # whole pool re-enters ordinary admission before prerequisite splitting.
@@ -1307,11 +1307,6 @@ def _build_candidates(
         assert preflight_wait is not None
         zoom_wait = preflight_wait.candidate_read
         program_step = zoom_wait.program_step
-        advance_condition = (
-            zoom_wait.prescription.heading.boundary
-            if zoom_wait.prescription is not None and zoom_wait.prescription.heading is not None
-            else None
-        )
         if program_step is not None:
             program_pairs = set(program_step.required_pairs)
         admission = preflight_wait.admission
@@ -1335,27 +1330,42 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
     )
-    advance_boundary: _ActionPair | None = (
-        zoom_wait.frontier[0]
-        if zoom_wait is not None and advance_condition is not None and len(zoom_wait.frontier) == 1
-        else None
-    )
+    if (
+        zoom_wait is not None
+        and zoom_wait.prescription is not None
+        and zoom_wait.prescription.heading is not None
+        and zoom_wait.prescription.heading.boundary is not None
+        and len(zoom_wait.frontier) == 1
+    ):
+        channel_tag, target_value = zoom_wait.frontier[0]
+        advance_heading = ChannelHeading(
+            channel_tag=channel_tag,
+            target_value=target_value,
+            boundary=zoom_wait.prescription.heading.boundary,
+            route=zoom_wait.prescription.heading.route,
+        )
     if _is_coast:
         for node in frame.tree.leaves():
             step = getattr(node, "advance", None)
             if step is None or node.satisfied:
                 continue
-            advance_boundary = (
+            boundary_pair = (
                 getattr(node, "owner_boundary", None)
                 if getattr(node, "linear_boundary", False)
                 else None
             ) or _advance_heading(step.until, frame, state)
-            if advance_boundary is not None:
-                advance_condition = (
+            if boundary_pair is not None:
+                boundary = (
                     getattr(node, "owner_condition", None)
                     if getattr(node, "linear_boundary", False)
                     else None
                 ) or step.until
+                channel_tag, target_value = boundary_pair
+                advance_heading = ChannelHeading(
+                    channel_tag=channel_tag,
+                    target_value=target_value,
+                    boundary=boundary,
+                )
                 break
 
     # A plain chart completion is only the outer route context. Its admitted
@@ -1363,27 +1373,22 @@ def _build_candidates(
     # is what execution must witness first. Exact-producer waits already own
     # their immediate motion and are not overwritten here.
     if (
-        advance_boundary is not None
+        advance_heading is not None
         and zoom_wait is not None
         and zoom_wait.program_step is None
         and zoom_wait.prescription is not None
     ):
-        channel_tag, target_value = advance_boundary
         route_context = (
             zoom_wait.prescription.heading.route
             if zoom_wait.prescription.heading is not None
             else None
         )
+        advance_heading = replace(advance_heading, route=route_context)
         zoom_wait = replace(
             zoom_wait,
             prescription=replace(
                 zoom_wait.prescription,
-                heading=ChannelHeading(
-                    channel_tag=channel_tag,
-                    target_value=target_value,
-                    boundary=advance_condition,
-                    route=route_context,
-                ),
+                heading=advance_heading,
             ),
         )
 
@@ -1662,19 +1667,17 @@ def _build_candidates(
         wait = zoom_wait
 
     if (
-        advance_boundary is not None
+        advance_heading is not None
         and not candidates
         and (wait is None or wait.prescription is None)
     ):
-        channel_tag, target_value = advance_boundary
-        reason = f"advance {channel_tag} to its next boundary {target_value!r}"
+        reason = (
+            f"advance {advance_heading.channel_tag} to its next boundary "
+            f"{advance_heading.target_value!r}"
+        )
         wait = WaitRead(
             WaitPrescription(
-                ChannelHeading(
-                    channel_tag=channel_tag,
-                    target_value=target_value,
-                    boundary=advance_condition,
-                ),
+                advance_heading,
                 reason,
                 # The immediate coast heading is not an unresolved completion
                 # frontier. Only an exact completion/program re-read owns that

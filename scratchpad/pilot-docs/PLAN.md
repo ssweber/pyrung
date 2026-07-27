@@ -213,34 +213,6 @@ and gives pending policy the exact opening evidence it is waiting to resolve.
 `test_pilot_detour_hold_release.py`, `test_pilot_progress.py`,
 `test_pilot_investigate.py`.
 
-### B7. Keep discovered coast headings typed through candidate refinement
-
-`options._build_candidates` still dehydrates a discovered navigation heading into
-parallel `advance_boundary: _ActionPair | None` and `advance_condition` locals.
-Two later branches unpack the pair and reconstruct `ChannelHeading`.
-
-**Required shape**
-
-- Once a candidate read discovers an immediate coast boundary, represent it as
-  `ChannelHeading`.
-- Route context may be composed onto that heading, but channel, target, and
-  boundary must continue together.
-- Keep ordinary action pairs as `_ActionPair`; this is a navigation-boundary
-  ownership fix, not a general ban on tuple indexing.
-
-**Why**
-
-The current tuple is no longer an action. Keeping the typed heading removes one
-small remaining dehydrate/reconstruct seam from B2.
-
-**LOC:** about -5 to -15.
-
-**Risk:** medium because this is inside candidate selection, though the intended
-change is mechanical.
-
-**Gate:** candidate-wait and orientation-contract tests, decision goldens, then
-full Pilot and Tumbler.
-
 ---
 
 ## C. Give repeated decisions one owner
@@ -586,13 +558,12 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Navigation boundary continuity:** B7.
-2. **Trial evidence continuity:** B4, then B5.
-3. **Shared decisions:** C1 and C2.
-4. **Control flow:** D1/D2/D3.
-5. **Recovery continuity:** B6, then D4.
-6. **Compiled residual replay:** E1, E2, then E3.
-7. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Trial evidence continuity:** B4, then B5.
+2. **Shared decisions:** C1 and C2.
+3. **Control flow:** D1/D2/D3.
+4. **Recovery continuity:** B6, then D4.
+5. **Compiled residual replay:** E1, E2, then E3.
+6. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
