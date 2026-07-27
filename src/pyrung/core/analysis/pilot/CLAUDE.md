@@ -116,8 +116,9 @@ should consume the first owner's result.
   execution and verification, and recovery consumes that receipt rather than
   rebuilding intent from the global context
 - Option materialization and ranking: `options.py::_build_candidates`; its
-  action-free `_WaitPrescription` and `_admit_trace_details` make wait isolation
-  and single admission structural
+  `WaitRead` keeps each wait prescription attached to its discovered inputs,
+  and `_AdmittedWait` carries both through the ordinary admission policy before
+  a coast can be selected
 - Local trial gates: `verify.py::verify_gates`
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop

@@ -230,41 +230,6 @@ case.
 
 **Gate:** `test_pilot_verify.py`, `test_pilot_trace.py`.
 
-### A4. Make wait admission structural, then adjudicate `_wait_is_viable`
-
-`options._wait_is_viable` demotes a prescribed wait when the exact producer's
-required inputs did not survive ordinary admission. That is a policy decision
-introduced by the admission pass, not a mechanical consequence.
-
-There is also a concrete hole in the intended ownership rule:
-`options._read_wait` returns `(prescription, details)`, and the fallback route arm
-binds `_fallback_details` but discards them. That supplemental completion/program
-read never enters `_admit_trace_details`, so the current structure does not
-actually guarantee one admission pass for every reading.
-
-**Required shape**
-
-- Return one `WaitRead` object containing prescription plus discovered details;
-  callers cannot receive one without the other.
-- Admission consumes `WaitRead` and returns an admitted wait result; do not pass a
-  bare prescription forward before its inputs are admitted.
-- Cover the fallback route arm, not only the zoom preflight arm.
-
-Then either accept the rule, add a focused test showing that an unadmitted
-producer input cannot authorize a coast, document the decision in
-`_WaitPrescription`, and remove the note; or produce a counterexample and replace
-it with a different owned admission receipt.
-
-**LOC:** roughly neutral to -15; the object removes tuple unpacking and fallback
-special cases.
-
-**Risk:** medium because it changes whether PILOT waits or tries another bearing.
-
-**Gate:** `test_pilot_candidate_wait.py`, including a grounded filtered-action
-fallback with required inputs, then the Tumbler Complete avoid golden.
-
----
-
 ## B. Preserve objects across module seams
 
 This is the main cleanup program. Items are ordered by leverage.
@@ -322,9 +287,9 @@ on the declared act.
 
 **Current dehydration chain**
 
-`options._admit_trace_details` returns `_TraceAdmission` and `_read_wait` returns
-`_WaitPrescription`, but `_build_candidates` immediately unpacks both into locals
-and returns `_CandidateList` with parallel optional fields:
+`options._admit_wait_read` now keeps `WaitRead` and `_TraceAdmission` together as
+`_AdmittedWait`, but `_build_candidates` still unpacks that admitted reading into
+locals and returns `_CandidateList` with parallel optional fields:
 
 - `wait_prescribed` + `wait_reason`;
 - `advance_boundary` + `advance_condition`;
@@ -747,7 +712,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Correctness:** A1/A2/A3 and adjudicate A4.
+1. **Correctness:** A1/A2/A3.
 2. **Navigation continuity:** B1, then B2.
 3. **Trial evidence continuity:** B3, B4, then B5.
 4. **Shared decisions:** C1 and C2.

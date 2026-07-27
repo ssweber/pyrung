@@ -240,9 +240,9 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
 class _WaitPrescription:
     """One grounded wait bearing and the evidence that justified it.
 
-    Action details are deliberately absent.  Exact-producer and completion
-    readings enter the ordinary trace-admission pass before this bearing can be
-    executed; a wait receipt cannot materialize work by itself.
+    This is only the decision portion of :class:`WaitRead`.  Exact-producer
+    inputs must all survive that reading's ordinary admission before the
+    prescription may authorize a coast.
     """
 
     prescribed: bool
@@ -250,6 +250,19 @@ class _WaitPrescription:
     frontier: tuple[_ActionPair, ...] = ()
     program_step: Any = None
     boundary: Any = None
+
+
+@dataclass(frozen=True)
+class WaitRead:
+    """One wait prescription together with every action its read discovered.
+
+    The prescription cannot cross candidate construction on its own.  Its
+    completion and exact-producer details travel with it into one ordinary
+    admission pass.
+    """
+
+    prescription: _WaitPrescription
+    details: tuple[TraceAction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -262,6 +275,49 @@ class _TraceAdmission:
     detail_by_pair: dict[_ActionPair, TraceAction]
     managed_boolean_rungs: tuple[PilotRung, ...]
     establish_pending: bool
+
+
+@dataclass(frozen=True)
+class _AdmittedWait:
+    """A complete wait read after the candidate pool admitted its details."""
+
+    read: WaitRead
+    admission: _TraceAdmission
+
+    @property
+    def admitted_pairs(self) -> frozenset[_ActionPair]:
+        return frozenset(
+            (
+                *self.admission.actions,
+                *((rung.dest, rung.value) for rung in self.admission.managed_boolean_rungs),
+            )
+        )
+
+    @property
+    def admitted_supplement(self) -> bool:
+        return any(detail.pair in self.admitted_pairs for detail in self.read.details)
+
+    @property
+    def viable(self) -> bool:
+        """Whether every exact-producer input survived this admission.
+
+        The program cannot be observed crossing an owned boundary unless every
+        external input that exact producer currently requires will be applied
+        by the same candidate result.
+        """
+
+        step = self.read.prescription.program_step
+        required_pairs = step.required_pairs if step is not None else frozenset()
+        return self.read.prescription.prescribed and (
+            not required_pairs or required_pairs <= self.admitted_pairs
+        )
+
+    @property
+    def prescription(self) -> _WaitPrescription:
+        prescription = self.read.prescription
+        if prescription.prescribed and not self.viable:
+            return replace(prescription, prescribed=False)
+        return prescription
 
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
@@ -805,12 +861,12 @@ def _prescribe_wait(
 ) -> _WaitPrescription:
     """Mint a prescribed-wait bearing from one current-world edge read.
 
-    The single owner of "a wait is prescribed" for all three mint sites.  A
-    route completion edge (the zoom / fallback sites) must be *grounded* — a
-    wildcard from-value has no dwell semantics, so it refuses the wait (returns
-    ``prescribed=False``).  An influence-path wait passes ``edge=None`` with an
-    explicit ``reason`` — always coastable. Automatic sibling edges carry one
-    exact-producer ``ProgramStep`` reading in the returned prescription.
+    The single owner of "a wait is prescribed" for both mint paths. A route
+    completion edge (zoom) must be *grounded* — a wildcard from-value has no
+    dwell semantics, so it refuses the wait (returns ``prescribed=False``). An
+    influence-path wait passes ``edge=None`` with an explicit ``reason`` —
+    always coastable. Automatic sibling edges carry one exact-producer
+    ``ProgramStep`` reading in the returned prescription.
 
     This function never returns actions.  :func:`_read_wait` collects any
     completion or exact-producer details separately so `_build_candidates` can
@@ -938,8 +994,8 @@ def _read_wait(
     ctx: Any,
     *,
     reason: str | None = None,
-) -> tuple[_WaitPrescription, tuple[TraceAction, ...]]:
-    """Read one wait edge without admitting any action it discovers."""
+) -> WaitRead:
+    """Read one wait edge while keeping every discovered action attached."""
 
     prescription = _prescribe_wait(edge, frame, state, ctx, reason=reason)
     step = prescription.program_step
@@ -953,7 +1009,7 @@ def _read_wait(
     if edge is not None and not edge.program_producers and edge.completion:
         details, frontier = _completion_reread(edge, frame, state, ctx)
         prescription = replace(prescription, frontier=frontier)
-    return prescription, details
+    return WaitRead(prescription, details)
 
 
 def _admit_trace_details(
@@ -1029,18 +1085,26 @@ def _admit_trace_details(
     )
 
 
-def _wait_is_viable(
-    prescription: _WaitPrescription,
-    admitted_pairs: set[_ActionPair],
-) -> bool:
-    """A wait may coast only when all of its current inputs survived admission."""
+def _admit_wait_read(
+    read: WaitRead,
+    base_details: tuple[TraceAction, ...],
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> _AdmittedWait:
+    """Admit one whole wait read through the candidate pool's only policy."""
 
-    required_pairs = (
-        prescription.program_step.required_pairs
-        if prescription.program_step is not None
-        else frozenset()
+    return _AdmittedWait(
+        read=read,
+        admission=_admit_trace_details(
+            (*base_details, *read.details),
+            frame,
+            state,
+            ctx,
+            key_nogoods,
+        ),
     )
-    return prescription.prescribed and (not required_pairs or required_pairs <= admitted_pairs)
 
 
 def _build_candidates(
@@ -1120,29 +1184,23 @@ def _build_candidates(
     # ask the same graph for the next route. This is how HELD walks around a
     # structurally possible Complete edge to the currently conductive Unhold
     # edge, without retaining a route suffix or poisoning another world.
-    preflight_wait: _WaitPrescription | None = None
-    preflight_details: tuple[TraceAction, ...] = ()
-    preflight_admission: _TraceAdmission | None = None
+    preflight_wait: _AdmittedWait | None = None
     excluded_edges: set[tuple[Any, ...]] = set()
     while _is_zoom:
         assert route_plan is not None
-        preflight_wait, preflight_details = _read_wait(route_plan.first_edge, frame, state, ctx)
-        preflight_admission = _admit_trace_details(
-            (*tuple(frame.raw_trace_action_details), *preflight_details),
+        preflight_wait = _admit_wait_read(
+            _read_wait(route_plan.first_edge, frame, state, ctx),
+            tuple(frame.raw_trace_action_details),
             frame,
             state,
             ctx,
             key_nogoods,
         )
-        admitted_pairs = {
-            *preflight_admission.actions,
-            *((rung.dest, rung.value) for rung in preflight_admission.managed_boolean_rungs),
-        }
-        wait_viable = _wait_is_viable(preflight_wait, admitted_pairs)
-        if preflight_wait.prescribed and not wait_viable:
-            preflight_wait = replace(preflight_wait, prescribed=False)
-        admitted_supplement = any(detail.pair in admitted_pairs for detail in preflight_details)
-        if wait_viable or admitted_supplement or not route_plan.first_edge.program_producers:
+        if (
+            preflight_wait.viable
+            or preflight_wait.admitted_supplement
+            or not route_plan.first_edge.program_producers
+        ):
             break
         excluded_edges.add(route_plan.first_edge.identity)
         alternate = _compass_route_plan(
@@ -1155,8 +1213,6 @@ def _build_candidates(
             break
         route_plan = alternate
         preflight_wait = None
-        preflight_details = ()
-        preflight_admission = None
         _is_zoom = not admission.establish_pending and route_plan.first_edge.action is None
 
     if _is_zoom or admission.establish_pending:
@@ -1183,14 +1239,13 @@ def _build_candidates(
     if _is_zoom:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
         assert preflight_wait is not None
-        assert preflight_admission is not None
-        zoom_wait = preflight_wait
+        zoom_wait = preflight_wait.prescription
         completion_frontier = zoom_wait.frontier
         program_step = zoom_wait.program_step
         advance_condition = zoom_wait.boundary
         if program_step is not None:
             program_pairs = set(program_step.required_pairs)
-        admission = preflight_admission
+        admission = preflight_wait.admission
         if admission.establish_pending:
             _is_zoom = False
             zoom_wait = replace(zoom_wait, prescribed=False)
@@ -1521,30 +1576,6 @@ def _build_candidates(
             prescribed=True,
             reason=f"advance {advance_boundary[0]} to its next boundary {advance_boundary[1]!r}",
         )
-
-    # Fallback: route exists with an action but no candidates surfaced.  A wildcard
-    # (ANY_FROM) edge whose action was filtered (nogooded / already at value) has
-    # no dwell semantics — ``_prescribe_wait`` refuses it (the loop's stuck
-    # diagnosis names the state instead of burning the budget on a dead register).
-    if (
-        route_plan is not None
-        and not _is_zoom
-        and not establish_pending
-        and not route_candidates
-        and not trace_actions
-        and not wait.prescribed
-    ):
-        fallback_wait, _fallback_details = _read_wait(route_plan.first_edge, frame, state, ctx)
-        wait = replace(
-            wait,
-            prescribed=fallback_wait.prescribed,
-            reason=fallback_wait.reason,
-        )
-        completion_frontier += fallback_wait.frontier
-        if fallback_wait.program_step is not None:
-            program_step = fallback_wait.program_step
-        if fallback_wait.boundary is not None:
-            advance_condition = fallback_wait.boundary
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
     # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and

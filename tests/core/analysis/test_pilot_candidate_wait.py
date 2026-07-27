@@ -25,10 +25,12 @@ from pyrung.core.analysis.pilot.navigation import (
 )
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.pilot.options import (
+    WaitRead,
     _admit_trace_details,
+    _admit_wait_read,
     _build_candidates,
+    _compass_route_actions,
     _compass_route_plan,
-    _wait_is_viable,
     _WaitPrescription,
 )
 from pyrung.core.analysis.pilot.program_step import (
@@ -853,18 +855,77 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
     """A rejected required input cannot authorize coasting the producer."""
 
     required = (TraceAction("First", True), TraceAction("Blocked", True))
-    prescription = _WaitPrescription(
-        True,
-        program_step=SimpleNamespace(
-            required_inputs=required,
-            required_pairs=frozenset(detail.pair for detail in required),
+    read = WaitRead(
+        _WaitPrescription(
+            True,
+            program_step=SimpleNamespace(
+                required_inputs=required,
+                required_pairs=frozenset(detail.pair for detail in required),
+            ),
+            boundary=object(),
         ),
-        boundary=object(),
+        required,
+    )
+    frame = SimpleNamespace(snap={"First": False, "Blocked": False})
+    state = SimpleNamespace(rungs=())
+    admitted = _admit_wait_read(
+        read,
+        (),
+        frame,
+        state,
+        SimpleNamespace(
+            route_allowed=lambda pair: pair != ("Blocked", True),
+            edge_tags=frozenset(),
+        ),
+        set(),
     )
 
-    assert not _wait_is_viable(prescription, {("First", True)})
-    assert _wait_is_viable(prescription, {("First", True), ("Blocked", True)})
-    assert not _wait_is_viable(replace(prescription, prescribed=False), set())
+    assert admitted.viable is False
+    assert admitted.prescription.prescribed is False
+
+    fully_admitted = _admit_wait_read(
+        read,
+        (),
+        frame,
+        state,
+        SimpleNamespace(route_allowed=lambda _pair: True, edge_tags=frozenset()),
+        set(),
+    )
+    assert fully_admitted.viable is True
+    assert fully_admitted.prescription is read.prescription
+
+
+def test_grounded_action_plan_always_materializes_its_first_action() -> None:
+    """A selected action edge cannot fall through to a synthetic wait."""
+
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (_action_route(6, 16, "Complete"),),
+    )
+    frame = SimpleNamespace(
+        key=("state", 6),
+        snap={"State": 6, "Complete": False},
+        tree=TraceNode(
+            "State",
+            16,
+            children=[TraceNode("UnreadableGuard", 1, satisfied=False, is_steerable=False)],
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        route_allowed=lambda _pair: True,
+        avoid_pred=None,
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 16),
+    )
+
+    plan = _compass_route_plan(frame, ctx, set())
+
+    assert plan is not None
+    assert plan.first_edge.action == ("Complete", True)
+    assert plan.first_edge.completion == ()
+    assert plan.first_edge.program_producers == ()
+    assert _compass_route_actions(plan, frame, ctx, set()) == (("Complete", True),)
 
 
 def test_apply_reports_changed_and_returns_self_when_nothing_new():
