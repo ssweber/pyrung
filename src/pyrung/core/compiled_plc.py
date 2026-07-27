@@ -20,6 +20,7 @@ from pyrung.core.state import SystemState
 from pyrung.core.system_points import (
     _BATTERY_PRESENT_KEY,
     _CLOCK_HALF_PERIODS,
+    _DERIVED_EDGE_TAGS,
     _DERIVED_TAG_NAMES,
     _MODE_RUN_KEY,
     READ_ONLY_SYSTEM_TAG_NAMES,
@@ -673,7 +674,11 @@ class CompiledPLC:
             else:
                 continue
             self._kernel.prev[name] = value
-            self._kernel.memory[f"_prev:{name}"] = value
+            # Scan-derived edges compute directly from scan_id and deliberately
+            # have no committed _prev:* entry in the interpreter.  The kernel
+            # still needs its private prev value while executing compiled code.
+            if name not in _DERIVED_EDGE_TAGS:
+                self._kernel.memory[f"_prev:{name}"] = value
 
     def _committed_tags(self) -> dict[str, Any]:
         return {
