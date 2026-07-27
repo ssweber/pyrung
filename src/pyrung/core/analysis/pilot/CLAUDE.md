@@ -280,9 +280,10 @@ investigation materializes their guarded installed form.
 - `ChannelHeading` owns an immediate observable channel/value/boundary and its
   optional outer `RouteEdgeContext`. `Coast` consumes that heading whole through
   `ActPolicy.heading`; consumers do not receive scalar channel or route copies.
-  Candidate refinement keeps a discovered coast boundary as one
-  `ChannelHeading`; it may compose route context onto that object but does not
-  split the boundary back into an action pair and predicate.
+  `options.py::_boundary_heading` lowers an instruction-owned boundary directly
+  to that typed object. Candidate refinement carries it whole and may compose
+  route context onto it; only the explicitly pair-typed wait frontier projects
+  its channel and target.
 - A planning trace may read the live harness to identify a physical driver.
   VERIFY's post-trial dead-end trace deliberately omits that proposal model;
   continued physical motion needs executed evidence or a live pending effect on

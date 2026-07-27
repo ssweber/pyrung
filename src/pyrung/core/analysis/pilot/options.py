@@ -855,13 +855,17 @@ def _completion_reread(
     return tuple(details), tuple(frontier)
 
 
-def _advance_heading(boundary: Any, frame: Any, state: Any) -> _ActionPair | None:
+def _boundary_heading(boundary: Any, frame: Any, state: Any) -> ChannelHeading | None:
     """Lower an owned relational boundary to an exact observable heading."""
     from pyrung.core.analysis.pilot.advance import build_advance_index
     from pyrung.core.crossing import Cmp, Eq
 
     if isinstance(boundary, Eq) and len(boundary.values) == 1:
-        return (boundary.tag, next(iter(boundary.values)))
+        return ChannelHeading(
+            channel_tag=boundary.tag,
+            target_value=next(iter(boundary.values)),
+            boundary=boundary,
+        )
     if not isinstance(boundary, Cmp) or boundary.op not in {">=", "<="}:
         return None
     owner = build_advance_index(
@@ -873,7 +877,11 @@ def _advance_heading(boundary: Any, frame: Any, state: Any) -> _ActionPair | Non
     target = frame.snap.get(str(boundary.bound)) if boundary.bound_is_tag else boundary.bound
     if target is None:
         return None
-    return (boundary.tag, target)
+    return ChannelHeading(
+        channel_tag=boundary.tag,
+        target_value=target,
+        boundary=boundary,
+    )
 
 
 def _prescribe_wait(
@@ -935,17 +943,17 @@ def _prescribe_wait(
             declined_frontier=declined_frontier,
         )
 
-    def _heading(
-        pair: _ActionPair | None,
+    def _route_heading(
+        heading: ChannelHeading | None = None,
         boundary: Any = None,
     ) -> ChannelHeading:
-        channel_tag, target_value = (
-            pair if pair is not None else (edge.role.channel_tag, edge.to_value)
+        heading = heading or ChannelHeading(
+            channel_tag=edge.role.channel_tag,
+            target_value=edge.to_value,
         )
-        return ChannelHeading(
-            channel_tag=channel_tag,
-            target_value=target_value,
-            boundary=boundary,
+        return replace(
+            heading,
+            boundary=boundary if boundary is not None else heading.boundary,
             route=route_context,
         )
 
@@ -992,9 +1000,9 @@ def _prescribe_wait(
         )
         motion = step.observable_motion(preferred_channel)
         motion_heading = (
-            (
-                motion.channel_tag,
-                (
+            ChannelHeading(
+                channel_tag=motion.channel_tag,
+                target_value=(
                     motion.before_value
                     if motion.channel_tag in step.preserve_channels
                     else motion.target_value
@@ -1004,7 +1012,7 @@ def _prescribe_wait(
             else None
         )
         if step.status is ProgramStepStatus.KEEP_RUNNING:
-            boundary_heading = _advance_heading(step.boundary, frame, state)
+            boundary_heading = _boundary_heading(step.boundary, frame, state)
             if boundary_heading is None:
                 return _read(
                     None,
@@ -1019,16 +1027,21 @@ def _prescribe_wait(
             )
             return _read(
                 WaitPrescription(
-                    _heading(coast_heading, step.boundary),
+                    _route_heading(coast_heading, step.boundary),
                     f"{route_reason}{observation}",
-                    frontier=(boundary_heading,),
+                    frontier=(
+                        (
+                            boundary_heading.channel_tag,
+                            boundary_heading.target_value,
+                        ),
+                    ),
                 ),
                 step=step,
             )
         if step.status is ProgramStepStatus.NEEDS_INPUT:
             boundary = step.uniform_handoff_boundary
             if boundary is not None:
-                boundary_heading = _advance_heading(boundary, frame, state)
+                boundary_heading = _boundary_heading(boundary, frame, state)
                 if boundary_heading is None:
                     return _read(
                         None,
@@ -1037,12 +1050,19 @@ def _prescribe_wait(
                             f"{route_reason}; owned boundary has no exact coast heading"
                         ),
                     )
-                heading_tag, _heading_value = boundary_heading
                 return _read(
                     WaitPrescription(
-                        _heading(motion_heading or boundary_heading, boundary),
-                        (f"{route_reason}; supply its current input and hand off to {heading_tag}"),
-                        frontier=(boundary_heading,),
+                        _route_heading(motion_heading or boundary_heading, boundary),
+                        (
+                            f"{route_reason}; supply its current input and hand off to "
+                            f"{boundary_heading.channel_tag}"
+                        ),
+                        frontier=(
+                            (
+                                boundary_heading.channel_tag,
+                                boundary_heading.target_value,
+                            ),
+                        ),
                     ),
                     step=step,
                 )
@@ -1060,7 +1080,7 @@ def _prescribe_wait(
         if step.status is ProgramStepStatus.INTERRUPTED:
             return _read(
                 WaitPrescription(
-                    _heading(motion_heading),
+                    _route_heading(motion_heading),
                     f"{route_reason}; {step.reason}",
                 ),
                 step=step,
@@ -1068,7 +1088,7 @@ def _prescribe_wait(
         return _read(None, step=step, declined_reason=f"{route_reason}; {step.reason}")
 
     prescription = WaitPrescription(
-        _heading(None),
+        _route_heading(),
         route_reason,
     )
     details: tuple[TraceAction, ...] = ()
@@ -1297,7 +1317,7 @@ def _build_candidates(
     wait: WaitRead | None = None
     program_step: Any = None
     program_pairs: set[_ActionPair] = set()
-    advance_heading: ChannelHeading | None = None
+    boundary_heading: ChannelHeading | None = None
     # A grounded completion edge may add a narrower current-world read below the
     # opaque pipeline cut. Those details join the broad target details and the
     # whole pool re-enters ordinary admission before prerequisite splitting.
@@ -1330,20 +1350,6 @@ def _build_candidates(
     _is_coast = any(
         getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
     )
-    if (
-        zoom_wait is not None
-        and zoom_wait.prescription is not None
-        and zoom_wait.prescription.heading is not None
-        and zoom_wait.prescription.heading.boundary is not None
-        and len(zoom_wait.frontier) == 1
-    ):
-        channel_tag, target_value = zoom_wait.frontier[0]
-        advance_heading = ChannelHeading(
-            channel_tag=channel_tag,
-            target_value=target_value,
-            boundary=zoom_wait.prescription.heading.boundary,
-            route=zoom_wait.prescription.heading.route,
-        )
     if _is_coast:
         for node in frame.tree.leaves():
             step = getattr(node, "advance", None)
@@ -1353,7 +1359,7 @@ def _build_candidates(
                 getattr(node, "owner_boundary", None)
                 if getattr(node, "linear_boundary", False)
                 else None
-            ) or _advance_heading(step.until, frame, state)
+            )
             if boundary_pair is not None:
                 boundary = (
                     getattr(node, "owner_condition", None)
@@ -1361,11 +1367,14 @@ def _build_candidates(
                     else None
                 ) or step.until
                 channel_tag, target_value = boundary_pair
-                advance_heading = ChannelHeading(
+                boundary_heading = ChannelHeading(
                     channel_tag=channel_tag,
                     target_value=target_value,
                     boundary=boundary,
                 )
+            else:
+                boundary_heading = _boundary_heading(step.until, frame, state)
+            if boundary_heading is not None:
                 break
 
     # A plain chart completion is only the outer route context. Its admitted
@@ -1373,7 +1382,7 @@ def _build_candidates(
     # is what execution must witness first. Exact-producer waits already own
     # their immediate motion and are not overwritten here.
     if (
-        advance_heading is not None
+        boundary_heading is not None
         and zoom_wait is not None
         and zoom_wait.program_step is None
         and zoom_wait.prescription is not None
@@ -1383,12 +1392,12 @@ def _build_candidates(
             if zoom_wait.prescription.heading is not None
             else None
         )
-        advance_heading = replace(advance_heading, route=route_context)
+        boundary_heading = replace(boundary_heading, route=route_context)
         zoom_wait = replace(
             zoom_wait,
             prescription=replace(
                 zoom_wait.prescription,
-                heading=advance_heading,
+                heading=boundary_heading,
             ),
         )
 
@@ -1667,17 +1676,17 @@ def _build_candidates(
         wait = zoom_wait
 
     if (
-        advance_heading is not None
+        boundary_heading is not None
         and not candidates
         and (wait is None or wait.prescription is None)
     ):
         reason = (
-            f"advance {advance_heading.channel_tag} to its next boundary "
-            f"{advance_heading.target_value!r}"
+            f"advance {boundary_heading.channel_tag} to its next boundary "
+            f"{boundary_heading.target_value!r}"
         )
         wait = WaitRead(
             WaitPrescription(
-                advance_heading,
+                boundary_heading,
                 reason,
                 # The immediate coast heading is not an unresolved completion
                 # frontier. Only an exact completion/program re-read owns that
