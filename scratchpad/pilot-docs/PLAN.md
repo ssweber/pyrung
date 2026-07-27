@@ -175,6 +175,39 @@ and gives pending policy the exact opening evidence it is waiting to resolve.
 `test_pilot_detour_hold_release.py`, `test_pilot_progress.py`,
 `test_pilot_investigate.py`.
 
+### B8. Name and carry boundary headings consistently
+
+The B7 change preserved a discovered `ChannelHeading`, but its remaining
+vocabulary still crosses meanings:
+
+- `options._advance_heading` returns an `_ActionPair`, not a heading;
+- `_build_candidates.advance_heading` is a `ChannelHeading`;
+- callers unpack the helper's pair and reconstruct the typed boundary heading.
+
+**Required shape**
+
+- Let the helper return the `ChannelHeading` it discovers and name it for the
+  boundary it represents.
+- Use `boundary_heading` consistently for that typed object.
+- Carry the heading intact through candidate refinement; project
+  `(channel_tag, target_value)` only where an explicitly action-pair/frontier
+  contract requires it.
+- Keep ordinary `_ActionPair` values as tuples. This is the small follow-through
+  at the boundary seam, not a general tuple conversion.
+
+**Why**
+
+`advance` names the instruction source, while `boundary` names the evidence the
+consumer receives. One plain name and one return type remove the first local
+deviation back toward split scalar state.
+
+**LOC:** roughly neutral to -10.
+
+**Risk:** low-medium because the helper also serves program-owned waits.
+
+**Gate:** candidate-wait and orientation-contract tests, decision goldens, then
+full Pilot and Tumbler.
+
 ---
 
 ## C. Give repeated decisions one owner
@@ -520,12 +553,13 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Trial evidence continuity:** B5.
-2. **Shared decisions:** C1 and C2.
-3. **Control flow:** D1/D2/D3.
-4. **Recovery continuity:** B6, then D4.
-5. **Compiled residual replay:** E1, E2, then E3.
-6. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Boundary vocabulary follow-through:** B8.
+2. **Trial evidence continuity:** B5.
+3. **Shared decisions:** C1 and C2.
+4. **Control flow:** D1/D2/D3.
+5. **Recovery continuity:** B6, then D4.
+6. **Compiled residual replay:** E1, E2, then E3.
+7. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
