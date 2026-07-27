@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation import (
     NavigationConstraints,
@@ -111,6 +112,7 @@ def _trial_result(
     observe_label: str,
     gate_events: list[PilotGateEvent],
     channel_motion: ChannelMotion,
+    gauge_receipt: GaugeReceipt,
 ) -> _TrialResult:
     """Preserve one executed attempt as verification's accepted receipt."""
     trial = attempt.pulse
@@ -130,6 +132,7 @@ def _trial_result(
         motion=policy.motion,
         regression_nogoods=policy.regression_nogoods,
         chase_regression_causes=policy.chase_regression_causes,
+        gauge_receipt=gauge_receipt,
         gate_events=tuple(gate_events),
         channel_motion=channel_motion,
         coast_receipt=trial.coast_receipt,
@@ -175,6 +178,7 @@ def _gate_spin(
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
     avoid_names: list[str],
+    gauge_receipt: GaugeReceipt | None = None,
 ) -> _PulseState | None:
     key_config = state.key_config
     assert key_config is not None
@@ -187,8 +191,12 @@ def _gate_spin(
     # ``count < 3``) projects to the same key as doing nothing.  The gauge
     # carries exactly those ordinals: an earn in stride direction is real
     # work, not a spin.
-    gauge = getattr(state, "gauge", None)
-    if gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap):
+    if gauge_receipt is None:
+        gauge = getattr(state, "gauge", None)
+        gauge_receipt = (
+            gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
+        )
+    if gauge_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return trial
 
@@ -282,7 +290,7 @@ def _gate_cycle(
     state: Any,
     *,
     pending: bool,
-    ordinal_advanced: bool,
+    gauge_receipt: GaugeReceipt,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
@@ -293,7 +301,7 @@ def _gate_cycle(
     # A revisit by the key's lights that advanced an event-earned ordinal is a
     # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
     # the threshold-masked projection (see _gate_spin's twin check).
-    if ordinal_advanced:
+    if gauge_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return True
     if not influence_prescribed:
@@ -327,7 +335,7 @@ def _gate_dead_end(
     ctx: Any,
     *,
     target: TargetSpec,
-    ordinal_advanced: bool,
+    gauge_receipt: GaugeReceipt,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
@@ -427,7 +435,7 @@ def _gate_dead_end(
         # An event-earned ordinal advance is trend improvement the tree can't
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
-        if ordinal_advanced:
+        if gauge_receipt.any_forward:
             _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
@@ -509,6 +517,8 @@ def verify_gates(
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     retry_avoid_names: list[str] = []
+    gauge = getattr(state, "gauge", None)
+    gauge_receipt = gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
 
     def _reject(
         *,
@@ -532,6 +542,7 @@ def verify_gates(
                 policy.target_observe_label,
                 gate_events,
                 channel_motion,
+                gauge_receipt,
             ),
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
@@ -587,20 +598,18 @@ def verify_gates(
     # ``unknown``, never a guessed veto.  Coasts are excluded here because a
     # backward move during a coast is program motion owned by post-commit
     # investigation/recovery, not a destructive operator choice.
-    gauge = getattr(state, "gauge", None)
     if (
         action_pairs
         and policy.motion is MotionKind.INTERVENTION
-        and gauge is not None
-        and gauge.compare(frame.snap, trial.snap) == "behind"
+        and gauge_receipt.movement is GaugeMovement.BACKWARD
     ):
         gate_events.append(
             PilotGateEvent(
                 "banked-work",
                 "intervention would erase target-relative gauge progress",
                 evidence={
-                    "source_mark": gauge.mark(frame.snap),
-                    "landing_mark": gauge.mark(trial.snap),
+                    "source_mark": gauge_receipt.source_mark,
+                    "landing_mark": gauge_receipt.landing_mark,
                     "effect": "behind",
                 },
             )
@@ -621,6 +630,7 @@ def verify_gates(
     ):
         return _accept_target()
 
+    pre_spin_trial = trial
     spun = _gate_spin(
         trial,
         action_pairs,
@@ -631,10 +641,15 @@ def verify_gates(
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
         avoid_names=retry_avoid_names,
+        gauge_receipt=gauge_receipt,
     )
     if spun is None:
         return _reject()
     trial = spun
+    if trial is not pre_spin_trial:
+        gauge_receipt = (
+            gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
+        )
     attempt = replace(attempt, pulse=trial)
 
     if target_reached(
@@ -646,14 +661,12 @@ def verify_gates(
         return _accept_target()
 
     pending = _has_pending_effects(trial.fork)
-    gauge = getattr(state, "gauge", None)
-    ordinal_advanced = gauge is not None and gauge.ordinal_advanced(frame.snap, trial.snap)
     if not _gate_cycle(
         trial,
         frame,
         state,
         pending=pending,
-        ordinal_advanced=ordinal_advanced,
+        gauge_receipt=gauge_receipt,
         influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
@@ -668,7 +681,7 @@ def verify_gates(
         state,
         ctx,
         target=bearing.objective.target,
-        ordinal_advanced=ordinal_advanced,
+        gauge_receipt=gauge_receipt,
         influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
@@ -688,7 +701,7 @@ def verify_gates(
         chase_cause_roots,
         route_prescribed=policy.route_prescribed,
         channel_motion=channel_motion,
-        channel_progressed=ordinal_advanced,
+        gauge_receipt=gauge_receipt,
     )
 
     outcome = assessment.legacy_outcome
@@ -730,6 +743,7 @@ def verify_gates(
                 policy.observe_label,
                 gate_events,
                 channel_motion,
+                gauge_receipt,
             ),
             new_key=trial.key,
             trend=dead_end.trend,

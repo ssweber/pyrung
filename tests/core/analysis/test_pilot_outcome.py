@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from pyrung.core.analysis.pilot.gauge import GaugeReading, GaugeReceipt
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -40,7 +41,7 @@ def _zoom(
             16,
             stop_reason="reached" if after == 16 else "timeout" if after == 11 else "departed",
         ),
-        channel_progressed=credential,
+        gauge_receipt=GaugeReceipt((GaugeReading("Step", 0, 1, 1),) if credential else ()),
     )
 
 
@@ -67,7 +68,7 @@ def test_action_receipt_survives_later_program_departure() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
         channel_motion=ChannelMotion("State", 16, stop_reason="reached"),
-        channel_progressed=True,
+        gauge_receipt=GaugeReceipt((GaugeReading("Step", 0, 1, 1),)),
     )
 
     assert assessment.bearing is BearingEffect.SATISFIED
@@ -92,7 +93,7 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
-        channel_progressed=False,
+        gauge_receipt=GaugeReceipt(),
     )
 
     assert assessment.bearing is BearingEffect.DEPARTED
@@ -117,7 +118,7 @@ def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=True,
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
-        channel_progressed=False,
+        gauge_receipt=GaugeReceipt(),
     )
 
     assert assessment.agency is Agency.PROGRAM

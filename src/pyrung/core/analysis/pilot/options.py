@@ -186,7 +186,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             gauge is not None
             and components
             and any(component.tag in anchor_tags for component in components)
-            and gauge.ordinal_advanced(before, after)
+            and gauge.receipt(before, after).any_forward
         ):
             reasons.append("gauge:advanced")
 

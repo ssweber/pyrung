@@ -711,12 +711,7 @@ def _commit_trial(
     # scan-ids per lap — free dwell there means no terminating force).
     if trial.motion.is_coast:
         productive = (
-            not key_was_seen
-            or trial.channel_motion.reached
-            or (
-                state.gauge is not None
-                and state.gauge.ordinal_advanced(frame.snap, trial.fork_snap)
-            )
+            not key_was_seen or trial.channel_motion.reached or trial.gauge_receipt.any_forward
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - trial.scan_before

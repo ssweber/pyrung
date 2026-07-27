@@ -19,7 +19,7 @@ from pyrung import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.gauge import build_gauge
+from pyrung.core.analysis.pilot.gauge import GaugeMovement, build_gauge
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 from tests.core.analysis.test_pilot_detour_progress import _knock_three_times_program
@@ -58,9 +58,9 @@ def test_knock_count_is_an_ordinal_component() -> None:
 
     kinds = {c.tag: c.kind for c in gauge.components}
     assert kinds.get(count.name) == "ordinal"
-    assert gauge.ordinal_advanced({count.name: 1}, {count.name: 2})
-    assert not gauge.ordinal_advanced({count.name: 2}, {count.name: 2})
-    assert not gauge.ordinal_advanced({count.name: 2}, {count.name: 0})
+    assert gauge.receipt({count.name: 1}, {count.name: 2}).any_forward
+    assert not gauge.receipt({count.name: 2}, {count.name: 2}).any_forward
+    assert not gauge.receipt({count.name: 2}, {count.name: 0}).any_forward
 
 
 def test_gauge_receipt_keeps_source_landing_and_progress_order() -> None:
@@ -72,12 +72,35 @@ def test_gauge_receipt_keeps_source_landing_and_progress_order() -> None:
     advanced = gauge.receipt({"Step": 101}, {"Step": 103})
     assert advanced.source_mark == (("Step", 101),)
     assert advanced.landing_mark == (("Step", 103),)
-    assert advanced.effect == "advanced"
+    assert advanced.movement is GaugeMovement.FORWARD
+    assert advanced.any_forward
 
-    assert gauge.receipt({"Step": 103}, {"Step": 103}).effect == "preserved"
-    assert gauge.receipt({"Step": 103}, {"Step": 101}).effect == "behind"
-    assert gauge.receipt({}, {"Step": 103}).effect == "unknown"
-    assert Gauge(()).receipt({}, {}).effect == "unknown"
+    assert gauge.receipt({"Step": 103}, {"Step": 103}).movement is GaugeMovement.UNCHANGED
+    assert gauge.receipt({"Step": 103}, {"Step": 101}).movement is GaugeMovement.BACKWARD
+    assert gauge.receipt({}, {"Step": 103}).movement is GaugeMovement.UNKNOWN
+    assert Gauge(()).receipt({}, {}).movement is GaugeMovement.UNKNOWN
+
+    mixed = Gauge(
+        (
+            GaugeComponent("Step", "stepper", 1),
+            GaugeComponent("Batch", "ordinal", 1),
+        )
+    ).receipt({"Step": 3, "Batch": 7}, {"Step": 4, "Batch": 6})
+    assert mixed.movement is GaugeMovement.BACKWARD
+    assert mixed.any_forward
+    assert tuple(reading.movement for reading in mixed.readings) == (
+        GaugeMovement.FORWARD,
+        GaugeMovement.BACKWARD,
+    )
+
+
+def test_old_gauge_comparison_methods_remain_compatibility_projections() -> None:
+    from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
+
+    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+
+    assert gauge.compare({"Step": 1}, {"Step": 2}) == "advanced"
+    assert gauge.ordinal_advanced({"Step": 1}, {"Step": 2})
 
 
 def _step_chain_program():
@@ -141,11 +164,10 @@ def test_step_chain_stepper_with_alias_resolved_reset() -> None:
     assert not gauge.has_banked_work({Step.name: 1})
     assert gauge.has_banked_work({Step.name: 2})
 
-    # Anchor-relative verdicts: ahead = advanced, equal = preserved,
-    # a reset landing = behind (work destroyed).
-    assert gauge.compare({Step.name: 2}, {Step.name: 3}) == "advanced"
-    assert gauge.compare({Step.name: 2}, {Step.name: 2}) == "preserved"
-    assert gauge.compare({Step.name: 2}, {Step.name: 1}) == "behind"
+    # Anchor-relative readings: forward, unchanged, and backward.
+    assert gauge.receipt({Step.name: 2}, {Step.name: 3}).movement is GaugeMovement.FORWARD
+    assert gauge.receipt({Step.name: 2}, {Step.name: 2}).movement is GaugeMovement.UNCHANGED
+    assert gauge.receipt({Step.name: 2}, {Step.name: 1}).movement is GaugeMovement.BACKWARD
 
 
 def _banked_reset_alternative_program(*, initial_step: int):

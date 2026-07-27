@@ -29,7 +29,13 @@ from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
-from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
+from pyrung.core.analysis.pilot.gauge import (
+    Gauge,
+    GaugeComponent,
+    GaugeMovement,
+    GaugeReading,
+    GaugeReceipt,
+)
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
 from pyrung.core.analysis.pilot.outcome import (
@@ -43,6 +49,7 @@ from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
     _apply_departure_decision,
+    _assess_pending_departure,
     _channel_recovery_origin,
     _investigate_and_revert,
     _monitor_trend,
@@ -51,6 +58,7 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     DepartureAction,
+    DepartureBasis,
     DepartureDecision,
     PendingDeparture,
     PilotEvent,
@@ -157,7 +165,7 @@ def _pending_departure(
         progress_mark=progress_mark,
         rollback_owner=rollback_owner or state.checkpoints[-1].owner,
         expires_at=expires_at,
-        opening_progress=opening_progress or GaugeReceipt((), (), "unknown"),
+        opening_progress=opening_progress or GaugeReceipt(),
     )
 
 
@@ -437,6 +445,44 @@ def test_pending_expiry_without_saved_progress_rolls_back():
     assert state.best_trend == 5
 
 
+def test_pilot_caused_regression_does_not_rewrite_forward_gauge_evidence():
+    checkpoint = _cp(("src",), _oneshot_plc(), 5)
+    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+    state = _make_state(
+        best_trend=5,
+        checkpoints=[checkpoint],
+        gauge=gauge,
+    )
+    state.pending_departure = _pending_departure(
+        state,
+        progress_mark=(("Step", 3),),
+    )
+    trial = _make_trial(
+        6,
+        Outcome.AMBIENT_DRIFT,
+        fork_snap={"State": 8, "Step": 4},
+        assessment=TrialAssessment(
+            agency=Agency.PILOT,
+            bearing=BearingEffect.DEPARTED,
+            progress=ProgressEffect.BEHIND,
+            new_frontier=False,
+            accepted=True,
+        ),
+    )
+
+    decision = _assess_pending_departure(
+        trial,
+        state,
+        SimpleNamespace(target=TargetSpec("State", 17)),
+    )
+
+    assert decision.action is DepartureAction.REGRESS
+    assert decision.basis is DepartureBasis.PILOT_CAUSED_REGRESSION
+    assert decision.receipt.movement is GaugeMovement.FORWARD
+    assert decision.receipt.source_mark == (("Step", 3),)
+    assert decision.receipt.landing_mark == (("Step", 4),)
+
+
 def test_pending_expiry_restores_the_current_checkpoint_artifact():
     """Correction lifecycle may re-key a receipt without changing its owner."""
     checkpoint = _cp(("source",), _oneshot_plc(), 5)
@@ -535,7 +581,7 @@ def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
     )
 
     events = _apply_departure_decision(
-        DepartureDecision(DepartureAction.REGRESS, "behind"),
+        DepartureDecision(DepartureAction.REGRESS, GaugeReceipt()),
         trial,
         _frame(),
         state,
@@ -586,7 +632,7 @@ def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypat
     )
 
     events = _apply_departure_decision(
-        DepartureDecision(DepartureAction.REGRESS, "behind"),
+        DepartureDecision(DepartureAction.REGRESS, GaugeReceipt()),
         trial,
         _frame(),
         state,
@@ -647,7 +693,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         settled_fork=trial.fork,
         settled_value=4,
         settle_scans=0,
-        progress=GaugeReceipt((), (), "preserved"),
+        progress=GaugeReceipt((GaugeReading("Step", 1, 1, 1),)),
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
@@ -716,11 +762,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         settled_fork=trial.fork,
         settled_value=2,
         settle_scans=0,
-        progress=GaugeReceipt(
-            source_mark=(("RecipeStep", 101),),
-            landing_mark=(("RecipeStep", 101),),
-            effect="preserved",
-        ),
+        progress=GaugeReceipt((GaugeReading("RecipeStep", 101, 101, 1),)),
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
@@ -747,7 +789,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         "provisional_started",
     ]
     assert state.pending_departure is not None
-    assert state.pending_departure.opening_progress.effect == "preserved"
+    assert state.pending_departure.opening_progress.movement is GaugeMovement.UNCHANGED
 
 
 def _seal_in_regression_inputs():

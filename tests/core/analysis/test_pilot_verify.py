@@ -9,6 +9,7 @@ Coverage targets:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
+from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import (
     ActPolicy,
@@ -281,7 +282,7 @@ class TestGateCycle:
             SimpleNamespace(snap={}),
             SimpleNamespace(seen_keys={key}, gauge=None),
             pending=False,
-            ordinal_advanced=False,
+            gauge_receipt=GaugeReceipt(),
             influence_prescribed=False,
             nogood_pair=("Cmd", True),
             gate_events=gates,
@@ -366,7 +367,7 @@ class TestGateDeadEnd:
                 state,
                 ctx,
                 target=TargetSpec(target.name, 1),
-                ordinal_advanced=False,
+                gauge_receipt=GaugeReceipt(),
                 influence_prescribed=False,
                 nogood_pair=None,
                 gate_events=[],
@@ -406,7 +407,9 @@ class TestVerifyGates:
                 out(target)
         plc = PLC(program, dt=0.010)
         before = dict(plc.state.tags)
+        before["VerifyStep"] = 1
         after = {**before, target.name: True}
+        after["VerifyStep"] = 2
         pulse = _PulseState(
             fork=plc,
             scan_before=3,
@@ -435,7 +438,7 @@ class TestVerifyGates:
         result = verify_gates(
             _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
-            SimpleNamespace(),
+            SimpleNamespace(gauge=Gauge((GaugeComponent("VerifyStep", "stepper", 1),))),
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec(target.name, True),
@@ -456,6 +459,79 @@ class TestVerifyGates:
         assert result.trial.channel_motion.reached
         assert result.trial.motion is MotionKind.COAST_TO_BEARING
         assert result.trial.timeline == pulse.timeline
+        assert result.trial.gauge_receipt.any_forward
+        assert result.trial.gauge_receipt.source_mark == (("VerifyStep", 1),)
+        assert result.trial.gauge_receipt.landing_mark == (("VerifyStep", 2),)
+
+    def test_spin_replacement_owns_a_new_gauge_receipt(self, monkeypatch):
+        source = Bool("RetryReceiptSource", external=True)
+        target = Bool("RetryReceiptTarget")
+        with Program() as program:
+            with Rung(source):
+                out(target)
+        plc = PLC(program, dt=0.010)
+        before = {**dict(plc.state.tags), "RetryReceiptStep": 1}
+        pre_retry = {**before, "RetryReceiptStep": 2}
+        replacement_snap = {
+            **before,
+            target.name: True,
+            "RetryReceiptStep": 3,
+        }
+        pulse = _PulseState(
+            fork=plc,
+            scan_before=3,
+            action_scan=4,
+            action_snap=pre_retry,
+            wait_snaps=(),
+            post_pulse_snap=pre_retry,
+            post_pulse_key=("post",),
+            snap=pre_retry,
+            key=("spin",),
+        )
+        replacement = replace(
+            pulse,
+            snap=replacement_snap,
+            key=("replacement",),
+        )
+        policy = ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=((source.name, True),),
+            applied=((source.name, True),),
+        )
+        bearing = Bearing(
+            ("world",),
+            Pulse(policy),
+            BearingObjective(TargetSpec(target.name, True)),
+        )
+        gauge = Gauge((GaugeComponent("RetryReceiptStep", "stepper", 1),))
+        receipts = []
+
+        class _CountingGauge:
+            def receipt(self, source_snap, landing_snap):
+                receipt = gauge.receipt(source_snap, landing_snap)
+                receipts.append(receipt)
+                return receipt
+
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify._gate_spin",
+            lambda *_args, **_kwargs: replacement,
+        )
+
+        result = verify_gates(
+            _ExecutedAttempt(pulse=pulse, bearing=bearing),
+            SimpleNamespace(snap=before),
+            SimpleNamespace(gauge=_CountingGauge()),
+            SimpleNamespace(
+                avoid_pred=None,
+                target=TargetSpec(target.name, True),
+            ),
+        )
+
+        assert result.trial is not None
+        assert len(receipts) == 2
+        assert receipts[0].landing_mark == (("RetryReceiptStep", 2),)
+        assert result.trial.gauge_receipt is receipts[1]
+        assert result.trial.gauge_receipt.landing_mark == (("RetryReceiptStep", 3),)
 
     def test_intervention_cannot_erase_banked_gauge_work(self):
         before = {"Step": 3, "Target": False}

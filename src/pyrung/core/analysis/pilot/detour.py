@@ -29,7 +29,7 @@ from pyrung.core.analysis.pilot.causal import (
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import unique_legal_current_reading
-from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
 from pyrung.core.analysis.pilot.navigation import BearingObjective
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.sp_values import _values_match
@@ -66,7 +66,7 @@ class DepartureReading:
     source_scan: int | None
     producer_rungs: tuple[int, ...] = ()
     external_supports: tuple[tuple[str, Any], ...] = ()
-    progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
+    progress: GaugeReceipt = GaugeReceipt()
     reason: str = ""
 
     @property
@@ -85,7 +85,7 @@ class DepartureVerdict:
     settle_scans: int
     reentry_value: Any = None  # where the clean route re-enters, if found
     route: tuple[Any, ...] = ()  # channel values along the clean route
-    progress: GaugeReceipt = GaugeReceipt((), (), "unknown")
+    progress: GaugeReceipt = GaugeReceipt()
     reading: DepartureReading = DepartureReading(
         DepartureDisposition.UNKNOWN,
         None,
@@ -356,7 +356,7 @@ def classify_departure(
     progress = (
         gauge.receipt(anchor_snap, dict(fork.state.tags))
         if gauge is not None and getattr(gauge, "components", ())
-        else GaugeReceipt((), (), "unknown")
+        else GaugeReceipt()
     )
     reading = _departure_reading(
         chain,
@@ -400,7 +400,7 @@ def classify_departure(
         # could not — a timeout is not a settlement).
         return _v("unknown", f"landing did not settle within cap ({receipt.stop_reason})")
 
-    if progress.effect == "behind":
+    if progress.movement is GaugeMovement.BACKWARD:
         return _v("regression", "settled world is behind the exact source receipt")
 
     goals: list[Any] = [from_value]

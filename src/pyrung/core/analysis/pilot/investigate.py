@@ -48,6 +48,7 @@ from pyrung.core.analysis.pilot.corrections import (
     correct_enablers,
     guard_correction_holds,
 )
+from pyrung.core.analysis.pilot.gauge import GaugeMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
@@ -992,7 +993,11 @@ def build_replay_fn(
             and ownership.neutralized
             and progress_gauge is not None
             and regression_progress_floor is not None
-            and progress_gauge.compare(regression_progress_floor, snap) == "behind"
+            and progress_gauge.receipt(
+                regression_progress_floor,
+                snap,
+            ).movement
+            is GaugeMovement.BACKWARD
         )
         # A correction owns the recorded operation, not merely its outer
         # channel. Keeping Execute while erasing the Step/phase receipt that
@@ -1040,7 +1045,7 @@ def build_replay_fn(
                 and progressed is None
                 and progress_gauge is not None
                 and progress_anchor is not None
-                and progress_gauge.compare(progress_anchor, snap) == "advanced"
+                and progress_gauge.receipt(progress_anchor, snap).movement is GaugeMovement.FORWARD
             ):
                 gauge_advanced = True
                 progressed = "target-relative progress advanced"

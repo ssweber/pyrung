@@ -150,6 +150,15 @@ should consume the first owner's result.
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`; execution arms
   trial-start-clear members, `CoastReceipt.avoided` derives exact firings from
   typed events, and VERIFY consumes that receipt before target acceptance
+- Target-relative movement: `gauge.py::Gauge.receipt` preserves each
+  component's source, landing, and earn direction. Its `GaugeMovement` and
+  `any_forward` views are derived independently, so mixed forward/backward
+  motion remains visible. `verify.py` owns the accepted trial receipt and
+  replaces it only when spin recovery replaces the fork; outcome and commit
+  consume that receipt intact. Pending-departure policy creates one new receipt
+  for each new anchor/current pair. A typed
+  `DepartureBasis.PILOT_CAUSED_REGRESSION` may override retention policy without
+  rewriting factual gauge movement.
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
 - Coast-departure channel ownership: `_ops.py::coast_departure_tags`

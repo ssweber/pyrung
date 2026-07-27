@@ -17,6 +17,7 @@ from enum import Enum
 from typing import Any
 
 from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
+from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 from pyrung.core.analysis.pilot.types import ChannelMotion, _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -150,7 +151,7 @@ def assess_outcome(
     *,
     route_prescribed: bool,
     channel_motion: ChannelMotion,
-    channel_progressed: bool,
+    gauge_receipt: GaugeReceipt,
 ) -> TrialAssessment:
     """Judge a post-gate trial on independent evidence axes.
 
@@ -162,7 +163,7 @@ def assess_outcome(
     chart value is a departure and post-commit progress handling decides what
     that observed world means for target-relative progress.
     """
-    if (channel_motion.active and channel_progressed) or new_trend < frame.distance_before:
+    if (channel_motion.active and gauge_receipt.any_forward) or new_trend < frame.distance_before:
         progress = ProgressEffect.ADVANCED
     elif new_trend == frame.distance_before:
         progress = ProgressEffect.PRESERVED
@@ -208,10 +209,10 @@ def assess_outcome(
         # Gauge-authoritative: trace-trend is a coordinate-relative count that
         # legitimately drops when the surrounding world shifts, so a frozen
         # channel must never be confirmed off an incidental trend drop — only
-        # the gauge (``channel_progressed``) proves earned work here. The honest
+        # the gauge receipt proves earned work here. The honest
         # rejection is what frees the escalation ladder (terminal let-run,
         # skiff) to earn the holds this coast actually needs.
-        if channel_progressed:
+        if gauge_receipt.any_forward:
             return TrialAssessment(
                 Agency.PROGRAM,
                 BearingEffect.UNCHANGED,

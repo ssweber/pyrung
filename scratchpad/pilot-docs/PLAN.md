@@ -102,83 +102,9 @@ Each arrow should carry the object on its left intact. A downstream object may
 compose new evidence around it, but should not copy selected fields and recreate
 its meaning.
 
-### Inaccuracies corrected from the previous plan
-
-- A1 cannot be fixed merely by "passing the compiled avoid condition." The
-  compiled condition is currently discarded by `runner._compile_avoid`;
-  `_AvoidMember` retains only a predicate, display name, and tag names.
-- An opaque callable `avoid=` has no condition metadata at all. A fold cannot
-  soundly infer which skipped scan would satisfy an arbitrary callable. Its
-  correctness/performance policy must be explicit.
-- A terminal settle already executes scan by scan and produces a
-  `CoastReceipt.trajectory`; it does not need the same mechanism as a folded seek.
-  The current problem is that terminal dwell discards that receipt/trajectory.
-- G1's former "after D6" prerequisite is satisfied: D6 landed in `af3060a4`.
-- `trace._all_nodes` now has 15 package call sites, not nine.
-- The three static-edge filters have drifted by policy, not just by one extra
-  term. Detour intentionally omits several current-world nogood checks that
-  options and frontier evidence apply.
-- "Never split a file" is too absolute. A file move is not a first move, but an
-  ownership pass may expose a real boundary worth splitting later. Reassess after
-  the objects and decision owners are clear.
-
-### Test posture
-
-`make test-tumbler` was green after the admission/mechanical pass. That establishes
-refactor mechanics, not the correctness of evidence the current receipts never
-record. In particular, no passing endpoint golden can prove that a folded coast
-never crossed `avoid=`.
-
-For deep Tumbler work, use `tests/tumbler/bench.py::Bench.force_done(acc_tag,
-preset)` to park at `Internal__Step == 102`; do not drive `how()` from cold.
-Use `devtools/pilot_divergence.py` for the first changed decision and
-`devtools/watch_pilot_decisions.py --stop-action TAG=VALUE` for candidate entry.
-
 ## B. Preserve objects across module seams
 
 This is the main cleanup program. Items are ordered by leverage.
-
-### B3. Carry one gauge comparison receipt through verify, commit, and progress
-
-**Current dehydration chain**
-
-`verify` computes `ordinal_advanced`; `outcome.assess_outcome` turns that Boolean
-plus trace distance into `ProgressEffect`; `pilot._commit_trial` calls
-`Gauge.ordinal_advanced` again to award dwell credit; pending progress later
-rebuilds comparisons for new source/landing pairs.
-
-`GaugeReceipt` already exists but the main trial path does not carry it.
-Its current single `effect` field is not a replacement for
-`ordinal_advanced`: one gauge component can advance while another moves behind,
-so "any earned coordinate" and the worst-wins overall effect are independent
-facts.
-
-**Required shape**
-
-- `Gauge.receipt` records the component evidence needed to derive both the
-  worst-wins effect and whether any coordinate advanced. Do not collapse those
-  axes to one enum.
-- `verify` creates the post-retry `GaugeReceipt` once for the accepted trial.
-  `_gate_spin` may compute an earlier receipt for its pre-retry decision, but a
-  replaced fork necessarily gets a new owned receipt.
-- Add typed `GaugeEffect` values and derived `GaugeReceipt.any_advanced` /
-  `.behind` properties; stop comparing string literals throughout the package.
-- `TrialAssessment` consumes the receipt, not a `channel_progressed` Boolean.
-- The accepted trial carries the receipt. Commit dwell accounting and progress
-  policy consume it. A later pending transition gets a new receipt for its new
-  source/landing pair, constructed once by the pending-policy owner.
-
-**Why**
-
-The source/landing marks are the auditable evidence. Passing only a Boolean loses
-precision and invites later modules to decide the comparison again.
-
-**LOC:** about -10 to -30.
-
-**Risk:** medium; affects spin, outcome, dwell accounting, and pending progress.
-
-**Gate:** `test_pilot_gauge.py`, `test_pilot_verify.py`,
-`test_pilot_progress.py`, Tumbler.
 
 ### B4. Replace `_TrialResult`'s flattened optional fields with verification variants
 
@@ -286,6 +212,34 @@ and gives pending policy the exact opening evidence it is waiting to resolve.
 **Gate:** `test_pilot_detour_progress.py`,
 `test_pilot_detour_hold_release.py`, `test_pilot_progress.py`,
 `test_pilot_investigate.py`.
+
+### B7. Keep discovered coast headings typed through candidate refinement
+
+`options._build_candidates` still dehydrates a discovered navigation heading into
+parallel `advance_boundary: _ActionPair | None` and `advance_condition` locals.
+Two later branches unpack the pair and reconstruct `ChannelHeading`.
+
+**Required shape**
+
+- Once a candidate read discovers an immediate coast boundary, represent it as
+  `ChannelHeading`.
+- Route context may be composed onto that heading, but channel, target, and
+  boundary must continue together.
+- Keep ordinary action pairs as `_ActionPair`; this is a navigation-boundary
+  ownership fix, not a general ban on tuple indexing.
+
+**Why**
+
+The current tuple is no longer an action. Keeping the typed heading removes one
+small remaining dehydrate/reconstruct seam from B2.
+
+**LOC:** about -5 to -15.
+
+**Risk:** medium because this is inside candidate selection, though the intended
+change is mechanical.
+
+**Gate:** candidate-wait and orientation-contract tests, decision goldens, then
+full Pilot and Tumbler.
 
 ---
 
@@ -632,12 +586,13 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Trial evidence continuity:** B3, B4, then B5.
-2. **Shared decisions:** C1 and C2.
-3. **Control flow:** D1/D2/D3.
-4. **Recovery continuity:** B6, then D4.
-5. **Compiled residual replay:** E1, E2, then E3.
-6. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Navigation boundary continuity:** B7.
+2. **Trial evidence continuity:** B4, then B5.
+3. **Shared decisions:** C1 and C2.
+4. **Control flow:** D1/D2/D3.
+5. **Recovery continuity:** B6, then D4.
+6. **Compiled residual replay:** E1, E2, then E3.
+7. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.

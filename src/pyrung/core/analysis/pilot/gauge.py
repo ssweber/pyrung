@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
@@ -64,18 +65,79 @@ class GaugeComponent:
     resets: tuple[_ResetWriter, ...] = ()
 
 
+class GaugeMovement(StrEnum):
+    """Observed target-relative motion, without a policy judgment."""
+
+    FORWARD = "forward"
+    BACKWARD = "backward"
+    UNCHANGED = "unchanged"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class GaugeReading:
+    """One gauge component observed across one world transition."""
+
+    tag: str
+    source: Any
+    landing: Any
+    direction: int
+
+    @property
+    def movement(self) -> GaugeMovement:
+        if (
+            isinstance(self.source, bool)
+            or isinstance(self.landing, bool)
+            or not isinstance(self.source, (int, float))
+            or not isinstance(self.landing, (int, float))
+        ):
+            return GaugeMovement.UNKNOWN
+        delta = (self.landing - self.source) * self.direction
+        if delta < 0:
+            return GaugeMovement.BACKWARD
+        if delta > 0:
+            return GaugeMovement.FORWARD
+        return GaugeMovement.UNCHANGED
+
+
 @dataclass(frozen=True)
 class GaugeReceipt:
-    """Target-relative work observed across one world transition.
+    """Auditable target-relative movement across one world transition."""
 
-    The marks make the comparison auditable and reusable by later policy.
-    ``unknown`` means the gauge had no trustworthy coordinate or could not
-    compare one; it is never silently treated as preserved work.
-    """
+    readings: tuple[GaugeReading, ...] = ()
 
-    source_mark: tuple[tuple[str, Any], ...]
-    landing_mark: tuple[tuple[str, Any], ...]
-    effect: str  # "advanced" | "preserved" | "behind" | "unknown"
+    @property
+    def source_mark(self) -> tuple[tuple[str, Any], ...]:
+        return tuple((reading.tag, reading.source) for reading in self.readings)
+
+    @property
+    def landing_mark(self) -> tuple[tuple[str, Any], ...]:
+        return tuple((reading.tag, reading.landing) for reading in self.readings)
+
+    @property
+    def movement(self) -> GaugeMovement:
+        movements = tuple(reading.movement for reading in self.readings)
+        if GaugeMovement.BACKWARD in movements:
+            return GaugeMovement.BACKWARD
+        if GaugeMovement.FORWARD in movements:
+            return GaugeMovement.FORWARD
+        if not movements or GaugeMovement.UNKNOWN in movements:
+            return GaugeMovement.UNKNOWN
+        return GaugeMovement.UNCHANGED
+
+    @property
+    def any_forward(self) -> bool:
+        return any(reading.movement is GaugeMovement.FORWARD for reading in self.readings)
+
+
+def legacy_movement(movement: GaugeMovement) -> str:
+    """Project plain movement names onto stable event-payload vocabulary."""
+    return {
+        GaugeMovement.FORWARD: "advanced",
+        GaugeMovement.BACKWARD: "behind",
+        GaugeMovement.UNCHANGED: "preserved",
+        GaugeMovement.UNKNOWN: "unknown",
+    }[movement]
 
 
 @dataclass(frozen=True)
@@ -92,58 +154,25 @@ class Gauge:
 
     def receipt(self, source: Any, landing: Any) -> GaugeReceipt:
         """Freeze the target-relative work comparison for one transition."""
-        source_mark = self.mark(source)
-        landing_mark = self.mark(landing)
-        effect = self.compare(source, landing) if self.components else "unknown"
-        return GaugeReceipt(source_mark, landing_mark, effect)
+        return GaugeReceipt(
+            tuple(
+                GaugeReading(
+                    tag=component.tag,
+                    source=source.get(component.tag),
+                    landing=landing.get(component.tag),
+                    direction=component.direction,
+                )
+                for component in self.components
+            )
+        )
 
     def compare(self, anchor: Any, now: Any) -> str:
-        """``advanced`` / ``preserved`` / ``behind`` / ``unknown``.
-
-        ``behind`` dominates (any erased component means work was destroyed);
-        then ``advanced`` (some component earned); then ``preserved``.
-        Non-numeric or missing values are ``unknown`` — never guessed.
-        """
-        saw_advance = False
-        saw_unknown = False
-        for c in self.components:
-            v0, v1 = anchor.get(c.tag), now.get(c.tag)
-            if (
-                isinstance(v0, bool)
-                or isinstance(v1, bool)
-                or not isinstance(v0, (int, float))
-                or not isinstance(v1, (int, float))
-            ):
-                saw_unknown = True
-                continue
-            delta = (v1 - v0) * c.direction
-            if delta < 0:
-                return "behind"
-            if delta > 0:
-                saw_advance = True
-        if saw_advance:
-            return "advanced"
-        return "unknown" if saw_unknown else "preserved"
+        """Temporary compatibility wrapper preserving the former strings."""
+        return legacy_movement(self.receipt(anchor, now).movement)
 
     def ordinal_advanced(self, before: Any, after: Any) -> bool:
-        """Did any component earn in its stride direction between snapshots?
-
-        The verify SPIN/CYCLE consumers use this: a trial that advanced an
-        event-earned ordinal did real work even when the threshold-masked
-        search key aliases the before/after states.
-        """
-        for c in self.components:
-            v0, v1 = before.get(c.tag), after.get(c.tag)
-            if (
-                isinstance(v0, bool)
-                or isinstance(v1, bool)
-                or not isinstance(v0, (int, float))
-                or not isinstance(v1, (int, float))
-            ):
-                continue
-            if (v1 - v0) * c.direction > 0:
-                return True
-        return False
+        """Temporary compatibility wrapper around the owned receipt."""
+        return self.receipt(before, after).any_forward
 
     def has_banked_work(self, snap: Any) -> bool:
         """Whether a component is ahead of one of its proved reset floors.

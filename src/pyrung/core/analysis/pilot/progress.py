@@ -36,6 +36,11 @@ from pyrung.core.analysis.pilot.detour import (
     DepartureVerdict,
     classify_departure,
 )
+from pyrung.core.analysis.pilot.gauge import (
+    GaugeMovement,
+    GaugeReceipt,
+    legacy_movement,
+)
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationRejection,
     InvestigationResult,
@@ -60,6 +65,7 @@ from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
     DepartureAction,
+    DepartureBasis,
     DepartureDecision,
     MotionKind,
     PendingDeparture,
@@ -328,7 +334,7 @@ def _monitor_trend(
                 and trial.assessment.agency is Agency.PILOT
             )
             if (
-                verdict.progress.effect == "preserved"
+                verdict.progress.movement is GaugeMovement.UNCHANGED
                 and not prescribed_departure
                 and (
                     state.pending_departure is not None
@@ -644,12 +650,12 @@ def _record_pending_landing(
     ):
         return ()
     gauge = state.gauge
-    outcome = pending.opening_progress.effect
-    if outcome not in {"advanced", "behind"}:
-        outcome = (
-            gauge.compare(dict(pending.progress_mark), frame.snap)
-            if gauge is not None and gauge.components
-            else "unknown"
+    progress = pending.opening_progress
+    if progress.movement not in {GaugeMovement.FORWARD, GaugeMovement.BACKWARD}:
+        progress = (
+            gauge.receipt(dict(pending.progress_mark), frame.snap)
+            if gauge is not None
+            else GaugeReceipt()
         )
     receipt = _Checkpoint(
         frame.key,
@@ -659,7 +665,7 @@ def _record_pending_landing(
     )
     state.checkpoints.append(receipt)
     state.best_trend = frame.distance_before
-    if outcome == "advanced":
+    if progress.movement is GaugeMovement.FORWARD:
         landing_mark = gauge.mark(frame.snap) if gauge is not None else ()
         # Save the work without closing the pending departure. The Held
         # checkpoint is now the rollback floor, while pending state gives the next
@@ -714,9 +720,7 @@ def _assess_pending_departure(
     )
     gauge = state.gauge
     anchor = dict(pending.progress_mark)
-    outcome = (
-        gauge.compare(anchor, now_snap) if gauge is not None and gauge.components else "unknown"
-    )
+    progress = gauge.receipt(anchor, now_snap) if gauge is not None else GaugeReceipt()
     # A gauge may advance on the same scan that a pilot act drives the machine
     # into a worse target-relative world (for example, a recipe step increments
     # while an unsafe Unhold enters Aborted). Trial attribution is the narrower
@@ -727,16 +731,31 @@ def _assess_pending_departure(
         and trial.assessment.bearing is BearingEffect.DEPARTED
         and trial.assessment.progress is ProgressEffect.BEHIND
     ):
-        outcome = "behind"
+        caused_regression = True
+    else:
+        caused_regression = False
     if reached:
-        return DepartureDecision(DepartureAction.PROMOTE, outcome)
-    if outcome == "behind":
-        return DepartureDecision(DepartureAction.REGRESS, outcome)
-    if outcome == "advanced":
-        return DepartureDecision(DepartureAction.PROMOTE, outcome)
+        return DepartureDecision(DepartureAction.PROMOTE, progress)
+    if caused_regression:
+        return DepartureDecision(
+            DepartureAction.REGRESS,
+            progress,
+            DepartureBasis.PILOT_CAUSED_REGRESSION,
+        )
+    if progress.movement is GaugeMovement.BACKWARD:
+        return DepartureDecision(DepartureAction.REGRESS, progress)
+    if progress.movement is GaugeMovement.FORWARD:
+        return DepartureDecision(DepartureAction.PROMOTE, progress)
     if state.search_scan < pending.expires_at:
-        return DepartureDecision(DepartureAction.WAIT, outcome)
-    return DepartureDecision(DepartureAction.EXPIRE, outcome)
+        return DepartureDecision(DepartureAction.WAIT, progress)
+    return DepartureDecision(DepartureAction.EXPIRE, progress)
+
+
+def _departure_event_outcome(decision: DepartureDecision) -> str:
+    """Keep public transcript vocabulary while policy carries typed evidence."""
+    if decision.basis is DepartureBasis.PILOT_CAUSED_REGRESSION:
+        return "behind"
+    return legacy_movement(decision.receipt.movement)
 
 
 def _apply_departure_decision(
@@ -777,7 +796,7 @@ def _apply_departure_decision(
                         "landing_mark": (
                             state.gauge.mark(trial.fork_snap) if state.gauge is not None else ()
                         ),
-                        "outcome": decision.progress,
+                        "outcome": _departure_event_outcome(decision),
                         "trend": promoted_trend,
                         "checkpoint_count": len(state.checkpoints),
                         "terminal": trial.new_key is None,
@@ -793,7 +812,7 @@ def _apply_departure_decision(
             state.work.state.scan_id,
             _provisional_payload(
                 pending,
-                before_gauge={"outcome": decision.progress},
+                before_gauge={"outcome": _departure_event_outcome(decision)},
             ),
         )
         regression = _investigate_and_revert(
@@ -822,7 +841,7 @@ def _apply_departure_decision(
             state.work.state.scan_id,
             _provisional_payload(
                 pending,
-                before_gauge={"outcome": decision.progress},
+                before_gauge={"outcome": _departure_event_outcome(decision)},
             ),
         ),
     )

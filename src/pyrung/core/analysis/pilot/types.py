@@ -15,12 +15,13 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
 
+from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.gauge import GaugeReceipt
     from pyrung.core.analysis.pilot.navigation import Bearing, BearingObjective, TargetSpec
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
@@ -265,12 +266,19 @@ class DepartureAction(Enum):
     EXPIRE = "expire"
 
 
+class DepartureBasis(Enum):
+    """Exceptional policy evidence applied without rewriting gauge facts."""
+
+    PILOT_CAUSED_REGRESSION = "pilot_caused_regression"
+
+
 @dataclass(frozen=True)
 class DepartureDecision:
     """One evidence-based assessment of a pending departure."""
 
     action: DepartureAction
-    progress: str
+    receipt: GaugeReceipt
+    basis: DepartureBasis | None = None
 
 
 @dataclass(frozen=True)
@@ -764,6 +772,10 @@ class _TrialResult:
     trend: int | None = None
     outcome: Outcome | None = None
     assessment: TrialAssessment | None = None
+    # Verification's exact target-relative comparison for this accepted fork.
+    # Later consumers apply it; they do not recompute the same before/after
+    # comparison from the dehydrated snapshots.
+    gauge_receipt: GaugeReceipt = field(default_factory=GaugeReceipt)
     regression_nogoods: frozenset[_ActionPair] = frozenset()
     chase_regression_causes: bool = True
     gate_events: tuple[PilotGateEvent, ...] = ()
