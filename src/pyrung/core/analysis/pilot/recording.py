@@ -654,8 +654,11 @@ def _act_event(
         assert isinstance(act, (Coast, Dwell))
         if phase == "try":
             channel_tag = target_tag
-            if isinstance(act, Coast) and act.mode == "bearing" and act.channel_tag is not None:
-                channel_tag = act.route_channel_tag or act.channel_tag
+            if isinstance(act, Coast) and act.mode == "bearing":
+                heading = act.policy.heading
+                route = heading.route if heading is not None else None
+                if heading is not None:
+                    channel_tag = route.channel_tag if route is not None else heading.channel_tag
             return PilotEvent(
                 "zoom",
                 scan,

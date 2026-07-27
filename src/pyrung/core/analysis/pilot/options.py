@@ -333,11 +333,7 @@ class CandidateDiagnosis:
 
 @dataclass(frozen=True)
 class CandidateRead:
-    """Owned current-world readings composed for Orientation.
-
-    Compatibility properties deliberately preserve the old scalar surface for
-    this pass.  Their values are derived from the evidence owners below.
-    """
+    """Owned current-world readings composed for Orientation."""
 
     trace: _TraceAdmission
     options: tuple[_Candidate, ...]
@@ -347,83 +343,6 @@ class CandidateRead:
     prerequisites: PrerequisiteRead = PrerequisiteRead()
     learned_batch: LearnedBatchRead | None = None
     diagnosis: CandidateDiagnosis | None = None
-
-    @property
-    def active_trace_actions(self) -> tuple[_ActionPair, ...]:
-        return self.trace.active_actions
-
-    @property
-    def trace_actions(self) -> tuple[_ActionPair, ...]:
-        return self.trace.actions
-
-    @property
-    def trace_action_details(self) -> tuple[TraceAction, ...]:
-        return self.trace.details
-
-    @property
-    def route_plan(self) -> StaticPath | None:
-        return self.route.plan if self.route is not None else None
-
-    @property
-    def route_candidates(self) -> tuple[_ActionPair, ...]:
-        return self.route.candidates if self.route is not None else ()
-
-    @property
-    def route_co_actions(self) -> tuple[_ActionPair, ...]:
-        return self.route.co_actions if self.route is not None else ()
-
-    @property
-    def candidates(self) -> tuple[_Candidate, ...]:
-        return self.options
-
-    @property
-    def wait_prescribed(self) -> bool:
-        return self.wait is not None and self.wait.prescription is not None
-
-    @property
-    def wait_reason(self) -> str | None:
-        if self.wait is None:
-            return None
-        return self.wait.reason
-
-    @property
-    def heading(self) -> ChannelHeading | None:
-        if self.wait is None or self.wait.prescription is None:
-            return None
-        return self.wait.prescription.heading
-
-    @property
-    def advance_boundary(self) -> _ActionPair | None:
-        heading = self.heading
-        return (heading.channel_tag, heading.target_value) if heading is not None else None
-
-    @property
-    def advance_condition(self) -> Any:
-        return self.heading.boundary if self.heading is not None else None
-
-    @property
-    def prescribed_batch(self) -> tuple[_ActionPair, ...] | None:
-        return self.learned_batch.actions if self.learned_batch is not None else None
-
-    @property
-    def prerequisite_rungs(self) -> tuple[PilotRung, ...]:
-        return self.prerequisites.rungs
-
-    @property
-    def held_command_tags(self) -> frozenset[str]:
-        return self.prerequisites.held_command_tags
-
-    @property
-    def stuck_reason(self) -> str | None:
-        return self.diagnosis.reason if self.diagnosis is not None else None
-
-    @property
-    def completion_frontier(self) -> tuple[_ActionPair, ...]:
-        return self.wait.frontier if self.wait is not None else ()
-
-    @property
-    def program_step(self) -> ProgramStep | None:
-        return self.wait.program_step if self.wait is not None else None
 
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
@@ -1821,8 +1740,9 @@ def _candidate_applied(
 
     # A route-prescribed command carries its co-actions (the one-shot edge gate);
     # they must fire in the same scan or the command rung never executes.
-    if candidate.source is ActSource.ROUTE:
-        for co in candidates.route_co_actions:
+    route = candidates.route
+    if candidate.source is ActSource.ROUTE and route is not None:
+        for co in route.co_actions:
             if co[0] not in seen:
                 actions.append(co)
                 seen.add(co[0])
@@ -1837,12 +1757,12 @@ def _candidate_applied(
 
     # A convergence-pipeline command (CtrlCmd-style) co-pulses the remaining
     # trace actions so a level prerequisite and the command land together.
-    if candidate.tag in ctx.compass.action_tags and candidates.active_trace_actions:
+    if candidate.tag in ctx.compass.action_tags and candidates.trace.active_actions:
         # A pair rejected as a standalone act remains valid context for a
         # different atomic act.  Fresh orientation therefore keeps it out of
         # the candidate queue while still allowing the joint pulse to be
         # judged under its own Bearing identity.
-        for ta in candidates.active_trace_actions:
+        for ta in candidates.trace.active_actions:
             if ta[0] not in seen:
                 actions.append(ta)
                 seen.add(ta[0])
@@ -1851,7 +1771,7 @@ def _candidate_applied(
     # without it the decoder fires a stuck button instead.  Recorded in the pulse
     # so replay reproduces a fully-specified, unambiguous command surface.
     if candidate.tag in ctx.compass.action_tags:
-        for other in sorted(candidates.held_command_tags):
+        for other in sorted(candidates.prerequisites.held_command_tags):
             if other not in seen:
                 actions.append((other, ctx.resting.get(other, False)))
                 seen.add(other)
@@ -1859,7 +1779,7 @@ def _candidate_applied(
     # Prerequisite holds (trace actions split into rungs for coast/zoom)
     # are applied to the fork but were removed from trace_actions — record them
     # so the scan_log faithfully captures everything the fork sees.
-    for rung in candidates.prerequisite_rungs:
+    for rung in candidates.prerequisites.rungs:
         tag, value = rung.dest, rung.value
         if tag not in seen:
             actions.append((tag, value))

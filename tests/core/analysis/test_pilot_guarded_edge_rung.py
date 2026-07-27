@@ -117,10 +117,10 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
 
     candidates = _build_candidates(frame, pilot_state, ctx)
 
-    assert candidates.candidates == ()
-    assert candidates.stuck_reason is None
-    assert len(candidates.prerequisite_rungs) == 1
-    close_again = candidates.prerequisite_rungs[0]
+    assert candidates.options == ()
+    assert candidates.diagnosis is None
+    assert len(candidates.prerequisites.rungs) == 1
+    close_again = candidates.prerequisites.rungs[0]
     assert (close_again.dest, close_again.value) == (door_closed.name, True)
 
     _append_rungs(plc, [close_again], rungs)

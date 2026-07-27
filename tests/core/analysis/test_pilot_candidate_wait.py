@@ -784,9 +784,9 @@ def test_prescribed_wait_suppresses_stuck_reason():
     assert candidates.wait.prescription.heading.route.channel_tag == "State"
     assert candidates.trace.actions == ()
     assert candidates.options == ()
-    assert candidates.wait_prescribed is True
-    assert candidates.wait_reason == "let-run State: 6->16"
-    assert candidates.stuck_reason is None
+    assert candidates.wait.prescription is not None
+    assert candidates.wait.reason == "let-run State: 6->16"
+    assert candidates.diagnosis is None
 
 
 def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:

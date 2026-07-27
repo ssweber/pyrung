@@ -1003,7 +1003,7 @@ def _pilot_loop_events(
                 terminal_reason,
                 journal_channel_tags,
                 journal_acc_names,
-                candidate_count=len(candidates.candidates) if candidates is not None else 0,
+                candidate_count=len(candidates.options) if candidates is not None else 0,
                 diagnosis=result,
             )
             return

@@ -212,33 +212,6 @@ class Coast:
     mode: Literal["bearing", "terminal"]
     policy: ActPolicy
 
-    @property
-    def channel_tag(self) -> str | None:
-        return self.policy.heading.channel_tag if self.policy.heading is not None else None
-
-    @property
-    def target_value(self) -> Any:
-        return self.policy.heading.target_value if self.policy.heading is not None else None
-
-    @property
-    def boundary(self) -> Any:
-        return self.policy.heading.boundary if self.policy.heading is not None else None
-
-    @property
-    def route_channel_tag(self) -> str | None:
-        route = self.policy.heading.route if self.policy.heading is not None else None
-        return route.channel_tag if route is not None else None
-
-    @property
-    def route_from_value(self) -> Any:
-        route = self.policy.heading.route if self.policy.heading is not None else None
-        return route.from_value if route is not None else None
-
-    @property
-    def route_target_value(self) -> Any:
-        route = self.policy.heading.route if self.policy.heading is not None else None
-        return route.target_value if route is not None else None
-
 
 @dataclass(frozen=True)
 class Dwell:
@@ -331,19 +304,21 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     if isinstance(act, BatchPulse):
         return ("batch", act.policy.source.value, act.actions)
     if isinstance(act, Coast):
+        heading = act.policy.heading
+        route = heading.route if heading is not None else None
         identity = (
             "coast",
             act.mode,
-            act.channel_tag,
-            repr(act.target_value),
-            repr(act.boundary),
+            heading.channel_tag if heading is not None else None,
+            repr(heading.target_value if heading is not None else None),
+            repr(heading.boundary if heading is not None else None),
         )
-        if act.route_channel_tag is not None:
+        if route is not None:
             return (
                 *identity,
-                act.route_channel_tag,
-                repr(act.route_from_value),
-                repr(act.route_target_value),
+                route.channel_tag,
+                repr(route.from_value),
+                repr(route.target_value),
             )
         return identity
     return ("dwell",)

@@ -140,9 +140,8 @@ should consume the first owner's result.
   variant, and diagnosis. `WaitRead.prescription` is
   `WaitPrescription | None`, so a present wait is valid by construction while
   a declined read retains its reason, producer evidence, frontier, and details.
-  Orientation and recording consume those owners directly. The old flattened
-  names remain derived compatibility views for option-assembly helpers and
-  tests during the ownership migration.
+  Orientation, recording, option assembly, and tests consume those owners
+  directly; `CandidateRead` does not flatten them into a second scalar surface.
 - Local trial gates: `verify.py::verify_gates`
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may use the live harness to propose a

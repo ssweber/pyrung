@@ -121,6 +121,31 @@ def _world(compass: Compass) -> OrientationWorld:
     )
 
 
+def test_candidate_read_exposes_only_owned_receipts() -> None:
+    flattened_aliases = {
+        "active_trace_actions",
+        "trace_actions",
+        "trace_action_details",
+        "route_plan",
+        "route_candidates",
+        "route_co_actions",
+        "candidates",
+        "wait_prescribed",
+        "wait_reason",
+        "heading",
+        "advance_boundary",
+        "advance_condition",
+        "prescribed_batch",
+        "prerequisite_rungs",
+        "held_command_tags",
+        "stuck_reason",
+        "completion_frontier",
+        "program_step",
+    }
+
+    assert flattened_aliases.isdisjoint(vars(CandidateRead))
+
+
 def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
     from pyrung.core.analysis.pilot.trace import TraceChoice
@@ -184,7 +209,7 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert not hasattr(result, "candidates")
     assert result.trace is not None
     assert result.trace.world.frame is world.frame
-    assert result.trace.candidates.candidates == (first,)
+    assert result.trace.candidates.options == (first,)
     assert not hasattr(result.trace, "readings")
 
 
@@ -366,8 +391,17 @@ def test_coast_act_carries_only_immediate_heading() -> None:
         ),
     )
 
-    assert act.channel_tag == "State"
-    assert act.target_value == 2
+    assert act.policy.heading is not None
+    assert act.policy.heading.channel_tag == "State"
+    assert act.policy.heading.target_value == 2
+    assert {
+        "channel_tag",
+        "target_value",
+        "boundary",
+        "route_channel_tag",
+        "route_from_value",
+        "route_target_value",
+    }.isdisjoint(vars(Coast))
     assert not hasattr(act, "option")
     assert not hasattr(act, "path")
 
@@ -394,10 +428,11 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     assert isinstance(result, Bearing)
     assert isinstance(result.act, Coast)
     assert result.act.policy.heading is heading
-    assert result.act.channel_tag == "InnerAcc"
-    assert result.act.route_channel_tag == "OuterState"
-    assert result.act.route_from_value == 6
-    assert result.act.route_target_value == 16
+    assert result.act.policy.heading.channel_tag == "InnerAcc"
+    assert result.act.policy.heading.route is not None
+    assert result.act.policy.heading.route.channel_tag == "OuterState"
+    assert result.act.policy.heading.route.from_value == 6
+    assert result.act.policy.heading.route.target_value == 16
 
 
 def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:

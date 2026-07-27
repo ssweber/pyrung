@@ -482,6 +482,12 @@ def _try_zoom(
     """
     coast = bearing.act
     assert isinstance(coast, Coast)
+    heading = coast.policy.heading
+    route = heading.route if heading is not None else None
+    channel_tag = heading.channel_tag if heading is not None else None
+    target_value = heading.target_value if heading is not None else None
+    boundary = heading.boundary if heading is not None else None
+    route_channel_tag = route.channel_tag if route is not None else None
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
@@ -494,12 +500,12 @@ def _try_zoom(
     session.arm_pens(_pen_tags(state, ctx))
     dwell, zoom_receipt = _letrun_zoom(
         fork,
-        coast.channel_tag,
-        coast.target_value,
+        channel_tag,
+        target_value,
         cone=_cone_tags(frame, ctx),
         session=session,
-        boundary=coast.boundary,
-        route_channel_tag=coast.route_channel_tag,
+        boundary=boundary,
+        route_channel_tag=route_channel_tag,
     )
 
     snap_after = dict(fork.state.tags)
@@ -524,12 +530,13 @@ def _try_zoom(
         wait_before = wait_after
 
     departed_route = (
-        zoom_receipt is not None
-        and zoom_receipt.stop_reason == "departed"
-        and coast.route_channel_tag is not None
+        zoom_receipt is not None and zoom_receipt.stop_reason == "departed" and route is not None
     )
-    verify_channel = coast.route_channel_tag if departed_route else coast.channel_tag
-    verify_target = coast.route_target_value if departed_route else coast.target_value
+    verify_channel = channel_tag
+    verify_target = target_value
+    if departed_route and route is not None:
+        verify_channel = route.channel_tag
+        verify_target = route.target_value
 
     trial = _PulseState(
         fork=fork,
@@ -546,7 +553,7 @@ def _try_zoom(
         channel_motion=ChannelMotion(
             verify_channel,
             verify_target,
-            coast.boundary,
+            boundary,
         ),
     )
 
