@@ -702,7 +702,118 @@ The purpose is preventing scope mixups, not annotating every tuple.
 
 ---
 
-## E. Boundaries to preserve
+## E. Compile residual causal replay after folding
+
+The remaining performance project is not “replace the interpreter with the
+compiled runner.” Keep the existing semantic owners and compose them:
+
+1. the shared coast/fold machinery decides which scans are provably skippable,
+   including ordinary timer folding and cycle folding;
+2. the compiled runner executes only the residual scans between observation
+   boundaries;
+3. causal replay lands at `witness_scan - 1`, then executes one interpreted scan
+   to capture exact reads, runs, edges, and attempted writes for the witness.
+
+That division preserves the reason causal replay exists while removing most of
+its per-scan Python cost. It also gives candidate replay the same advancement
+primitive instead of introducing a second replay log or a causal-only fold
+implementation.
+
+### E1. Instrument the residual work before changing its executor
+
+For the exact avoided-Complete Tumbler route, report:
+
+- ordinary-folded, cycle-folded, compiled-residual, and interpreted-witness scan
+  counts;
+- cold compile, warm execution, observation handoff, and total replay time;
+- slab refill and candidate-replay counts, including repeated replay of an
+  identical interval.
+
+Measure cold and warm runs separately. A roughly half-second cold compilation
+can erase a small replay win even though the warm kernel is substantially faster.
+Keep the current interpreter run as the semantic and timing baseline.
+
+Known evidence is encouraging but not yet an end-to-end acceptance result:
+compiled state transitions have matched interpreted transitions in the measured
+route, and a warm compiled kernel ran a 331-scan residual interval in roughly
+0.10--0.13 seconds versus roughly 1.0--1.5 seconds interpreted. Re-measure these
+figures under the final observation contract rather than copying them into a
+performance promise.
+
+**Risk:** low; instrumentation must not retain another scan-by-scan log.
+
+**Gate:** the focused causal/investigate tests plus the exact avoided-Complete
+route.
+
+### E2. Define one replay-advancement API
+
+Extract a narrow advancement operation shared by causal slab refill and
+candidate replay. Its inputs must identify the executable `World`, target scan
+or observation boundary, avoid predicate, and active coast/fold proof. Its
+receipt must distinguish scans skipped by ordinary folding, scans skipped by
+cycle folding, residual scans executed by the backend, and the exact endpoint.
+
+Do not make the compiled backend decide whether a jump is sound. The coast/fold
+owner proves the jump; the backend applies state transitions. Do not add a
+universal receipt type pre-emptively: define the result beside the advancement
+owner, and let D4 reuse it if that makes `_advance_or_reject` smaller.
+
+The operation must work with every current repeating-history encoding through
+its public transition/jump surface. It must not branch on a private concrete RHE
+representation or silently expand compressed history.
+
+**Owner -> receipt -> consumers:**
+
+`shared replay advancement -> exact advancement receipt -> causal slab refill
+and candidate replay`
+
+**Risk:** medium-high; endpoint ownership and avoid observation are semantic.
+
+**Gate:** RHE transition, fold, cyclefold, causal capture, and investigate
+tests.
+
+### E3. Add the compiled residual executor
+
+Cache compiled kernels by the executable world shape that affects semantics:
+program, synthesis plant, active `PilotRung`s, and runner options. A cache hit is
+valid only for the same executable world; equal tag values in a different world
+are not parity. Preserve patches, forces, scan lifecycle, timer fractional
+state, edge memory, avoid checks, and exact target-scan landing.
+
+Use compiled execution only between required observation boundaries. At an
+evidence boundary, materialize the state at the preceding scan and let the
+interpreted observer execute the witness scan. The resulting causal chain,
+read/run views, attempted writes, and replay result must be identical to the
+all-interpreted baseline.
+
+This should compose with folding rather than compete with it: long proven waits
+mostly disappear through ordinary/cycle folds; the kernel accelerates the
+unavoidable remainder. If a route cannot prove a fold, compiled residual replay
+must still remain a correct optimization rather than changing the evidence.
+
+**Acceptance:**
+
+- exact causal and candidate results match the interpreted baseline;
+- the avoided-Complete Tumbler investigation retains its golden explanation;
+- warm end-to-end investigation is at least 2x faster on the measured route;
+- cold end-to-end timing is reported separately and does not regress
+  pathologically;
+- memory remains bounded by the existing slab/cache policy, with no second
+  per-scan history.
+
+**Risk:** high.
+
+**Gate:** compiled/interpreted parity, fold and cyclefold, causal chain/replay
+capture, pilot investigate/progress, exact avoided-Complete Tumbler golden, and
+`make test-pilot`.
+
+Profile again after this lands. Smaller iteration or zoom costs may remain, but
+they should be justified by the new profile rather than folded into this
+executor redesign.
+
+---
+
+## F. Boundaries to preserve
 
 These are not current cleanup targets.
 
@@ -737,7 +848,9 @@ These are not current cleanup targets.
 4. **Shared decisions:** C1 and C2.
 5. **Control flow:** D1/D2/D3.
 6. **Recovery continuity:** B6, then D4.
-7. **Diagnostics and type hardening:** C3, C4, D5.
+7. **Compiled residual replay:** E1, E2, then E3, after A1 establishes the
+   folded-avoid observation contract.
+8. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
