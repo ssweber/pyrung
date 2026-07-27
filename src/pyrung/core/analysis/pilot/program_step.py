@@ -58,6 +58,15 @@ class ProgramInputHandoff:
 
 
 @dataclass(frozen=True)
+class ProgramMotion:
+    """One exact observable channel motion proved by the unchanged projection."""
+
+    channel_tag: str
+    before_value: Any
+    target_value: Any
+
+
+@dataclass(frozen=True)
 class ProgramStep:
     """Current-world proof result for one selected producer."""
 
@@ -84,6 +93,7 @@ class ProgramStep:
     uniform_handoff_boundary: Eq | Cmp | None = field(init=False, default=None)
     required_pairs: frozenset[tuple[str, Any]] = field(init=False, default=frozenset())
     inputs_with_lifetime: tuple[TraceAction, ...] = field(init=False, default=())
+    observable_motions: tuple[ProgramMotion, ...] = field(init=False, default=())
 
     def __post_init__(self) -> None:
         handoffs = {handoff.action: handoff for handoff in self.input_handoffs}
@@ -105,6 +115,37 @@ class ProgramStep:
                 if boundary is not None
                 else self.required_inputs
             ),
+        )
+        observable_channels = frozenset(
+            (*self.preserve_channels, *((self.channel,) if self.channel is not None else ()))
+        )
+        object.__setattr__(
+            self,
+            "observable_motions",
+            tuple(
+                ProgramMotion(tag, before, after)
+                for tag, before, after in reversed(self.projected_changes)
+                if tag in observable_channels and not _values_match(before, after)
+            ),
+        )
+
+    def observable_motion(self, preferred_channel: str | None = None) -> ProgramMotion | None:
+        """Return the owned motion, honoring a caller's outer route preference."""
+
+        if preferred_channel is not None:
+            preferred = next(
+                (
+                    motion
+                    for motion in self.observable_motions
+                    if motion.channel_tag == preferred_channel
+                ),
+                None,
+            )
+            if preferred is not None:
+                return preferred
+        return next(
+            (motion for motion in self.observable_motions if motion.channel_tag == self.channel),
+            self.observable_motions[0] if self.observable_motions else None,
         )
 
 

@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.currents import Producer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation import (
+    ChannelHeading,
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
@@ -25,13 +26,15 @@ from pyrung.core.analysis.pilot.navigation import (
 )
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
 from pyrung.core.analysis.pilot.options import (
+    WaitPrescription,
     WaitRead,
     _admit_trace_details,
     _admit_wait_read,
+    _AdmittedWait,
     _build_candidates,
     _compass_route_actions,
     _compass_route_plan,
-    _WaitPrescription,
+    _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.program_step import (
     ProgramInputHandoff,
@@ -772,6 +775,15 @@ def test_prescribed_wait_suppresses_stuck_reason():
 
     candidates = _build_candidates(frame, state, ctx)
 
+    assert candidates.route is not None
+    assert candidates.route.plan.first_edge.from_value == 6
+    assert candidates.wait is not None
+    assert candidates.wait.prescription is not None
+    assert candidates.wait.prescription.heading is not None
+    assert candidates.wait.prescription.heading.route is not None
+    assert candidates.wait.prescription.heading.route.channel_tag == "State"
+    assert candidates.trace.actions == ()
+    assert candidates.options == ()
     assert candidates.wait_prescribed is True
     assert candidates.wait_reason == "let-run State: 6->16"
     assert candidates.stuck_reason is None
@@ -851,20 +863,49 @@ def test_program_step_derives_only_a_uniform_shared_input_lifetime() -> None:
     assert all(detail.until is shared_boundary for detail in shared_step.inputs_with_lifetime)
 
 
+def test_program_step_owns_observable_motion_and_route_preference() -> None:
+    step = ProgramStep(
+        ProgramStepStatus.INTERRUPTED,
+        producer=object(),
+        boundary=None,
+        channel="Inner",
+        projected_changes=(
+            ("Outer", 6, 7),
+            ("Inner", 10, 11),
+            ("Unrelated", False, True),
+        ),
+        preserve_channels=("Outer", "Inner"),
+    )
+
+    assert tuple(
+        (motion.channel_tag, motion.before_value, motion.target_value)
+        for motion in step.observable_motions
+    ) == (("Inner", 10, 11), ("Outer", 6, 7))
+    inner = step.observable_motion()
+    outer = step.observable_motion("Outer")
+    assert inner is not None and inner.channel_tag == "Inner"
+    assert outer is not None and outer.channel_tag == "Outer"
+
+
 def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> None:
     """A rejected required input cannot authorize coasting the producer."""
 
     required = (TraceAction("First", True), TraceAction("Blocked", True))
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
+        required_inputs=required,
+    )
     read = WaitRead(
-        _WaitPrescription(
-            True,
-            program_step=SimpleNamespace(
-                required_inputs=required,
-                required_pairs=frozenset(detail.pair for detail in required),
-            ),
-            boundary=object(),
+        WaitPrescription(
+            ChannelHeading("Advance", True, object()),
+            "advance the owned boundary",
+            frontier=(("Advance", True),),
         ),
         required,
+        program_step=step,
     )
     frame = SimpleNamespace(snap={"First": False, "Blocked": False})
     state = SimpleNamespace(rungs=())
@@ -881,7 +922,13 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
     )
 
     assert admitted.viable is False
-    assert admitted.prescription.prescribed is False
+    assert admitted.prescription is None
+    demoted = admitted.candidate_read
+    assert demoted.prescription is None
+    assert demoted.reason == "advance the owned boundary"
+    assert demoted.frontier == (("Advance", True),)
+    assert demoted.program_step is step
+    assert demoted.details == required
 
     fully_admitted = _admit_wait_read(
         read,
@@ -893,6 +940,43 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
     )
     assert fully_admitted.viable is True
     assert fully_admitted.prescription is read.prescription
+
+
+def test_establish_suppression_retains_declined_wait_evidence() -> None:
+    detail = TraceAction("Establish", True, establish=True)
+    step = ProgramStep(
+        ProgramStepStatus.KEEP_RUNNING,
+        producer=object(),
+        boundary=None,
+        channel="Advance",
+    )
+    read = WaitRead(
+        WaitPrescription(
+            ChannelHeading("Advance", True, object()),
+            "wait behind the establish gate",
+            frontier=(("Advance", True),),
+        ),
+        (detail,),
+        program_step=step,
+    )
+    establish_pending = _AdmittedWait(
+        read,
+        _TraceAdmission(
+            active_actions=(detail.pair,),
+            actions=(detail.pair,),
+            details=(detail,),
+            detail_by_pair={detail.pair: detail},
+            managed_boolean_rungs=(),
+            establish_pending=True,
+        ),
+    )
+    assert establish_pending.viable is True
+    suppressed = establish_pending.candidate_read
+    assert suppressed.prescription is None
+    assert suppressed.reason == "wait behind the establish gate"
+    assert suppressed.frontier == (("Advance", True),)
+    assert suppressed.program_step is step
+    assert suppressed.details == (detail,)
 
 
 def test_grounded_action_plan_always_materializes_its_first_action() -> None:

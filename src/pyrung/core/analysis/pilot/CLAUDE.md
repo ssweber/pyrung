@@ -51,9 +51,13 @@ PILOT evidence.
 3. `program_step.py` checks one exact producer in an otherwise-unchanged fork,
    plus one counterfactual input patch per required input, and reports keep
    running, needs input, interrupted pipeline motion, or unclear. It does not
-   choose an action. Observed pipeline motion makes the reading interrupted even
-   when the producer exposes no external input; the current transition owner
-   must be observed before option ordering may select an alternative.
+   choose an action. Its immutable `ProgramStep` derives the exact observable
+   channel motions proved by that projection; candidate construction may select
+   one with an outer route-channel preference, while Orientation never
+   reconstructs motion from `projected_changes`. Observed pipeline motion makes
+   the reading interrupted even when the producer exposes no external input;
+   the current transition owner must be observed before option ordering may
+   select an alternative.
    A requirement read while the program is crossing a boundary it owns belongs
    to the world after that crossing, not to this one. The settled projection is
    the disproof: an input the program is genuinely stopped at is still required
@@ -131,9 +135,14 @@ should consume the first owner's result.
   `ChannelHeading` is navigation's declaration; a coast's selected landing
   remains execution evidence on `_PulseState`.
 - Option materialization and ranking: `options.py::_build_candidates`; its
-  `WaitRead` keeps each wait prescription attached to its discovered inputs,
-  and `_AdmittedWait` carries both through the ordinary admission policy before
-  a coast can be selected
+  immutable `CandidateRead` composes the final trace admission, optional
+  `RouteRead`, `WaitRead`, prerequisite artifact, options, learned-batch
+  variant, and diagnosis. `WaitRead.prescription` is
+  `WaitPrescription | None`, so a present wait is valid by construction while
+  a declined read retains its reason, producer evidence, frontier, and details.
+  Orientation and recording consume those owners directly. The old flattened
+  names remain derived compatibility views for option-assembly helpers and
+  tests during the ownership migration.
 - Local trial gates: `verify.py::verify_gates`
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may use the live harness to propose a
@@ -252,6 +261,10 @@ investigation materializes their guarded installed form.
   operation's `AdvanceStep.progress` receipt is PILOT's observable evidence.
 - Learned or static route edges are suggestions. A live trial still passes the
   same verification gates.
+- `ChannelHeading` owns an immediate observable channel/value/boundary and its
+  optional outer `RouteEdgeContext`. `Coast` consumes that heading whole; its
+  scalar channel and route attributes are compatibility properties and cannot
+  disagree with `ActPolicy.heading`.
 - A planning trace may read the live harness to identify a physical driver.
   VERIFY's post-trial dead-end trace deliberately omits that proposal model;
   continued physical motion needs executed evidence or a live pending effect on

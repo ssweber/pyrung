@@ -15,17 +15,29 @@ from pyrung.core.analysis.pilot.navigation import (
     ActSource,
     Bearing,
     BearingObjective,
+    ChannelHeading,
     Coast,
     Dwell,
     NavigationConstraints,
     NeedProbe,
     OrientationWorld,
     Pulse,
+    RouteEdgeContext,
     Stuck,
     TargetSpec,
     act_identity,
     pulse_identity,
 )
+from pyrung.core.analysis.pilot.options import (
+    CandidateDiagnosis,
+    CandidateRead,
+    LearnedBatchRead,
+    PrerequisiteRead,
+    WaitPrescription,
+    WaitRead,
+    _TraceAdmission,
+)
+from pyrung.core.analysis.pilot.recording import _candidate_payload
 
 
 @dataclass
@@ -70,17 +82,25 @@ def _options(
     stuck_reason=None,
     prescribed_batch=None,
     active_trace_actions=(),
+    wait=None,
 ):
-    return SimpleNamespace(
-        completion_frontier=(),
-        route_plan=None,
-        candidates=tuple(candidates),
-        prerequisite_rungs=(),
-        wait_prescribed=False,
-        wait_reason=None,
-        prescribed_batch=prescribed_batch,
-        active_trace_actions=active_trace_actions,
-        stuck_reason=stuck_reason,
+    return CandidateRead(
+        trace=_TraceAdmission(
+            active_actions=active_trace_actions,
+            actions=active_trace_actions,
+            details=(),
+            detail_by_pair={},
+            managed_boolean_rungs=(),
+            establish_pending=False,
+        ),
+        options=tuple(candidates),
+        wake_cap=20,
+        wait=wait,
+        prerequisites=PrerequisiteRead(),
+        learned_batch=(
+            LearnedBatchRead(prescribed_batch) if prescribed_batch is not None else None
+        ),
+        diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
     )
 
 
@@ -195,6 +215,18 @@ def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     assert result.act.policy.target_observe_label == "batch-target"
     assert result.act.policy.influence_prescribed
     assert not result.act.policy.chase_regression_causes
+
+
+def test_current_candidate_recording_keeps_route_diagnostic_distinct() -> None:
+    policy = ActPolicy(
+        source=ActSource.CURRENT,
+        action_pairs=(("Acknowledge", True),),
+    )
+
+    payload = _candidate_payload(policy)
+
+    assert payload["current_prescribed"] is True
+    assert payload["route_prescribed"] is False
 
 
 def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
@@ -328,15 +360,44 @@ def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
 def test_coast_act_carries_only_immediate_heading() -> None:
     act = Coast(
         "bearing",
-        ActPolicy(source=ActSource.ROUTE),
-        channel_tag="State",
-        target_value=2,
+        ActPolicy(
+            source=ActSource.ROUTE,
+            heading=ChannelHeading("State", 2),
+        ),
     )
 
     assert act.channel_tag == "State"
     assert act.target_value == 2
     assert not hasattr(act, "option")
     assert not hasattr(act, "path")
+
+
+def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    route = RouteEdgeContext("OuterState", 6, 16)
+    heading = ChannelHeading("InnerAcc", 5, boundary=object(), route=route)
+    read = WaitRead(WaitPrescription(heading, "owned wait"))
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(wait=read),
+    )
+
+    compass = Compass()
+    result = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, Coast)
+    assert result.act.policy.heading is heading
+    assert result.act.channel_tag == "InnerAcc"
+    assert result.act.route_channel_tag == "OuterState"
+    assert result.act.route_from_value == 6
+    assert result.act.route_target_value == 16
 
 
 def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:

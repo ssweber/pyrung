@@ -12,9 +12,10 @@ execute a trial, apply observations, or commit state.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import product
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot._ops import (
@@ -32,7 +33,12 @@ from pyrung.core.analysis.pilot.compass import (
     is_composite_action,
     unique_legal_current_reading,
 )
-from pyrung.core.analysis.pilot.navigation import ActSource, pulse_identity
+from pyrung.core.analysis.pilot.navigation import (
+    ActSource,
+    ChannelHeading,
+    RouteEdgeContext,
+    pulse_identity,
+)
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     _all_nodes,
@@ -44,6 +50,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
+    from pyrung.core.analysis.pilot.program_step import ProgramStep
     from pyrung.core.analysis.pilot.trace import TraceAction
 
 # ---------------------------------------------------------------------------
@@ -96,47 +103,6 @@ class _Candidate:
     @property
     def program_prescribed(self) -> bool:
         return self.source is ActSource.PROGRAM
-
-
-@dataclass(frozen=True)
-class _CandidateList:
-    active_trace_actions: tuple[_ActionPair, ...]
-    trace_actions: tuple[_ActionPair, ...]
-    trace_action_details: tuple[TraceAction, ...]
-    route_candidates: tuple[_ActionPair, ...]
-    candidates: tuple[_Candidate, ...]
-    wake_cap: int
-    route_plan: StaticPath | None = None
-    wait_prescribed: bool = False
-    wait_reason: str | None = None
-    # An instruction-owned frontier's immediate observable boundary. This is
-    # one coast heading, not a route: after it lands PILOT retraces.
-    advance_boundary: _ActionPair | None = None
-    advance_condition: Any = None
-    # A composite learned edge (skiff pair probe): the whole action set must
-    # fire in one window.  Tried as a single batch trial before the singles —
-    # verified live through the same gate pipeline as any candidate.
-    prescribed_batch: tuple[_ActionPair, ...] | None = None
-    prerequisite_rungs: tuple[PilotRung, ...] = ()
-    stuck_reason: str | None = None
-    # Co-actions that must fire in the same scan as a route-prescribed command
-    # candidate (the one-shot edge gate, e.g. ``rise(CmdChgRequest)``).  Carried
-    # off the chosen compass edge so the command rung actually executes.
-    route_co_actions: tuple[_ActionPair, ...] = ()
-    # Convergence command buttons currently held off-resting.  A command decoder
-    # is last-write-wins, so pressing one button while another is still held
-    # fires the wrong command; a convergence pulse releases these.
-    held_command_tags: frozenset[str] = frozenset()
-    # The completion re-read's unmet frontier: a prescribed wait's charted
-    # completion condition, re-traced against the live world (``_prescribe_wait``).
-    # Names the pressable lever behind the wait (``x_RotateFB``) so the terminal
-    # frontier clause points past the pipeline cut. Orientation stamps it onto
-    # its completed frame; empty when no wait carries completion.
-    completion_frontier: tuple[_ActionPair, ...] = ()
-    # Exact-producer reading behind this iteration's automatic edge. The
-    # orientation layer consumes its witnessed local boundary; recording keeps
-    # the same value available for diagnostics.
-    program_step: Any = None
 
 
 def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
@@ -228,19 +194,12 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
 
 
 @dataclass(frozen=True)
-class _WaitPrescription:
-    """One grounded wait bearing and the evidence that justified it.
+class WaitPrescription:
+    """One valid-by-construction wait bearing."""
 
-    This is only the decision portion of :class:`WaitRead`.  Exact-producer
-    inputs must all survive that reading's ordinary admission before the
-    prescription may authorize a coast.
-    """
-
-    prescribed: bool
+    heading: ChannelHeading | None
     reason: str | None = None
     frontier: tuple[_ActionPair, ...] = ()
-    program_step: Any = None
-    boundary: Any = None
 
 
 @dataclass(frozen=True)
@@ -252,8 +211,33 @@ class WaitRead:
     admission pass.
     """
 
-    prescription: _WaitPrescription
+    prescription: WaitPrescription | None
     details: tuple[TraceAction, ...] = ()
+    declined_reason: str | None = None
+    program_step: ProgramStep | None = None
+    declined_frontier: tuple[_ActionPair, ...] = ()
+
+    @property
+    def reason(self) -> str | None:
+        return self.prescription.reason if self.prescription is not None else self.declined_reason
+
+    @property
+    def frontier(self) -> tuple[_ActionPair, ...]:
+        return (
+            self.prescription.frontier if self.prescription is not None else self.declined_frontier
+        )
+
+    def without_prescription(self) -> WaitRead:
+        """Remove coast authorization without discarding the reading's evidence."""
+
+        if self.prescription is None:
+            return self
+        return replace(
+            self,
+            prescription=None,
+            declined_reason=self.reason,
+            declined_frontier=self.frontier,
+        )
 
 
 @dataclass(frozen=True)
@@ -263,7 +247,7 @@ class _TraceAdmission:
     active_actions: tuple[_ActionPair, ...]
     actions: tuple[_ActionPair, ...]
     details: tuple[TraceAction, ...]
-    detail_by_pair: dict[_ActionPair, TraceAction]
+    detail_by_pair: Mapping[_ActionPair, TraceAction]
     managed_boolean_rungs: tuple[PilotRung, ...]
     establish_pending: bool
 
@@ -297,18 +281,149 @@ class _AdmittedWait:
         by the same candidate result.
         """
 
-        step = self.read.prescription.program_step
+        step = self.read.program_step
         required_pairs = step.required_pairs if step is not None else frozenset()
-        return self.read.prescription.prescribed and (
+        return self.read.prescription is not None and (
             not required_pairs or required_pairs <= self.admitted_pairs
         )
 
     @property
-    def prescription(self) -> _WaitPrescription:
-        prescription = self.read.prescription
-        if prescription.prescribed and not self.viable:
-            return replace(prescription, prescribed=False)
-        return prescription
+    def prescription(self) -> WaitPrescription | None:
+        return self.candidate_read.prescription
+
+    @property
+    def candidate_read(self) -> WaitRead:
+        """The evidence-preserving wait result candidate construction may use."""
+
+        if self.viable and not self.admission.establish_pending:
+            return self.read
+        return self.read.without_prescription()
+
+
+@dataclass(frozen=True)
+class RouteRead:
+    """The selected static route and its immediate executable action context."""
+
+    plan: StaticPath
+    candidates: tuple[_ActionPair, ...] = ()
+    co_actions: tuple[_ActionPair, ...] = ()
+
+
+@dataclass(frozen=True)
+class PrerequisiteRead:
+    """Executable prerequisites and convergence state admitted by this read."""
+
+    rungs: tuple[PilotRung, ...] = ()
+    held_command_tags: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class LearnedBatchRead:
+    """One learned joint action retained as its own compatibility variant."""
+
+    actions: tuple[_ActionPair, ...]
+
+
+@dataclass(frozen=True)
+class CandidateDiagnosis:
+    """Terminal diagnosis owned by candidate construction."""
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class CandidateRead:
+    """Owned current-world readings composed for Orientation.
+
+    Compatibility properties deliberately preserve the old scalar surface for
+    this pass.  Their values are derived from the evidence owners below.
+    """
+
+    trace: _TraceAdmission
+    options: tuple[_Candidate, ...]
+    wake_cap: int
+    route: RouteRead | None = None
+    wait: WaitRead | None = None
+    prerequisites: PrerequisiteRead = PrerequisiteRead()
+    learned_batch: LearnedBatchRead | None = None
+    diagnosis: CandidateDiagnosis | None = None
+
+    @property
+    def active_trace_actions(self) -> tuple[_ActionPair, ...]:
+        return self.trace.active_actions
+
+    @property
+    def trace_actions(self) -> tuple[_ActionPair, ...]:
+        return self.trace.actions
+
+    @property
+    def trace_action_details(self) -> tuple[TraceAction, ...]:
+        return self.trace.details
+
+    @property
+    def route_plan(self) -> StaticPath | None:
+        return self.route.plan if self.route is not None else None
+
+    @property
+    def route_candidates(self) -> tuple[_ActionPair, ...]:
+        return self.route.candidates if self.route is not None else ()
+
+    @property
+    def route_co_actions(self) -> tuple[_ActionPair, ...]:
+        return self.route.co_actions if self.route is not None else ()
+
+    @property
+    def candidates(self) -> tuple[_Candidate, ...]:
+        return self.options
+
+    @property
+    def wait_prescribed(self) -> bool:
+        return self.wait is not None and self.wait.prescription is not None
+
+    @property
+    def wait_reason(self) -> str | None:
+        if self.wait is None:
+            return None
+        return self.wait.reason
+
+    @property
+    def heading(self) -> ChannelHeading | None:
+        if self.wait is None or self.wait.prescription is None:
+            return None
+        return self.wait.prescription.heading
+
+    @property
+    def advance_boundary(self) -> _ActionPair | None:
+        heading = self.heading
+        return (heading.channel_tag, heading.target_value) if heading is not None else None
+
+    @property
+    def advance_condition(self) -> Any:
+        return self.heading.boundary if self.heading is not None else None
+
+    @property
+    def prescribed_batch(self) -> tuple[_ActionPair, ...] | None:
+        return self.learned_batch.actions if self.learned_batch is not None else None
+
+    @property
+    def prerequisite_rungs(self) -> tuple[PilotRung, ...]:
+        return self.prerequisites.rungs
+
+    @property
+    def held_command_tags(self) -> frozenset[str]:
+        return self.prerequisites.held_command_tags
+
+    @property
+    def stuck_reason(self) -> str | None:
+        return self.diagnosis.reason if self.diagnosis is not None else None
+
+    @property
+    def completion_frontier(self) -> tuple[_ActionPair, ...]:
+        return self.wait.frontier if self.wait is not None else ()
+
+    @property
+    def program_step(self) -> ProgramStep | None:
+        return self.wait.program_step if self.wait is not None else None
 
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
@@ -849,28 +964,72 @@ def _prescribe_wait(
     ctx: Any,
     *,
     reason: str | None = None,
-) -> _WaitPrescription:
+) -> WaitRead:
     """Mint a prescribed-wait bearing from one current-world edge read.
 
     The single owner of "a wait is prescribed" for both mint paths. A route
     completion edge (zoom) must be *grounded* — a wildcard from-value has no
-    dwell semantics, so it refuses the wait (returns ``prescribed=False``). An
+    dwell semantics, so its read has no prescription. An
     influence-path wait passes ``edge=None`` with an explicit ``reason`` —
     always coastable. Automatic sibling edges carry one exact-producer
     ``ProgramStep`` reading in the returned prescription.
 
-    This function never returns actions.  :func:`_read_wait` collects any
-    completion or exact-producer details separately so `_build_candidates` can
-    pass them through ordinary trace admission.
+    The returned read keeps completion and exact-producer details attached so
+    `_build_candidates` can pass them through ordinary trace admission.
     """
     if edge is None:
-        return _WaitPrescription(True, reason)
+        return WaitRead(WaitPrescription(None, reason))
     if not _edge_grounded(edge):
-        return _WaitPrescription(False)
+        return WaitRead(
+            None,
+            declined_reason="completion edge has no grounded source value",
+        )
 
     route_reason = (
         f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
     )
+    route_context = RouteEdgeContext(
+        edge.role.channel_tag,
+        edge.from_value,
+        edge.to_value,
+    )
+
+    def _read(
+        prescription: WaitPrescription | None,
+        *,
+        step: Any = None,
+        declined_reason: str | None = None,
+        declined_frontier: tuple[_ActionPair, ...] = (),
+    ) -> WaitRead:
+        details = (
+            step.inputs_with_lifetime
+            if step is not None and prescription is not None
+            else step.required_inputs
+            if step is not None
+            else ()
+        )
+        return WaitRead(
+            prescription,
+            details,
+            declined_reason=declined_reason,
+            program_step=step,
+            declined_frontier=declined_frontier,
+        )
+
+    def _heading(
+        pair: _ActionPair | None,
+        boundary: Any = None,
+    ) -> ChannelHeading:
+        channel_tag, target_value = (
+            pair if pair is not None else (edge.role.channel_tag, edge.to_value)
+        )
+        return ChannelHeading(
+            channel_tag=channel_tag,
+            target_value=target_value,
+            boundary=boundary,
+            route=route_context,
+        )
+
     if edge.program_producers:
         from pyrung.core.analysis.pilot.program_step import (
             ProgramStepStatus,
@@ -882,9 +1041,9 @@ def _prescribe_wait(
             {producer.rung_index: producer for producer in edge.program_producers}.values()
         )
         if len(producers) != 1:
-            return _WaitPrescription(
-                False,
-                f"{route_reason}; exact program producer is ambiguous",
+            return _read(
+                None,
+                declined_reason=f"{route_reason}; exact program producer is ambiguous",
             )
         world = WorldView(
             snapshot=frame.snap,
@@ -907,96 +1066,94 @@ def _prescribe_wait(
             state.rungs,
             resting=ctx.resting,
         )
-        if step.status is ProgramStepStatus.KEEP_RUNNING:
-            heading = _advance_heading(step.boundary, frame, state)
-            if heading is None:
-                return _WaitPrescription(
-                    False,
-                    f"{route_reason}; owned boundary has no exact coast heading",
-                    program_step=step,
-                )
-            movement = next(
+        preferred_channel = (
+            edge.role.channel_tag
+            if edge.role.channel_tag in step.preserve_channels
+            else next(iter(sorted(step.preserve_channels)), None)
+        )
+        motion = step.observable_motion(preferred_channel)
+        motion_heading = (
+            (
+                motion.channel_tag,
                 (
-                    (tag, before, after)
-                    for tag, before, after in reversed(step.projected_changes)
-                    if tag == step.channel and not _values_match(before, after)
+                    motion.before_value
+                    if motion.channel_tag in step.preserve_channels
+                    else motion.target_value
                 ),
-                None,
             )
+            if motion is not None
+            else None
+        )
+        if step.status is ProgramStepStatus.KEEP_RUNNING:
+            boundary_heading = _advance_heading(step.boundary, frame, state)
+            if boundary_heading is None:
+                return _read(
+                    None,
+                    step=step,
+                    declined_reason=f"{route_reason}; owned boundary has no exact coast heading",
+                )
+            coast_heading = motion_heading or boundary_heading
             observation = (
-                f" ({movement[0]}: {movement[1]!r}->{movement[2]!r})"
-                if movement is not None
+                f" ({motion.channel_tag}: {motion.before_value!r}->{motion.target_value!r})"
+                if motion is not None
                 else f"; {step.reason}"
             )
-            return _WaitPrescription(
-                True,
-                f"{route_reason}{observation}",
-                frontier=(heading,),
-                program_step=step,
-                boundary=step.boundary,
+            return _read(
+                WaitPrescription(
+                    _heading(coast_heading, step.boundary),
+                    f"{route_reason}{observation}",
+                    frontier=(boundary_heading,),
+                ),
+                step=step,
             )
         if step.status is ProgramStepStatus.NEEDS_INPUT:
             boundary = step.uniform_handoff_boundary
             if boundary is not None:
-                heading = _advance_heading(boundary, frame, state)
-                if heading is None:
-                    return _WaitPrescription(
-                        False,
-                        f"{route_reason}; owned boundary has no exact coast heading",
-                        program_step=step,
+                boundary_heading = _advance_heading(boundary, frame, state)
+                if boundary_heading is None:
+                    return _read(
+                        None,
+                        step=step,
+                        declined_reason=(
+                            f"{route_reason}; owned boundary has no exact coast heading"
+                        ),
                     )
-                return _WaitPrescription(
-                    True,
-                    (f"{route_reason}; supply its current input and hand off to {heading[0]}"),
-                    frontier=(heading,),
-                    program_step=step,
-                    boundary=boundary,
+                heading_tag, _heading_value = boundary_heading
+                return _read(
+                    WaitPrescription(
+                        _heading(motion_heading or boundary_heading, boundary),
+                        (f"{route_reason}; supply its current input and hand off to {heading_tag}"),
+                        frontier=(boundary_heading,),
+                    ),
+                    step=step,
                 )
             frontier = tuple(
                 action.pair
                 for action in step.required_inputs
                 if action.pulse or not _values_match(frame.snap.get(action.tag), action.value)
             )
-            return _WaitPrescription(
-                False,
-                f"{route_reason}; {step.reason}",
-                frontier=frontier,
-                program_step=step,
+            return _read(
+                None,
+                step=step,
+                declined_reason=f"{route_reason}; {step.reason}",
+                declined_frontier=frontier,
             )
         if step.status is ProgramStepStatus.INTERRUPTED:
-            return _WaitPrescription(
-                True,
-                f"{route_reason}; {step.reason}",
-                program_step=step,
+            return _read(
+                WaitPrescription(
+                    _heading(motion_heading),
+                    f"{route_reason}; {step.reason}",
+                ),
+                step=step,
             )
-        return _WaitPrescription(
-            False,
-            f"{route_reason}; {step.reason}",
-            program_step=step,
-        )
+        return _read(None, step=step, declined_reason=f"{route_reason}; {step.reason}")
 
-    return _WaitPrescription(True, route_reason)
-
-
-def _read_wait(
-    edge: Any,
-    frame: Any,
-    state: Any,
-    ctx: Any,
-    *,
-    reason: str | None = None,
-) -> WaitRead:
-    """Read one wait edge while keeping every discovered action attached."""
-
-    prescription = _prescribe_wait(edge, frame, state, ctx, reason=reason)
-    step = prescription.program_step
-    details = (
-        step.inputs_with_lifetime
-        if step is not None and prescription.prescribed
-        else step.required_inputs
-        if step is not None
-        else ()
+    prescription = WaitPrescription(
+        _heading(None),
+        route_reason,
     )
+    details: tuple[TraceAction, ...] = ()
+    frontier: tuple[_ActionPair, ...] = ()
     if edge is not None and not edge.program_producers and edge.completion:
         details, frontier = _completion_reread(edge, frame, state, ctx)
         prescription = replace(prescription, frontier=frontier)
@@ -1070,7 +1227,7 @@ def _admit_trace_details(
         active_actions=active_trace_actions,
         actions=trace_actions,
         details=trace_action_details,
-        detail_by_pair=detail_by_pair,
+        detail_by_pair=MappingProxyType(detail_by_pair),
         managed_boolean_rungs=managed_boolean_rungs,
         establish_pending=establish_pending,
     )
@@ -1102,7 +1259,7 @@ def _build_candidates(
     frame: Any,
     state: Any,
     ctx: Any,
-) -> _CandidateList:
+) -> CandidateRead:
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
     gauge = getattr(state, "gauge", None)
     # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
@@ -1180,7 +1337,7 @@ def _build_candidates(
     while _is_zoom:
         assert route_plan is not None
         preflight_wait = _admit_wait_read(
-            _read_wait(route_plan.first_edge, frame, state, ctx),
+            _prescribe_wait(route_plan.first_edge, frame, state, ctx),
             tuple(frame.raw_trace_action_details),
             frame,
             state,
@@ -1218,28 +1375,29 @@ def _build_candidates(
         else ()
     )
 
-    wait = _WaitPrescription(False)
-    completion_frontier: tuple[_ActionPair, ...] = ()
+    wait: WaitRead | None = None
     program_step: Any = None
     program_pairs: set[_ActionPair] = set()
     advance_condition: Any = None
     # A grounded completion edge may add a narrower current-world read below the
     # opaque pipeline cut. Those details join the broad target details and the
     # whole pool re-enters ordinary admission before prerequisite splitting.
-    zoom_wait = _WaitPrescription(False)
+    zoom_wait: WaitRead | None = None
     if _is_zoom:
         assert route_plan is not None  # _is_zoom is True only when route_plan exists
         assert preflight_wait is not None
-        zoom_wait = preflight_wait.prescription
-        completion_frontier = zoom_wait.frontier
+        zoom_wait = preflight_wait.candidate_read
         program_step = zoom_wait.program_step
-        advance_condition = zoom_wait.boundary
+        advance_condition = (
+            zoom_wait.prescription.heading.boundary
+            if zoom_wait.prescription is not None and zoom_wait.prescription.heading is not None
+            else None
+        )
         if program_step is not None:
             program_pairs = set(program_step.required_pairs)
         admission = preflight_wait.admission
         if admission.establish_pending:
             _is_zoom = False
-            zoom_wait = replace(zoom_wait, prescribed=False)
 
     active_trace_actions = admission.active_actions
     trace_actions = admission.actions
@@ -1259,8 +1417,8 @@ def _build_candidates(
         getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
     )
     advance_boundary: _ActionPair | None = (
-        completion_frontier[0]
-        if advance_condition is not None and len(completion_frontier) == 1
+        zoom_wait.frontier[0]
+        if zoom_wait is not None and advance_condition is not None and len(zoom_wait.frontier) == 1
         else None
     )
     if _is_coast:
@@ -1280,6 +1438,36 @@ def _build_candidates(
                     else None
                 ) or step.until
                 break
+
+    # A plain chart completion is only the outer route context. Its admitted
+    # trace may expose a nearer instruction-owned boundary; that local heading
+    # is what execution must witness first. Exact-producer waits already own
+    # their immediate motion and are not overwritten here.
+    if (
+        advance_boundary is not None
+        and zoom_wait is not None
+        and zoom_wait.program_step is None
+        and zoom_wait.prescription is not None
+    ):
+        channel_tag, target_value = advance_boundary
+        route_context = (
+            zoom_wait.prescription.heading.route
+            if zoom_wait.prescription.heading is not None
+            else None
+        )
+        zoom_wait = replace(
+            zoom_wait,
+            prescription=replace(
+                zoom_wait.prescription,
+                heading=ChannelHeading(
+                    channel_tag=channel_tag,
+                    target_value=target_value,
+                    boundary=advance_condition,
+                    route=route_context,
+                ),
+            ),
+        )
+
     prerequisite_rungs = list(admission.managed_boolean_rungs)
     if _is_zoom or _is_coast:
         # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
@@ -1397,11 +1585,7 @@ def _build_candidates(
                     ctx,
                     reason=f"{n.tag}: {cur_val!r}->{n.value!r}",
                 )
-                wait = replace(
-                    wait,
-                    prescribed=influence_wait.prescribed,
-                    reason=influence_wait.reason,
-                )
+                wait = influence_wait
                 break
             if is_composite_action(first_step):
                 # A skiff-learned joint edge: the whole action set must fire in
@@ -1554,18 +1738,30 @@ def _build_candidates(
     # Zoom-wait mint: apply the reason from the early completion re-read (its
     # producers already entered the trace pool above).  An influence-path wait
     # (site 1, in the compass leaf loop) takes precedence when it fired.
-    if _is_zoom and not wait.prescribed:
-        wait = replace(
-            wait,
-            prescribed=zoom_wait.prescribed,
-            reason=zoom_wait.reason,
-        )
+    if _is_zoom and (wait is None or wait.prescription is None):
+        assert zoom_wait is not None
+        wait = zoom_wait
 
-    if advance_boundary is not None and not candidates and not wait.prescribed:
-        wait = replace(
-            wait,
-            prescribed=True,
-            reason=f"advance {advance_boundary[0]} to its next boundary {advance_boundary[1]!r}",
+    if (
+        advance_boundary is not None
+        and not candidates
+        and (wait is None or wait.prescription is None)
+    ):
+        channel_tag, target_value = advance_boundary
+        reason = f"advance {channel_tag} to its next boundary {target_value!r}"
+        wait = WaitRead(
+            WaitPrescription(
+                ChannelHeading(
+                    channel_tag=channel_tag,
+                    target_value=target_value,
+                    boundary=advance_condition,
+                ),
+                reason,
+                # The immediate coast heading is not an unresolved completion
+                # frontier. Only an exact completion/program re-read owns that
+                # target-relative evidence.
+                frontier=(),
+            ),
         )
 
     # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
@@ -1576,30 +1772,36 @@ def _build_candidates(
     if (
         not candidates
         and not prerequisite_rungs
-        and not wait.prescribed
+        and (wait is None or wait.prescription is None)
         and prescribed_batch is None
     ):
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
-    return _CandidateList(
-        active_trace_actions=active_trace_actions,
-        trace_actions=trace_actions,
-        trace_action_details=trace_action_details,
-        route_candidates=route_candidates,
-        candidates=tuple(candidates),
+    final_admission = replace(
+        admission,
+        active_actions=active_trace_actions,
+        actions=trace_actions,
+        details=trace_action_details,
+    )
+    route_read = (
+        RouteRead(route_plan, route_candidates, route_co_actions)
+        if route_plan is not None
+        else None
+    )
+    return CandidateRead(
+        trace=final_admission,
+        options=tuple(candidates),
         wake_cap=wake_cap,
-        route_plan=route_plan,
-        wait_prescribed=wait.prescribed,
-        wait_reason=wait.reason,
-        advance_boundary=advance_boundary,
-        advance_condition=advance_condition,
-        prescribed_batch=prescribed_batch,
-        prerequisite_rungs=tuple(prerequisite_rungs),
-        stuck_reason=stuck_reason,
-        route_co_actions=route_co_actions,
-        held_command_tags=held_command_tags,
-        completion_frontier=completion_frontier,
-        program_step=program_step,
+        route=route_read,
+        wait=wait,
+        prerequisites=PrerequisiteRead(
+            tuple(prerequisite_rungs),
+            held_command_tags,
+        ),
+        learned_batch=(
+            LearnedBatchRead(prescribed_batch) if prescribed_batch is not None else None
+        ),
+        diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
     )
 
 
@@ -1610,7 +1812,7 @@ def _build_candidates(
 
 def _candidate_applied(
     candidate: _Candidate,
-    candidates: _CandidateList,
+    candidates: CandidateRead,
     ctx: Any,
 ) -> tuple[_ActionPair, ...]:
     pair = candidate.pair

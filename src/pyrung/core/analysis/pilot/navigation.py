@@ -15,6 +15,8 @@ from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot._ops import PilotRung
+    from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
 
@@ -98,12 +100,22 @@ class ActSource(StrEnum):
 
 
 @dataclass(frozen=True)
+class RouteEdgeContext:
+    """The outer chart edge served by an immediate channel heading."""
+
+    channel_tag: str
+    from_value: Any
+    target_value: Any
+
+
+@dataclass(frozen=True)
 class ChannelHeading:
     """A channel boundary declared by navigation, before execution observes it."""
 
     channel_tag: str
     target_value: Any
     boundary: Any = None
+    route: RouteEdgeContext | None = None
 
 
 @dataclass(frozen=True)
@@ -195,24 +207,37 @@ class BatchPulse:
 
 @dataclass(frozen=True)
 class Coast:
-    """One coast act with an executable boundary and optional route heading.
-
-    ``channel_tag`` / ``target_value`` are the immediate value the executor
-    must witness. ``route_*`` names the outer chart edge that the local proof
-    serves; it is presentation and nogood context, never permission to coast
-    past the witnessed boundary.
-    """
+    """One coast act consuming navigation's complete typed heading."""
 
     mode: Literal["bearing", "terminal"]
     policy: ActPolicy
-    channel_tag: str | None = None
-    target_value: Any = None
-    # The owner's original relation. ``target_value`` is its exact observable
-    # heading; execution keeps this proof for progress and coast estimates.
-    boundary: Any = None
-    route_channel_tag: str | None = None
-    route_from_value: Any = None
-    route_target_value: Any = None
+
+    @property
+    def channel_tag(self) -> str | None:
+        return self.policy.heading.channel_tag if self.policy.heading is not None else None
+
+    @property
+    def target_value(self) -> Any:
+        return self.policy.heading.target_value if self.policy.heading is not None else None
+
+    @property
+    def boundary(self) -> Any:
+        return self.policy.heading.boundary if self.policy.heading is not None else None
+
+    @property
+    def route_channel_tag(self) -> str | None:
+        route = self.policy.heading.route if self.policy.heading is not None else None
+        return route.channel_tag if route is not None else None
+
+    @property
+    def route_from_value(self) -> Any:
+        route = self.policy.heading.route if self.policy.heading is not None else None
+        return route.from_value if route is not None else None
+
+    @property
+    def route_target_value(self) -> Any:
+        route = self.policy.heading.route if self.policy.heading is not None else None
+        return route.target_value if route is not None else None
 
 
 @dataclass(frozen=True)
@@ -237,7 +262,7 @@ class OrientationTrace:
 
     world_key: _StateKey
     world: OrientationWorld
-    candidates: Any
+    candidates: CandidateRead
     considered_paths: tuple[Any, ...] = ()
     rankings: tuple[Any, ...] = ()
     exclusions: tuple[Any, ...] = ()
@@ -251,7 +276,7 @@ class Bearing:
     world_key: _StateKey
     act: NavigationAct
     objective: BearingObjective
-    prerequisites: tuple[Any, ...] = ()
+    prerequisites: tuple[PilotRung, ...] = ()
     rationale: str = ""
     trace: OrientationTrace | None = None
 

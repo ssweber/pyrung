@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot.navigation import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.options import (
+    CandidateRead,
     _build_candidates,
     _candidate_applied,
     _current_work_evidence,
@@ -274,11 +275,13 @@ def _read_worlds(
     )
 
 
-def _frontier(world: OrientationWorld, candidates: Any) -> tuple[tuple[str, Any], ...]:
+def _frontier(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+) -> tuple[tuple[str, Any], ...]:
     """One complete target-relative frontier for every Orientation result."""
-    pairs = tuple(candidates.completion_frontier) + tuple(
-        frontier_pairs(world.frame.tree, world.snapshot)
-    )
+    completion_frontier = candidates.wait.frontier if candidates.wait is not None else ()
+    pairs = tuple(completion_frontier) + tuple(frontier_pairs(world.frame.tree, world.snapshot))
     result: list[tuple[str, Any]] = []
     for pair in pairs:
         if pair not in result:
@@ -289,7 +292,7 @@ def _frontier(world: OrientationWorld, candidates: Any) -> tuple[tuple[str, Any]
 def _probe_or_stuck(
     compass: Any,
     world: OrientationWorld,
-    candidates: Any,
+    candidates: CandidateRead,
     reason: str,
     _constraints: NavigationConstraints,
 ) -> NeedProbe | Stuck:
@@ -300,8 +303,8 @@ def _probe_or_stuck(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
-        considered_paths=((candidates.route_plan,) if candidates.route_plan is not None else ()),
-        rankings=tuple(candidates.candidates),
+        considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
+        rankings=tuple(candidates.options),
         exclusions=exclusions,
     )
     if count < _PROBE_BUDGET:
@@ -330,7 +333,7 @@ def _probe_or_stuck(
 def _bearing(
     world: OrientationWorld,
     act: Any,
-    candidates: Any,
+    candidates: CandidateRead,
     *,
     target: TargetSpec,
     rationale: str,
@@ -339,8 +342,8 @@ def _bearing(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
-        considered_paths=((candidates.route_plan,) if candidates.route_plan is not None else ()),
-        rankings=tuple(candidates.candidates),
+        considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
+        rankings=tuple(candidates.options),
         exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
         selected_bearing_id=repr(act_identity(act)),
     )
@@ -348,7 +351,7 @@ def _bearing(
         world_key=world.world_key,
         act=act,
         objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
-        prerequisites=tuple(candidates.prerequisite_rungs),
+        prerequisites=candidates.prerequisites.rungs,
         rationale=rationale,
         trace=trace,
     )
@@ -391,7 +394,8 @@ def _orient_read(
         world.context,
     )
 
-    if candidates.completion_frontier:
+    completion_frontier = candidates.wait.frontier if candidates.wait is not None else ()
+    if completion_frontier:
         # Candidate construction discovers the completion re-read, but
         # orientation owns the resulting frame. Consumers receive one complete
         # world and never have to stitch two readings from this call together.
@@ -399,55 +403,28 @@ def _orient_read(
             world,
             frame=replace(
                 world.frame,
-                completion_frontier=candidates.completion_frontier,
+                completion_frontier=completion_frontier,
             ),
         )
 
-    if candidates.wait_prescribed:
-        route_plan = candidates.route_plan
-        advance_boundary = candidates.advance_boundary
-        program_step = candidates.program_step
-        preserve_channels = (
-            frozenset(program_step.preserve_channels) if program_step is not None else frozenset()
+    prescription = candidates.wait.prescription if candidates.wait is not None else None
+    if prescription is not None:
+        heading = prescription.heading
+        route = heading.route if heading is not None else None
+        wait_channel = (
+            route.channel_tag
+            if route is not None
+            else (heading.channel_tag if heading is not None else None)
         )
-        preferred_channel = (
-            route_plan.role.channel_tag
-            if route_plan is not None and route_plan.role.channel_tag in preserve_channels
-            else next(iter(sorted(preserve_channels)), None)
-        )
-        program_heading = (
-            next(
-                (
-                    (
-                        tag,
-                        before if tag in preserve_channels else after,
-                    )
-                    for tag, before, after in reversed(program_step.projected_changes)
-                    if tag
-                    == (
-                        preferred_channel if preferred_channel is not None else program_step.channel
-                    )
-                    and not _values_match(before, after)
-                ),
-                None,
-            )
-            if program_step is not None
-            else None
-        )
-        heading = program_heading if program_heading is not None else advance_boundary
-        route_prescribed = route_plan is not None
-        route_channel = route_plan.role.channel_tag if route_plan is not None else None
-        route_from = route_plan.first_edge.from_value if route_plan is not None else None
-        route_target = route_plan.first_edge.to_value if route_plan is not None else None
-        preserve_route_heading = route_prescribed and heading is not None
-        channel_tag = heading[0] if heading is not None else route_channel
-        target_value = heading[1] if heading is not None else route_target
-        wait_channel = route_channel or channel_tag
         wait_nogood = (
             wait_edge_nogood(
                 wait_channel,
-                route_from if route_channel is not None else world.snapshot.get(wait_channel),
-                route_target if route_channel is not None else target_value,
+                route.from_value if route is not None else world.snapshot.get(wait_channel),
+                route.target_value
+                if route is not None
+                else heading.target_value
+                if heading is not None
+                else None,
             )
             if wait_channel is not None
             else None
@@ -455,21 +432,11 @@ def _orient_read(
         act = Coast(
             "bearing",
             ActPolicy(
-                source=ActSource.ROUTE if route_prescribed else ActSource.PROGRAM,
+                source=ActSource.ROUTE if route is not None else ActSource.PROGRAM,
                 nogood_pair=wait_nogood,
-                heading=(
-                    ChannelHeading(channel_tag, target_value, candidates.advance_condition)
-                    if channel_tag is not None
-                    else None
-                ),
+                heading=heading,
                 motion=MotionKind.COAST_TO_BEARING,
             ),
-            channel_tag=channel_tag,
-            target_value=target_value,
-            boundary=candidates.advance_condition,
-            route_channel_tag=route_channel if preserve_route_heading else None,
-            route_from_value=route_from if preserve_route_heading else None,
-            route_target_value=route_target if preserve_route_heading else None,
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
             return _bearing(
@@ -477,11 +444,11 @@ def _orient_read(
                 act,
                 candidates,
                 target=target,
-                rationale=candidates.wait_reason or "charted completion edge",
+                rationale=prescription.reason or "charted completion edge",
             )
 
-    if candidates.prescribed_batch:
-        actions = tuple(candidates.prescribed_batch)
+    if candidates.learned_batch is not None:
+        actions = candidates.learned_batch.actions
         act = BatchPulse(
             ActPolicy(
                 source=ActSource.LEARNED,
@@ -498,7 +465,7 @@ def _orient_read(
                 rationale="learned joint transition",
             )
 
-    for option in candidates.candidates:
+    for option in candidates.options:
         applied = _candidate_applied(option, candidates, world.context)
         act = Pulse(_pulse_policy(option, applied))
         if compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -520,7 +487,7 @@ def _orient_read(
     # Widening remains an atomic act, but no sequence of widths survives an
     # observation.  Each rejected width is world-keyed knowledge and the next
     # call recomputes before considering another width.
-    active = tuple(candidates.active_trace_actions)
+    active = candidates.trace.active_actions
     for width in range(2, len(active) + 1):
         actions = active[:width]
         act = BatchPulse(
@@ -539,12 +506,12 @@ def _orient_read(
                 rationale=f"widen trace context to {width} atomic actions",
             )
 
-    if candidates.stuck_reason is not None:
+    if candidates.diagnosis is not None:
         return _probe_or_stuck(
             compass,
             world,
             candidates,
-            candidates.stuck_reason,
+            candidates.diagnosis.reason,
             constraints,
         )
 

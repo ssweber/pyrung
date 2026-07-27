@@ -138,52 +138,6 @@ Use `devtools/pilot_divergence.py` for the first changed decision and
 
 This is the main cleanup program. Items are ordered by leverage.
 
-### B2. Make `_CandidateList` a composition of owned readings, not a flattened state bag
-
-**Current dehydration chain**
-
-`options._admit_wait_read` now keeps `WaitRead` and `_TraceAdmission` together as
-`_AdmittedWait`, but `_build_candidates` still unpacks that admitted reading into
-locals and returns `_CandidateList` with parallel optional fields:
-
-- `wait_prescribed` + `wait_reason`;
-- `advance_boundary` + `advance_condition`;
-- `completion_frontier` + `program_step`;
-- `prescribed_batch`;
-- route plan, route candidates, co-actions, and prerequisite rungs.
-
-`orientation._orient_read` then reconstructs a coast heading by walking
-`ProgramStep.projected_changes`, interpreting `preserve_channels`, preferring a
-route channel, and reassembling the route edge context.
-
-**Required shape**
-
-- No false-valued `_WaitPrescription`. Use `None | WaitPrescription`; a present
-  prescription is valid by construction.
-- `ProgramStep` owns the exact observable program motion it proved. Orientation
-  should not reverse-walk `projected_changes` to infer a heading.
-- Introduce a typed heading receipt containing the immediate channel/value,
-  original boundary, and optional outer route-edge context. `Coast` consumes that
-  object whole; `route_prescribed` becomes derived from the route context.
-- `_CandidateList` (rename after its final role is clear) composes
-  `_TraceAdmission`, optional wait/heading, candidate options, prerequisite
-  artifact, and diagnosis. Do not copy their fields into the outer record.
-- `OrientationTrace.candidates` and `Bearing.prerequisites` stop using `Any`.
-
-**Why**
-
-Candidate construction is hard to follow because each phase mutates a set of
-loose variables whose combinations encode hidden variants. Make the variants
-explicit first; phase extraction then becomes mechanical.
-
-**LOC:** neutral to -40. The payoff is fewer states and less reconstruction, not
-the raw delta.
-
-**Risk:** medium-high; `_build_candidates` is the action-selection hot path.
-
-**Gate:** `test_pilot_candidate_wait.py`, `test_pilot_orientation_contract.py`,
-`test_pilot_coast.py`, `test_pilot_program_step.py`, decision goldens.
-
 ### B3. Carry one gauge comparison receipt through verify, commit, and progress
 
 **Current dehydration chain**
@@ -678,13 +632,12 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Navigation continuity:** B2.
-2. **Trial evidence continuity:** B3, B4, then B5.
-3. **Shared decisions:** C1 and C2.
-4. **Control flow:** D1/D2/D3.
-5. **Recovery continuity:** B6, then D4.
-6. **Compiled residual replay:** E1, E2, then E3.
-7. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Trial evidence continuity:** B3, B4, then B5.
+2. **Shared decisions:** C1 and C2.
+3. **Control flow:** D1/D2/D3.
+4. **Recovery continuity:** B6, then D4.
+5. **Compiled residual replay:** E1, E2, then E3.
+6. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.

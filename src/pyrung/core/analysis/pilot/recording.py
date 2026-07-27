@@ -39,7 +39,8 @@ from pyrung.core.validation.render import operand_name
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.compass import Compass
-    from pyrung.core.analysis.pilot.options import _Candidate
+    from pyrung.core.analysis.pilot.options import CandidateRead, _Candidate
+    from pyrung.core.analysis.pilot.program_step import ProgramStep
 
 
 def _investigation_started_event(
@@ -342,31 +343,35 @@ def _iteration_payload(
 
 
 def _candidates_built_payload(
-    candidates: Any, lever_notes: dict[str, str] | None = None
+    candidates: CandidateRead, lever_notes: dict[str, str] | None = None
 ) -> dict[str, Any]:
+    route = candidates.route
+    wait = candidates.wait
+    prescription = wait.prescription if wait is not None else None
+    prerequisites = candidates.prerequisites.rungs
     return {
-        "candidates": tuple(_candidate_read_payload(c) for c in candidates.candidates),
-        "trace_actions": candidates.trace_actions,
-        "trace_action_details": candidates.trace_action_details,
-        "active_trace_actions": candidates.active_trace_actions,
-        "route_candidates": candidates.route_candidates,
-        "route_plan": _route_plan_payload(candidates.route_plan),
+        "candidates": tuple(_candidate_read_payload(c) for c in candidates.options),
+        "trace_actions": candidates.trace.actions,
+        "trace_action_details": candidates.trace.details,
+        "active_trace_actions": candidates.trace.active_actions,
+        "route_candidates": route.candidates if route is not None else (),
+        "route_plan": _route_plan_payload(route.plan if route is not None else None),
         "wake_cap": candidates.wake_cap,
-        "wait_prescribed": candidates.wait_prescribed,
-        "wait_reason": candidates.wait_reason,
-        "prerequisite_rungs": candidates.prerequisite_rungs,
+        "wait_prescribed": prescription is not None,
+        "wait_reason": wait.reason if wait is not None else None,
+        "prerequisite_rungs": prerequisites,
         "lever_notes": {
             rung.dest: lever_notes[rung.dest]
-            for rung in candidates.prerequisite_rungs
+            for rung in prerequisites
             if lever_notes and rung.dest in lever_notes
         },
-        "stuck_reason": candidates.stuck_reason,
-        "completion_frontier": candidates.completion_frontier,
-        "program_step": _program_step_payload(candidates.program_step),
+        "stuck_reason": candidates.diagnosis.reason if candidates.diagnosis is not None else None,
+        "completion_frontier": wait.frontier if wait is not None else (),
+        "program_step": _program_step_payload(wait.program_step if wait is not None else None),
     }
 
 
-def _program_step_payload(step: Any) -> dict[str, Any] | None:
+def _program_step_payload(step: ProgramStep | None) -> dict[str, Any] | None:
     """Compact, dumpable view of an exact-producer current-world reading."""
     if step is None:
         return None
