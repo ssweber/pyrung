@@ -7,6 +7,7 @@ do not choose an action, apply knowledge, or mutate the drive world.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
@@ -148,7 +149,7 @@ def _build_plan_journal(
 
     hold_log = tuple(state.hold_log)
 
-    def _controlled_at(scan: int, tag: str, value: Any, snapshot: dict[str, Any]) -> bool:
+    def _controlled_at(scan: int, tag: str, value: Any, snapshot: Mapping[str, Any]) -> bool:
         active: dict[tuple[Any, ...], Any] = {}
         for entry in hold_log:
             if entry.scan > scan:
@@ -502,8 +503,8 @@ def _route_plan_payload(plan: StaticPath | None) -> dict[str, Any] | None:
 
 
 def _diff_snapshots(
-    before: dict[str, Any],
-    after: dict[str, Any],
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
     *,
     tags: set[str] | frozenset[str] | None = None,
 ) -> tuple[TagChange, ...]:
@@ -546,7 +547,7 @@ def _zoom_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "coast_timer_quanta_replayed": (
             receipt.timer_quanta_replayed if receipt is not None else None
         ),
-        "snapshot": trial.fork_snap,
+        "snapshot": dict(trial.fork_snap),
     }
 
 
@@ -593,13 +594,13 @@ def _accepted_payload(
         },
         "changes": changes,
         "snapshots": {
-            "before": trial.before_snap,
+            "before": dict(trial.before_snap),
             "post_pulse": trial.post_pulse_snap,
-            "after_settle": trial.fork_snap,
+            "after_settle": dict(trial.fork_snap),
         },
         "new_key": assessed.new_key if assessed is not None else None,
         "trend": assessed.trend if assessed is not None else None,
-        "snapshot": trial.fork_snap,
+        "snapshot": dict(trial.fork_snap),
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
     }
@@ -703,7 +704,7 @@ def _act_event(
             "gates": trial.gate_events,
             "new_key": assessed.new_key if assessed is not None else None,
             "trend": assessed.trend if assessed is not None else None,
-            "snapshot": trial.fork_snap,
+            "snapshot": dict(trial.fork_snap),
             "scan_before": trial.scan_before,
             "scan_after": trial.fork.state.scan_id,
         },

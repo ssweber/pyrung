@@ -12,6 +12,7 @@ record transition knowledge, or choose the iteration's final candidate order.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
@@ -1146,7 +1147,7 @@ def _expr_satisfied(expr: Any, snapshot: dict[str, Any]) -> bool:
 
 
 def target_reached(
-    snapshot: dict[str, Any],
+    snapshot: Mapping[str, Any],
     target_tag: str,
     target_value: Any,
     target_predicate: Any = None,

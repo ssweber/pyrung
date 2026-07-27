@@ -44,6 +44,7 @@ from pyrung.core.analysis.pilot.types import (
     _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
+    _ExecutionEvidence,
     _PulseState,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -116,11 +117,18 @@ def _accepted_trial(
     gauge_receipt: GaugeReceipt,
     verification: TargetReached | AssessedMotion,
 ) -> _AcceptedTrial:
-    """Preserve one executed attempt as verification's accepted receipt."""
+    """Preserve the final executed attempt and its PLC-free evidence."""
+    pulse = attempt.pulse
+    execution = _ExecutionEvidence(
+        before_snap=frame.snap,
+        after_snap=pulse.snap,
+        channel_motion=channel_motion,
+        coast_receipt=pulse.coast_receipt,
+        timeline=pulse.timeline,
+    )
     return _AcceptedTrial(
         attempt=attempt,
-        source_snapshot=frame.snap,
-        channel_motion=channel_motion,
+        execution=execution,
         gauge_receipt=gauge_receipt,
         gate_events=tuple(gate_events),
         verification=verification,

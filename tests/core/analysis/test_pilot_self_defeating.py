@@ -75,6 +75,7 @@ from pyrung.core.analysis.pilot.types import (
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _ExecutedAttempt,
+    _ExecutionEvidence,
     _PilotState,
     _PulseState,
     _World,
@@ -547,8 +548,13 @@ def _saboteur_scenario():
                 ),
             ),
         ),
-        source_snapshot=source_snapshot,
-        channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+        execution=_ExecutionEvidence(
+            source_snapshot,
+            landing_snapshot,
+            ChannelMotion("State", 6, stop_reason="departed"),
+            None,
+            (),
+        ),
         verification=AssessedMotion(
             new_key=("ejected",),
             trend=1,  # misleadingly LOW — the ejection branch intercepts it

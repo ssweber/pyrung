@@ -24,6 +24,7 @@ from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     _AcceptedTrial,
     _ExecutedAttempt,
+    _ExecutionEvidence,
     _PulseState,
     _RecoveryOrigin,
 )
@@ -92,8 +93,7 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
                 objective=BearingObjective(TargetSpec("Target", True)),
             ),
         ),
-        source_snapshot={},
-        channel_motion=ChannelMotion(),
+        execution=_ExecutionEvidence({}, {}, ChannelMotion(), None, ()),
         verification=AssessedMotion(
             new_key=pulse.key,
             trend=4,

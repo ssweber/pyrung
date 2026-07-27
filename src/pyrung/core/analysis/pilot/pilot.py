@@ -604,16 +604,10 @@ def _step_context(
         control_rungs = tuple(state.rungs)
 
     return _StepContext(
-        motion=trial.motion,
-        candidate=dict(trial.candidate),
+        policy=trial.policy,
+        execution=trial.execution,
         frontier_tags=frontier_tags,
         control_rungs=control_rungs,
-        channel_tag=trial.channel_motion.channel_tag,
-        before_snap=dict(trial.before_snap),
-        after_snap=dict(trial.fork_snap),
-        channel_target=trial.channel_motion.target_value,
-        timeline=trial.timeline,
-        accelerators=tuple(getattr(trial.coast_receipt, "advances", ())),
     )
 
 
@@ -645,7 +639,7 @@ def _commit_and_monitor(
             trial,
             verification=replace(
                 verified,
-                new_key=_pilot_world_key(trial.fork_snap, state.key_config, state.rungs),
+                new_key=_pilot_world_key(dict(trial.fork_snap), state.key_config, state.rungs),
             ),
         )
     _commit_trial(trial, frame, state, ctx)

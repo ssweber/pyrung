@@ -76,6 +76,11 @@ plan proposed:
 - `navigation.ActSource` replaces four stored provenance booleans on the private
   `_Candidate`, then travels inside the selected act's immutable `ActPolicy`.
 - `trace.TraceReadConstraints` owns the common trace-read bundle.
+- `types._ExecutionEvidence` is VERIFY's frozen, PLC-free receipt for the final
+  accepted snapshots, channel landing, coast receipt, and exact timeline.
+  `_AcceptedTrial` and the committed `_StepContext` share that object; the
+  original `ActPolicy` remains a separate declaration, while frontier tags and
+  executable rungs remain commit-owned.
 - `_HoldLogEntry.tags` and `_StepContext.steady_holds` are derived from executable
   rung evidence rather than stored in parallel.
 
@@ -88,14 +93,16 @@ The cleanup is aiming for this chain:
 
 ```text
 options          orientation        steer             verify
-CandidateRead -> Bearing          -> ExecutedAttempt -> VerifiedTrial
-                 Act + Policy        declaration +      attempt + acceptance
-                 Objective           execution evidence + GaugeReceipt
+CandidateRead -> Bearing          -> ExecutedAttempt -> AcceptedTrial
+                 Act + Policy        declaration +      attempt + frozen
+                 Objective           physical pulse     execution evidence
+                                                        + GaugeReceipt
                                                             |
                                                             v
 pilot / progress   CommittedOperation -> DepartureObservation -> PendingDeparture
-                   verified evidence    observed landing       recovery policy
-                   + commit-owned rungs + classification       + rollback owners
+                   policy + shared      observed landing       recovery policy
+                   execution evidence   + classification       + rollback owners
+                   + commit-owned rungs
 ```
 
 Each arrow should carry the object on its left intact. A downstream object may
@@ -105,37 +112,6 @@ its meaning.
 ## B. Preserve objects across module seams
 
 This is the main cleanup program. Items are ordered by leverage.
-
-### B5. Let committed operation context embed execution evidence instead of rebuilding it
-
-`pilot._step_context` currently reconstructs a durable operation record from
-`_AcceptedTrial`, `_IterationFrame`, and `_PilotState`: frontier tags, control rungs,
-channel heading, before/after snapshots, timeline, and coast accelerators.
-
-Some facts are commit-owned (`control_rungs`); others already belong to the
-execution/verification receipt (`motion`, snapshots, channel, timeline,
-`CoastReceipt.advances`). Preserve that boundary.
-
-**Required shape**
-
-- Define one immutable, PLC-free execution window/operation evidence object.
-- The accepted trial and `_StepContext` reference that object rather than copying
-  its fields.
-- Keep commit-owned rung ownership and checkpoint context on `_StepContext`.
-- Make `accelerators` a derived view of the typed coast receipt.
-- Preserve the existing good pattern: `steady_holds` remains derived from exact
-  rungs.
-
-**Why**
-
-Incident construction and replay should read the same operation evidence VERIFY
-accepted, not a commit-time reconstruction that merely looks equivalent.
-
-**LOC:** about -20 to -50.
-
-**Risk:** medium-high; affects replay and correction evidence.
-
-**Gate:** recording, holds, progress, investigate, and cyclefold tests.
 
 ### B6. Separate departure observation from departure policy without flattening either
 
@@ -520,16 +496,16 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Trial evidence continuity:** B5.
-2. **Shared decisions:** C1 and C2.
-3. **Control flow:** D1/D2/D3.
-4. **Recovery continuity:** B6, then D4.
-5. **Compiled residual replay:** E1, E2, then E3.
-6. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Shared decisions:** C1 and C2.
+2. **Control flow:** D1/D2/D3.
+3. **Recovery continuity:** B6, then D4.
+4. **Compiled residual replay:** E1, E2, then E3.
+5. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
 
-The expected LOC reduction is deliberately not totaled. B1-B5 and D1-D4 should
-remove meaningful code, but the acceptance criterion is a shorter reasoning path:
-one owner, one receipt, and consumers that apply rather than reconstruct.
+The expected LOC reduction is deliberately not totaled. The remaining D1-D4
+work should remove meaningful code, but the acceptance criterion is a shorter
+reasoning path: one owner, one receipt, and consumers that apply rather than
+reconstruct.

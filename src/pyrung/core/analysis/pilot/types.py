@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pyrsistent import PRecord, PVector, pvector
@@ -443,28 +444,73 @@ class _PilotContext:
 
 
 @dataclass(frozen=True)
+class _ExecutionEvidence:
+    """PLC-free evidence from the final execution VERIFY accepted.
+
+    Navigation's policy remains a declaration. This record contains only the
+    final observed operation window, copied away from the mutable execution
+    fork after any retry has selected the pulse that will be committed.
+    """
+
+    before_snap: Mapping[str, Any]
+    after_snap: Mapping[str, Any]
+    channel_motion: ChannelMotion
+    coast_receipt: CoastReceipt | None
+    timeline: tuple[BumpEvent, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
+        object.__setattr__(self, "after_snap", MappingProxyType(dict(self.after_snap)))
+        object.__setattr__(self, "timeline", tuple(self.timeline))
+
+    @property
+    def accelerators(self) -> tuple[_ActionPair, ...]:
+        """Exact CycleFold writes derived from the typed coast receipt."""
+        return self.coast_receipt.advances if self.coast_receipt is not None else ()
+
+
+@dataclass(frozen=True)
 class _StepContext:
     """Semantic and evidentiary context owned by one committed operation."""
 
-    candidate: dict[str, Any]
-    motion: MotionKind = MotionKind.INTERVENTION
+    policy: ActPolicy
+    execution: _ExecutionEvidence
     frontier_tags: tuple[str, ...] = ()
     # Exact synthesis rules present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
     control_rungs: tuple[Any, ...] = ()
-    channel_tag: str | None = None
-    before_snap: dict[str, Any] = field(default_factory=dict)
-    after_snap: dict[str, Any] = field(default_factory=dict)
-    # The requested channel value for a coast step (the zoom bearing / the
-    # letrun channel's held value) — with ``motion`` + ``channel_tag`` this is
-    # the recorded session spec a replay re-arms, replacing the old positional
-    # "last empty-input step is the eject coast" inference.
-    channel_target: Any = None
-    # The step's session timeline (pen marks + bump landings).  Incident
-    # construction reads these instead of re-diffing history windows.
-    timeline: tuple[Any, ...] = ()
-    # Exact CycleFold accumulator writes performed during this operation.
-    accelerators: tuple[_ActionPair, ...] = ()
+
+    @property
+    def candidate(self) -> dict[str, Any]:
+        return dict(self.policy.action_pairs)
+
+    @property
+    def motion(self) -> MotionKind:
+        return self.policy.motion
+
+    @property
+    def channel_tag(self) -> str | None:
+        return self.execution.channel_motion.channel_tag
+
+    @property
+    def channel_target(self) -> Any:
+        return self.execution.channel_motion.target_value
+
+    @property
+    def before_snap(self) -> Mapping[str, Any]:
+        return self.execution.before_snap
+
+    @property
+    def after_snap(self) -> Mapping[str, Any]:
+        return self.execution.after_snap
+
+    @property
+    def timeline(self) -> tuple[BumpEvent, ...]:
+        return self.execution.timeline
+
+    @property
+    def accelerators(self) -> tuple[_ActionPair, ...]:
+        return self.execution.accelerators
 
     @property
     def steady_holds(self) -> tuple[str, ...]:
@@ -781,14 +827,14 @@ TrialVerification = TargetReached | AssessedMotion
 class _AcceptedTrial:
     """One accepted execution with verification's evidence and judgment.
 
-    The executed attempt remains intact. Shared execution and policy views below
-    are derived from that owner; only verification-owned evidence is stored
-    alongside it.
+    The executed attempt remains intact beside the frozen, PLC-free evidence
+    VERIFY selected from its final pulse. Compatibility views below derive
+    navigation declarations from the attempt's policy and durable observations
+    from that execution evidence.
     """
 
     attempt: _ExecutedAttempt
-    source_snapshot: dict[str, Any]
-    channel_motion: ChannelMotion
+    execution: _ExecutionEvidence
     verification: TrialVerification
     gauge_receipt: GaugeReceipt = field(default_factory=GaugeReceipt)
     gate_events: tuple[PilotGateEvent, ...] = ()
@@ -822,16 +868,20 @@ class _AcceptedTrial:
         return self.policy.applied
 
     @property
-    def before_snap(self) -> dict[str, Any]:
-        return self.source_snapshot
+    def before_snap(self) -> Mapping[str, Any]:
+        return self.execution.before_snap
 
     @property
     def post_pulse_snap(self) -> dict[str, Any]:
         return self.pulse.post_pulse_snap
 
     @property
-    def fork_snap(self) -> dict[str, Any]:
-        return self.pulse.snap
+    def fork_snap(self) -> Mapping[str, Any]:
+        return self.execution.after_snap
+
+    @property
+    def channel_motion(self) -> ChannelMotion:
+        return self.execution.channel_motion
 
     @property
     def observe_label(self) -> str:
@@ -861,11 +911,11 @@ class _AcceptedTrial:
 
     @property
     def coast_receipt(self) -> CoastReceipt | None:
-        return self.pulse.coast_receipt
+        return self.execution.coast_receipt
 
     @property
     def timeline(self) -> tuple[BumpEvent, ...]:
-        return self.pulse.timeline
+        return self.execution.timeline
 
 
 @dataclass(frozen=True)

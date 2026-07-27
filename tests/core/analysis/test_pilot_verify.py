@@ -10,7 +10,7 @@ Coverage targets:
 from __future__ import annotations
 
 from dataclasses import replace
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 
@@ -22,7 +22,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.coast import BumpEvent
+from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation import (
@@ -413,6 +413,17 @@ class TestVerifyGates:
         before["VerifyStep"] = 1
         after = {**before, target.name: True}
         after["VerifyStep"] = 2
+        timeline = (BumpEvent("recorded", "pen", 4, ()),)
+        coast_receipt = CoastReceipt(
+            kind="verify",
+            start_scan=3,
+            end_scan=4,
+            stop_reason="reached",
+            fired=("target",),
+            events=timeline,
+            budget=1,
+            advances=(("VerifyAccumulator", 9),),
+        )
         pulse = _PulseState(
             fork=plc,
             scan_before=3,
@@ -423,7 +434,8 @@ class TestVerifyGates:
             post_pulse_key=("post",),
             snap=after,
             key=("target",),
-            timeline=(BumpEvent("recorded", "pen", 4, ()),),
+            coast_receipt=coast_receipt,
+            timeline=timeline,
         )
         objective = BearingObjective(
             TargetSpec(target.name, True),
@@ -465,9 +477,20 @@ class TestVerifyGates:
         assert result.trial.channel_motion.reached
         assert result.trial.motion is MotionKind.COAST_TO_BEARING
         assert result.trial.timeline == pulse.timeline
+        assert result.trial.execution.coast_receipt is coast_receipt
+        assert result.trial.execution.accelerators == (("VerifyAccumulator", 9),)
+        assert result.trial.execution.before_snap is not before
+        assert result.trial.execution.after_snap is not after
+        assert isinstance(result.trial.execution.before_snap, MappingProxyType)
+        assert isinstance(result.trial.execution.after_snap, MappingProxyType)
+        assert not any(isinstance(value, PLC) for value in vars(result.trial.execution).values())
         assert result.trial.gauge_receipt.any_forward
         assert result.trial.gauge_receipt.source_mark == (("VerifyStep", 1),)
         assert result.trial.gauge_receipt.landing_mark == (("VerifyStep", 2),)
+        before["LateSourceMutation"] = True
+        after["LateLandingMutation"] = True
+        assert "LateSourceMutation" not in result.trial.before_snap
+        assert "LateLandingMutation" not in result.trial.fork_snap
 
     def test_assessed_motion_requires_an_accepted_assessment(self):
         from pyrung.core.analysis.pilot.outcome import (
@@ -519,6 +542,7 @@ class TestVerifyGates:
             pulse,
             snap=replacement_snap,
             key=("replacement",),
+            timeline=(BumpEvent("retry", "pen", 5, ()),),
         )
         policy = ActPolicy(
             source=ActSource.TRACE,
@@ -555,6 +579,10 @@ class TestVerifyGates:
         )
 
         assert result.trial is not None
+        assert result.trial.attempt.pulse is replacement
+        assert result.trial.execution.after_snap == replacement_snap
+        assert result.trial.execution.timeline == replacement.timeline
+        assert result.trial.execution.timeline != pulse.timeline
         assert len(receipts) == 2
         assert receipts[0].landing_mark == (("RetryReceiptStep", 2),)
         assert result.trial.gauge_receipt is receipts[1]

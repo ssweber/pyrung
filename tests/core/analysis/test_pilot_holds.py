@@ -11,12 +11,15 @@ from types import SimpleNamespace
 from pyrung import Bool, Int, Or, Program, Rung, out, rise
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot._ops import OperationReceipt, PilotRung
+from pyrung.core.analysis.pilot.navigation import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     CorrectionStatus,
     _CommittedAct,
     _ConfirmedCorrection,
     _CorrectionReceipt,
+    _ExecutionEvidence,
     _HoldLogEntry,
     _Step,
     _StepContext,
@@ -51,7 +54,10 @@ def _committed_test_act() -> _CommittedAct:
     step = _Step(inputs={}, scan_before=0, scan_after=10)
     return _CommittedAct(
         steps=(step,),
-        context=_StepContext(candidate={}),
+        context=_StepContext(
+            policy=ActPolicy(ActSource.TRACE),
+            execution=_ExecutionEvidence({}, {}, ChannelMotion(), None, ()),
+        ),
     )
 
 

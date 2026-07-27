@@ -28,10 +28,13 @@ from pyrung import (
 )
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.navigation import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.recording import _build_plan_journal
 from pyrung.core.analysis.pilot.types import (
+    ChannelMotion,
     MotionKind,
     _CommittedAct,
+    _ExecutionEvidence,
     _HoldLogEntry,
     _Step,
     _StepContext,
@@ -48,16 +51,36 @@ def _all_nodes(tree):
     return out_nodes
 
 
+def _step_context(
+    candidate: dict[str, object],
+    *,
+    before_snap: dict[str, object] | None = None,
+) -> _StepContext:
+    action_pairs = tuple(candidate.items())
+    return _StepContext(
+        policy=ActPolicy(
+            ActSource.TRACE,
+            action_pairs=action_pairs,
+            applied=action_pairs,
+            motion=MotionKind.INTERVENTION,
+        ),
+        execution=_ExecutionEvidence(
+            before_snap or {},
+            {},
+            ChannelMotion(),
+            None,
+            (),
+        ),
+    )
+
+
 def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     """One edge act owns both physical steps and one semantic recording."""
     release = _Step(inputs={"Cmd": False}, scan_before=10, scan_after=11)
     pulse = _Step(inputs={"Cmd": True}, scan_before=11, scan_after=13)
     act = _CommittedAct(
         steps=(release, pulse),
-        context=_StepContext(
-            candidate={"Cmd": True},
-            motion=MotionKind.INTERVENTION,
-        ),
+        context=_step_context({"Cmd": True}),
     )
     state = SimpleNamespace(
         committed_acts=(act,),
@@ -89,9 +112,8 @@ def test_plan_manual_edit_is_hidden_only_by_matching_effective_owner() -> None:
             committed_acts=(
                 _CommittedAct(
                     steps=(step,),
-                    context=_StepContext(
-                        candidate={In.name: value},
-                        motion=MotionKind.INTERVENTION,
+                    context=_step_context(
+                        {In.name: value},
                         before_snap={Scope.name: False, In.name: False},
                     ),
                 ),

@@ -28,6 +28,7 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.detour import DepartureVerdict
 from pyrung.core.analysis.pilot.gauge import (
@@ -53,6 +54,7 @@ from pyrung.core.analysis.pilot.outcome import (
     ProgressEffect,
     TrialAssessment,
 )
+from pyrung.core.analysis.pilot.pilot import _commit_trial
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
@@ -77,6 +79,7 @@ from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
     _CommittedAct,
     _ExecutedAttempt,
+    _ExecutionEvidence,
     _PilotState,
     _PulseState,
     _Step,
@@ -122,7 +125,14 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
     committed_acts = tuple(over.pop("committed_acts", ())) or tuple(
         _CommittedAct(
             steps=(step,),
-            context=_StepContext(candidate=dict(step.inputs)),
+            context=_StepContext(
+                policy=ActPolicy(
+                    ActSource.TRACE,
+                    action_pairs=tuple(step.inputs.items()),
+                    applied=tuple(step.inputs.items()),
+                ),
+                execution=_ExecutionEvidence({}, {}, ChannelMotion(), None, ()),
+            ),
         )
         for step in steps
     )
@@ -180,6 +190,10 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
         applied=applied,
         motion=motion,
     )
+    coast_receipt = over.pop("coast_receipt", None)
+    timeline = over.pop("timeline", ())
+    pulse_channel_motion = over.pop("pulse_channel_motion", ChannelMotion())
+    channel_motion = over.pop("channel_motion", ChannelMotion())
     pulse = _PulseState(
         fork=fork,
         scan_before=scan_before,
@@ -190,9 +204,9 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
         post_pulse_key=("post",),
         snap=fork_snap,
         key=over.pop("new_key", ("k",)),
-        coast_receipt=over.pop("coast_receipt", None),
-        timeline=over.pop("timeline", ()),
-        channel_motion=over.pop("pulse_channel_motion", ChannelMotion()),
+        coast_receipt=coast_receipt,
+        timeline=timeline,
+        channel_motion=pulse_channel_motion,
     )
     assessment = over.pop("assessment", None)
     if assessment is None:
@@ -217,8 +231,13 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
                 objective=objective,
             ),
         ),
-        source_snapshot=before_snap,
-        channel_motion=over.pop("channel_motion", ChannelMotion()),
+        execution=_ExecutionEvidence(
+            before_snap=before_snap,
+            after_snap=fork_snap,
+            channel_motion=channel_motion,
+            coast_receipt=coast_receipt,
+            timeline=timeline,
+        ),
         gauge_receipt=over.pop("gauge_receipt", GaugeReceipt()),
         gate_events=over.pop("gate_events", ()),
         verification=AssessedMotion(pulse.key, trend, assessment),
@@ -244,6 +263,56 @@ def _pending_departure(
         expires_at=expires_at,
         opening_progress=opening_progress or GaugeReceipt(),
     )
+
+
+def test_commit_shares_verified_execution_evidence_and_policy() -> None:
+    """Commit composes ownership without rebuilding accepted evidence."""
+    work = _oneshot_plc()
+    fork = work.fork()
+    fork.step()
+    before = dict(work.state.tags)
+    after = dict(fork.state.tags)
+    timeline = ()
+    receipt = CoastReceipt(
+        kind="focused",
+        start_scan=work.state.scan_id,
+        end_scan=fork.state.scan_id,
+        stop_reason="dwell",
+        fired=(),
+        events=timeline,
+        budget=1,
+        advances=(("Acc", 7),),
+    )
+    trial = _make_trial(
+        1,
+        Outcome.CONFIRMED,
+        fork=fork,
+        scan_before=work.state.scan_id,
+        before_snap=before,
+        fork_snap=after,
+        candidate={"A": True},
+        applied=(("A", True),),
+        coast_receipt=receipt,
+    )
+    state = _make_state(2, [], work=work)
+    frame = SimpleNamespace()
+    ctx = SimpleNamespace(resting={}, edge_tags=set(), live=False)
+
+    _commit_trial(trial, frame, state, ctx)
+
+    context = state.committed_acts[-1].context
+    assert context.execution is trial.execution
+    assert context.policy is trial.policy
+    assert context.candidate == trial.candidate
+    assert context.motion is trial.motion
+    assert context.before_snap is trial.before_snap
+    assert context.after_snap is trial.fork_snap
+    assert context.timeline is trial.timeline
+    assert context.accelerators == (("Acc", 7),)
+
+    state.extend_last_step(fork.state.scan_id + 3)
+    assert state.committed_acts[-1].context.execution is trial.execution
+    assert state.committed_acts[-1].steps[-1].scan_after == fork.state.scan_id + 3
 
 
 def _frame() -> SimpleNamespace:

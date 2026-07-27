@@ -144,13 +144,24 @@ should consume the first owner's result.
   directly; `CandidateRead` does not flatten them into a second scalar surface.
 - Local trial gates: `verify.py::verify_gates`
 - Accepted trial verification: `verify.py::verify_gates` preserves the exact
-  `_ExecutedAttempt` inside one `_AcceptedTrial`. Its required verification is
-  either the `TargetReached` marker or an `AssessedMotion` carrying the accepted
-  state key, trend, and `TrialAssessment`; legacy `Outcome` is derived from that
-  assessment. Progress and recording narrow the variant before consuming
-  assessed-motion facts. The source snapshot, verification-owned channel
-  landing, gauge receipt, and gate events are the only evidence added around the
+  `_ExecutedAttempt` inside one `_AcceptedTrial`, then constructs a frozen,
+  PLC-free `_ExecutionEvidence` only after spin recovery has selected the final
+  pulse. That receipt owns read-only copies of the final before/after snapshots,
+  VERIFY's `ChannelMotion`, the typed `CoastReceipt`, and the exact
+  `tuple[BumpEvent, ...]` timeline; `accelerators` derives from
+  `CoastReceipt.advances`. Its required verification is either the
+  `TargetReached` marker or an `AssessedMotion` carrying the accepted state key,
+  trend, and `TrialAssessment`; legacy `Outcome` is derived from that assessment.
+  Progress and recording narrow the variant before consuming assessed-motion
+  facts. Gauge and gate receipts remain verification-owned evidence around the
   attempt.
+- Committed operation context: `pilot.py::_step_context` carries the original
+  `ActPolicy` and the exact `_ExecutionEvidence` object from `_AcceptedTrial`
+  into `_StepContext`. Commit adds only unresolved frontier tags and exact
+  executable control rungs. Physical replay `_Step` values stay on
+  `_CommittedAct`; `_StepContext` derives policy, snapshots, channel, timeline,
+  accelerator, and steady-hold views from their owners rather than storing
+  parallel fields.
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may use the live harness to propose a
   coupling driver; `verify.py::_gate_dead_end` omits that model and
@@ -284,6 +295,12 @@ investigation materializes their guarded installed form.
   to that typed object. Candidate refinement carries it whole and may compose
   route context onto it; only the explicitly pair-typed wait frontier projects
   its channel and target.
+- Accepted execution evidence contains no PLC, transient pulse/action/wait
+  snapshots, world keys, correction or assessment state, or replay steps.
+  `_AcceptedTrial` retains the physical `_ExecutedAttempt` separately; committed
+  consumers share only the PLC-free `_ExecutionEvidence`. Recording's
+  ordinary-fold accelerator fallback remains necessary until ordinary fold
+  receipts own exact edits.
 - A planning trace may read the live harness to identify a physical driver.
   VERIFY's post-trial dead-end trace deliberately omits that proposal model;
   continued physical motion needs executed evidence or a live pending effect on
@@ -348,8 +365,8 @@ investigation materializes their guarded installed form.
   results, and public drive entry points.
 - `recording.py` — pure event-payload, terminal-frontier, and plan-journal
   rendering; it does not make drive decisions.
-- `types.py` — cross-module protocols and world, trial, event, and incident
-  records.
+- `types.py` — cross-module protocols and world, trial, event, incident, and
+  accepted execution-evidence records.
 - `__init__.py` — package exports.
 - `physical.py` — harness installation and feedback-tag exclusion.
 - `multitarget.py` — conservative incompatibility proof and target ordering.
