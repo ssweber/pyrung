@@ -115,6 +115,21 @@ should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
 - Writer eligibility and order: `trace.py::_rank_writers`
+- Unlocked local trace alternatives:
+  `trace.py::_select_trace_alternative` returns an immutable
+  `_TraceSelection`. Each `_TraceAlternative` records its caller-supplied rank
+  and literal facts: whether it violates avoid, matches via, has no dead end,
+  or is the exact rejected action. Expression OR, call-site, table-enablement,
+  and nested-writer readers consume that decision. Call-site and table ranks
+  put alternatives with no dead end first; OR keeps its structural rank, and
+  writers keep `_rank_writers` order. Root writer/OR locks remain binding, and
+  `rank_trace_choices` separately owns complete-route ranking. Nested writers
+  remain lazy: they record `matches_via` but do not eagerly build later writers
+  to find a match; that behavior choice remains explicit in the plan.
+  Subroutine call sites are distinct program contexts, so caller selection
+  records exact rejection but does not redirect to a different caller because
+  of it. The rejected caller remains the honest frontier for higher-level
+  recovery.
 - Permanent guard rejection: `tide_tables.py::guard_verdict`; trace supplies
   writer fire pins and consumes the complete-domain verdict
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
@@ -247,12 +262,14 @@ recorded concrete conditions held.
 Trace alternatives consume the same evidence without taking ownership of it.
 Orientation may project an exact current-world singleton Pulse rejection back
 to its identical trace leaf; it must not project a rejected joint act onto one
-member. Trace uses those exact leaf rejections only to order unlocked nested
-writer/OR alternatives. A multi-leaf branch is a distinct, still-untested joint
-artifact, and an unreadable branch is not a fallback. Trace retains the best
-rejected branch when no pilotable alternative survives so the frontier remains
-visible. Root writer/OR locks stay with the inferred/explicit route lifecycle
-and are never redirected inside Trace.
+member. Trace uses those exact leaf rejections only to order unlocked local
+OR, table-value, and nested-writer alternatives. It does not redirect between
+subroutine callers, which are distinct lifecycle contexts rather than alternate
+recipes. A multi-leaf branch is a distinct, still-untested joint artifact, and
+a branch with a dead end cannot replace a rejected branch. Trace retains the
+best rejected branch when no untried alternative without a dead end survives so
+the frontier remains visible. Root writer/OR locks stay with the
+inferred/explicit route lifecycle and are never redirected inside Trace.
 Static route selection applies the same boundary: it excludes the exact
 current-world ``(primary action, co-actions)`` Pulse artifact that failed, then
 may select a sibling edge carrying the same primary action under different

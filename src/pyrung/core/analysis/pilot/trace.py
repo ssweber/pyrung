@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pyrung.core.analysis import steerable as _steerable
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
@@ -70,6 +70,8 @@ from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+
+_TraceChoicePayload = TypeVar("_TraceChoicePayload")
 
 # The availability-layer names imported above are re-exported *by that import* —
 # external importers (``options.py``, ``tide_tables.py``, the pilot tests
@@ -463,7 +465,8 @@ class TraceNode:
     # before settling on ``writer_rung`` — ``(ri, reason)`` where reason names the
     # silent gate that dropped it (``cant_produce`` / ``guard_pin_contradiction`` /
     # ``guard_fire_pin_contradiction`` / ``guard_dead`` / ``avoid_shadowed`` /
-    # ``unresolved_rung``).  Empty when the top-ranked writer was taken directly.
+    # ``empirically_rejected`` / ``alternative_has_dead_end`` /
+    # ``unresolved_rung``). Empty when the top-ranked writer was taken directly.
     writer_skips: tuple[tuple[int, str], ...] = ()
 
     def leaves(self) -> list[TraceNode]:
@@ -1265,6 +1268,58 @@ def _trace_demand(
     return nodes
 
 
+@dataclass(frozen=True)
+class _CallGateTrace:
+    """One main-program call site and the prerequisites that enable it."""
+
+    caller_index: int
+    nodes: tuple[TraceNode, ...]
+
+
+def _select_call_gate(
+    env: _TraceEnv,
+    subroutine: str,
+    call_gates: list[_CallGateTrace],
+) -> _CallGateTrace | None:
+    """Choose one coherent call site for a subroutine used by this trace."""
+
+    if not call_gates:
+        return None
+
+    locked_caller = env.caller_locks.get(subroutine)
+    if locked_caller is not None:
+        return next(
+            (call_gate for call_gate in call_gates if call_gate.caller_index == locked_caller),
+            None,
+        )
+
+    alternatives: list[_TraceAlternative[_CallGateTrace]] = []
+    for call_gate in call_gates:
+        nodes = list(call_gate.nodes)
+        has_no_dead_end = _route_has_no_dead_end(nodes)
+        alternatives.append(
+            _trace_alternative(
+                choice=call_gate,
+                nodes=nodes,
+                rank=(
+                    0 if has_no_dead_end else 1,
+                    *_trace_score(nodes, env.pdg),
+                ),
+                env=env,
+            )
+        )
+
+    selection = _select_trace_alternative(
+        tuple(alternatives),
+        replace_rejected_choice=False,
+    )
+    alternative = selection.chosen or selection.blocked_alternative
+    if alternative is None:
+        return None
+    env.caller_locks.setdefault(subroutine, alternative.choice.caller_index)
+    return alternative.choice
+
+
 def _owner_call_gate_nodes(
     env: _TraceEnv,
     owner: Any,
@@ -1285,8 +1340,8 @@ def _owner_call_gate_nodes(
     if subroutine is None:
         return []
 
-    routes: list[list[TraceNode]] = []
-    for caller in env.pdg.rung_nodes:
+    call_gates: list[_CallGateTrace] = []
+    for caller_index, caller in enumerate(env.pdg.rung_nodes):
         if subroutine not in caller.calls:
             continue
         rung = resolve_rung(env.program, caller)
@@ -1296,20 +1351,25 @@ def _owner_call_gate_nodes(
         expression = _sp_to_expr(sp)
         if _expr_satisfied(expression, env.snapshot):
             return []
-        routes.append(
-            _trace_expression(
-                env,
-                expression,
-                "",
-                provenance=provenance,
-                _visited=set(),
-                _depth=depth + 1,
+        call_gates.append(
+            _CallGateTrace(
+                caller_index=caller_index,
+                nodes=tuple(
+                    _trace_expression(
+                        env,
+                        expression,
+                        "",
+                        provenance=provenance,
+                        _visited=set(),
+                        _depth=depth + 1,
+                    )
+                ),
             )
         )
-    if not routes:
+    selected = _select_call_gate(env, subroutine, call_gates)
+    if selected is None:
         return []
-    pilotable = [route for route in routes if _route_pilotable(route)]
-    return min(pilotable or routes, key=lambda route: _trace_score(route, env.pdg))
+    return list(selected.nodes)
 
 
 def _advance_frontier(
@@ -1541,11 +1601,11 @@ def _is_dead_end_leaf(leaf: TraceNode) -> bool:
     )
 
 
-def _route_pilotable(nodes: list[TraceNode]) -> bool:
-    """Whether a route bottoms out at things PILOT can act on — a binary property.
+def _route_has_no_dead_end(nodes: list[TraceNode]) -> bool:
+    """Whether a route has no unresolved leaf that PILOT cannot act on.
 
     A route is an AND of prerequisites; one dead-end leaf (see
-    :func:`_is_dead_end_leaf`) makes the whole route undriveable.  This is the
+    :func:`_is_dead_end_leaf`) means the route has a dead end. This is the
     filter to apply *before* :func:`_trace_score`, which only ranks: a dead route
     has no steerable leaves and therefore the *cheapest* (zero) wake, so
     scoring alone would always prefer it over a live one.
@@ -1576,6 +1636,162 @@ def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, i
     wake = sum(len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable)
     pivots = sum(node.unsatisfied_count() for node in nodes)
     return wake, pivots, len(steerable)
+
+
+@dataclass(frozen=True)
+class _TraceAlternative(Generic[_TraceChoicePayload]):
+    """Literal facts about one already-read trace alternative."""
+
+    choice: _TraceChoicePayload
+    rank: tuple[Any, ...]
+    violates_avoid: bool
+    matches_via: bool
+    has_no_dead_end: bool
+    exact_action_rejected: bool
+
+
+@dataclass(frozen=True)
+class _TraceSelection(Generic[_TraceChoicePayload]):
+    """The selected alternative or the exact blocked branch kept for diagnosis."""
+
+    chosen: _TraceAlternative[_TraceChoicePayload] | None
+    blocked_alternative: _TraceAlternative[_TraceChoicePayload] | None
+
+
+@dataclass(frozen=True)
+class _WriterAttempt:
+    """One fully-read writer subtree plus the visited state it produced."""
+
+    children: tuple[TraceNode, ...]
+    writer_rung: int
+    writer_availability: _WriterAvailability
+    live_guard: bool
+    visited_after: frozenset[tuple[str, Any]]
+
+
+def _writer_attempt(node: TraceNode, visited: set[tuple[str, Any]]) -> _WriterAttempt:
+    """Capture a built writer subtree before the next alternative is read."""
+
+    if node.writer_rung is None:
+        raise ValueError("a writer attempt requires its selected rung")
+    return _WriterAttempt(
+        children=tuple(node.children),
+        writer_rung=node.writer_rung,
+        writer_availability=node.writer_availability,
+        live_guard=node.live_guard,
+        visited_after=frozenset(visited),
+    )
+
+
+def _clear_writer_attempt(
+    node: TraceNode,
+    visited: set[tuple[str, Any]],
+    visited_before: set[tuple[str, Any]],
+) -> None:
+    """Restore the shared recursion shell before reading another writer."""
+
+    node.children.clear()
+    node.writer_rung = None
+    node.writer_availability = _WriterAvailability.AVAILABLE_NOW
+    node.live_guard = False
+    visited.clear()
+    visited.update(visited_before)
+
+
+def _apply_writer_attempt(
+    node: TraceNode,
+    visited: set[tuple[str, Any]],
+    attempt: _WriterAttempt,
+) -> None:
+    """Apply the selected writer subtree to the shared trace node once."""
+
+    node.children.extend(attempt.children)
+    node.writer_rung = attempt.writer_rung
+    node.writer_availability = attempt.writer_availability
+    node.live_guard = attempt.live_guard
+    visited.clear()
+    visited.update(attempt.visited_after)
+
+
+def _trace_alternative(
+    *,
+    choice: _TraceChoicePayload,
+    nodes: list[TraceNode],
+    rank: tuple[Any, ...],
+    env: _TraceEnv,
+) -> _TraceAlternative[_TraceChoicePayload]:
+    """Read the common selection facts for one caller-ranked alternative."""
+
+    return _TraceAlternative(
+        choice=choice,
+        rank=rank,
+        violates_avoid=(
+            env.avoid_pred is not None
+            and bool(nodes)
+            and _route_forces(nodes, env.snapshot, env.avoid_pred)
+        ),
+        matches_via=(
+            env.via_pred is not None
+            and bool(nodes)
+            and _route_forces(nodes, env.snapshot, env.via_pred)
+        ),
+        has_no_dead_end=_route_has_no_dead_end(nodes),
+        exact_action_rejected=_route_actions_rejected(nodes, env),
+    )
+
+
+def _select_trace_alternative(
+    alternatives: tuple[_TraceAlternative[_TraceChoicePayload], ...],
+    *,
+    prefer_via: bool = True,
+    replace_rejected_choice: bool = True,
+) -> _TraceSelection[_TraceChoicePayload]:
+    """Apply the precedence shared by unlocked local trace alternatives.
+
+    Avoided alternatives cannot be selected. ``via=`` is a local preference:
+    it narrows the current choice only when at least one alternative itself
+    proves the requested condition. A rejected baseline may be replaced only
+    by an untried alternative with no dead end when the caller permits that
+    replacement. If no allowed choice remains, the exact blocked baseline stays
+    named for diagnosis.
+    """
+
+    if not alternatives:
+        return _TraceSelection(chosen=None, blocked_alternative=None)
+
+    allowed = tuple(alternative for alternative in alternatives if not alternative.violates_avoid)
+    if not allowed:
+        pool = alternatives
+        if prefer_via:
+            via_matches = tuple(alternative for alternative in pool if alternative.matches_via)
+            pool = via_matches or pool
+        return _TraceSelection(
+            chosen=None,
+            blocked_alternative=min(pool, key=lambda alternative: alternative.rank),
+        )
+
+    pool = allowed
+    if prefer_via:
+        via_matches = tuple(alternative for alternative in pool if alternative.matches_via)
+        pool = via_matches or pool
+    baseline = min(pool, key=lambda alternative: alternative.rank)
+    if not baseline.exact_action_rejected or not replace_rejected_choice:
+        return _TraceSelection(chosen=baseline, blocked_alternative=None)
+
+    replacements = tuple(
+        alternative
+        for alternative in pool
+        if not alternative.exact_action_rejected and alternative.has_no_dead_end
+    )
+    if replacements:
+        return _TraceSelection(
+            chosen=min(replacements, key=lambda alternative: alternative.rank),
+            blocked_alternative=None,
+        )
+    return _TraceSelection(
+        chosen=None,
+        blocked_alternative=baseline,
+    )
 
 
 def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -> bool:
@@ -1817,7 +2033,7 @@ def _trace_expression(
         # branches — Or(rise(Input), SealIn) where SealIn is the tag
         # we're already tracing (the engineer knows the seal-in path
         # is circular and looks at the trigger instead).
-        alternatives: list[tuple[list[TraceNode], int, bool, bool]] = []
+        alternatives: list[_TraceAlternative[tuple[TraceNode, ...]]] = []
         for term in expr.terms:
             if isinstance(term, Atom) and term.tag == self_tag:
                 continue
@@ -1832,14 +2048,6 @@ def _trace_expression(
                 _relational_goal=term,
                 _depth=_depth,
             )
-            # Steering this arm would land in the avoided region — skip it so a
-            # non-avoided arm wins the bearing (not just a verify-time veto).
-            if (
-                env.avoid_pred is not None
-                and candidate
-                and _route_forces(candidate, env.snapshot, env.avoid_pred)
-            ):
-                continue
             if not candidate:
                 return []
             structural_score = sum(
@@ -1847,35 +2055,29 @@ def _trace_expression(
                 for c in candidate
                 if (not c.satisfied and not c.is_steerable and not c.pipeline_internal)
             )
-            rejected = _route_actions_rejected(candidate, env)
-            forces_via = env.via_pred is not None and _route_forces(
-                candidate, env.snapshot, env.via_pred
+            alternatives.append(
+                _trace_alternative(
+                    choice=tuple(candidate),
+                    nodes=candidate,
+                    rank=(structural_score,),
+                    env=env,
+                )
             )
-            alternatives.append((candidate, structural_score, rejected, forces_via))
 
-        via_alternatives = [alternative for alternative in alternatives if alternative[3]]
-        pool = via_alternatives or alternatives
-        if not pool:
+        selection = _select_trace_alternative(tuple(alternatives))
+        if selection.chosen is not None:
+            return list(selection.chosen.choice)
+        if (
+            selection.blocked_alternative is not None
+            and selection.blocked_alternative.exact_action_rejected
+            and not selection.blocked_alternative.violates_avoid
+        ):
+            # Keep the exact rejected frontier visible when there is no untried
+            # branch without a dead end. Avoided arms remain excluded.
+            return list(selection.blocked_alternative.choice)
+        if selection.blocked_alternative is None:
             return []
-
-        # Preserve the baseline ordering unless the arm it would select is the
-        # exact rejected singleton. A rejection belonging to some other arm in
-        # this Or is no reason to change direction.
-        selected = min(pool, key=lambda alternative: alternative[1])
-        if not selected[2]:
-            return selected[0]
-
-        # The selected arm was disproved in this world. Redirect only to an
-        # untried, pilotable alternative; if none survives, retain the rejected
-        # branch so the honest frontier remains visible.
-        fallbacks = [
-            alternative
-            for alternative in pool
-            if not alternative[2] and _route_pilotable(alternative[0])
-        ]
-        if fallbacks:
-            return min(fallbacks, key=lambda alternative: alternative[1])[0]
-        return selected[0]
+        return []
 
     if isinstance(expr, Atom):
         target = _atom_target(expr, env.snapshot)
@@ -2149,25 +2351,13 @@ def _trace_back(
     if locked_writer is not None and locked_writer in ranked_writers:
         ranked_writers = [locked_writer]
 
-    # avoid= writer fallback: when avoiding a predicate, a chosen writer whose
-    # fully-built subtree *forces* the avoided condition (the steerable
-    # ``C_Complete`` rung forcing ``Cmd == Complete``) must not silently shadow a
-    # program-owned producer of the same value (``rise(CompleteTmr.Done)``).  The
-    # first tainted attempt is stashed so an honest decline still has a nameable
-    # subtree; the walk then tries the next ranked writer for an unavoided route.
-    avoid_fallback: (
-        tuple[list[TraceNode], int | None, _WriterAvailability, bool, set[tuple[str, Any]]] | None
-    ) = None
-    rejected_fallback: (
-        tuple[list[TraceNode], int | None, _WriterAvailability, bool, set[tuple[str, Any]]] | None
-    ) = None
+    writer_alternatives: list[_TraceAlternative[_WriterAttempt]] = []
+    writer_selection: _TraceSelection[_WriterAttempt] | None = None
 
-    for ri in ranked_writers:
-        # Snapshot the (caller-shared) visited set so a tainted attempt can be
-        # rolled back cleanly before the next writer is tried.
-        visited_before = (
-            set(_visited) if env.avoid_pred is not None or env.rejected_actions else None
-        )
+    for writer_order, ri in enumerate(ranked_writers):
+        # Each writer is read from the same recursion state. The selected
+        # attempt's resulting visited set is applied once after selection.
+        visited_before = set(_visited)
 
         rung_node = env.pdg.rung_nodes[ri]
         ro = resolve_rung(env.program, rung_node)
@@ -2265,7 +2455,7 @@ def _trace_back(
             )
 
         if rung_node.subroutine:
-            caller_routes: list[tuple[int, tuple[int, int, int], list[TraceNode]]] = []
+            call_gates: list[_CallGateTrace] = []
             for ci, cn in enumerate(env.pdg.rung_nodes):
                 if rung_node.subroutine in cn.calls:
                     call_ro = resolve_rung(env.program, cn)
@@ -2273,7 +2463,7 @@ def _trace_back(
                         continue
                     call_sp = call_ro.sp_tree()
                     if call_sp is None:
-                        caller_routes.append((ci, (0, 0, 0), []))
+                        call_gates.append(_CallGateTrace(caller_index=ci, nodes=()))
                         continue
                     children = _trace_expression(
                         env,
@@ -2284,26 +2474,10 @@ def _trace_back(
                         _ancestry=_child_ancestry,
                         _depth=_depth + 1,
                     )
-                    caller_routes.append((ci, _trace_score(children, env.pdg), children))
-            if caller_routes:
-                # Choose the caller by *pilotability*, not by score.
-                # ``mode_change`` is called from both ``~InitDone`` (spent after
-                # init) and ``ModeChgRequestBool==1`` (the live trigger).  Scoring
-                # alone picks the dead ~InitDone route — its lone leaf
-                # ``InitDone == False`` is a dead end (childless, unsatisfiable),
-                # so it has no steerable leaves and scores cheapest (zero wake).
-                # Filter to routes PILOT can actually drive first; score only to
-                # break ties among those.
-                locked_caller = env.caller_locks.get(rung_node.subroutine)
-                locked = [route for route in caller_routes if route[0] == locked_caller]
-                if locked:
-                    _ci, _score, call_children = locked[0]
-                else:
-                    pilotable = [r for r in caller_routes if _route_pilotable(r[2])]
-                    pool = pilotable or caller_routes
-                    _ci, _score, call_children = min(pool, key=lambda item: item[1])
-                    env.caller_locks.setdefault(rung_node.subroutine, _ci)
-                node.children.extend(call_children)
+                    call_gates.append(_CallGateTrace(caller_index=ci, nodes=tuple(children)))
+            selected_call_gate = _select_call_gate(env, rung_node.subroutine, call_gates)
+            if selected_call_gate is not None:
+                node.children.extend(selected_call_gate.nodes)
 
         for constraint in producer_constraints:
             if isinstance(constraint, Eq):
@@ -2425,92 +2599,60 @@ def _trace_back(
         )
 
         # Punt signal for the future skiff: the tide tables could not decide
-        # this writer's guard (a genuinely-live word / undecidable term) AND the
-        # backward walk found no drivable path for this frontier.  That is exactly
-        # the skiff's territory — "this frontier is gated by an unreadable guard".
-        # Gating on non-pilotability keeps the flag off ordinary frontiers whose
-        # guard merely lacks an ``nd_domains`` entry but still resolves to a
-        # steerable input.  Purely informational: no drive-loop behavior keys on it.
-        node.live_guard = guard_punted and not _route_pilotable([node])
+        # this writer's guard (a genuinely-live word / undecidable term) and the
+        # backward walk ended at a dead end. Purely informational: no drive-loop
+        # behavior keys on it.
+        node.live_guard = guard_punted and not _route_has_no_dead_end([node])
 
-        # avoid= gate: if this writer's fully-built subtree forces the avoided
-        # predicate, do not accept it — stash it (first one only) as the honest
-        # fallback, roll the node and the visited set back, and try the next
-        # ranked writer for a route that does not depend on the avoided condition.
-        if env.avoid_pred is not None and _route_forces([node], env.snapshot, env.avoid_pred):
-            if avoid_fallback is None:
-                avoid_fallback = (
-                    list(node.children),
-                    node.writer_rung,
-                    node.writer_availability,
-                    node.live_guard,
-                    set(_visited),
-                )
-            node.children.clear()
-            node.writer_rung = None
-            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
-            node.live_guard = False
+        attempt = _writer_attempt(node, _visited)
+        alternative = _trace_alternative(
+            choice=attempt,
+            nodes=[node],
+            rank=(writer_order,),
+            env=env,
+        )
+        writer_alternatives.append(alternative)
+        _clear_writer_attempt(node, _visited, visited_before)
+
+        # Nested-writer via preference remains deliberately lazy: honoring it
+        # here would require eagerly building later writers. Root route selection
+        # already owns complete-route via intent; a second sweep can decide
+        # whether nested writers should become eager.
+        writer_selection = _select_trace_alternative(
+            tuple(writer_alternatives),
+            prefer_via=False,
+        )
+
+        if alternative.violates_avoid:
             writer_skips.append((ri, "avoid_shadowed"))
-            if visited_before is not None:
-                _visited.clear()
-                _visited.update(visited_before)
             continue
 
-        # Empirical fallback must lead to another executable recipe. A generic
-        # affine/copy writer may be structurally capable of producing the value
-        # yet recurse into an unreadable self-source. It cannot displace the
-        # rejected-but-pilotable branch.
-        if rejected_fallback is not None and not _route_pilotable([node]):
-            node.children.clear()
-            node.writer_rung = None
-            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
-            node.live_guard = False
-            writer_skips.append((ri, "unpilotable_alternative"))
-            if visited_before is not None:
-                _visited.clear()
-                _visited.update(visited_before)
-            continue
+        # Root/user locks remain binding. Orientation owns their exhaustion and
+        # possible revocation rather than an inner writer redirect.
+        if locked_writer is not None:
+            break
 
-        # Nested writers are read-side alternatives, not retained decisions.
-        # When every action this unlocked writer exposes was rejected in the
-        # exact current world, keep it as an honest fallback and read the next
-        # writer. A root/user lock remains binding; Orientation owns its
-        # exhaustion and possible revocation.
-        if locked_writer is None and env.rejected_actions and _route_actions_rejected([node], env):
-            if rejected_fallback is None:
-                rejected_fallback = (
-                    list(node.children),
-                    node.writer_rung,
-                    node.writer_availability,
-                    node.live_guard,
-                    set(_visited),
-                )
-            node.children.clear()
-            node.writer_rung = None
-            node.writer_availability = _WriterAvailability.AVAILABLE_NOW
-            node.live_guard = False
+        if alternative.exact_action_rejected:
             writer_skips.append((ri, "empirically_rejected"))
-            if visited_before is not None:
-                _visited.clear()
-                _visited.update(visited_before)
             continue
 
-        break  # use first viable writer
+        if writer_selection.chosen is None:
+            # A prior rejected branch remains the honest frontier until another
+            # writer supplies an untried alternative with no dead end.
+            writer_skips.append((ri, "alternative_has_dead_end"))
+            continue
+
+        break
 
     node.writer_skips = tuple(writer_skips)
-
-    # No unavoided writer was accepted: restore the first tainted attempt so the
-    # decline names the same tainted subtree today's first-viable break would
-    # have (behavior identical to pre-avoid when there is no alternative).
-    fallback = rejected_fallback or avoid_fallback
-    if fallback is not None and node.writer_rung is None:
-        children, wr, wav, lg, visited_after = fallback
-        node.children.extend(children)
-        node.writer_rung = wr
-        node.writer_availability = wav
-        node.live_guard = lg
-        _visited.clear()
-        _visited.update(visited_after)
+    if writer_selection is None:
+        writer_selection = _select_trace_alternative(
+            tuple(writer_alternatives),
+            prefer_via=False,
+        )
+    selected_writer = writer_selection.chosen or writer_selection.blocked_alternative
+    if selected_writer is not None:
+        _apply_writer_attempt(node, _visited, selected_writer.choice)
 
     if _depth == 0:
         # Reconcile relational guards against concrete demands once, on the full
@@ -3562,6 +3704,30 @@ def _writer_guard_verdict(
     return verdict
 
 
+def _select_table_enablement_value(
+    env: _TraceEnv,
+    arms: list[TraceNode],
+) -> _TraceSelection[TraceNode]:
+    """Choose one value proved to satisfy a constant-table enablement gate."""
+
+    alternatives: list[_TraceAlternative[TraceNode]] = []
+    for arm in arms:
+        nodes = [arm]
+        has_no_dead_end = _route_has_no_dead_end(nodes)
+        alternatives.append(
+            _trace_alternative(
+                choice=arm,
+                nodes=nodes,
+                rank=(
+                    0 if has_no_dead_end else 1,
+                    *_trace_score(nodes, env.pdg),
+                ),
+                env=env,
+            )
+        )
+    return _select_trace_alternative(tuple(alternatives))
+
+
 def _table_enablement_prereqs(
     env: _TraceEnv,
     ro: Any,
@@ -3646,34 +3812,14 @@ def _table_enablement_prereqs(
                     )
                     for v in idx_vals
                 ]
-                # Respect avoid=/via= the same way OR-arm selection does: drop an
-                # arm whose assignment forces the avoided condition (so
-                # ``avoid=(UnitModeCurrent == 0)`` steers off the degenerate
-                # Undefined slot), and prefer one that forces via=.  Never
-                # over-prune — if every arm is avoided, keep them all.
-                if env.avoid_pred is not None:
-                    kept = [n for n in arms if not _route_forces([n], env.snapshot, env.avoid_pred)]
-                    if kept:
-                        arms = kept
-                if env.via_pred is not None:
-                    preferred = [n for n in arms if _route_forces([n], env.snapshot, env.via_pred)]
-                    if preferred:
-                        arms = preferred
-                # Keep only the arms PILOT can actually drive.  The tide tables admit
-                # every table-satisfying index, but some are dead: the degenerate
-                # mode 0 is producible only via the reset ``copy(0, UnitModeCmd)``,
-                # and a mode whose sole writer is a spent ``~InitDone`` init rung
-                # drives nothing.  ``_trace_score`` alone would *prefer* those (no
-                # steerable leaves ⇒ zero wake ⇒ sorts first), so PILOT would
-                # surface a mode it cannot command.  Filtering to pilotable arms
-                # lets it see, without a hard-coded filter, that mode 0 leads
-                # nowhere; score only breaks ties among the drivable ones.
-                pilotable = [n for n in arms if _route_pilotable([n])]
-                if pilotable:
-                    arms = pilotable
-                best = min(arms, key=lambda n: _trace_score([n], env.pdg))
-                best.data_flow = "enable"
-                prereqs.append(best)
+                selection = _select_table_enablement_value(env, arms)
+                selected = selection.chosen or selection.blocked_alternative
+                if selected is None:
+                    continue
+                # A blocked value is retained only as the exact frontier. The
+                # containing writer and action gates still own exclusion.
+                selected.choice.data_flow = "enable"
+                prereqs.append(selected.choice)
     return prereqs
 
 

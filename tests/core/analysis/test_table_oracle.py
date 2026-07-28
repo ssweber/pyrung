@@ -265,7 +265,7 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
     )
     assert _enable_modes(avoided) and 0 not in _enable_modes(avoided)
 
-    # via= steers onto either real mode (both drivable via the steerable UnitModeCmd).
+    # via= steers onto either real mode (neither route has a dead end).
     onto_prod = trace_back(
         "StateCurrent",
         _HOLDING,
@@ -287,6 +287,73 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
         via_pred=_compiled(UnitModeCurrent == 2),
     )
     assert _enable_modes(onto_maint) == [2]  # Maintenance, steered onto
+
+
+def test_table_enablement_value_skips_exact_rejected_action():
+    """A rejected direct value gives an untried sibling the enablement work."""
+
+    from pyrung import Bool, Int, Program, out, rung
+    from pyrung.core.analysis.pilot.trace import (
+        TraceNode,
+        _env_for,
+        _select_table_enablement_value,
+    )
+
+    Mode = Int("SelectionMode", external=True)
+    Enabled = Bool("SelectionEnabled")
+    with Program() as logic:
+        with rung(Mode == 1):
+            out(Enabled)
+    pdg = build_program_graph(logic)
+    env = _env_for(
+        {"SelectionMode": 0, "SelectionEnabled": False},
+        pdg,
+        logic,
+        frozenset({"SelectionMode"}),
+        rejected_actions=frozenset({("SelectionMode", 1)}),
+    )
+    first = TraceNode("SelectionMode", 1, is_steerable=True)
+    second = TraceNode("SelectionMode", 2, is_steerable=True)
+
+    selection = _select_table_enablement_value(env, [first, second])
+
+    assert selection.chosen is not None
+    assert selection.chosen.choice is second
+    assert selection.blocked_alternative is None
+
+
+def test_table_enablement_value_keeps_all_avoided_choice_blocked():
+    """All avoided values leave a named frontier, never a selected value."""
+
+    from pyrung import Bool, Int, Program, out, rung
+    from pyrung.core.analysis.pilot.trace import (
+        TraceNode,
+        _env_for,
+        _select_table_enablement_value,
+    )
+
+    Mode = Int("AvoidedSelectionMode", external=True)
+    Enabled = Bool("AvoidedSelectionEnabled")
+    with Program() as logic:
+        with rung(Mode == 1):
+            out(Enabled)
+    pdg = build_program_graph(logic)
+    env = _env_for(
+        {"AvoidedSelectionMode": 0, "AvoidedSelectionEnabled": False},
+        pdg,
+        logic,
+        frozenset({"AvoidedSelectionMode"}),
+        avoid_pred=lambda snapshot: snapshot.get("AvoidedSelectionMode") in (1, 2),
+    )
+    first = TraceNode("AvoidedSelectionMode", 1, is_steerable=True)
+    second = TraceNode("AvoidedSelectionMode", 2, is_steerable=True)
+
+    selection = _select_table_enablement_value(env, [first, second])
+
+    assert selection.chosen is None
+    assert selection.blocked_alternative is not None
+    assert selection.blocked_alternative.choice is first
+    assert selection.blocked_alternative.violates_avoid
 
 
 def test_no_mode_surfaced_when_current_mode_already_enables(bench_trace):

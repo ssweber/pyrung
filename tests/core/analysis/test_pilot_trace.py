@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from pyrung import (
     PLC,
+    And,
     Bool,
     Counter,
     Int,
@@ -91,6 +92,34 @@ def test_rejection_on_unselected_or_arm_does_not_rerank():
     assert baseline.children[0].tag == Dead.name
     assert unrelated.children[0].tag == Dead.name
     assert unrelated.ordered_actions() == baseline.ordered_actions() == []
+
+
+def test_singleton_rejection_does_not_reject_joint_or_arm():
+    """A joint branch is not the singleton action rejected in another trial."""
+
+    CmdA = Bool("OrJoint_CmdA", external=True)
+    CmdB = Bool("OrJoint_CmdB", external=True)
+    CmdC = Bool("OrJoint_CmdC", external=True)
+    Target = Bool("OrJoint_Target")
+
+    with Program() as logic:
+        with rung(Or(And(CmdA, CmdB), CmdC)):
+            out(Target)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    snapshot = {tag: False for tag in (CmdA.name, CmdB.name, CmdC.name, Target.name)}
+    tree = trace_back(
+        Target.name,
+        True,
+        snapshot,
+        pdg,
+        logic,
+        steerable,
+        rejected_actions=frozenset({(CmdA.name, True)}),
+    )
+
+    assert tree.ordered_actions() == [(CmdA.name, True), (CmdB.name, True)]
 
 
 # -- Test 1: Boolean chain --------------------------------------------------
@@ -800,6 +829,74 @@ def test_subroutine_writer_reuses_its_call_gate_across_trace_occurrences():
     fresh_actions = {tag for tag, _value in fresh.ordered_actions()}
     assert "x_Request" not in fresh_actions
     assert "x_SimFirst" not in fresh_actions
+
+
+def test_subroutine_caller_keeps_program_context_after_exact_rejection():
+    """A failed normal gate does not redirect the trace through simulation."""
+
+    NormalRequest = Bool("CallerContext_NormalRequest", external=True)
+    SimulateFirstScan = Bool("CallerContext_SimulateFirstScan", external=True)
+    Target = Bool("CallerContext_Target")
+
+    @subroutine("CallerContext_Apply")
+    def apply():
+        with rung():
+            out(Target)
+
+    with Program() as logic:
+        with rung(NormalRequest):
+            call(apply)
+        with rung(SimulateFirstScan):
+            call(apply)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    tree = trace_back(
+        Target.name,
+        True,
+        {},
+        pdg,
+        logic,
+        steerable,
+        rejected_actions=frozenset({(NormalRequest.name, True)}),
+    )
+
+    assert tree.ordered_actions() == [(NormalRequest.name, True)]
+
+
+def test_subroutine_caller_respects_avoid_and_via():
+    """Complete call-site alternatives use the same avoid and via facts."""
+
+    CallA = Bool("CallerPolicy_CallA", external=True)
+    CallB = Bool("CallerPolicy_CallB", external=True)
+    Target = Bool("CallerPolicy_Target")
+
+    @subroutine("CallerPolicy_Apply")
+    def apply():
+        with rung():
+            out(Target)
+
+    with Program() as logic:
+        with rung(CallA):
+            call(apply)
+        with rung(CallB):
+            call(apply)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    args = (Target.name, True, {}, pdg, logic, steerable)
+
+    avoided = trace_back(
+        *args,
+        avoid_pred=lambda snapshot: bool(snapshot.get(CallA.name)),
+    )
+    via = trace_back(
+        *args,
+        via_pred=lambda snapshot: bool(snapshot.get(CallB.name)),
+    )
+
+    assert avoided.ordered_actions() == [(CallB.name, True)]
+    assert via.ordered_actions() == [(CallB.name, True)]
 
 
 # -- Test 10: Indirect copy inversion (lookup table) ----------------------

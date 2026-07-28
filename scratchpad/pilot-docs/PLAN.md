@@ -87,6 +87,12 @@ plan proposed:
   whether one static chart edge may participate in a path search. Options,
   frontier evidence, and detour consume its Boolean projection; detour composes
   the recovery-only `ContinuationSafety` decision around it.
+- `trace._TraceSelection` owns the common precedence among unlocked local trace
+  alternatives while each caller supplies its exact rank. Its alternatives
+  retain literal avoid, via, dead-end, and exact-rejection facts; root route
+  locks and complete-route ranking remain separate. Subroutine callers are
+  distinct program contexts: they share avoid/via and coherence selection but
+  do not redirect on exact action rejection.
 
 Those are the pattern to continue: construct evidence once, keep it typed, and
 let later modules consume the object.
@@ -159,40 +165,6 @@ and gives pending policy the exact opening evidence it is waiting to resolve.
 
 ## C. Give repeated decisions one owner
 
-### C2. Give trace alternative selection one result object
-
-`trace.py` repeats variants of:
-
-1. apply avoid;
-2. prefer via;
-3. retain pilotable alternatives;
-4. score;
-5. preserve the best rejected branch when no untried pilotable branch survives.
-
-The policy appears in expression OR selection, caller-route selection, table-arm
-selection, and writer fallback bookkeeping. The variants are legitimate, but
-their differences are encoded as local list operations.
-
-**Required shape**
-
-- Introduce a local `TraceAlternative` / `TraceSelection` receipt carrying score,
-  avoid/via disposition, pilotability, empirical rejection, and fallback status.
-- One selector owns the common precedence.
-- Callers supply only genuinely local eligibility evidence.
-- Preserve the honest rejected fallback explicitly in the result instead of
-  stashing/restoring mutable node fields in multiple arms where possible.
-
-**Why**
-
-Writer/arm selection is a core "why" decision. A named result makes rejected,
-avoided, unpilotable, and selected alternatives visible to recording and tests.
-
-**LOC:** about -40 to -80.
-
-**Risk:** high; trace choice changes cascade widely.
-
-**Gate:** trace, route, avoid, needed-vocabulary, and Tumbler tests.
-
 ### C3. Introduce `UnsupportedConstruct` before converting trace dispatch
 
 A missing tracer rule currently looks like a genuinely opaque program and sends
@@ -236,6 +208,28 @@ owned key function or value object. Then use one ordered-unique helper.
 **Risk:** low-medium; this is a behavior decision, not mechanical cleanup.
 
 **Gate:** focused identity tests plus goldens.
+
+---
+
+### C5. Decide whether nested-writer `via=` should make writer reading eager
+
+`trace._trace_back` currently stops at the first writer admitted by
+`_rank_writers`. `_TraceAlternative.matches_via` records the literal fact, but
+writer selection deliberately does not prefer it because discovering a later
+match would require building every later writer subtree. Complete root routes
+already apply durable `via=` intent after tracing the whole route.
+
+Choose explicitly whether nested writers should remain lazy or whether `via=`
+justifies eager enumeration. If eager, measure the Tumbler trace cost and keep
+root locks binding; do not hide the behavior change inside D3's mutation
+cleanup.
+
+**LOC:** likely neutral.
+
+**Risk:** medium-high; this changes nested program-path precedence and trace
+cost.
+
+**Gate:** focused nested-writer via/default tests plus route and Tumbler tests.
 
 ---
 
@@ -284,9 +278,10 @@ unnecessary.
 
 ### D3. Collapse repeated trace writer-fallback bookkeeping
 
-`trace._trace_back` repeats save/reset/restore blocks for attempted writers and
-their rejected/avoid fallbacks. After C2 supplies a typed selection receipt,
-factor the mutation transaction once.
+`trace._trace_back` still builds each writer through the shared mutable
+`TraceNode` and visited set before capturing `_WriterAttempt`. Factor that
+remaining build/reset transaction once; `_TraceSelection` already owns which
+attempt is chosen or retained as the blocked alternative.
 
 **LOC:** about -25 to -40.
 
@@ -463,7 +458,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Shared decisions:** C2.
+1. **Trace precedence:** C5, before D3 changes the writer-build transaction.
 2. **Control flow:** D1/D2/D3.
 3. **Recovery continuity:** B6, then D4.
 4. **Compiled residual replay:** E1, E2, then E3.
