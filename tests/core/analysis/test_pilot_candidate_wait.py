@@ -24,7 +24,11 @@ from pyrung.core.analysis.pilot.navigation import (
     TargetSpec,
     pulse_identity,
 )
-from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
+from pyrung.core.analysis.pilot.navigation_evidence import (
+    NavigationEvidence,
+    Reachable,
+    StaticEdgeExclusionReason,
+)
 from pyrung.core.analysis.pilot.options import (
     WaitPrescription,
     WaitRead,
@@ -170,6 +174,7 @@ def test_convergent_actions_remain_ordered_independent_edges(monkeypatch) -> Non
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=None,
     )
     fallback = _compass_route_plan(frame, ctx, {("First", True)})
@@ -227,6 +232,7 @@ def test_rejected_joint_route_falls_back_to_same_action_with_other_gate() -> Non
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -290,6 +296,104 @@ def test_rejected_joint_route_falls_back_to_same_action_with_other_gate() -> Non
     )
 
 
+def test_static_edge_admission_names_full_artifact_exclusions() -> None:
+    """The shared receipt explains exclusions without flattening to a Boolean."""
+    primary = ("Start", True)
+    gate = ("Gate", True)
+    route = replace(_action_route(0, 2, primary[0]), edge_gates=(gate,))
+    graph = StaticTransitionGraph(PipelineRoles("State"), (route,))
+    edge = graph.edges[0]
+    world = ("world",)
+    compass, _ = Compass(NavigationCatalog(graphs=(graph,))).apply(
+        (
+            CompassObservation(
+                "no_change",
+                "State",
+                primary,
+                0,
+                world_key=None,
+                applied=(primary, gate),
+            ),
+            ActionNogoodObservation(world, ("pair", primary)),
+            ActionNogoodObservation(world, pulse_identity((primary, gate))),
+        )
+    )
+    ctx = SimpleNamespace(
+        avoid_pred=lambda snap: snap.get("Gate") is True,
+    )
+
+    admission = NavigationEvidence.static_edge_admission(
+        edge,
+        world_key=world,
+        snapshot={"State": 0, "Start": False, "Gate": False},
+        knowledge=compass.knowledge,
+        blocked_actions=frozenset({gate}),
+        context=ctx,
+    )
+
+    assert not admission.allowed
+    assert {exclusion.reason for exclusion in admission.exclusions} == {
+        StaticEdgeExclusionReason.STATIC_STATUS,
+        StaticEdgeExclusionReason.PAIR_NOGOOD,
+        StaticEdgeExclusionReason.PULSE_NOGOOD,
+        StaticEdgeExclusionReason.ROUTE_BLOCKED,
+        StaticEdgeExclusionReason.AVOID_FORCED,
+    }
+    assert any(exclusion.evidence == (gate,) for exclusion in admission.exclusions)
+
+
+def test_static_route_rejects_a_forbidden_required_co_action() -> None:
+    primary = ("Start", True)
+    forbidden = ("ForbiddenGate", True)
+    route = replace(_action_route(0, 2, primary[0]), edge_gates=(forbidden,))
+    graph = StaticTransitionGraph(PipelineRoles("State"), (route,))
+    compass = Compass(NavigationCatalog(graphs=(graph,)))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "Start": False, "ForbiddenGate": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset({"State"}),
+        target=TargetSpec("State", 2),
+        blocked_route_actions=frozenset({forbidden}),
+        avoid_pred=None,
+    )
+
+    assert _compass_route_plan(frame, ctx) is None
+
+    view = OrientationWorld(
+        world_key=frame.key,
+        snapshot=frame.snap,
+        frame=frame,
+        state=SimpleNamespace(),
+        context=ctx,
+    )
+    assert not isinstance(
+        NavigationEvidence.frontier_status(
+            view,
+            TargetSpec("State", 2),
+            NavigationConstraints(blocked_actions=frozenset({forbidden})),
+            compass.knowledge,
+        ),
+        Reachable,
+    )
+
+    ctx.blocked_route_actions = frozenset()
+    ctx.avoid_pred = lambda snap: snap.get("ForbiddenGate") is True
+    assert _compass_route_plan(frame, ctx) is None
+    assert not isinstance(
+        NavigationEvidence.frontier_status(
+            view,
+            TargetSpec("State", 2),
+            NavigationConstraints(avoid_predicate=ctx.avoid_pred),
+            compass.knowledge,
+        ),
+        Reachable,
+    )
+
+
 def test_static_path_prefers_exact_edge_over_wildcard_match() -> None:
     role = PipelineRoles("State")
     graph = StaticTransitionGraph(
@@ -327,6 +431,7 @@ def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() ->
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -383,6 +488,7 @@ def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=lambda snap: snap.get("Forbidden") is True,
     )
 
@@ -665,6 +771,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 17),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -998,6 +1105,7 @@ def test_grounded_action_plan_always_materializes_its_first_action() -> None:
     ctx = SimpleNamespace(
         compass=Compass(NavigationCatalog(graphs=(graph,))),
         route_allowed=lambda _pair: True,
+        blocked_route_actions=frozenset(),
         avoid_pred=None,
         opaque_loop=frozenset(),
         target=TargetSpec("State", 16),

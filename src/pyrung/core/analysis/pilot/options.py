@@ -37,8 +37,8 @@ from pyrung.core.analysis.pilot.navigation import (
     ActSource,
     ChannelHeading,
     RouteEdgeContext,
-    pulse_identity,
 )
+from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     _all_nodes,
@@ -517,7 +517,7 @@ def _compass_route_plan(
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair] | None = None,
-    excluded_edges: frozenset[tuple[Any, ...]] = frozenset(),
+    unavailable_producer_edges: frozenset[tuple[Any, ...]] = frozenset(),
 ) -> StaticPath | None:
     if not ctx.compass.graphs:
         return None
@@ -527,33 +527,18 @@ def _compass_route_plan(
     nogoods = key_nogoods if key_nogoods is not None else set()
 
     def _edge_open(edge: Any) -> bool:
-        if edge.identity in excluded_edges:
+        if edge.identity in unavailable_producer_edges:
             return False
-        if ctx.compass.knowledge.static_edge_status(
-            edge, getattr(frame, "key", None), frame.snap
-        ) in {
-            "contradicted",
-            "no_change",
-        }:
-            return False
-        if edge.action is None:
-            # A completion edge proven sterile at this world (a rejected wait)
-            # is walked around, exactly like a nogood press — BFS then returns
-            # the surviving route.
-            return (
-                wait_edge_nogood(edge.role.channel_tag, edge.from_value, edge.to_value)
-                not in nogoods
-            )
-        exact_artifact = pulse_identity((edge.action, *edge.co_actions))
-        return (
-            edge.action not in nogoods
-            and not ctx.compass.knowledge.act_is_nogood(
-                getattr(frame, "key", None),
-                exact_artifact,
-            )
-            and ctx.route_allowed(edge.action)
-            and not _avoid_forces(ctx, [edge.action], frame.snap)
+        admission = NavigationEvidence.static_edge_admission(
+            edge,
+            world_key=getattr(frame, "key", None),
+            snapshot=frame.snap,
+            knowledge=ctx.compass.knowledge,
+            blocked_actions=ctx.blocked_route_actions,
+            context=ctx,
+            pair_nogoods=nogoods,
         )
+        return admission.allowed
 
     plans: list[StaticPath] = []
     for n in _all_nodes(frame.tree):
@@ -1272,7 +1257,7 @@ def _build_candidates(
     # structurally possible Complete edge to the currently conductive Unhold
     # edge, without retaining a route suffix or poisoning another world.
     preflight_wait: _AdmittedWait | None = None
-    excluded_edges: set[tuple[Any, ...]] = set()
+    unavailable_producer_edges: set[tuple[Any, ...]] = set()
     while _is_zoom:
         assert route_plan is not None
         preflight_wait = _admit_wait_read(
@@ -1289,12 +1274,12 @@ def _build_candidates(
             or not route_plan.first_edge.program_producers
         ):
             break
-        excluded_edges.add(route_plan.first_edge.identity)
+        unavailable_producer_edges.add(route_plan.first_edge.identity)
         alternate = _compass_route_plan(
             frame,
             ctx,
             key_nogoods,
-            frozenset(excluded_edges),
+            frozenset(unavailable_producer_edges),
         )
         if alternate is None:
             break

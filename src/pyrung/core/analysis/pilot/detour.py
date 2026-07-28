@@ -2,7 +2,7 @@
 
 ``classify_departure`` settles the landing under the active holds, compares
 target-relative gauge evidence, and inspects static routes for reset boundaries
-or already-discharged actions that would have to be repeated. It permits
+or completed channel actions that would have to be repeated. It permits
 continued motion only when a clean continuation is supported, reports regression
 when earned work moved backward, and returns unknown otherwise.
 
@@ -28,10 +28,14 @@ from pyrung.core.analysis.pilot.causal import (
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
-from pyrung.core.analysis.pilot.compass import unique_legal_current_reading
+from pyrung.core.analysis.pilot.compass import CompassKnowledge, unique_legal_current_reading
 from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
 from pyrung.core.analysis.pilot.navigation import BearingObjective
-from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Reachable
+from pyrung.core.analysis.pilot.navigation_evidence import (
+    NavigationEvidence,
+    Reachable,
+    StaticEdgeAdmission,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -114,12 +118,15 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastR
     return fork, receipt
 
 
-def _discharged_actions(state: _PilotState, channel_tag: str) -> set[tuple[str, Any, Any]]:
-    """Discharged obligations: ``(action_tag, value, channel_value_at_press)``.
+def _completed_channel_actions(
+    state: _PilotState,
+    channel_tag: str,
+) -> set[tuple[str, Any, Any]]:
+    """Completed channel actions: ``(tag, value, channel_value_at_press)``.
 
     The committed steps are the work the march already did.  A forward plan that
-    re-requires one of these presses *in the same channel context* is
-    resurrected debt — the mechanical meaning of "undoes our progress".
+    re-requires one of these presses *in the same channel context* reopens work
+    that was already completed.
     Context comes from the owning committed operation's before-snapshot; release
     and pulse steps therefore carry the same exact channel context."""
     out: set[tuple[str, Any, Any]] = set()
@@ -131,17 +138,17 @@ def _discharged_actions(state: _PilotState, channel_tag: str) -> set[tuple[str, 
     return out
 
 
-def _reset_blocked_values(
+def _progress_erasing_values(
     gauge: Any,
     anchor_snap: Any,
     channel_tag: str,
 ) -> tuple[frozenset[Any], bool]:
-    """Channel values where a gauge reset is enabled, given the anchor.
+    """Channel values where the route would erase progress earned at the anchor.
 
     A reset is a literal load *behind* the anchor value in the component's
     earn direction (a load ahead of the anchor is a shortcut, not a reset).
-    Returns ``(blocked_values, all_resolved)`` — an unresolved reset poisons
-    the whole route analysis (the caller fails closed).
+    Returns ``(progress_erasing_values, all_resolved)``. When reset behavior is
+    unresolved, the caller cannot safely classify the route.
     """
     blocked: set[Any] = set()
     all_resolved = True
@@ -166,14 +173,14 @@ def _reset_blocked_values(
     return frozenset(blocked), all_resolved
 
 
-def _edge_resurrects(
+def _reopens_completed_work(
     edge: Any,
-    discharged: set[tuple[str, Any, Any]],
+    completed_actions: set[tuple[str, Any, Any]],
 ) -> bool:
     if edge.action is None:
         return False
     tag, value = edge.action
-    for action_tag, action_value, action_context in discharged:
+    for action_tag, action_value, action_context in completed_actions:
         if action_tag != tag or not _values_match(action_value, value):
             continue
         if action_context is None or edge.from_value is ANY_FROM:
@@ -181,6 +188,75 @@ def _edge_resurrects(
         if _values_match(action_context, edge.from_value):
             return True
     return False
+
+
+def _erases_earned_progress(
+    edge: Any,
+    progress_erasing_values: frozenset[Any],
+) -> bool:
+    """Whether this edge enters a channel value that enables a proved reset."""
+
+    return any(_values_match(edge.to_value, value) for value in progress_erasing_values)
+
+
+@dataclass(frozen=True)
+class ContinuationSafety:
+    """Static admission plus recovery-only protection of already-earned work."""
+
+    admission: StaticEdgeAdmission
+    erases_earned_progress: bool
+    reopens_completed_work: bool
+
+    @property
+    def allowed(self) -> bool:
+        """Boolean projection consumed by the static channel search."""
+
+        return (
+            self.admission.allowed
+            and not self.erases_earned_progress
+            and not self.reopens_completed_work
+        )
+
+
+def _continuation_safety(
+    edge: Any,
+    ctx: Any,
+    *,
+    settled_key: tuple[Any, ...] | None,
+    settled_snap: dict[str, Any],
+    blocked_actions: frozenset[tuple[str, Any]],
+    progress_erasing_values: frozenset[Any],
+    completed_actions: set[tuple[str, Any, Any]],
+) -> ContinuationSafety:
+    """Whether one admitted edge also preserves work recovery already earned."""
+
+    admission = NavigationEvidence.static_edge_admission(
+        edge,
+        world_key=settled_key,
+        snapshot=settled_snap,
+        knowledge=ctx.compass.knowledge,
+        blocked_actions=blocked_actions,
+        context=ctx,
+    )
+    return ContinuationSafety(
+        admission=admission,
+        erases_earned_progress=_erases_earned_progress(edge, progress_erasing_values),
+        reopens_completed_work=_reopens_completed_work(edge, completed_actions),
+    )
+
+
+def _current_action_allowed(
+    action: tuple[str, Any],
+    *,
+    settled_key: tuple[Any, ...] | None,
+    knowledge: CompassKnowledge,
+    blocked_actions: frozenset[tuple[str, Any]],
+) -> bool:
+    """Whether one structural current may support this settled world."""
+
+    if action in blocked_actions:
+        return False
+    return settled_key is None or action not in knowledge.nogood_pairs(settled_key)
 
 
 def _request_producer_rungs(chain: Any, role: Any) -> tuple[int, ...]:
@@ -408,44 +484,50 @@ def classify_departure(
         if not any(_values_match(value, goal) for goal in goals):
             goals.append(value)
 
-    blocked_values, all_resolved = _reset_blocked_values(gauge, anchor_snap, channel_tag)
+    progress_erasing_values, all_resolved = _progress_erasing_values(
+        gauge,
+        anchor_snap,
+        channel_tag,
+    )
     if not all_resolved:
-        return _v("unknown", "a gauge reset is unresolved")
+        return _v(
+            "unknown",
+            "cannot determine whether a route would erase earned progress",
+        )
 
-    discharged = _discharged_actions(state, channel_tag)
+    completed_actions = _completed_channel_actions(state, channel_tag)
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
-    route_allowed = getattr(ctx, "route_allowed", lambda _action: True)
     settled_snap = dict(fork.state.tags)
     settled_key = (
         _pilot_world_key(settled_snap, state.key_config, state.rungs)
         if state.key_config is not None
         else None
     )
+
+    def _safe_continuation_edge(edge: Any) -> bool:
+        return _continuation_safety(
+            edge,
+            ctx,
+            settled_key=settled_key,
+            settled_snap=settled_snap,
+            blocked_actions=ctx.blocked_route_actions,
+            progress_erasing_values=progress_erasing_values,
+            completed_actions=completed_actions,
+        ).allowed
+
     continuation = NavigationEvidence.channel_continuation(
         tuple(graphs),
         channel_tag,
         settled_value,
         tuple(goals),
-        edge_allowed=lambda edge: (
-            ctx.compass.knowledge.static_edge_status(edge, settled_key, settled_snap)
-            not in {"contradicted", "no_change"}
-            and not any(_values_match(edge.to_value, blocked) for blocked in blocked_values)
-            and not _edge_resurrects(edge, discharged)
-            and (
-                edge.action is None
-                or (
-                    route_allowed(edge.action)
-                    and not _avoid_forces(ctx, [edge.action], dict(fork.state.tags))
-                )
-            )
-        ),
+        edge_allowed=_safe_continuation_edge,
     )
     saw_graph = any(graph.role.channel_tag == channel_tag for graph in graphs)
     if isinstance(continuation, Reachable):
         return _v(
             "continue",
             "constrained navigation evidence has a clean forward continuation "
-            "(no reset, no resurrected obligation)",
+            "that preserves earned progress and does not reopen completed work",
         )
 
     # A unique, non-avoided operator push that the program is waiting for is
@@ -458,6 +540,14 @@ def classify_departure(
         qualifier = "chart has no clean route" if saw_graph else "no chart or current evidence"
         return _v("unknown", qualifier)
 
+    def _legal_current_action(action: tuple[str, Any]) -> bool:
+        return _current_action_allowed(
+            action,
+            settled_key=settled_key,
+            knowledge=ctx.compass.knowledge,
+            blocked_actions=ctx.blocked_route_actions,
+        )
+
     current = unique_legal_current_reading(
         WorldView(
             snapshot=dict(fork.state.tags),
@@ -469,7 +559,7 @@ def classify_departure(
         ),
         channel_tag,
         ctx.pipeline_roles,
-        route_allowed=route_allowed,
+        route_allowed=_legal_current_action,
         action_avoided=lambda action: _avoid_forces(
             ctx,
             [action],

@@ -142,6 +142,16 @@ should consume the first owner's result.
   a declined read retains its reason, producer evidence, frontier, and details.
   Orientation, recording, option assembly, and tests consume those owners
   directly; `CandidateRead` does not flatten them into a second scalar surface.
+- Static chart-edge admission:
+  `navigation_evidence.py::NavigationEvidence.static_edge_admission` returns a
+  typed `StaticEdgeAdmission` with machine-readable exclusions for static
+  status, current-world pair/wait/Pulse nogoods, blocked required actions, and
+  avoid. It evaluates the complete required action overlay, including
+  co-actions. Options, frontier evidence, and detour give graph search only its
+  `allowed` projection. Options keeps unavailable-producer edges local to its
+  candidate read. Detour composes the recovery-only `ContinuationSafety`
+  receipt, whose named facts say whether a route erases earned progress or
+  reopens completed work.
 - Local trial gates: `verify.py::verify_gates`
 - Accepted trial verification: `verify.py::verify_gates` preserves the exact
   `_ExecutedAttempt` inside one `_AcceptedTrial`, then constructs a frozen,
@@ -306,8 +316,10 @@ investigation materializes their guarded installed form.
   continued physical motion needs executed evidence or a live pending effect on
   the exact trial fork.
 - Static charts enumerate every source match, exact edges before wildcard
-  edges. Callers own exclusions through `edge_allowed`: specificity is
-  precedence, never a pre-filter veto of a surviving wildcard route.
+  edges. `StaticEdgeAdmission` owns shared current-world exclusions while
+  callers compose only their local evidence; graph APIs consume the Boolean
+  projection. Specificity is precedence, never a pre-filter veto of a
+  surviving wildcard route.
 - A convergence lookup is an ordered multimap of primary-action alternatives.
   Chart construction fans each alternative into its own edge; only a route's
   `edge_gates` are simultaneous co-actions.
@@ -388,7 +400,8 @@ investigation materializes their guarded installed form.
   synthesis, and terminal/probe policy.
 - `options.py` — private evidence-rich option materialization and ranking.
 - `navigation_evidence.py` — narrow constrained reachability evidence shared
-  with verification and recovery; never returns an action.
+  with verification and recovery, including typed static-edge admission; never
+  returns an action.
 - `currents.py` — structural program-awaited-action readings and producer
   families; Compass owns filtering and ambiguity policy.
 - `advance.py` — unambiguous instruction-owned channel lookup and boundary
@@ -415,7 +428,8 @@ investigation materializes their guarded installed form.
 - `progress.py` — checkpoints, pending departures, regression recovery,
   correction installation, and reverts.
 - `detour.py` — channel-departure classification for progress handling; reads
-  the executed Bearing objective and never reconstructs a target objective.
+  the executed Bearing objective, composes recovery-only continuation safety,
+  and never reconstructs a target objective.
 - `gauge.py` — conservative target-relative earned-work marks and reset
   boundaries.
 - `causal.py` — recorded cause-chain queries and empirical program-write

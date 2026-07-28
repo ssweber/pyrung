@@ -83,6 +83,10 @@ plan proposed:
   executable rungs remain commit-owned.
 - `_HoldLogEntry.tags` and `_StepContext.steady_holds` are derived from executable
   rung evidence rather than stored in parallel.
+- `navigation_evidence.StaticEdgeAdmission` owns the current-world answer to
+  whether one static chart edge may participate in a path search. Options,
+  frontier evidence, and detour consume its Boolean projection; detour composes
+  the recovery-only `ContinuationSafety` decision around it.
 
 Those are the pattern to continue: construct evidence once, keep it typed, and
 let later modules consume the object.
@@ -154,43 +158,6 @@ and gives pending policy the exact opening evidence it is waiting to resolve.
 ---
 
 ## C. Give repeated decisions one owner
-
-### C1. Replace the three static-edge lambdas with one typed base decision
-
-The previous plan described the filters as nearly identical. They are not.
-
-- `options._compass_route_plan._edge_open` applies excluded identities,
-  static-edge evidence, wait/action nogoods, exact Pulse nogoods,
-  `route_allowed`, and avoid.
-- `navigation_evidence.frontier_status.edge_allowed` applies blocked actions,
-  wait/action nogoods, exact Pulse nogoods, and avoid.
-- `detour.classify_departure` applies static-edge evidence, reset-blocked
-  destinations, discharged-action resurrection, `route_allowed`, and avoid, but
-  omits current-world learned nogoods.
-
-**Required shape**
-
-- First write a policy matrix and decide whether detour's omissions are intended.
-- `navigation_evidence.py` owns a base `EdgeDecision` with allowed/excluded and
-  machine-readable reasons for the shared static status, action artifact, wait
-  artifact, route constraint, and avoid checks.
-- Options and frontier evidence consume that decision.
-- Detour composes explicit recovery-only exclusions (reset and resurrection) and
-  either explicitly opts out of world nogoods or consumes them. No anonymous
-  callback hides that choice.
-- Recording/debug output may surface the reason object; path search still consumes
-  the Boolean projection.
-
-**Why**
-
-The win is one auditable answer to "why was this edge excluded?", not 22 fewer
-lines.
-
-**LOC:** neutral to -25.
-
-**Risk:** medium-high because one current behavior will likely be adjudicated.
-
-**Gate:** avoid, nogood, candidate-wait, and detour-progress tests.
 
 ### C2. Give trace alternative selection one result object
 
@@ -496,7 +463,7 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Shared decisions:** C1 and C2.
+1. **Shared decisions:** C2.
 2. **Control flow:** D1/D2/D3.
 3. **Recovery continuity:** B6, then D4.
 4. **Compiled residual replay:** E1, E2, then E3.

@@ -968,7 +968,7 @@
    ]
   ],
   "kind": "provisional_started",
-  "reason": "constrained navigation evidence has a clean forward continuation (no reset, no resurrected obligation)",
+  "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
   "requested_value": 1,
   "route": [],
   "settled_value": 2

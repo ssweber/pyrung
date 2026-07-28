@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import _avoid_forces, wait_edge_nogood
@@ -45,6 +46,40 @@ class NoRoute:
 
 
 FrontierStatus = Reachable | Unknown | NoRoute
+
+
+class StaticEdgeExclusionReason(StrEnum):
+    """Machine-readable reasons a static chart edge cannot join a path."""
+
+    STATIC_STATUS = "static_status"
+    PAIR_NOGOOD = "pair_nogood"
+    WAIT_NOGOOD = "wait_nogood"
+    PULSE_NOGOOD = "pulse_nogood"
+    ROUTE_BLOCKED = "route_blocked"
+    AVOID_FORCED = "avoid_forced"
+
+
+@dataclass(frozen=True)
+class StaticEdgeExclusion:
+    """One exact reason and artifact excluded from a static path search."""
+
+    reason: StaticEdgeExclusionReason
+    evidence: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class StaticEdgeAdmission:
+    """Whether one static chart edge may participate in this world's path search."""
+
+    edge_identity: tuple[Any, ...]
+    world_key: tuple[Any, ...] | None
+    exclusions: tuple[StaticEdgeExclusion, ...] = ()
+
+    @property
+    def allowed(self) -> bool:
+        """Boolean projection consumed by the graph path APIs."""
+
+        return not self.exclusions
 
 
 def _learned_reachable(
@@ -91,6 +126,88 @@ class NavigationEvidence:
     """Shared constrained evidence layer for orientation and verification."""
 
     @staticmethod
+    def static_edge_admission(
+        edge: Any,
+        *,
+        world_key: tuple[Any, ...] | None,
+        snapshot: dict[str, Any],
+        knowledge: CompassKnowledge,
+        blocked_actions: frozenset[tuple[str, Any]],
+        context: Any,
+        pair_nogoods: set[tuple[str, Any]] | frozenset[tuple[str, Any]] | None = None,
+    ) -> StaticEdgeAdmission:
+        """Decide whether one chart edge may join a current-world path search."""
+
+        exclusions: list[StaticEdgeExclusion] = []
+        status = knowledge.static_edge_status(edge, world_key, snapshot)
+        if status in {"contradicted", "no_change"}:
+            exclusions.append(
+                StaticEdgeExclusion(
+                    StaticEdgeExclusionReason.STATIC_STATUS,
+                    (status,),
+                )
+            )
+
+        if pair_nogoods is None:
+            current_nogoods = (
+                knowledge.nogood_pairs(world_key) if world_key is not None else frozenset()
+            )
+        else:
+            current_nogoods = frozenset(pair_nogoods)
+        if edge.action is None:
+            wait_identity = wait_edge_nogood(
+                edge.role.channel_tag,
+                edge.from_value,
+                edge.to_value,
+            )
+            if wait_identity in current_nogoods:
+                exclusions.append(
+                    StaticEdgeExclusion(
+                        StaticEdgeExclusionReason.WAIT_NOGOOD,
+                        (wait_identity,),
+                    )
+                )
+        else:
+            required_actions = (edge.action, *edge.co_actions)
+            exclusions.extend(
+                StaticEdgeExclusion(
+                    StaticEdgeExclusionReason.PAIR_NOGOOD,
+                    (action,),
+                )
+                for action in required_actions
+                if action in current_nogoods
+            )
+            pulse_artifact = pulse_identity(required_actions)
+            if world_key is not None and knowledge.act_is_nogood(world_key, pulse_artifact):
+                exclusions.append(
+                    StaticEdgeExclusion(
+                        StaticEdgeExclusionReason.PULSE_NOGOOD,
+                        (pulse_artifact,),
+                    )
+                )
+            exclusions.extend(
+                StaticEdgeExclusion(
+                    StaticEdgeExclusionReason.ROUTE_BLOCKED,
+                    (action,),
+                )
+                for action in required_actions
+                if action in blocked_actions
+            )
+            if _avoid_forces(context, required_actions, snapshot):
+                exclusions.append(
+                    StaticEdgeExclusion(
+                        StaticEdgeExclusionReason.AVOID_FORCED,
+                        (required_actions,),
+                    )
+                )
+
+        return StaticEdgeAdmission(
+            edge_identity=edge.identity,
+            world_key=world_key,
+            exclusions=tuple(exclusions),
+        )
+
+    @staticmethod
     def frontier_status(
         world: OrientationWorld,
         target: TargetSpec,
@@ -98,30 +215,17 @@ class NavigationEvidence:
         knowledge: CompassKnowledge,
     ) -> FrontierStatus:
         compass = world.context.compass
-        pair_nogoods = knowledge.nogood_pairs(world.world_key)
 
         def edge_allowed(edge: Any) -> bool:
-            if knowledge.static_edge_status(edge, world.world_key, world.snapshot) in {
-                "contradicted",
-                "no_change",
-            }:
-                return False
-            if edge.action is None:
-                return (
-                    wait_edge_nogood(
-                        edge.role.channel_tag,
-                        edge.from_value,
-                        edge.to_value,
-                    )
-                    not in pair_nogoods
-                )
-            exact_artifact = pulse_identity((edge.action, *edge.co_actions))
-            return (
-                edge.action not in constraints.blocked_actions
-                and edge.action not in pair_nogoods
-                and not knowledge.act_is_nogood(world.world_key, exact_artifact)
-                and not _avoid_forces(world.context, [edge.action], world.snapshot)
+            admission = NavigationEvidence.static_edge_admission(
+                edge,
+                world_key=world.world_key,
+                snapshot=world.snapshot,
+                knowledge=knowledge,
+                blocked_actions=constraints.blocked_actions,
+                context=world.context,
             )
+            return admission.allowed
 
         static = _best_static_path(
             target.tag,
