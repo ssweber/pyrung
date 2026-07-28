@@ -169,19 +169,6 @@ owned key function or value object. Then use one ordered-unique helper.
 
 ## D. Extract control flow after the receipts are stable
 
-### D4. Extract replay advancement in `investigate.py`
-
-The raw and guarded replay arms repeat replacement-fingerprint and
-advance-or-reject logic. Extract an `_advance_or_reject` result object, not a
-Boolean/tuple. Then extract the large channel-ejection arm from
-`progress._monitor_trend` using the stable departure receipts.
-
-**LOC:** investigate roughly -30 to -45; progress extraction may be net-neutral.
-
-**Risk:** medium-high.
-
-**Gate:** investigate, progress, detour, correction, and golden tests.
-
 ### D5. Add role-typed keys last
 
 Use `NewType`/small value objects for action-source keys, rollback owners, and
@@ -347,18 +334,16 @@ re-ground the deferred concept names against the owners that actually landed.
 
 ## Sequence
 
-1. **Recovery extraction:** D4.
-2. **Compiled residual replay:** E1, E2, then E3.
-3. **Diagnostics and type hardening:** C3, C4, D5.
-4. **Naming:** the approved tranche in G, then re-audit the deferred names.
+1. **Compiled residual replay:** E1, E2, then E3.
+2. **Diagnostics and type hardening:** C3, C4, D5.
+3. **Naming:** the approved tranche in G, then re-audit the deferred names.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
 
-The expected LOC reduction is deliberately not totaled. The remaining D4 work
-should remove meaningful code, but the acceptance criterion is a shorter
-reasoning path: one owner, one receipt, and consumers that apply rather than
-reconstruct.
+The expected LOC reduction is deliberately not totaled. The acceptance
+criterion is a shorter reasoning path: one owner, one receipt, and consumers
+that apply rather than reconstruct.
 
 ## Working pipeline
 

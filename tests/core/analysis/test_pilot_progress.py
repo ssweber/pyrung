@@ -70,6 +70,7 @@ from pyrung.core.analysis.pilot.progress import (
     _apply_departure_decision,
     _assess_pending_departure,
     _channel_recovery_origin,
+    _handle_channel_departure,
     _investigate_and_revert,
     _monitor_trend,
     _open_pending_departure,
@@ -1290,11 +1291,13 @@ class TestLetrunEjection:
             _investigate,
         )
 
-        events = _monitor_trend(
+        assert isinstance(trial.verification, AssessedMotion)
+        events = _handle_channel_departure(
             trial,
             _frame(),
             state,
             SimpleNamespace(target=TargetSpec("State", 17)),
+            trial.verification,
         )
         assert next(events).kind == "letrun_ejection"
         assert classified is False
@@ -1317,12 +1320,14 @@ class TestLetrunEjection:
             before_snap={"S": 0},
             fork_snap={"S": 2},
         )
+        assert isinstance(trial.verification, AssessedMotion)
         events = tuple(
-            _monitor_trend(
+            _handle_channel_departure(
                 trial,
                 _frame(),
                 state,
                 SimpleNamespace(target=TargetSpec("State", 17)),
+                trial.verification,
             )
         )
         assert [e.kind for e in events] == ["letrun_ejection"]

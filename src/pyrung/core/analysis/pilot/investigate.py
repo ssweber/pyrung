@@ -3,8 +3,9 @@
 The module constructs incident windows and replay functions, derives candidate
 holds from causal roots, writer enablers, and pinned scans, ranks those
 hypotheses, closes the first explanation over sibling causes exposed by its
-counterfactual replay, and returns the first composite that survives. It also
-provides the shorter excursion investigation used by trial verification.
+counterfactual replay, resolves each attempt as accepted, extended, or rejected,
+and returns the first composite that survives. It also provides the shorter
+excursion investigation used by trial verification.
 
 Investigation confirms a proposed correction but does not install it; recovery
 and installation belong to ``progress.py``.
@@ -17,7 +18,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pilot._ops import (
     _ZOOM_BUDGET,
@@ -326,6 +327,30 @@ class InvestigationRejection:
 
 
 @dataclass(frozen=True)
+class _ReplayAccepted:
+    """A replay attempt accepted without exposing another causal cut."""
+
+    outcome: ReplayOutcome
+
+
+@dataclass(frozen=True)
+class _HypothesisExtended:
+    """A replay exposed another causal cut and extended the hypothesis."""
+
+    hypothesis: InvestigationHypothesis
+
+
+@dataclass(frozen=True)
+class _ReplayRejected:
+    """A replay attempt rejected the current hypothesis on an exact ground."""
+
+    rejection: InvestigationRejection
+
+
+_ReplayResolution = _ReplayAccepted | _HypothesisExtended | _ReplayRejected
+
+
+@dataclass(frozen=True)
 class InvestigationResult:
     """Replay-confirmed corrective information."""
 
@@ -337,6 +362,62 @@ class InvestigationResult:
     # classification, and human ground cannot become index-desynchronized.
     rejected: tuple[InvestigationRejection, ...] = ()
     unresolved: tuple[str, ...] = ()
+
+
+def _resolve_replay_attempt(
+    *,
+    phase: Literal["exploratory", "guarded"],
+    current: InvestigationHypothesis,
+    outcome: ReplayOutcome,
+    seen_replacements: set[tuple[Any, ...]],
+    extend: Callable[
+        [InvestigationHypothesis, ReplacementEvidence],
+        InvestigationHypothesis | None,
+    ],
+) -> _ReplayResolution:
+    """Resolve one replay without flattening acceptance, extension, or rejection.
+
+    Replacement identity is shared across exploratory and guarded attempts in
+    one investigation. A repeated cause is rejected before another extension
+    is derived, so causal closure cannot manufacture work from a cycle.
+    """
+    if not outcome.accepted:
+        return _ReplayRejected(
+            InvestigationRejection(
+                current,
+                f"{phase}-replay-failed",
+                f"{phase} replay rejected: " + (outcome.reason or "no replay reason supplied"),
+            )
+        )
+
+    replacement = outcome.replacement
+    if replacement is None or not replacement.shared_suffix:
+        return _ReplayAccepted(outcome)
+
+    fingerprint = tuple(
+        (item.rung, item.tag, _semantic_key(item.value)) for item in replacement.witness.cause
+    )
+    if fingerprint in seen_replacements:
+        ground = (
+            "counterfactual replacement cause repeated inside one investigation"
+            if phase == "exploratory"
+            else "guarded replay repeated a counterfactual replacement cause"
+        )
+        return _ReplayRejected(InvestigationRejection(current, "nested-cause-cycle", ground))
+    seen_replacements.add(fingerprint)
+
+    extended = extend(current, replacement)
+    if extended is None:
+        prefix = "replacement" if phase == "exploratory" else "guarded replacement"
+        return _ReplayRejected(
+            InvestigationRejection(
+                current,
+                "nested-cause-unresolved",
+                f"{prefix} reproduced the same bounded outcome and pipeline "
+                "but yielded no additional corrective cut",
+            )
+        )
+    return _HypothesisExtended(extended)
 
 
 def _scoped_correction_rungs(
@@ -1872,39 +1953,20 @@ def investigate_deviation(
                 correction_progress_mark,
             )
             outcome = replay(exploratory)
-            if not outcome.accepted:
-                _reject(
-                    current,
-                    "exploratory-replay-failed",
-                    "exploratory replay rejected: "
-                    + (outcome.reason or "no replay reason supplied"),
-                )
+            resolution = _resolve_replay_attempt(
+                phase="exploratory",
+                current=current,
+                outcome=outcome,
+                seen_replacements=seen_replacements,
+                extend=_extend_from_replacement,
+            )
+            if isinstance(resolution, _ReplayRejected):
+                rejected.append(resolution.rejection)
                 break
-            replacement = outcome.replacement
-            if replacement is not None and replacement.shared_suffix:
-                fingerprint = tuple(
-                    (item.rung, item.tag, _semantic_key(item.value))
-                    for item in replacement.witness.cause
-                )
-                if fingerprint in seen_replacements:
-                    _reject(
-                        current,
-                        "nested-cause-cycle",
-                        "counterfactual replacement cause repeated inside one investigation",
-                    )
-                    break
-                seen_replacements.add(fingerprint)
-                extended = _extend_from_replacement(current, replacement)
-                if extended is None:
-                    _reject(
-                        current,
-                        "nested-cause-unresolved",
-                        "replacement reproduced the same bounded outcome and pipeline "
-                        "but yielded no additional corrective cut",
-                    )
-                    break
-                current = extended
+            if isinstance(resolution, _HypothesisExtended):
+                current = resolution.hypothesis
                 continue
+            outcome = resolution.outcome
 
             # A target-work correction belongs to the exact Gauge occurrence.
             # A correction that directly discharges this producer occurrence's
@@ -1964,59 +2026,36 @@ def investigate_deviation(
             # incident checkpoint, so an identical executable correction has
             # already proved its installed form in the exploratory pass.
             installed_outcome = outcome if scoped == exploratory else replay(scoped)
-            installed_replacement = installed_outcome.replacement
-            if (
-                installed_outcome.accepted
-                and installed_replacement is not None
-                and installed_replacement.shared_suffix
-            ):
-                fingerprint = tuple(
-                    (item.rung, item.tag, _semantic_key(item.value))
-                    for item in installed_replacement.witness.cause
-                )
-                if fingerprint in seen_replacements:
-                    _reject(
-                        current,
-                        "nested-cause-cycle",
-                        "guarded replay repeated a counterfactual replacement cause",
-                    )
-                    break
-                seen_replacements.add(fingerprint)
-                extended = _extend_from_replacement(current, installed_replacement)
-                if extended is None:
-                    _reject(
-                        current,
-                        "nested-cause-unresolved",
-                        "guarded replacement reproduced the same bounded outcome and pipeline "
-                        "but yielded no additional corrective cut",
-                    )
-                    break
-                current = extended
-                continue
-            if installed_outcome.accepted:
-                confirmed_hypothesis = InvestigationHypothesis(
-                    kind=current.kind,
-                    holds=scoped,
-                    sources=current.sources,
-                    detail=current.detail,
-                )
-                confirmed.append(confirmed_hypothesis)
-                confirmed_correction = _ConfirmedCorrection(
-                    identity=correction_identity(scoped),
-                    rungs=scoped,
-                    sources=confirmed_hypothesis.sources,
-                    justification=(
-                        installed_outcome.justification.value
-                        if installed_outcome.justification is not None
-                        else installed_outcome.reason or "replay-confirmed"
-                    ),
-                )
+            resolution = _resolve_replay_attempt(
+                phase="guarded",
+                current=current,
+                outcome=installed_outcome,
+                seen_replacements=seen_replacements,
+                extend=_extend_from_replacement,
+            )
+            if isinstance(resolution, _ReplayRejected):
+                rejected.append(resolution.rejection)
                 break
-            _reject(
-                current,
-                "guarded-replay-failed",
-                "guarded replay rejected: "
-                + (installed_outcome.reason or "no replay reason supplied"),
+            if isinstance(resolution, _HypothesisExtended):
+                current = resolution.hypothesis
+                continue
+            installed_outcome = resolution.outcome
+            confirmed_hypothesis = InvestigationHypothesis(
+                kind=current.kind,
+                holds=scoped,
+                sources=current.sources,
+                detail=current.detail,
+            )
+            confirmed.append(confirmed_hypothesis)
+            confirmed_correction = _ConfirmedCorrection(
+                identity=correction_identity(scoped),
+                rungs=scoped,
+                sources=confirmed_hypothesis.sources,
+                justification=(
+                    installed_outcome.justification.value
+                    if installed_outcome.justification is not None
+                    else installed_outcome.reason or "replay-confirmed"
+                ),
             )
             break
         else:

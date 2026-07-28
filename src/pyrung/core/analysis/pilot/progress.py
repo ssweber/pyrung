@@ -5,7 +5,8 @@ gauge marks, updates checkpoints, and classifies program-owned departures.
 Regression handling builds an incident, replay-validates corrective hypotheses,
 installs at most one surviving correction, and restores the appropriate
 checkpoint. A clean departure may remain pending until later gauge evidence
-promotes it or requires rollback.
+promotes it or requires rollback. The terminal channel-departure handler owns
+that event stream and policy arm after trend monitoring detects the occurrence.
 
 This is the owner of post-commit recovery policy, not trial execution or local
 gate acceptance.
@@ -282,141 +283,7 @@ def _monitor_trend(
     # its exact channel-transition producer and upstream corrective levers are
     # recoverable, then revert to the pre-coast checkpoint.
     if channel_ejection:
-        chan = trial.channel_motion.channel_tag
-        assert chan is not None
-        departed_from = trial.before_snap.get(chan)
-        investigated = bool(state.checkpoints)
-        ejection = PilotEvent(
-            "letrun_ejection",
-            state.work.state.scan_id,
-            {
-                "channel_tag": chan,
-                "from_value": departed_from,
-                "requested_value": trial.channel_motion.target_value,
-                "to_value": trial.fork_snap.get(chan),
-                "observe_label": trial.observe_label,
-                "coast_span": (trial.scan_before, state.work.state.scan_id),
-                "investigated": investigated,
-                "reason": None if investigated else "no checkpoint to revert to",
-            },
-        )
-        if not investigated:
-            # No prior checkpoint to anchor the incident or revert to — the
-            # ejected state stands committed.  Surface why so the bail is visible
-            # in the event stream rather than a silent ``return ()``.
-            yield ejection
-            return
-        yield ejection
-        yield PilotEvent(
-            "departure_check_started",
-            state.work.state.scan_id,
-            {
-                "channel_tag": chan,
-                "from_value": departed_from,
-                "to_value": trial.fork_snap.get(chan),
-            },
-        )
-        # Classify BEFORE investigating (detour.py): program-owned motion may
-        # preserves the progress gauge and offers a clean forward route —
-        # reverting it would throw away the whole march, and investigation
-        # would honestly confirm nothing. Affirmative clean-route evidence opens
-        # bounded pending piloting; regression or unknown evidence follows
-        # the conservative investigate-and-revert arm.
-        departure = classify_departure(
-            state,
-            ctx,
-            trial.bearing_objective,
-            chan,
-            departed_from,
-            trial.before_snap,
-            occurrence_scan=next(
-                (
-                    event.scan
-                    for event in trial.timeline
-                    if any(
-                        tag == chan
-                        and _values_match(before, departed_from)
-                        and not _values_match(after, departed_from)
-                        for tag, before, after in event.transitions
-                    )
-                ),
-                state.work.state.scan_id,
-            ),
-        )
-        observation = departure.observation
-        if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
-            prescribed_departure = (
-                trial.route_prescribed and verified.assessment.agency is Agency.PILOT
-            )
-            if (
-                observation.progress.movement is GaugeMovement.UNCHANGED
-                and not prescribed_departure
-                and (
-                    state.pending_departure is not None
-                    or observation.reading.disposition is DepartureDisposition.REACTIVE
-                )
-            ):
-                # A clean route says the landing is usable, but a known-
-                # preserved progress receipt says this occurrence earned
-                # no program work. For ambient motion it may therefore be
-                # a preventable ejection. A Compass/current edge earns
-                # tide-table credit only when causal attribution says the
-                # pilot actually produced this departure; program-caused
-                # motion encountered during a prescribed coast remains
-                # ambient.
-                #
-                # Positive reactive attribution requires investigation on the
-                # first occurrence.  An already-open pending state retains the
-                # established compatibility rule: every preserved departure is
-                # concrete new evidence and must be understood before retention.
-                origin = _channel_recovery_origin(
-                    state,
-                    trial,
-                    frame,
-                    chan,
-                    departed_from,
-                )
-                if trial.chase_regression_causes:
-                    yield recording._investigation_started_event(trial, origin)
-                yield from _investigate_and_revert(
-                    trial,
-                    frame,
-                    state,
-                    ctx,
-                    origin=origin,
-                    retain_if_unresolved=departure,
-                    occurrence_requirements=observation.reading.external_supports,
-                )
-                return
-            if state.pending_departure is None:
-                yield from _open_pending_departure(departure, trial, state, ctx)
-                return
-            # A clean program-owned departure inside an existing bounded
-            # attempt that earned work (or fulfilled an explicitly prescribed
-            # channel transaction) is ordinary piloting. Keep the original
-            # rollback boundary and budget; do not nest another pending departure.
-            return
-        origin = _channel_recovery_origin(
-            state,
-            trial,
-            frame,
-            chan,
-            departed_from,
-        )
-        if trial.chase_regression_causes:
-            yield recording._investigation_started_event(trial, origin)
-        yield from _investigate_and_revert(
-            trial,
-            frame,
-            state,
-            ctx,
-            origin=origin,
-            occurrence_requirements=(
-                observation.reading.external_supports
-                if observation.reading.disposition is DepartureDisposition.REACTIVE
-                else ()
-            ),
-        )
+        yield from _handle_channel_departure(trial, frame, state, ctx, verified)
         return
 
     # A satisfied channel bearing can enter a world whose backward
@@ -510,6 +377,149 @@ def _monitor_trend(
         state,
         ctx,
         origin=origin,
+    )
+
+
+def _handle_channel_departure(
+    trial: _AcceptedTrial,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    verified: AssessedMotion,
+) -> Iterator[PilotEvent]:
+    """Classify and resolve one observed channel departure.
+
+    This is a terminal arm of trend monitoring: it streams the existing
+    ejection and investigation events in order, then owns pending/open/retain
+    policy for that occurrence.
+    """
+    chan = trial.channel_motion.channel_tag
+    assert chan is not None
+    departed_from = trial.before_snap.get(chan)
+    investigated = bool(state.checkpoints)
+    ejection = PilotEvent(
+        "letrun_ejection",
+        state.work.state.scan_id,
+        {
+            "channel_tag": chan,
+            "from_value": departed_from,
+            "requested_value": trial.channel_motion.target_value,
+            "to_value": trial.fork_snap.get(chan),
+            "observe_label": trial.observe_label,
+            "coast_span": (trial.scan_before, state.work.state.scan_id),
+            "investigated": investigated,
+            "reason": None if investigated else "no checkpoint to revert to",
+        },
+    )
+    if not investigated:
+        # No prior checkpoint to anchor the incident or revert to — the
+        # ejected state stands committed. Surface why so the bail is visible
+        # in the event stream rather than a silent ``return ()``.
+        yield ejection
+        return
+    yield ejection
+    yield PilotEvent(
+        "departure_check_started",
+        state.work.state.scan_id,
+        {
+            "channel_tag": chan,
+            "from_value": departed_from,
+            "to_value": trial.fork_snap.get(chan),
+        },
+    )
+    # Classify BEFORE investigating (detour.py): program-owned motion may
+    # preserve the progress gauge and offer a clean forward route. Reverting
+    # it would throw away the whole march, and investigation would honestly
+    # confirm nothing. Affirmative clean-route evidence opens bounded pending
+    # piloting; regression or unknown evidence follows the conservative
+    # investigate-and-revert arm.
+    departure = classify_departure(
+        state,
+        ctx,
+        trial.bearing_objective,
+        chan,
+        departed_from,
+        trial.before_snap,
+        occurrence_scan=next(
+            (
+                event.scan
+                for event in trial.timeline
+                if any(
+                    tag == chan
+                    and _values_match(before, departed_from)
+                    and not _values_match(after, departed_from)
+                    for tag, before, after in event.transitions
+                )
+            ),
+            state.work.state.scan_id,
+        ),
+    )
+    observation = departure.observation
+    if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
+        prescribed_departure = trial.route_prescribed and verified.assessment.agency is Agency.PILOT
+        if (
+            observation.progress.movement is GaugeMovement.UNCHANGED
+            and not prescribed_departure
+            and (
+                state.pending_departure is not None
+                or observation.reading.disposition is DepartureDisposition.REACTIVE
+            )
+        ):
+            # A clean route says the landing is usable, but a known-preserved
+            # progress receipt says this occurrence earned no program work.
+            # For ambient motion it may therefore be a preventable ejection.
+            #
+            # Positive reactive attribution requires investigation on the
+            # first occurrence. An already-open pending state retains the
+            # established compatibility rule: every preserved departure is
+            # concrete new evidence and must be understood before retention.
+            origin = _channel_recovery_origin(
+                state,
+                trial,
+                frame,
+                chan,
+                departed_from,
+            )
+            if trial.chase_regression_causes:
+                yield recording._investigation_started_event(trial, origin)
+            yield from _investigate_and_revert(
+                trial,
+                frame,
+                state,
+                ctx,
+                origin=origin,
+                retain_if_unresolved=departure,
+                occurrence_requirements=observation.reading.external_supports,
+            )
+            return
+        if state.pending_departure is None:
+            yield from _open_pending_departure(departure, trial, state, ctx)
+            return
+        # A clean program-owned departure inside an existing bounded attempt
+        # that earned work (or fulfilled an explicitly prescribed channel
+        # transaction) is ordinary piloting. Keep the original rollback
+        # boundary and budget; do not nest another pending departure.
+        return
+    origin = _channel_recovery_origin(
+        state,
+        trial,
+        frame,
+        chan,
+        departed_from,
+    )
+    if trial.chase_regression_causes:
+        yield recording._investigation_started_event(trial, origin)
+    yield from _investigate_and_revert(
+        trial,
+        frame,
+        state,
+        ctx,
+        origin=origin,
+        occurrence_requirements=(
+            observation.reading.external_supports
+            if observation.reading.disposition is DepartureDisposition.REACTIVE
+            else ()
+        ),
     )
 
 

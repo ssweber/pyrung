@@ -228,9 +228,14 @@ should consume the first owner's result.
 - Coast-departure channel ownership: `_ops.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`;
   its `PendingDeparture` embeds the opening `DepartureObservation` and adds
-  only mutable policy anchors, rollback owners, and its deadline
+  only mutable policy anchors, rollback owners, and its deadline;
+  `_handle_channel_departure` is the terminal event-streaming owner after
+  `_monitor_trend` detects a channel departure
 - Corrective hypothesis derivation: `corrections.py`
-- Corrective hypothesis replay and confirmation: `investigate.py`
+- Corrective hypothesis replay and confirmation: `investigate.py`;
+  `_resolve_replay_attempt` preserves accepted, hypothesis-extended, and
+  rejected outcomes as a typed sum while sharing replacement-cycle identity
+  across exploratory and guarded replay
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
@@ -247,7 +252,9 @@ should consume the first owner's result.
 4. `pilot.py::_record_attempt` applies all observations, including rejected
    attempts, before any further orientation.
 5. An accepted fork is committed and `progress.py` decides retention,
-   pending continuation, investigation, or revert.
+   pending continuation, investigation, or revert. Trend monitoring hands a
+   detected channel departure to its terminal `_handle_channel_departure`
+   generator without reconstructing the departure receipt.
 6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
    exhaustion mark are applied before orientation runs again.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
@@ -477,7 +484,8 @@ investigation materializes their guarded installed form.
 - `verify.py` — avoid, target, spin, cycle, dead-end, and outcome gates.
 - `outcome.py` — agency, bearing, progress, and frontier evidence.
 - `progress.py` — checkpoints, the `PendingDeparture` policy record, regression
-  recovery, correction installation, and reverts.
+  recovery, the terminal channel-departure handler, correction installation,
+  and reverts.
 - `detour.py` — immutable channel-departure observation and typed
   classification for progress handling; reads the executed Bearing objective,
   composes recovery-only continuation safety, preserves exact source receipts,
@@ -486,7 +494,8 @@ investigation materializes their guarded installed form.
   boundaries.
 - `causal.py` — recorded cause-chain queries and empirical program-write
   evidence.
-- `investigate.py` — incident construction, hypothesis ranking, and replay.
+- `investigate.py` — incident construction, hypothesis ranking, typed replay
+  resolution, and confirmation.
 - `corrections.py` — scoped corrective-hold hypothesis derivation.
 
 Module docstrings define the current local contracts. If a change moves a
