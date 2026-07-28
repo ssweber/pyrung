@@ -125,7 +125,7 @@ with rung(Or(
 ### 1.5 Regression tests to add
 
 - `validate()` on the (preserved buggy) guard rung reports `RUNG_CONTRADICTION` with `BlockingRelation` naming the contradictory pair `UnitModeCmd < 1` / `UnitModeCmd > 3`, plus `RUNG_TAUTOLOGY` on the `Or` term with the residual condition.
-- `how StateCurrent == S.HELD` from EXECUTE — coordinated `CmdHold` (level) + `rise(CmdChgRequest)` (edge) on the same scan; `CtrlCmd` is both external and program-written, so route redirection (`via=`) has two paths to `CtrlCmd == 4`.
+- `how StateCurrent == S.HELD` from EXECUTE — coordinated `CmdHold` (level) + `rise(CmdChgRequest)` (edge) on the same scan; `CtrlCmd` is both external and program-written, so the route reader must rank both paths to `CtrlCmd == 4`.
 - `how StateCurrent == S.COMPLETED` from cold start under `fold=True` — init fold, edge-gated Start, STARTING auto-advance, three 1 s TON dwells through the odd-step counter, Complete command.
 - `why StateCurrent == S.ABORTED` via `LoopIndex > 10` overflow — attribution through the affine counter and the `ds[150 + StateRequested]` jump table.
 - `how` into a mode-disabled state — planner must discover the `StateMask & DisabledStates` block, follow the jump-table redirect, and respect the LoopIndex bailout; acceptable outcomes are a correct redirect discovery or a loud budget exhaustion, never a silent wrong plan.

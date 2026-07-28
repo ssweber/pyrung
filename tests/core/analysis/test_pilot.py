@@ -282,12 +282,12 @@ def test_pilot_events_stream_candidate_decisions():
     assert accepted.data["accepted_because"]["target_reached"] is True
 
 
-def test_bool_output_routes_report_and_redirect():
+def test_bool_output_routes_report_and_avoid():
     """Burner latches via ``Or(ProdMode, MaintMode)`` — both internal coils, so
     there are two material routes.  how() never reports ambiguous: it takes a
     deterministic default (the first arm, ProdMode) and records it on
-    ``Path.route``, naming the route not taken; ``avoid=``/``via=`` redirect onto
-    the maintenance route."""
+    ``Path.route``, naming the route not taken; ``avoid=`` excludes the default
+    and lets the maintenance route win."""
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
     Mode = Int("Mode")
@@ -309,22 +309,23 @@ def test_bool_output_routes_report_and_redirect():
 
     plc = PLC(logic)
 
-    # Default route: reachable, names ProdMode, surfaces MaintMode for redirect.
+    # Default route: reachable, names ProdMode, and reports MaintMode as an alternative.
     default = plc.how(Burner)
     assert default.reachable
     assert default.route is not None
     assert not default.route.dominant
-    assert "ProdMode" in default.route.label
-    alternatives = default.route.pivots[0].alternatives
+    assert default.route.label == "ProdMode"
+    pivot = default.route.pivots[0]
+    assert pivot.avoid_hint == ("ProdMode", True)
+    assert not hasattr(pivot, "via_hint")
+    alternatives = pivot.alternatives
     assert any("MaintMode" in alt.label for alt in alternatives)
+    assert all(not hasattr(alt, "via_hint") for alt in alternatives)
     assert default.changes.get("ProdCmd") is True
-
-    # via= redirects onto the maintenance route.
-    via = plc.how(Burner, via=MaintMode)
-    assert via.reachable
-    assert via.route is not None and "MaintMode" in via.route.label
-    assert via.changes.get("MaintCmd") is True
-    assert via.changes.get("ProdCmd") is not True
+    rendered = str(default)
+    assert "Route: ProdMode" in rendered
+    assert "Other routes: avoid=ProdMode" in rendered
+    assert "Route: via" not in rendered
 
     # avoid= steers off the production route to the same place.
     avoided = plc.how(Burner, avoid=ProdMode)
@@ -389,14 +390,6 @@ def test_actionless_root_does_not_hide_productive_current_world_sibling():
     manual.patch({ManualUp.name: True})
     manual.step()
     assert manual.state.tags[Output.name] is True
-
-    via_manual = PLC(logic).how(Output, via=ManualUp, max_scans=200)
-    assert via_manual.reachable, via_manual.reason
-    assert via_manual.changes == {ManualUp.name: True}
-    assert via_manual.replay().state.tags[Output.name] is True
-
-    via_up = PLC(logic).how(Output, via=Up, max_scans=200)
-    assert not via_up.reachable
 
     events = []
     inferred = PLC(logic).how(Output, max_scans=200, on_event=events.append)
@@ -475,49 +468,12 @@ def test_rejected_nested_or_arm_falls_back_to_sibling_arm():
     assert path.route is None
 
 
-def test_explicit_via_keeps_alternate_current_world_work_out():
-    """Unlike inferred alternatives, ``via=`` remains durable user intent."""
-    CmdA = Bool("RouteVia_CmdA", external=True)
-    CmdB = Bool("RouteVia_CmdB", external=True)
-    Forbidden = Bool("RouteVia_Forbidden")
-    DummyB1 = Bool("RouteVia_DummyB1")
-    DummyB2 = Bool("RouteVia_DummyB2")
-    Target = Bool("RouteVia_Target")
-
-    with Program() as logic:
-        with rung(CmdB):
-            latch(Target)
-            latch(DummyB1)
-            latch(DummyB2)
-        with rung(CmdA):
-            latch(Target)
-            latch(Forbidden)
-
-    events = []
-    path = PLC(logic).how(
-        Target,
-        via=CmdA,
-        avoid=Forbidden,
-        max_scans=200,
-        on_event=events.append,
-    )
-
-    assert not path.reachable
-    assert not any(event.kind.startswith("route_") for event in events)
-    assert all(
-        event.data["candidate"]["tag"] != CmdB.name
-        for event in events
-        if event.kind == "candidate_try"
-    )
-    assert path.changes.get(CmdB.name) is not True
-
-
-def test_word_target_routes_report_and_redirect():
-    """A word target (``State == 5``) gets the same route report + redirect as a
+def test_word_target_routes_report_and_avoid():
+    """A word target (``State == 5``) gets the same route report as a
     Bool: ``copy(5, State)`` is gated ``Or(ProdMode, MaintMode)`` — two internal
     coils, two material routes.  how() takes the default (ProdMode) and records
-    the MaintMode route; ``via=``/``avoid=`` redirect onto it.  Mirrors
-    ``test_bool_output_routes_report_and_redirect`` with a value target."""
+    the MaintMode route; ``avoid=`` excludes the default. Mirrors
+    ``test_bool_output_routes_report_and_avoid`` with a value target."""
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
     ProdMode = Bool("ProdMode")
@@ -543,22 +499,16 @@ def test_word_target_routes_report_and_redirect():
     assert any("MaintMode" in alt.label for alt in alternatives)
     assert default.changes.get("ProdCmd") is True
 
-    via = plc.how(State == 5, via=MaintMode)
-    assert via.reachable
-    assert via.route is not None and "MaintMode" in via.route.label
-    assert via.changes.get("MaintCmd") is True
-    assert via.changes.get("ProdCmd") is not True
-
     avoided = plc.how(State == 5, avoid=ProdMode)
     assert avoided.reachable
     assert avoided.route is not None and "MaintMode" in avoided.route.label
     assert avoided.changes.get("ProdCmd") is not True
 
 
-def test_bool_false_target_routes_report_and_redirect():
+def test_bool_false_target_routes_report_and_avoid():
     """A ``Bool == False`` target routes too: a latched ``Running`` has two reset
     writers (``StopA``, ``StopB``), so clearing it has two routes.  how() takes the
-    default (StopA) and records StopB; ``via=``/``avoid=`` redirect onto it.  The
+    default (StopA) and records StopB; ``avoid=`` excludes the default. The
     target starts True (so it is not already satisfied) — otherwise there is
     nothing to route."""
     StartCmd = Bool("StartCmd", external=True)
@@ -590,27 +540,19 @@ def test_bool_false_target_routes_report_and_redirect():
     assert any("StopB" in alt.label for alt in alternatives)
     assert default.changes.get("StopA") is True
 
-    via = plc.how(Running == False, via=StopB)  # noqa: E712
-    assert via.reachable
-    assert via.route is not None and "StopB" in via.route.label
-    assert via.changes.get("StopB") is True
-    assert via.changes.get("StopA") is not True
-
     avoided = plc.how(Running == False, avoid=StopA)  # noqa: E712
     assert avoided.reachable
     assert avoided.route is not None and "StopB" in avoided.route.label
     assert avoided.changes.get("StopA") is not True
 
 
-def test_multi_target_avoid_via_now_supported():
-    """``avoid=``/``via=`` combined with a multi-target ``how()`` used to raise;
-    now the same route predicate constrains every target's route selection.
+def test_multi_target_avoid_constrains_each_route():
+    """``avoid=`` constrains every target's route selection.
 
     ``Burner`` latches via ``Or(ProdMode, MaintMode)`` (two routes); ``Aux`` is
-    independent.  ``how(Burner, Aux, via=MaintMode)`` reaches both and steers
-    Burner onto the maintenance route (``MaintCmd``, not ``ProdCmd``); ``avoid=
-    ProdMode`` reaches the same place (the avoid gate also vetoes resting with
-    ProdMode set)."""
+    independent. ``avoid=ProdMode`` reaches both through maintenance while the
+    avoid gate also vetoes resting with ProdMode set.
+    """
     ProdCmd = Bool("ProdCmd", external=True)
     MaintCmd = Bool("MaintCmd", external=True)
     ProdMode = Bool("ProdMode")
@@ -628,12 +570,6 @@ def test_multi_target_avoid_via_now_supported():
             out(Burner)
         with rung(AuxCmd):
             out(Aux)
-
-    via = PLC(logic).how(Burner, Aux, via=MaintMode)
-    assert via.reachable
-    assert via.changes.get("MaintCmd") is True
-    assert via.changes.get("ProdCmd") is not True
-    assert via.changes.get("AuxCmd") is True
 
     avoided = PLC(logic).how(Burner, Aux, avoid=ProdMode)
     assert avoided.reachable

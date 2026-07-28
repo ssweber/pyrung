@@ -736,14 +736,11 @@ def _format_pilot_progress(event: Any) -> str | None:
 
 @register(
     "how",
-    usage=(
-        "how <expression>[, <expression>...] "
-        "[avoid <expression>[, <expression>...]] [via <expression>]"
-    ),
+    usage=("how <expression>[, <expression>...] [avoid <expression>[, <expression>...]]"),
     group="analysis",
     hint="(runs planner)",
-    # Declared, not derived: the usage prose can't say that `avoid`/`via` are
-    # *keyword-introduced* clauses, nor that targets and avoids are comma-separated
+    # Declared, not derived: the usage prose can't say that `avoid` is a
+    # *keyword-introduced* clause, nor that targets and avoids are comma-separated
     # conjuncts within a single slot. Completers need both facts.
     slots=(
         Slot(kind="expression", label="target", repeat=True, separator=","),
@@ -755,7 +752,6 @@ def _format_pilot_progress(event: Any) -> str | None:
             separator=",",
             keyword="avoid",
         ),
-        Slot(kind="expression", label="via", required=False, keyword="via"),
     ),
 )
 def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
@@ -763,9 +759,9 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
     if len(parts) < 2 or not parts[1].strip():
         raise adapter.DAPAdapterError(
             "Usage: how <expression>[, <expression>...] "
-            "[avoid <expression>[, <expression>...]] [via <expression>]  "
+            "[avoid <expression>[, <expression>...]]  "
             "(e.g. how Running, how State == HELD avoid State == FAULTED, "
-            "how Burner avoid ProdMode, MaintFault, how Burner via MaintMode).  "
+            "how Burner avoid ProdMode, MaintFault).  "
             "Comma-separated targets must all hold at the end of the path.  "
             "Comma-separated avoid conditions are a union; each is avoided "
             "independently."
@@ -780,8 +776,8 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         parse as parse_expr,
     )
 
-    # Split the target from trailing `avoid`/`via` clauses (either order).
-    tokens = re.split(r"\b(avoid|via)\b", expr_str)
+    # Split the target from the trailing `avoid` clause.
+    tokens = re.split(r"\b(avoid)\b", expr_str)
     expr_str = tokens[0].strip()
     clauses: dict[str, str] = {}
     for i in range(1, len(tokens), 2):
@@ -824,9 +820,7 @@ def _cmd_how(adapter: Any, expression: str) -> ConsoleResult:
         if fragment is not None:
             adapter._send_event("output", {"category": "console", "output": fragment})
 
-    path = runner.how(
-        *conditions, avoid=_single("avoid"), via=_single("via"), on_event=_on_pilot_event
-    )
+    path = runner.how(*conditions, avoid=_single("avoid"), on_event=_on_pilot_event)
     return ConsoleResult(str(path))
 
 

@@ -994,8 +994,8 @@ def _hold_allowed(ctx: Any, pair: tuple[str, Any]) -> bool:
     tag, _value = pair
     compass = getattr(ctx, "compass", None)
     action_tags = getattr(compass, "action_tags", frozenset())
-    route_allowed = getattr(ctx, "route_allowed", None)
-    if tag in action_tags or (route_allowed is not None and not route_allowed(pair)):
+    blocked_actions = getattr(ctx, "blocked_actions", frozenset())
+    if tag in action_tags or pair in blocked_actions:
         return False
     # A hold that drives an avoided tag is a path that depends on it — inadmissible.
     return not _avoid_forces(ctx, [pair])

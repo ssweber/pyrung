@@ -172,7 +172,6 @@ def _detour_edge_allowed(
     ctx = SimpleNamespace(
         compass=compass,
         avoid_pred=avoid_pred,
-        blocked_route_actions=blocked_actions,
     )
     return _continuation_safety(
         edge,

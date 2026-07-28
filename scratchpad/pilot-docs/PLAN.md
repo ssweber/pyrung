@@ -89,9 +89,9 @@ plan proposed:
   the recovery-only `ContinuationSafety` decision around it.
 - `trace._TraceSelection` owns the common precedence among unlocked local trace
   alternatives while each caller supplies its exact rank. Its alternatives
-  retain literal avoid, via, dead-end, and exact-rejection facts; root route
-  locks and complete-route ranking remain separate. Subroutine callers are
-  distinct program contexts: they share avoid/via and coherence selection but
+  retain literal avoid, dead-end, and exact-rejection facts; alternative-specific
+  root locks and complete-route ranking remain separate. Subroutine callers are
+  distinct program contexts: they share avoid and coherence selection but
   do not redirect on exact action rejection.
 
 Those are the pattern to continue: construct evidence once, keep it typed, and
@@ -208,28 +208,6 @@ owned key function or value object. Then use one ordered-unique helper.
 **Risk:** low-medium; this is a behavior decision, not mechanical cleanup.
 
 **Gate:** focused identity tests plus goldens.
-
----
-
-### C5. Decide whether nested-writer `via=` should make writer reading eager
-
-`trace._trace_back` currently stops at the first writer admitted by
-`_rank_writers`. `_TraceAlternative.matches_via` records the literal fact, but
-writer selection deliberately does not prefer it because discovering a later
-match would require building every later writer subtree. Complete root routes
-already apply durable `via=` intent after tracing the whole route.
-
-Choose explicitly whether nested writers should remain lazy or whether `via=`
-justifies eager enumeration. If eager, measure the Tumbler trace cost and keep
-root locks binding; do not hide the behavior change inside D3's mutation
-cleanup.
-
-**LOC:** likely neutral.
-
-**Risk:** medium-high; this changes nested program-path precedence and trace
-cost.
-
-**Gate:** focused nested-writer via/default tests plus route and Tumbler tests.
 
 ---
 
@@ -458,11 +436,10 @@ These are not current cleanup targets.
 
 ## Sequence
 
-1. **Trace precedence:** C5, before D3 changes the writer-build transaction.
-2. **Control flow:** D1/D2/D3.
-3. **Recovery continuity:** B6, then D4.
-4. **Compiled residual replay:** E1, E2, then E3.
-5. **Diagnostics and type hardening:** C3, C4, D5.
+1. **Control flow:** D1/D2/D3.
+2. **Recovery continuity:** B6, then D4.
+3. **Compiled residual replay:** E1, E2, then E3.
+4. **Diagnostics and type hardening:** C3, C4, D5.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.

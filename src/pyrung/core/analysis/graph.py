@@ -393,34 +393,28 @@ def _rung_coast_summary(rungs: tuple[Any, ...], *, same_holds: bool = False) -> 
 
 @dataclass(frozen=True)
 class RouteAlt:
-    """A road not taken at a pivot — what ``via=`` would switch to.
-
-    ``via_hint`` is the concrete ``(tag, value)`` the engineer names to redirect
-    onto this alternative (``via=(MaintMode, True)`` / the bare tag ``MaintMode``).
-    """
+    """A road not taken at a reported pivot."""
 
     label: str
-    via_hint: tuple[str, Any] | None = None
 
 
 @dataclass(frozen=True)
 class RoutePivot:
-    """A redirectable decision the chosen route committed to.
+    """An excludable decision the chosen route committed to.
 
     PILOT picked ``(tag, value)`` where ≥1 other viable option existed.  The
-    engineer steers away with ``avoid=<via_hint>`` or toward an alternative with
-    ``via=<that alt's via_hint>``.  ``via_hint`` is the bridge from the human
-    label to the ``avoid=``/``via=`` predicate: the concrete condition the
-    redirect names (the committed writer's gating coil, or a representative
-    steerable leaf of an OR arm).  ``salient`` is False for trivial cost-0 forks
-    (``Or(Auto, Manual)``) — still redirectable, but hidden from the headline.
+    engineer can exclude it with ``avoid=<avoid_hint>``. ``avoid_hint`` is the
+    concrete condition behind the human label: the committed writer's gating
+    coil, or a representative steerable leaf of an OR arm. ``salient`` is False
+    for trivial cost-0 forks (``Or(Auto, Manual)``), which stay hidden from the
+    headline.
     """
 
     tag: str
     value: Any
     label: str
     kind: str  # "writer" | "or-arm"
-    via_hint: tuple[str, Any] | None = None
+    avoid_hint: tuple[str, Any] | None = None
     alternatives: tuple[RouteAlt, ...] = ()
     salient: bool = True
 
@@ -431,9 +425,9 @@ class RouteTaken:
 
     ``how()`` never reports ambiguous: it starts with a deterministic preferred
     route (cheapest by trace score, rung order breaking ties) and records the
-    route that actually reached the goal here. The engineer can redirect with
-    ``avoid=``/``via=``. ``dominant`` is True when preparation found no real
-    root fork.
+    route that actually reached the goal here. The engineer can exclude it
+    with ``avoid=``. ``dominant`` is True when preparation found no real root
+    fork.
     """
 
     label: str
@@ -446,7 +440,7 @@ class RouteTaken:
 
 
 def _format_hint(hint: tuple[str, Any] | None) -> str:
-    """Render a ``(tag, value)`` redirect hint as the engineer would type it."""
+    """Render a ``(tag, value)`` exclusion hint as the engineer would type it."""
     if hint is None:
         return ""
     tag, value = hint
@@ -454,17 +448,9 @@ def _format_hint(hint: tuple[str, Any] | None) -> str:
 
 
 def _render_pivot_redirect(pivot: RoutePivot) -> str:
-    """One-line ``avoid=``/``via=`` hint for redirecting off a salient pivot."""
-    bits: list[str] = []
-    avoid_expr = _format_hint(pivot.via_hint)
-    if avoid_expr:
-        bits.append(f"avoid={avoid_expr}")
-    for alt in pivot.alternatives:
-        via_expr = _format_hint(alt.via_hint)
-        if via_expr and via_expr != avoid_expr:
-            bits.append(f"via={via_expr}")
-    unique = tuple(dict.fromkeys(bits))
-    return " | ".join(unique)
+    """One-line ``avoid=`` hint for excluding a salient chosen route."""
+    avoid_expr = _format_hint(pivot.avoid_hint)
+    return f"avoid={avoid_expr}" if avoid_expr else ""
 
 
 def _format_plan_step(
@@ -569,7 +555,7 @@ class Plan:
     ``CANNOT_REACH`` result from ``STOPPED``, where PILOT ran out of safe,
     evidence-backed actions. :attr:`reason` names the proof or outstanding
     frontier. :attr:`route` records which way PILOT went to a Bool target so the
-    engineer can redirect with ``avoid=`` / ``via=``.
+    engineer can exclude with ``avoid=``.
     """
 
     reachable: bool

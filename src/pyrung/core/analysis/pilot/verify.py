@@ -368,7 +368,6 @@ def _gate_dead_end(
             route=ctx.route,
             prior=ctx.domain_prior,
             avoid_pred=ctx.avoid_pred,
-            via_pred=ctx.via_pred,
         ),
     )
     new_trend = new_tree.unsatisfied_count()
@@ -385,7 +384,10 @@ def _gate_dead_end(
             context=ctx,
         ),
         target,
-        NavigationConstraints(ctx.blocked_route_actions, ctx.avoid_pred),
+        NavigationConstraints(
+            blocked_actions=ctx.blocked_actions,
+            avoid_predicate=ctx.avoid_pred,
+        ),
         ctx.compass.knowledge,
     )
     influence_frontier = isinstance(frontier_status, Reachable)

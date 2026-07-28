@@ -195,7 +195,7 @@ def test_conveyor_diverter_reachable():
     branch (``Manual ∧ DiverterBtn ∧ EstopOK``) is fully steerable, so PILOT
     collapses the OR onto it (no ``choice=`` needed) rather than reporting the
     two Bool output routes as ambiguous — the internal auto-sort branch stays
-    available via ``choice=``/``via=`` but is not the default."""
+    available as a reported route alternative but is not the default."""
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.DiverterCmd, max_scans=500)
     assert path.reachable

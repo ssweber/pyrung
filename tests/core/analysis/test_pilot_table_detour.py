@@ -327,7 +327,7 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
         steerable=steerable,
         domain_prior=None,
         pipeline_roles=(role,),
-        route_allowed=lambda _pair: True,
+        blocked_actions=frozenset(),
         avoid_pred=None,
     )
 

@@ -354,10 +354,9 @@ class TestGateDeadEnd:
             opaque_loop=frozenset(),
             pipeline_internal_tags=frozenset(),
             route=None,
+            blocked_actions=frozenset(),
             domain_prior=None,
             avoid_pred=None,
-            via_pred=None,
-            blocked_route_actions=frozenset(),
             compass=SimpleNamespace(knowledge=object()),
         )
 

@@ -433,7 +433,6 @@ def test_context_trace_uses_live_harness_to_surface_ramp_driver():
         opaque_loop=frozenset(),
         pipeline_internal_tags=frozenset(),
         domain_prior=None,
-        via_pred=None,
     )
 
     read = TraceReadConstraints.from_context(
@@ -864,8 +863,8 @@ def test_subroutine_caller_keeps_program_context_after_exact_rejection():
     assert tree.ordered_actions() == [(NormalRequest.name, True)]
 
 
-def test_subroutine_caller_respects_avoid_and_via():
-    """Complete call-site alternatives use the same avoid and via facts."""
+def test_subroutine_caller_respects_avoid_and_default_order():
+    """Call-site alternatives keep deterministic order and honor avoid."""
 
     CallA = Bool("CallerPolicy_CallA", external=True)
     CallB = Bool("CallerPolicy_CallB", external=True)
@@ -890,13 +889,10 @@ def test_subroutine_caller_respects_avoid_and_via():
         *args,
         avoid_pred=lambda snapshot: bool(snapshot.get(CallA.name)),
     )
-    via = trace_back(
-        *args,
-        via_pred=lambda snapshot: bool(snapshot.get(CallB.name)),
-    )
+    default = trace_back(*args)
 
     assert avoided.ordered_actions() == [(CallB.name, True)]
-    assert via.ordered_actions() == [(CallB.name, True)]
+    assert default.ordered_actions() == [(CallA.name, True)]
 
 
 # -- Test 10: Indirect copy inversion (lookup table) ----------------------

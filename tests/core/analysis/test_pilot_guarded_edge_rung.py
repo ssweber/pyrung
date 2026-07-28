@@ -103,13 +103,12 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     pilot_state = SimpleNamespace(work=plc, rungs=rungs)
     ctx = SimpleNamespace(
         compass=Compass(),
-        blocked_route_actions=frozenset(),
         edge_tags=compute_edge_tags(pdg, logic),
         clear_only=frozenset(),
         steerable=steerable,
         pdg=pdg,
         program=logic,
-        route_allowed=lambda _pair: True,
+        blocked_actions=frozenset(),
         opaque_loop=frozenset(),
         target=TargetSpec(state_tag.name, ready),
         resting={door_closed.name: False},

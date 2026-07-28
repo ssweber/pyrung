@@ -88,7 +88,7 @@ class WalkContext(Protocol):
     ``trace.py``'s ``_TraceEnv`` contains all constants threaded through one
     trace. A separate static reader consumes only the world-describing subset,
     not route or recursion controls such as writer locks, ``avoid_pred``,
-    ``via_pred``, ``guard_memo``, ``max_depth``, ``harness``, or ``clear_only``.
+    ``guard_memo``, ``max_depth``, ``harness``, or ``clear_only``.
     This protocol defines that subset:
 
     - ``snapshot`` — the live register frame guards are evaluated against;
@@ -128,7 +128,6 @@ class WorldView:
     pipeline_internal_tags: frozenset[str] = frozenset()
     pipeline_roles: tuple[Any, ...] = ()
     avoid_pred: Any = None
-    via_pred: Any = None
     harness: Any = None
 
 
@@ -424,23 +423,22 @@ class _PilotContext:
     opaque_loop: frozenset[str]
     pipeline_roles: tuple[PipelineRoles, ...]
     pipeline_internal_tags: frozenset[str]
-    # An explicit user ``via=`` lock through a multi-route value trace, or None.
-    # The final Plan.route receipt is reporting only and never feeds back into
-    # execution.
+    # The root route selected for this current-world bearing. Orientation
+    # replaces it when comparing inferred alternatives; verification and replay
+    # keep that exact writer/OR path for the duration of the bearing.
     route: TraceChoice | None
-    blocked_route_actions: frozenset[_ActionPair]
+    # Generic caller-owned action exclusions for the current orientation read.
+    # Public ``how()`` supplies none; other navigation clients may constrain an
+    # exact action without implying a retained route choice.
+    blocked_actions: frozenset[_ActionPair]
     max_scans: int
     live: bool
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
-    via_pred: Any = None
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
     # Kept off prerequisite holds (options.py) and off preferred init/reset
     # writer selection (trace._rank_writers): a momentary command, never a hold.
     clear_only: frozenset[str] = frozenset()
-
-    def route_allowed(self, pair: _ActionPair) -> bool:
-        return pair not in self.blocked_route_actions
 
 
 @dataclass(frozen=True)

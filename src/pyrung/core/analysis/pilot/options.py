@@ -109,9 +109,9 @@ def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
     """Concrete current-trace facts that can identify live work."""
 
     anchors: list[_ActionPair] = []
-    via_hint = getattr(route, "via_hint", None)
-    if via_hint is not None:
-        anchors.append(via_hint)
+    route_condition = getattr(route, "route_condition", None)
+    if route_condition is not None:
+        anchors.append(route_condition)
         return tuple(anchors)
     for node in _all_nodes(tree):
         if node.relational or node.value is None:
@@ -120,6 +120,12 @@ def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
         if pair not in anchors:
             anchors.append(pair)
     return tuple(anchors)
+
+
+def _action_allowed(ctx: Any, pair: _ActionPair) -> bool:
+    """Whether the current orientation constraints admit this exact action."""
+
+    return pair not in ctx.blocked_actions
 
 
 def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...]:
@@ -506,7 +512,7 @@ def _learned_edge_allowed(
         members = cast(tuple[_ActionPair, ...], cause) if is_composite_action(cause) else (cause,)
         return all(
             pair not in key_nogoods
-            and ctx.route_allowed(pair)
+            and _action_allowed(ctx, pair)
             and not _avoid_forces(ctx, (pair,), frame.snap)
             for pair in members
         )
@@ -534,7 +540,7 @@ def _compass_route_plan(
             world_key=getattr(frame, "key", None),
             snapshot=frame.snap,
             knowledge=ctx.compass.knowledge,
-            blocked_actions=ctx.blocked_route_actions,
+            blocked_actions=ctx.blocked_actions,
             context=ctx,
             pair_nogoods=nogoods,
         )
@@ -638,7 +644,7 @@ def _compass_route_actions(
 
     edge = plan.first_edge
     if edge.action is not None:
-        if edge.action not in key_nogoods and ctx.route_allowed(edge.action):
+        if edge.action not in key_nogoods and _action_allowed(ctx, edge.action):
             return (edge.action,)
         return ()
 
@@ -647,7 +653,7 @@ def _compass_route_actions(
         if _values_match(frame.snap.get(tag), value):
             continue
         pair = (tag, value)
-        if tag in ctx.steerable and pair not in key_nogoods and ctx.route_allowed(pair):
+        if tag in ctx.steerable and pair not in key_nogoods and _action_allowed(ctx, pair):
             direct.append(pair)
 
     return tuple(direct)
@@ -776,7 +782,7 @@ def _current_bearing(frame: Any, ctx: Any) -> Any:
         world,
         channel,
         ctx.pipeline_roles,
-        route_allowed=ctx.route_allowed,
+        action_allowed=lambda action: _action_allowed(ctx, action),
         action_avoided=lambda action: _avoid_forces(ctx, [action], frame.snap),
         awaits_operator=True,
     )
@@ -968,7 +974,6 @@ def _prescribe_wait(
             pipeline_internal_tags=ctx.pipeline_internal_tags,
             pipeline_roles=ctx.pipeline_roles,
             avoid_pred=ctx.avoid_pred,
-            via_pred=ctx.via_pred,
             harness=getattr(state.work, "_harness", None),
         )
         step = read_program_step(
@@ -1114,7 +1119,7 @@ def _admit_trace_details(
         pair
         for pair in ordered_pairs
         for detail in (detail_by_pair[pair],)
-        if ctx.route_allowed(pair)
+        if _action_allowed(ctx, pair)
         and (
             not _values_match(frame.snap.get(pair[0]), pair[1])
             or pair[0] in ctx.edge_tags
@@ -1411,7 +1416,7 @@ def _build_candidates(
             scope = _until_unresolved_condition(state.work, detail.until)
             if tag in pulse_tags:
                 seen_prereq.add(tag)
-                if ctx.route_allowed((tag, value)):
+                if _action_allowed(ctx, (tag, value)):
                     prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
             elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
@@ -1419,7 +1424,7 @@ def _build_candidates(
                 seen_prereq.add(tag)
                 # Action gate for a prerequisite hold: a hold that drives an
                 # avoided tag is a path that depends on it — never install it.
-                if ctx.route_allowed((tag, value)) and not _avoid_forces(
+                if _action_allowed(ctx, (tag, value)) and not _avoid_forces(
                     ctx, [(tag, value)], frame.snap
                 ):
                     prerequisite_rungs.append(PilotRung(tag, value, scope))
@@ -1512,11 +1517,11 @@ def _build_candidates(
                 # composite is a tuple OF pairs, which is what the shape test
                 # just established.)
                 members = cast("tuple[_ActionPair, ...]", tuple(first_step))
-                if all(pair not in key_nogoods and ctx.route_allowed(pair) for pair in members):
+                if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
                     prescribed_batch = members
                     break
                 continue
-            if first_step not in key_nogoods and ctx.route_allowed(first_step):
+            if first_step not in key_nogoods and _action_allowed(ctx, first_step):
                 inf_candidates.append(first_step)
                 prescribed_action = first_step
                 break
@@ -1602,7 +1607,7 @@ def _build_candidates(
     # File it before deeper backward-trace leaves; this is a source category,
     # not a numeric rank, and is recomputed from the next world after every act.
     for pair in route_candidates:
-        if ctx.route_allowed(pair) and pair not in seen_cand:
+        if _action_allowed(ctx, pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in trace_actions:
@@ -1610,7 +1615,7 @@ def _build_candidates(
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in inf_candidates:
-        if ctx.route_allowed(pair) and pair not in seen_cand:
+        if _action_allowed(ctx, pair) and pair not in seen_cand:
             seen_cand.add(pair)
             candidates.append(_candidate_for(pair))
     # High-wake trace actions split off the batch above still get a turn as
@@ -1633,7 +1638,7 @@ def _build_candidates(
     if current_action is not None and not candidates:
         pair = current_action.action
         if (
-            ctx.route_allowed(pair)
+            _action_allowed(ctx, pair)
             and pair not in seen_cand
             and pair not in key_nogoods
             and (not _values_match(frame.snap.get(pair[0]), pair[1]) or pair[0] in ctx.edge_tags)

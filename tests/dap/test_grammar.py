@@ -82,11 +82,8 @@ class TestHowGrammar:
         assert avoid.repeat is True
         assert avoid.separator == ","
 
-    def test_via_is_a_single_keyword_clause(self, grammar: dict):
-        via = next(s for s in grammar["how"].slots if s.keyword == "via")
-        assert via.kind == "expression"
-        assert via.required is False
-        assert via.repeat is False
+    def test_avoid_is_the_only_keyword_clause(self, grammar: dict):
+        assert {slot.keyword for slot in grammar["how"].slots if slot.keyword} == {"avoid"}
 
     def test_every_how_slot_takes_an_expression(self, grammar: dict):
         assert all(s.kind == "expression" for s in grammar["how"].slots)

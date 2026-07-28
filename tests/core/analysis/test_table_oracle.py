@@ -232,15 +232,15 @@ def test_trace_surfaces_mode_for_state_disabled_in_current_mode(bench_trace):
     assert _enable_modes(tree), "mode change to enable HOLDING was not surfaced"
 
 
-def test_enable_arm_respects_avoid_and_via(bench_trace):
-    """``avoid=``/``via=`` steer the surfaced enable arm among the *real* modes.
+def test_enable_arm_respects_avoid_and_default_order(bench_trace):
+    """``avoid=`` and default order select among the *real* modes.
 
     HOLDING is blocked in Manual, so a mode change to Production/Maintenance is a
     genuine prerequisite.  The degenerate mode 0 (Undefined = all-zero reserved
     mask slot) is *not* surfaced: the ``UnitModeCmd != 0`` guard on
     ``copy(UnitModeCmd, UnitModeCurrent)`` proves the writer can never emit
     ``UnitModeCurrent == 0`` (producibility), so the unsteered default is the
-    cheapest *real* mode and ``via=`` steers onto a specific one.
+    cheapest *real* mode.
     """
     from examples.packml_bench import UnitModeCurrent
     from pyrung.core.analysis.pilot.trace import trace_back
@@ -264,29 +264,6 @@ def test_enable_arm_respects_avoid_and_via(bench_trace):
         avoid_pred=_compiled(UnitModeCurrent == 0),
     )
     assert _enable_modes(avoided) and 0 not in _enable_modes(avoided)
-
-    # via= steers onto either real mode (neither route has a dead end).
-    onto_prod = trace_back(
-        "StateCurrent",
-        _HOLDING,
-        snap,
-        pdg,
-        program,
-        steerable,
-        via_pred=_compiled(UnitModeCurrent == 1),
-    )
-    assert _enable_modes(onto_prod) == [1]  # Production, steered onto
-
-    onto_maint = trace_back(
-        "StateCurrent",
-        _HOLDING,
-        snap,
-        pdg,
-        program,
-        steerable,
-        via_pred=_compiled(UnitModeCurrent == 2),
-    )
-    assert _enable_modes(onto_maint) == [2]  # Maintenance, steered onto
 
 
 def test_table_enablement_value_skips_exact_rejected_action():

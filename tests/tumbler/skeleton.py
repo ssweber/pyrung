@@ -220,7 +220,6 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
     "started": (
         "target",
         "route",
-        "blocked_route_actions",
         "pipeline_roles",
         "steerable_count",
         "opaque_loop",

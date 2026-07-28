@@ -177,7 +177,6 @@ def _trace_exact(ctx: Any, producer: Any, snapshot: Mapping[str, Any]) -> TraceN
         },
         prior=getattr(ctx, "prior", getattr(ctx, "domain_prior", None)),
         avoid_pred=getattr(ctx, "avoid_pred", None),
-        via_pred=getattr(ctx, "via_pred", None),
         harness=getattr(ctx, "harness", None),
     )
 

@@ -235,8 +235,8 @@ def _continuation_safety(
         world_key=settled_key,
         snapshot=settled_snap,
         knowledge=ctx.compass.knowledge,
-        blocked_actions=blocked_actions,
         context=ctx,
+        blocked_actions=blocked_actions,
     )
     return ContinuationSafety(
         admission=admission,
@@ -510,7 +510,7 @@ def classify_departure(
             ctx,
             settled_key=settled_key,
             settled_snap=settled_snap,
-            blocked_actions=ctx.blocked_route_actions,
+            blocked_actions=ctx.blocked_actions,
             progress_erasing_values=progress_erasing_values,
             completed_actions=completed_actions,
         ).allowed
@@ -545,7 +545,7 @@ def classify_departure(
             action,
             settled_key=settled_key,
             knowledge=ctx.compass.knowledge,
-            blocked_actions=ctx.blocked_route_actions,
+            blocked_actions=ctx.blocked_actions,
         )
 
     current = unique_legal_current_reading(
@@ -559,7 +559,7 @@ def classify_departure(
         ),
         channel_tag,
         ctx.pipeline_roles,
-        route_allowed=_legal_current_action,
+        action_allowed=_legal_current_action,
         action_avoided=lambda action: _avoid_forces(
             ctx,
             [action],

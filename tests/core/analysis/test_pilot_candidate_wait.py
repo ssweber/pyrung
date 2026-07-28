@@ -173,8 +173,7 @@ def test_convergent_actions_remain_ordered_independent_edges(monkeypatch) -> Non
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=None,
     )
     fallback = _compass_route_plan(frame, ctx, {("First", True)})
@@ -231,8 +230,7 @@ def test_rejected_joint_route_falls_back_to_same_action_with_other_gate() -> Non
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -342,7 +340,7 @@ def test_static_edge_admission_names_full_artifact_exclusions() -> None:
     assert any(exclusion.evidence == (gate,) for exclusion in admission.exclusions)
 
 
-def test_static_route_rejects_a_forbidden_required_co_action() -> None:
+def test_static_evidence_rejects_a_blocked_required_co_action() -> None:
     primary = ("Start", True)
     forbidden = ("ForbiddenGate", True)
     route = replace(_action_route(0, 2, primary[0]), edge_gates=(forbidden,))
@@ -357,7 +355,7 @@ def test_static_route_rejects_a_forbidden_required_co_action() -> None:
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
-        blocked_route_actions=frozenset({forbidden}),
+        blocked_actions=frozenset({forbidden}),
         avoid_pred=None,
     )
 
@@ -380,7 +378,7 @@ def test_static_route_rejects_a_forbidden_required_co_action() -> None:
         Reachable,
     )
 
-    ctx.blocked_route_actions = frozenset()
+    ctx.blocked_actions = frozenset()
     ctx.avoid_pred = lambda snap: snap.get("ForbiddenGate") is True
     assert _compass_route_plan(frame, ctx) is None
     assert not isinstance(
@@ -430,8 +428,7 @@ def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() ->
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -487,8 +484,7 @@ def test_orient_removes_live_avoid_edges_before_route_selection() -> None:
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 2),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=lambda snap: snap.get("Forbidden") is True,
     )
 
@@ -770,8 +766,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
         compass=compass,
         opaque_loop=frozenset({"State"}),
         target=TargetSpec("State", 17),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=None,
     )
 
@@ -869,13 +864,12 @@ def test_prescribed_wait_suppresses_stuck_reason():
     state = SimpleNamespace(rungs=[])
     ctx = SimpleNamespace(
         compass=compass,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         edge_tags=set(),
         clear_only=frozenset(),
         steerable=frozenset(),
         pdg=SimpleNamespace(writers_of={}),
         program=object(),
-        route_allowed=lambda _pair: True,
         opaque_loop=frozenset(),
         target=TargetSpec("State", 17),
     )
@@ -903,17 +897,13 @@ def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     outer = TraceAction("Keep", True)
     supplemental = (
         TraceAction("Keep", True, until=lifetime),
-        TraceAction("Blocked", True),
         TraceAction("Nogood", True),
     )
     frame = SimpleNamespace(
-        snap={"Keep": True, "Blocked": False, "Nogood": False},
+        snap={"Keep": True, "Nogood": False},
     )
     state = SimpleNamespace(rungs=())
-    ctx = SimpleNamespace(
-        route_allowed=lambda pair: pair != ("Blocked", True),
-        edge_tags=frozenset(),
-    )
+    ctx = SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset())
 
     admitted = _admit_trace_details(
         (outer, *supplemental),
@@ -1022,10 +1012,10 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
         frame,
         state,
         SimpleNamespace(
-            route_allowed=lambda pair: pair != ("Blocked", True),
+            blocked_actions=frozenset(),
             edge_tags=frozenset(),
         ),
-        set(),
+        {("Blocked", True)},
     )
 
     assert admitted.viable is False
@@ -1042,7 +1032,7 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
         (),
         frame,
         state,
-        SimpleNamespace(route_allowed=lambda _pair: True, edge_tags=frozenset()),
+        SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset()),
         set(),
     )
     assert fully_admitted.viable is True
@@ -1104,8 +1094,7 @@ def test_grounded_action_plan_always_materializes_its_first_action() -> None:
     )
     ctx = SimpleNamespace(
         compass=Compass(NavigationCatalog(graphs=(graph,))),
-        route_allowed=lambda _pair: True,
-        blocked_route_actions=frozenset(),
+        blocked_actions=frozenset(),
         avoid_pred=None,
         opaque_loop=frozenset(),
         target=TargetSpec("State", 16),

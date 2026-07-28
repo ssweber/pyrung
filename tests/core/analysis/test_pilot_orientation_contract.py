@@ -44,9 +44,9 @@ from pyrung.core.analysis.pilot.recording import _candidate_payload
 class _Context:
     compass: Compass
     target: TargetSpec = TargetSpec("Target", True)
-    blocked_route_actions: frozenset = frozenset()
     avoid_pred: object = None
     route: object = None
+    blocked_actions: frozenset = frozenset()
     pdg: object = None
     program: object = None
     steerable: frozenset = frozenset()
@@ -54,7 +54,6 @@ class _Context:
     opaque_loop: frozenset = frozenset()
     pipeline_internal_tags: frozenset = frozenset()
     domain_prior: object = None
-    via_pred: object = None
 
 
 def _candidate(tag: str) -> SimpleNamespace:
@@ -175,6 +174,51 @@ def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) 
     )
 
     assert routes == ((route_a, tree_a), (route_b, tree_b))
+
+
+def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
+    from pyrung.core.analysis.pilot._ops import _StateKeyConfig
+    from pyrung.core.analysis.pilot.orientation import _assemble_world
+    from pyrung.core.analysis.pilot.trace import TraceChoice, TraceNode
+
+    route = TraceChoice(id="route-a", label="A", route=("A",))
+    assembled = _assemble_world(
+        _world(Compass()),
+        TargetSpec("Target", True),
+        route,
+        TraceNode("Target", True, satisfied=False),
+        _StateKeyConfig(
+            stateful_names=("Target",),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        ),
+    )
+
+    assert assembled.root_route is route
+    assert assembled.context.route is route
+
+
+def test_orient_passes_blocked_actions_to_candidate_admission(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    blocked = frozenset({("Blocked", True)})
+    seen: list[frozenset] = []
+
+    def _read(_frame, _state, context):
+        seen.append(context.blocked_actions)
+        return _options(stuck_reason="trace_empty")
+
+    monkeypatch.setattr(orientation, "_build_candidates", _read)
+    compass = Compass()
+
+    compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(blocked_actions=blocked),
+    )
+
+    assert seen == [blocked]
 
 
 def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:

@@ -484,8 +484,7 @@ def _compile_avoid(spec: Any) -> Any:
     printable name and condition fold metadata so a decline can point at what
     it violated and a folded PILOT coast can observe it. Opaque callables retain
     only their predicate; rise/fall transition conditions are rejected because
-    avoidance is defined over snapshots. (``via=`` stays a conjunction — see
-    ``_compile_via``.)
+    avoidance is defined over snapshots.
     """
     if spec is None:
         return None
@@ -1314,7 +1313,6 @@ class PLC:
         self,
         *conditions: Any,
         avoid: Any = None,
-        via: Any = None,
         max_scans: int = 4000,
         unlink: list[str] | None = None,
         on_event: Any = None,
@@ -1324,9 +1322,8 @@ class PLC:
         For a target with more than one route — a Bool (``Running``,
         ``Running == False``) or a word value (``State == 5``) — PILOT never
         reports ambiguous: it picks a deterministic default route, reaches the
-        goal, and records where it went on ``Path.route``.  Redirect with
-        ``avoid=`` (steer off a route) or ``via=`` (steer onto one), naming the
-        condition from the reported route.
+        goal, and records where it went on ``Path.route``. Exclude a reported
+        route with ``avoid=`` and PILOT will look for another.
 
         ``avoid X`` = do not take a path that depends on X.  It excludes routes,
         operator actions, and observed scan states that satisfy the predicate —
@@ -1347,8 +1344,6 @@ class PLC:
                 condition avoided independently).  Express a composite prohibition
                 explicitly — ``avoid=And(A, B)`` avoids only the combined state,
                 not A or B alone.
-            via: Condition(s) the chosen route must pass through.  A tuple/list
-                conjoins (the route must pass through every one).
             max_scans: Scan budget for the search.
             unlink: Harness-feedback tag names to free for fault injection.
                 Named tags have their ``link=`` coupling removed so the harness
@@ -1359,44 +1354,30 @@ class PLC:
         Returns:
             A :class:`~pyrung.core.analysis.graph.Path`.
         """
-        return self._how_via_pilot(
+        return self._how_with_pilot(
             *conditions,
             max_scans=max_scans,
             avoid=avoid,
-            via=via,
             unlink=unlink,
             on_event=on_event,
         )
 
-    def _how_via_pilot(
+    def _how_with_pilot(
         self,
         *conditions: Any,
         max_scans: int = 4000,
         avoid: Any = None,
-        via: Any = None,
         unlink: list[str] | None = None,
         on_event: Any = None,
     ) -> Any:
         """PILOT engine: backward-trace + forward-simulate."""
         from pyrung.core.analysis.pilot import pilot_how
 
-        def _compile_via(spec: Any) -> Any:
-            # ``via=`` is a single route predicate — a tuple/list conjoins (the
-            # route must pass through every condition).
-            if spec is None:
-                return None
-            from pyrung.core.analysis.prove import _compile_property
-
-            conds = tuple(spec) if isinstance(spec, (tuple, list)) else (spec,)
-            pred, _, _ = _compile_property(*conds)
-            return pred
-
         return pilot_how(
             self,
             *conditions,
             max_scans=max_scans,
             avoid_pred=_compile_avoid(avoid),
-            via_pred=_compile_via(via),
             unlink=unlink,
             on_event=on_event,
         )

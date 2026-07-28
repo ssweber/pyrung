@@ -2564,10 +2564,10 @@ class TestHoldAllowed:
         assert _hold_allowed(ctx, ("x", True)) is False
         assert _hold_allowed(ctx, ("y", True)) is True
 
-    def test_rejects_route_blocked(self):
+    def test_rejects_blocked_action(self):
         ctx = SimpleNamespace(
             compass=SimpleNamespace(action_tags=frozenset()),
-            route_allowed=lambda pair: pair[0] != "blocked",
+            blocked_actions=frozenset({("blocked", True)}),
         )
         assert _hold_allowed(ctx, ("blocked", True)) is False
         assert _hold_allowed(ctx, ("ok", True)) is True

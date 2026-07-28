@@ -252,7 +252,7 @@ def probe_live_guard_frontiers(
     # trace actions ride along with the probe.
     context: dict[str, Any] = {}
     for tag, value in frame.tree.ordered_actions():
-        if tag in ctx.steerable and ctx.route_allowed((tag, value)):
+        if tag in ctx.steerable and (tag, value) not in ctx.blocked_actions:
             context.setdefault(tag, value)
 
     observations: list[NavigationObservation] = []

@@ -107,10 +107,8 @@ class _TraceEnv:
 
     Everything here is constant for the whole trace — only ``tag``/``value`` (or
     ``expr``), ``provenance``, ``_visited``, ``_ancestry`` and ``_depth`` change
-    between recursive calls. ``avoid_pred`` biases OR-arm selection away
-    from arms that force the avoided condition; ``via_pred`` is its dual — it
-    biases selection *toward* an arm that forces the named condition (``None``
-    each for an unconstrained trace).
+    between recursive calls. ``avoid_pred`` excludes alternatives that force
+    the avoided condition (``None`` for an unconstrained trace).
 
     The world-describing subset — ``snapshot`` / ``pdg`` / ``program`` /
     ``steerable`` / ``opaque_loop`` / ``prior`` — is the **read-side seam**: this
@@ -132,7 +130,6 @@ class _TraceEnv:
     or_locks: dict[tuple[str, str], int] | None = None
     prior: DomainPrior | None = None
     avoid_pred: Any = None
-    via_pred: Any = None
     # Exact singleton actions rejected in this executable world. Joint acts are
     # intentionally absent: disproving ``A + B`` does not disprove either member
     # under another co-action context.
@@ -171,7 +168,6 @@ def _env_for(
     or_locks: dict[tuple[str, str], int] | None = None,
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
-    via_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
@@ -194,7 +190,6 @@ def _env_for(
         or_locks=or_locks,
         prior=prior,
         avoid_pred=avoid_pred,
-        via_pred=via_pred,
         rejected_actions=rejected_actions,
         max_depth=max_depth,
         harness=harness,
@@ -207,11 +202,10 @@ class TraceChoice:
     """One enumerated route through a multi-writer / OR-over-coils Bool trace.
 
     Internal: ``enumerate_trace_choices`` produces these so ``_prepare_route``
-    can pick a deterministic default and record the rest as redirectable pivots
-    on :class:`~pyrung.core.analysis.graph.RouteTaken`.  ``via_hint`` is the
-    concrete ``(tag, value)`` the engineer names to redirect onto this route
-    (``via=``) or off it (``avoid=``) — the committed writer's gating coil, or a
-    representative leaf of the chosen OR arm.
+    can pick a deterministic default and record the rest as pivots on
+    :class:`~pyrung.core.analysis.graph.RouteTaken`. ``route_condition`` is the
+    concrete ``(tag, value)`` that distinguishes the route and can be named by
+    ``avoid=`` to exclude it.
     """
 
     id: str
@@ -219,7 +213,7 @@ class TraceChoice:
     route: tuple[str, ...]
     writer_locks: tuple[tuple[str, Any, int], ...] = ()
     or_locks: tuple[tuple[str, str, int], ...] = ()
-    via_hint: tuple[str, Any] | None = None
+    route_condition: tuple[str, Any] | None = None
 
     def __str__(self) -> str:
         detail = " -> ".join(_compact_route(self.route))
@@ -242,7 +236,6 @@ class TraceReadConstraints:
     route: TraceChoice | None = None
     prior: DomainPrior | None = None
     avoid_pred: Any = None
-    via_pred: Any = None
     rejected_actions: frozenset[tuple[str, Any]] = frozenset()
     harness: Any = None
 
@@ -265,7 +258,6 @@ class TraceReadConstraints:
             route=route,
             prior=ctx.domain_prior,
             avoid_pred=avoid_pred,
-            via_pred=ctx.via_pred,
             rejected_actions=rejected_actions,
             harness=getattr(work, "_harness", None),
         )
@@ -296,7 +288,6 @@ class TraceReadConstraints:
             or_locks=or_locks,
             prior=self.prior,
             avoid_pred=self.avoid_pred,
-            via_pred=self.via_pred,
             rejected_actions=self.rejected_actions,
             max_depth=max_depth,
             harness=self.harness,
@@ -370,21 +361,23 @@ class _RouteDraft:
 
     route: tuple[str, ...] = ()
     or_locks: tuple[tuple[str, str, int], ...] = ()
-    # Concrete ``(tag, value)`` the engineer names to redirect onto this route;
-    # the outermost OR arm's representative leaf (first set wins).
-    via_hint: tuple[str, Any] | None = None
+    # Concrete ``(tag, value)`` that distinguishes this route; the outermost OR
+    # arm's representative leaf (first set wins).
+    route_condition: tuple[str, Any] | None = None
 
     def extend(
         self,
         *,
         route: str | None = None,
         or_lock: tuple[str, str, int] | None = None,
-        via_hint: tuple[str, Any] | None = None,
+        route_condition: tuple[str, Any] | None = None,
     ) -> _RouteDraft:
         return _RouteDraft(
             route=self.route + ((route,) if route else ()),
             or_locks=self.or_locks + ((or_lock,) if or_lock else ()),
-            via_hint=self.via_hint if self.via_hint is not None else via_hint,
+            route_condition=(
+                self.route_condition if self.route_condition is not None else route_condition
+            ),
         )
 
 
@@ -1505,7 +1498,6 @@ def trace_relational(
     route: TraceChoice | None = None,
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
-    via_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
@@ -1526,7 +1518,6 @@ def trace_relational(
         route=route,
         prior=prior,
         avoid_pred=avoid_pred,
-        via_pred=via_pred,
         rejected_actions=rejected_actions,
         harness=harness,
     )
@@ -1645,7 +1636,6 @@ class _TraceAlternative(Generic[_TraceChoicePayload]):
     choice: _TraceChoicePayload
     rank: tuple[Any, ...]
     violates_avoid: bool
-    matches_via: bool
     has_no_dead_end: bool
     exact_action_rejected: bool
 
@@ -1730,11 +1720,6 @@ def _trace_alternative(
             and bool(nodes)
             and _route_forces(nodes, env.snapshot, env.avoid_pred)
         ),
-        matches_via=(
-            env.via_pred is not None
-            and bool(nodes)
-            and _route_forces(nodes, env.snapshot, env.via_pred)
-        ),
         has_no_dead_end=_route_has_no_dead_end(nodes),
         exact_action_rejected=_route_actions_rejected(nodes, env),
     )
@@ -1743,17 +1728,14 @@ def _trace_alternative(
 def _select_trace_alternative(
     alternatives: tuple[_TraceAlternative[_TraceChoicePayload], ...],
     *,
-    prefer_via: bool = True,
     replace_rejected_choice: bool = True,
 ) -> _TraceSelection[_TraceChoicePayload]:
     """Apply the precedence shared by unlocked local trace alternatives.
 
-    Avoided alternatives cannot be selected. ``via=`` is a local preference:
-    it narrows the current choice only when at least one alternative itself
-    proves the requested condition. A rejected baseline may be replaced only
-    by an untried alternative with no dead end when the caller permits that
-    replacement. If no allowed choice remains, the exact blocked baseline stays
-    named for diagnosis.
+    Avoided alternatives cannot be selected. A rejected baseline may be
+    replaced only by an untried alternative with no dead end when the caller
+    permits that replacement. If no allowed choice remains, the exact blocked
+    baseline stays named for diagnosis.
     """
 
     if not alternatives:
@@ -1761,26 +1743,18 @@ def _select_trace_alternative(
 
     allowed = tuple(alternative for alternative in alternatives if not alternative.violates_avoid)
     if not allowed:
-        pool = alternatives
-        if prefer_via:
-            via_matches = tuple(alternative for alternative in pool if alternative.matches_via)
-            pool = via_matches or pool
         return _TraceSelection(
             chosen=None,
-            blocked_alternative=min(pool, key=lambda alternative: alternative.rank),
+            blocked_alternative=min(alternatives, key=lambda alternative: alternative.rank),
         )
 
-    pool = allowed
-    if prefer_via:
-        via_matches = tuple(alternative for alternative in pool if alternative.matches_via)
-        pool = via_matches or pool
-    baseline = min(pool, key=lambda alternative: alternative.rank)
+    baseline = min(allowed, key=lambda alternative: alternative.rank)
     if not baseline.exact_action_rejected or not replace_rejected_choice:
         return _TraceSelection(chosen=baseline, blocked_alternative=None)
 
     replacements = tuple(
         alternative
-        for alternative in pool
+        for alternative in allowed
         if not alternative.exact_action_rejected and alternative.has_no_dead_end
     )
     if replacements:
@@ -2199,7 +2173,6 @@ def trace_back(
     or_locks: dict[tuple[str, str], int] | None = None,
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
-    via_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
@@ -2223,7 +2196,6 @@ def trace_back(
         route=route,
         prior=prior,
         avoid_pred=avoid_pred,
-        via_pred=via_pred,
         rejected_actions=rejected_actions,
         harness=harness,
     )
@@ -2614,14 +2586,7 @@ def _trace_back(
         writer_alternatives.append(alternative)
         _clear_writer_attempt(node, _visited, visited_before)
 
-        # Nested-writer via preference remains deliberately lazy: honoring it
-        # here would require eagerly building later writers. Root route selection
-        # already owns complete-route via intent; a second sweep can decide
-        # whether nested writers should become eager.
-        writer_selection = _select_trace_alternative(
-            tuple(writer_alternatives),
-            prefer_via=False,
-        )
+        writer_selection = _select_trace_alternative(tuple(writer_alternatives))
 
         if alternative.violates_avoid:
             writer_skips.append((ri, "avoid_shadowed"))
@@ -2646,10 +2611,7 @@ def _trace_back(
 
     node.writer_skips = tuple(writer_skips)
     if writer_selection is None:
-        writer_selection = _select_trace_alternative(
-            tuple(writer_alternatives),
-            prefer_via=False,
-        )
+        writer_selection = _select_trace_alternative(tuple(writer_alternatives))
     selected_writer = writer_selection.chosen or writer_selection.blocked_alternative
     if selected_writer is not None:
         _apply_writer_attempt(node, _visited, selected_writer.choice)
@@ -2815,8 +2777,8 @@ def _or_ambiguity_over_inputs(
     directly-steerable inputs alone — ``Or(Auto, Manual)``, or the manual-jog
     branch ``And(Manual, DiverterBtn)`` beside an internal auto-sort branch —
     PILOT can take that arm without an internal commitment, so it collapses
-    rather than reporting ambiguous (the internal arms stay available via
-    ``choice=``/``via=``).  Returns False when there is no choice-bearing OR
+    rather than reporting ambiguous (the selected arm can still be excluded
+    with ``avoid=``). Returns False when there is no choice-bearing OR
     (nothing to collapse) or any choosing OR offers *no* steerable arm
     (``Or(ProdMode, MaintMode)`` — both coil-backed), which must stay surfaced.
     """
@@ -2930,13 +2892,15 @@ def enumerate_trace_choices(
     for i, (writer_ri, draft) in enumerate(options[:max_choices], 1):
         route = draft.route
         writer_locks: tuple[tuple[str, Any, int], ...] = ()
-        via_hint = draft.via_hint
+        route_condition = draft.route_condition
         if writer_ri is not None:
             route = (_writer_label(tag, value, writer_ri, pdg.rung_nodes[writer_ri]), *route)
             writer_locks = ((tag, value, writer_ri),)
             # Multi-writer: the discriminator is the writer's own guard; the
-            # OR-arm hint (if any) only refines it.
-            via_hint = _writer_via_hint(writer_ri, tag, value, pdg, program) or via_hint
+            # OR-arm condition (if any) only refines it.
+            route_condition = (
+                _writer_route_condition(writer_ri, tag, value, pdg, program) or route_condition
+            )
         choices.append(
             TraceChoice(
                 id=str(i),
@@ -2944,7 +2908,7 @@ def enumerate_trace_choices(
                 route=route,
                 writer_locks=writer_locks,
                 or_locks=draft.or_locks,
-                via_hint=via_hint,
+                route_condition=route_condition,
             )
         )
     return tuple(choices)
@@ -3005,17 +2969,16 @@ def rank_trace_choices(
     pipeline_internal_tags: frozenset[str] = frozenset(),
     prior: DomainPrior | None = None,
     avoid_pred: Any = None,
-    via_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     harness: Any = None,
     constraints: TraceReadConstraints | None = None,
 ) -> tuple[tuple[TraceChoice, ...], tuple[tuple[TraceChoice, TraceNode], ...]]:
     """Enumerate and rank current-world root choices once.
 
-    The complete enumerated set is returned for explicit route-action locking;
-    the ranked set contains only choices admitted by the user's predicates.
-    Both drive preparation and Orientation consume this reader so route order is
-    not independently re-derived at the two ownership boundaries.
+    The complete enumerated set is returned for route reporting; the ranked set
+    contains only choices admitted by the user's avoidance predicate. Both drive
+    preparation and Orientation consume this reader so route order is not
+    independently re-derived at the two ownership boundaries.
     """
 
     read = constraints or TraceReadConstraints(
@@ -3024,7 +2987,6 @@ def rank_trace_choices(
         pipeline_internal_tags=pipeline_internal_tags,
         prior=prior,
         avoid_pred=avoid_pred,
-        via_pred=via_pred,
         rejected_actions=rejected_actions,
         harness=harness,
     )
@@ -3046,11 +3008,9 @@ def rank_trace_choices(
             pdg,
             program,
             steerable,
-            constraints=replace(read, route=choice, avoid_pred=None, via_pred=None),
+            constraints=replace(read, route=choice, avoid_pred=None),
         )
         if read.avoid_pred is not None and _route_forces([tree], snapshot, read.avoid_pred):
-            continue
-        if read.via_pred is not None and not _route_forces([tree], snapshot, read.via_pred):
             continue
         traced.append((choice, tree))
     if not traced:
@@ -3157,7 +3117,11 @@ def _combine_route_options(
                     _RouteDraft(
                         route=left.route + right.route,
                         or_locks=left.or_locks + right.or_locks,
-                        via_hint=left.via_hint if left.via_hint is not None else right.via_hint,
+                        route_condition=(
+                            left.route_condition
+                            if left.route_condition is not None
+                            else right.route_condition
+                        ),
                     )
                 )
                 if len(combined) >= max_choices:
@@ -3198,10 +3162,14 @@ def _enumerate_expr_routes(
             if isinstance(term, Atom) and term.tag == self_tag:
                 continue  # self-referencing seal-in arm
             label = _route_label_for_expr(term)
-            hint = _expr_via_hint(term)
+            route_condition = _expr_route_condition(term)
             for route in _enumerate_expr_routes(term, self_tag, snapshot, max_choices=max_choices):
                 result.append(
-                    route.extend(route=label, or_lock=(self_tag, key, index), via_hint=hint)
+                    route.extend(
+                        route=label,
+                        or_lock=(self_tag, key, index),
+                        route_condition=route_condition,
+                    )
                 )
                 if len(result) >= max_choices:
                     return result
@@ -3219,33 +3187,33 @@ def _route_label_for_expr(expr: Any) -> str:
     return str(expr)
 
 
-def _expr_via_hint(expr: Any) -> tuple[str, Any] | None:
-    """A concrete ``(tag, value)`` an engineer can name to select *expr*'s route.
+def _expr_route_condition(expr: Any) -> tuple[str, Any] | None:
+    """A concrete ``(tag, value)`` that distinguishes *expr*'s route.
 
     The first equality/bit atom found walking the And/Or/Atom structure — the
-    OR arm's representative leaf (``ProdMode`` / ``Manual``).  Inequalities and
-    other non-targetable atoms yield ``None`` (the renderer falls back to the
-    route label).  Display + redirect-suggestion only; ``via_pred`` itself comes
-    from the user, so a ``None`` hint never weakens correctness.
+    OR arm's representative leaf (``ProdMode`` / ``Manual``). Inequalities and
+    other non-targetable atoms yield ``None``; the renderer falls back to the
+    route label.
     """
     if isinstance(expr, Atom):
         return _atom_target(expr)
     if isinstance(expr, (And, Or)):
         for term in expr.terms:
-            hint = _expr_via_hint(term)
-            if hint is not None:
-                return hint
+            route_condition = _expr_route_condition(term)
+            if route_condition is not None:
+                return route_condition
     return None
 
 
-def _writer_via_hint(
+def _writer_route_condition(
     ri: int, tag: str, value: Any, pdg: ProgramGraph, program: Any
 ) -> tuple[str, Any] | None:
     """The gating-condition discriminator for multi-writer route *ri*.
 
     A multi-writer Bool surfaces because two rungs drive it under different
-    guards; the guard is what the engineer names to pick a writer (``via=Manual``
-    vs ``via=State==5``).  Returns the writer condition's representative atom."""
+    guards. Returns the writer condition's representative atom so ``avoid=``
+    can name and exclude the chosen route.
+    """
     rn = pdg.rung_nodes[ri]
     ro = resolve_rung(program, rn)
     if ro is None:
@@ -3256,7 +3224,7 @@ def _writer_via_hint(
     expr = _sp_to_expr(sp)
     if _values_match(value, False) and tag in rn.ote_writes:
         expr = _negate(expr)
-    return _expr_via_hint(expr)
+    return _expr_route_condition(expr)
 
 
 def _writer_label(tag: str, value: Any, rung_index: int, rung_node: Any) -> str:

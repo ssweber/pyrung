@@ -21,7 +21,7 @@ Three internal gates enforce it:
 
 Arity: ``avoid=`` accepts one condition or a tuple/list = **union** of
 exclusions (each avoided independently); ``avoid=And(A, B)`` avoids only the
-combined state.  ``via=`` is unchanged (conjunction).
+combined state.
 
 Every gate test here is hand-driveable and honestly-failing — the ground-truth
 ``*_reachable`` checks pin that the target really is reachable so a decline is a
@@ -431,10 +431,6 @@ def test_avoid_hold_is_inadmissible() -> None:
         avoid_pred = avoid
         resting = {"X": False, "Y": False}
         compass = None
-        blocked_route_actions: frozenset = frozenset()
-
-        def route_allowed(self, pair: tuple[str, object]) -> bool:
-            return True
 
     ctx = _Ctx()
     assert _avoid_forces(ctx, [("X", True)])

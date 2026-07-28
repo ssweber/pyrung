@@ -132,8 +132,8 @@ class NavigationEvidence:
         world_key: tuple[Any, ...] | None,
         snapshot: dict[str, Any],
         knowledge: CompassKnowledge,
-        blocked_actions: frozenset[tuple[str, Any]],
         context: Any,
+        blocked_actions: frozenset[tuple[str, Any]] = frozenset(),
         pair_nogoods: set[tuple[str, Any]] | frozenset[tuple[str, Any]] | None = None,
     ) -> StaticEdgeAdmission:
         """Decide whether one chart edge may join a current-world path search."""
@@ -222,8 +222,8 @@ class NavigationEvidence:
                 world_key=world.world_key,
                 snapshot=world.snapshot,
                 knowledge=knowledge,
-                blocked_actions=constraints.blocked_actions,
                 context=world.context,
+                blocked_actions=constraints.blocked_actions,
             )
             return admission.allowed
 

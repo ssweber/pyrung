@@ -141,9 +141,9 @@ def _read_route_trees(
 ) -> tuple[tuple[TraceChoice | None, TraceNode], ...]:
     """Read every admissible root alternative from this current world.
 
-    Explicit ``via=`` remains one constrained read.  Inferred alternatives are
-    not commitments or a queue: exact current-world rejections remove their
-    dead acts and the remaining trees are returned together for one decision.
+    Inferred alternatives are not commitments or a queue: exact current-world
+    rejections remove their dead acts and the remaining trees are returned
+    together for one decision.
     """
 
     ctx = world.context
@@ -156,12 +156,6 @@ def _read_route_trees(
         else frozenset()
     )
     rejected_actions = _exact_rejected_actions(exclusions)
-
-    # Explicit positive user intent is a constraint, so no unconstrained sibling
-    # is introduced when its current tree has no bearing.
-    if ctx.route is not None:
-        tree = _trace_for_route(world, target, constraints, ctx.route, rejected_actions)
-        return ((ctx.route, tree),)
 
     if target.predicate is not None:
         return ((None, _trace_for_route(world, target, constraints, None, rejected_actions)),)
@@ -621,7 +615,7 @@ def orient(
     read_context = replace(
         world.context,
         target=target,
-        blocked_route_actions=constraints.blocked_actions,
+        blocked_actions=constraints.blocked_actions,
         avoid_pred=constraints.avoid_predicate,
     )
     seed = replace(world, context=read_context)

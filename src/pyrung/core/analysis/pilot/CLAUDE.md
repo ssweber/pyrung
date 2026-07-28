@@ -22,9 +22,8 @@ Do not store a suffix of actions to execute later. Every iteration rebuilds the
 trace and candidate set from the current snapshot, static evidence, accumulated
 transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
-`via=` is durable positive user intent, but it constrains each current-world
-trace rather than supplying an action suffix. `avoid=` remains a constraint at
-every read/action/scan gate. Condition-like avoids carry their runtime condition
+`avoid=` remains a constraint at every read/action/scan gate. Condition-like
+avoids carry their runtime condition
 into trial coasts, so folding lands on any avoided crossing. Opaque callable
 avoids have no readable fold proof and are checked at endpoints, retained real
 snapshots, and kernel scans the coast actually executes; skipped logical scans
@@ -118,14 +117,13 @@ should consume the first owner's result.
 - Unlocked local trace alternatives:
   `trace.py::_select_trace_alternative` returns an immutable
   `_TraceSelection`. Each `_TraceAlternative` records its caller-supplied rank
-  and literal facts: whether it violates avoid, matches via, has no dead end,
-  or is the exact rejected action. Expression OR, call-site, table-enablement,
-  and nested-writer readers consume that decision. Call-site and table ranks
-  put alternatives with no dead end first; OR keeps its structural rank, and
-  writers keep `_rank_writers` order. Root writer/OR locks remain binding, and
-  `rank_trace_choices` separately owns complete-route ranking. Nested writers
-  remain lazy: they record `matches_via` but do not eagerly build later writers
-  to find a match; that behavior choice remains explicit in the plan.
+  and literal facts: whether it violates avoid, has no dead end, or is the exact
+  rejected action. Expression OR, call-site, table-enablement, and nested-writer
+  readers consume that decision. Call-site and table ranks put alternatives
+  with no dead end first; OR keeps its structural rank, and writers keep
+  `_rank_writers` order. Alternative-specific root writer/OR locks remain
+  binding while each complete route is read; `rank_trace_choices` separately
+  owns complete-route ranking. Nested writers remain lazy.
   Subroutine call sites are distinct program contexts, so caller selection
   records exact rejection but does not redirect to a different caller because
   of it. The rejected caller remains the honest frontier for higher-level
@@ -268,8 +266,8 @@ subroutine callers, which are distinct lifecycle contexts rather than alternate
 recipes. A multi-leaf branch is a distinct, still-untested joint artifact, and
 a branch with a dead end cannot replace a rejected branch. Trace retains the
 best rejected branch when no untried alternative without a dead end survives so
-the frontier remains visible. Root writer/OR locks stay with the
-inferred/explicit route lifecycle and are never redirected inside Trace.
+the frontier remains visible. Root writer/OR locks stay with each inferred
+alternative while Trace reads it and are never redirected inside Trace.
 Static route selection applies the same boundary: it excludes the exact
 current-world ``(primary action, co-actions)`` Pulse artifact that failed, then
 may select a sibling edge carrying the same primary action under different

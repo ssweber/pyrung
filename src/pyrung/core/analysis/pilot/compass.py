@@ -53,8 +53,8 @@ def unique_legal_current_reading(
     channel_tag: str,
     pipeline_roles: Any,
     *,
-    route_allowed: Callable[[ActionPair], bool],
     action_avoided: Callable[[ActionPair], bool],
+    action_allowed: Callable[[ActionPair], bool] = lambda _action: True,
     awaits_operator: bool = False,
 ) -> Any:
     """Return the one legal current reading under the caller's stated policy."""
@@ -81,7 +81,7 @@ def unique_legal_current_reading(
     legal = tuple(
         reading
         for reading in current_readings(world, channel_tag, pipeline_roles)
-        if route_allowed(reading.action)
+        if action_allowed(reading.action)
         and not action_avoided(reading.action)
         and (not awaits_operator or _awaits_operator(reading))
     )

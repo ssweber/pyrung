@@ -170,7 +170,8 @@ If the targets can't coexist — the same register at two values, or two states 
 plc.how(State == IDLE, State == RUNNING)         # Cannot reach: one register, two values
 ```
 
-`avoid=` / `via=` work with multiple targets too — the route predicate constrains every target's route selection at once.
+`avoid=` works with multiple targets too — the same exclusions apply while
+PILOT works toward each target.
 
 ### `avoid`
 
@@ -188,11 +189,11 @@ Pass more than one condition — a tuple or list — for a **union of exclusions
 plc.how(Burner, avoid=(ProdMode, MaintFault))   # avoid ProdMode OR MaintFault
 ```
 
-Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own. (`via=` stays a conjunction — a tuple/list means the route must pass through every one.)
+Express a composite prohibition explicitly: `avoid=And(A, B)` avoids only the combined state, not A or B on their own.
 
 When every path is excluded the returned `Plan` stops with a reason that names the violated avoid condition(s).
 
-### `via` and the route taken
+### The route taken
 
 When a target can be reached more than one way — two writers, or an `OR` over internal coils — `how()` never asks you to disambiguate. It takes a deterministic default route and tells you where it went on `Plan.route`:
 
@@ -200,31 +201,29 @@ When a target can be reached more than one way — two writers, or an `OR` over 
 plan = plc.how(Burner)
 print(plan)
 # Reached Burner=True in 3 scans (~30ms).
-# Route: via ProdMode
-#   Other routes: avoid=ProdMode | via=MaintMode
+# Route: ProdMode
+#   Other routes: avoid=ProdMode
 #
 # Steps:
 #
 # 1. Pulse ProdCmd=True.
 ```
 
-You already know your machine, so you redirect by naming the route — `avoid=` steers off it, `via=` steers onto another:
+You already know your machine, so exclude the reported route with `avoid=` and PILOT will read the remaining current-world alternatives:
 
 ```python
-plc.how(Burner, via=MaintMode)     # reaches via the maintenance route
-plc.how(Burner, avoid=ProdMode)    # same — steer off production
+plc.how(Burner, avoid=ProdMode)    # exclude production; maintenance remains
 ```
 
-The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Plan.route` and redirect the same way:
+The route report is the same for any concrete value target, not just `Bool == True`. A word target that two modes drive (`copy(5, State)` under `Or(ProdMode, MaintMode)`) and a `Bool == False` target with two reset writers both report a `Plan.route`, and the chosen route can be excluded the same way:
 
 ```python
-plc.how(State == 5, via=MaintMode)   # word target — steer onto the maintenance route
 plc.how(Running == False, avoid=StopA)   # clear the latch via the other stop
 ```
 
 A relational target (`State > 5`) has no frozen value to route over, so it never carries a `Plan.route`.
 
-A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to commit to — so `Plan.route` is `None`. `via=` still steers onto a specific arm when you want one.
+A fork that's a plain choice of inputs (`Or(Auto, Manual)`) is taken silently — there's nothing to report — so `Plan.route` is `None`.
 
 ## In a debug session
 
