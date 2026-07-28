@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.charts import (
     StaticTransitionGraph,
     _best_static_path,
@@ -15,12 +16,13 @@ from pyrung.core.analysis.pilot.compass import (
     CompassObservation,
     NavigationCatalog,
 )
-from pyrung.core.analysis.pilot.currents import Producer
+from pyrung.core.analysis.pilot.currents import CurrentReading, Producer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation import (
     ChannelHeading,
     NavigationConstraints,
     OrientationWorld,
+    RouteEdgeContext,
     TargetSpec,
     pulse_identity,
 )
@@ -30,14 +32,21 @@ from pyrung.core.analysis.pilot.navigation_evidence import (
     StaticEdgeExclusionReason,
 )
 from pyrung.core.analysis.pilot.options import (
+    PrerequisiteRead,
     WaitPrescription,
     WaitRead,
     _admit_trace_details,
     _admit_wait_read,
     _AdmittedWait,
+    _assemble_candidate_read,
     _build_candidates,
     _compass_route_actions,
     _compass_route_plan,
+    _LearnedWait,
+    _PrerequisiteSeparation,
+    _RouteAndCompletionRead,
+    _select_wait,
+    _separate_prerequisites,
     _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.program_step import (
@@ -890,6 +899,128 @@ def test_prescribed_wait_suppresses_stuck_reason():
     assert candidates.diagnosis is None
 
 
+def test_wait_selection_keeps_its_three_evidence_sources_explicit() -> None:
+    route = RouteEdgeContext("State", 6, 16)
+    charted = WaitRead(
+        WaitPrescription(
+            ChannelHeading("State", 16, route=route),
+            "charted completion",
+        )
+    )
+    boundary = ChannelHeading("Accumulated", 5, boundary=object())
+    learned = _LearnedWait(WaitRead(WaitPrescription(None, "learned transition")))
+
+    selected = _select_wait(
+        charted_completion=charted,
+        instruction_boundary=boundary,
+        learned=learned,
+        has_candidates=False,
+    )
+    assert selected is learned.read
+
+    charted_selected = _select_wait(
+        charted_completion=charted,
+        instruction_boundary=boundary,
+        learned=None,
+        has_candidates=True,
+    )
+    assert charted_selected is not None
+    assert charted_selected.reason == "charted completion"
+    assert charted_selected.prescription is not None
+    assert charted_selected.prescription.heading is not None
+    assert charted_selected.prescription.heading.channel_tag == "Accumulated"
+    assert charted_selected.prescription.heading.route is route
+
+    declined_learned = _LearnedWait(
+        WaitRead(None, declined_reason="learned transition is not coastable")
+    )
+    assert (
+        _select_wait(
+            charted_completion=charted,
+            instruction_boundary=None,
+            learned=declined_learned,
+            has_candidates=False,
+        )
+        is charted
+    )
+
+    boundary_selected = _select_wait(
+        charted_completion=None,
+        instruction_boundary=boundary,
+        learned=None,
+        has_candidates=False,
+    )
+    assert boundary_selected is not None
+    assert boundary_selected.reason == "advance Accumulated to its next boundary 5"
+    assert boundary_selected.prescription is not None
+    assert boundary_selected.prescription.heading is boundary
+    assert (
+        _select_wait(
+            charted_completion=None,
+            instruction_boundary=boundary,
+            learned=None,
+            has_candidates=True,
+        )
+        is None
+    )
+
+
+def test_candidate_assembly_consumes_current_reading_without_rereading(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.options as options
+
+    admission = _TraceAdmission(
+        active_actions=(),
+        actions=(),
+        details=(),
+        detail_by_pair={},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(admission, None, None)
+    separated = _PrerequisiteSeparation(
+        admission,
+        PrerequisiteRead(),
+        None,
+    )
+    current = CurrentReading(
+        action=("Acknowledge", True),
+        command_tag="Command",
+        command_value=True,
+        command_writes=(("Command", True),),
+        from_state=11,
+        to_state=12,
+        note="program awaits Acknowledge",
+    )
+    frame = SimpleNamespace(snap={"Acknowledge": False})
+    ctx = SimpleNamespace(
+        blocked_actions=frozenset(),
+        edge_tags=frozenset(),
+        pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
+        target=TargetSpec("State", 17),
+    )
+    monkeypatch.setattr(
+        options,
+        "_current_bearing",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected current re-read")),
+    )
+
+    read = _assemble_candidate_read(
+        route_and_wait,
+        separated,
+        None,
+        current,
+        frame,
+        ctx,
+        set(),
+    )
+
+    assert tuple(option.pair for option in read.options) == (("Acknowledge", True),)
+    assert read.options[0].current_prescribed
+    assert read.options[0].current_note == "program awaits Acknowledge"
+
+
 def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     """A narrow completion read adds evidence, never a privileged candidate."""
 
@@ -919,6 +1050,45 @@ def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     assert admitted.active_actions == (("Keep", True), ("Nogood", True))
     assert admitted.actions == (("Keep", True),)
     assert tuple(detail.pair for detail in admitted.details) == (("Keep", True),)
+
+
+def test_prerequisite_separation_retains_trace_action_evidence() -> None:
+    detail = TraceAction("Enable", True)
+    rung = PilotRung("Enable", True, object())
+    admission = _TraceAdmission(
+        active_actions=(detail.pair,),
+        actions=(detail.pair,),
+        details=(detail,),
+        detail_by_pair={detail.pair: detail},
+        managed_boolean_rungs=(rung,),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(
+        admission,
+        None,
+        WaitRead(WaitPrescription(None, "charted completion")),
+    )
+    frame = SimpleNamespace(
+        snap={"Enable": False, "Target": False},
+        tree=TraceNode("Target", True, satisfied=False),
+    )
+    state = SimpleNamespace(rungs=(), work=SimpleNamespace())
+    ctx = SimpleNamespace(
+        compass=SimpleNamespace(action_tags=frozenset()),
+        edge_tags=frozenset(),
+        clear_only=frozenset(),
+        resting={},
+        blocked_actions=frozenset(),
+        pdg=SimpleNamespace(),
+        program=object(),
+    )
+
+    separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
+
+    assert separated.trace.actions == ()
+    assert separated.trace.active_actions == ()
+    assert separated.prerequisites.rungs == (rung,)
+    assert separated.trace.details == (detail,)
 
 
 def test_program_step_derives_only_a_uniform_shared_input_lifetime() -> None:

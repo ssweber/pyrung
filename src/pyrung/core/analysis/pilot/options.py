@@ -1,10 +1,10 @@
 """Materialize the action and wait options for one orientation.
 
-``_build_candidates`` combines the current trace tree, constrained static
-routes, learned transitions, program-awaited actions, existing corrections,
-and prerequisite holds. It returns the current read's deterministic action
-order together with any prescribed wait, completion frontier, or no-bearing
-diagnosis.
+``_build_candidates`` orchestrates separate reads for static routes and charted
+completion, instruction-owned boundaries and prerequisites, learned
+transitions, and program-owned currents. Frozen private receipts keep those
+sources distinct until ``_select_wait`` applies their precedence and
+``_assemble_candidate_read`` creates the sole durable ``CandidateRead``.
 
 Candidate construction reads the current world and knowledge but does not
 execute a trial, apply observations, or commit state.
@@ -16,7 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from pyrung.core.analysis.pilot._ops import (
     PilotRung,
@@ -33,6 +33,7 @@ from pyrung.core.analysis.pilot.compass import (
     is_composite_action,
     unique_legal_current_reading,
 )
+from pyrung.core.analysis.pilot.currents import CurrentReading
 from pyrung.core.analysis.pilot.navigation import (
     ActSource,
     ChannelHeading,
@@ -349,6 +350,56 @@ class CandidateRead:
     prerequisites: PrerequisiteRead = PrerequisiteRead()
     learned_batch: LearnedBatchRead | None = None
     diagnosis: CandidateDiagnosis | None = None
+
+
+@dataclass(frozen=True)
+class _RouteAndCompletionRead:
+    """The admitted trace, static route, and charted-completion evidence."""
+
+    trace: _TraceAdmission
+    route: RouteRead | None
+    charted_completion: WaitRead | None
+
+    @property
+    def charted_wait(self) -> WaitRead | None:
+        """The charted completion that may participate in wait selection."""
+
+        if self.trace.establish_pending:
+            return None
+        return self.charted_completion
+
+
+@dataclass(frozen=True)
+class _PrerequisiteSeparation:
+    """Trace evidence after executable prerequisites have been separated."""
+
+    trace: _TraceAdmission
+    prerequisites: PrerequisiteRead
+    instruction_boundary: ChannelHeading | None
+
+
+@dataclass(frozen=True)
+class _LearnedWait:
+    """A learned transition whose next step is program-owned motion."""
+
+    read: WaitRead
+
+
+@dataclass(frozen=True)
+class _LearnedAction:
+    """A learned transition whose next step is one action."""
+
+    action: _ActionPair
+
+
+@dataclass(frozen=True)
+class _LearnedBatch:
+    """A learned transition whose next step is one atomic action batch."""
+
+    read: LearnedBatchRead
+
+
+_LearnedFallback: TypeAlias = _LearnedWait | _LearnedAction | _LearnedBatch
 
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
@@ -756,7 +807,7 @@ def _managed_boolean_rungs(
 # ---------------------------------------------------------------------------
 
 
-def _current_bearing(frame: Any, ctx: Any) -> Any:
+def _current_bearing(frame: Any, ctx: Any) -> CurrentReading | None:
     """The program-owned current's operator action for the current state, or
     ``None``.
 
@@ -1184,34 +1235,14 @@ def _admit_wait_read(
     )
 
 
-def _build_candidates(
+def _read_route_and_wait(
     frame: Any,
     state: Any,
     ctx: Any,
-) -> CandidateRead:
-    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
-    gauge = getattr(state, "gauge", None)
-    # Clear-only (ack-cleared momentary) commands join the pulse-treatment set: the
-    # program clears them every scan, so their idiom is pulse-and-release.  Holding
-    # one steady as a prerequisite would assert a momentary command (a mode-change
-    # request) forever — so they are pulsed like edge/action tags, never held.
-    _act_or_edge = ctx.compass.action_tags | ctx.edge_tags | ctx.clear_only
+    key_nogoods: set[_ActionPair],
+) -> _RouteAndCompletionRead:
+    """Read the current trace, static route, and charted completion together."""
 
-    # Convergence command buttons currently held off-resting (and not a deliberate
-    # forced hold).  A convergence pulse must release these or the program's
-    # last-write-wins decoder fires the wrong command (a stuck CmdAbort overriding
-    # CmdReset).  Empty for non-convergence programs → no effect.
-    held_command_tags = frozenset(
-        t
-        for t in ctx.compass.action_tags
-        if t not in {r.dest for r in state.rungs}
-        and not _values_match(frame.snap.get(t), ctx.resting.get(t, False))
-    )
-
-    # This preliminary admission determines whether the broad target trace
-    # already owns the move. A selected wait edge may add a narrower current-
-    # world reading below; the combined pool is then admitted again through the
-    # same function before candidate ranking.
     admission = _admit_trace_details(
         tuple(frame.raw_trace_action_details),
         frame,
@@ -1219,15 +1250,7 @@ def _build_candidates(
         ctx,
         key_nogoods,
     )
-
-    # A trace leaf whose selected writer is available now (or after its named
-    # prerequisite) is live local work. So is a trace continuation when Gauge
-    # can see work already banked beyond a proved reset floor: at recipe Step
-    # 103, open the door before Unhold even if the full future writer chain is
-    # conservatively unavailable. Unknown/unavailable leaves with no banked
-    # work do not veto the current process boundary; from ABORTED the charted
-    # Clear edge owns the move even though the deep target trace can already
-    # name a later mode-change request.
+    gauge = getattr(state, "gauge", None)
     current_trace_actions = tuple(
         pair
         for pair in admission.actions
@@ -1245,27 +1268,16 @@ def _build_candidates(
         or (getattr(state, "pending_departure", None) is not None and admission.active_actions)
         else live_plan
     )
-    # A zoom iteration: the route's next edge is a completion (no action),
-    # so the frontier self-advances under held state.  Prerequisites are the
-    # level signals that must be held while timers accumulate.  A pending
-    # establish gate is never a zoom: the frontier cannot self-advance past the
-    # closed gate, so hold stage 0 as the bearing instead.
-    _is_zoom = (
+    is_charted_completion = (
         not admission.establish_pending
         and route_plan is not None
         and route_plan.first_edge.action is None
     )
-    # An automatic chart edge is only a possible route until its exact program
-    # producer is checked in this controlled world. If that producer offers no
-    # executable wait or live input, remove just that edge from this read and
-    # ask the same graph for the next route. This is how HELD walks around a
-    # structurally possible Complete edge to the currently conductive Unhold
-    # edge, without retaining a route suffix or poisoning another world.
-    preflight_wait: _AdmittedWait | None = None
+    admitted_completion: _AdmittedWait | None = None
     unavailable_producer_edges: set[tuple[Any, ...]] = set()
-    while _is_zoom:
+    while is_charted_completion:
         assert route_plan is not None
-        preflight_wait = _admit_wait_read(
+        admitted_completion = _admit_wait_read(
             _prescribe_wait(route_plan.first_edge, frame, state, ctx),
             tuple(frame.raw_trace_action_details),
             frame,
@@ -1274,8 +1286,8 @@ def _build_candidates(
             key_nogoods,
         )
         if (
-            preflight_wait.viable
-            or preflight_wait.admitted_supplement
+            admitted_completion.viable
+            or admitted_completion.admitted_supplement
             or not route_plan.first_edge.program_producers
         ):
             break
@@ -1289,58 +1301,51 @@ def _build_candidates(
         if alternate is None:
             break
         route_plan = alternate
-        preflight_wait = None
-        _is_zoom = not admission.establish_pending and route_plan.first_edge.action is None
+        admitted_completion = None
+        is_charted_completion = (
+            not admission.establish_pending and route_plan.first_edge.action is None
+        )
 
-    if _is_zoom or admission.establish_pending:
-        route_candidates: tuple[_ActionPair, ...] = ()
-    else:
-        route_candidates = _compass_route_actions(route_plan, frame, ctx, key_nogoods)
-    # Co-actions for the route command (the one-shot edge gate); pulsed in the
-    # same scan as the command candidate via _candidate_applied.
-    route_co_actions: tuple[_ActionPair, ...] = (
+    route_candidates = (
+        ()
+        if is_charted_completion or admission.establish_pending
+        else _compass_route_actions(route_plan, frame, ctx, key_nogoods)
+    )
+    route_co_actions = (
         tuple(route_plan.first_edge.co_actions)
         if route_candidates and route_plan is not None
         else ()
     )
+    charted_completion: WaitRead | None = None
+    if is_charted_completion:
+        assert admitted_completion is not None
+        charted_completion = admitted_completion.candidate_read
+        admission = admitted_completion.admission
 
-    wait: WaitRead | None = None
-    program_step: Any = None
-    program_pairs: set[_ActionPair] = set()
-    boundary_heading: ChannelHeading | None = None
-    # A grounded completion edge may add a narrower current-world read below the
-    # opaque pipeline cut. Those details join the broad target details and the
-    # whole pool re-enters ordinary admission before prerequisite splitting.
-    zoom_wait: WaitRead | None = None
-    if _is_zoom:
-        assert route_plan is not None  # _is_zoom is True only when route_plan exists
-        assert preflight_wait is not None
-        zoom_wait = preflight_wait.candidate_read
-        program_step = zoom_wait.program_step
-        if program_step is not None:
-            program_pairs = set(program_step.required_pairs)
-        admission = preflight_wait.admission
-        if admission.establish_pending:
-            _is_zoom = False
-
-    active_trace_actions = admission.active_actions
-    trace_actions = admission.actions
-    trace_action_details = admission.details
-    detail_by_pair = admission.detail_by_pair
-    establish_pending = admission.establish_pending
-
-    # Prerequisite/command split: on zoom iterations, and on a self-advancing
-    # coast leaf that has no compass route (a harness-linked sensor ramp, or a
-    # timer/counter threshold reached via the terminal let-run rather than a
-    # route zoom).  Prerequisites are non-action, non-edge steerable inputs that
-    # must be *held* while the frontier self-advances — e.g. the Enable that
-    # drives a sensor toward its threshold.  Without this they would be pulsed
-    # and reverted as no-progress commands, and the coast would never ramp.  On
-    # plain iterations, all trace actions are commands — pulse-and-judge.
-    _is_coast = any(
-        getattr(n, "advance", None) is not None and not n.satisfied for n in frame.tree.leaves()
+    route = (
+        RouteRead(route_plan, route_candidates, route_co_actions)
+        if route_plan is not None
+        else None
     )
-    if _is_coast:
+    return _RouteAndCompletionRead(admission, route, charted_completion)
+
+
+def _separate_prerequisites(
+    route_and_wait: _RouteAndCompletionRead,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> _PrerequisiteSeparation:
+    """Separate executable holds without selecting among wait sources."""
+
+    admission = route_and_wait.trace
+    is_charted_completion = route_and_wait.charted_wait is not None
+    is_coast = any(
+        getattr(node, "advance", None) is not None and not node.satisfied
+        for node in frame.tree.leaves()
+    )
+    instruction_boundary: ChannelHeading | None = None
+    if is_coast:
         for node in frame.tree.leaves():
             step = getattr(node, "advance", None)
             if step is None or node.satisfied:
@@ -1357,60 +1362,29 @@ def _build_candidates(
                     else None
                 ) or step.until
                 channel_tag, target_value = boundary_pair
-                boundary_heading = ChannelHeading(
+                instruction_boundary = ChannelHeading(
                     channel_tag=channel_tag,
                     target_value=target_value,
                     boundary=boundary,
                 )
             else:
-                boundary_heading = _boundary_heading(step.until, frame, state)
-            if boundary_heading is not None:
+                instruction_boundary = _boundary_heading(step.until, frame, state)
+            if instruction_boundary is not None:
                 break
 
-    # A plain chart completion is only the outer route context. Its admitted
-    # trace may expose a nearer instruction-owned boundary; that local heading
-    # is what execution must witness first. Exact-producer waits already own
-    # their immediate motion and are not overwritten here.
-    if (
-        boundary_heading is not None
-        and zoom_wait is not None
-        and zoom_wait.program_step is None
-        and zoom_wait.prescription is not None
-    ):
-        route_context = (
-            zoom_wait.prescription.heading.route
-            if zoom_wait.prescription.heading is not None
-            else None
-        )
-        boundary_heading = replace(boundary_heading, route=route_context)
-        zoom_wait = replace(
-            zoom_wait,
-            prescription=replace(
-                zoom_wait.prescription,
-                heading=boundary_heading,
-            ),
-        )
-
     prerequisite_rungs = list(admission.managed_boolean_rungs)
-    if _is_zoom or _is_coast:
-        # Edge-gated accumulator drivers (oscillate flag) toggle each scan via a
-        # PilotRung instead of holding steady — a steady hold fires the edge
-        # only once.  Routed as prerequisites so the terminal let-run animates and
-        # records them; captured before the level loop because they are edge tags
-        # the plain loop would otherwise leave as one-shot commands.
-        # A steady hold that, held every scan, forces a rung writing a register the
-        # tree still needs to a contradicting literal defeats the very frontier that
-        # proposed it (``Heat_xInit=1`` forces ``fill(1, Heat_CurStep)`` while the
-        # tree needs ``Heat_CurStep=3``).  Never install such a hold: skip it and
-        # surface the skip.  Static, name-free (write-vs-need); belt-and-suspenders
-        # on top of clear-only/writer-selection for levers those don't reroute.
+    trace_actions = admission.actions
+    active_trace_actions = admission.active_actions
+    trace_action_details = admission.details
+    if is_charted_completion or is_coast:
+        action_or_edge = ctx.compass.action_tags | ctx.edge_tags | ctx.clear_only
         needed = frontier_pairs(frame.tree, frame.snap)
-        pulse_tags = {d.tag for d in trace_action_details if d.pulse}
+        pulse_tags = {detail.tag for detail in trace_action_details if detail.pulse}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
-            if tag in seen_prereq or tag in {r.dest for r in state.rungs}:
+            if tag in seen_prereq or tag in {rung.dest for rung in state.rungs}:
                 continue
-            detail = detail_by_pair.get((tag, value))
+            detail = admission.detail_by_pair.get((tag, value))
             if detail is None or detail.until is None:
                 continue
             scope = _until_unresolved_condition(state.work, detail.until)
@@ -1418,57 +1392,80 @@ def _build_candidates(
                 seen_prereq.add(tag)
                 if _action_allowed(ctx, (tag, value)):
                     prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
-            elif tag not in _act_or_edge and not _values_match(frame.snap.get(tag), value):
+            elif tag not in action_or_edge and not _values_match(frame.snap.get(tag), value):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
                     continue
                 seen_prereq.add(tag)
-                # Action gate for a prerequisite hold: a hold that drives an
-                # avoided tag is a path that depends on it — never install it.
                 if _action_allowed(ctx, (tag, value)) and not _avoid_forces(
                     ctx, [(tag, value)], frame.snap
                 ):
                     prerequisite_rungs.append(PilotRung(tag, value, scope))
-        prereq_tags = {r.dest for r in prerequisite_rungs}
-        trace_actions = tuple(p for p in trace_actions if p[0] not in prereq_tags)
-        active_trace_actions = tuple(p for p in active_trace_actions if p[0] not in prereq_tags)
+        prereq_tags = {rung.dest for rung in prerequisite_rungs}
+        trace_actions = tuple(pair for pair in trace_actions if pair[0] not in prereq_tags)
+        active_trace_actions = tuple(
+            pair for pair in active_trace_actions if pair[0] not in prereq_tags
+        )
 
-    # Learned motion is a fallback reading, not a second policy layered over
-    # the backward trace or a charted program edge.  If the live read already
-    # exposes a continuation, keep it; only consult learned transitions when
-    # the local/static readers are silent.
-    inf_candidates: list[_ActionPair] = []
-    prescribed_action: _ActionPair | None = None
-    prescribed_batch: tuple[_ActionPair, ...] | None = None
+    held_command_tags = frozenset(
+        tag
+        for tag in ctx.compass.action_tags
+        if tag not in {rung.dest for rung in state.rungs}
+        and not _values_match(frame.snap.get(tag), ctx.resting.get(tag, False))
+    )
+    updated_trace = replace(
+        admission,
+        active_actions=active_trace_actions,
+        actions=trace_actions,
+        details=trace_action_details,
+    )
+    return _PrerequisiteSeparation(
+        updated_trace,
+        PrerequisiteRead(tuple(prerequisite_rungs), held_command_tags),
+        instruction_boundary,
+    )
+
+
+def _read_learned_fallback(
+    route_and_wait: _RouteAndCompletionRead,
+    separated: _PrerequisiteSeparation,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> _LearnedFallback | None:
+    """Read exactly one learned wait, action, or batch fallback."""
+
+    route = route_and_wait.route
+    route_plan = route.plan if route is not None else None
+    route_candidates = route.candidates if route is not None else ()
+    local_bearing_open = bool(
+        separated.trace.actions or route_candidates or route_and_wait.charted_wait is not None
+    )
     probed_leaf_states: set[tuple[str, Any]] = set()
-    # Stage 0 is the sole bearing while an establish gate is pending — silence the
-    # compass so it can't prescribe a move on the target register past the closed
-    # gate (or wait on a frontier that can't self-advance until the gate settles).
-    local_bearing_open = bool(trace_actions or route_candidates or _is_zoom)
-    for n in [] if establish_pending or local_bearing_open else _all_nodes(frame.tree):
-        # Leaves only — with two "map unreadable here" exceptions where the
-        # learned transition table is the only chart available: a live-guard
-        # frontier (readable arm traced, so it has children, but the writer
-        # guard is a live word), and a pipeline channel whose static value
-        # graph produced NO plan (route_plan is None) but for which learned
-        # transitions exist (skiff probes or route seeds).
-        unreadable = getattr(n, "live_guard", False) or (
-            getattr(n, "pipeline_internal", False)
+    nodes = (
+        () if separated.trace.establish_pending or local_bearing_open else _all_nodes(frame.tree)
+    )
+    for node in nodes:
+        unreadable = getattr(node, "live_guard", False) or (
+            getattr(node, "pipeline_internal", False)
             and route_plan is None
             and ctx.compass.knowledge.has_transitions(
-                n.tag, world_key=frame.key, snapshot=frame.snap
+                node.tag,
+                world_key=frame.key,
+                snapshot=frame.snap,
             )
         )
         if (
-            (n.children and not unreadable)
-            or n.satisfied
-            or n.is_steerable
-            or (getattr(n, "pipeline_internal", False) and not unreadable)
+            (node.children and not unreadable)
+            or node.satisfied
+            or node.is_steerable
+            or (getattr(node, "pipeline_internal", False) and not unreadable)
         ):
             continue
-        cur_val = frame.snap.get(n.tag)
-        if _values_match(cur_val, n.value):
+        current_value = frame.snap.get(node.tag)
+        if _values_match(current_value, node.value):
             continue
-        leaf_state = (n.tag, cur_val)
+        leaf_state = (node.tag, current_value)
         if leaf_state in probed_leaf_states:
             continue
         probed_leaf_states.add(leaf_state)
@@ -1478,7 +1475,7 @@ def _build_candidates(
             cause: Any,
             destination: Any,
             *,
-            tag: str = n.tag,
+            tag: str = node.tag,
         ) -> bool:
             return _learned_edge_allowed(
                 tag,
@@ -1491,64 +1488,134 @@ def _build_candidates(
             )
 
         path = ctx.compass.knowledge.find_path(
-            n.tag,
-            cur_val,
-            n.value,
+            node.tag,
+            current_value,
+            node.value,
             cause_allowed=_learned_edge_open,
             world_key=frame.key,
             snapshot=frame.snap,
         )
-        if path:
-            first_step = path[0]
-            if not is_action(first_step):
-                influence_wait = _prescribe_wait(
+        if not path:
+            continue
+        first_step = path[0]
+        if not is_action(first_step):
+            return _LearnedWait(
+                _prescribe_wait(
                     None,
                     frame,
                     state,
                     ctx,
-                    reason=f"{n.tag}: {cur_val!r}->{n.value!r}",
+                    reason=f"{node.tag}: {current_value!r}->{node.value!r}",
                 )
-                wait = influence_wait
-                break
-            if is_composite_action(first_step):
-                # A skiff-learned joint edge: the whole action set must fire in
-                # one window.  Propose it as a batch trial, not a single.
-                # (The static type of a cause is a single action pair; a
-                # composite is a tuple OF pairs, which is what the shape test
-                # just established.)
-                members = cast("tuple[_ActionPair, ...]", tuple(first_step))
-                if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
-                    prescribed_batch = members
-                    break
-                continue
-            if first_step not in key_nogoods and _action_allowed(ctx, first_step):
-                inf_candidates.append(first_step)
-                prescribed_action = first_step
-                break
+            )
+        if is_composite_action(first_step):
+            members = cast("tuple[_ActionPair, ...]", tuple(first_step))
+            if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
+                return _LearnedBatch(LearnedBatchRead(members))
+            continue
+        if first_step not in key_nogoods and _action_allowed(ctx, first_step):
+            return _LearnedAction(first_step)
+    return None
 
-    # Wake is an *ordering* input, never a filter.  An input with an
-    # unusually large downstream write cone (a factory-reset call, or a master
-    # enable feeding everything) poisons a batch and should be tried *last* — but
-    # it must never be dropped, or a legitimately-needed lever with a large wake
-    # makes the target silently unreachable.  Here we only split the
-    # over-cap actions off the *batch-facing* ``trace_actions`` (widening /
-    # convergence co-pulse) so they don't poison a batch trial; they are added
-    # back as individual candidates below, after the ordinary trace actions.
+
+def _read_current_fallback(frame: Any, ctx: Any) -> CurrentReading | None:
+    """Read the unique program-owned current without deciding its precedence."""
+
+    return _current_bearing(frame, ctx)
+
+
+def _select_wait(
+    *,
+    charted_completion: WaitRead | None,
+    instruction_boundary: ChannelHeading | None,
+    learned: _LearnedFallback | None,
+    has_candidates: bool,
+) -> WaitRead | None:
+    """Select one wait from three explicit evidence sources."""
+
+    charted = charted_completion
+    if (
+        charted is not None
+        and instruction_boundary is not None
+        and charted.program_step is None
+        and charted.prescription is not None
+    ):
+        route_context = (
+            charted.prescription.heading.route if charted.prescription.heading is not None else None
+        )
+        heading = replace(instruction_boundary, route=route_context)
+        charted = replace(
+            charted,
+            prescription=replace(charted.prescription, heading=heading),
+        )
+
+    selected = learned.read if isinstance(learned, _LearnedWait) else None
+    if charted is not None and (selected is None or selected.prescription is None):
+        selected = charted
+    if (
+        instruction_boundary is not None
+        and not has_candidates
+        and (selected is None or selected.prescription is None)
+    ):
+        reason = (
+            f"advance {instruction_boundary.channel_tag} to its next boundary "
+            f"{instruction_boundary.target_value!r}"
+        )
+        selected = WaitRead(
+            WaitPrescription(
+                instruction_boundary,
+                reason,
+                frontier=(),
+            )
+        )
+    return selected
+
+
+def _assemble_candidate_read(
+    route_and_wait: _RouteAndCompletionRead,
+    separated: _PrerequisiteSeparation,
+    learned: _LearnedFallback | None,
+    current: CurrentReading | None,
+    frame: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair],
+) -> CandidateRead:
+    """Compose the final durable candidate read from explicit phase receipts."""
+
+    trace = separated.trace
+    route = route_and_wait.route
+    route_plan = route.plan if route is not None else None
+    route_candidates = route.candidates if route is not None else ()
+    trace_actions = trace.actions
     wake_cap = 20
     over_wake_actions: tuple[_ActionPair, ...] = ()
     if len(trace_actions) > 1:
-        radii = {t: len(ctx.pdg.downstream_slice(t, follow_calls=True)) for t, _v in trace_actions}
-        median_r = sorted(radii.values())[len(radii) // 2] if radii else 0
-        wake_cap = max(median_r * 3, 20)
-        over_wake_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) > wake_cap)
-        trace_actions = tuple((t, v) for t, v in trace_actions if radii.get(t, 0) <= wake_cap)
+        radii = {
+            tag: len(ctx.pdg.downstream_slice(tag, follow_calls=True))
+            for tag, _value in trace_actions
+        }
+        median_radius = sorted(radii.values())[len(radii) // 2] if radii else 0
+        wake_cap = max(median_radius * 3, 20)
+        over_wake_actions = tuple(
+            (tag, value) for tag, value in trace_actions if radii.get(tag, 0) > wake_cap
+        )
+        trace_actions = tuple(
+            (tag, value) for tag, value in trace_actions if radii.get(tag, 0) <= wake_cap
+        )
 
+    learned_action = learned.action if isinstance(learned, _LearnedAction) else None
+    program_step = (
+        route_and_wait.charted_completion.program_step
+        if route_and_wait.charted_completion is not None
+        else None
+    )
+    program_pairs = program_step.required_pairs if program_step is not None else frozenset()
     candidates: list[_Candidate] = []
-    seen_cand: set[_ActionPair] = set()
+    seen_candidates: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
 
     def _candidate_for(pair: _ActionPair) -> _Candidate:
-        detail = detail_by_pair.get(pair)
+        detail = trace.detail_by_pair.get(pair)
         prescribed_edge = (
             route_plan.first_edge
             if route_plan is not None and pair in route_candidate_set
@@ -1561,7 +1628,7 @@ def _build_candidates(
                 ActSource.ROUTE
                 if pair in route_candidate_set
                 else ActSource.INFLUENCE
-                if prescribed_action is not None and pair == prescribed_action
+                if pair == learned_action
                 else ActSource.PROGRAM
                 if pair in program_pairs
                 else ActSource.TRACE
@@ -1603,126 +1670,100 @@ def _build_candidates(
             ),
         )
 
-    # A chart candidate is the exact edge out of the current process state.
-    # File it before deeper backward-trace leaves; this is a source category,
-    # not a numeric rank, and is recomputed from the next world after every act.
     for pair in route_candidates:
-        if _action_allowed(ctx, pair) and pair not in seen_cand:
-            seen_cand.add(pair)
+        if _action_allowed(ctx, pair) and pair not in seen_candidates:
+            seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in trace_actions:
-        if pair not in seen_cand:
-            seen_cand.add(pair)
+        if pair not in seen_candidates:
+            seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
-    for pair in inf_candidates:
-        if _action_allowed(ctx, pair) and pair not in seen_cand:
-            seen_cand.add(pair)
-            candidates.append(_candidate_for(pair))
-    # High-wake trace actions split off the batch above still get a turn as
-    # individual candidates. Construction order files them at the tail, so they
-    # are tried last rather than excluded outright.
+    if (
+        learned_action is not None
+        and _action_allowed(ctx, learned_action)
+        and learned_action not in seen_candidates
+    ):
+        seen_candidates.add(learned_action)
+        candidates.append(_candidate_for(learned_action))
     for pair in over_wake_actions:
-        if pair not in seen_cand:
-            seen_cand.add(pair)
+        if pair not in seen_candidates:
+            seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
-    # Program-owned current: when the target register is an opaque-loop channel
-    # whose backward trace dead-ends and whose compass route is the avoided
-    # command, the trace surfaces no operator action for a program-owned detour
-    # (the mid-recipe ack while HELD).  Recognize it directly — the one operator
-    # push the program is dwelling on at the current state — and surface it as a
-    # fallback bearing.  Fail-closed: only a *unique* legal, non-avoided push on a
-    # recognized channel is returned; ambiguity / no-channel keep today's
-    # behavior.  It appends *after* every read source, so a route/influence/trace
-    # move keeps priority and this only matters where the loop is otherwise stuck.
-    current_action = _current_bearing(frame, ctx)
-    if current_action is not None and not candidates:
-        pair = current_action.action
+
+    if current is not None and not candidates:
+        pair = current.action
         if (
             _action_allowed(ctx, pair)
-            and pair not in seen_cand
+            and pair not in seen_candidates
             and pair not in key_nogoods
             and (not _values_match(frame.snap.get(pair[0]), pair[1]) or pair[0] in ctx.edge_tags)
         ):
-            seen_cand.add(pair)
             candidates.append(
                 replace(
                     _candidate_for(pair),
                     source=ActSource.CURRENT,
-                    current_note=current_action.note,
+                    current_note=current.note,
                     bearing_channel_tag=ctx.target.tag,
-                    bearing_channel_value=current_action.to_state,
+                    bearing_channel_value=current.to_state,
                 )
             )
-    # Preserve the readers' deterministic order. The backward trace already
-    # selected its writer and ordered its leaves; route/current/learned readers
-    # are admitted only after that local read is silent. Re-ranking this list
-    # would invent another navigation policy after the world was already read.
 
-    # Zoom-wait mint: apply the reason from the early completion re-read (its
-    # producers already entered the trace pool above).  An influence-path wait
-    # (site 1, in the compass leaf loop) takes precedence when it fired.
-    if _is_zoom and (wait is None or wait.prescription is None):
-        assert zoom_wait is not None
-        wait = zoom_wait
-
-    if (
-        boundary_heading is not None
-        and not candidates
-        and (wait is None or wait.prescription is None)
-    ):
-        reason = (
-            f"advance {boundary_heading.channel_tag} to its next boundary "
-            f"{boundary_heading.target_value!r}"
-        )
-        wait = WaitRead(
-            WaitPrescription(
-                boundary_heading,
-                reason,
-                # The immediate coast heading is not an unresolved completion
-                # frontier. Only an exact completion/program re-read owns that
-                # target-relative evidence.
-                frontier=(),
-            ),
-        )
-
-    # Stuck diagnosis: no candidates from any reading source.  A skiff-learned
-    # composite edge surfaces as ``prescribed_batch`` (a bearing, not a plan), and
-    # a prescribed wait is an Act-tier bearing, so either means the loop has a move
-    # to try -- not stuck.
+    wait = _select_wait(
+        charted_completion=route_and_wait.charted_wait,
+        instruction_boundary=separated.instruction_boundary,
+        learned=learned,
+        has_candidates=bool(candidates),
+    )
+    learned_batch = learned.read if isinstance(learned, _LearnedBatch) else None
     stuck_reason: str | None = None
     if (
         not candidates
-        and not prerequisite_rungs
+        and not separated.prerequisites.rungs
         and (wait is None or wait.prescription is None)
-        and prescribed_batch is None
+        and learned_batch is None
     ):
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
-    final_admission = replace(
-        admission,
-        active_actions=active_trace_actions,
-        actions=trace_actions,
-        details=trace_action_details,
-    )
-    route_read = (
-        RouteRead(route_plan, route_candidates, route_co_actions)
-        if route_plan is not None
-        else None
-    )
+    final_trace = replace(trace, actions=trace_actions)
     return CandidateRead(
-        trace=final_admission,
+        trace=final_trace,
         options=tuple(candidates),
         wake_cap=wake_cap,
-        route=route_read,
+        route=route,
         wait=wait,
-        prerequisites=PrerequisiteRead(
-            tuple(prerequisite_rungs),
-            held_command_tags,
-        ),
-        learned_batch=(
-            LearnedBatchRead(prescribed_batch) if prescribed_batch is not None else None
-        ),
+        prerequisites=separated.prerequisites,
+        learned_batch=learned_batch,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
+    )
+
+
+def _build_candidates(
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> CandidateRead:
+    """Build one candidate read through explicit evidence-owning phases."""
+
+    key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
+    route_and_wait = _read_route_and_wait(frame, state, ctx, key_nogoods)
+    separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
+    learned = _read_learned_fallback(
+        route_and_wait,
+        separated,
+        frame,
+        state,
+        ctx,
+        key_nogoods,
+    )
+    current = _read_current_fallback(frame, ctx)
+    return _assemble_candidate_read(
+        route_and_wait,
+        separated,
+        learned,
+        current,
+        frame,
+        ctx,
+        key_nogoods,
     )
 
 

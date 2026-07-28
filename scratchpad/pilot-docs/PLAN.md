@@ -169,28 +169,6 @@ owned key function or value object. Then use one ordered-unique helper.
 
 ## D. Extract control flow after the receipts are stable
 
-### D1. Extract `options._build_candidates` by owned phase
-
-The function remains about 540 lines and has sequential phases sharing mutable
-locals. Do not extract the old scalar phases unchanged.
-
-After B2:
-
-- `_read_route_and_wait` returns the typed route/wait/admission receipt;
-- `_lower_prerequisites` consumes admission and returns executable prerequisites
-  plus remaining actions;
-- `_read_learned_fallback` returns an optional learned act;
-- `_assemble_candidates` returns the final option set and diagnosis.
-
-The extracted phase record must carry every rebound value explicitly. No closure
-over seven mutable locals.
-
-**LOC:** approximately neutral to -30.
-
-**Risk:** medium after B2, high before it.
-
-**Gate:** candidate-wait, orientation-contract, coast, nogood, and Tumbler tests.
-
 ### D2. Give `TraceNode` one traversal and one interior-frontier predicate
 
 `TraceNode` has six recursive collectors (`leaves`, same-tag chains, ordered
@@ -401,7 +379,7 @@ re-ground the deferred concept names against the owners that actually landed.
 
 ## Sequence
 
-1. **Control flow:** D1/D2/D3.
+1. **Control flow:** D2/D3.
 2. **Recovery extraction:** D4.
 3. **Compiled residual replay:** E1, E2, then E3.
 4. **Diagnostics and type hardening:** C3, C4, D5.
@@ -410,7 +388,7 @@ re-ground the deferred concept names against the owners that actually landed.
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
 
-The expected LOC reduction is deliberately not totaled. The remaining D1-D4
+The expected LOC reduction is deliberately not totaled. The remaining D2-D4
 work should remove meaningful code, but the acceptance criterion is a shorter
 reasoning path: one owner, one receipt, and consumers that apply rather than
 reconstruct.

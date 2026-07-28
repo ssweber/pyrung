@@ -147,10 +147,19 @@ should consume the first owner's result.
   `_PulseState` evidence, and recording renders the same policy. A
   `ChannelHeading` is navigation's declaration; a coast's selected landing
   remains execution evidence on `_PulseState`.
-- Option materialization and ranking: `options.py::_build_candidates`; its
-  immutable `CandidateRead` composes the final trace admission, optional
-  `RouteRead`, `WaitRead`, prerequisite artifact, options, learned-batch
-  variant, and diagnosis. `WaitRead.prescription` is
+- Option materialization and ranking: `options.py::_build_candidates`
+  orchestrates four explicit current-world reads, then
+  `_assemble_candidate_read` creates the sole durable `CandidateRead`.
+  `_RouteAndCompletionRead` keeps static route and charted-completion evidence with
+  the admission that produced them; `_PrerequisiteSeparation` carries the
+  updated admission, executable prerequisites, and the still-unselected
+  instruction-owned boundary. Learned fallback is an explicit wait, single
+  action, or batch variant, while `_read_current_fallback` remains a separate
+  program-current reading. `_select_wait` alone chooses among learned motion,
+  charted completion, and an instruction-owned boundary with the established
+  prescription and candidate gates. The immutable `CandidateRead` composes the
+  final trace admission, optional `RouteRead`, `WaitRead`, prerequisite
+  artifact, options, learned-batch variant, and diagnosis. `WaitRead.prescription` is
   `WaitPrescription | None`, so a present wait is valid by construction while
   a declined read retains its reason, producer evidence, frontier, and details.
   Orientation, recording, option assembly, and tests consume those owners
@@ -328,9 +337,9 @@ investigation materializes their guarded installed form.
   optional outer `RouteEdgeContext`. `Coast` consumes that heading whole through
   `ActPolicy.heading`; consumers do not receive scalar channel or route copies.
   `options.py::_boundary_heading` lowers an instruction-owned boundary directly
-  to that typed object. Candidate refinement carries it whole and may compose
-  route context onto it; only the explicitly pair-typed wait frontier projects
-  its channel and target.
+  to that typed object. Prerequisite separation carries it whole and
+  `_select_wait` may compose route context onto it; only the explicitly
+  pair-typed wait frontier projects its channel and target.
 - Accepted execution evidence contains no PLC, transient pulse/action/wait
   snapshots, world keys, correction or assessment state, or replay steps.
   `_AcceptedTrial` retains the physical `_ExecutedAttempt` separately; committed
@@ -425,7 +434,8 @@ investigation materializes their guarded installed form.
 - `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
 - `orientation.py` — current-world read, complete frame assembly, sole result
   synthesis, and terminal/probe policy.
-- `options.py` — private evidence-rich option materialization and ranking.
+- `options.py` — phased private current-world readings, explicit wait-source
+  selection, and final evidence-rich option materialization and ranking.
 - `navigation_evidence.py` — narrow constrained reachability evidence shared
   with verification and recovery, including typed static-edge admission; never
   returns an action.
