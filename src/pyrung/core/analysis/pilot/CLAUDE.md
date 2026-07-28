@@ -113,6 +113,12 @@ Do not reproduce a decision in a second module for convenience. Shared callers
 should consume the first owner's result.
 
 - User trace route: `pilot.py::_prepare_route`
+- Trace-tree structural traversal and unresolved interior identity:
+  `trace.py::TraceNode.iter_nodes` and
+  `trace.py::TraceNode.is_interior_frontier`. Breadth-first order is the
+  package default; callers that need left-to-right preorder request
+  depth-first explicitly. Collector-specific rules, including the relational
+  unsatisfied-frontier stop and ordered-action context fold, remain explicit.
 - Writer eligibility and order: `trace.py::_rank_writers`
 - Unlocked local trace alternatives:
   `trace.py::_select_trace_alternative` returns an immutable
@@ -421,8 +427,8 @@ investigation materializes their guarded installed form.
 
 ### Static reading and orientation
 
-- `trace.py` — backward requirement tree, route enumeration, steerability, and
-  writer ranking.
+- `trace.py` — backward requirement tree, stable tree traversal, unresolved
+  interior identity, route enumeration, steerability, and writer ranking.
 - `availability.py` — current-state writer availability used for ordering.
 - `evidence.py` — pipeline-role inference and static transition-route expansion.
 - `tide_tables.py` — finite constant-backed table and calculation preimages,

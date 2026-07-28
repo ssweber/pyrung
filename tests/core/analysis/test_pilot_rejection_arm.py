@@ -27,7 +27,6 @@ from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_SAT
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceNode,
-    _all_nodes,
     _reverse_writer,
     _writer_guard_verdict,
     resolve_rung,
@@ -193,7 +192,7 @@ def test_live_guard_admits_writer_and_flags_frontier():
     assert ("Trig", True) in _leaf_pairs(tree)
 
     # The frontier gated by the unreadable ``Mask == 0`` guard carries the signal.
-    flagged = [(n.tag, n.value) for n in _all_nodes(tree) if n.live_guard]
+    flagged = [(n.tag, n.value) for n in tree.iter_nodes() if n.live_guard]
     assert flagged == [("St", 7)]
 
 
@@ -219,7 +218,7 @@ def test_readable_guard_not_flagged_live():
 
     assert tree.writer_rung == 1
     assert ("Cfg", 3) in _leaf_pairs(tree)  # the guard was read, not punted-dead
-    assert [n for n in _all_nodes(tree) if n.live_guard] == []
+    assert [n for n in tree.iter_nodes() if n.live_guard] == []
 
 
 # --- Test 4: SAT verdict — a satisfiable guard is admitted normally -----------

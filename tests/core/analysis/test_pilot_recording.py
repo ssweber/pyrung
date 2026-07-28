@@ -41,16 +41,6 @@ from pyrung.core.analysis.pilot.types import (
 )
 
 
-def _all_nodes(tree):
-    """Breadth-first walk over a TraceNode tree."""
-    out_nodes = [tree]
-    i = 0
-    while i < len(out_nodes):
-        out_nodes.extend(out_nodes[i].children)
-        i += 1
-    return out_nodes
-
-
 def _step_context(
     candidate: dict[str, object],
     *,
@@ -199,7 +189,7 @@ def test_writer_ranking_names_winner_and_losers() -> None:
     ranked_nodes = [
         n
         for tree in trees
-        for n in _all_nodes(tree)
+        for n in tree.iter_nodes()
         if n.writer_ranking is not None and len(n.writer_ranking) >= 2
     ]
     assert ranked_nodes, "expected a node whose writer_ranking names winner + losers"
@@ -242,7 +232,7 @@ def test_writer_skips_records_avoid_shadowed() -> None:
         avoid=Cmd,
         on_event=lambda ev: trees.append(ev.data["tree"]) if ev.kind == "iteration" else None,
     )
-    skips = [skip for tree in trees for n in _all_nodes(tree) for skip in n.writer_skips]
+    skips = [skip for tree in trees for n in tree.iter_nodes() for skip in n.writer_skips]
     assert any(reason == "avoid_shadowed" for _ri, reason in skips), skips
 
 

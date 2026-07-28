@@ -58,6 +58,89 @@ def _known(logic: Program) -> dict:
     return plc._known_tags_by_name
 
 
+def test_trace_node_structural_views_preserve_stable_tree_order() -> None:
+    deep_leaf = TraceNode("deep_leaf", True)
+    left_branch = TraceNode("left_branch", True, children=[deep_leaf])
+    left_leaf = TraceNode("left_leaf", True)
+    right_leaf = TraceNode("right_leaf", True)
+    left = TraceNode("left", True, children=[left_leaf, left_branch])
+    right = TraceNode("right", True, children=[right_leaf])
+    root = TraceNode("root", True, children=[left, right])
+
+    assert [node.tag for node in root.iter_nodes()] == [
+        "root",
+        "left",
+        "right",
+        "left_leaf",
+        "left_branch",
+        "right_leaf",
+        "deep_leaf",
+    ]
+    assert [node.tag for node in root.iter_nodes(order="depth_first")] == [
+        "root",
+        "left",
+        "left_leaf",
+        "left_branch",
+        "deep_leaf",
+        "right",
+        "right_leaf",
+    ]
+    assert [node.tag for node in root.leaves()] == [
+        "left_leaf",
+        "deep_leaf",
+        "right_leaf",
+    ]
+
+
+def test_trace_node_rejects_unknown_traversal_order() -> None:
+    tree = TraceNode("root", True)
+
+    try:
+        list(tree.iter_nodes(order="sideways"))  # type: ignore[arg-type]
+    except ValueError as exc:
+        assert "sideways" in str(exc)
+    else:
+        raise AssertionError("unknown traversal order should fail")
+
+
+def test_interior_frontier_is_the_plain_structural_predicate() -> None:
+    child = TraceNode("child", True)
+
+    assert TraceNode("plain", True, children=[child]).is_interior_frontier
+    assert TraceNode(
+        "relation",
+        True,
+        relational=True,
+        children=[child],
+    ).is_interior_frontier
+    assert not TraceNode("leaf", True).is_interior_frontier
+    assert not TraceNode("done", True, satisfied=True, children=[child]).is_interior_frontier
+    assert not TraceNode("action", True, is_steerable=True, children=[child]).is_interior_frontier
+    assert not TraceNode(
+        "pipeline",
+        True,
+        pipeline_internal=True,
+        children=[child],
+    ).is_interior_frontier
+
+
+def test_relational_unsatisfied_frontier_does_not_count_its_lever_subtree() -> None:
+    hidden_interior = TraceNode(
+        "hidden",
+        True,
+        children=[TraceNode("action", True, is_steerable=True)],
+    )
+    relation = TraceNode(
+        "A",
+        6,
+        relational=True,
+        predicate=Atom("A", "gt", 5),
+        children=[hidden_interior],
+    )
+
+    assert relation.unsatisfied_conditions() == {("A", ("gt", 5))}
+
+
 def test_rejection_on_unselected_or_arm_does_not_rerank():
     """Only rejection of the arm this Or selected enables fallback."""
 

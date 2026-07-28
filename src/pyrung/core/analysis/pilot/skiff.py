@@ -208,11 +208,9 @@ def probe_live_guard_frontiers(
     probes added no knowledge. A learned edge only surfaces a candidate on the
     next iteration and must still pass live trial verification.
     """
-    from pyrung.core.analysis.pilot.trace import _all_nodes
-
     frontiers = []
     seen_frontier: set[tuple[str, str]] = set()
-    for n in _all_nodes(frame.tree):
+    for n in frame.tree.iter_nodes():
         if n.satisfied or n.is_steerable:
             continue
         # An opaque-cut frontier: the walk refused the tag (opaque pipeline /

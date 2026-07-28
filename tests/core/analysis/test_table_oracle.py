@@ -199,12 +199,10 @@ def _manual_execute_snapshot(snap):
 
 def _enable_modes(tree):
     """The ``UnitModeCurrent`` values surfaced as ``enable`` prerequisites."""
-    from pyrung.core.analysis.pilot.trace import _all_nodes
-
     return sorted(
         {
             n.value
-            for n in _all_nodes(tree)
+            for n in tree.iter_nodes()
             if n.tag == "UnitModeCurrent" and n.data_flow == "enable"
         }
     )
@@ -504,10 +502,8 @@ def _mask_gate_trace(transition: str, *, mode: int = 3):
 
 
 def _mask_gate_modes(tree):
-    from pyrung.core.analysis.pilot.trace import _all_nodes
-
     return sorted(
-        {n.value for n in _all_nodes(tree) if n.tag == "ModeCurrent" and n.data_flow == "enable"}
+        {n.value for n in tree.iter_nodes() if n.tag == "ModeCurrent" and n.data_flow == "enable"}
     )
 
 

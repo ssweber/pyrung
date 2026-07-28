@@ -12,7 +12,8 @@ record transition knowledge, or choose the iteration's final candidate order.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import typing
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
@@ -462,39 +463,47 @@ class TraceNode:
     # ``unresolved_rung``). Empty when the top-ranked writer was taken directly.
     writer_skips: tuple[tuple[int, str], ...] = ()
 
+    def iter_nodes(
+        self,
+        *,
+        order: typing.Literal["breadth_first", "depth_first"] = "breadth_first",
+    ) -> Iterator[TraceNode]:
+        """Yield this trace in one of its two stable structural orders."""
+
+        if order == "breadth_first":
+            pending: list[TraceNode] = [self]
+            index = 0
+            while index < len(pending):
+                node = pending[index]
+                pending.extend(node.children)
+                index += 1
+                yield node
+            return
+        if order == "depth_first":
+            pending = [typing.cast(TraceNode, self)]
+            while pending:
+                node = pending.pop()
+                pending.extend(reversed(node.children))
+                yield node
+            return
+        raise ValueError(f"unknown trace traversal order: {order!r}")
+
+    @property
+    def is_interior_frontier(self) -> bool:
+        """Whether this is an unresolved structural requirement with children."""
+
+        return (
+            bool(self.children)
+            and not self.satisfied
+            and not self.is_steerable
+            and not self.pipeline_internal
+        )
+
     def leaves(self) -> list[TraceNode]:
-        if not self.children:
-            return [self]
-        result: list[TraceNode] = []
-        for child in self.children:
-            result.extend(child.leaves())
-        return result
+        return [node for node in self.iter_nodes(order="depth_first") if not node.children]
 
     def steerable_leaves(self) -> list[tuple[str, Any]]:
         return [(n.tag, n.value) for n in self.leaves() if n.is_steerable]
-
-    def same_tag_chains(self) -> list[list[TraceNode]]:
-        """Find ancestor-descendant pairs with the same tag but different values
-        where the prerequisite (descendant) is NOT already satisfied.
-
-        These encode temporal ordering: reaching tag=v2 requires first
-        reaching tag=v1 (the ancestor).  Chains where the prerequisite
-        is already satisfied are not real blocking dependencies.
-        """
-        chains: list[list[TraceNode]] = []
-        self._collect_chains([], chains)
-        return chains
-
-    def _collect_chains(self, ancestors: list[TraceNode], out: list[list[TraceNode]]) -> None:
-        for anc in ancestors:
-            if (
-                anc.tag == self.tag
-                and not _values_match(anc.value, self.value)
-                and not self.satisfied
-            ):
-                out.append([anc, self])
-        for child in self.children:
-            child._collect_chains([*ancestors, self], out)
 
     def ordered_actions(self) -> list[tuple[str, Any]]:
         """Depth-first action list with same-tag prerequisites first.
@@ -639,21 +648,11 @@ class TraceNode:
         non-leaf, non-steerable nodes that have children (meaning the
         trace walked through them as intermediate conditions).
         """
-        tags: set[str] = set()
-        self._collect_pivots(tags)
-        return tags
-
-    def _collect_pivots(self, out: set[str]) -> None:
-        if (
-            not self.satisfied
-            and not self.is_steerable
-            and not self.pipeline_internal
-            and not self.relational
-            and self.children
-        ):
-            out.add(self.tag)
-        for child in self.children:
-            child._collect_pivots(out)
+        return {
+            node.tag
+            for node in self.iter_nodes()
+            if node.is_interior_frontier and not node.relational
+        }
 
     def unsatisfied_count(self) -> int:
         """Number of *distinct* unsatisfied, non-steerable conditions.
@@ -686,12 +685,7 @@ class TraceNode:
             if not self.satisfied and self.advance is None:
                 seen.add(self._relational_key())
             return
-        if (
-            not self.satisfied
-            and not self.is_steerable
-            and not self.pipeline_internal
-            and self.children
-        ):
+        if self.is_interior_frontier:
             seen.add(_visit_key(self.tag, self.value))
         for child in self.children:
             child._collect_unsatisfied(seen)
@@ -700,45 +694,6 @@ class TraceNode:
         """Dedup key for a relational frontier: tag + (form, operand)."""
         p = self.predicate
         return (self.tag, (getattr(p, "form", None), getattr(p, "operand", self.value)))
-
-    def dead_end_parent_tags(self) -> set[str]:
-        """Tags of nodes whose children include a dead-end leaf.
-
-        A dead-end leaf is not satisfied, not steerable, and has no children.
-        The parent's tag broadens the upstream candidate cone so command
-        buttons that write through an opaque pipeline can be discovered.
-        """
-        result: set[str] = set()
-        self._collect_dead_end_parents(result)
-        return result
-
-    def _collect_dead_end_parents(self, out: set[str]) -> None:
-        for child in self.children:
-            if (
-                not child.children
-                and not child.satisfied
-                and not child.is_steerable
-                and not child.pipeline_internal
-            ):
-                out.add(self.tag)
-            child._collect_dead_end_parents(out)
-
-
-def _all_nodes(tree: TraceNode, *, depth_first: bool = False) -> list[TraceNode]:
-    """Collect all nodes in a TraceNode tree in the requested stable order."""
-
-    if depth_first:
-        result = [tree]
-        for child in tree.children:
-            result.extend(_all_nodes(child, depth_first=True))
-        return result
-
-    result: list[TraceNode] = [tree]
-    i = 0
-    while i < len(result):
-        result.extend(result[i].children)
-        i += 1
-    return result
 
 
 def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -759,13 +714,8 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
     """
     pairs: list[tuple[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for n in _all_nodes(tree):
-        if (
-            not n.satisfied
-            and not n.is_steerable
-            and not getattr(n, "pipeline_internal", False)
-            and n.children
-        ):
+    for n in tree.iter_nodes():
+        if n.is_interior_frontier:
             if n.relational and n.predicate is not None:
                 # The need is the *relation* — emit the Atom, never the operand
                 # tag-name posing as an equality value (a string a downstream
@@ -1550,7 +1500,7 @@ def _reconcile_relational(root: TraceNode, snapshot: dict[str, Any]) -> None:
     other.  The predicate is evaluated against the snapshot overlaid with the
     candidate value, so tag-operand thresholds (``PV >= Lower``) resolve too.
     """
-    nodes = _all_nodes(root)
+    nodes = list(root.iter_nodes())
     concrete: dict[str, set[Any]] = {}
     for n in nodes:
         if n.is_steerable and n.lever is None:
@@ -1781,7 +1731,7 @@ def _route_forces(nodes: list[TraceNode], snapshot: dict[str, Any], pred: Any) -
     """
     overlay = dict(snapshot)
     for root in nodes:
-        for n in _all_nodes(root):
+        for n in root.iter_nodes():
             if n.relational or n.value is None:
                 continue
             overlay[n.tag] = n.value
@@ -1802,7 +1752,7 @@ def _route_forced_names(
     """
     overlay = dict(snapshot)
     for root in nodes:
-        for n in _all_nodes(root):
+        for n in root.iter_nodes():
             if n.relational or n.value is None:
                 continue
             overlay[n.tag] = n.value
@@ -1873,7 +1823,7 @@ def _route_conflicts(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozen
     Every node in a resolved trace tree is a required condition (Or-arms are
     already chosen), so two nodes pinning the same tag to disjoint value sets
     clash **unless** one is an ancestor of the other — that is temporal
-    sequencing (``same_tag_chains``: reach ``v1`` first, then ``v2``), not a
+    sequencing (reach ``v1`` first, then ``v2``), not a
     simultaneous contradiction.  A plain node pins its scalar value (a singleton
     set); a mode flag is normalized through :func:`_equality_gated_coil` into the
     channel-register value *set* it implies, so a manual-mode caller gate

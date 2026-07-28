@@ -42,7 +42,6 @@ from pyrung.core.analysis.pilot.navigation import (
 from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
-    _all_nodes,
     frontier_pairs,
     trace_back,
 )
@@ -114,7 +113,7 @@ def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
     if route_condition is not None:
         anchors.append(route_condition)
         return tuple(anchors)
-    for node in _all_nodes(tree):
+    for node in tree.iter_nodes():
         if node.relational or node.value is None:
             continue
         pair = (node.tag, node.value)
@@ -169,7 +168,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
         before = context.before_snap
         after = context.after_snap
         if getattr(context.motion, "is_coast", False):
-            tree_tags = {node.tag for node in _all_nodes(frame.tree)}
+            tree_tags = {node.tag for node in frame.tree.iter_nodes()}
             for tag, value in after.items():
                 if (
                     tag in tree_tags
@@ -521,7 +520,7 @@ def _diagnose_stuck_reason(
         and not node.children
         and not node.satisfied
         and not node.is_steerable
-        for node in _all_nodes(tree)
+        for node in tree.iter_nodes()
     ):
         return None
 
@@ -598,7 +597,7 @@ def _compass_route_plan(
         return admission.allowed
 
     plans: list[StaticPath] = []
-    for n in _all_nodes(frame.tree):
+    for n in frame.tree.iter_nodes():
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
             continue
         if not n.children and n.tag not in ctx.opaque_loop:
@@ -1443,7 +1442,7 @@ def _read_learned_fallback(
     )
     probed_leaf_states: set[tuple[str, Any]] = set()
     nodes = (
-        () if separated.trace.establish_pending or local_bearing_open else _all_nodes(frame.tree)
+        () if separated.trace.establish_pending or local_bearing_open else frame.tree.iter_nodes()
     )
     for node in nodes:
         unreadable = getattr(node, "live_guard", False) or (

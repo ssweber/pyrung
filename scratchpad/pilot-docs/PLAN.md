@@ -169,25 +169,6 @@ owned key function or value object. Then use one ordered-unique helper.
 
 ## D. Extract control flow after the receipts are stable
 
-### D2. Give `TraceNode` one traversal and one interior-frontier predicate
-
-`TraceNode` has six recursive collectors (`leaves`, same-tag chains, ordered
-actions, pivots, unsatisfied conditions, dead-end parents) plus `_all_nodes`, which
-has 15 package call sites.
-
-Add a stable `iter_nodes(order=...)` generator and one
-`is_interior_frontier`/`_interior_frontier` predicate. Keep per-collector stopping
-rules—especially relational frontiers—explicit.
-
-This is the prerequisite for any TraceNode split by kind and may make that split
-unnecessary.
-
-**LOC:** about -25 to -45.
-
-**Risk:** medium; traversal order is behavior.
-
-**Gate:** trace, needed-vocabulary, program-step, options, and skiff tests.
-
 ### D3. Collapse repeated trace writer-fallback bookkeeping
 
 `trace._trace_back` still builds each writer through the shared mutable
@@ -379,7 +360,7 @@ re-ground the deferred concept names against the owners that actually landed.
 
 ## Sequence
 
-1. **Control flow:** D2/D3.
+1. **Control flow:** D3.
 2. **Recovery extraction:** D4.
 3. **Compiled residual replay:** E1, E2, then E3.
 4. **Diagnostics and type hardening:** C3, C4, D5.
@@ -388,7 +369,20 @@ re-ground the deferred concept names against the owners that actually landed.
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
 
-The expected LOC reduction is deliberately not totaled. The remaining D2-D4
+The expected LOC reduction is deliberately not totaled. The remaining D3-D4
 work should remove meaningful code, but the acceptance criterion is a shorter
 reasoning path: one owner, one receipt, and consumers that apply rather than
 reconstruct.
+
+## Working pipeline
+
+The safe parallel pattern is a pipeline, not parallel edits to the same
+subsystem:
+
+1. One agent implements the current item.
+2. Another agent audits the next item against committed `HEAD`.
+3. The primary agent reviews and gates the current diff.
+4. Only then does the next implementation begin.
+
+This overlaps design grounding with the long test gate while preserving a
+single attributable implementation change and a meaningful first deviation.

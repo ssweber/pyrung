@@ -42,7 +42,7 @@ from pyrung.core.analysis.pilot.navigation import (
     OrientationWorld,
     Pulse,
 )
-from pyrung.core.analysis.pilot.trace import _all_nodes, target_reached
+from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     PilotGateEvent,
@@ -149,7 +149,7 @@ def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
     met — plus the channel / opaque-loop registers.  Steerable inputs are
     excluded: those are held, not watched.
     """
-    tags = {n.tag for n in _all_nodes(frame.tree) if not n.is_steerable}
+    tags = {n.tag for n in frame.tree.iter_nodes() if not n.is_steerable}
     return frozenset(tags | ctx.opaque_loop)
 
 
@@ -277,7 +277,7 @@ def _compass_observations(
     """
     action_tag = cause[0] if is_action(cause) else None
     observations: list[CompassObservation] = []
-    for n in _all_nodes(frame.tree):
+    for n in frame.tree.iter_nodes():
         # pipeline_internal nodes are included: the learned table is the
         # pipeline instrument's own memory, and a live trial is the strongest
         # evidence there is — both for new edges and for falsifying stale

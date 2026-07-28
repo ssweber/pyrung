@@ -33,7 +33,6 @@ from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceNode,
-    _all_nodes,
     trace_back,
 )
 from pyrung.core.analysis.sp_values import _values_match
@@ -153,7 +152,7 @@ def _first_advance(root: TraceNode) -> AdvanceStep | None:
     # Producer traces are ordered execution paths: the first boundary is the
     # first unsatisfied advance in depth-first trace order, not the shallowest
     # advance anywhere in the tree.
-    for node in _all_nodes(root, depth_first=True):
+    for node in root.iter_nodes(order="depth_first"):
         if node.advance is not None and not node.satisfied:
             return node.advance
     return None
@@ -401,7 +400,7 @@ def read_program_step(
         runs,
     )
     next_trace = _trace_exact(ctx, producer, after)
-    relevant = {node.tag for node in (*_all_nodes(trace), *_all_nodes(next_trace))} | {
+    relevant = {node.tag for tree in (trace, next_trace) for node in tree.iter_nodes()} | {
         producer.command_tag,
         *producer.co_writes,
     }
@@ -544,7 +543,7 @@ def read_program_step(
         # program's own motion; an installed PILOT hold is excluded because its
         # effect is PILOT's, not the program's.  Only a coordinate this trace
         # actually read can be the boundary that invalidated it.
-        trace_tags = {node.tag for node in _all_nodes(trace)}
+        trace_tags = {node.tag for node in trace.iter_nodes()}
         crossing = next(
             (
                 (tag, after_value)

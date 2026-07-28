@@ -12,7 +12,6 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
-    _all_nodes,
     trace_back,
 )
 from pyrung.core.analysis.steerable import compute_steerable
@@ -27,7 +26,7 @@ def _known(logic: Program) -> dict:
 
 
 def _relational_nodes(tree: TraceNode) -> list[TraceNode]:
-    return [n for n in _all_nodes(tree) if n.relational]
+    return [n for n in tree.iter_nodes() if n.relational]
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +240,7 @@ def test_program_owned_witness_preserves_boundary_scalar_type() -> None:
     tree = next(event.data["tree"] for event in events if event.kind == "iteration")
     writer_witnesses = [
         node.value
-        for node in _all_nodes(tree)
+        for node in tree.iter_nodes()
         if node.tag == Bound.name and node.writer_rung is not None
     ]
 

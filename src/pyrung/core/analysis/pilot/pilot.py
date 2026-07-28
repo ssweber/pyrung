@@ -78,7 +78,6 @@ from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceChoice,
     TraceReadConstraints,
-    _all_nodes,
     _route_forced_names,
     compute_edge_tags,
     compute_reference_constants,
@@ -1169,7 +1168,7 @@ def _linked_feedback_block(
         tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
     except Exception:  # noqa: BLE001 — diagnostic only; never mask the real failure
         return None
-    route_tags = {n.tag for n in _all_nodes(tree)}
+    route_tags = {n.tag for n in tree.iter_nodes()}
     blockers = [
         (en, fb)
         for en, fb in couplings
