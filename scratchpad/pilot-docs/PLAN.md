@@ -434,12 +434,22 @@ These are not current cleanup targets.
 
 ---
 
+## G. Apply the grounded naming backlog
+
+The naming work is maintained separately in
+[`RENAME_PLAN.md`](../../src/pyrung/core/analysis/pilot/RENAME_PLAN.md). Apply
+its approved mechanical tranche only after the ownership work above, then
+re-ground the deferred concept names against the owners that actually landed.
+
+---
+
 ## Sequence
 
 1. **Control flow:** D1/D2/D3.
 2. **Recovery continuity:** B6, then D4.
 3. **Compiled residual replay:** E1, E2, then E3.
 4. **Diagnostics and type hardening:** C3, C4, D5.
+5. **Naming:** the approved tranche in G, then re-audit the deferred names.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
