@@ -1698,6 +1698,18 @@ class PLC:
             "runup_scans": max(0, slab_start - anchor_scan - 1),
             "materialized_states": len(slab),
             "folded_runup": int(positioned_with_fold),
+            "ordinary_folded_scans": (
+                self._last_replay_seek_stats.get("ordinary_folded_scans", 0)
+                if positioned_with_fold
+                else 0
+            ),
+            "cycle_folded_scans": 0,
+            "residual_scans": (
+                self._last_replay_seek_stats.get("residual_scans", 0)
+                if positioned_with_fold
+                else max(0, slab_start - anchor_scan - 1)
+            )
+            + len(slab),
         }
         if scan_id in slab:
             return slab[scan_id]
@@ -2141,10 +2153,15 @@ class PLC:
 
         state = replay._materialize_replay_state()
         if fold:
+            logical_scans = target_scan_id - anchor_scan_id
+            ordinary_folded_scans = logical_scans - kernel_scans
             self._last_replay_seek_stats = {
-                "logical_scans": target_scan_id - anchor_scan_id,
+                "logical_scans": logical_scans,
                 "kernel_scans": kernel_scans,
-                "folded_scans": target_scan_id - anchor_scan_id - kernel_scans,
+                "folded_scans": ordinary_folded_scans,
+                "ordinary_folded_scans": ordinary_folded_scans,
+                "cycle_folded_scans": 0,
+                "residual_scans": kernel_scans,
             }
         return self._fork_from_reconstructed_state(
             state,
@@ -2202,7 +2219,19 @@ class PLC:
             )
         kernel = self._compiled_replay_supported_kernel()
         if kernel is None:
-            return self._replay_to_interpreted(target_scan_id)
+            replay = self._replay_to_interpreted(target_scan_id)
+            anchor = self._nearest_checkpoint_at_or_before(target_scan_id)
+            anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
+            logical_scans = target_scan_id - anchor_scan_id
+            self._last_replay_seek_stats = {
+                "logical_scans": logical_scans,
+                "kernel_scans": logical_scans,
+                "folded_scans": 0,
+                "ordinary_folded_scans": 0,
+                "cycle_folded_scans": 0,
+                "residual_scans": logical_scans,
+            }
+            return replay
         return self._replay_to_compiled(target_scan_id, kernel, fold=True)
 
     def replay_trace_at(self, target_scan_id: int) -> dict[int, RungTrace]:

@@ -202,31 +202,13 @@ its per-scan Python cost. It also gives candidate replay the same advancement
 primitive instead of introducing a second replay log or a causal-only fold
 implementation.
 
-### E1. Instrument the residual work before changing its executor
-
-For the exact avoided-Complete Tumbler route, report:
-
-- ordinary-folded, cycle-folded, compiled-residual, and interpreted-witness scan
-  counts;
-- cold compile, warm execution, observation handoff, and total replay time;
-- slab refill and candidate-replay counts, including repeated replay of an
-  identical interval.
-
-Measure cold and warm runs separately. A roughly half-second cold compilation
-can erase a small replay win even though the warm kernel is substantially faster.
-Keep the current interpreter run as the semantic and timing baseline.
-
-Known evidence is encouraging but not yet an end-to-end acceptance result:
-compiled state transitions have matched interpreted transitions in the measured
-route, and a warm compiled kernel ran a 331-scan residual interval in roughly
-0.10--0.13 seconds versus roughly 1.0--1.5 seconds interpreted. Re-measure these
-figures under the final observation contract rather than copying them into a
-performance promise.
-
-**Risk:** low; instrumentation must not retain another scan-by-scan log.
-
-**Gate:** the focused causal/investigate tests plus the exact avoided-Complete
-route.
+E1's reproducible measurements are in
+[`E1_RESIDUAL_REPLAY_REPORT.md`](E1_RESIDUAL_REPLAY_REPORT.md). They found 1,999
+backend-supported investigation-replay residual scans, but the representative
+40-scan shadow under the same recorded executable-overlay fingerprint failed
+endpoint parity. No residual scan is therefore compiled-eligible yet and no
+positive savings ceiling is established. E2 must settle the exact
+advancement/World boundary before E3 is attempted.
 
 ### E2. Define one replay-advancement API
 
@@ -241,9 +223,10 @@ owner proves the jump; the backend applies state transitions. Do not add a
 universal receipt type pre-emptively: define the result beside the advancement
 owner, and let D4 reuse it if that makes `_advance_or_reject` smaller.
 
-The operation must work with every current repeating-history encoding through
-its public transition/jump surface. It must not branch on a private concrete RHE
-representation or silently expand compressed history.
+Advancement must leave causal-evidence consumers encoding-agnostic through the
+repeating-history encodings' public query APIs. It must not imply that an RHE
+executes PLC transitions or jumps, branch on a private concrete RHE
+representation, or silently expand compressed history.
 
 **Owner -> receipt -> consumers:**
 
@@ -334,7 +317,7 @@ re-ground the deferred concept names against the owners that actually landed.
 
 ## Sequence
 
-1. **Compiled residual replay:** E1, E2, then E3.
+1. **Compiled residual replay:** E2, then E3.
 2. **Diagnostics and type hardening:** C3, C4, D5.
 3. **Naming:** the approved tranche in G, then re-audit the deferred names.
 

@@ -1,0 +1,217 @@
+{
+  "baseline": {
+    "candidate_replay": {
+      "backend_supported_interval_scans": 2877,
+      "backend_supported_replay_residual_scans": 1999,
+      "calls": 6,
+      "calls_detail": [
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 152,
+          "interval_scans": 45,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 0.07361859997035936,
+          "start_scan": 107
+        },
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 152,
+          "interval_scans": 45,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 0.07896049995906651,
+          "start_scan": 107
+        },
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 922,
+          "interval_scans": 1,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 0.0022991999867372215,
+          "start_scan": 921
+        },
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 1952,
+          "interval_scans": 1031,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 1.1137961999629624,
+          "start_scan": 921
+        },
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 2652,
+          "interval_scans": 1731,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 2.0518920999602415,
+          "start_scan": 921
+        },
+        {
+          "candidate_count": 570,
+          "candidates_sha256": "7c7a6d914cf258c8b16d5ccc2de36a22d10d3b33c4016841654c8dae9311d4e2",
+          "end_scan": 451052,
+          "interval_scans": 24,
+          "overlay_fingerprint": "26c67786803b5a8d",
+          "seconds": 0.040635100041981786,
+          "start_scan": 451028
+        }
+      ],
+      "compiled_eligible_interval_scans": 0,
+      "compiled_eligible_replay_residual_scans": 0,
+      "recorded_executable_overlay_fingerprints": [
+        "26c67786803b5a8d"
+      ],
+      "repeated_exact_intervals": 1,
+      "unique_exact_intervals": 5,
+      "unsupported_overlay_fingerprints": []
+    },
+    "capture": {
+      "hits": 134,
+      "misses": 92,
+      "requests": 226
+    },
+    "coast_partitions": {
+      "departure-settle": {
+        "cycle_folded": 0,
+        "logical": 812,
+        "ordinary_folded": 0,
+        "residual": 812
+      },
+      "replay": {
+        "cycle_folded": 2700,
+        "logical": 4699,
+        "ordinary_folded": 0,
+        "residual": 1999
+      },
+      "zoom": {
+        "cycle_folded": 658900,
+        "logical": 665375,
+        "ordinary_folded": 0,
+        "residual": 6475
+      }
+    },
+    "compiled_actual_scans": 2210,
+    "executor": "current interpreted PILOT with existing causal compiled replay",
+    "interpreted_replay_residual_scans": 1999,
+    "interpreted_witness_scans": 92,
+    "slabs": {
+      "materialized_states": 2210,
+      "refills": 3
+    },
+    "timing": {
+      "boundaries_are_nested_and_non_additive": true,
+      "candidate_intervals": {
+        "calls": 6,
+        "seconds": 3.3612016998813488
+      },
+      "cold_compile": {
+        "calls": 3,
+        "seconds": 0.8811677999910899
+      },
+      "interpreted_witness": {
+        "calls": 92,
+        "seconds": 0.46862559992587194
+      },
+      "observation_handoff": {
+        "calls": 92,
+        "seconds": 0.013693899847567081
+      },
+      "replay_envelope": {
+        "calls": 226,
+        "seconds": 1.1678007997688837
+      },
+      "route_is_instrumented_time_excluding_shadow": true,
+      "route_seconds": 97.8777381000109,
+      "warm_backend": {
+        "calls": 2210,
+        "seconds": 2.682787101890426
+      }
+    }
+  },
+  "feasibility_shadow": {
+    "advancement_kind": "replay_coast",
+    "difference": {
+      "memory_difference_count": 1,
+      "memory_difference_sample": [
+        [
+          "_prev:A_Alm14_DoorOpen_Trig",
+          true,
+          false
+        ]
+      ],
+      "scan_ids": [
+        152,
+        152
+      ],
+      "tag_difference_count": 507,
+      "tag_difference_sample": [
+        [
+          "A_Alm14_Date_MMDD",
+          728,
+          0
+        ],
+        [
+          "A_Alm14_DoorOpen_Trig",
+          true,
+          false
+        ],
+        [
+          "A_Alm14_Status",
+          1,
+          0
+        ],
+        [
+          "A_Alm14_Time_hhmm",
+          1754,
+          0
+        ],
+        [
+          "A_Alm14_Time_ss",
+          10,
+          0
+        ],
+        [
+          "A_AlmExtent",
+          2,
+          1
+        ],
+        [
+          "A_AlmHist100",
+          null,
+          0
+        ],
+        [
+          "A_AlmHist101",
+          null,
+          0
+        ]
+      ],
+      "timestamp_delta": 0.0
+    },
+    "end_scan": 152,
+    "endpoint_parity": false,
+    "interpreted_seconds": 0.08960189996287227,
+    "logical_scans": 40,
+    "overlay_fingerprint": "26c67786803b5a8d",
+    "residual_scans": 40,
+    "speedup": 1.2612365193797146,
+    "start_scan": 112,
+    "warm_compiled_seconds": 0.07104290003189817
+  },
+  "modeled_ceiling": null,
+  "route": {
+    "avoid": "Cmd_State_Complete",
+    "finish_scan": 631797,
+    "reached": true,
+    "seconds": 97.8777381000109,
+    "skeleton_events": 184,
+    "skeleton_sha256": "06f07354d42ff4329139ae7ce367de3d0bf0273fe74556ac3a6756a188fa35f4",
+    "target": "Sts_State_Completed=True",
+    "timing_basis": "instrumented wall time excluding feasibility shadow"
+  },
+  "schema": 2
+}

@@ -221,6 +221,12 @@ class TestCycleFoldBitEqual:
         assert stats["logical_scans"] == 100
         assert stats["kernel_scans"] < 20
         assert stats["ordinary_folds"] >= 1
+        assert (
+            stats["ordinary_folded_scans"] + stats["cycle_folded_scans"] + stats["residual_scans"]
+            == stats["logical_scans"]
+        )
+        assert stats["ordinary_folded_scans"] > 0
+        assert stats["cycle_folded_scans"] == 0
 
     def test_ordinary_plateau_fold_is_layered_ahead_of_cycle_detection(self) -> None:
         Soak = Timer.clone("LayeredSoak")
@@ -246,6 +252,9 @@ class TestCycleFoldBitEqual:
         assert stats["ordinary_folds"] >= 1
         assert stats["cycle_folds"] == 0
         assert stats["skipped_scans"] > 0
+        assert stats["ordinary_folded_scans"] == stats["skipped_scans"]
+        assert stats["cycle_folded_scans"] == 0
+        assert stats["residual_scans"] == stats["kernel_scans"]
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
         # Reference: pure scan-by-scan (fold=False), oscillation running.
@@ -282,6 +291,10 @@ class TestCycleFoldBitEqual:
         assert stats["macro_folds"] == stats["folds"]
         assert stats["skipped_scans"] == stats["logical_scans"] - stats["kernel_scans"]
         assert stats["saved_kernel_scans"] == stats["skipped_scans"]
+        assert (
+            stats["ordinary_folded_scans"] + stats["cycle_folded_scans"] + stats["residual_scans"]
+            == stats["logical_scans"]
+        )
         assert advances
         assert any(tag == "Soak_Acc" and value > 0 for tag, value in advances)
 

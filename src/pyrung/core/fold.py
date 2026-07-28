@@ -1816,10 +1816,17 @@ def fold_run_until(
                 break
 
     if stats is not None:
+        ordinary_folded_scans = used - kernel_scans
         stats["logical_scans"] = used
         stats["kernel_scans"] = kernel_scans
         stats["macro_folds"] = macro_folds
-        stats["skipped_scans"] = used - kernel_scans
+        stats["skipped_scans"] = ordinary_folded_scans
+        # Scalar work partition used by replay feasibility instrumentation.
+        # These three values always sum to ``logical_scans`` and do not retain
+        # any per-scan evidence.
+        stats["ordinary_folded_scans"] = ordinary_folded_scans
+        stats["cycle_folded_scans"] = 0
+        stats["residual_scans"] = kernel_scans
         # Compatibility with cyclefold's original private stats vocabulary.
         stats["real_scans"] = kernel_scans
         stats["folds"] = macro_folds

@@ -432,6 +432,8 @@ def cycle_fold_until(
     folds = 0
     ordinary_folds = 0
     cycle_folds = 0
+    ordinary_folded_scans = 0
+    cycle_folded_scans = 0
     timer_quanta_replayed = 0
     # The sterile proof holds only when every tag the predicate reads is
     # covered by the ring (an excluded tag could change without breaking the
@@ -471,6 +473,9 @@ def cycle_fold_until(
             stats["ordinary_folds"] = ordinary_folds
             stats["cycle_folds"] = cycle_folds
             stats["skipped_scans"] = logical_scans - real_scans
+            stats["ordinary_folded_scans"] = ordinary_folded_scans
+            stats["cycle_folded_scans"] = cycle_folded_scans
+            stats["residual_scans"] = real_scans
             stats["scan_by_scan_counterfactual"] = logical_scans
             stats["saved_kernel_scans"] = logical_scans - real_scans
             stats["timer_quanta_replayed"] = timer_quanta_replayed
@@ -522,6 +527,7 @@ def cycle_fold_until(
                 real_scans += advance.kernel_scans
                 folds += 1
                 ordinary_folds += 1
+                ordinary_folded_scans += advance.logical_scans - advance.kernel_scans
                 ring.clear()
                 since_detect = 0
                 paused = plc._consume_pause_request()
@@ -664,6 +670,7 @@ def cycle_fold_until(
         )
         folds += 1
         cycle_folds += 1
+        cycle_folded_scans += jump_scans
         ring.clear()  # consecutive gap — re-observe before trusting the cycle again
 
     return _finish(bool(predicate(plc.state)))

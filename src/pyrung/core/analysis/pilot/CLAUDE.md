@@ -548,6 +548,14 @@ Use the focused gate before the full suite when changing a risky invariant:
 - waits, coasts, and cycle folding:
   `test_pilot_candidate_wait.py`, `test_pilot_coast.py`,
   `test_pilot_cyclefold.py`
+- residual replay measurement:
+  `devtools/profile_pilot_replay.py` wraps the existing fold, replay, slab,
+  capture, and candidate-history boundaries. Its scalar partitions are
+  observational only: ordinary-folded + cycle-folded + residual always equals
+  logical scans, and it must not retain a second per-scan log or enlarge
+  `CoastReceipt`. A compiled shadow qualifies only the same recorded
+  executable-overlay fingerprint and exact advancement interval, and only
+  after endpoint parity. It does not qualify other backend-supported work.
 - departures, gauges, and recovery:
   `test_pilot_detour_progress.py`, `test_pilot_detour_hold_release.py`,
   `test_pilot_gauge.py`, `test_pilot_investigate.py`

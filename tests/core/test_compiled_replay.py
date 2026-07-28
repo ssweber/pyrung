@@ -514,6 +514,31 @@ def test_replay_to_falls_back_for_unsupported_program() -> None:
     _assert_states_equivalent(replay, interpreted)
 
 
+def test_sparse_replay_seek_reports_unsupported_world_as_residual() -> None:
+    enable = Bool("UnsupportedSeekEnable")
+
+    with Program(strict=False) as program:
+        with Rung(enable):
+            run_function(time.time)
+
+    source = PLC(program, dt=0.01)
+    source.patch({"UnsupportedSeekEnable": True})
+    source.run(5)
+
+    replay = source._replay_seek(4)
+
+    assert replay.state.scan_id == 4
+    assert source._compiled_replay_supported_kernel() is None
+    assert source._last_replay_seek_stats == {
+        "logical_scans": 4,
+        "kernel_scans": 4,
+        "folded_scans": 0,
+        "ordinary_folded_scans": 0,
+        "cycle_folded_scans": 0,
+        "residual_scans": 4,
+    }
+
+
 def test_compiled_plc_with_prebuilt_kernel_does_not_walk_program(monkeypatch) -> None:
     """When a prebuilt kernel is supplied, construction must not re-walk the
     program graph — the materialized tag set is already on the kernel."""
