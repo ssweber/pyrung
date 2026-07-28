@@ -1166,9 +1166,15 @@ class TestClassifyDepartureRefusal:
             source_snap={"Chan": 1},
         )
 
-        assert verdict.decision == "unknown"
+        assert verdict.classification is detour.DepartureClassification.UNKNOWN
         assert "did not settle within cap" in verdict.reason
         assert "timeout" in verdict.reason
         # The receipt's landing value is still surfaced, just not trusted.
-        assert verdict.settled_value == 7
-        assert verdict.settle_scans == 2000
+        assert verdict.observation.settled_value == 7
+        assert verdict.observation.landing_receipt is timeout_receipt
+        assert verdict.observation.landing_receipt.logical_scans == 2000
+        assert isinstance(
+            verdict.observation.continuation.channel_status,
+            detour.Unknown,
+        )
+        assert verdict.observation.continuation.current_inspected is False

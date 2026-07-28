@@ -30,7 +30,14 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
-from pyrung.core.analysis.pilot.detour import DepartureVerdict
+from pyrung.core.analysis.pilot.detour import (
+    ContinuationEvidence,
+    DepartureClassification,
+    DepartureDisposition,
+    DepartureObservation,
+    DepartureReading,
+    DepartureResult,
+)
 from pyrung.core.analysis.pilot.gauge import (
     Gauge,
     GaugeComponent,
@@ -47,6 +54,7 @@ from pyrung.core.analysis.pilot.navigation import (
     BearingObjective,
     TargetSpec,
 )
+from pyrung.core.analysis.pilot.navigation_evidence import Reachable, Unknown
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -56,6 +64,7 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.pilot import _commit_trial
 from pyrung.core.analysis.pilot.progress import (
+    PendingDeparture,
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
     _apply_departure_decision,
@@ -72,7 +81,6 @@ from pyrung.core.analysis.pilot.types import (
     DepartureBasis,
     DepartureDecision,
     MotionKind,
-    PendingDeparture,
     PilotEvent,
     TargetReached,
     _AcceptedTrial,
@@ -255,14 +263,66 @@ def _pending_departure(
     from_value: Any = 9,
     rollback_owner: Any = None,
 ) -> PendingDeparture:
-    return PendingDeparture(
+    opening = DepartureObservation(
         channel_tag="State",
         from_value=from_value,
+        settled_value=from_value,
+        landing_receipt=CoastReceipt(
+            kind="departure-settle",
+            start_scan=0,
+            end_scan=0,
+            stop_reason="quiescent",
+            fired=(),
+            events=(),
+            budget=0,
+        ),
+        progress=opening_progress or GaugeReceipt(),
+        reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
+        continuation=ContinuationEvidence(Unknown("not inspected in policy fixture")),
+    )
+    return PendingDeparture(
+        opening=opening,
         progress_mark=progress_mark,
         rollback_owner=rollback_owner or state.checkpoints[-1].owner,
         expires_at=expires_at,
-        opening_progress=opening_progress or GaugeReceipt(),
     )
+
+
+def _departure_result(
+    settled_fork: PLC,
+    *,
+    reason: str,
+    settled_value: Any,
+    progress: GaugeReceipt | None = None,
+    classification: DepartureClassification = DepartureClassification.CLEAN_CONTINUATION,
+    channel_tag: str = "State",
+    from_value: Any = None,
+    settle_scans: int = 0,
+) -> DepartureResult:
+    """Build a complete detour receipt for focused progress-policy tests."""
+    start_scan = settled_fork.state.scan_id - settle_scans
+    observation = DepartureObservation(
+        channel_tag=channel_tag,
+        from_value=from_value,
+        settled_value=settled_value,
+        landing_receipt=CoastReceipt(
+            kind="departure-settle",
+            start_scan=start_scan,
+            end_scan=settled_fork.state.scan_id,
+            stop_reason="quiescent",
+            fired=(),
+            events=(),
+            budget=settle_scans,
+        ),
+        progress=progress or GaugeReceipt(),
+        reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
+        continuation=ContinuationEvidence(
+            Reachable(("focused-fixture",))
+            if classification is DepartureClassification.CLEAN_CONTINUATION
+            else Unknown("focused policy fixture")
+        ),
+    )
+    return DepartureResult(observation, classification, reason, settled_fork)
 
 
 def test_commit_shares_verified_execution_evidence_and_policy() -> None:
@@ -546,28 +606,32 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         fork_snap={"State": 10, "Step": 105},
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
     )
-    verdict = DepartureVerdict(
-        decision="continue",
+    departure = _departure_result(
+        settled,
         reason="clean continuation",
-        settled_fork=settled,
         settled_value=11,
         settle_scans=1,
-        reentry_value=6,
-        route=(11, 12, 6),
         progress=gauge.receipt(trial.before_snap, settled.state.tags),
+        from_value=6,
     )
 
     events = _open_pending_departure(
-        verdict,
+        departure,
         trial,
         state,
         SimpleNamespace(max_scans=10_000),
-        "State",
     )
 
     assert state.pending_departure is not None
+    assert state.pending_departure.opening is departure.observation
+    assert state.pending_departure.opening.landing_receipt.logical_scans == 1
     assert state.pending_departure.progress_mark == (("Step", 107),)
+    assert not hasattr(state.pending_departure, "opening_progress")
+    assert not hasattr(state.pending_departure, "settled_fork")
+    assert not hasattr(state.pending_departure.opening.reading, "progress")
     assert events[0].data["gauge_at_source"] == (("Step", 107),)
+    assert events[0].data["settle_scans"] == 1
+    assert events[0].data["classification"] == "continue"
 
 
 def test_pending_expiry_without_saved_progress_rolls_back():
@@ -857,17 +921,16 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         state,
         expires_at=0,
     )
-    verdict = DepartureVerdict(
-        decision="continue",
+    departure = _departure_result(
+        trial.fork,
         reason="unique clean current",
-        settled_fork=trial.fork,
         settled_value=4,
-        settle_scans=0,
         progress=GaugeReceipt((GaugeReading("Step", 1, 1, 1),)),
+        from_value=2,
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
-        lambda *_args, **_kwargs: verdict,
+        lambda *_args, **_kwargs: departure,
     )
     investigated = []
 
@@ -891,7 +954,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         "investigation_started",
         "departure_investigated",
     ]
-    assert investigated == [verdict]
+    assert investigated == [departure]
     assert state.pending_departure is not None
     assert state.work is trial.fork
     assert len(state.checkpoints) == 1
@@ -926,17 +989,16 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         ),
     )
     state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
-    verdict = DepartureVerdict(
-        decision="continue",
+    departure = _departure_result(
+        trial.fork,
         reason="clean prescribed continuation",
-        settled_fork=trial.fork,
         settled_value=2,
-        settle_scans=0,
         progress=GaugeReceipt((GaugeReading("RecipeStep", 101, 101, 1),)),
+        from_value=9,
     )
     monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
-        lambda *_args, **_kwargs: verdict,
+        lambda *_args, **_kwargs: departure,
     )
 
     def _unexpected_investigation(*_args, **_kwargs):
@@ -959,7 +1021,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         "provisional_started",
     ]
     assert state.pending_departure is not None
-    assert state.pending_departure.opening_progress.movement is GaugeMovement.UNCHANGED
+    assert state.pending_departure.opening.progress.movement is GaugeMovement.UNCHANGED
 
 
 def _seal_in_regression_inputs():
@@ -1206,12 +1268,12 @@ class TestLetrunEjection:
         def _classify(*_args, **_kwargs):
             nonlocal classified
             classified = True
-            return DepartureVerdict(
-                decision="unknown",
+            return _departure_result(
+                trial.fork,
                 reason="no clean continuation",
-                settled_fork=trial.fork,
                 settled_value=10,
-                settle_scans=0,
+                classification=DepartureClassification.UNKNOWN,
+                from_value=6,
             )
 
         def _investigate(*_args, **_kwargs):

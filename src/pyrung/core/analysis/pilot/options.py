@@ -157,10 +157,10 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             reasons.append(f"held:{tag}={value!r}")
 
     pending = getattr(state, "pending_departure", None)
-    if pending is not None and pending.channel_tag in anchor_tags:
-        current = frame.snap.get(pending.channel_tag)
-        if not _values_match(current, pending.from_value):
-            reasons.append(f"pending:{pending.channel_tag}={current!r}")
+    if pending is not None and pending.opening.channel_tag in anchor_tags:
+        current = frame.snap.get(pending.opening.channel_tag)
+        if not _values_match(current, pending.opening.from_value):
+            reasons.append(f"pending:{pending.opening.channel_tag}={current!r}")
 
     committed = tuple(getattr(state, "committed_acts", ()))
     if committed:

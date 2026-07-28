@@ -54,13 +54,16 @@ Stop after this tranche and re-ground the remaining owners.
 
 These concepts are being reshaped by the main plan. Naming them first would
 either bless the current mixed responsibility or create another rename later.
+The B6 departure-receipt prerequisite is now met; its three rows remain here
+for the post-ownership naming audit rather than authorizing a rename in the B6
+commit.
 
 | Current proposal | Wait for | Grounded direction |
 |---|---|---|
 | `options.py` -> `candidate_builder.py` | D1 | Use `candidate_builder.py` if the extracted phases still form one candidate-building owner. |
-| `detour.py` -> `departure_classifier.py` | B6 | Prefer the stable owner name `departure.py`; B6 deliberately separates observation from classification policy. |
-| `gauge.py` and selected `Gauge*` types -> earned-work names | B6 | Decide the complete vocabulary together: module, model, component, reading, receipt, movement, builder, state field, diagnostics, and tests. A partial rename would create two concepts. |
-| `_PulseState` -> `_TrialState` | B6 receipt flow | Rename the whole execution vocabulary together, including `.pulse` fields on attempt/trial receipts. `_TrialState` alone is not a coherent change. |
+| `detour.py` -> `departure_classifier.py` | post-B6 re-audit | Prefer the stable owner name `departure.py`; observation and typed classification now share this owner while policy stays in `progress.py`. |
+| `gauge.py` and selected `Gauge*` types -> earned-work names | post-B6 re-audit | Decide the complete vocabulary together: module, model, component, reading, receipt, movement, builder, state field, diagnostics, and tests. A partial rename would create two concepts. |
+| `_PulseState` -> `_TrialState` | post-B6 re-audit | Rename the whole execution vocabulary together, including `.pulse` fields on attempt/trial receipts. `_TrialState` alone is not a coherent change. |
 | `_ops.py` -> `_execution.py` | D4 / E2 | Do not rename the current mixed module. It also owns state/world keys, avoid and hold predicates, rung compilation, and coast wrappers. Name the cohesive owners after replay advancement is extracted. |
 
 ## Proposals that need a better name

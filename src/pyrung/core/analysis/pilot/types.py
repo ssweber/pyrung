@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
+    from pyrung.core.analysis.pilot.progress import PendingDeparture
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
 
@@ -285,19 +286,6 @@ class DepartureDecision:
     action: DepartureAction
     receipt: GaugeReceipt
     basis: DepartureBasis | None = None
-
-
-@dataclass(frozen=True)
-class PendingDeparture:
-    """A clean departure awaiting target-relative progress evidence."""
-
-    channel_tag: str
-    from_value: Any
-    progress_mark: tuple[tuple[str, Any], ...]
-    rollback_owner: _CheckpointOwner
-    expires_at: int
-    opening_progress: GaugeReceipt
-    saved_progress_owner: _CheckpointOwner | None = None
 
 
 # ---------------------------------------------------------------------------

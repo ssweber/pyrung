@@ -109,59 +109,15 @@ CandidateRead -> Bearing          -> ExecutedAttempt -> AcceptedTrial
                                                         + GaugeReceipt
                                                             |
                                                             v
-pilot / progress   CommittedOperation -> DepartureObservation -> PendingDeparture
-                   policy + shared      observed landing       recovery policy
-                   execution evidence   + classification       + rollback owners
+pilot / progress   CommittedOperation -> DepartureResult      -> PendingDeparture
+                   policy + shared      observation + typed     opening observation
+                   execution evidence   classification          + rollback owners
                    + commit-owned rungs
 ```
 
 Each arrow should carry the object on its left intact. A downstream object may
 compose new evidence around it, but should not copy selected fields and recreate
 its meaning.
-
-## B. Preserve objects across module seams
-
-This is the main cleanup program. Items are ordered by leverage.
-
-### B6. Separate departure observation from departure policy without flattening either
-
-`detour.classify_departure` currently returns `DepartureVerdict`, which mixes:
-
-- the settled PLC fork with selected fields dehydrated from the local
-  `CoastReceipt` (`settled_value`, `settle_scans`);
-- causal `DepartureReading`;
-- `GaugeReceipt`;
-- route-continuation evidence;
-- the policy string `"continue" | "unknown" | "regression"`.
-
-`progress` consumes the object initially, then rehydrates a `PendingDeparture`
-from selected fields.
-
-**Required shape**
-
-- Detour owns a typed immutable `DepartureObservation` containing the actual
-  landing `CoastReceipt`, causal reading, gauge receipt, and constrained
-  continuation evidence.
-- A typed classification is derived once from that observation.
-- Progress owns `PendingDeparture` policy and embeds the durable opening
-  observation/receipt plus rollback owners; it should not copy a partial set of
-  source marks and classification strings.
-- The mutable settled fork remains an adoption handle, not durable evidence.
-
-**Why**
-
-This makes "what happened" independently inspectable from "what recovery will do,"
-and gives pending policy the exact opening evidence it is waiting to resolve.
-
-**LOC:** likely neutral to -30.
-
-**Risk:** high; do after the central trial receipt is stable.
-
-**Gate:** `test_pilot_detour_progress.py`,
-`test_pilot_detour_hold_release.py`, `test_pilot_progress.py`,
-`test_pilot_investigate.py`.
-
----
 
 ## C. Give repeated decisions one owner
 
@@ -272,7 +228,7 @@ attempt is chosen or retained as the blocked alternative.
 The raw and guarded replay arms repeat replacement-fingerprint and
 advance-or-reject logic. Extract an `_advance_or_reject` result object, not a
 Boolean/tuple. Then extract the large channel-ejection arm from
-`progress._monitor_trend` once B4/B6 provide stable receipts.
+`progress._monitor_trend` using the stable departure receipts.
 
 **LOC:** investigate roughly -30 to -45; progress extraction may be net-neutral.
 
@@ -446,7 +402,7 @@ re-ground the deferred concept names against the owners that actually landed.
 ## Sequence
 
 1. **Control flow:** D1/D2/D3.
-2. **Recovery continuity:** B6, then D4.
+2. **Recovery extraction:** D4.
 3. **Compiled residual replay:** E1, E2, then E3.
 4. **Diagnostics and type hardening:** C3, C4, D5.
 5. **Naming:** the approved tranche in G, then re-audit the deferred names.

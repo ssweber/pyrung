@@ -506,13 +506,13 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     plc.patch({tags["State"].name: tags["Execute"]})
     plc.step()
 
-    departure_readings = []
+    departure_observations = []
     classify_departure = progress_module.classify_departure
 
     def _capture_departure(*args, **kwargs):
-        verdict = classify_departure(*args, **kwargs)
-        departure_readings.append(verdict.reading)
-        return verdict
+        result = classify_departure(*args, **kwargs)
+        departure_observations.append(result.observation)
+        return result
 
     monkeypatch.setattr(progress_module, "classify_departure", _capture_departure)
 
@@ -555,16 +555,16 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
         departure for departure in departures if departure[1].get(tags["Step"].name) == 103
     )
     assert initial_landing[tags["State"].name] != tags["Execute"]
-    initial_reading = next(
-        reading
-        for reading in departure_readings
-        if reading.occurrence_scan is not None
-        and reading.progress.source_mark == ((tags["Step"].name, 103),)
+    initial_observation = next(
+        observation
+        for observation in departure_observations
+        if observation.reading.occurrence_scan is not None
+        and observation.progress.source_mark == ((tags["Step"].name, 103),)
     )
-    assert initial_reading.progress.movement is GaugeMovement.UNCHANGED
-    assert initial_reading.progress.source_mark == ((tags["Step"].name, 103),)
-    assert initial_reading.progress.landing_mark == ((tags["Step"].name, 103),)
-    assert initial_reading.external_supports == ((tags["Door"].name, False),)
+    assert initial_observation.progress.movement is GaugeMovement.UNCHANGED
+    assert initial_observation.progress.source_mark == ((tags["Step"].name, 103),)
+    assert initial_observation.progress.landing_mark == ((tags["Step"].name, 103),)
+    assert initial_observation.reading.external_supports == ((tags["Door"].name, False),)
 
     resolution = next(
         event

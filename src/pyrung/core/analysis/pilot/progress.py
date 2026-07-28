@@ -14,7 +14,7 @@ gate acceptance.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pyrsistent import pvector
@@ -32,8 +32,10 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
+    DepartureClassification,
     DepartureDisposition,
-    DepartureVerdict,
+    DepartureObservation,
+    DepartureResult,
     classify_departure,
 )
 from pyrung.core.analysis.pilot.gauge import (
@@ -69,7 +71,6 @@ from pyrung.core.analysis.pilot.types import (
     DepartureBasis,
     DepartureDecision,
     MotionKind,
-    PendingDeparture,
     PilotEvent,
     TargetReached,
     _AcceptedTrial,
@@ -87,6 +88,17 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.sp_values import _values_match
 
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
+
+
+@dataclass(frozen=True)
+class PendingDeparture:
+    """Progress policy for one durable departure observation."""
+
+    opening: DepartureObservation
+    progress_mark: tuple[tuple[str, Any], ...]
+    rollback_owner: _CheckpointOwner
+    expires_at: int
+    saved_progress_owner: _CheckpointOwner | None = None
 
 
 def _checkpoint_index(state: _PilotState, owner: _CheckpointOwner) -> int:
@@ -141,8 +153,8 @@ def _provisional_payload(
 ) -> dict[str, Any]:
     """Shared pending-departure fields with stable transcript key order."""
     return {
-        "channel_tag": pending.channel_tag,
-        "from_value": pending.from_value,
+        "channel_tag": pending.opening.channel_tag,
+        "from_value": pending.opening.from_value,
         **dict(before_gauge or {}),
         "gauge_at_source": pending.progress_mark,
         **dict(after_gauge or {}),
@@ -310,7 +322,7 @@ def _monitor_trend(
         # would honestly confirm nothing. Affirmative clean-route evidence opens
         # bounded pending piloting; regression or unknown evidence follows
         # the conservative investigate-and-revert arm.
-        verdict = classify_departure(
+        departure = classify_departure(
             state,
             ctx,
             trial.bearing_objective,
@@ -331,16 +343,17 @@ def _monitor_trend(
                 state.work.state.scan_id,
             ),
         )
-        if verdict.can_continue:
+        observation = departure.observation
+        if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
             prescribed_departure = (
                 trial.route_prescribed and verified.assessment.agency is Agency.PILOT
             )
             if (
-                verdict.progress.movement is GaugeMovement.UNCHANGED
+                observation.progress.movement is GaugeMovement.UNCHANGED
                 and not prescribed_departure
                 and (
                     state.pending_departure is not None
-                    or verdict.reading.disposition is DepartureDisposition.REACTIVE
+                    or observation.reading.disposition is DepartureDisposition.REACTIVE
                 )
             ):
                 # A clean route says the landing is usable, but a known-
@@ -371,12 +384,12 @@ def _monitor_trend(
                     state,
                     ctx,
                     origin=origin,
-                    retain_if_unresolved=verdict,
-                    occurrence_requirements=verdict.reading.external_supports,
+                    retain_if_unresolved=departure,
+                    occurrence_requirements=observation.reading.external_supports,
                 )
                 return
             if state.pending_departure is None:
-                yield from _open_pending_departure(verdict, trial, state, ctx, chan)
+                yield from _open_pending_departure(departure, trial, state, ctx)
                 return
             # A clean program-owned departure inside an existing bounded
             # attempt that earned work (or fulfilled an explicitly prescribed
@@ -399,8 +412,8 @@ def _monitor_trend(
             ctx,
             origin=origin,
             occurrence_requirements=(
-                verdict.reading.external_supports
-                if verdict.reading.disposition is DepartureDisposition.REACTIVE
+                observation.reading.external_supports
+                if observation.reading.disposition is DepartureDisposition.REACTIVE
                 else ()
             ),
         )
@@ -549,32 +562,35 @@ def _anchor_bearing_receipt(
 
 
 def _open_pending_departure(
-    verdict: DepartureVerdict,
+    departure: DepartureResult,
     trial: _AcceptedTrial,
     state: _PilotState,
     ctx: _PilotContext,
-    chan: str,
 ) -> tuple[PilotEvent, ...]:
     """Record a clean departure whose progress is not yet conclusive."""
+    observation = departure.observation
     gauge = state.gauge
     # The exact pre-coast world remains the replay/rollback receipt. Settle the
     # landing before marking progress: movement completed by the departing
     # operation belongs to that operation, not to the state it happened to land
     # in. Only work earned after PILOT can read the departed world may validate
     # staying there.
-    departed_from = trial.before_snap.get(chan)
-    _adopt_settled_departure(verdict, state)
+    _adopt_settled_departure(departure, state)
     progress_mark = (
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
     search_scan = state.search_scan
     state.pending_departure = PendingDeparture(
-        channel_tag=chan,
-        from_value=departed_from,
+        opening=observation,
         progress_mark=progress_mark,
         rollback_owner=state.checkpoints[-1].owner,
         expires_at=min(ctx.max_scans, search_scan + _PENDING_DEPARTURE_SCAN_BUDGET),
-        opening_progress=verdict.progress,
+    )
+    # ``route`` and ``classification`` are stable diagnostic vocabulary. The
+    # former is a projection of the exact current evidence, never retained
+    # navigation state; static continuation has always rendered an empty route.
+    legacy_route = (
+        (observation.settled_value,) if observation.continuation.current is not None else ()
     )
     return (
         PilotEvent(
@@ -582,22 +598,22 @@ def _open_pending_departure(
             "provisional_started",
             state.work.state.scan_id,
             {
-                "channel_tag": chan,
-                "from_value": departed_from,
+                "channel_tag": observation.channel_tag,
+                "from_value": observation.from_value,
                 "requested_value": trial.channel_motion.target_value,
-                "settled_value": verdict.settled_value,
-                "reason": verdict.reason,
-                "route": verdict.route,
-                "settle_scans": verdict.settle_scans,
+                "settled_value": observation.settled_value,
+                "reason": departure.reason,
+                "route": legacy_route,
+                "settle_scans": observation.landing_receipt.logical_scans,
                 "gauge_at_source": progress_mark,
-                "entry_progress": verdict.progress,
-                "classification": verdict.decision,
+                "entry_progress": observation.progress,
+                "classification": "continue",
             },
         ),
     )
 
 
-def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> int:
+def _adopt_settled_departure(departure: DepartureResult, state: _PilotState) -> int:
     """Adopt the classifier's settled landing without changing pending policy.
 
     Settlement is evidence shared by both a newly-opened pending departure and
@@ -606,7 +622,7 @@ def _adopt_settled_departure(verdict: DepartureVerdict, state: _PilotState) -> i
     way to consume the settled fork.
     Returns the scan at which adoption began.
     """
-    settled = verdict.settled_fork
+    settled = departure.settled_fork
     scan_before = state.work.state.scan_id
     # Rebuild the overlay from the canonical rung list before adopting the
     # settled fork as the working PLC.
@@ -653,7 +669,7 @@ def _record_pending_landing(
     ):
         return ()
     gauge = state.gauge
-    progress = pending.opening_progress
+    progress = pending.opening.progress
     if progress.movement not in {GaugeMovement.FORWARD, GaugeMovement.BACKWARD}:
         progress = (
             gauge.receipt(dict(pending.progress_mark), frame.snap)
@@ -686,7 +702,7 @@ def _record_pending_landing(
                 _provisional_payload(
                     pending,
                     after_gauge={
-                        "entry_progress": pending.opening_progress,
+                        "entry_progress": pending.opening.progress,
                         "landing_mark": landing_mark,
                         "trend": frame.distance_before,
                         "checkpoint_count": len(state.checkpoints),
@@ -1112,7 +1128,7 @@ def _investigate_and_revert(
     ctx: _PilotContext,
     *,
     origin: _RecoveryOrigin,
-    retain_if_unresolved: DepartureVerdict | None = None,
+    retain_if_unresolved: DepartureResult | None = None,
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident from ``origin`` through the current world, replay-test
@@ -1318,7 +1334,7 @@ def _investigate_and_revert(
                 "channel_tag": trial.channel_motion.channel_tag,
                 "from_value": trial.before_snap.get(trial.channel_motion.channel_tag),
                 "retained": True,
-                "progress": retain_if_unresolved.progress,
+                "progress": retain_if_unresolved.observation.progress,
                 "investigation": investigation_payload,
             },
         )
@@ -1332,7 +1348,6 @@ def _investigate_and_revert(
                 trial,
                 state,
                 ctx,
-                trial.channel_motion.channel_tag,
             ),
         )
 

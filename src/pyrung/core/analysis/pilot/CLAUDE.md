@@ -201,10 +201,19 @@ should consume the first owner's result.
   for each new anchor/current pair. A typed
   `DepartureBasis.PILOT_CAUSED_REGRESSION` may override retention policy without
   rewriting factual gauge movement.
+- Departure observation and classification:
+  `detour.py::classify_departure` returns a short-lived `DepartureResult`.
+  Its frozen `DepartureObservation` owns the channel landing, exact
+  `CoastReceipt`, one `GaugeReceipt`, causal `DepartureReading`, and the typed
+  static/current continuation evidence actually consulted. The mutable settled
+  PLC fork remains only an adoption handle on the result; neither the
+  observation nor pending recovery retains it or an executable route suffix.
 - Evidence classification: `outcome.py::assess_outcome`
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
 - Coast-departure channel ownership: `_ops.py::coast_departure_tags`
-- Post-commit retention, recovery, and correction installation: `progress.py`
+- Post-commit retention, recovery, and correction installation: `progress.py`;
+  its `PendingDeparture` embeds the opening `DepartureObservation` and adds
+  only mutable policy anchors, rollback owners, and its deadline
 - Corrective hypothesis derivation: `corrections.py`
 - Corrective hypothesis replay and confirmation: `investigate.py`
 - Corrective operation lifetime: the instruction owner, carried through
@@ -275,8 +284,10 @@ co-actions. Pair-level consumers see only explicit pair rejections and
 singleton Pulses.
 
 `PendingDeparture` records a clean program departure whose progress is not yet
-conclusive. It names the stable owner of its rollback checkpoint, the owner of
-an optional saved-progress checkpoint, and a finite search-scan deadline.
+conclusive. It carries detour's opening `DepartureObservation` intact, then
+names the post-settlement progress mark, stable owner of its rollback
+checkpoint, owner of an optional saved-progress checkpoint, and finite
+search-scan deadline.
 The saved-progress owner is an irreversible recovery floor: expiry and
 regression resolve its current executable artifact and may discard only work
 after it. Until that owner exists, the opening rollback owner remains the floor.
@@ -393,7 +404,8 @@ investigation materializes their guarded installed form.
 - `recording.py` — pure event-payload, terminal-frontier, and plan-journal
   rendering; it does not make drive decisions.
 - `types.py` — cross-module protocols and world, trial, event, incident, and
-  accepted execution-evidence records.
+  accepted execution-evidence records; recovery policy records stay with
+  `progress.py`.
 - `__init__.py` — package exports.
 - `physical.py` — harness installation and feedback-tag exclusion.
 - `multitarget.py` — conservative incompatibility proof and target ordering.
@@ -440,11 +452,12 @@ investigation materializes their guarded installed form.
 
 - `verify.py` — avoid, target, spin, cycle, dead-end, and outcome gates.
 - `outcome.py` — agency, bearing, progress, and frontier evidence.
-- `progress.py` — checkpoints, pending departures, regression recovery,
-  correction installation, and reverts.
-- `detour.py` — channel-departure classification for progress handling; reads
-  the executed Bearing objective, composes recovery-only continuation safety,
-  and never reconstructs a target objective.
+- `progress.py` — checkpoints, the `PendingDeparture` policy record, regression
+  recovery, correction installation, and reverts.
+- `detour.py` — immutable channel-departure observation and typed
+  classification for progress handling; reads the executed Bearing objective,
+  composes recovery-only continuation safety, preserves exact source receipts,
+  and never reconstructs a target objective or retains a route suffix.
 - `gauge.py` — conservative target-relative earned-work marks and reset
   boundaries.
 - `causal.py` — recorded cause-chain queries and empirical program-write
