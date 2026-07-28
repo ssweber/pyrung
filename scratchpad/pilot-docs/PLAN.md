@@ -169,19 +169,6 @@ owned key function or value object. Then use one ordered-unique helper.
 
 ## D. Extract control flow after the receipts are stable
 
-### D3. Collapse repeated trace writer-fallback bookkeeping
-
-`trace._trace_back` still builds each writer through the shared mutable
-`TraceNode` and visited set before capturing `_WriterAttempt`. Factor that
-remaining build/reset transaction once; `_TraceSelection` already owns which
-attempt is chosen or retained as the blocked alternative.
-
-**LOC:** about -25 to -40.
-
-**Risk:** high; hottest static correctness path.
-
-**Gate:** rejection-arm, trace, avoid, route, and Tumbler tests.
-
 ### D4. Extract replay advancement in `investigate.py`
 
 The raw and guarded replay arms repeat replacement-fingerprint and
@@ -360,17 +347,16 @@ re-ground the deferred concept names against the owners that actually landed.
 
 ## Sequence
 
-1. **Control flow:** D3.
-2. **Recovery extraction:** D4.
-3. **Compiled residual replay:** E1, E2, then E3.
-4. **Diagnostics and type hardening:** C3, C4, D5.
-5. **Naming:** the approved tranche in G, then re-audit the deferred names.
+1. **Recovery extraction:** D4.
+2. **Compiled residual replay:** E1, E2, then E3.
+3. **Diagnostics and type hardening:** C3, C4, D5.
+4. **Naming:** the approved tranche in G, then re-audit the deferred names.
 
 After each step, remove the landed item and update `pilot/CLAUDE.md` so its
 ownership table names the object now carrying the decision.
 
-The expected LOC reduction is deliberately not totaled. The remaining D3-D4
-work should remove meaningful code, but the acceptance criterion is a shorter
+The expected LOC reduction is deliberately not totaled. The remaining D4 work
+should remove meaningful code, but the acceptance criterion is a shorter
 reasoning path: one owner, one receipt, and consumers that apply rather than
 reconstruct.
 

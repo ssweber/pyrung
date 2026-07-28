@@ -291,7 +291,14 @@ recipes. A multi-leaf branch is a distinct, still-untested joint artifact, and
 a branch with a dead end cannot replace a rejected branch. Trace retains the
 best rejected branch when no untried alternative without a dead end survives so
 the frontier remains visible. Root writer/OR locks stay with each inferred
-alternative while Trace reads it and are never redirected inside Trace.
+alternative while Trace reads it and are never redirected inside Trace. Each
+ranked writer is read through a fresh `_WriterBuild`: an isolated `TraceNode`
+shell and copy of the caller's visited set. It completes to an immutable
+`_WriterAttempt`; `_TraceAlternative` classifies that attempt and
+`_TraceSelection` names the selected or honestly blocked attempt. Only that
+retained attempt's children and complete visited state are adopted into the
+caller's tree. Trace-wide caller locks and guard memoization remain shared
+evidence rather than writer-local build state.
 Static route selection applies the same boundary: it excludes the exact
 current-world ``(primary action, co-actions)`` Pulse artifact that failed, then
 may select a sibling edge carrying the same primary action under different
@@ -428,7 +435,8 @@ investigation materializes their guarded installed form.
 ### Static reading and orientation
 
 - `trace.py` — backward requirement tree, stable tree traversal, unresolved
-  interior identity, route enumeration, steerability, and writer ranking.
+  interior identity, route enumeration, steerability, writer ranking, isolated
+  writer builds, and selected/blocked attempt adoption.
 - `availability.py` — current-state writer availability used for ordering.
 - `evidence.py` — pipeline-role inference and static transition-route expansion.
 - `tide_tables.py` — finite constant-backed table and calculation preimages,

@@ -32,12 +32,16 @@ from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_ta
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     TraceReadConstraints,
+    _apply_writer_attempt,
     _env_for,
     _rank_writers,
     _rewrite_internal_compare,
     _scan_transient_rest,
+    _select_trace_alternative,
     _trace_back,
+    _TraceAlternative,
     _TraceEnv,
+    _WriterBuild,
     compute_reference_constants,
     trace_back,
     trace_relational,
@@ -56,6 +60,115 @@ def _steerable_names(node: TraceNode) -> set[str]:
 def _known(logic: Program) -> dict:
     plc = PLC(logic)
     return plc._known_tags_by_name
+
+
+def test_writer_builds_are_isolated_until_selection_adopts_one() -> None:
+    """Reading one writer cannot alter its sibling or the caller-owned state."""
+
+    parent = TraceNode("Target", 7)
+    caller_visited = {("Target", 7), ("Before", True)}
+    first = _WriterBuild.fresh(parent, caller_visited)
+    second = _WriterBuild.fresh(parent, caller_visited)
+    first_child = TraceNode("FirstNeed", True)
+
+    first.node.writer_rung = 10
+    first.node.children.append(first_child)
+    first.visited.add(("FirstNeed", True))
+
+    assert first.node is not second.node
+    assert parent.children == []
+    assert second.node.children == []
+    assert caller_visited == {("Target", 7), ("Before", True)}
+    assert second.visited == caller_visited
+
+    attempt = first.complete()
+    assert attempt.children == (first_child,)
+    assert attempt.visited_after == frozenset(
+        {("Target", 7), ("Before", True), ("FirstNeed", True)}
+    )
+
+
+def test_writer_selection_adopts_only_the_chosen_attempt_and_full_visited_state() -> None:
+    parent = TraceNode("Target", 7)
+    caller_visited = {("Target", 7)}
+    rejected = _WriterBuild.fresh(parent, caller_visited)
+    rejected.node.writer_rung = 10
+    rejected.node.children.append(TraceNode("RejectedNeed", True))
+    rejected.visited.add(("RejectedNeed", True))
+    replacement = _WriterBuild.fresh(parent, caller_visited)
+    replacement_child = TraceNode("ReplacementNeed", True)
+    replacement.node.writer_rung = 11
+    replacement.node.children.append(replacement_child)
+    replacement.visited.add(("ReplacementNeed", True))
+
+    selection = _select_trace_alternative(
+        (
+            _TraceAlternative(
+                choice=rejected.complete(),
+                rank=(0,),
+                violates_avoid=False,
+                has_no_dead_end=True,
+                exact_action_rejected=True,
+            ),
+            _TraceAlternative(
+                choice=replacement.complete(),
+                rank=(1,),
+                violates_avoid=False,
+                has_no_dead_end=True,
+                exact_action_rejected=False,
+            ),
+        )
+    )
+
+    assert selection.retained is selection.chosen
+    assert selection.retained is not None
+    _apply_writer_attempt(parent, caller_visited, selection.retained.choice)
+    assert parent.writer_rung == 11
+    assert parent.children == [replacement_child]
+    assert parent.children[0] is replacement_child
+    assert caller_visited == {("Target", 7), ("ReplacementNeed", True)}
+
+
+def test_blocked_writer_selection_adopts_min_ranked_attempt_and_visited_state() -> None:
+    parent = TraceNode("Target", 7)
+    caller_visited = {("Target", 7)}
+    lower_rank = _WriterBuild.fresh(parent, caller_visited)
+    lower_child = TraceNode("LowerRankNeed", True)
+    lower_rank.node.writer_rung = 10
+    lower_rank.node.children.append(lower_child)
+    lower_rank.visited.add(("LowerRankNeed", True))
+    higher_rank = _WriterBuild.fresh(parent, caller_visited)
+    higher_rank.node.writer_rung = 11
+    higher_rank.node.children.append(TraceNode("HigherRankNeed", True))
+    higher_rank.visited.add(("HigherRankNeed", True))
+
+    selection = _select_trace_alternative(
+        (
+            _TraceAlternative(
+                choice=higher_rank.complete(),
+                rank=(1,),
+                violates_avoid=True,
+                has_no_dead_end=True,
+                exact_action_rejected=False,
+            ),
+            _TraceAlternative(
+                choice=lower_rank.complete(),
+                rank=(0,),
+                violates_avoid=True,
+                has_no_dead_end=True,
+                exact_action_rejected=False,
+            ),
+        )
+    )
+
+    assert selection.chosen is None
+    assert selection.retained is selection.blocked_alternative
+    assert selection.retained is not None
+    _apply_writer_attempt(parent, caller_visited, selection.retained.choice)
+    assert parent.writer_rung == 10
+    assert parent.children == [lower_child]
+    assert parent.children[0] is lower_child
+    assert caller_visited == {("Target", 7), ("LowerRankNeed", True)}
 
 
 def test_trace_node_structural_views_preserve_stable_tree_order() -> None:

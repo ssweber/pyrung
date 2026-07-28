@@ -1597,6 +1597,12 @@ class _TraceSelection(Generic[_TraceChoicePayload]):
     chosen: _TraceAlternative[_TraceChoicePayload] | None
     blocked_alternative: _TraceAlternative[_TraceChoicePayload] | None
 
+    @property
+    def retained(self) -> _TraceAlternative[_TraceChoicePayload] | None:
+        """The classified alternative whose complete read the caller adopts."""
+
+        return self.chosen or self.blocked_alternative
+
 
 @dataclass(frozen=True)
 class _WriterAttempt:
@@ -1609,33 +1615,38 @@ class _WriterAttempt:
     visited_after: frozenset[tuple[str, Any]]
 
 
-def _writer_attempt(node: TraceNode, visited: set[tuple[str, Any]]) -> _WriterAttempt:
-    """Capture a built writer subtree before the next alternative is read."""
+@dataclass
+class _WriterBuild:
+    """Fresh mutable state used to read exactly one ranked writer."""
 
-    if node.writer_rung is None:
-        raise ValueError("a writer attempt requires its selected rung")
-    return _WriterAttempt(
-        children=tuple(node.children),
-        writer_rung=node.writer_rung,
-        writer_availability=node.writer_availability,
-        live_guard=node.live_guard,
-        visited_after=frozenset(visited),
-    )
+    node: TraceNode
+    visited: set[tuple[str, Any]]
 
+    @classmethod
+    def fresh(
+        cls,
+        parent: TraceNode,
+        visited: set[tuple[str, Any]],
+    ) -> _WriterBuild:
+        """Start one writer from the caller's untouched recursion state."""
 
-def _clear_writer_attempt(
-    node: TraceNode,
-    visited: set[tuple[str, Any]],
-    visited_before: set[tuple[str, Any]],
-) -> None:
-    """Restore the shared recursion shell before reading another writer."""
+        return cls(
+            node=TraceNode(tag=parent.tag, value=parent.value),
+            visited=set(visited),
+        )
 
-    node.children.clear()
-    node.writer_rung = None
-    node.writer_availability = _WriterAvailability.AVAILABLE_NOW
-    node.live_guard = False
-    visited.clear()
-    visited.update(visited_before)
+    def complete(self) -> _WriterAttempt:
+        """Freeze this isolated build for classification and later adoption."""
+
+        if self.node.writer_rung is None:
+            raise ValueError("a writer attempt requires its selected rung")
+        return _WriterAttempt(
+            children=tuple(self.node.children),
+            writer_rung=self.node.writer_rung,
+            writer_availability=self.node.writer_availability,
+            live_guard=self.node.live_guard,
+            visited_after=frozenset(self.visited),
+        )
 
 
 def _apply_writer_attempt(
@@ -2277,10 +2288,6 @@ def _trace_back(
     writer_selection: _TraceSelection[_WriterAttempt] | None = None
 
     for writer_order, ri in enumerate(ranked_writers):
-        # Each writer is read from the same recursion state. The selected
-        # attempt's resulting visited set is applied once after selection.
-        visited_before = set(_visited)
-
         rung_node = env.pdg.rung_nodes[ri]
         ro = resolve_rung(env.program, rung_node)
         if ro is None:
@@ -2345,17 +2352,23 @@ def _trace_back(
                 continue
             guard_punted = verdict == GUARD_PUNT
 
-        node.writer_rung = ri
-        node.writer_availability = writer_availability.get(ri, _WriterAvailability.UNKNOWN)
+        # Every viable ranked writer is read in a fresh shell from the same
+        # caller-owned visited state. Only selection adopts one completed
+        # attempt into ``node`` and ``_visited`` below.
+        writer_build = _WriterBuild.fresh(node, _visited)
+        attempt_node = writer_build.node
+        attempt_visited = writer_build.visited
+        attempt_node.writer_rung = ri
+        attempt_node.writer_availability = writer_availability.get(ri, _WriterAvailability.UNKNOWN)
 
         if guard_expr is not None:
-            node.children.extend(
+            attempt_node.children.extend(
                 _trace_expression(
                     env,
                     guard_expr,
                     tag,
                     provenance=(_scope_ref(ri, rung_node),),
-                    _visited=_visited,
+                    _visited=attempt_visited,
                     _ancestry=_child_ancestry,
                     _depth=_depth,
                 )
@@ -2364,13 +2377,13 @@ def _trace_back(
         # Reaching this writer at all requires no upstream return_early() to have
         # fired — its negated guard is a prerequisite of the rung executing.
         for guard_expr in _return_early_guard_exprs(env.program, rung_node):
-            node.children.extend(
+            attempt_node.children.extend(
                 _trace_expression(
                     env,
                     guard_expr,
                     tag,
                     provenance=(_scope_ref(ri, rung_node),),
-                    _visited=_visited,
+                    _visited=attempt_visited,
                     _ancestry=_child_ancestry,
                     _depth=_depth,
                 )
@@ -2392,14 +2405,14 @@ def _trace_back(
                         _sp_to_expr(call_sp),
                         tag,
                         provenance=(_scope_ref(ci, cn),),
-                        _visited=set(_visited),
+                        _visited=set(attempt_visited),
                         _ancestry=_child_ancestry,
                         _depth=_depth + 1,
                     )
                     call_gates.append(_CallGateTrace(caller_index=ci, nodes=tuple(children)))
             selected_call_gate = _select_call_gate(env, rung_node.subroutine, call_gates)
             if selected_call_gate is not None:
-                node.children.extend(selected_call_gate.nodes)
+                attempt_node.children.extend(selected_call_gate.nodes)
 
         for constraint in producer_constraints:
             if isinstance(constraint, Eq):
@@ -2407,12 +2420,12 @@ def _trace_back(
                     env,
                     constraint.tag,
                     next(iter(constraint.values)),
-                    _visited=_visited,
+                    _visited=attempt_visited,
                     _ancestry=_child_ancestry,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "producer"
-                node.children.append(child)
+                attempt_node.children.append(child)
                 continue
             atom = _constraint_atom(constraint)
             if atom is None:
@@ -2422,14 +2435,14 @@ def _trace_back(
                 atom,
                 tag,
                 provenance=(_scope_ref(ri, rung_node),),
-                _visited=_visited,
+                _visited=attempt_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth + 1,
                 _relational_goal=atom,
             )
             for child in children:
                 child.data_flow = "producer"
-            node.children.extend(children)
+            attempt_node.children.extend(children)
 
         # Enablement gate decided by a constant-table predicate (PackML
         # state-enable / cmd-valid mask): the flag on this transition is a
@@ -2440,14 +2453,14 @@ def _trace_back(
         # not the identity-copy silhouette: identity/converting copies, affine
         # calc transitions, and guard-pinned decodes all reach the tide tables,
         # which are asked which mode makes the gate hold under those pins.
-        node.children.extend(
+        attempt_node.children.extend(
             _table_enablement_prereqs(
                 env,
                 ro,
                 tag,
                 value,
                 reverse_result,
-                _visited=_visited,
+                _visited=attempt_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth,
             )
@@ -2467,27 +2480,27 @@ def _trace_back(
                     env,
                     wv.source,
                     src_val,
-                    _visited=_visited,
+                    _visited=attempt_visited,
                     _ancestry=_child_ancestry,
                     _depth=_depth + 1,
                 )
                 child.data_flow = "calc"
-                node.children.append(child)
+                attempt_node.children.append(child)
 
-        if isinstance(wv, Aggregate) and wv.operation == "sum" and not node.children:
+        if isinstance(wv, Aggregate) and wv.operation == "sum" and not attempt_node.children:
             for child_node in _decompose_sum(
                 env,
                 wv,
                 tag,
                 value,
-                _visited=_visited,
+                _visited=attempt_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth,
             ):
-                node.children.append(child_node)
+                attempt_node.children.append(child_node)
 
         # Indirect copy: block[pointer] → invert the lookup table.
-        if not node.children:
+        if not attempt_node.children:
             from pyrung.core.analysis.pilot.tide_tables import invert_indirect_copy
 
             inv = invert_indirect_copy(ro, tag, value, env.snapshot, env.pdg, env.program)
@@ -2498,23 +2511,23 @@ def _trace_back(
                         env,
                         idx_tag,
                         iv,
-                        _visited=_visited,
+                        _visited=attempt_visited,
                         _ancestry=_child_ancestry,
                         _depth=_depth + 1,
                     )
                     child.data_flow = "lookup"
-                    node.children.append(child)
+                    attempt_node.children.append(child)
 
         # Preserve: the writer above *establishes* the value; a retentive target
         # must also be kept from being clobbered by a competing writer.
-        node.children.extend(
+        attempt_node.children.extend(
             _preserve_children(
                 env,
                 tag,
                 value,
                 ri,
                 predicate=_preserve_predicate,
-                _visited=_visited,
+                _visited=attempt_visited,
                 _ancestry=_child_ancestry,
                 _depth=_depth,
             )
@@ -2524,17 +2537,16 @@ def _trace_back(
         # this writer's guard (a genuinely-live word / undecidable term) and the
         # backward walk ended at a dead end. Purely informational: no drive-loop
         # behavior keys on it.
-        node.live_guard = guard_punted and not _route_has_no_dead_end([node])
+        attempt_node.live_guard = guard_punted and not _route_has_no_dead_end([attempt_node])
 
-        attempt = _writer_attempt(node, _visited)
+        attempt = writer_build.complete()
         alternative = _trace_alternative(
             choice=attempt,
-            nodes=[node],
+            nodes=[attempt_node],
             rank=(writer_order,),
             env=env,
         )
         writer_alternatives.append(alternative)
-        _clear_writer_attempt(node, _visited, visited_before)
 
         writer_selection = _select_trace_alternative(tuple(writer_alternatives))
 
@@ -2562,7 +2574,7 @@ def _trace_back(
     node.writer_skips = tuple(writer_skips)
     if writer_selection is None:
         writer_selection = _select_trace_alternative(tuple(writer_alternatives))
-    selected_writer = writer_selection.chosen or writer_selection.blocked_alternative
+    selected_writer = writer_selection.retained
     if selected_writer is not None:
         _apply_writer_attempt(node, _visited, selected_writer.choice)
 
