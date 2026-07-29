@@ -22,25 +22,19 @@ Do not store a suffix of actions to execute later. Every iteration rebuilds the
 trace and candidate set from the current snapshot, static evidence, accumulated
 transition knowledge, active holds, avoid constraints, and world-keyed nogoods.
 
-`avoid=` remains a constraint at every read/action/scan gate. Condition-like
-avoids carry their runtime condition
-into trial coasts, so folding lands on any avoided crossing. Opaque callable
-avoids have no readable fold proof and are checked at endpoints, retained real
-snapshots, and kernel scans the coast actually executes; skipped logical scans
-are outside that narrower contract. `rise()`/`fall()` avoids are rejected
-because they are transitions rather than snapshot states. A graph path, trace
+`avoid=` remains a constraint at every read/action/scan gate; the exact
+enforcement contract is in the soundness invariants below. A graph path, trace
 alternative, or learned transition is evidence for the next action only.
 
 ### Read before probing
 
 Escalate according to what remains unreadable:
 
-Every rung consumes the instruction-owned `AdvanceProfile` contract: one next
-operation, the observable boundary for the next read, and an optional
-`AdvanceStep.progress` receipt. The receipt is owner-declared evidence that an
-operation is active when a quantized scalar cannot change on the next scan;
-fractional accumulator state remains simulator execution state, not public
-PILOT evidence.
+Every rung consumes the instruction-owned `AdvanceProfile` contract. An
+`AdvanceStep.progress` receipt is owner-declared evidence that an operation is
+active when a quantized scalar cannot change on the next scan; fractional
+accumulator state remains simulator execution state, not public PILOT
+evidence.
 
 1. `trace.py` follows writers, guards, copies, calculations, and
    instruction-owned cross-scan state through `advance.py`.
@@ -49,20 +43,16 @@ PILOT evidence.
    constant-backed tables, and program-awaited actions.
 3. `program_step.py` checks one exact producer in an otherwise-unchanged fork,
    plus one counterfactual input patch per required input, and reports keep
-   running, needs input, interrupted pipeline motion, or unclear. It does not
-   choose an action. Its immutable `ProgramStep` derives the exact observable
-   channel motions proved by that projection; candidate construction may select
-   one with an outer route-channel preference, while Orientation never
-   reconstructs motion from `projected_changes`. Observed pipeline motion makes
-   the reading interrupted even when the producer exposes no external input;
-   the current transition owner must be observed before option ordering may
-   select an alternative.
+   running, needs input, interrupted pipeline motion, or unclear. It never
+   chooses an action. Observed pipeline motion makes the reading interrupted
+   even when the producer exposes no external input; the current transition
+   owner must be observed before option ordering may select an alternative.
    A requirement read while the program is crossing a boundary it owns belongs
-   to the world after that crossing, not to this one. The settled projection is
-   the disproof: an input the program is genuinely stopped at is still required
-   once its own motion finishes. Such a reading keeps running with the crossing
-   itself as the immediate boundary, so the caller coasts to its landing and the
-   drive loop reads the settled world again.
+   to the world after that crossing, not to this one — an input the program is
+   genuinely stopped at is still required once its own motion finishes. Such a
+   reading keeps running with the crossing itself as the immediate boundary,
+   so the caller coasts to its landing and the drive loop reads the settled
+   world again.
 4. `skiff.py` runs isolated fork probes only for a genuinely unreadable
    frontier.
 
@@ -81,9 +71,7 @@ unlikely.
 A rejection is stronger: downstream code may never reconsider it. Static
 rejection therefore requires a complete finite domain, such as Bool, prover
 `nd_domains`, or declared `choices=`. `tide_tables.guard_verdict` owns that
-completeness requirement before it can return permanent `GUARD_DEAD`;
-`trace._writer_guard_verdict` supplies writer fire pins and memoizes the owned
-verdict.
+completeness requirement before it can return permanent `GUARD_DEAD`.
 
 Failure to make progress is not proof that a transition is impossible.
 Pending-departure expiry rolls the world back without creating a nogood.
@@ -110,137 +98,86 @@ probing produces no navigation evidence; stop and report the frontier.
 ### Give each decision one owner
 
 Do not reproduce a decision in a second module for convenience. Shared callers
-should consume the first owner's result.
+consume the first owner's result. Most of these contracts are enforced by the
+frozen records themselves; this table names each owner, and the clauses kept
+beside a pointer are the ones only discipline holds.
 
 - User trace route: `pilot.py::_prepare_route`
-- Trace-tree structural traversal and unresolved interior identity:
-  `trace.py::TraceNode.iter_nodes` and
-  `trace.py::TraceNode.is_interior_frontier`. Breadth-first order is the
-  package default; callers that need left-to-right preorder request
-  depth-first explicitly. Collector-specific rules, including the relational
-  unsatisfied-frontier stop and ordered-action context fold, remain explicit.
+- Trace-tree traversal and unresolved interior identity:
+  `trace.py::TraceNode.iter_nodes` / `is_interior_frontier`. Breadth-first is
+  the package default; callers that need left-to-right preorder request
+  depth-first explicitly. Collector-specific rules stay explicit at each
+  collector.
 - Writer eligibility and order: `trace.py::_rank_writers`
-- Unlocked local trace alternatives:
-  `trace.py::_select_trace_alternative` returns an immutable
-  `_TraceSelection`. Each `_TraceAlternative` records its caller-supplied rank
-  and literal facts: whether it violates avoid, has no dead end, or is the exact
-  rejected action. Expression OR, call-site, table-enablement, and nested-writer
-  readers consume that decision. Call-site and table ranks put alternatives
-  with no dead end first; OR keeps its structural rank, and writers keep
-  `_rank_writers` order. Alternative-specific root writer/OR locks remain
-  binding while each complete route is read; `rank_trace_choices` separately
-  owns complete-route ranking. Nested writers remain lazy.
-  Subroutine call sites are distinct program contexts, so caller selection
-  records exact rejection but does not redirect to a different caller because
-  of it. The rejected caller remains the honest frontier for higher-level
-  recovery.
+- Unlocked local trace alternatives: `trace.py::_select_trace_alternative`;
+  complete-route ranking is separately owned by `rank_trace_choices`. A
+  rejected subroutine caller is recorded but never redirects selection to a
+  different caller; it remains the honest frontier for higher-level recovery.
 - Permanent guard rejection: `tide_tables.py::guard_verdict`; trace supplies
-  writer fire pins and consumes the complete-domain verdict
+  writer fire pins and consumes the complete-domain verdict.
+- Unsupported construct reporting: `trace.py::UnsupportedConstruct`, raised at
+  read time and caught at the drive boundary in `pilot.py`; `recording.py`
+  renders the diagnostic. Test mode propagates; drive mode degrades to a named
+  terminal result.
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's counterfactual proof: `program_step.py::read_program_step`
 - Current-world navigation result: `orientation.py::orient`, entered via the
   `compass.py::Compass.orient` facade
 - Current-world continuation evidence: `options.py::_current_work_evidence`;
-  orientation groups live-work alternatives ahead of fresh alternatives
-- Target-relative Bearing objective: `orientation.py::_bearing`; the original
-  `TargetSpec` and complete unresolved frontier travel unchanged through
-  execution and verification, and recovery consumes that receipt rather than
-  rebuilding intent from the global context
+  orientation groups live-work alternatives ahead of fresh alternatives.
+- Target-relative Bearing objective: `orientation.py::_bearing`; recovery
+  consumes that receipt rather than rebuilding intent from the global context.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
-  immutable `navigation.ActPolicy` from the selected private option or wait.
-  `steer.execute` applies that declared policy without decoding provenance;
-  `_ExecutedAttempt` carries the original `Bearing` beside physical
-  `_PulseState` evidence, and recording renders the same policy. A
-  `ChannelHeading` is navigation's declaration; a coast's selected landing
-  remains execution evidence on `_PulseState`.
-- Option materialization and ranking: `options.py::_build_candidates`
-  orchestrates four explicit current-world reads, then
+  `navigation.ActPolicy`; `steer.execute` applies the declared policy without
+  decoding provenance. A `ChannelHeading` is navigation's declaration; a
+  coast's selected landing remains execution evidence on `_PulseState`.
+- Option materialization and ranking: `options.py::_build_candidates`;
   `_assemble_candidate_read` creates the sole durable `CandidateRead`.
-  `_RouteAndCompletionRead` keeps static route and charted-completion evidence with
-  the admission that produced them; `_PrerequisiteSeparation` carries the
-  updated admission, executable prerequisites, and the still-unselected
-  instruction-owned boundary. Learned fallback is an explicit wait, single
-  action, or batch variant, while `_read_current_fallback` remains a separate
-  program-current reading. `_select_wait` alone chooses among learned motion,
-  charted completion, and an instruction-owned boundary with the established
-  prescription and candidate gates. The immutable `CandidateRead` composes the
-  final trace admission, optional `RouteRead`, `WaitRead`, prerequisite
-  artifact, options, learned-batch variant, and diagnosis. `WaitRead.prescription` is
-  `WaitPrescription | None`, so a present wait is valid by construction while
-  a declined read retains its reason, producer evidence, frontier, and details.
-  Orientation, recording, option assembly, and tests consume those owners
-  directly; `CandidateRead` does not flatten them into a second scalar surface.
+  `_select_wait` alone chooses among learned motion, charted completion, and
+  an instruction-owned boundary.
 - Static chart-edge admission:
-  `navigation_evidence.py::NavigationEvidence.static_edge_admission` returns a
-  typed `StaticEdgeAdmission` with machine-readable exclusions for static
-  status, current-world pair/wait/Pulse nogoods, blocked required actions, and
-  avoid. It evaluates the complete required action overlay, including
-  co-actions. Options, frontier evidence, and detour give graph search only its
-  `allowed` projection. Options keeps unavailable-producer edges local to its
-  candidate read. Detour composes the recovery-only `ContinuationSafety`
-  receipt, whose named facts say whether a route erases earned progress or
-  reopens completed work.
-- Local trial gates: `verify.py::verify_gates`
-- Accepted trial verification: `verify.py::verify_gates` preserves the exact
-  `_ExecutedAttempt` inside one `_AcceptedTrial`, then constructs a frozen,
-  PLC-free `_ExecutionEvidence` only after spin recovery has selected the final
-  pulse. That receipt owns read-only copies of the final before/after snapshots,
-  VERIFY's `ChannelMotion`, the typed `CoastReceipt`, and the exact
-  `tuple[BumpEvent, ...]` timeline; `accelerators` derives from
-  `CoastReceipt.advances`. Its required verification is either the
-  `TargetReached` marker or an `AssessedMotion` carrying the accepted state key,
-  trend, and `TrialAssessment`; legacy `Outcome` is derived from that assessment.
-  Progress and recording narrow the variant before consuming assessed-motion
-  facts. Gauge and gate receipts remain verification-owned evidence around the
-  attempt.
-- Committed operation context: `pilot.py::_step_context` carries the original
-  `ActPolicy` and the exact `_ExecutionEvidence` object from `_AcceptedTrial`
-  into `_StepContext`. Commit adds only unresolved frontier tags and exact
-  executable control rungs. Physical replay `_Step` values stay on
-  `_CommittedAct`; `_StepContext` derives policy, snapshots, channel, timeline,
-  accelerator, and steady-hold views from their owners rather than storing
-  parallel fields.
+  `navigation_evidence.py::NavigationEvidence.static_edge_admission`. It
+  evaluates the complete required action overlay, including co-actions; graph
+  search receives only its `allowed` projection, and options keeps
+  unavailable-producer edges local to its candidate read.
+- Local trial gates: `verify.py::verify_gates`; the PLC-free
+  `_ExecutionEvidence` is constructed only after spin recovery has selected
+  the final pulse.
+- Committed operation context: `pilot.py::_step_context`; commit adds only
+  unresolved frontier tags and exact executable control rungs.
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may use the live harness to propose a
-  coupling driver; `verify.py::_gate_dead_end` omits that model and
-  `_ops.py::_has_pending_effects` reads the executed fork for continued motion
+  coupling driver; `verify.py::_gate_dead_end` omits that model, and continued
+  physical motion needs executed evidence or a live pending effect on the
+  exact trial fork (`_ops.py::_has_pending_effects`).
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`; execution arms
-  trial-start-clear members, `CoastReceipt.avoided` derives exact firings from
-  typed events, and VERIFY consumes that receipt before target acceptance
-- Target-relative movement: `gauge.py::Gauge.receipt` preserves each
-  component's source, landing, and earn direction. Its `GaugeMovement` and
-  `any_forward` views are derived independently, so mixed forward/backward
-  motion remains visible. `verify.py` owns the accepted trial receipt and
-  replaces it only when spin recovery replaces the fork; outcome and commit
-  consume that receipt intact. Pending-departure policy creates one new receipt
-  for each new anchor/current pair. A typed
-  `DepartureBasis.PILOT_CAUSED_REGRESSION` may override retention policy without
-  rewriting factual gauge movement.
-- Departure observation and classification:
-  `detour.py::classify_departure` returns a short-lived `DepartureResult`.
-  Its frozen `DepartureObservation` owns the channel landing, exact
-  `CoastReceipt`, one `GaugeReceipt`, causal `DepartureReading`, and the typed
-  static/current continuation evidence actually consulted. The mutable settled
-  PLC fork remains only an adoption handle on the result; neither the
-  observation nor pending recovery retains it or an executable route suffix.
-- Evidence classification: `outcome.py::assess_outcome`
+  trial-start-clear members, and VERIFY consumes the typed `CoastReceipt`
+  before target acceptance.
+- Target-relative movement: `gauge.py::Gauge.receipt`. `verify.py` owns the
+  accepted trial's receipt and replaces it only when spin recovery replaces
+  the fork; pending-departure policy creates one new receipt per
+  anchor/current pair. A typed `DepartureBasis.PILOT_CAUSED_REGRESSION` may
+  override retention policy without rewriting factual gauge movement.
+- Departure observation and classification: `detour.py::classify_departure`.
+  The settled PLC fork is only an adoption handle on the short-lived result;
+  neither the observation nor pending recovery retains it or an executable
+  route suffix.
+- Evidence classification: `outcome.py::assess_outcome`;
+  `classify_outcome` stays as the small ergonomic compatibility projection.
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
 - Coast-departure channel ownership: `_ops.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`;
-  its `PendingDeparture` embeds the opening `DepartureObservation` and adds
-  only mutable policy anchors, rollback owners, and its deadline;
   `_handle_channel_departure` is the terminal event-streaming owner after
-  `_monitor_trend` detects a channel departure
+  `_monitor_trend` detects a channel departure.
 - Corrective hypothesis derivation: `corrections.py`
 - Corrective hypothesis replay and confirmation: `investigate.py`;
-  `_resolve_replay_attempt` preserves accepted, hypothesis-extended, and
-  rejected outcomes as a typed sum while sharing replacement-cycle identity
-  across exploratory and guarded replay
+  `_resolve_replay_attempt` shares replacement-cycle identity across
+  exploratory and guarded replay.
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
-  receipt and preserves an already-active owner by its progress witness
+  receipt and preserves an already-active owner by its progress witness.
 - Temporary-logic execution ownership: `_ops.py::_rung_execution_receipt` over
-  the same `_expand_pilot_rules` branches installed by `_set_rungs`
+  the same `_expand_pilot_rules` branches installed by `_set_rungs`.
 
 ## Actual control flow
 
@@ -280,42 +217,33 @@ knowledge that must survive:
 Every production PILOT fork that may execute is created through
 `_ops.py::fork_with_rungs`, with the owning `_World.rungs` supplied explicitly;
 the initial drive bootstrap supplies an explicit empty rung set. Public
-`PLC.fork()` does not implicitly inherit PILOT holds. Runner-internal replay has
-a separate contract: a reconstructed fork copies its source runner's **current**
-synthesis plant and holds so interpreted and compiled replay execute the same
-current World. This is not a historical overlay-epoch log and makes no claim
-that an older interval is being replayed under the overlay that existed then;
-that temporal ownership remains the later E2 concern.
+`PLC.fork()` does not implicitly inherit PILOT holds. Runner-internal replay
+has a separate contract: a reconstructed fork copies its source runner's
+**current** synthesis plant and holds, making no claim that an older interval
+replays under the overlay that existed then.
 
-`Compass.apply` returns a new compass and a `changed` flag. When no entry
-changes, it returns the same object. Runtime instruments return
-`CompassObservation` values and do not mutate the compass themselves.
-Empirical transition and probe receipts are scoped to the exact executable
-world, complete pre-transition snapshot, and applied action artifact that
-proved them. A local tombstone cannot erase another recipe or co-action
-context; within its own exact context it overrides deliberately global seeded
-evidence. Static-edge overlays are narrower still: negative evidence attaches
-only when the trial exercised that edge's exact action/co-action set while its
-recorded concrete conditions held.
+`Compass.apply` returns a new compass and a `changed` flag; runtime
+instruments return `CompassObservation` values and do not mutate the compass
+themselves. Empirical transition and probe receipts are scoped to the exact
+executable world, complete pre-transition snapshot, and applied action
+artifact that proved them. A local tombstone cannot erase another recipe or
+co-action context; within its own exact context it overrides deliberately
+global seeded evidence. Static-edge overlays are narrower still: negative
+evidence attaches only when the trial exercised that edge's exact
+action/co-action set while its recorded concrete conditions held.
 
 Trace alternatives consume the same evidence without taking ownership of it.
 Orientation may project an exact current-world singleton Pulse rejection back
 to its identical trace leaf; it must not project a rejected joint act onto one
-member. Trace uses those exact leaf rejections only to order unlocked local
-OR, table-value, and nested-writer alternatives. It does not redirect between
+member. Trace uses exact leaf rejections only to order unlocked local OR,
+table-value, and nested-writer alternatives; it does not redirect between
 subroutine callers, which are distinct lifecycle contexts rather than alternate
 recipes. A multi-leaf branch is a distinct, still-untested joint artifact, and
-a branch with a dead end cannot replace a rejected branch. Trace retains the
-best rejected branch when no untried alternative without a dead end survives so
-the frontier remains visible. Root writer/OR locks stay with each inferred
-alternative while Trace reads it and are never redirected inside Trace. Each
-ranked writer is read through a fresh `_WriterBuild`: an isolated `TraceNode`
-shell and copy of the caller's visited set. It completes to an immutable
-`_WriterAttempt`; `_TraceAlternative` classifies that attempt and
-`_TraceSelection` names the selected or honestly blocked attempt. Only that
-retained attempt's children and complete visited state are adopted into the
-caller's tree. Trace-wide caller locks and guard memoization remain shared
-evidence rather than writer-local build state.
+a branch with a dead end cannot replace a rejected branch; trace retains the
+best rejected branch when no untried alternative without a dead end survives,
+so the frontier stays visible. Only a retained writer attempt's children and
+visited state are adopted into the caller's tree; trace-wide caller locks and
+guard memoization remain shared evidence rather than writer-local build state.
 Static route selection applies the same boundary: it excludes the exact
 current-world ``(primary action, co-actions)`` Pulse artifact that failed, then
 may select a sibling edge carrying the same primary action under different
@@ -323,22 +251,17 @@ co-actions. Pair-level consumers see only explicit pair rejections and
 singleton Pulses.
 
 `PendingDeparture` records a clean program departure whose progress is not yet
-conclusive. It carries detour's opening `DepartureObservation` intact, then
-names the post-settlement progress mark, stable owner of its rollback
-checkpoint, owner of an optional saved-progress checkpoint, and finite
-search-scan deadline.
-The saved-progress owner is an irreversible recovery floor: expiry and
-regression resolve its current executable artifact and may discard only work
-after it. Until that owner exists, the opening rollback owner remains the floor.
+conclusive: detour's opening observation plus mutable policy anchors, rollback
+owners, and a finite search-scan deadline. The saved-progress owner is an
+irreversible recovery floor: expiry and regression may discard only work after
+it; until that owner exists, the opening rollback owner remains the floor.
 Correction install/revoke may replace a checkpoint's executable artifact but
-must preserve that owner. `TrialAssessment` and
-gauge receipts carry the evidence; every observed unexpected departure still
-enters the same incident, investigation, correction, and retry lifecycle before
-pending policy is considered. `progress.py` first returns a plain
-`DepartureDecision` (wait, promote, regress, or expire), then applies that
-decision to the receipts owned by the pending record. The retained
-`provisional_*` event names are compatibility vocabulary only; they do not name
-an internal state or policy.
+must preserve that owner. Every observed unexpected departure still enters the
+same incident, investigation, correction, and retry lifecycle before pending
+policy is considered. `progress.py` first returns a plain `DepartureDecision`
+(wait, promote, regress, or expire), then applies that decision to the
+receipts owned by the pending record. The retained `provisional_*` event names
+are compatibility vocabulary only.
 Correction nogoods are identities of replay-confirmed executable
 `PilotRung`s, composed from `_ops.py::_rung_identity`; guard and operation
 boundary are part of the disproved artifact. Raw `(tag, value)` hypotheses do
@@ -347,44 +270,33 @@ investigation materializes their guarded installed form.
 
 ## Soundness and behavior invariants
 
-- Writer eligibility and ordering: `trace.py::_rank_writers`; availability is
-  only a sort key, never a rejection
+- Writer availability is only a sort key in `_rank_writers`, never a
+  rejection.
 - "Still needed" has separate meanings:
   `frontier_pairs` reports unresolved needs in the selected trace tree;
   `_writer_projection` checks a writer under its fire-time overlay;
   `_expr_availability` compares a guard with the live snapshot.
 - Avoidance is enforced when choosing a route and before applying an action.
-  Condition-like members are also enforced across every logical scan of a
-  pre-commit trial; opaque callables cover endpoints, retained real snapshots,
-  and executed kernel scans only.
+  Condition-like members carry their runtime condition into trial coasts, so
+  folding lands on any avoided crossing, and are enforced across every logical
+  scan of a pre-commit trial; opaque callables have no readable fold proof and
+  cover endpoints, retained real snapshots, and executed kernel scans only.
+  `rise()`/`fall()` avoids are rejected because they are transitions rather
+  than snapshot states.
 - Active-cycle detection, crossing arithmetic, and folded jumps read the same
   timed scalar coordinate: public accumulator plus its fractional remainder.
   The remainder proves continued execution to the simulator, while the
   operation's `AdvanceStep.progress` receipt is PILOT's observable evidence.
 - Learned or static route edges are suggestions. A live trial still passes the
   same verification gates.
-- `ChannelHeading` owns an immediate observable channel/value/boundary and its
-  optional outer `RouteEdgeContext`. `Coast` consumes that heading whole through
-  `ActPolicy.heading`; consumers do not receive scalar channel or route copies.
-  `options.py::_boundary_heading` lowers an instruction-owned boundary directly
-  to that typed object. Prerequisite separation carries it whole and
-  `_select_wait` may compose route context onto it; only the explicitly
-  pair-typed wait frontier projects its channel and target.
-- Accepted execution evidence contains no PLC, transient pulse/action/wait
-  snapshots, world keys, correction or assessment state, or replay steps.
-  `_AcceptedTrial` retains the physical `_ExecutedAttempt` separately; committed
-  consumers share only the PLC-free `_ExecutionEvidence`. Recording's
-  ordinary-fold accelerator fallback remains necessary until ordinary fold
-  receipts own exact edits.
-- A planning trace may read the live harness to identify a physical driver.
-  VERIFY's post-trial dead-end trace deliberately omits that proposal model;
-  continued physical motion needs executed evidence or a live pending effect on
-  the exact trial fork.
+- `ChannelHeading` travels whole through `ActPolicy.heading`; consumers do not
+  receive scalar channel or route copies, and only the explicitly pair-typed
+  wait frontier projects its channel and target.
+- Recording's ordinary-fold accelerator fallback remains necessary until
+  ordinary fold receipts own exact edits.
 - Static charts enumerate every source match, exact edges before wildcard
-  edges. `StaticEdgeAdmission` owns shared current-world exclusions while
-  callers compose only their local evidence; graph APIs consume the Boolean
-  projection. Specificity is precedence, never a pre-filter veto of a
-  surviving wildcard route.
+  edges. Specificity is precedence, never a pre-filter veto of a surviving
+  wildcard route.
 - A convergence lookup is an ordered multimap of primary-action alternatives.
   Chart construction fans each alternative into its own edge; only a route's
   `edge_gates` are simultaneous co-actions.
@@ -417,15 +329,11 @@ investigation materializes their guarded installed form.
   active correction receipts may renegotiate their concrete value from a later
   incident boundary; prerequisites and route holds cannot enter the correction
   lifecycle merely because they compile to the same rung type.
-- Correction lifecycle ownership: `_ConfirmedCorrection`, `_CorrectionReceipt`,
-  and the derived `_HoldLogEntry.tags` / `_StepContext.steady_holds` properties.
-  Excursion verification rechecks corrected replay against `avoid=`. The shared
+- Excursion verification rechecks corrected replay against `avoid=`. The shared
   installer rejects forged identities and already-owned rungs; prerequisite
   installation reuses an identical rung without claiming it. Installation
   banks active corrections into every revert anchor, and revocation removes
   them symmetrically.
-- Coast channel ownership across execution and replay:
-  `_ops.py::coast_departure_tags`
 - Coast predicates decide bump truth. Compiled conditions provide fold metadata
   only. Every reported crossing lands on a real recorded scan.
 - Cycle folding, table inversion, producer recognition, and departure
@@ -451,9 +359,8 @@ investigation materializes their guarded installed form.
 
 ### Static reading and orientation
 
-- `trace.py` — backward requirement tree, stable tree traversal, unresolved
-  interior identity, route enumeration, steerability, writer ranking, isolated
-  writer builds, and selected/blocked attempt adoption.
+- `trace.py` — backward requirement tree, traversal, route enumeration,
+  steerability, writer ranking, and alternative selection.
 - `availability.py` — current-state writer availability used for ordering.
 - `evidence.py` — pipeline-role inference and static transition-route expansion.
 - `tide_tables.py` — finite constant-backed table and calculation preimages,
@@ -465,11 +372,10 @@ investigation materializes their guarded installed form.
 - `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
 - `orientation.py` — current-world read, complete frame assembly, sole result
   synthesis, and terminal/probe policy.
-- `options.py` — phased private current-world readings, explicit wait-source
-  selection, and final evidence-rich option materialization and ranking.
+- `options.py` — phased private current-world readings, wait-source selection,
+  and final option materialization and ranking.
 - `navigation_evidence.py` — narrow constrained reachability evidence shared
-  with verification and recovery, including typed static-edge admission; never
-  returns an action.
+  with verification and recovery; never returns an action.
 - `currents.py` — structural program-awaited-action readings and producer
   families; Compass owns filtering and ambiguity policy.
 - `advance.py` — unambiguous instruction-owned channel lookup and boundary
@@ -482,6 +388,8 @@ investigation materializes their guarded installed form.
 ### Execution and observation
 
 - `steer.py` — forked action/coast execution and invocation of trial gates.
+  `_settle_cone` stays as the thin execution adapter around
+  `CoastSession.settle`.
 - `_ops.py` — shared PLC operations, world keys, temporary-logic compilation and
   effective-owner receipts, pulses, coast adapters, and action-admission checks.
 - `coast.py` — bump-driven coasts with exact-scan receipts, including typed
@@ -497,9 +405,7 @@ investigation materializes their guarded installed form.
   recovery, the terminal channel-departure handler, correction installation,
   and reverts.
 - `detour.py` — immutable channel-departure observation and typed
-  classification for progress handling; reads the executed Bearing objective,
-  composes recovery-only continuation safety, preserves exact source receipts,
-  and never reconstructs a target objective or retains a route suffix.
+  classification for progress handling.
 - `gauge.py` — conservative target-relative earned-work marks and reset
   boundaries.
 - `causal.py` — recorded cause-chain queries and empirical program-write
@@ -558,14 +464,9 @@ Use the focused gate before the full suite when changing a risky invariant:
 - waits, coasts, and cycle folding:
   `test_pilot_candidate_wait.py`, `test_pilot_coast.py`,
   `test_pilot_cyclefold.py`
-- residual replay measurement:
-  `devtools/profile_pilot_replay.py` wraps the existing fold, replay, slab,
-  capture, and candidate-history boundaries. Its scalar partitions are
-  observational only: ordinary-folded + cycle-folded + residual always equals
-  logical scans, and it must not retain a second per-scan log or enlarge
-  `CoastReceipt`. A compiled shadow qualifies only the same recorded
-  executable-overlay fingerprint and exact advancement interval, and only
-  after endpoint parity. It does not qualify other backend-supported work.
+- residual replay measurement: `devtools/profile_pilot_replay.py`; its scalar
+  partitions are observational only — it must not retain a second per-scan
+  log or enlarge `CoastReceipt`.
 - departures, gauges, and recovery:
   `test_pilot_detour_progress.py`, `test_pilot_detour_hold_release.py`,
   `test_pilot_gauge.py`, `test_pilot_investigate.py`
