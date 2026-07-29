@@ -574,6 +574,109 @@ class TestPredicateBump:
 
 
 class TestAvoidBump:
+    def test_condition_member_predicate_receives_only_declared_reads(self):
+        from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+
+        plc = PLC(_ramp_program(), dt=0.010)
+        temp = plc._known_tags_by_name["Temp"]
+        observed: list[dict[str, object]] = []
+
+        def _record(snapshot: dict[str, object]) -> bool:
+            observed.append(snapshot)
+            return snapshot.get("Temp") == 2
+
+        avoid = _AvoidPredicate(
+            (
+                _AvoidMember(
+                    name="Temp == 2",
+                    pred=_record,
+                    tags=frozenset({"Temp"}),
+                    condition=CompareEq(temp, 2),
+                ),
+            )
+        )
+        session = CoastSession(plc)
+        session.arm_avoid(avoid)
+        observed.clear()  # Ignore the one full trial-start eligibility check.
+
+        state = SimpleNamespace(tags={"Temp": 2, "Enable": True, "Unrelated": 99})
+
+        assert session._avoid_bumps[0].predicate(state)
+        assert observed == [{"Temp": 2}]
+        assert type(observed[0]) is dict
+
+    def test_compiled_union_and_composite_members_keep_their_read_sets(self):
+        from pyrung.core.runner import _compile_avoid
+
+        A = Bool("AvoidProjectionA")
+        B = Bool("AvoidProjectionB")
+        Noise = Int("AvoidProjectionNoise")
+        with Program() as program:
+            with Rung(A):
+                out(B)
+            with Rung(Noise == 1):
+                out(B)
+        plc = PLC(program)
+
+        union = CoastSession(plc)
+        union.arm_avoid(_compile_avoid((A, B)))
+
+        assert [b.watched for b in union._avoid_bumps] == [
+            ("AvoidProjectionA",),
+            ("AvoidProjectionB",),
+        ]
+        state = SimpleNamespace(
+            tags={
+                "AvoidProjectionA": True,
+                "AvoidProjectionB": False,
+                "AvoidProjectionNoise": 1,
+            }
+        )
+        assert union._avoid_bumps[0].predicate(state)
+        assert not union._avoid_bumps[1].predicate(state)
+
+        composite = CoastSession(plc)
+        composite.arm_avoid(_compile_avoid(AllCondition(A, B)))
+
+        assert len(composite._avoid_bumps) == 1
+        assert composite._avoid_bumps[0].watched == (
+            "AvoidProjectionA",
+            "AvoidProjectionB",
+        )
+        assert not composite._avoid_bumps[0].predicate(state)
+        state.tags["AvoidProjectionB"] = True
+        assert composite._avoid_bumps[0].predicate(state)
+
+    def test_condition_projection_preserves_missing_key_and_default_semantics(self):
+        from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+
+        plc = PLC(_ramp_program(), dt=0.010)
+        temp = plc._known_tags_by_name["Temp"]
+        observed: list[dict[str, object]] = []
+
+        def _uses_mapping_default(snapshot: dict[str, object]) -> bool:
+            observed.append(snapshot)
+            return snapshot.get("Absent", 42) == 42 and snapshot.get("Temp") == 7
+
+        avoid = _AvoidPredicate(
+            (
+                _AvoidMember(
+                    name="mapping default",
+                    pred=_uses_mapping_default,
+                    tags=frozenset({"Temp", "Absent"}),
+                    condition=CompareEq(temp, 0),
+                ),
+            )
+        )
+        session = CoastSession(plc)
+        session.arm_avoid(avoid)
+        session._avoid_bumps[0].predicate(
+            SimpleNamespace(tags={"Temp": 7, "Unrelated": 99})
+        )
+
+        assert observed[-1] == {"Temp": 7}
+        assert "Absent" not in observed[-1]
+
     def test_member_true_at_trial_start_is_not_armed(self):
         from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
 
@@ -645,6 +748,36 @@ class TestAvoidBump:
         assert receipt.stop_reason == AVOID
         assert receipt.avoided == ("opaque Temp == 2",)
         assert receipt.real_scans == 1
+
+    def test_opaque_member_predicate_retains_full_plain_snapshot(self):
+        from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
+
+        plc = PLC(_ramp_program(), dt=0.010)
+        observed: list[dict[str, object]] = []
+
+        def _opaque(snapshot: dict[str, object]) -> bool:
+            observed.append(snapshot)
+            return False
+
+        session = CoastSession(plc)
+        session.arm_avoid(
+            _AvoidPredicate(
+                (
+                    _AvoidMember(
+                        name="opaque",
+                        pred=_opaque,
+                        tags=frozenset(),
+                        condition=None,
+                    ),
+                )
+            )
+        )
+        observed.clear()  # Ignore the one full trial-start eligibility check.
+        state = SimpleNamespace(tags={"Temp": 2, "Unrelated": 99})
+
+        assert not session._avoid_bumps[0].predicate(state)
+        assert observed == [{"Temp": 2, "Unrelated": 99}]
+        assert type(observed[0]) is dict
 
 
 class TestPenCondition:
