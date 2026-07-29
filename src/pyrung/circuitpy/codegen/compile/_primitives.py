@@ -66,7 +66,7 @@ def _snapshot_tag_symbol(
         if snapshot_symbol is not None:
             return snapshot_symbol
 
-    if block_info is not None and ctx.blockless:
+    if ctx.blockless and (block_info is not None or tag.name in ctx.dict_backed_tag_names):
         return f"tags.get({tag.name!r}, {tag.default!r})"
 
     return ctx.symbol_for_tag(tag)
@@ -86,6 +86,10 @@ def _range_item_read_expr(
     key_expr: str,
     ctx: CodegenContext,
 ) -> str:
+    if isinstance(range_value, BlockRange):
+        layout = ctx.static_range_layout(range_value)
+        if not layout.uses_backing_storage:
+            return f"{symbol}[{key_expr}]"
     if not ctx.blockless:
         return f"{symbol}[{key_expr}]"
     binding = ctx.block_bindings[id(range_value.block)]
@@ -314,7 +318,11 @@ def _compute_sequential_reloads(
     prefix, base, width = seq
     reloads: list[tuple[int, str]] = []
     for tag_name in list(ctx.referenced_tags):
-        if tag_name == target_name or tag_name in ctx.tag_block_addresses:
+        if (
+            tag_name == target_name
+            or tag_name in ctx.tag_block_addresses
+            or tag_name in ctx.dict_backed_tag_names
+        ):
             continue
         m = _SEQUENTIAL_TAG_RE.match(tag_name)
         if m is None:
@@ -466,7 +474,9 @@ def _compile_assignment_lines(
 
 def _compile_lvalue(target: Tag | IndirectRef | IndirectExprRef, ctx: CodegenContext) -> str:
     if isinstance(target, Tag):
-        if ctx.blockless and target.name in ctx.tag_block_addresses:
+        if ctx.blockless and (
+            target.name in ctx.tag_block_addresses or target.name in ctx.dict_backed_tag_names
+        ):
             return f"tags[{target.name!r}]"
         return ctx.symbol_for_tag(target)
     if isinstance(target, IndirectRef):
@@ -509,13 +519,25 @@ def _compile_range_setup(
         raise TypeError(
             f"Expected BlockRange or IndirectBlockRange, got {type(range_value).__name__}"
         )
-    binding = ctx.block_bindings[id(range_value.block)]
-    symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
     if isinstance(range_value, BlockRange):
         name = ctx.next_name(stem)
         indices_var = f"_{name}_{'names' if ctx.blockless else 'indices'}"
         addrs_var = f"_{name}_addrs"
-        addresses = [int(addr) for addr in range_value.addresses]
+        layout = ctx.static_range_layout(range_value)
+        addresses = list(layout.addresses)
+        if not layout.uses_backing_storage:
+            symbol = f"_{name}_values"
+            value_exprs = [_compile_value(tag, ctx) for tag in layout.tags]
+            lines = [f"{symbol} = [{', '.join(value_exprs)}]"]
+            indices_expr = _sequence_expr(list(range(len(layout.tags))))
+            lines.append(f"{indices_var} = {indices_expr}")
+            if include_addresses:
+                lines.append(f"{addrs_var} = {_sequence_expr(addresses)}")
+            else:
+                addrs_var = "[]"
+            return lines, symbol, indices_var, addrs_var
+        binding = ctx.block_bindings[id(range_value.block)]
+        symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
         if ctx.blockless:
             indices_expr = repr(tuple(binding.block._get_tag(addr).name for addr in addresses))
         else:
@@ -528,6 +550,8 @@ def _compile_range_setup(
             addrs_var = "[]"
         return lines, symbol, indices_var, addrs_var
 
+    binding = ctx.block_bindings[id(range_value.block)]
+    symbol = "tags" if ctx.blockless else ctx.symbol_for_block(range_value.block)
     helper = ctx.use_indirect_block(binding.block_id)
     name = ctx.next_name(stem)
     start_var = f"_{name}_start"
@@ -564,6 +588,23 @@ def _compile_range_setup(
         if include_addresses:
             lines.append(f"{addrs_var}.reverse()")
     return lines, symbol, indices_var, addrs_var
+
+
+def _compile_range_flush(
+    range_value: BlockRange | IndirectBlockRange,
+    symbol: str,
+    ctx: CodegenContext,
+) -> list[str]:
+    """Flush a specialized static range's value list to its semantic tags."""
+
+    if not isinstance(range_value, BlockRange):
+        return []
+    layout = ctx.static_range_layout(range_value)
+    if layout.uses_backing_storage:
+        return []
+    return [
+        f"{_compile_lvalue(tag, ctx)} = {symbol}[{index}]" for index, tag in enumerate(layout.tags)
+    ]
 
 
 def _sequence_expr(values: list[int]) -> str:
@@ -684,6 +725,12 @@ def _compile_target_write_lines(
         return _compile_target_write_lines(target.value, value_expr, ctx, indent)
     if isinstance(target, Tag):
         return [f"{sp}{_compile_lvalue(target, ctx)} = {value_expr}"]
+
+    if isinstance(target, BlockRange):
+        layout = ctx.static_range_layout(target)
+        if not layout.uses_backing_storage:
+            lines = [f"{sp}{_compile_lvalue(tag, ctx)} = {value_expr}" for tag in layout.tags]
+            return lines if lines else [f"{sp}pass"]
 
     if ctx.blockless:
         setup, symbol, indices_var, _ = _compile_range_setup(

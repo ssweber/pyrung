@@ -77,7 +77,7 @@ def _range_reverse(range_value: Any) -> bool:
 
 def _static_range_length(range_value: Any) -> int | None:
     if isinstance(range_value, BlockRange):
-        return len(range_value.addresses)
+        return len(range_value)
     return None
 
 

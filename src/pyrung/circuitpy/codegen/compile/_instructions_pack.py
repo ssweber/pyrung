@@ -23,6 +23,7 @@ from pyrung.core.instruction import (
 from ._primitives import (
     _compile_assignment_lines,
     _compile_guarded_instruction,
+    _compile_range_flush,
     _compile_range_setup,
     _compile_set_out_of_range_fault_body,
     _compile_value,
@@ -205,6 +206,7 @@ def _compile_unpack_bits_instruction(
             f"_bits = {bits_expr}",
             f"for _bit_index, _dst_idx in enumerate({dst_indices}):",
             f"    {dst_symbol}[_dst_idx] = bool((_bits >> _bit_index) & 1)",
+            *_compile_range_flush(instr.bit_block, dst_symbol, ctx),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)
@@ -258,6 +260,7 @@ def _compile_unpack_words_instruction(
             "_hi_word = ((_bits >> 16) & 0xFFFF)",
             f"{dst_symbol}[{dst_indices}[0]] = {lo_store}",
             f"{dst_symbol}[{dst_indices}[1]] = {hi_store}",
+            *_compile_range_flush(instr.word_block, dst_symbol, ctx),
         ]
     )
     return _compile_guarded_instruction(instr, enabled_expr, ctx, indent, enabled_body)

@@ -23,6 +23,7 @@ from pyrung.core import (
     copy,
     fill,
     latch,
+    named_array,
     on_delay,
     out,
     rise,
@@ -105,7 +106,13 @@ def test_compiled_plc_seeds_explicit_block_pointer_tag() -> None:
 
 def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() -> None:
     enable = Bool("Enable")
-    ds = Block("DS", TagType.INT, 1, 12)
+    ds = Block(
+        "DS",
+        TagType.INT,
+        1,
+        12,
+        valid_ranges=((1, 3), (10, 12)),
+    )
 
     with Program(strict=False) as program:
         with Rung(enable):
@@ -117,6 +124,161 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
     assert not set(runner.current_state.tags).intersection(
         {"DS1", "DS2", "DS3", "DS10", "DS11", "DS12"}
     )
+
+
+@pytest.mark.parametrize("blockless", [False, True])
+def test_compiled_plc_preserves_named_array_range_identity_and_shape(
+    blockless: bool,
+) -> None:
+    @named_array(Int, count=2, stride=4)
+    class ReplayRow:
+        first = 7
+        second = 0
+
+    enabled = Bool("ReplayRowCopyEnabled")
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            blockcopy(ReplayRow.instance(1).reverse(), ReplayRow.instance(2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(
+        program,
+        compiled=compile_kernel(program, blockless=blockless),
+        dt=0.010,
+    )
+
+    # An explicit semantic range seeds the fields in both runners, while its
+    # sparse backing span and padding never become observable state.
+    _assert_states_equivalent(plc, compiled)
+    semantic_names = {
+        "ReplayRow1_first",
+        "ReplayRow1_second",
+        "ReplayRow2_first",
+        "ReplayRow2_second",
+    }
+    assert semantic_names <= set(compiled.current_state.tags)
+    assert compiled.current_state.tags["ReplayRow1_first"] == 7
+    assert compiled.current_state.tags["ReplayRow2_first"] == 7
+    assert not {f"ReplayRow{index}" for index in range(1, 9)} & set(compiled.current_state.tags)
+
+    plc.step()
+    compiled.step()
+    _assert_states_equivalent(plc, compiled)
+
+    patch = {
+        "ReplayRowCopyEnabled": True,
+        "ReplayRow1_first": 11,
+        "ReplayRow1_second": 22,
+    }
+    plc.patch(patch)
+    compiled.patch(patch)
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["ReplayRow2_first"] == 22
+    assert compiled.current_state.tags["ReplayRow2_second"] == 11
+    assert not {f"ReplayRow{index}" for index in range(1, 9)} & set(compiled.current_state.tags)
+
+
+@pytest.mark.parametrize("blockless", [False, True])
+def test_compiled_plc_specialized_fill_is_visible_to_same_scan_copy(
+    blockless: bool,
+) -> None:
+    @named_array(Int, stride=3)
+    class FillRow:
+        first = 0
+        second = 0
+
+    observed = Int("FillRowObserved")
+
+    with Program(strict=False) as program:
+        with Rung():
+            fill(9, FillRow.instance(1))
+            copy(FillRow[1].second, observed)
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(
+        program,
+        compiled=compile_kernel(program, blockless=blockless),
+        dt=0.010,
+    )
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["FillRowObserved"] == 9
+
+
+@pytest.mark.parametrize("blockless", [False, True])
+def test_compiled_plc_sparse_reversed_specialized_search_keeps_address_parity(
+    blockless: bool,
+) -> None:
+    @named_array(Int, count=2, stride=3)
+    class SearchRow:
+        first = 0
+        second = 0
+
+    result = Int("SearchRowResult")
+    found = Bool("SearchRowFound")
+
+    with Program(strict=False) as program:
+        with Rung():
+            search(
+                SearchRow.instance_select(1, 2).reverse() == 42,
+                result=result,
+                found=found,
+            )
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(
+        program,
+        compiled=compile_kernel(program, blockless=blockless),
+        dt=0.010,
+    )
+    patch = {"SearchRow2_first": 42}
+    plc.patch(patch)
+    compiled.patch(patch)
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["SearchRowFound"] is True
+    # Sparse selected ranges currently pair their semantic tags with the
+    # physical span in traversal order. Keep compiled replay aligned with that
+    # exact interpreter behavior until the public address contract is revisited.
+    assert compiled.current_state.tags["SearchRowResult"] == 5
+
+
+def test_compile_kernel_caches_specialized_static_range_layout(monkeypatch) -> None:
+    @named_array(Int, count=50, stride=3)
+    class CachedRows:
+        first = 0
+        second = 0
+
+    selected = CachedRows.instance_select(1, 50)
+    range_type = type(selected)
+    original_tags = range_type.tags
+    calls = 0
+
+    def counted_tags(range_value):
+        nonlocal calls
+        if range_value is selected:
+            calls += 1
+        return original_tags(range_value)
+
+    monkeypatch.setattr(range_type, "tags", counted_tags)
+
+    with Program(strict=False) as program:
+        with Rung():
+            fill(1, selected)
+
+    compile_kernel(program, blockless=True)
+
+    assert calls == 1
 
 
 def test_blockless_kernel_matches_legacy_for_block_operations() -> None:
@@ -290,6 +452,34 @@ def test_kernel_subroutine_copy_converter_scalar_char_fanout_uses_live_tags() ->
     assert runner.current_state.tags["Ch1"] == "2"
     assert runner.current_state.tags["Ch2"] == "3"
     assert ord(runner.current_state.tags["Ch3"]) == 0
+
+
+def test_blockless_specialized_char_range_supports_sequential_copy_converter() -> None:
+    @named_array(Char, stride=2)
+    class NamedChars:
+        char1 = ""
+        char2 = ""
+
+    source = Int("NamedCharsSource", default=12)
+
+    with Program(strict=False) as program:
+        with Rung():
+            fill("", NamedChars.instance(1))
+            copy(source, NamedChars[1].char1, convert=to_text())
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(
+        program,
+        compiled=compile_kernel(program, blockless=True),
+        dt=0.010,
+    )
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["NamedChars_char1"] == "1"
+    assert compiled.current_state.tags["NamedChars_char2"] == "2"
 
 
 def test_compiled_plc_matches_plc_for_initial_and_first_scan_system_runtime_defaults() -> None:

@@ -26,15 +26,18 @@ from pyrung.circuitpy.codegen._util import (
     _subroutine_symbol,
 )
 from pyrung.circuitpy.codegen.compile import compile_rungs
-from pyrung.circuitpy.codegen.context import CodegenContext
+from pyrung.circuitpy.codegen.context import CodegenContext, describe_static_range
 from pyrung.core.kernel import BlockSpec, CompiledKernel
-from pyrung.core.memory_block import Block
+from pyrung.core.memory_block import Block, BlockRange
 from pyrung.core.program import Program
 from pyrung.core.system_points import SYSTEM_TAGS_BY_NAME
 from pyrung.core.tag import Tag
 
 
-def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
+def _collect_materialized_tag_names(
+    program: Program,
+    ctx: CodegenContext | None = None,
+) -> frozenset[str]:
     """Return the set of non-system tag names materialized in the program graph.
 
     ``BlockRange`` objects intentionally retain their owning ``Block``.  Walking
@@ -61,6 +64,17 @@ def _collect_materialized_tag_names(program: Program) -> frozenset[str]:
         if isinstance(current, (str, bytes, bytearray, int, float, bool)):
             continue
         if isinstance(current, Block):
+            continue
+        if type(current) is BlockRange:
+            continue
+        if isinstance(current, BlockRange):
+            layout = (
+                ctx.static_range_layout(current)
+                if ctx is not None
+                else describe_static_range(current)
+            )
+            if not layout.uses_backing_storage:
+                queue.extend(layout.tags)
             continue
 
         current_id = id(current)
@@ -143,7 +157,7 @@ def compile_kernel(
         blockless=blockless,
         has_io_gaps=ctx.has_io_gaps,
         indirect_block_info=indirect_block_info,
-        materialized_tag_names=_collect_materialized_tag_names(program),
+        materialized_tag_names=_collect_materialized_tag_names(program, ctx),
     )
 
 

@@ -73,6 +73,30 @@ class BlockBinding:
 
 
 @dataclass(frozen=True)
+class StaticRangeLayout:
+    """The ordered semantic tags and backing addresses of one static range."""
+
+    tags: tuple[Tag, ...]
+    addresses: tuple[int, ...]
+    uses_backing_storage: bool
+
+
+def describe_static_range(range_value: BlockRange) -> StaticRangeLayout:
+    """Return the semantic elements and physical span of a static range."""
+
+    addresses = tuple(int(addr) for addr in range_value.addresses)
+    tags = tuple(range_value.tags())
+    uses_backing_storage = len(tags) == len(addresses) and all(
+        tag is range_value.block._get_tag(addr) for tag, addr in zip(tags, addresses, strict=True)
+    )
+    return StaticRangeLayout(
+        tags=tags,
+        addresses=addresses,
+        uses_backing_storage=uses_backing_storage,
+    )
+
+
+@dataclass(frozen=True)
 class ModbusClientSymbolSpec:
     symbol: str
     owner: str
@@ -146,6 +170,7 @@ class CodegenContext:
     referenced_tags: dict[str, Tag] = field(default_factory=dict)
     retentive_tags: dict[str, Tag] = field(default_factory=dict)
     edge_prev_tags: set[str] = field(default_factory=set)
+    dict_backed_tag_names: set[str] = field(default_factory=set)
 
     subroutine_names: list[str] = field(default_factory=list)
     function_sources: dict[str, str] = field(default_factory=dict)
@@ -176,6 +201,7 @@ class CodegenContext:
     modbus_client_specs_by_instruction: dict[int, ModbusClientJobSpec] = field(default_factory=dict)
     _helper_condition_snapshots: dict[int, dict[str, str | list[str]]] = field(default_factory=dict)
     compact_block_map: dict[int, dict[int, int]] = field(default_factory=dict)
+    _static_range_layouts: dict[int, StaticRangeLayout] = field(default_factory=dict)
 
     def collect_hw_bindings(self) -> None:
         self.slot_bindings.clear()
@@ -228,6 +254,8 @@ class CodegenContext:
     def collect_program_references(self) -> None:
         self.referenced_tags.clear()
         self.edge_prev_tags.clear()
+        self.dict_backed_tag_names.clear()
+        self._static_range_layouts.clear()
         self.subroutine_names = sorted(self.program.subroutines)
         seen_values: set[int] = set()
 
@@ -291,11 +319,22 @@ class CodegenContext:
                 return
 
             if isinstance(value, BlockRange):
-                self._ensure_block_binding(value.block)
-                for addr in value.addresses:
-                    tag = value.block._get_tag(addr)
-                    self.tag_block_addresses[tag.name] = (id(value.block), addr)
+                layout = self.static_range_layout(value)
+                if layout.uses_backing_storage:
+                    self._ensure_block_binding(value.block)
+                elif self.blockless:
+                    names = {tag.name for tag in layout.tags}
+                    self.dict_backed_tag_names.update(names)
+                    for name in names:
+                        self.tag_block_addresses.pop(name, None)
+                for tag in layout.tags:
                     self.referenced_tags.setdefault(tag.name, tag)
+                    if not layout.uses_backing_storage and not self.blockless:
+                        annotated_block = getattr(tag, "_pyrung_block", None)
+                        if annotated_block is not None:
+                            self._ensure_block_binding(annotated_block)
+                    if layout.uses_backing_storage or not self.blockless:
+                        self._associate_tag_with_known_block(tag)
                 return
 
             if isinstance(value, IndirectBlockRange):
@@ -428,7 +467,7 @@ class CodegenContext:
             self.block_symbols[block_id] = self.block_symbols[bank_id]
 
         for tag_name in sorted(self.referenced_tags):
-            if tag_name in self.tag_block_addresses:
+            if tag_name in self.tag_block_addresses or tag_name in self.dict_backed_tag_names:
                 continue
             tag = self.referenced_tags[tag_name]
             symbol = _mangle_symbol(tag_name, "_t_", used)
@@ -458,6 +497,22 @@ class CodegenContext:
             for binding in self.block_bindings.values()
             if binding.block_id not in self.block_alias
         ]
+
+    def static_range_layout(self, range_value: BlockRange) -> StaticRangeLayout:
+        """Describe a static range without confusing its address span with its tags.
+
+        Most ranges name every slot in one backing block.  Specialized ranges
+        may instead expose an ordered semantic tag list over that span (for
+        example, a named-array instance selection skips stride padding and
+        interleaves fields).  Code generation must preserve that tag identity.
+        """
+
+        range_id = id(range_value)
+        layout = self._static_range_layouts.get(range_id)
+        if layout is None:
+            layout = describe_static_range(range_value)
+            self._static_range_layouts[range_id] = layout
+        return layout
 
     def build_compact_block_maps(self) -> None:
         """Build compact index mappings for blocks with only static access."""
@@ -658,7 +713,7 @@ class CodegenContext:
         return block_id
 
     def _associate_tag_with_known_block(self, tag: Tag) -> None:
-        if tag.name in self.tag_block_addresses:
+        if tag.name in self.tag_block_addresses or tag.name in self.dict_backed_tag_names:
             return
         if self.blockless:
             annotated_block = getattr(tag, "_pyrung_block", None)
