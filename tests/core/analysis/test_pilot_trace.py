@@ -54,6 +54,7 @@ from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
+from pyrung.core.crossing import REVERSE_FALLTHROUGH
 from pyrung.core.memory_block import Block
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.tag import TagType
@@ -458,6 +459,28 @@ def test_calc_affine():
     names = _steerable_names(tree)
     assert "x_Go" in names
     assert "Raw" in names
+
+
+def test_affine_fallback_when_registered_reverse_declines(monkeypatch) -> None:
+    x_Go = Bool("AffineFallbackGo", external=True)
+    Raw = Int("AffineFallbackRaw", external=True)
+    Scaled = Int("AffineFallbackScaled")
+    with Program() as logic:
+        with rung(x_Go):
+            calc(Raw + 10, Scaled)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    monkeypatch.setattr(
+        "pyrung.core.analysis.crossings.reverse",
+        lambda *_args, **_kwargs: REVERSE_FALLTHROUGH,
+    )
+
+    tree = trace_back(Scaled.name, 42, {}, pdg, logic, steerable)
+
+    names = _steerable_names(tree)
+    assert x_Go.name in names
+    assert Raw.name in names
 
 
 # -- Test 3b: Aggregate (sum) decomposition ---------------------------------

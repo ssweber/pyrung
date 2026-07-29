@@ -119,6 +119,53 @@ def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     assert journal[0].inputs == (("Cmd", True),)
 
 
+def test_ordinary_fold_journal_infers_accelerators_from_scan_log() -> None:
+    """Ordinary folds retain the legacy scan-log accelerator projection."""
+    step = _Step(inputs={}, scan_before=10, scan_after=13)
+    context = _StepContext(
+        policy=ActPolicy(
+            ActSource.TRACE,
+            motion=MotionKind.COAST_TO_BEARING,
+        ),
+        execution=_ExecutionEvidence(
+            before_snap={},
+            after_snap={},
+            channel_motion=ChannelMotion("State", 2),
+            coast_receipt=None,
+            timeline=(),
+        ),
+    )
+    state = SimpleNamespace(
+        committed_acts=(_CommittedAct(steps=(step,), context=context),),
+        lever_notes={},
+        hold_log=(),
+        correction_receipts=(),
+    )
+    scan_log = SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(
+            patches_by_scan={
+                11: {"Acc": 7, "Unrelated": 99},
+                14: {"Acc": 8},
+            }
+        )
+    )
+    fork = SimpleNamespace(
+        _scan_log=scan_log,
+        _known_tags_by_name={"Acc": Int("Acc")},
+    )
+
+    journal = _build_plan_journal(
+        state,
+        fork,
+        frozenset(),
+        frozenset({"Acc"}),
+    )
+
+    assert len(journal) == 1
+    assert journal[0].kind == "coast"
+    assert journal[0].accelerators == (("Acc", 7),)
+
+
 def test_plan_manual_edit_is_hidden_only_by_matching_effective_owner() -> None:
     """Dormant and overwritten rules cannot claim a command input."""
     In = Bool("JournalOwnerIn", external=True)

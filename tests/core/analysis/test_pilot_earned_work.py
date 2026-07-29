@@ -19,7 +19,11 @@ from pyrung import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, build_earned_work
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWorkMovement,
+    build_earned_work,
+    legacy_earned_work_movement,
+)
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 from tests.core.analysis.test_pilot_departure_progress import _knock_three_times_program
@@ -94,6 +98,15 @@ def test_earned_work_receipt_keeps_source_landing_and_progress_order() -> None:
         EarnedWorkMovement.FORWARD,
         EarnedWorkMovement.BACKWARD,
     )
+
+
+def test_legacy_earned_work_movement_keeps_event_vocabulary() -> None:
+    assert {movement: legacy_earned_work_movement(movement) for movement in EarnedWorkMovement} == {
+        EarnedWorkMovement.FORWARD: "advanced",
+        EarnedWorkMovement.BACKWARD: "behind",
+        EarnedWorkMovement.UNCHANGED: "preserved",
+        EarnedWorkMovement.UNKNOWN: "unknown",
+    }
 
 
 def _step_chain_program():

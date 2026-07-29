@@ -314,8 +314,29 @@ class TestGateCycle:
         assert gates[-1].evidence["seen"] is True
         assert gates[-1].evidence["influence_prescribed"] is False
 
-    @pytest.mark.skip(reason="stub")
-    def test_influence_prescribed_overrides_cycle(self): ...
+    def test_influence_prescribed_overrides_cycle(self):
+        key = ("visited",)
+        trial = SimpleNamespace(key=key, snap={})
+        gates = []
+        collected_nogoods = []
+
+        accepted = _gate_cycle(
+            trial,
+            SimpleNamespace(snap={}),
+            SimpleNamespace(seen_keys={key}, earned_work=None),
+            pending=False,
+            earned_work_receipt=EarnedWorkReceipt(),
+            influence_prescribed=True,
+            nogood_pair=("Cmd", True),
+            gate_events=gates,
+            collected_nogoods=collected_nogoods,
+        )
+
+        assert accepted is True
+        assert collected_nogoods == []
+        assert len(gates) == 1
+        assert gates[0].event == "influence-override-cycle"
+        assert gates[0].detail == "influence-prescribed"
 
 
 class TestGateDeadEnd:

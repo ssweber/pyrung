@@ -313,6 +313,55 @@ Avoid extending the nautical metaphor in technical contracts. Words such as
 captain, vessel, reef, shipyard, and waters add a translation step without
 naming code abstractions.
 
+## Compatibility boundaries
+
+The following projections are deliberate compatibility seams. Keep their owner
+and removal condition visible so an internal cleanup does not silently change
+an event stream, replay identity, or lower-level API.
+
+- `corrections.py::_best_forcing_holds` owns the pair-shaped forcing-hold
+  projection. Remove it only after every correction consumer accepts
+  `TraceAction` or another exact operation receipt.
+- `recording.py::_build_plan_journal` infers accelerator edits from the scan log
+  for ordinary runner folds whose receipts contain no exact edits. Remove that
+  fallback when ordinary-fold receipts carry authoritative edits.
+- `trace.py` retains the affine walker fallback when a registered reverse
+  declines. Remove it only when registered reverse rules cover those affine
+  writers.
+- `progress.py::PendingDeparture` owns the stable `provisional_*` events and
+  their legacy `route`, `gauge_at_source`, and earned-work movement words
+  (`advanced`, `behind`, `preserved`, `unknown`), including the legacy
+  gauge/earned-work reason prose produced by `departure.py`. Change them only
+  with an event schema version and downstream migration.
+- `outcome.py::legacy_outcome` and `classify_outcome` are the legacy outcome
+  projection boundary. Remove them only with the corresponding API and event
+  migration.
+- `navigation_contracts.py::ActSource` keeps serialized values `influence` and
+  `learned`; recording keeps the `influence_prescribed` payload, and VERIFY
+  keeps the public `influence-override-cycle` gate event. Version and migrate
+  consumers before changing any of them.
+- `recording.py` owns the `zoom`, `zoom_accepted`, and `zoom_rejected` events and
+  their `zoom_*` payload keys. The public stall spelling is lowercase
+  `zoom-stall`; uppercase spellings are internal gate labels, not public
+  vocabulary. Change these only through an event schema migration.
+- `recording.py` and `progress.py` serialize `rungs` and `revoked_rungs`.
+  Renaming those payload keys requires an event schema migration.
+- `coast.py` owns typed reached evidence and its event projection;
+  `cycle_fold_until` retains its Boolean API; PILOT filters lower-runner
+  `real_scans` and `folds` cycle-fold details. Remove that filter only after the
+  lower runner normalizes those fields; migrate the other APIs explicitly.
+- `world_key.py::_semantic_key` preserves the old
+  `pyrung.core.analysis.pilot._ops` module token for `OperationReceipt`.
+  Remove it only as an explicit world-key identity version.
+- `Compass` pair observations and pair nogoods are intentional pair semantics,
+  not tuple compatibility wrappers.
+
+Some compact views are genuine facades rather than removal candidates:
+`Compass` exposes graphs and action tags, `Pulse` exposes `action` and
+`applied`, `_PilotState` setters preserve `_World` ownership,
+and `LearnedBatchRead` presents learned batch evidence. Keep them while callers
+need those narrower contracts.
+
 ## Testing changes
 
 Run:

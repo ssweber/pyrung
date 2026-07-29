@@ -28,6 +28,7 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
@@ -666,6 +667,60 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
     assert events[0].data["gauge_at_source"] == (("Step", 107),)
     assert events[0].data["settle_scans"] == 1
     assert events[0].data["classification"] == "continue"
+    assert events[0].kind == "provisional_started"
+    assert events[0].data["route"] == ()
+
+
+def test_pending_departure_projects_awaited_action_route():
+    source = _oneshot_plc()
+    source._state = source.state.with_tags({"State": 6})
+    settled = source.fork()
+    settled._state = settled.state.with_tags({"State": 11})
+    checkpoint = _cp(("source",), source, 5)
+    state = _make_state(best_trend=5, checkpoints=[checkpoint], work=source)
+    trial = _make_trial(
+        5,
+        BearingEffect.DEPARTED,
+        before_snap={"State": 6},
+        fork_snap={"State": 10},
+        channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
+    )
+    departure = _departure_result(
+        settled,
+        reason="awaiting operator continuation",
+        settled_value=11,
+        from_value=6,
+    )
+    awaited = AwaitedAction(
+        action=("Start", True),
+        command_tag="Command",
+        command_value=2,
+        command_writes=(("Command", 2),),
+        from_state=11,
+        to_state=16,
+        note="operator start",
+    )
+    departure = replace(
+        departure,
+        observation=replace(
+            departure.observation,
+            continuation=ContinuationEvidence(
+                departure.observation.continuation.channel_status,
+                awaited_action_inspected=True,
+                awaited_action=awaited,
+            ),
+        ),
+    )
+
+    events = _open_pending_departure(
+        departure,
+        trial,
+        state,
+        SimpleNamespace(max_scans=10_000),
+    )
+
+    assert events[0].kind == "provisional_started"
+    assert events[0].data["route"] == (11,)
 
 
 def test_pending_expiry_without_saved_progress_rolls_back():
