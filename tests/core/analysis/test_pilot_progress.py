@@ -39,12 +39,12 @@ from pyrung.core.analysis.pilot.detour import (
     DepartureReading,
     DepartureResult,
 )
-from pyrung.core.analysis.pilot.gauge import (
-    Gauge,
-    GaugeComponent,
-    GaugeMovement,
-    GaugeReading,
-    GaugeReceipt,
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWork,
+    EarnedWorkComponent,
+    EarnedWorkMovement,
+    EarnedWorkReading,
+    EarnedWorkReceipt,
 )
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -245,7 +245,7 @@ def _make_trial(
             coast_receipt=coast_receipt,
             timeline=timeline,
         ),
-        gauge_receipt=over.pop("gauge_receipt", GaugeReceipt()),
+        earned_work_receipt=over.pop("earned_work_receipt", EarnedWorkReceipt()),
         gate_events=over.pop("gate_events", ()),
         verification=AssessedMotion(pulse.key, trend, assessment),
     )
@@ -258,7 +258,7 @@ def _pending_departure(
     *,
     progress_mark: tuple[tuple[str, Any], ...] = (),
     expires_at: int = 2000,
-    opening_progress: GaugeReceipt | None = None,
+    opening_progress: EarnedWorkReceipt | None = None,
     from_value: Any = 9,
     rollback_owner: Any = None,
 ) -> PendingDeparture:
@@ -275,7 +275,7 @@ def _pending_departure(
             events=(),
             budget=0,
         ),
-        progress=opening_progress or GaugeReceipt(),
+        progress=opening_progress or EarnedWorkReceipt(),
         reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
         continuation=ContinuationEvidence(Unknown("not inspected in policy fixture")),
     )
@@ -292,7 +292,7 @@ def _departure_result(
     *,
     reason: str,
     settled_value: Any,
-    progress: GaugeReceipt | None = None,
+    progress: EarnedWorkReceipt | None = None,
     classification: DepartureClassification = DepartureClassification.CLEAN_CONTINUATION,
     channel_tag: str = "State",
     from_value: Any = None,
@@ -313,7 +313,7 @@ def _departure_result(
             events=(),
             budget=settle_scans,
         ),
-        progress=progress or GaugeReceipt(),
+        progress=progress or EarnedWorkReceipt(),
         reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
         continuation=ContinuationEvidence(
             Reachable(("focused-fixture",))
@@ -631,12 +631,12 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
     settled = source.fork()
     settled._state = settled.state.with_tags({"State": 11, "Step": 107})
     checkpoint = _cp(("source",), source, 5)
-    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+    earned_work = EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))
     state = _make_state(
         best_trend=5,
         checkpoints=[checkpoint],
         work=source,
-        gauge=gauge,
+        earned_work=earned_work,
     )
     trial = _make_trial(
         5,
@@ -650,7 +650,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         reason="clean continuation",
         settled_value=11,
         settle_scans=1,
-        progress=gauge.receipt(trial.before_snap, settled.state.tags),
+        progress=earned_work.receipt(trial.before_snap, settled.state.tags),
         from_value=6,
     )
 
@@ -674,7 +674,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
 
 
 def test_pending_expiry_without_saved_progress_rolls_back():
-    """A pending departure that never earned anything — no gauge advance, no saved
+    """A pending departure that never earned anything — no earned-work advance, no saved
     checkpoint — expires by rolling back to its boundary without a nogood."""
     checkpoint = _cp(("src",), _oneshot_plc(), 5)
     state = _make_state(best_trend=5, checkpoints=[checkpoint])
@@ -718,13 +718,13 @@ def test_target_acceptance_resolves_pending_departure_before_returning():
     assert state.pending_departure is None
 
 
-def test_pilot_caused_regression_does_not_rewrite_forward_gauge_evidence():
+def test_pilot_caused_regression_does_not_rewrite_forward_earned_work_evidence():
     checkpoint = _cp(("src",), _oneshot_plc(), 5)
-    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+    earned_work = EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))
     state = _make_state(
         best_trend=5,
         checkpoints=[checkpoint],
-        gauge=gauge,
+        earned_work=earned_work,
     )
     state.pending_departure = _pending_departure(
         state,
@@ -751,7 +751,7 @@ def test_pilot_caused_regression_does_not_rewrite_forward_gauge_evidence():
 
     assert decision.action is DepartureAction.REGRESS
     assert decision.basis is DepartureBasis.PILOT_CAUSED_REGRESSION
-    assert decision.receipt.movement is GaugeMovement.FORWARD
+    assert decision.receipt.movement is EarnedWorkMovement.FORWARD
     assert decision.receipt.source_mark == (("Step", 3),)
     assert decision.receipt.landing_mark == (("Step", 4),)
 
@@ -854,7 +854,7 @@ def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
     )
 
     events = _apply_departure_decision(
-        DepartureDecision(DepartureAction.REGRESS, GaugeReceipt()),
+        DepartureDecision(DepartureAction.REGRESS, EarnedWorkReceipt()),
         trial,
         _frame(),
         state,
@@ -905,7 +905,7 @@ def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypat
     )
 
     events = _apply_departure_decision(
-        DepartureDecision(DepartureAction.REGRESS, GaugeReceipt()),
+        DepartureDecision(DepartureAction.REGRESS, EarnedWorkReceipt()),
         trial,
         _frame(),
         state,
@@ -982,7 +982,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         trial.fork,
         reason="unique clean awaited action",
         settled_value=4,
-        progress=GaugeReceipt((GaugeReading("Step", 1, 1, 1),)),
+        progress=EarnedWorkReceipt((EarnedWorkReading("Step", 1, 1, 1),)),
         from_value=2,
     )
     monkeypatch.setattr(
@@ -1022,10 +1022,10 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
+def test_prescribed_departure_outranks_a_preserved_recipe_earned_work(monkeypatch):
     """A tide-table edge is progress in its own channel.
 
-    The selected recipe gauge may remain flat while a prescribed state/mode
+    The selected recipe's earned work may remain flat while a prescribed state/mode
     transition crosses an intermediate channel value. That is not an ambient
     ejection to diagnose, even when the landing has a clean continuation.
     """
@@ -1050,7 +1050,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         trial.fork,
         reason="clean prescribed continuation",
         settled_value=2,
-        progress=GaugeReceipt((GaugeReading("RecipeStep", 101, 101, 1),)),
+        progress=EarnedWorkReceipt((EarnedWorkReading("RecipeStep", 101, 101, 1),)),
         from_value=9,
     )
     monkeypatch.setattr(
@@ -1078,7 +1078,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
         "provisional_started",
     ]
     assert state.pending_departure is not None
-    assert state.pending_departure.opening.progress.movement is GaugeMovement.UNCHANGED
+    assert state.pending_departure.opening.progress.movement is EarnedWorkMovement.UNCHANGED
 
 
 def _seal_in_regression_inputs():

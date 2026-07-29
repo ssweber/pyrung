@@ -24,7 +24,11 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
-from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWork,
+    EarnedWorkComponent,
+    EarnedWorkReceipt,
+)
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -109,7 +113,7 @@ class TestGateSpin:
             trial,
             (("SpinSource", False),),
             SimpleNamespace(key=key, snap=snap),
-            SimpleNamespace(key_config=object(), gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(key_config=object(), earned_work=None, work=plc, rungs=[]),
             SimpleNamespace(),
             nogood_pair=("SpinSource", False),
             gate_events=gates,
@@ -179,7 +183,7 @@ class TestGateSpin:
             SimpleNamespace(key=frame_key, snap=snap),
             SimpleNamespace(
                 key_config=cfg,
-                gauge=None,
+                earned_work=None,
                 work=plc,
                 rungs=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
@@ -258,7 +262,7 @@ class TestGateSpin:
             SimpleNamespace(key=frame_key, snap=snap),
             SimpleNamespace(
                 key_config=cfg,
-                gauge=None,
+                earned_work=None,
                 work=plc,
                 rungs=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
@@ -295,9 +299,9 @@ class TestGateCycle:
         accepted = _gate_cycle(
             trial,
             SimpleNamespace(snap={}),
-            SimpleNamespace(seen_keys={key}, gauge=None),
+            SimpleNamespace(seen_keys={key}, earned_work=None),
             pending=False,
-            gauge_receipt=GaugeReceipt(),
+            earned_work_receipt=EarnedWorkReceipt(),
             influence_prescribed=False,
             nogood_pair=("Cmd", True),
             gate_events=gates,
@@ -381,7 +385,7 @@ class TestGateDeadEnd:
                 state,
                 ctx,
                 target=TargetSpec(target.name, 1),
-                gauge_receipt=GaugeReceipt(),
+                earned_work_receipt=EarnedWorkReceipt(),
                 influence_prescribed=False,
                 nogood_pair=None,
                 gate_events=[],
@@ -464,7 +468,9 @@ class TestVerifyGates:
         result = verify_gates(
             _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
-            SimpleNamespace(gauge=Gauge((GaugeComponent("VerifyStep", "stepper", 1),))),
+            SimpleNamespace(
+                earned_work=EarnedWork((EarnedWorkComponent("VerifyStep", "stepper", 1),))
+            ),
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec(target.name, True),
@@ -495,9 +501,9 @@ class TestVerifyGates:
         assert isinstance(result.trial.execution.before_snap, MappingProxyType)
         assert isinstance(result.trial.execution.after_snap, MappingProxyType)
         assert not any(isinstance(value, PLC) for value in vars(result.trial.execution).values())
-        assert result.trial.gauge_receipt.any_forward
-        assert result.trial.gauge_receipt.source_mark == (("VerifyStep", 1),)
-        assert result.trial.gauge_receipt.landing_mark == (("VerifyStep", 2),)
+        assert result.trial.earned_work_receipt.any_forward
+        assert result.trial.earned_work_receipt.source_mark == (("VerifyStep", 1),)
+        assert result.trial.earned_work_receipt.landing_mark == (("VerifyStep", 2),)
         before["LateSourceMutation"] = True
         after["LateLandingMutation"] = True
         assert "LateSourceMutation" not in result.trial.before_snap
@@ -524,7 +530,7 @@ class TestVerifyGates:
                 ),
             )
 
-    def test_spin_replacement_owns_a_new_gauge_receipt(self, monkeypatch):
+    def test_spin_replacement_owns_a_new_earned_work_receipt(self, monkeypatch):
         source = Bool("RetryReceiptSource", external=True)
         target = Bool("RetryReceiptTarget")
         with Program() as program:
@@ -565,12 +571,12 @@ class TestVerifyGates:
             Pulse(policy),
             BearingObjective(TargetSpec(target.name, True)),
         )
-        gauge = Gauge((GaugeComponent("RetryReceiptStep", "stepper", 1),))
+        earned_work = EarnedWork((EarnedWorkComponent("RetryReceiptStep", "stepper", 1),))
         receipts = []
 
-        class _CountingGauge:
+        class _CountingEarnedWork:
             def receipt(self, source_snap, landing_snap):
-                receipt = gauge.receipt(source_snap, landing_snap)
+                receipt = earned_work.receipt(source_snap, landing_snap)
                 receipts.append(receipt)
                 return receipt
 
@@ -582,7 +588,7 @@ class TestVerifyGates:
         result = verify_gates(
             _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
-            SimpleNamespace(gauge=_CountingGauge()),
+            SimpleNamespace(earned_work=_CountingEarnedWork()),
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec(target.name, True),
@@ -596,10 +602,10 @@ class TestVerifyGates:
         assert result.trial.execution.timeline != pulse.timeline
         assert len(receipts) == 2
         assert receipts[0].landing_mark == (("RetryReceiptStep", 2),)
-        assert result.trial.gauge_receipt is receipts[1]
-        assert result.trial.gauge_receipt.landing_mark == (("RetryReceiptStep", 3),)
+        assert result.trial.earned_work_receipt is receipts[1]
+        assert result.trial.earned_work_receipt.landing_mark == (("RetryReceiptStep", 3),)
 
-    def test_intervention_cannot_erase_banked_gauge_work(self):
+    def test_intervention_cannot_erase_banked_earned_work(self):
         before = {"Step": 3, "Target": False}
         # Even manufacturing the requested Target value does not pardon a
         # reset-to-floor intervention.
@@ -625,7 +631,7 @@ class TestVerifyGates:
         result = verify_gates(
             _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
-            SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
+            SimpleNamespace(earned_work=EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))),
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec("Target", True),
@@ -661,7 +667,7 @@ class TestVerifyGates:
         result = verify_gates(
             _ExecutedAttempt(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
-            SimpleNamespace(gauge=Gauge((GaugeComponent("Step", "stepper", 1),))),
+            SimpleNamespace(earned_work=EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))),
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec("Target", True),

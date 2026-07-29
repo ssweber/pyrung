@@ -40,7 +40,7 @@ from pyrung.core.analysis.pilot.compass import (
     NavigationCatalog,
     ProbeExhaustedObservation,
 )
-from pyrung.core.analysis.pilot.gauge import build_gauge
+from pyrung.core.analysis.pilot.earned_work import build_earned_work
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
@@ -704,14 +704,16 @@ def _commit_trial(
     # advancing itself while the pilot holds heading — so it must not drain the
     # invocation's search budget. A revert rewinds this credit with the world.
     # The credit is earned only when the machine actually moved its own work —
-    # the coast reached its channel target or advanced the progress gauge; a
+    # the coast reached its channel target or advanced earned work; a
     # coast that parks with nothing moving is the *search* failing, and sterile
     # laps must still drain the budget (the old-wiring live run spun at HELD
     # committing 100k scan-ids per lap — free dwell there means no terminating
     # force).
     if trial.motion.is_coast:
         productive = (
-            not key_was_seen or trial.channel_motion.reached or trial.gauge_receipt.any_forward
+            not key_was_seen
+            or trial.channel_motion.reached
+            or trial.earned_work_receipt.any_forward
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - trial.scan_before
@@ -840,12 +842,12 @@ def _pilot_loop_events(
         watch_tags=[],
         search_start_scan=plc.state.scan_id,
     )
-    # The target-relative progress gauge (gauge.py): event-earned
+    # The target-relative earned-work model (earned_work.py): event-earned
     # ordinals the threshold-masked search key deliberately aliases.  Static
-    # for the loop's life; knowledge side (never reverted).  Best-effort — an
-    # an empty gauge degrades every consumer to its earlier behavior.
+    # for the loop's life; knowledge side (never reverted). Best-effort — an
+    # empty model degrades every consumer to its earlier behavior.
     try:
-        state.gauge = build_gauge(
+        state.earned_work = build_earned_work(
             ctx.pdg,
             ctx.program,
             ctx.target.tag,
@@ -858,7 +860,7 @@ def _pilot_loop_events(
             harness=getattr(plc, "_harness", None),
         )
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
-        logger.debug("pilot: gauge build failed", exc_info=True)
+        logger.debug("pilot: earned-work build failed", exc_info=True)
 
     # Settle: at scan 0, calc-computed intermediates are still at defaults
     # and may trivially satisfy conditions that fail once rungs execute

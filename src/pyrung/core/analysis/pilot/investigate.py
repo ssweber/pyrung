@@ -50,7 +50,7 @@ from pyrung.core.analysis.pilot.corrections import (
     correct_enablers,
     guard_correction_holds,
 )
-from pyrung.core.analysis.pilot.gauge import GaugeMovement
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
@@ -266,7 +266,7 @@ class ReplayIncident:
     watch_roles: tuple[str, ...] = ()
     departure_bearing: tuple[ActionPair, ...] = ()
     regression_witness: RegressionWitness | None = None
-    progress_gauge: Any = None
+    earned_work: Any = None
     progress_anchor: Mapping[str, Any] | None = None
     regression_progress_floor: Mapping[str, Any] | None = None
 
@@ -498,7 +498,7 @@ def _scoped_correction_rungs(
                 # Reaching the safe channel value is not yet an acknowledgment:
                 # the user program reads that landing on its next scan. Keep
                 # the correction across the observed source/intermediate/
-                # landing corridor until the Gauge coordinate advances.
+                # landing corridor until the earned-work coordinate advances.
                 scope = _union_conditions(
                     (
                         CompareEq(channel, before),
@@ -566,7 +566,7 @@ def _exploratory_correction_rungs(
     A global exploratory hold is a broader intervention than the guarded fact
     PILOT would install. It can therefore erase earlier, compatible work and
     reject a locally-correct hypothesis for behavior the hypothesis would never
-    own. An exact Gauge mark is enough to keep that first replay at the incident;
+    own. An exact EarnedWork mark is enough to keep that first replay at the incident;
     the accepted outcome still supplies the narrower channel lifetime below.
     """
 
@@ -966,7 +966,7 @@ def build_replay_fn(
     replay_watch_roles = incident.watch_roles
     departure_bearing = incident.departure_bearing
     regression_witness = incident.regression_witness
-    progress_gauge = incident.progress_gauge
+    earned_work = incident.earned_work
     progress_anchor = incident.progress_anchor
     regression_progress_floor = incident.regression_progress_floor
 
@@ -1073,13 +1073,13 @@ def build_replay_fn(
         progress_erased = (
             ownership is not None
             and ownership.neutralized
-            and progress_gauge is not None
+            and earned_work is not None
             and regression_progress_floor is not None
-            and progress_gauge.receipt(
+            and earned_work.receipt(
                 regression_progress_floor,
                 snap,
             ).movement
-            is GaugeMovement.BACKWARD
+            is EarnedWorkMovement.BACKWARD
         )
         # A correction owns the recorded operation, not merely its outer
         # channel. Keeping Execute while erasing the Step/phase receipt that
@@ -1102,7 +1102,7 @@ def build_replay_fn(
 
         # Channel incident (channel coast OR terminal let-run hold): the hold is
         # good iff it reaches the requested zoom destination, advances the
-        # target-relative gauge, or suppresses the incident's exact departure
+        # target-relative earned work, or suppresses the incident's exact departure
         # causal branch within the incident window. A terminal let-run's
         # "target" is the state it was trying to hold, so equality alone is not
         # success there: a direct channel override could mask a still-firing
@@ -1121,15 +1121,16 @@ def build_replay_fn(
                     else "recorded cause silenced before an unrelated replacement departure"
                 )
             progressed = neutralized_reason
-            gauge_advanced = False
+            earned_work_advanced = False
             if (
                 not reached
                 and progressed is None
-                and progress_gauge is not None
+                and earned_work is not None
                 and progress_anchor is not None
-                and progress_gauge.receipt(progress_anchor, snap).movement is GaugeMovement.FORWARD
+                and earned_work.receipt(progress_anchor, snap).movement
+                is EarnedWorkMovement.FORWARD
             ):
-                gauge_advanced = True
+                earned_work_advanced = True
                 progressed = "target-relative progress advanced"
             # Ownership already distinguishes masking from a genuine branch
             # replacement. A healthy replacement may share generic executor
@@ -1153,7 +1154,7 @@ def build_replay_fn(
                 )
             )
             accepted = (
-                gauge_advanced or (not cause_repeated and (reached or progressed is not None))
+                earned_work_advanced or (not cause_repeated and (reached or progressed is not None))
             ) and not progress_erased
             return ReplayOutcome(
                 accepted=accepted,
@@ -1982,7 +1983,7 @@ def investigate_deviation(
                 continue
             outcome = resolution.outcome
 
-            # A target-work correction belongs to the exact Gauge occurrence.
+            # A target-work correction belongs to the exact earned-work occurrence.
             # A correction that directly discharges this producer occurrence's
             # recorded external supports instead belongs to the already-derived
             # channel-source lifetime.  Its final installed form is still

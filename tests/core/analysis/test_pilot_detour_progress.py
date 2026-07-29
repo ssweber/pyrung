@@ -105,7 +105,7 @@ def test_pilot_reaches_counter_gated_target_across_channel_revisits() -> None:
 
     The search key threshold-abstracts ``Knock_Count`` — the joint visits
     ``(AtDoor, 1)`` and ``(AtDoor, 2)`` alias — so the SPIN / CYCLE / LATERAL
-    gates consult the target-relative progress gauge (gauge.py): a
+    gates consult target-relative earned work (earned_work.py): a
     knock that advanced the event-earned ordinal is real work, not a revisit.
     """
 

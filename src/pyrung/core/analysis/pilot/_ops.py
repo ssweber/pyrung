@@ -127,8 +127,8 @@ def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
 def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
     """Channels whose departure terminates a coast holding the current world.
 
-    Pipeline analysis owns recognized request/state channels.  Gauge owns
-    monotone progress coordinates.  An exact stateful target with no Gauge
+    Pipeline analysis owns recognized request/state channels.  EarnedWork owns
+    monotone progress coordinates.  An exact stateful target with no EarnedWork
     owner is itself a discrete channel, even when the program has no inferred
     operator-request pipeline.  Keeping that arbitration here gives coast,
     VERIFY replay, and investigation the same channel set.
@@ -136,14 +136,15 @@ def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
     channels = list(dict.fromkeys(role.channel_tag for role in ctx.pipeline_roles))
     config = state.key_config
     target = ctx.target.tag
-    gauge_tags = {
-        component.tag for component in getattr(getattr(state, "gauge", None), "components", ())
+    earned_work_tags = {
+        component.tag
+        for component in getattr(getattr(state, "earned_work", None), "components", ())
     }
     if (
         ctx.target.predicate is None
         and config is not None
         and target in config.stateful_names
-        and target not in gauge_tags
+        and target not in earned_work_tags
         and target not in channels
     ):
         channels.append(target)

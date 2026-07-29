@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot.gauge import GaugeReading, GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkReading, EarnedWorkReceipt
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -41,7 +41,9 @@ def _zoom(
             16,
             stop_reason="reached" if after == 16 else "timeout" if after == 11 else "departed",
         ),
-        gauge_receipt=GaugeReceipt((GaugeReading("Step", 0, 1, 1),) if credential else ()),
+        earned_work_receipt=EarnedWorkReceipt(
+            (EarnedWorkReading("Step", 0, 1, 1),) if credential else ()
+        ),
     )
 
 
@@ -68,7 +70,7 @@ def test_action_receipt_survives_later_program_departure() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
         channel_motion=ChannelMotion("State", 16, stop_reason="reached"),
-        gauge_receipt=GaugeReceipt((GaugeReading("Step", 0, 1, 1),)),
+        earned_work_receipt=EarnedWorkReceipt((EarnedWorkReading("Step", 0, 1, 1),)),
     )
 
     assert assessment.bearing is BearingEffect.SATISFIED
@@ -93,7 +95,7 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=False,
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
-        gauge_receipt=GaugeReceipt(),
+        earned_work_receipt=EarnedWorkReceipt(),
     )
 
     assert assessment.bearing is BearingEffect.DEPARTED
@@ -118,7 +120,7 @@ def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
         lambda *_args, **_kwargs: (set(), []),
         route_prescribed=True,
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
-        gauge_receipt=GaugeReceipt(),
+        earned_work_receipt=EarnedWorkReceipt(),
     )
 
     assert assessment.agency is Agency.PROGRAM
@@ -138,8 +140,8 @@ def test_unchanged_channel_can_still_earn_progress_inside_corridor() -> None:
 
 
 def test_unchanged_channel_trend_drop_alone_is_rejected() -> None:
-    """Gauge-authoritative: trace-trend is coordinate-relative noise for a
+    """Earned-work-authoritative: trace-trend is coordinate-relative noise for a
     frozen channel (incidental sub-registers can drop the tree count while
     the channel sits stuck at its start value — the tumbler zoom
-    false-confirm).  Only the gauge or a genuinely new frontier confirms."""
+    false-confirm).  Only earned work or a genuinely new frontier confirms."""
     assert _zoom(11, trend_after=1) is Outcome.BAD_EDGE

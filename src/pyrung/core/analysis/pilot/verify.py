@@ -25,7 +25,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     NavigationEvidence,
     Reachable,
 )
-from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
@@ -111,7 +111,7 @@ def _accepted_trial(
     frame: Any,
     gate_events: list[PilotGateEvent],
     channel_motion: ChannelMotion,
-    gauge_receipt: GaugeReceipt,
+    earned_work_receipt: EarnedWorkReceipt,
     verification: TargetReached | AssessedMotion,
 ) -> _AcceptedTrial:
     """Preserve the final executed attempt and its PLC-free evidence."""
@@ -126,7 +126,7 @@ def _accepted_trial(
     return _AcceptedTrial(
         attempt=attempt,
         execution=execution,
-        gauge_receipt=gauge_receipt,
+        earned_work_receipt=earned_work_receipt,
         gate_events=tuple(gate_events),
         verification=verification,
     )
@@ -165,7 +165,7 @@ def _gate_spin(
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
     avoid_names: list[str],
-    gauge_receipt: GaugeReceipt | None = None,
+    earned_work_receipt: EarnedWorkReceipt | None = None,
 ) -> _PulseState | None:
     key_config = state.key_config
     assert key_config is not None
@@ -175,15 +175,17 @@ def _gate_spin(
 
     # The search key threshold-masks event-earned progress sources, so a trial
     # that advanced one (the knock that incremented a counter the key aliases at
-    # ``count < 3``) projects to the same key as doing nothing.  The gauge
+    # ``count < 3``) projects to the same key as doing nothing.  Earned work
     # carries exactly those ordinals: an earn in stride direction is real
     # work, not a spin.
-    if gauge_receipt is None:
-        gauge = getattr(state, "gauge", None)
-        gauge_receipt = (
-            gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
+    if earned_work_receipt is None:
+        earned_work = getattr(state, "earned_work", None)
+        earned_work_receipt = (
+            earned_work.receipt(frame.snap, trial.snap)
+            if earned_work is not None
+            else EarnedWorkReceipt()
         )
-    if gauge_receipt.any_forward:
+    if earned_work_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return trial
 
@@ -277,7 +279,7 @@ def _gate_cycle(
     state: Any,
     *,
     pending: bool,
-    gauge_receipt: GaugeReceipt,
+    earned_work_receipt: EarnedWorkReceipt,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
@@ -288,7 +290,7 @@ def _gate_cycle(
     # A revisit by the key's lights that advanced an event-earned ordinal is a
     # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
     # the threshold-masked projection (see _gate_spin's twin check).
-    if gauge_receipt.any_forward:
+    if earned_work_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         return True
     if not influence_prescribed:
@@ -322,7 +324,7 @@ def _gate_dead_end(
     ctx: Any,
     *,
     target: TargetSpec,
-    gauge_receipt: GaugeReceipt,
+    earned_work_receipt: EarnedWorkReceipt,
     influence_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
@@ -430,7 +432,7 @@ def _gate_dead_end(
         # An event-earned ordinal advance is trend improvement the tree can't
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
-        if gauge_receipt.any_forward:
+        if earned_work_receipt.any_forward:
             _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
@@ -491,7 +493,7 @@ def verify_gates(
     real snapshots retained by execution. All steering execution modes
     converge here.
 
-    Verification owns the accepted trial's gauge receipt and replaces it only
+    Verification owns the accepted trial's earned-work receipt and replaces it only
     when spin recovery replaces the fork; outcome and commit consume that
     receipt intact.
     """
@@ -516,8 +518,12 @@ def verify_gates(
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
     retry_avoid_names: list[str] = []
-    gauge = getattr(state, "gauge", None)
-    gauge_receipt = gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
+    earned_work = getattr(state, "earned_work", None)
+    earned_work_receipt = (
+        earned_work.receipt(frame.snap, trial.snap)
+        if earned_work is not None
+        else EarnedWorkReceipt()
+    )
 
     def _reject(
         *,
@@ -540,7 +546,7 @@ def verify_gates(
                 frame,
                 gate_events,
                 channel_motion,
-                gauge_receipt,
+                earned_work_receipt,
                 TargetReached(),
             ),
             gate_events=tuple(gate_events),
@@ -592,7 +598,7 @@ def verify_gates(
                 )
 
     # An intervention may explore a new frontier, but it may not erase
-    # target-relative work the current world has already earned.  The gauge is
+    # target-relative work the current world has already earned.  Earned work is
     # deliberately conservative: absent or unclassifiable coordinates yield
     # ``unknown``, never a guessed veto.  Coasts are excluded here because a
     # backward move during a coast is program motion owned by post-commit
@@ -600,15 +606,15 @@ def verify_gates(
     if (
         action_pairs
         and policy.motion is MotionKind.INTERVENTION
-        and gauge_receipt.movement is GaugeMovement.BACKWARD
+        and earned_work_receipt.movement is EarnedWorkMovement.BACKWARD
     ):
         gate_events.append(
             PilotGateEvent(
                 "banked-work",
                 "intervention would erase target-relative gauge progress",
                 evidence={
-                    "source_mark": gauge_receipt.source_mark,
-                    "landing_mark": gauge_receipt.landing_mark,
+                    "source_mark": earned_work_receipt.source_mark,
+                    "landing_mark": earned_work_receipt.landing_mark,
                     "effect": "behind",
                 },
             )
@@ -640,14 +646,16 @@ def verify_gates(
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
         avoid_names=retry_avoid_names,
-        gauge_receipt=gauge_receipt,
+        earned_work_receipt=earned_work_receipt,
     )
     if spun is None:
         return _reject()
     trial = spun
     if trial is not pre_spin_trial:
-        gauge_receipt = (
-            gauge.receipt(frame.snap, trial.snap) if gauge is not None else GaugeReceipt()
+        earned_work_receipt = (
+            earned_work.receipt(frame.snap, trial.snap)
+            if earned_work is not None
+            else EarnedWorkReceipt()
         )
     attempt = replace(attempt, pulse=trial)
 
@@ -665,7 +673,7 @@ def verify_gates(
         frame,
         state,
         pending=pending,
-        gauge_receipt=gauge_receipt,
+        earned_work_receipt=earned_work_receipt,
         influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
@@ -680,7 +688,7 @@ def verify_gates(
         state,
         ctx,
         target=bearing.objective.target,
-        gauge_receipt=gauge_receipt,
+        earned_work_receipt=earned_work_receipt,
         influence_prescribed=policy.influence_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
@@ -700,7 +708,7 @@ def verify_gates(
         chase_cause_roots,
         route_prescribed=policy.route_prescribed,
         channel_motion=channel_motion,
-        gauge_receipt=gauge_receipt,
+        earned_work_receipt=earned_work_receipt,
     )
 
     outcome = assessment.legacy_outcome
@@ -740,7 +748,7 @@ def verify_gates(
             frame,
             gate_events,
             channel_motion,
-            gauge_receipt,
+            earned_work_receipt,
             AssessedMotion(
                 new_key=trial.key,
                 trend=dead_end.trend,

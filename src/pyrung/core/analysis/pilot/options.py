@@ -187,13 +187,13 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             ):
                 reasons.append(f"established:{tag}={desired!r}")
 
-        gauge = getattr(state, "gauge", None)
-        components = getattr(gauge, "components", ()) if gauge is not None else ()
+        earned_work = getattr(state, "earned_work", None)
+        components = getattr(earned_work, "components", ()) if earned_work is not None else ()
         if (
-            gauge is not None
+            earned_work is not None
             and components
             and any(component.tag in anchor_tags for component in components)
-            and gauge.receipt(before, after).any_forward
+            and earned_work.receipt(before, after).any_forward
         ):
             reasons.append("gauge:advanced")
 
@@ -1253,7 +1253,7 @@ def _read_route_and_wait(
         ctx,
         key_nogoods,
     )
-    gauge = getattr(state, "gauge", None)
+    earned_work = getattr(state, "earned_work", None)
     current_trace_actions = tuple(
         pair
         for pair in admission.actions
@@ -1261,7 +1261,7 @@ def _read_route_and_wait(
         if detail is not None and detail.availability <= _WriterAvailability.AFTER_PREREQ
     )
     banked_trace_work = bool(
-        admission.actions and gauge is not None and gauge.has_banked_work(frame.snap)
+        admission.actions and earned_work is not None and earned_work.has_banked_work(frame.snap)
     )
     live_plan = _compass_route_plan(frame, ctx, key_nogoods)
     route_plan = (

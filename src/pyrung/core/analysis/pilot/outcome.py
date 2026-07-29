@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Any
 
 from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
-from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.types import ChannelMotion, _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -53,7 +53,7 @@ class ProgressEffect(Enum):
 
     ``progress.py`` owns checkpoint-relative promotion and regression. This
     value is narrower: it records only what the before/after target trace and
-    progress gauge establish for this trial.
+    earned-work receipt establish for this trial.
     """
 
     ADVANCED = "advanced"
@@ -151,7 +151,7 @@ def assess_outcome(
     *,
     route_prescribed: bool,
     channel_motion: ChannelMotion,
-    gauge_receipt: GaugeReceipt,
+    earned_work_receipt: EarnedWorkReceipt,
 ) -> TrialAssessment:
     """Judge a post-gate trial on independent evidence axes.
 
@@ -163,7 +163,9 @@ def assess_outcome(
     chart value is a departure and post-commit progress handling decides what
     that observed world means for target-relative progress.
     """
-    if (channel_motion.active and gauge_receipt.any_forward) or new_trend < frame.distance_before:
+    if (
+        channel_motion.active and earned_work_receipt.any_forward
+    ) or new_trend < frame.distance_before:
         progress = ProgressEffect.ADVANCED
     elif new_trend == frame.distance_before:
         progress = ProgressEffect.PRESERVED
@@ -201,18 +203,18 @@ def assess_outcome(
 
         # The channel did not move.  That is not ambient drift.  Accept only
         # evidence of useful work during the motion: an event-earned
-        # credential (the gauge) or genuinely new prerequisites.  Otherwise
+        # credential (earned work) or genuinely new prerequisites.  Otherwise
         # this was a sterile timeout and must be rejected; treating
         # ``actual != requested`` alone as drift used to commit 10k-scan HELD
         # laps forever.
         #
-        # Gauge-authoritative: trace-trend is a coordinate-relative count that
+        # Earned-work-authoritative: trace-trend is a coordinate-relative count that
         # legitimately drops when the surrounding world shifts, so a frozen
         # channel must never be confirmed off an incidental trend drop — only
-        # the gauge receipt proves earned work here. The honest
+        # the earned-work receipt proves earned work here. The honest
         # rejection is what frees the escalation ladder (terminal let-run,
         # skiff) to earn the holds this coast actually needs.
-        if gauge_receipt.any_forward:
+        if earned_work_receipt.any_forward:
             return TrialAssessment(
                 Agency.PROGRAM,
                 BearingEffect.UNCHANGED,

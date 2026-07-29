@@ -22,7 +22,7 @@ remain active while the program departure is pending.
 The fixture reuses the armed opaque-loop / constant-mask-table skeleton of
 ``test_pilot_table_detour.py`` (the plain-copy sibling never arms the compass
 value graph the detour classifier reads) plus the discrete stepper shape of
-``test_pilot_gauge._step_chain_program`` (the detour needs a gauge component
+``test_pilot_earned_work._step_chain_program`` (the detour needs an earned-work component
 or classification fails closed to regression).
 """
 
@@ -44,7 +44,7 @@ from pyrung import (
     reset,
     rung,
 )
-from pyrung.core.analysis.pilot.gauge import GaugeMovement
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 
 _DWELL_MS = 100
 
@@ -191,7 +191,7 @@ def _door_cycle_program(
             with rung(State == EXECUTE, At101):
                 on_delay(PhaseTmr, _DWELL_MS, "ms")
             # The watchdog becomes eligible only after phase 1 has advanced the
-            # Gauge.  Its later Execute -> Held occurrence must not inherit that
+            # earned work. Its later Execute -> Held occurrence must not inherit that
             # earlier 101 -> 103 work as its own opening receipt.
             with rung(State == EXECUTE, At103, ~i_Door):
                 on_delay(PrematureHoldTmr, 30, "ms")
@@ -392,11 +392,11 @@ def test_door_cycle_premise() -> None:
     assert plc.state.tags[tags["C_Complete"].name] is False
 
 
-def test_stepper_is_a_gauge_component() -> None:
-    """Detour classification fails closed without a gauge; the fixture's
+def test_stepper_is_an_earned_work_component() -> None:
+    """Detour classification fails closed without earned work; the fixture's
     recipe stepper must classify (family B, self-limiting +2 advances)."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.gauge import build_gauge
+    from pyrung.core.analysis.pilot.earned_work import build_earned_work
     from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
@@ -408,7 +408,7 @@ def test_stepper_is_a_gauge_component() -> None:
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
     prover = _build_prover_context(logic, dict(plc.state.tags))
     assert prover.key_config is not None
-    gauge = build_gauge(
+    earned_work = build_earned_work(
         pdg,
         logic,
         tags["State"].name,
@@ -420,8 +420,8 @@ def test_stepper_is_a_gauge_component() -> None:
         channel_tags=frozenset({tags["State"].name}),
         harness=None,
     )
-    by_tag = {c.tag: c for c in gauge.components}
-    assert tags["Step"].name in by_tag, [c.tag for c in gauge.components]
+    by_tag = {c.tag: c for c in earned_work.components}
+    assert tags["Step"].name in by_tag, [c.tag for c in earned_work.components]
     # The prover threshold-absorbs the ``Step == …`` flag comparisons, so the
     # register classifies as family A (ordinal); without that absorption it
     # would classify as family B (stepper). Either carries the detour.
@@ -561,7 +561,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         if observation.reading.occurrence_scan is not None
         and observation.progress.source_mark == ((tags["Step"].name, 103),)
     )
-    assert initial_observation.progress.movement is GaugeMovement.UNCHANGED
+    assert initial_observation.progress.movement is EarnedWorkMovement.UNCHANGED
     assert initial_observation.progress.source_mark == ((tags["Step"].name, 103),)
     assert initial_observation.progress.landing_mark == ((tags["Step"].name, 103),)
     assert initial_observation.reading.external_supports == ((tags["Door"].name, False),)
@@ -582,7 +582,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         rung for rung in reversed(resolution.data["rungs"]) if rung.dest == tags["Door"].name
     )
     # The exact missing-support requirement belongs to the safety producer's
-    # Execute tenure, not to the Step-103 Gauge coordinate. It must survive the
+    # Execute tenure, not to the Step-103 earned-work coordinate. It must survive the
     # recipe advance that discharges that producer and release at the genuine
     # station Hold.
     assert door_correction.guard.evaluate(
@@ -616,12 +616,12 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     # HELD-era 105 -> 107 work can legitimately occur while this station
     # departure settles.  Its source must still be the occurrence's 105—not
     # the coast's earlier 101/103 receipt.
-    assert recipe_started.data["entry_progress"].movement is GaugeMovement.FORWARD
+    assert recipe_started.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
     assert recipe_started.data["entry_progress"].source_mark == ((tags["Step"].name, 105),)
     recipe_promoted = next(
         event for event in events[recipe_index + 1 :] if event.kind == "provisional_promoted"
     )
-    assert recipe_promoted.data["entry_progress"].movement is GaugeMovement.FORWARD
+    assert recipe_promoted.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
     assert recipe_promoted.data["corridor_open"] is True
     assert not any(event.kind == "departure_investigated" for event in events[recipe_index + 1 :])
 

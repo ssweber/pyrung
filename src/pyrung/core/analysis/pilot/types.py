@@ -17,7 +17,7 @@ from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
-from pyrung.core.analysis.pilot.gauge import GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -275,7 +275,7 @@ class DepartureAction(Enum):
 
 
 class DepartureBasis(Enum):
-    """Exceptional policy evidence applied without rewriting gauge facts."""
+    """Exceptional policy evidence applied without rewriting earned-work facts."""
 
     PILOT_CAUSED_REGRESSION = "pilot_caused_regression"
 
@@ -285,7 +285,7 @@ class DepartureDecision:
     """One evidence-based assessment of a pending departure."""
 
     action: DepartureAction
-    receipt: GaugeReceipt
+    receipt: EarnedWorkReceipt
     basis: DepartureBasis | None = None
 
 
@@ -609,11 +609,11 @@ class _PilotState:
     # Reporting-only provenance from the most recently selected current-world
     # bearing. It never feeds Orientation or constrains a later read.
     recorded_root_route: TraceChoice | None = None
-    # The target-relative progress gauge (gauge.py) — event-earned
+    # The target-relative earned-work model (earned_work.py) — event-earned
     # ordinals the threshold-masked search key aliases.  Static knowledge,
-    # built once at loop init; a None/empty gauge degrades consumers (verify
+    # built once at loop init; a None/empty model degrades consumers (verify
     # spin/cycle gates, departure classification) to key-only behavior.
-    gauge: Any = None
+    earned_work: Any = None
     # A clean program departure awaiting stronger progress evidence. It is
     # promoted on advance, regressed only on evidence of loss, and otherwise
     # rolled back on expiry without manufacturing a nogood.
@@ -843,7 +843,7 @@ class _AcceptedTrial:
     attempt: _ExecutedAttempt
     execution: _ExecutionEvidence
     verification: TrialVerification
-    gauge_receipt: GaugeReceipt = field(default_factory=GaugeReceipt)
+    earned_work_receipt: EarnedWorkReceipt = field(default_factory=EarnedWorkReceipt)
     gate_events: tuple[PilotGateEvent, ...] = ()
 
     @property

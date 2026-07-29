@@ -1,4 +1,4 @@
-"""Unit gates for the target-relative progress gauge (pilot/gauge.py)."""
+"""Unit gates for target-relative earned work (pilot/earned_work.py)."""
 
 from __future__ import annotations
 
@@ -19,19 +19,19 @@ from pyrung import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.gauge import GaugeMovement, build_gauge
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, build_earned_work
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 from tests.core.analysis.test_pilot_detour_progress import _knock_three_times_program
 
 
-def _gauge_for(logic, plc, target_tag, channel_tags=frozenset()):
+def _earned_work_for(logic, plc, target_tag, channel_tags=frozenset()):
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
     prover = _build_prover_context(logic, dict(plc.state.tags))
     assert prover.key_config is not None
-    return build_gauge(
+    return build_earned_work(
         pdg,
         logic,
         target_tag,
@@ -46,51 +46,53 @@ def _gauge_for(logic, plc, target_tag, channel_tags=frozenset()):
 
 
 def test_knock_count_is_an_ordinal_component() -> None:
-    """The threshold-absorbed knock counter joins the gauge as an ordinal.
+    """The threshold-absorbed knock counter joins earned work as an ordinal.
 
-    The search key masks ``Knock_Count`` behind ``count < 3``; the gauge
+    The search key masks ``Knock_Count`` behind ``count < 3``; earned work
     carries its raw value so ``(AtDoor, 1) -> (AtDoor, 2)`` reads as an earn.
     """
     logic, _knock, channel, count, *_ = _knock_three_times_program()
     plc = PLC(logic, dt=0.010)
     plc.step()
-    gauge = _gauge_for(logic, plc, channel.name)
+    earned_work = _earned_work_for(logic, plc, channel.name)
 
-    kinds = {c.tag: c.kind for c in gauge.components}
+    kinds = {c.tag: c.kind for c in earned_work.components}
     assert kinds.get(count.name) == "ordinal"
-    assert gauge.receipt({count.name: 1}, {count.name: 2}).any_forward
-    assert not gauge.receipt({count.name: 2}, {count.name: 2}).any_forward
-    assert not gauge.receipt({count.name: 2}, {count.name: 0}).any_forward
+    assert earned_work.receipt({count.name: 1}, {count.name: 2}).any_forward
+    assert not earned_work.receipt({count.name: 2}, {count.name: 2}).any_forward
+    assert not earned_work.receipt({count.name: 2}, {count.name: 0}).any_forward
 
 
-def test_gauge_receipt_keeps_source_landing_and_progress_order() -> None:
+def test_earned_work_receipt_keeps_source_landing_and_progress_order() -> None:
     """A consumer receives the evidence, not only a transient comparison."""
-    from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
+    from pyrung.core.analysis.pilot.earned_work import EarnedWork, EarnedWorkComponent
 
-    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
+    earned_work = EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))
 
-    advanced = gauge.receipt({"Step": 101}, {"Step": 103})
+    advanced = earned_work.receipt({"Step": 101}, {"Step": 103})
     assert advanced.source_mark == (("Step", 101),)
     assert advanced.landing_mark == (("Step", 103),)
-    assert advanced.movement is GaugeMovement.FORWARD
+    assert advanced.movement is EarnedWorkMovement.FORWARD
     assert advanced.any_forward
 
-    assert gauge.receipt({"Step": 103}, {"Step": 103}).movement is GaugeMovement.UNCHANGED
-    assert gauge.receipt({"Step": 103}, {"Step": 101}).movement is GaugeMovement.BACKWARD
-    assert gauge.receipt({}, {"Step": 103}).movement is GaugeMovement.UNKNOWN
-    assert Gauge(()).receipt({}, {}).movement is GaugeMovement.UNKNOWN
+    assert (
+        earned_work.receipt({"Step": 103}, {"Step": 103}).movement is EarnedWorkMovement.UNCHANGED
+    )
+    assert earned_work.receipt({"Step": 103}, {"Step": 101}).movement is EarnedWorkMovement.BACKWARD
+    assert earned_work.receipt({}, {"Step": 103}).movement is EarnedWorkMovement.UNKNOWN
+    assert EarnedWork(()).receipt({}, {}).movement is EarnedWorkMovement.UNKNOWN
 
-    mixed = Gauge(
+    mixed = EarnedWork(
         (
-            GaugeComponent("Step", "stepper", 1),
-            GaugeComponent("Batch", "ordinal", 1),
+            EarnedWorkComponent("Step", "stepper", 1),
+            EarnedWorkComponent("Batch", "ordinal", 1),
         )
     ).receipt({"Step": 3, "Batch": 7}, {"Step": 4, "Batch": 6})
-    assert mixed.movement is GaugeMovement.BACKWARD
+    assert mixed.movement is EarnedWorkMovement.BACKWARD
     assert mixed.any_forward
     assert tuple(reading.movement for reading in mixed.readings) == (
-        GaugeMovement.FORWARD,
-        GaugeMovement.BACKWARD,
+        EarnedWorkMovement.FORWARD,
+        EarnedWorkMovement.BACKWARD,
     )
 
 
@@ -137,10 +139,10 @@ def test_step_chain_stepper_with_alias_resolved_reset() -> None:
     logic, Step, Mode, Done = _step_chain_program()
     plc = PLC(logic, dt=0.010)
     plc.step()
-    gauge = _gauge_for(logic, plc, Done.name, channel_tags=frozenset({Mode.name}))
+    earned_work = _earned_work_for(logic, plc, Done.name, channel_tags=frozenset({Mode.name}))
 
-    by_tag = {c.tag: c for c in gauge.components}
-    assert Step.name in by_tag, [c.tag for c in gauge.components]
+    by_tag = {c.tag: c for c in earned_work.components}
+    assert Step.name in by_tag, [c.tag for c in earned_work.components]
     component = by_tag[Step.name]
     assert component.kind == "stepper"
     assert component.direction == 1
@@ -152,13 +154,19 @@ def test_step_chain_stepper_with_alias_resolved_reset() -> None:
     assert reset.value == 1
     assert reset.channel_tag == Mode.name
     assert reset.enabling_channel_values == (15,)
-    assert not gauge.has_banked_work({Step.name: 1})
-    assert gauge.has_banked_work({Step.name: 2})
+    assert not earned_work.has_banked_work({Step.name: 1})
+    assert earned_work.has_banked_work({Step.name: 2})
 
     # Anchor-relative readings: forward, unchanged, and backward.
-    assert gauge.receipt({Step.name: 2}, {Step.name: 3}).movement is GaugeMovement.FORWARD
-    assert gauge.receipt({Step.name: 2}, {Step.name: 2}).movement is GaugeMovement.UNCHANGED
-    assert gauge.receipt({Step.name: 2}, {Step.name: 1}).movement is GaugeMovement.BACKWARD
+    assert (
+        earned_work.receipt({Step.name: 2}, {Step.name: 3}).movement is EarnedWorkMovement.FORWARD
+    )
+    assert (
+        earned_work.receipt({Step.name: 2}, {Step.name: 2}).movement is EarnedWorkMovement.UNCHANGED
+    )
+    assert (
+        earned_work.receipt({Step.name: 2}, {Step.name: 1}).movement is EarnedWorkMovement.BACKWARD
+    )
 
 
 def _banked_reset_alternative_program(*, initial_step: int):
@@ -179,7 +187,7 @@ def _banked_reset_alternative_program(*, initial_step: int):
             latch(Done)
         # The destructive effect is a separate program consequence of the same
         # action. Candidate construction sees an ordinary target writer; the
-        # interpreted trial and gauge own the whole-world verdict.
+        # interpreted trial and earned work own the whole-world verdict.
         with rung(ResetTarget):
             copy(1, Step)
         with rung(SafeTarget):
@@ -240,7 +248,7 @@ def test_reset_at_its_floor_is_not_rejected_as_banked_work() -> None:
     )
 
 
-def test_level_driven_counter_stays_out_of_the_gauge() -> None:
+def test_level_driven_counter_stays_out_of_the_earned_work() -> None:
     """A free-running accumulator (level guard, no event) must not earn.
 
     The key config is fabricated (the tiny program is beneath the prover's
@@ -271,7 +279,7 @@ def test_level_driven_counter_stays_out_of_the_gauge() -> None:
         threshold_vector_specs=(),
         acc_indices=frozenset(),
     )
-    gauge = build_gauge(
+    earned_work = build_earned_work(
         pdg,
         logic,
         Done.name,
@@ -283,4 +291,4 @@ def test_level_driven_counter_stays_out_of_the_gauge() -> None:
         channel_tags=frozenset(),
         harness=None,
     )
-    assert Count.name not in {c.tag for c in gauge.components}
+    assert Count.name not in {c.tag for c in earned_work.components}

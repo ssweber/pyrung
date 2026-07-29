@@ -132,7 +132,7 @@ this table only locates the owner.
   `TraceReadConstraints.from_context` may propose a coupling driver;
   `verify.py::_gate_dead_end` deliberately omits that model
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`
-- Target-relative movement: `gauge.py::Gauge.receipt`; verification owns the
+- Target-relative movement: `earned_work.py::EarnedWork.receipt`; verification owns the
   accepted trial's receipt
 - Departure observation and classification: `detour.py::classify_departure`
 - Evidence classification: `outcome.py::assess_outcome`;
@@ -181,7 +181,7 @@ knowledge that must survive:
 - `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
   dwell accounting.
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
-  recovery, gauge, correction receipts/revocations, and diagnostic history.
+  recovery, earned work, correction receipts/revocations, and diagnostic history.
 - `CompassKnowledge`: empirical transitions/tombstones, scoped nogoods, probe
   budgets/results, coast receipts, and static-edge evidence overlays.
 - `_PilotContext`: static program analysis plus the current persistent
@@ -259,7 +259,7 @@ Judgment and recovery:
 - `outcome.py` — evidence classification
 - `progress.py` — retention, recovery, corrections, reverts
 - `detour.py` — departure observation and classification
-- `gauge.py` — target-relative earned-work marks
+- `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
 - `investigate.py` — hypothesis replay and confirmation
 - `corrections.py` — corrective-hold hypothesis derivation
@@ -289,7 +289,7 @@ plain language on first use.
 - **frontier** — unresolved non-steerable requirements in the selected trace
   tree.
 - **cone** — a region of tags upstream of a requirement.
-- **gauge** — conservative target-relative evidence of earned work.
+- **earned work** — conservative target-relative evidence of completed target work.
 
 Avoid extending the nautical metaphor in technical contracts. Words such as
 captain, vessel, reef, shipyard, and waters add a translation step without

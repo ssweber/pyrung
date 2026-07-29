@@ -1,7 +1,7 @@
 """Observe and classify a channel departure for post-commit recovery.
 
 ``classify_departure`` settles the landing under the active holds, compares
-target-relative gauge evidence, and inspects static routes for reset boundaries
+target-relative earned-work evidence, and inspects static routes for reset boundaries
 or completed channel actions that would have to be repeated. The immutable
 ``DepartureObservation`` keeps those exact source receipts together; the
 short-lived ``DepartureResult`` adds the classification and the mutable fork
@@ -41,7 +41,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     StaticEdgeAdmission,
     Unknown,
 )
-from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 from pyrung.core.analysis.sp_values import _values_match
@@ -69,7 +69,7 @@ class DepartureReading:
 
     ``cause`` remains the sole owner of causal reconstruction.  This receipt
     only names the exact request producer(s) already present in that chain,
-    partitions their supports at target-owned Gauge accomplishments.
+    partitions their supports at target-owned EarnedWork accomplishments.
     """
 
     disposition: DepartureDisposition
@@ -119,7 +119,7 @@ class DepartureObservation:
     from_value: Any
     settled_value: Any
     landing_receipt: CoastReceipt
-    progress: GaugeReceipt
+    progress: EarnedWorkReceipt
     reading: DepartureReading
     continuation: ContinuationEvidence
 
@@ -170,7 +170,7 @@ def _completed_channel_actions(
 
 
 def _progress_erasing_values(
-    gauge: Any,
+    earned_work: Any,
     anchor_snap: Any,
     channel_tag: str,
 ) -> tuple[frozenset[Any], bool]:
@@ -183,7 +183,7 @@ def _progress_erasing_values(
     """
     blocked: set[Any] = set()
     all_resolved = True
-    for component in getattr(gauge, "components", ()) or ():
+    for component in getattr(earned_work, "components", ()) or ():
         anchor_value = anchor_snap.get(component.tag)
         for reset in component.resets:
             if reset.init_only:
@@ -374,7 +374,7 @@ def _departure_reading(
     channel_tag: str,
     settled_value: Any,
     occurrence_scan: int | None,
-    gauge: Any,
+    earned_work: Any,
 ) -> DepartureReading:
     """Interpret exact cause identity against the selected target work."""
     source_scan = chain.effect.scan_id - 1 if chain is not None else None
@@ -395,9 +395,9 @@ def _departure_reading(
     )
     producer_rungs = _request_producer_rungs(chain, role)
     accomplishments = frozenset(
-        component.tag for component in getattr(gauge, "components", ()) or ()
+        component.tag for component in getattr(earned_work, "components", ()) or ()
     )
-    has_target_gauge = bool(accomplishments)
+    has_target_earned_work = bool(accomplishments)
     external_supports = (
         occurrence_external_supports(
             chain,
@@ -405,10 +405,10 @@ def _departure_reading(
             getattr(ctx, "steerable", frozenset()),
             accomplishments,
         )
-        if has_target_gauge
+        if has_target_earned_work
         else ()
     )
-    if producer_rungs and has_target_gauge and not external_supports:
+    if producer_rungs and has_target_earned_work and not external_supports:
         disposition = DepartureDisposition.OWNED
         reason = "exact departure producer is bounded by target Gauge accomplishments"
     elif external_supports:
@@ -457,11 +457,11 @@ def classify_departure(
         anchor_snap = dict(source_snap)
     fork, receipt = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
-    gauge = getattr(state, "gauge", None)
+    earned_work = getattr(state, "earned_work", None)
     progress = (
-        gauge.receipt(anchor_snap, dict(fork.state.tags))
-        if gauge is not None and getattr(gauge, "components", ())
-        else GaugeReceipt()
+        earned_work.receipt(anchor_snap, dict(fork.state.tags))
+        if earned_work is not None and getattr(earned_work, "components", ())
+        else EarnedWorkReceipt()
     )
     reading = _departure_reading(
         chain,
@@ -469,7 +469,7 @@ def classify_departure(
         channel_tag,
         settled_value,
         occurrence_scan,
-        gauge,
+        earned_work,
     )
 
     def _result(
@@ -523,7 +523,7 @@ def classify_departure(
             _not_inspected(reason),
         )
 
-    if progress.movement is GaugeMovement.BACKWARD:
+    if progress.movement is EarnedWorkMovement.BACKWARD:
         reason = "settled world is behind the exact source receipt"
         return _result(
             DepartureClassification.REGRESSION,
@@ -537,7 +537,7 @@ def classify_departure(
             goals.append(value)
 
     progress_erasing_values, all_resolved = _progress_erasing_values(
-        gauge,
+        earned_work,
         anchor_snap,
         channel_tag,
     )
@@ -589,7 +589,7 @@ def classify_departure(
 
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
-    # progress is structural (state + command handshake) and exposes no gauge.
+    # progress is structural (state + command handshake) and exposes no earned work.
     from pyrung.core.analysis.pilot.types import WorldView
 
     awaited_action_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")

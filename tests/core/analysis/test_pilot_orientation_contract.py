@@ -341,7 +341,7 @@ def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> 
                 )
             ),
         ),
-        gauge=None,
+        earned_work=None,
     )
 
     assert _current_work_evidence(frame, state, None) == ("operation:Heat_CurStep",)

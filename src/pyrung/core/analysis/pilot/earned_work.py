@@ -1,13 +1,13 @@
 """Measure conservative, target-relative work that search keys may alias.
 
-``build_gauge`` recognizes retained ordinal and stepper registers whose writers
-all have classifiable discrete provenance. A ``Gauge`` compares marks across
+``build_earned_work`` recognizes retained ordinal and stepper registers whose writers
+all have classifiable discrete provenance. An ``EarnedWork`` compares marks across
 worlds and exposes reset boundaries used by verification and departure
 classification.
 
 If any effective writer of a component is unclassifiable, that component is
 omitted. Consumers receive unknown rather than inferred progress from an
-incomplete gauge.
+incomplete earned-work model.
 """
 
 from __future__ import annotations
@@ -58,14 +58,14 @@ class _ResetWriter:
 
 
 @dataclass(frozen=True)
-class GaugeComponent:
+class EarnedWorkComponent:
     tag: str
     kind: str  # "ordinal" | "stepper"
     direction: int  # +1 / -1 — the earn direction
     resets: tuple[_ResetWriter, ...] = ()
 
 
-class GaugeMovement(StrEnum):
+class EarnedWorkMovement(StrEnum):
     """Observed target-relative motion, without a policy judgment."""
 
     FORWARD = "forward"
@@ -75,8 +75,8 @@ class GaugeMovement(StrEnum):
 
 
 @dataclass(frozen=True)
-class GaugeReading:
-    """One gauge component observed across one world transition."""
+class EarnedWorkReading:
+    """One earned-work component observed across one world transition."""
 
     tag: str
     source: Any
@@ -84,27 +84,27 @@ class GaugeReading:
     direction: int
 
     @property
-    def movement(self) -> GaugeMovement:
+    def movement(self) -> EarnedWorkMovement:
         if (
             isinstance(self.source, bool)
             or isinstance(self.landing, bool)
             or not isinstance(self.source, (int, float))
             or not isinstance(self.landing, (int, float))
         ):
-            return GaugeMovement.UNKNOWN
+            return EarnedWorkMovement.UNKNOWN
         delta = (self.landing - self.source) * self.direction
         if delta < 0:
-            return GaugeMovement.BACKWARD
+            return EarnedWorkMovement.BACKWARD
         if delta > 0:
-            return GaugeMovement.FORWARD
-        return GaugeMovement.UNCHANGED
+            return EarnedWorkMovement.FORWARD
+        return EarnedWorkMovement.UNCHANGED
 
 
 @dataclass(frozen=True)
-class GaugeReceipt:
+class EarnedWorkReceipt:
     """Auditable target-relative movement across one world transition."""
 
-    readings: tuple[GaugeReading, ...] = ()
+    readings: tuple[EarnedWorkReading, ...] = ()
 
     @property
     def source_mark(self) -> tuple[tuple[str, Any], ...]:
@@ -115,48 +115,48 @@ class GaugeReceipt:
         return tuple((reading.tag, reading.landing) for reading in self.readings)
 
     @property
-    def movement(self) -> GaugeMovement:
+    def movement(self) -> EarnedWorkMovement:
         movements = tuple(reading.movement for reading in self.readings)
-        if GaugeMovement.BACKWARD in movements:
-            return GaugeMovement.BACKWARD
-        if GaugeMovement.FORWARD in movements:
-            return GaugeMovement.FORWARD
-        if not movements or GaugeMovement.UNKNOWN in movements:
-            return GaugeMovement.UNKNOWN
-        return GaugeMovement.UNCHANGED
+        if EarnedWorkMovement.BACKWARD in movements:
+            return EarnedWorkMovement.BACKWARD
+        if EarnedWorkMovement.FORWARD in movements:
+            return EarnedWorkMovement.FORWARD
+        if not movements or EarnedWorkMovement.UNKNOWN in movements:
+            return EarnedWorkMovement.UNKNOWN
+        return EarnedWorkMovement.UNCHANGED
 
     @property
     def any_forward(self) -> bool:
-        return any(reading.movement is GaugeMovement.FORWARD for reading in self.readings)
+        return any(reading.movement is EarnedWorkMovement.FORWARD for reading in self.readings)
 
 
-def legacy_movement(movement: GaugeMovement) -> str:
+def legacy_earned_work_movement(movement: EarnedWorkMovement) -> str:
     """Project plain movement names onto stable event-payload vocabulary."""
     return {
-        GaugeMovement.FORWARD: "advanced",
-        GaugeMovement.BACKWARD: "behind",
-        GaugeMovement.UNCHANGED: "preserved",
-        GaugeMovement.UNKNOWN: "unknown",
+        EarnedWorkMovement.FORWARD: "advanced",
+        EarnedWorkMovement.BACKWARD: "behind",
+        EarnedWorkMovement.UNCHANGED: "preserved",
+        EarnedWorkMovement.UNKNOWN: "unknown",
     }[movement]
 
 
 @dataclass(frozen=True)
-class Gauge:
-    components: tuple[GaugeComponent, ...]
+class EarnedWork:
+    components: tuple[EarnedWorkComponent, ...]
 
     @property
     def tags(self) -> tuple[str, ...]:
         return tuple(c.tag for c in self.components)
 
     def mark(self, snap: Any) -> tuple[tuple[str, Any], ...]:
-        """The gauge receipt for one snapshot."""
+        """The earned-work mark for one snapshot."""
         return tuple((c.tag, snap.get(c.tag)) for c in self.components)
 
-    def receipt(self, source: Any, landing: Any) -> GaugeReceipt:
+    def receipt(self, source: Any, landing: Any) -> EarnedWorkReceipt:
         """Freeze the target-relative work comparison for one transition."""
-        return GaugeReceipt(
+        return EarnedWorkReceipt(
             tuple(
-                GaugeReading(
+                EarnedWorkReading(
                     tag=component.tag,
                     source=source.get(component.tag),
                     landing=landing.get(component.tag),
@@ -403,7 +403,7 @@ def _is_init_only(rn: Any, ro: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def build_gauge(
+def build_earned_work(
     pdg: ProgramGraph,
     program: Any,
     target_tag: str,
@@ -415,11 +415,11 @@ def build_gauge(
     pipeline_internal_tags: frozenset[str],
     channel_tags: frozenset[str],
     harness: Any = None,
-) -> Gauge:
-    """Build the target-relative gauge (see module docstring).
+) -> EarnedWork:
+    """Build the target-relative earned-work model (see module docstring).
 
     Conservative on every axis: unknown writer shapes, unresolvable guards, or
-    mixed stride directions omit the tag; an empty gauge is a valid answer
+    mixed stride directions omit the tag; an empty model is a valid answer
     (downstream verdicts then say ``unknown`` instead of guessing).
     """
     from pyrung.core.analysis.pilot.advance import iter_advance_owners
@@ -453,7 +453,7 @@ def build_gauge(
         | frozenset(profile_acc_names)
     )
 
-    components: list[GaugeComponent] = []
+    components: list[EarnedWorkComponent] = []
 
     # ── Family A: threshold-absorbed monotone sources (ordinal overlay) ──
     ordinal_candidates: dict[str, int] = {}
@@ -470,7 +470,7 @@ def build_gauge(
         )
         if verdict is not None:
             components.append(
-                GaugeComponent(tag=tag, kind="ordinal", direction=direction, resets=verdict)
+                EarnedWorkComponent(tag=tag, kind="ordinal", direction=direction, resets=verdict)
             )
 
     # ── Family B: discrete stepper registers ──
@@ -487,17 +487,17 @@ def build_gauge(
         )
         if verdict is not None:
             components.append(
-                GaugeComponent(tag=tag, kind="stepper", direction=direction, resets=verdict)
+                EarnedWorkComponent(tag=tag, kind="stepper", direction=direction, resets=verdict)
             )
 
-    gauge = Gauge(components=tuple(components))
+    earned_work = EarnedWork(components=tuple(components))
     if components:
         logger.debug(
-            "gauge for %s: %s",
+            "earned work for %s: %s",
             target_tag,
             ", ".join(f"{c.tag}[{c.kind}{'+' if c.direction > 0 else '-'}]" for c in components),
         )
-    return gauge
+    return earned_work
 
 
 def _stepper_shapes(tag: str, pdg: ProgramGraph, program: Any) -> dict[str, Any] | None:

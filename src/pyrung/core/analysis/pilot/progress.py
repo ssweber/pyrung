@@ -1,10 +1,10 @@
 """Retain, continue, or revert a committed trial world.
 
 After a trial passes verification, this module compares target distance and
-gauge marks, updates checkpoints, and classifies program-owned departures.
+earned-work marks, updates checkpoints, and classifies program-owned departures.
 Regression handling builds an incident, replay-validates corrective hypotheses,
 installs at most one surviving correction, and restores the appropriate
-checkpoint. A clean departure may remain pending until later gauge evidence
+checkpoint. A clean departure may remain pending until later earned-work evidence
 promotes it or requires rollback. The terminal channel-departure handler owns
 that event stream and policy arm after trend monitoring detects the occurrence.
 
@@ -40,10 +40,10 @@ from pyrung.core.analysis.pilot.detour import (
     DepartureResult,
     classify_departure,
 )
-from pyrung.core.analysis.pilot.gauge import (
-    GaugeMovement,
-    GaugeReceipt,
-    legacy_movement,
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWorkMovement,
+    EarnedWorkReceipt,
+    legacy_earned_work_movement,
 )
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationRejection,
@@ -162,16 +162,16 @@ def _trial_checkpoint(
 def _provisional_payload(
     pending: PendingDeparture,
     *,
-    before_gauge: Mapping[str, Any] | None = None,
-    after_gauge: Mapping[str, Any] | None = None,
+    before_source_mark_fields: Mapping[str, Any] | None = None,
+    after_source_mark_fields: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Shared pending-departure fields with stable transcript key order."""
     return {
         "channel_tag": pending.opening.channel_tag,
         "from_value": pending.opening.from_value,
-        **dict(before_gauge or {}),
+        **dict(before_source_mark_fields or {}),
         "gauge_at_source": pending.progress_mark,
-        **dict(after_gauge or {}),
+        **dict(after_source_mark_fields or {}),
     }
 
 
@@ -334,7 +334,7 @@ def _monitor_trend(
             # Trace distance says this reading exposes fewer open leaves. That
             # is useful locally, but it is not a receipt for program work and
             # therefore cannot close an unresolved departure. Keep the local
-            # checkpoint so piloting can continue; Gauge alone decides whether
+            # checkpoint so piloting can continue; earned work alone decides whether
             # the departed corridor earned anything durable.
             state.checkpoints.append(_trial_checkpoint(trial, state))
             state.best_trend = verified.trend
@@ -445,7 +445,7 @@ def _handle_channel_departure(
         },
     )
     # Classify BEFORE investigating (detour.py): program-owned motion may
-    # preserve the progress gauge and offer a clean forward route. Reverting
+    # preserve earned work and offer a clean forward route. Reverting
     # it would throw away the whole march, and investigation would honestly
     # confirm nothing. Affirmative clean-route evidence opens bounded pending
     # piloting; regression or unknown evidence follows the conservative
@@ -475,7 +475,7 @@ def _handle_channel_departure(
     if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
         prescribed_departure = trial.route_prescribed and verified.assessment.agency is Agency.PILOT
         if (
-            observation.progress.movement is GaugeMovement.UNCHANGED
+            observation.progress.movement is EarnedWorkMovement.UNCHANGED
             and not prescribed_departure
             and (
                 state.pending_departure is not None
@@ -596,7 +596,7 @@ def _open_pending_departure(
 ) -> tuple[PilotEvent, ...]:
     """Record a clean departure whose progress is not yet conclusive."""
     observation = departure.observation
-    gauge = state.gauge
+    earned_work = state.earned_work
     # The exact pre-coast world remains the replay/rollback receipt. Settle the
     # landing before marking progress: movement completed by the departing
     # operation belongs to that operation, not to the state it happened to land
@@ -604,7 +604,9 @@ def _open_pending_departure(
     # staying there.
     _adopt_settled_departure(departure, state)
     progress_mark = (
-        gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
+        earned_work.mark(dict(state.work.state.tags))
+        if earned_work is not None and earned_work.components
+        else ()
     )
     search_scans = state.search_scans
     state.pending_departure = PendingDeparture(
@@ -698,13 +700,13 @@ def _record_pending_landing(
         or state.checkpoints[-1].owner is not pending.rollback_owner
     ):
         return ()
-    gauge = state.gauge
+    earned_work = state.earned_work
     progress = pending.opening.progress
-    if progress.movement not in {GaugeMovement.FORWARD, GaugeMovement.BACKWARD}:
+    if progress.movement not in {EarnedWorkMovement.FORWARD, EarnedWorkMovement.BACKWARD}:
         progress = (
-            gauge.receipt(dict(pending.progress_mark), frame.snap)
-            if gauge is not None
-            else GaugeReceipt()
+            earned_work.receipt(dict(pending.progress_mark), frame.snap)
+            if earned_work is not None
+            else EarnedWorkReceipt()
         )
     receipt = _Checkpoint(
         frame.key,
@@ -714,8 +716,8 @@ def _record_pending_landing(
     )
     state.checkpoints.append(receipt)
     state.best_trend = frame.distance_before
-    if progress.movement is GaugeMovement.FORWARD:
-        landing_mark = gauge.mark(frame.snap) if gauge is not None else ()
+    if progress.movement is EarnedWorkMovement.FORWARD:
+        landing_mark = earned_work.mark(frame.snap) if earned_work is not None else ()
         # Save the work without closing the pending departure. The Held
         # checkpoint is now the rollback floor, while pending state gives the next
         # Unhold/rejoin transaction its ordinary local recovery semantics.
@@ -731,7 +733,7 @@ def _record_pending_landing(
                 state.work.state.scan_id,
                 _provisional_payload(
                     pending,
-                    after_gauge={
+                    after_source_mark_fields={
                         "entry_progress": pending.opening.progress,
                         "landing_mark": landing_mark,
                         "trend": frame.distance_before,
@@ -767,10 +769,12 @@ def _assess_pending_departure(
         ctx.target.value,
         ctx.target.predicate,
     )
-    gauge = state.gauge
+    earned_work = state.earned_work
     anchor = dict(pending.progress_mark)
-    progress = gauge.receipt(anchor, now_snap) if gauge is not None else GaugeReceipt()
-    # A gauge may advance on the same scan that a pilot act drives the machine
+    progress = (
+        earned_work.receipt(anchor, now_snap) if earned_work is not None else EarnedWorkReceipt()
+    )
+    # Earned work may advance on the same scan that a pilot act drives the machine
     # into a worse target-relative world (for example, a recipe step increments
     # while an unsafe Unhold enters Aborted). Trial attribution is the narrower
     # causal fact and must win over that incidental ordinal movement.
@@ -792,9 +796,9 @@ def _assess_pending_departure(
             progress,
             DepartureBasis.PILOT_CAUSED_REGRESSION,
         )
-    if progress.movement is GaugeMovement.BACKWARD:
+    if progress.movement is EarnedWorkMovement.BACKWARD:
         return DepartureDecision(DepartureAction.REGRESS, progress)
-    if progress.movement is GaugeMovement.FORWARD:
+    if progress.movement is EarnedWorkMovement.FORWARD:
         return DepartureDecision(DepartureAction.PROMOTE, progress)
     if state.search_scans < pending.expires_at_search_scan:
         return DepartureDecision(DepartureAction.WAIT, progress)
@@ -805,7 +809,7 @@ def _departure_event_outcome(decision: DepartureDecision) -> str:
     """Keep public transcript vocabulary while policy carries typed evidence."""
     if decision.basis is DepartureBasis.PILOT_CAUSED_REGRESSION:
         return "behind"
-    return legacy_movement(decision.receipt.movement)
+    return legacy_earned_work_movement(decision.receipt.movement)
 
 
 def _apply_departure_decision(
@@ -843,9 +847,11 @@ def _apply_departure_decision(
                 state.work.state.scan_id,
                 _provisional_payload(
                     pending,
-                    after_gauge={
+                    after_source_mark_fields={
                         "landing_mark": (
-                            state.gauge.mark(trial.fork_snap) if state.gauge is not None else ()
+                            state.earned_work.mark(trial.fork_snap)
+                            if state.earned_work is not None
+                            else ()
                         ),
                         "outcome": _departure_event_outcome(decision),
                         "trend": promoted_trend,
@@ -863,7 +869,7 @@ def _apply_departure_decision(
             state.work.state.scan_id,
             _provisional_payload(
                 pending,
-                before_gauge={"outcome": _departure_event_outcome(decision)},
+                before_source_mark_fields={"outcome": _departure_event_outcome(decision)},
             ),
         )
         regression = _investigate_and_revert(
@@ -892,7 +898,7 @@ def _apply_departure_decision(
             state.work.state.scan_id,
             _provisional_payload(
                 pending,
-                before_gauge={"outcome": _departure_event_outcome(decision)},
+                before_source_mark_fields={"outcome": _departure_event_outcome(decision)},
             ),
         ),
     )
@@ -1235,7 +1241,7 @@ def _investigate_and_revert(
         regression_witness = incident_regression_witness(trial.fork, incident)
         # A corrective fact belongs to the occurrence that exposed it. The
         # witness carries the scan-entry snapshot for the harmful writer; its
-        # Gauge coordinates distinguish a late fault from earlier useful work
+        # Earned-work coordinates distinguish a late fault from earlier useful work
         # inside the same coast. The rollback checkpoint is only where replay
         # starts and is not corrective context.
         correction_anchor = (
@@ -1244,8 +1250,8 @@ def _investigate_and_revert(
             else incident.before_snap
         )
         correction_progress_mark = (
-            state.gauge.mark(dict(correction_anchor))
-            if state.gauge is not None and state.gauge.components
+            state.earned_work.mark(dict(correction_anchor))
+            if state.earned_work is not None and state.earned_work.components
             else ()
         )
         regression_progress_floor = dict(cp_fork.state.tags)
@@ -1282,7 +1288,7 @@ def _investigate_and_revert(
                 ),
                 departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
                 regression_witness=regression_witness,
-                progress_gauge=state.gauge,
+                earned_work=state.earned_work,
                 progress_anchor=dict(cp_fork.state.tags),
                 regression_progress_floor=(
                     regression_progress_floor if correction_progress_mark else None
@@ -1356,7 +1362,7 @@ def _investigate_and_revert(
             "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
         }
     if retain_if_unresolved is not None and confirmed_correction is None and not revoked_receipts:
-        # The departure earned no gauge credit, but investigation also found no
+        # The departure earned no target-relative credit, but investigation found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary
         # bounded pending window. If one is already open, retain its
