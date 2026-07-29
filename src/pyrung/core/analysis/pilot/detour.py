@@ -162,7 +162,7 @@ def _completed_channel_actions(
     and pulse steps therefore carry the same exact channel context."""
     out: set[tuple[str, Any, Any]] = set()
     for act in state.committed_acts:
-        context = act.context.before_snap.get(channel_tag)
+        context = act.context.execution.before_snap.get(channel_tag)
         for step in act.steps:
             for tag, value in step.inputs.items():
                 out.add((tag, value, context))

@@ -330,13 +330,15 @@ def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> 
         committed_acts=(
             SimpleNamespace(
                 context=SimpleNamespace(
-                    before_snap={"Heat_tmr_Acc": 0, "Heat_CurStep": 1},
-                    after_snap={"Heat_tmr_Acc": 2, "Heat_CurStep": 2},
-                    frontier_tags=("Heat_tmr_Acc",),
-                    channel_tag="Heat_tmr_Acc",
-                    motion=SimpleNamespace(
-                        value="coast-to-bearing",
-                        is_coast=True,
+                    policy=SimpleNamespace(
+                        motion=SimpleNamespace(
+                            value="coast-to-bearing",
+                            is_coast=True,
+                        ),
+                    ),
+                    execution=SimpleNamespace(
+                        before_snap={"Heat_tmr_Acc": 0, "Heat_CurStep": 1},
+                        after_snap={"Heat_tmr_Acc": 2, "Heat_CurStep": 2},
                     ),
                 )
             ),

@@ -1233,7 +1233,7 @@ def _investigate_and_revert(
         window_timeline = tuple(
             event
             for act in state.committed_acts
-            for event in act.context.timeline
+            for event in act.context.execution.timeline
             if origin.anchor_scan <= event.scan <= end_scan
         )
         incident = build_deviation_incident(

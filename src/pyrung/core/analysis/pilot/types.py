@@ -470,38 +470,6 @@ class _StepContext:
     control_rungs: tuple[Any, ...] = ()
 
     @property
-    def candidate(self) -> dict[str, Any]:
-        return dict(self.policy.action_pairs)
-
-    @property
-    def motion(self) -> MotionKind:
-        return self.policy.motion
-
-    @property
-    def channel_tag(self) -> str | None:
-        return self.execution.channel_motion.channel_tag
-
-    @property
-    def channel_target(self) -> Any:
-        return self.execution.channel_motion.target_value
-
-    @property
-    def before_snap(self) -> Mapping[str, Any]:
-        return self.execution.before_snap
-
-    @property
-    def after_snap(self) -> Mapping[str, Any]:
-        return self.execution.after_snap
-
-    @property
-    def timeline(self) -> tuple[CoastTriggerEvent, ...]:
-        return self.execution.timeline
-
-    @property
-    def accelerators(self) -> tuple[_ActionPair, ...]:
-        return self.execution.accelerators
-
-    @property
     def steady_holds(self) -> tuple[str, ...]:
         """Concise view derived from the exact executable rung evidence."""
         return tuple(dict.fromkeys(rung.dest for rung in self.control_rungs))

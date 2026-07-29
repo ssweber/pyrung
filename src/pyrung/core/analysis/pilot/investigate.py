@@ -160,15 +160,16 @@ def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
         MotionKind.INTERVENTION: "pulse",
         MotionKind.COAST_TO_BEARING: "zoom",
         MotionKind.COAST_HOLDING_WORLD: "letrun",
-    }[context.motion]
-    if kind == "zoom" and context.channel_tag is None:
+    }[context.policy.motion]
+    channel_motion = context.execution.channel_motion
+    if kind == "zoom" and channel_motion.channel_tag is None:
         kind = "dwell"
     return ReplayStep(
         inputs=tuple(step.inputs.items()),
         scans=step.scans,
         kind=kind,
-        channel_tag=context.channel_tag,
-        channel_target=context.channel_target,
+        channel_tag=channel_motion.channel_tag,
+        channel_target=channel_motion.target_value,
     )
 
 

@@ -166,9 +166,9 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
     committed = tuple(getattr(state, "committed_acts", ()))
     if committed:
         context = committed[-1].context
-        before = context.before_snap
-        after = context.after_snap
-        if getattr(context.motion, "is_coast", False):
+        before = context.execution.before_snap
+        after = context.execution.after_snap
+        if getattr(context.policy.motion, "is_coast", False):
             tree_tags = {node.tag for node in frame.tree.iter_nodes()}
             for tag, value in after.items():
                 if (

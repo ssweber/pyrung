@@ -362,12 +362,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     context = state.committed_acts[-1].context
     assert context.execution is trial.execution
     assert context.policy is trial.attempt.bearing.act.policy
-    assert context.candidate == dict(trial.attempt.bearing.act.policy.action_pairs)
-    assert context.motion is trial.attempt.bearing.act.policy.motion
-    assert context.before_snap is trial.execution.before_snap
-    assert context.after_snap is trial.execution.after_snap
-    assert context.timeline is trial.execution.timeline
-    assert context.accelerators == (("Acc", 7),)
+    assert context.execution.accelerators == (("Acc", 7),)
 
     state.extend_last_step(fork.state.scan_id + 3)
     assert state.committed_acts[-1].context.execution is trial.execution

@@ -170,9 +170,11 @@ def _frontier_clause(frame: _IterationFrame | None) -> str:
 
 def _format_transition(sc: _StepContext, channel_tags: frozenset[str]) -> str:
     """Render the first changed semantic channel register."""
-    for tag in sorted((set(sc.before_snap) | set(sc.after_snap)) & channel_tags):
-        before = sc.before_snap.get(tag)
-        after = sc.after_snap.get(tag)
+    before_snap = sc.execution.before_snap
+    after_snap = sc.execution.after_snap
+    for tag in sorted((set(before_snap) | set(after_snap)) & channel_tags):
+        before = before_snap.get(tag)
+        after = after_snap.get(tag)
         if before != after:
             return f"{tag} {_display_value(before)} -> {_display_value(after)}"
     return ""
@@ -221,12 +223,12 @@ def _build_plan_journal(
         sc = act.context
         first_step = act.steps[0]
         semantic_step = act.steps[-1]
-        is_coast = sc.motion.is_coast
+        is_coast = sc.policy.motion.is_coast
         transition = _format_transition(sc, channel_tags)
         span = semantic_step.scan_after - first_step.scan_before
 
         if is_coast:
-            accel: list[tuple[str, Any]] = list(sc.accelerators)
+            accel: list[tuple[str, Any]] = list(sc.execution.accelerators)
             # Compatibility for ordinary runner folds, whose fold receipt does
             # not yet carry exact edits. CycleFold receipts are authoritative
             # and avoid mistaking program-owned accumulator resets for jumps.
@@ -257,7 +259,7 @@ def _build_plan_journal(
                         scan=first_step.scan_before,
                         scans=span,
                         inputs=(),
-                        label=sc.channel_tag or "",
+                        label=sc.execution.channel_motion.channel_tag or "",
                         transition=transition,
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
@@ -273,10 +275,15 @@ def _build_plan_journal(
                 if not (
                     isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )
-                and not _controlled_at(first_step.scan_before, tag, val, sc.before_snap)
+                and not _controlled_at(
+                    first_step.scan_before,
+                    tag,
+                    val,
+                    sc.execution.before_snap,
+                )
             ]
             if command_inputs:
-                decision_tags = sorted(sc.candidate)
+                decision_tags = sorted(dict(sc.policy.action_pairs))
                 label = ", ".join(decision_tags) if decision_tags else ""
                 entries.append(
                     (
