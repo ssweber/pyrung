@@ -889,8 +889,6 @@ def _apply_pulse(
 
 def _settle_delayed_effects(
     fork: PLC,
-    before_snap: dict[str, Any],
-    cfg: _StateKeyConfig | None,
     *,
     scan_budget: int = 2000,
     session: Any = None,
@@ -916,7 +914,6 @@ def _settle_delayed_effects(
         predicate_trigger,
     )
 
-    del before_snap, cfg
     budget = scan_budget
     receipts: list[CoastReceipt] = []
     if session is None:

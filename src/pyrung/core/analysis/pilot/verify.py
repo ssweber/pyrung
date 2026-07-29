@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pyrung.core.analysis.pilot._ops import (
     _avoid_snap_names,
@@ -48,9 +48,6 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.sp_values import _values_match
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +130,6 @@ def _accepted_trial(
         gate_events=tuple(gate_events),
         verification=verification,
     )
-
-
-# ---------------------------------------------------------------------------
-# Gate helpers — excursion diagnosis and retry
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

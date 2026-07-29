@@ -477,10 +477,9 @@ class TraceNode:
     note: str = ""
     # Set when the writer chosen for this (tag, value) frontier is gated by a
     # guard the tide tables could only *punt* on (a genuinely-live word or an
-    # undecidable term) — not proved satisfiable, not proved dead.  Purely
-    # informational today: it marks "this frontier is gated by an unreadable
-    # guard" so the future skiff can see where to send an experiment.
-    # No drive-loop behavior keys on it yet.
+    # undecidable term) — not proved satisfiable, not proved dead.  Skiff uses
+    # this signal to select isolated-probe frontiers; option building keeps the
+    # marked node open as unreadable work until probing supplies evidence.
     live_guard: bool = False
     # Availability of the writer chosen for this (tag, value) frontier, as
     # classified by ``_rank_writers`` against the live snapshot.  AVAILABLE_NOW
@@ -2582,10 +2581,10 @@ def _trace_back(
             )
         )
 
-        # Punt signal for the future skiff: the tide tables could not decide
-        # this writer's guard (a genuinely-live word / undecidable term) and the
-        # backward walk ended at a dead end. Purely informational: no drive-loop
-        # behavior keys on it.
+        # Punt signal for skiff and option building: the tide tables could not
+        # decide this writer's guard (a genuinely-live word / undecidable term)
+        # and the backward walk ended at a dead end. Skiff may probe the marked
+        # frontier; options keeps it open as unreadable work.
         attempt_node.live_guard = guard_punted and not _route_has_no_dead_end([attempt_node])
 
         attempt = writer_build.complete()

@@ -208,8 +208,6 @@ def _apply_actions(
     if not _reached(post_pulse_snap):
         delayed_receipts = _settle_delayed_effects(
             fork,
-            frame.snap,
-            key_config,
             scan_budget=state.remaining_search_scans(
                 ctx.max_scans,
                 scan_id=fork.state.scan_id,

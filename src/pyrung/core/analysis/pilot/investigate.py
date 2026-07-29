@@ -1430,7 +1430,7 @@ def investigate_excursion(
             if owner.profile.done is not None
         )
     _apply_pulse(retry, kickoff, resting, edge_tags, session=session)
-    _settle_delayed_effects(retry, pre_snap, cfg, scan_budget=scan_budget, session=session)
+    _settle_delayed_effects(retry, scan_budget=scan_budget, session=session)
     retry_snap = dict(retry.state.tags)
     retry_key = _pilot_state_key(retry_snap, cfg)
 

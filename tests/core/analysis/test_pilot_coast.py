@@ -1102,8 +1102,7 @@ class TestSettleDelayedEffectsReceipts:
         plc.step()
         assert plc._harness.pending_count > 0
 
-        before = dict(plc.state.tags)
-        receipts = _settle_delayed_effects(plc, before, cfg=None, scan_budget=200)
+        receipts = _settle_delayed_effects(plc, scan_budget=200)
 
         # Now a list of receipts (values that outlive the coast), not a bool.
         assert isinstance(receipts, list)
@@ -1119,7 +1118,7 @@ class TestSettleDelayedEffectsReceipts:
         # No harness installed and no done-specs -> nothing to settle.
         plc = PLC(_timer_program(), dt=0.010)
         assert getattr(plc, "_harness", None) is None
-        receipts = _settle_delayed_effects(plc, dict(plc.state.tags), cfg=None, scan_budget=200)
+        receipts = _settle_delayed_effects(plc, scan_budget=200)
         assert receipts == []
 
 

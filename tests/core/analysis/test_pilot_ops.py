@@ -655,8 +655,7 @@ class TestSettleDelayedEffects:
         harness = plc._harness
         assert harness.pending_count > 0
 
-        before = dict(plc.state.tags)
-        _settle_delayed_effects(plc, before, cfg=None, scan_budget=200)
+        _settle_delayed_effects(plc, scan_budget=200)
         assert harness.pending_count == 0
         # feedback resolved -> the gated copy fired
         assert plc.state.tags["Stage"] == 1
@@ -675,14 +674,8 @@ class TestSettleDelayedEffects:
         assert plc.state.tags["Tmr_TT"] is True
         assert plc.state.tags["Tmr_Done"] is False
 
-        cfg = _StateKeyConfig(
-            stateful_names=("Enable", "Tmr_Done", "Done"),
-            done_specs=(_StateKeyDoneSpec(index=1, acc_name="Tmr_Acc", kind="on_delay"),),
-            threshold_vector_specs=(),
-            acc_indices=frozenset(),
-        )
         scan_before = plc.state.scan_id
-        receipts = _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
+        receipts = _settle_delayed_effects(plc, scan_budget=500)
         assert receipts == []
         assert plc.state.scan_id == scan_before
         assert plc.state.tags["Tmr_Done"] is False
@@ -707,21 +700,14 @@ class TestSettleDelayedEffects:
         assert operation.progress is not None
         assert operation.progress.condition.tag.name == "TimerActive"
 
-        before = dict(plc.state.tags)
         plc.patch({"Enable": True})
         plc.step()
         # PENDING: accumulator advancing, TT active, done still False.
         assert plc.state.tags["TimerActive"] is True
         assert plc.state.tags["TimerReady"] is False
 
-        cfg = _StateKeyConfig(
-            stateful_names=("Enable", "TimerReady", "Out"),
-            done_specs=(_StateKeyDoneSpec(index=1, acc_name="TimerCount", kind="on_delay"),),
-            threshold_vector_specs=(),
-            acc_indices=frozenset(),
-        )
         scan_before = plc.state.scan_id
-        receipts = _settle_delayed_effects(plc, before, cfg=cfg, scan_budget=500)
+        receipts = _settle_delayed_effects(plc, scan_budget=500)
         assert receipts == []
         assert plc.state.scan_id == scan_before
         assert plc.state.tags["TimerReady"] is False

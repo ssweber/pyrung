@@ -148,15 +148,12 @@ def test_supplied_input_hands_the_timer_back_to_the_exact_producer_reader() -> N
     stopped_world = _world(program, plc)
     stopped = read_program_step(stopped_world, _producer(stopped_world), plc)
     assert stopped.input_handoffs[0].channel == timer.Acc.name
-    before = dict(plc.state.tags)
     plc.patch({run.name: True})
     plc.step()
     scan_at_handoff = plc.state.scan_id
 
     receipts = _settle_delayed_effects(
         plc,
-        before,
-        cfg=None,
         scan_budget=500,
     )
     world = _world(program, plc)
