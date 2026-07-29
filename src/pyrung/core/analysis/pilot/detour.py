@@ -23,27 +23,27 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
     fork_with_rungs,
 )
+from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
     occurrence_external_supports,
 )
-from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import (
     CompassKnowledge,
     _evidence_scope_key,
-    unique_legal_current_reading,
+    unique_legal_awaited_action,
 )
-from pyrung.core.analysis.pilot.currents import CurrentReading
-from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
-from pyrung.core.analysis.pilot.navigation import BearingObjective
-from pyrung.core.analysis.pilot.navigation_evidence import (
+from pyrung.core.analysis.pilot.constrained_reachability import (
     FrontierStatus,
     NavigationEvidence,
     Reachable,
     StaticEdgeAdmission,
     Unknown,
 )
+from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
+from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
+from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -98,17 +98,17 @@ class ContinuationEvidence:
 
     ``channel_status`` is the typed static-chart result. For classifications
     that short-circuit before that read, it is an honest ``Unknown`` naming why
-    it was not inspected. ``current_inspected`` distinguishes an unsuccessful
-    current read from a current read that was never attempted.
+    it was not inspected. ``awaited_action_inspected`` distinguishes an
+    unsuccessful awaited-action read from one that was never attempted.
     """
 
     channel_status: FrontierStatus
-    current_inspected: bool = False
-    current: CurrentReading | None = None
+    awaited_action_inspected: bool = False
+    awaited_action: AwaitedAction | None = None
 
     def __post_init__(self) -> None:
-        if self.current is not None and not self.current_inspected:
-            raise ValueError("a current reading requires an inspected current")
+        if self.awaited_action is not None and not self.awaited_action_inspected:
+            raise ValueError("an awaited action requires an inspected awaited action")
 
 
 @dataclass(frozen=True)
@@ -137,7 +137,7 @@ class DepartureResult:
 def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastReceipt]:
     """Ride a rung-driven fork to the departure's stable landing (bounded).
 
-    The departure bump lands at the *first* departure scan — mid-transition
+    The departure trigger lands at the *first* departure scan — mid-transition
     (Holding, Aborting).  Classification needs the landing, so let the
     departure's own chain complete with the installed pilot rungs active,
     exactly as a coast would — ``settle_landing`` rides every hop and the
@@ -278,14 +278,14 @@ def _continuation_safety(
     )
 
 
-def _current_action_allowed(
+def _awaited_action_allowed(
     action: tuple[str, Any],
     *,
     settled_key: tuple[Any, ...] | None,
     knowledge: CompassKnowledge,
     blocked_actions: frozenset[tuple[str, Any]],
 ) -> bool:
-    """Whether one structural current may support this settled world."""
+    """Whether one program-awaited action may support this settled world."""
 
     if action in blocked_actions:
         return False
@@ -592,24 +592,26 @@ def classify_departure(
     # progress is structural (state + command handshake) and exposes no gauge.
     from pyrung.core.analysis.pilot.types import WorldView
 
-    current_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
-    if not all(hasattr(ctx, name) for name in current_context):
-        qualifier = "chart has no clean route" if saw_graph else "no chart or current evidence"
+    awaited_action_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
+    if not all(hasattr(ctx, name) for name in awaited_action_context):
+        qualifier = (
+            "chart has no clean route" if saw_graph else "no chart or awaited-action evidence"
+        )
         return _result(
             DepartureClassification.UNKNOWN,
             qualifier,
             ContinuationEvidence(continuation),
         )
 
-    def _legal_current_action(action: tuple[str, Any]) -> bool:
-        return _current_action_allowed(
+    def _legal_awaited_action(action: tuple[str, Any]) -> bool:
+        return _awaited_action_allowed(
             action,
             settled_key=settled_key,
             knowledge=ctx.compass.knowledge,
             blocked_actions=ctx.blocked_actions,
         )
 
-    current = unique_legal_current_reading(
+    awaited_action = unique_legal_awaited_action(
         WorldView(
             snapshot=dict(fork.state.tags),
             pdg=ctx.pdg,
@@ -620,23 +622,27 @@ def classify_departure(
         ),
         channel_tag,
         ctx.pipeline_roles,
-        action_allowed=_legal_current_action,
+        action_allowed=_legal_awaited_action,
         action_avoided=lambda action: _avoid_forces(
             ctx,
             [action],
             dict(fork.state.tags),
         ),
     )
-    if current is not None:
+    if awaited_action is not None:
         return _result(
             DepartureClassification.CLEAN_CONTINUATION,
-            current.note,
-            ContinuationEvidence(continuation, current_inspected=True, current=current),
+            awaited_action.note,
+            ContinuationEvidence(
+                continuation,
+                awaited_action_inspected=True,
+                awaited_action=awaited_action,
+            ),
         )
     return _result(
         DepartureClassification.UNKNOWN,
         "no clean route is currently proven"
         if saw_graph
         else "no transition structure for the channel",
-        ContinuationEvidence(continuation, current_inspected=True),
+        ContinuationEvidence(continuation, awaited_action_inspected=True),
     )

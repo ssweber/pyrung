@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
 
-from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt
+from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.gauge import GaugeReceipt
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.navigation import (
+    from pyrung.core.analysis.pilot.navigation_contracts import (
         ActPolicy,
         Bearing,
         BearingObjective,
@@ -343,7 +343,7 @@ class DeviationIncident:
     # terminal-letrun channel tag) — other departures downstream of it are
     # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
     channel_tag: str | None = None
-    # The recorded session events inside the window (BumpEvents, ordered,
+    # The recorded session events inside the window (CoastTriggerEvents, ordered,
     # same-scan groups preserved).  This is the incident's evidence: a
     # fire-then-reset pulse is two transitions here, never a net no-op.
     timeline: tuple[Any, ...] = ()
@@ -445,7 +445,7 @@ class _ExecutionEvidence:
     after_snap: Mapping[str, Any]
     channel_motion: ChannelMotion
     coast_receipt: CoastReceipt | None
-    timeline: tuple[BumpEvent, ...]
+    timeline: tuple[CoastTriggerEvent, ...]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
@@ -494,7 +494,7 @@ class _StepContext:
         return self.execution.after_snap
 
     @property
-    def timeline(self) -> tuple[BumpEvent, ...]:
+    def timeline(self) -> tuple[CoastTriggerEvent, ...]:
         return self.execution.timeline
 
     @property
@@ -787,10 +787,10 @@ class _PulseState:
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
     coast_receipt: CoastReceipt | None = None
-    # The trial session's full event timeline (pen marks + bump landings across
+    # The trial session's full event timeline (pen marks + trigger landings across
     # pulse, settle, and coast) — stamped onto the committed step context so
     # incident construction reads recorded evidence, not history re-diffs.
-    timeline: tuple[BumpEvent, ...] = ()
+    timeline: tuple[CoastTriggerEvent, ...] = ()
     # A spin excursion may replace this trial with a replay-corrected fork.
     # Carry that exact correction with the fork so later gates cannot detach or
     # reconstruct the operation they are judging.
@@ -926,7 +926,7 @@ class _AcceptedTrial:
         return self.execution.coast_receipt
 
     @property
-    def timeline(self) -> tuple[BumpEvent, ...]:
+    def timeline(self) -> tuple[CoastTriggerEvent, ...]:
         return self.execution.timeline
 
 

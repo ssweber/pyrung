@@ -1,6 +1,6 @@
-"""Read program-owned transitions from the current machine state.
+"""Read program-awaited actions from the current machine state.
 
-``current_readings`` recognizes channel transitions that are presently waiting
+``awaited_actions`` recognizes channel transitions that are presently waiting
 on operator actions. The module also classifies sibling
 producer families so an automatic producer is not erased when an equivalent
 operator action is disallowed.
@@ -27,12 +27,12 @@ from pyrung.core.crossing import Affine, Literal
 
 
 @dataclass(frozen=True)
-class CurrentReading:
+class AwaitedAction:
     """One operator action a program transition is waiting for.
 
     A bearing, not a plan step: ``action`` is the ``(tag, level)`` push, and the
     remaining fields are the recognized ``(state, command, next-state)`` context
-    recorded for legibility (every current decision is dumpable).
+    recorded for legibility (every awaited-action decision is dumpable).
     """
 
     action: tuple[str, Any]
@@ -155,11 +155,11 @@ def _request_tags_for(ctx: WalkContext, channel_tag: str, pipeline_roles: Any) -
     return frozenset(tags)
 
 
-def current_readings(
+def awaited_actions(
     ctx: WalkContext,
     channel_tag: str,
     pipeline_roles: Any,
-) -> tuple[CurrentReading, ...]:
+) -> tuple[AwaitedAction, ...]:
     """All structural operator-action readings for the current channel state."""
     snapshot = dict(ctx.snapshot)
     state_value = snapshot.get(channel_tag)
@@ -171,7 +171,7 @@ def current_readings(
     if not transitions:
         return ()
 
-    candidates: list[CurrentReading] = []
+    candidates: list[AwaitedAction] = []
     seen_buttons: set[str] = set()
     for button in sorted(ctx.steerable):
         if button in seen_buttons:
@@ -193,7 +193,7 @@ def current_readings(
                 sorted((tag, writes[tag]) for tag in transition.command_guards if tag in writes)
             )
             candidates.append(
-                CurrentReading(
+                AwaitedAction(
                     action=action,
                     command_tag=next(iter(transition.command_guards), ""),
                     command_value=writes.get(next(iter(transition.command_guards), "")),
@@ -201,7 +201,7 @@ def current_readings(
                     from_state=state_value,
                     to_state=transition.to_value,
                     note=(
-                        f"program-owned current: {channel_tag}={state_value!r} awaits "
+                        f"program-awaited action: {channel_tag}={state_value!r} awaits "
                         f"{button} ({command_desc}) -> {channel_tag}={transition.to_value!r}"
                     ),
                 )

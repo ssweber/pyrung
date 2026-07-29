@@ -37,7 +37,7 @@ from pyrung.core.analysis.pilot.investigate import (
     correction_identity,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,

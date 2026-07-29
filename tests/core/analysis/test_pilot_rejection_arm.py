@@ -159,7 +159,7 @@ def test_choices_dead_writer_kept_without_domain_prior():
 # bitwise function of a runtime-loaded word — un-invertible and with no finite
 # domain.  The oracle can neither prove the guard satisfiable nor dead, so it
 # PUNTS: the writer is admitted exactly as before, and because the ``Mask`` gate
-# is a genuine dead-end (nothing drivable), the frontier is flagged ``live_guard``.
+# is a genuine dead-end (nothing steerable), the frontier is flagged ``live_guard``.
 
 
 def _live_guard_program():
@@ -200,7 +200,7 @@ def test_readable_guard_not_flagged_live():
     """A guard whose operand merely lacks an ``nd_domains`` entry but resolves to a
     steerable input is NOT flagged live — the flag means *unreadable*, not
     *un-enumerable*.  Here ``Live == 3`` traces through ``copy(Cfg, Live)`` to the
-    steerable ``Cfg``, so the frontier is fully drivable and carries no signal."""
+    steerable ``Cfg``, so the frontier is fully steerable and carries no signal."""
     Trig = Bool("Trig", external=True)
     Cfg = Int("Cfg", external=True)
     Load = Bool("Load", external=True)

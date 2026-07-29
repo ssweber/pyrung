@@ -5,8 +5,8 @@ which uses PLAIN copies and never arms it).
 Why a second fixture.  The sibling program models the same PackML command detour
 (Start -> Execute, a program-owned Hold -> Held, an operator ack -> Unhold, a
 program-owned Complete -> Completed) but writes ``State`` with a plain
-``copy(StateRequested, State)``.  With no indirect-copy source, ``charts.detect_
-opaque_loop`` / ``detect_opaque_pipelines`` (``pilot/charts.py``) return empty, so
+``copy(StateRequested, State)``. With no indirect-copy source, ``pipeline_graph.detect_
+opaque_loop`` / ``detect_opaque_pipelines`` (``pilot/pipeline_graph.py``) return empty, so
 the compass value-graph, the constant-table mask tide tables, and the
 state-consistent pinning machinery all stay dormant.  This fixture reproduces the
 real tumbler's shape that *does* arm them:
@@ -38,7 +38,7 @@ Completed(17), **never pressing the avoided ``C_Complete``**.  The undeclared
 mask-table neighbor (``PackTbl_A_Alm100``) rests at 0 the whole run, so the enable
 is satisfied naturally and the old mis-attribution decline never fires.
 
-This is the **program-owned current drive capability** (``pilot/currents.py``, future
+This is the **program-awaited action capability** (``pilot/awaited_actions.py``, future
 direction item 0): when the trace dead-ends on the opaque-loop state register and
 the compass route is the avoided command, the pilot recognizes the one operator
 push the program is dwelling on at the current ``(state, step)`` and surfaces it as
@@ -248,8 +248,8 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
 def _current_ctx(logic, plc):
     """Build the pdg / steerable / opaque_loop / evidence the recognizer consumes."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.pilot import _build_prover_context
+    from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.steerable import compute_steerable
 
     pdg = build_program_graph(logic)
@@ -267,10 +267,10 @@ def _drive_to(plc, tags, state_value):
     assert plc.state.tags[tags["State"].name] == state_value, plc.state.tags[tags["State"].name]
 
 
-def test_current_recognizes_ack_while_held() -> None:
+def test_awaited_action_recognizes_ack_while_held() -> None:
     """The recognizer surfaces the ONE operator action the program is dwelling on
     at HELD — ``InterlockAck`` — a legal, non-avoided, state-moving push."""
-    from pyrung.core.analysis.pilot.currents import current_readings
+    from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.types import WorldView
 
@@ -282,7 +282,7 @@ def test_current_recognizes_ack_while_held() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    readings = current_readings(world, tags["State"].name, (role,))
+    readings = awaited_actions(world, tags["State"].name, (role,))
     action = next(
         reading for reading in readings if reading.action != (tags["C_Complete"].name, True)
     )
@@ -293,13 +293,13 @@ def test_current_recognizes_ack_while_held() -> None:
     assert action.to_state == tags["Execute"]
 
 
-def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
+def test_awaited_action_policy_defers_a_command_with_an_automatic_sibling() -> None:
     """Compass must coast/read a program-owned command, not press its twin."""
     from types import SimpleNamespace
 
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.navigation import TargetSpec
-    from pyrung.core.analysis.pilot.options import _current_bearing
+    from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+    from pyrung.core.analysis.pilot.options import _awaited_action_bearing
 
     logic, tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -334,7 +334,7 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
     # Complete is structurally pressable here, but the program's timer owns an
     # automatic producer for that same command value.
     assert (
-        _current_bearing(
+        _awaited_action_bearing(
             SimpleNamespace(snap=dict(plc.state.tags)),
             ctx,
         )
@@ -342,9 +342,9 @@ def test_current_policy_defers_a_command_with_an_automatic_sibling() -> None:
     )
 
 
-def test_current_reader_returns_structural_execute_readings() -> None:
+def test_awaited_action_reader_returns_structural_execute_readings() -> None:
     """The reader reports structure without deciding whether PILOT should wait."""
-    from pyrung.core.analysis.pilot.currents import current_readings
+    from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.types import WorldView
 
@@ -362,13 +362,13 @@ def test_current_reader_returns_structural_execute_readings() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    readings = current_readings(world, tags["State"].name, (role,))
+    readings = awaited_actions(world, tags["State"].name, (role,))
     assert any(reading.action == (tags["C_Complete"].name, True) for reading in readings)
 
 
-def test_current_reader_does_not_apply_avoid_policy() -> None:
+def test_awaited_action_reader_does_not_apply_avoid_policy() -> None:
     """Avoid filtering belongs to Compass, not the structural reader."""
-    from pyrung.core.analysis.pilot.currents import current_readings
+    from pyrung.core.analysis.pilot.awaited_actions import awaited_actions
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.types import WorldView
 
@@ -380,14 +380,14 @@ def test_current_reader_does_not_apply_avoid_policy() -> None:
     role = infer_pipeline_roles(tags["State"].name, pdg, logic, steerable, opaque_loop, evidence)
     world = WorldView(dict(plc.state.tags), pdg, logic, steerable, opaque_loop, None)
 
-    readings = current_readings(world, tags["State"].name, (role,))
+    readings = awaited_actions(world, tags["State"].name, (role,))
     assert any(reading.action == (tags["InterlockAck"].name, True) for reading in readings)
 
 
-def test_current_surfaces_ack_as_candidate() -> None:
+def test_awaited_action_surfaces_ack_as_candidate() -> None:
     """Wait-over-steer ordering: at HELD the pilot's candidate list carries the
-    avoided C_Complete route AND the current-prescribed InterlockAck; the avoided
-    command is rejected and the current push is accepted."""
+    avoided C_Complete route AND the awaited-action-prescribed InterlockAck; the avoided
+    command is rejected and the program-awaited action is accepted."""
     from pyrung.core.analysis.pilot.pilot import pilot_events
     from pyrung.core.runner import _compile_avoid
 
@@ -411,8 +411,8 @@ def test_current_surfaces_ack_as_candidate() -> None:
     by_tag = {c["tag"]: c for c in held_candidates}
     assert tags["InterlockAck"].name in by_tag
     ack = by_tag[tags["InterlockAck"].name]
-    assert ack["current_prescribed"] is True
-    assert ack["current_note"]  # the recognition rationale is recorded
+    assert ack["awaited_action_prescribed"] is True
+    assert ack["awaited_action_note"]  # the recognition rationale is recorded
 
 
 def test_table_detour_premise() -> None:
@@ -446,9 +446,9 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     StateRequested -> State transition pipeline.
     """
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.charts import detect_opaque_loop
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.pilot.pilot import _build_prover_context
+    from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.steerable import compute_steerable
 
     logic, tags = _packml_table_detour_program()
@@ -490,8 +490,8 @@ def test_completion_edges_record_program_owned_command_bearings() -> None:
     ``rise(CompleteTmr.Done)`` producers issue them is Part 2's discovery —
     the sibling trace reads it, record time invents nothing.
     """
-    from pyrung.core.analysis.pilot.charts import build_static_transition_graphs
     from pyrung.core.analysis.pilot.pilot import _infer_pipeline_roles_for_context
+    from pyrung.core.analysis.pilot.pipeline_graph import build_static_transition_graphs
 
     HOLD_CMD, COMPLETE_CMD = 4, 10
 
@@ -520,11 +520,12 @@ def test_pilot_table_detour_reaches_completed_avoiding_complete() -> None:
     ``C_Start`` -> Execute(6), follows the program's own Hold self-advance to
     Holding(10)/Held(11), and there — the compass route is the avoided
     ``C_Complete`` and the backward trace dead-ends on the opaque-loop state
-    register — the **program-owned current** recognizer (``pilot/currents.py``)
+    register — the **program-awaited action** recognizer
+    (``pilot/awaited_actions.py``)
     surfaces the one operator action legal while HELD::
 
         candidates: [C_Complete (route, avoided -> rejected),
-                     InterlockAck (current_prescribed)]
+                     InterlockAck (awaited_action_prescribed)]
 
     Pressing ``InterlockAck`` sets ``Phase = 1`` and issues the program's Unhold;
     the settle-coast then rides the program's own Unhold -> Execute(6) ->

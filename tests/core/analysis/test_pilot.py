@@ -1699,7 +1699,7 @@ def test_detect_opaque_pipeline():
     """detect_opaque_pipelines finds indirect-copy targets and their steerable inputs."""
     from pyrung.click import ClickBlocks
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.charts import detect_opaque_pipelines
+    from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_pipelines
     from pyrung.core.analysis.steerable import compute_steerable
 
     x, y, c, t, ct, sc, ds, dd, dh, df, xd, yd, xd0u, yd0u, td, ctd, sd, txt = ClickBlocks()
@@ -2272,13 +2272,13 @@ def test_skiff_scan_preserves_active_pilot_rungs():
 def test_static_routes_remain_in_catalog_not_learned_knowledge():
     """Static paths are queryable without copying them into learned entries."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.charts import (
+    from pyrung.core.analysis.pilot.compass import Compass, NavigationCatalog
+    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
+    from pyrung.core.analysis.pilot.pipeline_graph import (
         _best_static_path,
         build_static_transition_graphs,
         detect_opaque_loop,
     )
-    from pyrung.core.analysis.pilot.compass import Compass, NavigationCatalog
-    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
     from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _Output = _packml_program()

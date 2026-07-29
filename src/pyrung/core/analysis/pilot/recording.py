@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
 from pyrung.core.analysis.pilot._ops import _rung_execution_receipt, _rung_identity
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,
@@ -44,9 +44,9 @@ from pyrung.core.validation.render import (
 )
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.compass import Compass
     from pyrung.core.analysis.pilot.options import CandidateRead, _Candidate
+    from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.program_step import ProgramStep
 
 
@@ -477,8 +477,8 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "bearing_channel_value": (
             policy.heading.target_value if policy.heading is not None else None
         ),
-        "current_prescribed": policy.source is ActSource.CURRENT,
-        "current_note": policy.note if policy.source is ActSource.CURRENT else "",
+        "awaited_action_prescribed": policy.source is ActSource.AWAITED_ACTION,
+        "awaited_action_note": (policy.note if policy.source is ActSource.AWAITED_ACTION else ""),
         "program_prescribed": policy.source is ActSource.PROGRAM,
         "program_note": policy.note if policy.source is ActSource.PROGRAM else "",
         "program_context_actions": policy.context_actions,
@@ -499,8 +499,8 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "route_prescribed": candidate.route_prescribed,
         "bearing_channel_tag": candidate.bearing_channel_tag,
         "bearing_channel_value": candidate.bearing_channel_value,
-        "current_prescribed": candidate.current_prescribed,
-        "current_note": candidate.current_note,
+        "awaited_action_prescribed": candidate.awaited_action_prescribed,
+        "awaited_action_note": candidate.awaited_action_note,
         "program_prescribed": candidate.program_prescribed,
         "program_note": candidate.program_note,
         "program_context_actions": candidate.program_context_actions,
@@ -526,7 +526,7 @@ def _knowledge_payload(
 def _route_plan_payload(plan: StaticPath | None) -> dict[str, Any] | None:
     if plan is None:
         return None
-    from pyrung.core.analysis.pilot.charts import ANY_FROM
+    from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 
     return {
         "needed": (plan.needed_tag, plan.needed_value),

@@ -528,7 +528,7 @@ def _accumulator_corrections(
         if not reset_actions:
             continue
         if not all(_hold_allowed(ctx, action.pair) for action in reset_actions):
-            continue  # a required lever is off-limits — the reset is undrivable
+            continue  # a required lever is off-limits — the reset is unsteerable
         from pyrung.core.condition import AllCondition, CompareEq
 
         done_name = profile.done.name
@@ -771,7 +771,7 @@ def _cannot_hold_pairs(demand: Any, snap: Mapping[str, Any], ctx: Any) -> list[t
     advancing), then resolves each participating read to its steerable driver.
     A single-read advance yields one lever (the old behaviour); a conjunction
     yields the cheapest single conjunct to break; an ``Or`` yields every arm as a
-    coordinated set.  Returns ``[]`` when no drivable stopping assignment exists.
+    coordinated set. Returns ``[]`` when no steerable stopping assignment exists.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
 
@@ -889,7 +889,7 @@ def _resolve_partial_actions(
     """Resolve each literal without discarding its intermediate operation owner.
 
     ``None`` if any read resolves to no steerable driver (the assignment is
-    undrivable) or two literals demand conflicting values of one driver.
+    unsteerable) or two literals demand conflicting values of one driver.
     """
     actions: dict[str, TraceAction] = {}
     for read, value in partial.items():
@@ -923,9 +923,9 @@ def _best_forcing_actions(
     """Cheapest structural driver operations that force *condition* to satisfy.
 
     Enumerates the reads' finite domains (capped like ``tide_tables``), finds
-    the minimal forcing assignments, and among the drivable ones prefers (a)
+    the minimal forcing assignments, and among the steerable ones prefers (a)
     fewest levers that differ from the current snapshot, then (b) fewest levers
-    total.  ``None`` when no assignment is drivable — the honest decline the
+    total. ``None`` when no assignment is steerable — the honest decline the
     single-read path made for a missing lever, now generalized to conjunctions.
     """
     from pyrung.core.analysis.pilot.tide_tables import bounded_product
@@ -986,7 +986,7 @@ def break_guard_holds(
     fixed: Mapping[str, Any] | None = None,
     steerable: frozenset[str] | None = None,
 ) -> list[ActionPair] | None:
-    """Minimal drivable lever set that forces *rung_obj*'s enable guard FALSE.
+    """Minimal steerable lever set that forces *rung_obj*'s enable guard FALSE.
 
     The **suppression dual** of the accumulator arm's satisfy-the-reset
     enumeration: the same :func:`_best_forcing_holds` machinery with the polarity
@@ -1002,8 +1002,8 @@ def break_guard_holds(
     than mistaken for free inputs.
 
     Returns coordinated ``(phys, value)`` holds, or ``None`` when the guard is
-    unreadable/undrivable — no candidate reads, an unknown (live-word) domain,
-    or no drivable forcing assignment.  ``None`` is the **punt signal** the
+    unreadable/unsteerable — no candidate reads, an unknown (live-word) domain,
+    or no steerable forcing assignment. ``None`` is the **punt signal** the
     caller escalates to the skiff on.  Rejection stays over COMPLETE finite
     domains only (inherited from ``_best_forcing_holds`` / ``_read_domains``);
     it never fabricates a hold it cannot read.

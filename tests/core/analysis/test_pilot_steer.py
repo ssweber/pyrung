@@ -1,7 +1,7 @@
 """Tests for pilot steer — Act instrument mechanics.
 
 Coverage targets:
-- _settle_cone: dwell control, fixpoint detection
+- _settle_watched_tags: dwell control, fixpoint detection
 - _letrun_zoom: channel-register coast, ejection guard, settle fallback
 - _try_zoom / _try_terminal_letrun: full-context wrappers (stubbed — exercised
   through the pilot_how integration path rather than direct unit calls)
@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
-from pyrung.core.analysis.pilot.steer import _letrun_zoom, _settle_cone
+from pyrung.core.analysis.pilot.steer import _letrun_zoom, _settle_watched_tags
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -61,13 +61,13 @@ def _timer_program() -> Program:
 
 
 class TestSettleCone:
-    """_settle_cone: coast until cone tags stop moving."""
+    """_settle_watched_tags: coast until watched tags stop moving."""
 
     def test_fixpoint_within_ceiling(self):
         plc = PLC(_follow_program(), dt=0.010)
         plc.force("In", True)
         plc.step()
-        snaps = _settle_cone(plc, frozenset({"Out"}), floor=2, ceiling=16)
+        snaps = _settle_watched_tags(plc, frozenset({"Out"}), floor=2, ceiling=16)
         # Out is steady, so settle stops at the floor — well under the ceiling.
         assert len(snaps) < 16
         assert snaps[-1]["Out"] == snaps[-2]["Out"]
@@ -77,7 +77,7 @@ class TestSettleCone:
         plc.force("In", True)
         plc.step()
         # Already at a fixpoint, but the floor forces a minimum dwell.
-        snaps = _settle_cone(plc, frozenset({"Out"}), floor=5, ceiling=16)
+        snaps = _settle_watched_tags(plc, frozenset({"Out"}), floor=5, ceiling=16)
         assert len(snaps) == 5
 
 
@@ -151,13 +151,13 @@ class TestTerminalLetrun:
 
 
 class TestPulseActions:
-    """_apply_actions: rising-edge release, wait settle cone, delayed effects."""
+    """_apply_actions: rising-edge release, settle watched tags, delayed effects."""
 
     @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
     def test_rising_edge_release_then_apply(self): ...
 
     @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_wait_settle_cone_recorded(self): ...
+    def test_wait_settle_watched_tags_recorded(self): ...
 
     @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
     def test_delayed_effects_settled(self): ...

@@ -58,7 +58,7 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation import BearingObjective
+from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -614,10 +614,10 @@ def _open_pending_departure(
         ),
     )
     # ``route`` and ``classification`` are stable diagnostic vocabulary. The
-    # former is a projection of the exact current evidence, never retained
+    # former is a projection of the exact awaited-action evidence, never retained
     # navigation state; static continuation has always rendered an empty route.
     legacy_route = (
-        (observation.settled_value,) if observation.continuation.current is not None else ()
+        (observation.settled_value,) if observation.continuation.awaited_action is not None else ()
     )
     return (
         PilotEvent(

@@ -717,7 +717,7 @@ def _producible_int_domain(
     A chain that bottoms out at a **writer-less input** yields that input's
     declared finite domain (*domains* — the prover's ``nd_domains`` / a tag's
     ``choices``), so a channel staged by ``copy(ExternalCmd, Channel)`` inherits
-    the command's *drivable* values rather than only the constants the program
+    the command's *steerable* values rather than only the constants the program
     stamps directly.  Without this, an operator-selected channel whose write is a
     plain copy (not a literal decode) resolves to just its current value."""
     from pyrung.core.analysis.pdg import resolve_rung

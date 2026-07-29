@@ -6,10 +6,22 @@ import pytest
 
 from pyrung.core.analysis.graph import PlanStep
 from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.types import _HoldLogEntry
-from tests.tumbler.skeleton import extract_skeleton
+from tests.tumbler.skeleton import _jsonify_dataclass, extract_skeleton
 
 pytestmark = pytest.mark.tumbler
+
+
+def test_coast_trigger_event_uses_exact_skeleton_marker() -> None:
+    event = CoastTriggerEvent("target", "target", 17, (("State", 1, 2),))
+
+    assert _jsonify_dataclass(event) == {
+        "__type__": "CoastTriggerEvent",
+        "name": "target",
+        "kind": "target",
+        "transitions": [["State", 1, 2]],
+    }
 
 
 def _trend_event(*, reverse: bool):

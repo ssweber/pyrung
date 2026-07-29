@@ -45,7 +45,7 @@ def test_cold_boot_how_y_burnerloop_completes(tumbler_logic) -> None:
     re-earning the door hold for the Execute era, the rotate-sensor liveness
     round, and the heat cascade to the burner loop.  Each era's correction is
     earned through its own incident and survives later reverts (the banked
-    checkpoint) — a hold solves one bump, not the passage.
+    checkpoint) — a hold solves one transition, not the passage.
     """
     plc = PLC(tumbler_logic, dt=0.010)
     plc.step()

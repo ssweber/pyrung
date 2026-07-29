@@ -163,7 +163,7 @@ _DATACLASS_KEEP: dict[str, tuple[str, ...]] = {
     # Receipt vocabulary (pilot/coast.py): decision-shaped fields only — scan
     # ids, budgets, and fold counters are run-variable and stay out.
     "CoastReceipt": ("kind", "stop_reason", "fired"),
-    "BumpEvent": ("name", "kind", "transitions"),
+    "CoastTriggerEvent": ("name", "kind", "transitions"),
 }
 
 
@@ -202,8 +202,8 @@ _CANDIDATE_KEEP = (
     "route_prescribed",
     "bearing_channel_tag",
     "bearing_channel_value",
-    "current_prescribed",
-    "current_note",
+    "awaited_action_prescribed",
+    "awaited_action_note",
     "provenance",
     "prescribed",
 )

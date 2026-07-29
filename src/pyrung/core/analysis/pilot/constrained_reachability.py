@@ -1,4 +1,4 @@
-"""Constrained, non-action-selecting navigation evidence queries."""
+"""Constrained, non-action-selecting reachability evidence queries."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from enum import StrEnum
 from typing import Any
 
 from pyrung.core.analysis.pilot._ops import _avoid_forces, wait_edge_nogood
-from pyrung.core.analysis.pilot.charts import _best_static_path
 from pyrung.core.analysis.pilot.compass import (
     WAIT,
     CompassKnowledge,
     _evidence_scope_key,
     is_action,
 )
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
     pulse_identity,
 )
+from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
 from pyrung.core.analysis.sp_values import _values_match
 
 

@@ -28,7 +28,7 @@ from pyrung import (
 )
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot._ops import PilotRung
-from pyrung.core.analysis.pilot.navigation import ActPolicy, ActSource
+from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.recording import (
     _build_plan_journal,
     render_unsupported_construct,

@@ -21,16 +21,16 @@ from pyrung.core.analysis.pilot._ops import (
     _pilot_world_key,
 )
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.constrained_reachability import (
+    NavigationEvidence,
+    Reachable,
+)
 from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
-)
-from pyrung.core.analysis.pilot.navigation_evidence import (
-    NavigationEvidence,
-    Reachable,
 )
 from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
@@ -85,7 +85,7 @@ def _owned_channel_motion(
 ) -> ChannelMotion:
     """Interpret a raw coast receipt against verification's selected owner.
 
-    An inner advance seek arms the outer route channel as its departure bump.
+    An inner advance seek arms the outer route channel as its departure trigger.
     When that outer channel lands exactly on its requested value, the raw inner
     receipt necessarily says ``departed`` even though the selected outer
     operation was reached.  Rebase that one observation here; relational inner
@@ -182,7 +182,7 @@ def _gate_spin(
         return trial
 
     # The search key threshold-masks event-earned progress sources, so a trial
-    # that advanced one (the knock that bumped a counter the key aliases at
+    # that advanced one (the knock that incremented a counter the key aliases at
     # ``count < 3``) projects to the same key as doing nothing.  The gauge
     # carries exactly those ordinals: an earn in stride direction is real
     # work, not a spin.

@@ -150,8 +150,8 @@
    {
     "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
     "bearing_channel_value": 1,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
@@ -168,8 +168,8 @@
    {
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
@@ -309,8 +309,8 @@
   "candidate": {
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
@@ -339,8 +339,8 @@
   "candidate": {
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
@@ -416,8 +416,8 @@
    {
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
@@ -553,8 +553,8 @@
   "candidate": {
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
@@ -583,8 +583,8 @@
   "candidate": {
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
@@ -668,8 +668,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Clear",
@@ -811,8 +811,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
@@ -875,8 +875,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
@@ -1008,8 +1008,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Reset",
@@ -1120,8 +1120,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
@@ -1167,8 +1167,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
@@ -1261,8 +1261,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Start",
@@ -1350,8 +1350,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -1392,8 +1392,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -1886,8 +1886,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Start",
@@ -1975,8 +1975,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -2017,8 +2017,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -3677,8 +3677,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Unhold",
@@ -3766,8 +3766,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
@@ -3813,8 +3813,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
@@ -4244,8 +4244,8 @@
    {
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "current_note": "",
-    "current_prescribed": false,
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Unhold",
@@ -4333,8 +4333,8 @@
   "candidate": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
@@ -4380,8 +4380,8 @@
   "candidate_detail": {
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "current_note": "",
-   "current_prescribed": false,
+   "awaited_action_note": "",
+   "awaited_action_prescribed": false,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",

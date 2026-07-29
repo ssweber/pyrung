@@ -986,7 +986,7 @@ def build_replay_fn(
         # allowance and coast beyond the evidence being replayed.
         session = CoastSession(probe, kind="replay", kernel_budget=False)
         # The last coast step IS the incident's eject coast; its receipt is the
-        # bump-local verdict ("did the recorded departure reproduce?") the
+        # trigger-local verdict ("did the recorded departure reproduce?") the
         # judgment below reads alongside the endpoint snapshot.
         eject_receipt: Any = None
         if zoom_channel_tag is not None:
@@ -1577,7 +1577,7 @@ def build_deviation_incident(
     """Capture the facts inside the known off-course window.
 
     *timeline* is the recorded session evidence for the window (the committed
-    steps' pen marks and bump landings): ``changed_tags`` membership and every
+    steps' pen marks and trigger landings): ``changed_tags`` membership and every
     departure scan are read off it, never re-derived from history.  A
     fire-then-reset watchdog pulse is two recorded transitions. That exact
     evidence identifies which accumulator owner completed; correction then asks
@@ -2128,7 +2128,7 @@ def _precise_causes(
     two forms of cut from that one record:
 
     * revert a steerable transition at its pre-incident value;
-    * force a fired rung's guard false with the cheapest drivable assignment.
+    * force a fired rung's guard false with the cheapest steerable assignment.
 
     Program-written condition tags are never terminal levers merely because
     static steerability includes them; guard solving follows their

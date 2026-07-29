@@ -22,10 +22,11 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.coast import BumpEvent, CoastReceipt
+from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
+from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent, GaugeReceipt
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,
@@ -35,7 +36,6 @@ from pyrung.core.analysis.pilot.navigation import (
     Pulse,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
@@ -424,7 +424,7 @@ class TestVerifyGates:
         before["VerifyStep"] = 1
         after = {**before, target.name: True}
         after["VerifyStep"] = 2
-        timeline = (BumpEvent("recorded", "pen", 4, ()),)
+        timeline = (CoastTriggerEvent("recorded", "pen", 4, ()),)
         coast_receipt = CoastReceipt(
             kind="verify",
             start_scan=3,
@@ -553,7 +553,7 @@ class TestVerifyGates:
             pulse,
             snap=replacement_snap,
             key=("replacement",),
-            timeline=(BumpEvent("retry", "pen", 5, ()),),
+            timeline=(CoastTriggerEvent("retry", "pen", 5, ()),),
         )
         policy = ActPolicy(
             source=ActSource.TRACE,

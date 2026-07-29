@@ -548,7 +548,7 @@ def _coast_to_value(
 ) -> CoastReceipt:
     """Coast *plc* forward (folding) until ``channel_tag == target_value``.
 
-    Arms two bumps — the target and a departure (the channel leaving its
+    Arms two coast triggers — the target and a departure (the channel leaving its
     start value for anything but the target) — so the coast lands on the
     exact scan either fires and the receipt says which.  This is the single
     mechanism for "hold heading and let scans pass": the live zoom
@@ -565,8 +565,8 @@ def _coast_to_value(
     from pyrung.core.analysis.pilot.coast import (
         TARGET,
         CoastSession,
-        departure_bump,
-        value_bump,
+        departure_trigger,
+        value_trigger,
     )
 
     if channel_tag is None:
@@ -581,9 +581,9 @@ def _coast_to_value(
         )
 
     start = plc.state.tags.get(channel_tag)
-    bumps = [
-        value_bump(plc, "target", TARGET, channel_tag, target_value),
-        departure_bump(
+    triggers = [
+        value_trigger(plc, "target", TARGET, channel_tag, target_value),
+        departure_trigger(
             plc,
             "ejected",
             {channel_tag: start},
@@ -593,7 +593,7 @@ def _coast_to_value(
     if session is None:
         session = CoastSession(plc, kind="zoom")
     assert session.plc is plc
-    return session.seek(bumps, budget=budget)
+    return session.seek(triggers, budget=budget)
 
 
 def _coast_holding_state(
@@ -622,7 +622,7 @@ def _coast_holding_state(
     investigation instead of burning the whole budget.
 
     With no roles (a program without a recognized state machine) the departure
-    bump never fires and the coast simply runs to the target or the budget —
+    trigger never fires and the coast simply runs to the target or the budget —
     still safe.
 
     ``receipt.reached`` is the legacy bool ("target reached, no ejection").
@@ -630,9 +630,9 @@ def _coast_holding_state(
     from pyrung.core.analysis.pilot.coast import (
         TARGET,
         CoastSession,
-        departure_bump,
-        predicate_bump,
-        value_bump,
+        departure_trigger,
+        predicate_trigger,
+        value_trigger,
     )
 
     # Conditional holds become guarded / oscillating rungs in the coast fork's
@@ -643,7 +643,7 @@ def _coast_holding_state(
     if reached_fn is not None:
         # Relational target: the callable remains authoritative while the
         # equivalent Condition supplies exact fold reads and crossings.
-        target = predicate_bump(
+        target = predicate_trigger(
             "target",
             TARGET,
             reached_fn,
@@ -651,16 +651,16 @@ def _coast_holding_state(
             watched=(target_tag,),
         )
     else:
-        target = value_bump(plc, "target", TARGET, target_tag, target_value)
+        target = value_trigger(plc, "target", TARGET, target_tag, target_value)
 
-    bumps = [target]
+    triggers = [target]
     if role_tags:
         start = {t: plc.state.tags.get(t) for t in role_tags}
-        bumps.append(departure_bump(plc, "ejected", start))
+        triggers.append(departure_trigger(plc, "ejected", start))
     if session is None:
         session = CoastSession(plc, kind="letrun")
     assert session.plc is plc
-    return session.seek(bumps, budget=budget)
+    return session.seek(triggers, budget=budget)
 
 
 _THRESHOLD_DOWN_KINDS = frozenset({"count_down", "int_down", "real_down"})
@@ -881,7 +881,7 @@ def _apply_pulse(
     session.note_pens()
 
     # Fixed settle window — the one waiting shape with no predicate (an
-    # explicit dwell, never disguised as a bump).
+    # explicit dwell, never disguised as a trigger).
     session.dwell(LIMITS.pulse_settle_scans)
 
     return 6 if needs_edge else 5
@@ -910,7 +910,11 @@ def _settle_delayed_effects(
     timing bits here used to execute that operation a second time, invisibly,
     before option ordering or correction lifecycle could observe it.
     """
-    from pyrung.core.analysis.pilot.coast import QUIESCENT, CoastSession, predicate_bump
+    from pyrung.core.analysis.pilot.coast import (
+        QUIESCENT,
+        CoastSession,
+        predicate_trigger,
+    )
 
     del before_snap, cfg
     budget = scan_budget
@@ -924,7 +928,7 @@ def _settle_delayed_effects(
         scan_before = fork.state.scan_id
         receipt = session.seek(
             [
-                predicate_bump(
+                predicate_trigger(
                     "harness_quiescent",
                     QUIESCENT,
                     lambda s: harness.pending_count == 0,

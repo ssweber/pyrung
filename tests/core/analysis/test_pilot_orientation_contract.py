@@ -10,7 +10,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     ProbeExhaustedObservation,
 )
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     Bearing,
@@ -62,10 +62,10 @@ def _candidate(tag: str) -> SimpleNamespace:
         value=True,
         pair=(tag, True),
         source=ActSource.TRACE,
-        current_note="",
+        awaited_action_note="",
         route_prescribed=False,
         influence_prescribed=False,
-        current_prescribed=False,
+        awaited_action_prescribed=False,
         program_prescribed=False,
         program_note="",
         bearing_channel_tag=None,
@@ -259,7 +259,7 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
 
 def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
-    from pyrung.core.analysis.pilot.navigation import BatchPulse
+    from pyrung.core.analysis.pilot.navigation_contracts import BatchPulse
 
     actions = (("First", True), ("Gate", True))
     monkeypatch.setattr(
@@ -286,15 +286,15 @@ def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     assert not result.act.policy.chase_regression_causes
 
 
-def test_current_candidate_recording_keeps_route_diagnostic_distinct() -> None:
+def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:
     policy = ActPolicy(
-        source=ActSource.CURRENT,
+        source=ActSource.AWAITED_ACTION,
         action_pairs=(("Acknowledge", True),),
     )
 
     payload = _candidate_payload(policy)
 
-    assert payload["current_prescribed"] is True
+    assert payload["awaited_action_prescribed"] is True
     assert payload["route_prescribed"] is False
 
 

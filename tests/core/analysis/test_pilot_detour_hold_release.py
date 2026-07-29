@@ -435,7 +435,7 @@ def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
     Capture the later, recipe-owned HELD world (Step 103 was earned before the
     program issued Hold), then ask PILOT for only its next decision.  Future
     work may teach recovery that an earlier door-caused Held is a pointless
-    detour; it must not erase this Current or perturb the established choice:
+    detour; it must not erase this awaited action or perturb the established choice:
     open the door for the recipe transition and issue Unhold, never Complete.
 
     ``PLC.fork()`` is the checkpoint seam: it preserves the exact timer, edge,
@@ -478,7 +478,7 @@ def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
     assert all(tag != tags["C_Complete"].name for tag, _value in tried["applied"])
 
 
-def test_clean_detour_is_investigated_before_retention_without_poisoning_later_current(
+def test_clean_detour_is_investigated_before_retention_without_poisoning_later_awaited_action(
     monkeypatch,
 ) -> None:
     """One PILOT session distinguishes two target-relative Held occurrences.
@@ -488,7 +488,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_c
     therefore not permission to skip investigation; PILOT must install the
     non-self-defeating Execute-era door correction and revert.
 
-    The second Held is the recipe's Current at Step 105.  Preventing that
+    The second Held carries the recipe's awaited action at Step 105. Preventing that
     program-owned Hold would defeat earned recipe progress, so PILOT retains
     the detour and still chooses its established next act: Unhold plus the
     open-door recipe transition, never the avoided Complete button.

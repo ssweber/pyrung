@@ -1,17 +1,18 @@
 """Tests for the CoastSession spine (the technician's trend recorder).
 
-These exercise ``CoastSession.seek`` and the bump helpers (``value_bump`` /
-``departure_bump`` / ``predicate_bump``) directly, not through the ``_ops``
+These exercise ``CoastSession.seek`` and the trigger helpers
+(``value_trigger`` / ``departure_trigger`` / ``predicate_trigger``) directly,
+not through the ``_ops``
 wrappers — the wrappers are covered in ``test_pilot_ops.py``.
 
 Coverage targets (per the CoastSession v2 design):
 - Receipt basics + fold/no-fold landing-scan parity (perfect reaction)
 - Departure terminal + recorded (tag, before, after) transition
-- Simultaneous terminal bumps (target wins classification)
+- Simultaneous terminal triggers (target wins classification)
 - Timeout stop_reason
 - Nonterminal re-arm timeline, one_shot vs re-arm (perfect recall)
 - Accumulator-comparison crossing exactness through the session
-- predicate_bump (opaque callable) plateau-guard landing
+- predicate_trigger (opaque callable) plateau-guard landing
 - cyclefold dispatch under oscillating conditional holds
 - seek([]) guard
 - skipped receipt
@@ -37,14 +38,14 @@ from pyrung.core.analysis.pilot.coast import (
     LIMITS,
     QUIESCENT,
     TARGET,
-    Bump,
     CoastReceipt,
     CoastSession,
-    departure_bump,
-    predicate_bump,
-    value_bump,
+    CoastTrigger,
+    departure_trigger,
+    predicate_trigger,
+    value_trigger,
 )
-from pyrung.core.analysis.pilot.steer import _settle_cone
+from pyrung.core.analysis.pilot.steer import _settle_watched_tags
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -160,7 +161,7 @@ def _free_timer_program():
 
 def _gated_counter_program():
     """A counter whose gate is its own ``~Done``: Acc climbs to preset, then
-    the Done bit drops the gate and Acc plateaus — a settling cone."""
+    the Done bit drops the gate and Acc plateaus — a settling watched set."""
     Reset = Bool("Reset", external=True)
     Ctr = Counter[1]
     with Program() as prog:
@@ -267,7 +268,7 @@ class TestReceiptBasics:
         plc.step()
 
         manual = plc.fork()  # fold=False reference
-        target = value_bump(plc, "target", TARGET, "Done", True)
+        target = value_trigger(plc, "target", TARGET, "Done", True)
         receipt = CoastSession(plc, kind="zoom").seek([target], budget=500)
 
         assert receipt.reached
@@ -298,7 +299,7 @@ class TestDepartureTerminal:
         assert plc.state.tags["State"] == 1
 
         manual = plc.fork()
-        dep = departure_bump(plc, "ejected", {"State": 1})
+        dep = departure_trigger(plc, "ejected", {"State": 1})
         receipt = CoastSession(plc, kind="zoom").seek([dep], budget=500)
 
         assert receipt.stop_reason == "departed"
@@ -317,7 +318,7 @@ class TestDepartureTerminal:
 
 
 # ---------------------------------------------------------------------------
-# 3. Simultaneous terminal bumps
+# 3. Simultaneous terminal triggers
 # ---------------------------------------------------------------------------
 
 
@@ -327,14 +328,14 @@ class TestSimultaneousTerminals:
         plc.patch({"Enable": True})
         plc.step()
 
-        a = value_bump(plc, "target", TARGET, "A", True)
-        b = value_bump(plc, "other", DEPARTURE, "B", True)
+        a = value_trigger(plc, "target", TARGET, "A", True)
+        b = value_trigger(plc, "other", DEPARTURE, "B", True)
         receipt = CoastSession(plc).seek([a, b], budget=500)
 
         # Both coils flip on the one scan Tmr.Done goes true.
         assert plc.state.tags["A"] is True
         assert plc.state.tags["B"] is True
-        # Both terminal bumps are recorded — never collapsed.
+        # Both terminal triggers are recorded — never collapsed.
         assert set(receipt.fired) == {"target", "other"}
         assert receipt.fired == ("target", "other")
         # A target among the simultaneous firings wins classification.
@@ -342,7 +343,7 @@ class TestSimultaneousTerminals:
         assert receipt.reached
 
     def test_target_and_avoid_same_scan_preserve_typed_avoid_evidence(self):
-        from pyrung.core.analysis.pilot.navigation import (
+        from pyrung.core.analysis.pilot.navigation_contracts import (
             ActPolicy,
             ActSource,
             Bearing,
@@ -378,7 +379,7 @@ class TestSimultaneousTerminals:
         session.arm_avoid(avoid)
 
         receipt = session.seek(
-            [value_bump(plc, "target", TARGET, "A", True)],
+            [value_trigger(plc, "target", TARGET, "A", True)],
             budget=500,
         )
 
@@ -426,7 +427,7 @@ class TestSimultaneousTerminals:
 class TestTimeout:
     def test_nothing_fires_within_budget(self):
         plc = PLC(_timer_program(), dt=0.010)  # Enable never asserted -> Done stays False
-        target = value_bump(plc, "target", TARGET, "Done", True)
+        target = value_trigger(plc, "target", TARGET, "Done", True)
         receipt = CoastSession(plc).seek([target], budget=20)
 
         assert receipt.stop_reason == "timeout"
@@ -447,13 +448,13 @@ class TestReArmTimeline:
         plc.patch({"Enable": True})
         plc.step()
 
-        blink = value_bump(plc, "blink", DEPARTURE, "Blink_Done", True, terminal=False)
-        target = value_bump(plc, "target", TARGET, "Target", True)
+        blink = value_trigger(plc, "blink", DEPARTURE, "Blink_Done", True, terminal=False)
+        target = value_trigger(plc, "target", TARGET, "Target", True)
         receipt = CoastSession(plc).seek([blink, target], budget=5000)
 
         assert receipt.stop_reason == "reached"
         blink_events = [e for e in receipt.events if e.name == "blink"]
-        # A re-arming nonterminal bump fires more than once inside the window.
+        # A re-arming nonterminal trigger fires more than once inside the window.
         assert len(blink_events) >= 2
         scans = [e.scan for e in blink_events]
         # Ordered, ascending, and distinct scans (perfect recall).
@@ -469,7 +470,7 @@ class TestReArmTimeline:
         plc.step()
 
         blink_tag = plc._known_tags_by_name["Blink_Done"]
-        blink = Bump(
+        blink = CoastTrigger(
             name="blink",
             kind=DEPARTURE,
             predicate=lambda s: s.tags.get("Blink_Done") is True,
@@ -478,7 +479,7 @@ class TestReArmTimeline:
             terminal=False,
             one_shot=True,
         )
-        target = value_bump(plc, "target", TARGET, "Target", True)
+        target = value_trigger(plc, "target", TARGET, "Target", True)
         receipt = CoastSession(plc).seek([blink, target], budget=5000)
 
         assert receipt.stop_reason == "reached"
@@ -500,14 +501,14 @@ class TestCrossingExactness:
         manual = plc.fork()
         acc = plc._known_tags_by_name["Counter_Acc"]
         n = 7
-        bump = Bump(
+        trigger = CoastTrigger(
             name="target",
             kind=TARGET,
             predicate=lambda s: (s.tags.get("Counter_Acc") or 0) >= n,
             condition=CompareGe(acc, n),
             watched=("Counter_Acc",),
         )
-        receipt = CoastSession(plc).seek([bump], budget=200)
+        receipt = CoastSession(plc).seek([trigger], budget=200)
 
         assert receipt.stop_reason == "reached"
         landing = _step_until(manual, lambda s: (s.tags.get("Counter_Acc") or 0) >= n)
@@ -516,7 +517,7 @@ class TestCrossingExactness:
 
 
 # ---------------------------------------------------------------------------
-# 7. predicate_bump (opaque callable)
+# 7. predicate_trigger (opaque callable)
 # ---------------------------------------------------------------------------
 
 
@@ -528,13 +529,13 @@ class TestPredicateBump:
 
         manual = plc.fork()
         threshold = 5
-        bump = predicate_bump(
+        trigger = predicate_trigger(
             "target",
             TARGET,
             lambda s: (s.tags.get("Temp") or 0) >= threshold,
             watched=("Temp",),
         )
-        receipt = CoastSession(plc).seek([bump], budget=200)
+        receipt = CoastSession(plc).seek([trigger], budget=200)
 
         assert receipt.reached
         assert receipt.stop_reason == "reached"
@@ -556,7 +557,7 @@ class TestPredicateBump:
         plc.step()
         acc = plc._known_tags_by_name["Counter_Acc"]
         threshold = 700
-        bump = predicate_bump(
+        trigger = predicate_trigger(
             "target",
             TARGET,
             lambda s: (s.tags.get(acc.name) or 0) >= threshold,
@@ -565,7 +566,7 @@ class TestPredicateBump:
         )
         session = CoastSession(plc)
 
-        receipt = session.seek([bump], budget=1000)
+        receipt = session.seek([trigger], budget=1000)
 
         assert receipt.reached
         assert plc.state.tags[acc.name] == threshold
@@ -601,7 +602,7 @@ class TestAvoidBump:
 
         state = SimpleNamespace(tags={"Temp": 2, "Enable": True, "Unrelated": 99})
 
-        assert session._avoid_bumps[0].predicate(state)
+        assert session._avoid_triggers[0].predicate(state)
         assert observed == [{"Temp": 2}]
         assert type(observed[0]) is dict
 
@@ -621,7 +622,7 @@ class TestAvoidBump:
         union = CoastSession(plc)
         union.arm_avoid(_compile_avoid((A, B)))
 
-        assert [b.watched for b in union._avoid_bumps] == [
+        assert [trigger.watched for trigger in union._avoid_triggers] == [
             ("AvoidProjectionA",),
             ("AvoidProjectionB",),
         ]
@@ -632,20 +633,20 @@ class TestAvoidBump:
                 "AvoidProjectionNoise": 1,
             }
         )
-        assert union._avoid_bumps[0].predicate(state)
-        assert not union._avoid_bumps[1].predicate(state)
+        assert union._avoid_triggers[0].predicate(state)
+        assert not union._avoid_triggers[1].predicate(state)
 
         composite = CoastSession(plc)
         composite.arm_avoid(_compile_avoid(AllCondition(A, B)))
 
-        assert len(composite._avoid_bumps) == 1
-        assert composite._avoid_bumps[0].watched == (
+        assert len(composite._avoid_triggers) == 1
+        assert composite._avoid_triggers[0].watched == (
             "AvoidProjectionA",
             "AvoidProjectionB",
         )
-        assert not composite._avoid_bumps[0].predicate(state)
+        assert not composite._avoid_triggers[0].predicate(state)
         state.tags["AvoidProjectionB"] = True
-        assert composite._avoid_bumps[0].predicate(state)
+        assert composite._avoid_triggers[0].predicate(state)
 
     def test_condition_projection_preserves_missing_key_and_default_semantics(self):
         from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
@@ -670,7 +671,7 @@ class TestAvoidBump:
         )
         session = CoastSession(plc)
         session.arm_avoid(avoid)
-        session._avoid_bumps[0].predicate(SimpleNamespace(tags={"Temp": 7, "Unrelated": 99}))
+        session._avoid_triggers[0].predicate(SimpleNamespace(tags={"Temp": 7, "Unrelated": 99}))
 
         assert observed[-1] == {"Temp": 7}
         assert "Absent" not in observed[-1]
@@ -697,7 +698,7 @@ class TestAvoidBump:
 
         receipt = session.seek(
             [
-                predicate_bump(
+                predicate_trigger(
                     "target",
                     TARGET,
                     lambda state: (state.tags.get("Temp") or 0) >= 5,
@@ -732,7 +733,7 @@ class TestAvoidBump:
 
         receipt = session.seek(
             [
-                predicate_bump(
+                predicate_trigger(
                     "target",
                     TARGET,
                     lambda state: (state.tags.get("Temp") or 0) >= 5,
@@ -773,7 +774,7 @@ class TestAvoidBump:
         observed.clear()  # Ignore the one full trial-start eligibility check.
         state = SimpleNamespace(tags={"Temp": 2, "Unrelated": 99})
 
-        assert not session._avoid_bumps[0].predicate(state)
+        assert not session._avoid_triggers[0].predicate(state)
         assert observed == [{"Temp": 2, "Unrelated": 99}]
         assert type(observed[0]) is dict
 
@@ -784,11 +785,11 @@ class TestPenCondition:
         session = CoastSession(plc)
         session.arm_pens(("State", "Enable"))
 
-        bump = session._pen_bump()
+        trigger = session._pen_trigger()
 
-        assert isinstance(bump.condition, AnyCondition)
-        assert all(isinstance(term, CompareNe) for term in bump.condition.conditions)
-        assert {(term.tag.name, term.value) for term in bump.condition.conditions} == {
+        assert isinstance(trigger.condition, AnyCondition)
+        assert all(isinstance(term, CompareNe) for term in trigger.condition.conditions)
+        assert {(term.tag.name, term.value) for term in trigger.condition.conditions} == {
             ("State", plc.state.tags["State"]),
             ("Enable", plc.state.tags["Enable"]),
         }
@@ -797,12 +798,12 @@ class TestPenCondition:
         plc = PLC(_role_program(), dt=0.010)
         session = CoastSession(plc)
         session.arm_pens(("State",))
-        first = session._pen_bump()
+        first = session._pen_trigger()
 
         plc.patch({"State": 9})
         plc.step()
         session.note_pens()
-        second = session._pen_bump()
+        second = session._pen_trigger()
 
         assert first.condition.conditions[0].value != second.condition.conditions[0].value
         assert second.condition.conditions[0].value == 9
@@ -815,7 +816,7 @@ class TestPenCondition:
         session.arm_pens(("Blink_Done",))
 
         receipt = session.seek(
-            [value_bump(plc, "target", TARGET, "Target", True)],
+            [value_trigger(plc, "target", TARGET, "Target", True)],
             budget=5000,
         )
 
@@ -859,7 +860,7 @@ class TestCyclefoldDispatch:
         install(folded)
         session = CoastSession(folded, kind="letrun")
         receipt = session.seek(
-            [value_bump(folded, "target", TARGET, Tmr.Done.name, True)],
+            [value_trigger(folded, "target", TARGET, Tmr.Done.name, True)],
             budget=500,
         )
 
@@ -886,7 +887,7 @@ class TestCyclefoldDispatch:
             ],
         )
 
-        target = value_bump(plc, "target", TARGET, "Target", True)
+        target = value_trigger(plc, "target", TARGET, "Target", True)
         receipt = CoastSession(plc, kind="letrun").seek([target], budget=200)
 
         assert receipt.reached
@@ -902,14 +903,14 @@ class TestCyclefoldDispatch:
 
 
 # ---------------------------------------------------------------------------
-# 9. Empty bumps
+# 9. Empty coast triggers
 # ---------------------------------------------------------------------------
 
 
 class TestEmptyBumps:
     def test_seek_empty_raises(self):
         plc = PLC(_timer_program(), dt=0.010)
-        with pytest.raises(ValueError, match="at least one bump"):
+        with pytest.raises(ValueError, match="at least one coast trigger"):
             CoastSession(plc).seek([], budget=10)
 
 
@@ -929,18 +930,18 @@ class TestSkippedReceipt:
 
 
 # ---------------------------------------------------------------------------
-# 11. settle — cone fixpoint (quiescence)
+# 11. settle — watched-tag fixpoint (quiescence)
 # ---------------------------------------------------------------------------
 
 
 class TestSettleQuiescent:
-    def test_cone_stops_moving_reports_quiescent(self):
+    def test_watched_tags_stop_moving_reports_quiescent(self):
         plc = PLC(_gated_counter_program(), dt=0.010)
         start = plc.state.scan_id
 
         receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
 
-        # The cone moved for a few scans (Acc climbing) then held — a fixpoint,
+        # The watched tags moved for a few scans (Acc climbing) then held — a fixpoint,
         # not a ceiling exit.
         assert receipt.stop_reason == "quiescent"
         assert receipt.real_scans < LIMITS.cone_ceiling
@@ -988,7 +989,7 @@ class TestSettleReached:
 
 
 class TestSettleTimeout:
-    def test_free_running_cone_exhausts_ceiling_and_is_named(self):
+    def test_free_running_watched_tags_exhaust_ceiling_and_are_named(self):
         plc = PLC(_counter_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()  # Counter_Acc == 1, climbing every scan hereafter
@@ -996,8 +997,8 @@ class TestSettleTimeout:
 
         receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
 
-        # A cone that never quiesces exhausts the ceiling — and the receipt
-        # NAMES it "timeout" (the old _settle_cone returned a bare trajectory
+        # Watched tags that never quiesce exhaust the ceiling — and the receipt
+        # NAMES it "timeout" (the old settle wrapper returned a bare trajectory
         # with no such flag; settlement is never passed off as reached here).
         assert receipt.stop_reason == "timeout"
         assert receipt.reached is False
@@ -1016,8 +1017,8 @@ class TestSettleTimeout:
 
 
 class TestSettleFloor:
-    def test_motionless_cone_still_steps_floor_scans(self):
-        # A cone that is motionless from the very first scan (Enable never
+    def test_motionless_watched_tags_still_step_floor_scans(self):
+        # Watched tags that are motionless from the very first scan (Enable never
         # asserted -> Tmr_Done stays False).  Without the floor, the fixpoint
         # would fire at scan 1; the floor forces at least `floor` scans first.
         plc = PLC(_timer_program(), dt=0.010)
@@ -1072,15 +1073,15 @@ class TestQuiescentThroughSeek:
         plc.patch({"Enable": True})
         plc.step()
 
-        # A terminal bump whose kind is neither TARGET nor DEPARTURE — the
-        # generalized classification falls through to the bump's own kind.
-        bump = predicate_bump(
+        # A terminal trigger whose kind is neither TARGET nor DEPARTURE — the
+        # generalized classification falls through to the trigger's own kind.
+        trigger = predicate_trigger(
             "quiesced",
             QUIESCENT,
             lambda s: s.tags.get("State") == 2,
             watched=("State",),
         )
-        receipt = CoastSession(plc).seek([bump], budget=500)
+        receipt = CoastSession(plc).seek([trigger], budget=500)
 
         assert receipt.stop_reason == "quiescent"
         assert receipt.reached is False
@@ -1108,7 +1109,7 @@ class TestSettleDelayedEffectsReceipts:
         assert isinstance(receipts, list)
         assert len(receipts) == 1
         assert all(isinstance(r, CoastReceipt) for r in receipts)
-        # The harness-quiescence seek lands on a QUIESCENT bump.
+        # The harness-quiescence seek lands on a QUIESCENT trigger.
         assert receipts[0].stop_reason == "quiescent"
         # And the effect actually settled: feedback resolved, gated copy fired.
         assert plc._harness.pending_count == 0
@@ -1123,7 +1124,7 @@ class TestSettleDelayedEffectsReceipts:
 
 
 # ---------------------------------------------------------------------------
-# 18. _settle_cone wrapper parity with CoastSession.settle
+# 18. _settle_watched_tags wrapper parity with CoastSession.settle
 # ---------------------------------------------------------------------------
 
 
@@ -1133,13 +1134,13 @@ class TestSettleConeParity:
         plc.patch({"Enable": True})
         plc.step()
 
-        cone = frozenset({"State"})
+        watched_tags = frozenset({"State"})
         # Two independent forks from the identical state, driven deterministically.
         fork_a = plc.fork()
         fork_b = plc.fork()
 
-        via_steer = _settle_cone(fork_a, cone)
-        via_session = CoastSession(fork_b, kind="settle").settle(cone)
+        via_steer = _settle_watched_tags(fork_a, watched_tags)
+        via_session = CoastSession(fork_b, kind="settle").settle(watched_tags)
 
         # The thin wrapper returns exactly the receipt's trajectory as a list.
         assert via_steer == list(via_session.trajectory)
@@ -1270,7 +1271,7 @@ class TestClassifyDepartureRefusal:
         from types import SimpleNamespace
 
         from pyrung.core.analysis.pilot import detour
-        from pyrung.core.analysis.pilot.navigation import BearingObjective, TargetSpec
+        from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, TargetSpec
 
         timeout_receipt = CoastReceipt(
             kind="departure-settle",
@@ -1308,4 +1309,4 @@ class TestClassifyDepartureRefusal:
             verdict.observation.continuation.channel_status,
             detour.Unknown,
         )
-        assert verdict.observation.continuation.current_inspected is False
+        assert verdict.observation.continuation.awaited_action_inspected is False

@@ -2,7 +2,7 @@
 
 ``_build_candidates`` orchestrates separate reads for static routes and charted
 completion, instruction-owned boundaries and prerequisites, learned
-transitions, and program-owned currents. Frozen private receipts keep those
+transitions, and program-awaited actions. Frozen private receipts keep those
 sources distinct until ``_select_wait`` applies their precedence and
 ``_assemble_candidate_read`` creates the sole durable ``CandidateRead``.
 
@@ -28,19 +28,19 @@ from pyrung.core.analysis.pilot._ops import (
     wait_edge_nogood,
 )
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
+from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.compass import (
     _evidence_scope_key,
     is_action,
     is_composite_action,
-    unique_legal_current_reading,
+    unique_legal_awaited_action,
 )
-from pyrung.core.analysis.pilot.currents import CurrentReading
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
     RouteEdgeContext,
 )
-from pyrung.core.analysis.pilot.navigation_evidence import NavigationEvidence
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     frontier_pairs,
@@ -50,7 +50,7 @@ from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.charts import StaticPath
+    from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.program_step import ProgramStep
     from pyrung.core.analysis.pilot.trace import TraceAction
 
@@ -73,15 +73,15 @@ class _Candidate:
     # the program displaced the route and must be investigated.
     bearing_channel_tag: str | None = None
     bearing_channel_value: Any = None
-    # A program-owned current (currents.py): the one operator action the program
+    # A program-awaited action (awaited_actions.py): the one operator action the program
     # is dwelling on at the current state of an opaque-loop channel, surfaced when
     # the trace dead-ends and the compass route is the avoided command.  Ordered
     # like a prescribed edge (a recognized bearing), but below route/influence so
     # it is the fallback, never overriding an available route.
-    current_note: str = ""
+    awaited_action_note: str = ""
     # An external input required by the exact program producer selected for an
     # automatic route edge. It is a current-world bearing below an established
-    # route/current and above an unrelated trace action.
+    # route/awaited-action evidence and above an unrelated trace action.
     program_note: str = ""
     program_context_actions: tuple[_ActionPair, ...] = ()
 
@@ -98,8 +98,8 @@ class _Candidate:
         return self.source is ActSource.INFLUENCE
 
     @property
-    def current_prescribed(self) -> bool:
-        return self.source is ActSource.CURRENT
+    def awaited_action_prescribed(self) -> bool:
+        return self.source is ActSource.AWAITED_ACTION
 
     @property
     def program_prescribed(self) -> bool:
@@ -579,7 +579,7 @@ def _compass_route_plan(
     if not ctx.compass.graphs:
         return None
 
-    from pyrung.core.analysis.pilot.charts import _best_static_path
+    from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
 
     nogoods = key_nogoods if key_nogoods is not None else set()
     world_key = getattr(frame, "key", None)
@@ -633,7 +633,7 @@ def _edge_grounded(edge: Any) -> bool:
     says nothing about the state the register advances *from*, so "hold and wait"
     on it has no dwell semantics.
     """
-    from pyrung.core.analysis.pilot.charts import ANY_FROM
+    from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 
     return edge.from_value is not ANY_FROM
 
@@ -641,7 +641,7 @@ def _edge_grounded(edge: Any) -> bool:
 def _fmt_from(value: Any) -> str:
     """Format an edge from-value for reason strings — the ``ANY_FROM`` sentinel
     renders as ``'*'``, never as a raw ``<object object at 0x...>``."""
-    from pyrung.core.analysis.pilot.charts import ANY_FROM
+    from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 
     return "*" if value is ANY_FROM else repr(value)
 
@@ -810,13 +810,13 @@ def _managed_boolean_rungs(
 # ---------------------------------------------------------------------------
 
 
-def _current_bearing(frame: Any, ctx: Any) -> CurrentReading | None:
-    """The program-owned current's operator action for the current state, or
+def _awaited_action_bearing(frame: Any, ctx: Any) -> AwaitedAction | None:
+    """The program-awaited operator action for the current state, or
     ``None``.
 
     Consulted only when the target register is an opaque-loop pipeline channel
     (the shape a program-owned command detour lives on).  Delegates to the
-    read-side recognizer ``currents.current_readings`` over a
+    read-side recognizer ``awaited_actions.awaited_actions`` over a
     ``WalkContext`` assembled from the live frame; fail-closed everywhere else.
     """
     channel = ctx.target.tag
@@ -832,7 +832,7 @@ def _current_bearing(frame: Any, ctx: Any) -> CurrentReading | None:
         opaque_loop=ctx.opaque_loop,
         prior=ctx.domain_prior,
     )
-    return unique_legal_current_reading(
+    return unique_legal_awaited_action(
         world,
         channel,
         ctx.pipeline_roles,
@@ -850,7 +850,7 @@ def _completion_reread(
 ) -> tuple[tuple[TraceAction, ...], tuple[_ActionPair, ...]]:
     """Re-trace a completion edge's charted gate pairs against the live world.
 
-    The wait's bearing (``StaticTransitionEdge.completion`` — charts.py) is ordinary
+    The wait's bearing (``StaticTransitionEdge.completion`` — pipeline_graph.py) is ordinary
     transparent ladder below the pipeline boundary: each recorded ``(tag,
     value)`` is traced back with a fresh walk (clean ancestry, so the
     opaque-loop feedback guard admits the one-hop descent), and its steerable
@@ -1521,10 +1521,10 @@ def _read_learned_fallback(
     return None
 
 
-def _read_current_fallback(frame: Any, ctx: Any) -> CurrentReading | None:
-    """Read the unique program-owned current without deciding its precedence."""
+def _read_awaited_action_fallback(frame: Any, ctx: Any) -> AwaitedAction | None:
+    """Read the unique program-awaited action without deciding its precedence."""
 
-    return _current_bearing(frame, ctx)
+    return _awaited_action_bearing(frame, ctx)
 
 
 def _select_wait(
@@ -1583,7 +1583,7 @@ def _assemble_candidate_read(
     route_and_wait: _RouteAndCompletionRead,
     separated: _PrerequisiteSeparation,
     learned: _LearnedFallback | None,
-    current: CurrentReading | None,
+    awaited_action: AwaitedAction | None,
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
@@ -1698,8 +1698,8 @@ def _assemble_candidate_read(
             seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
 
-    if current is not None and not candidates:
-        pair = current.action
+    if awaited_action is not None and not candidates:
+        pair = awaited_action.action
         if (
             _action_allowed(ctx, pair)
             and pair not in seen_candidates
@@ -1709,10 +1709,10 @@ def _assemble_candidate_read(
             candidates.append(
                 replace(
                     _candidate_for(pair),
-                    source=ActSource.CURRENT,
-                    current_note=current.note,
+                    source=ActSource.AWAITED_ACTION,
+                    awaited_action_note=awaited_action.note,
                     bearing_channel_tag=ctx.target.tag,
-                    bearing_channel_value=current.to_state,
+                    bearing_channel_value=awaited_action.to_state,
                 )
             )
 
@@ -1763,12 +1763,12 @@ def _build_candidates(
         ctx,
         key_nogoods,
     )
-    current = _read_current_fallback(frame, ctx)
+    awaited_action = _read_awaited_action_fallback(frame, ctx)
     return _assemble_candidate_read(
         route_and_wait,
         separated,
         learned,
-        current,
+        awaited_action,
         frame,
         ctx,
         key_nogoods,

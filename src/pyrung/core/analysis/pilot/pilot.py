@@ -33,10 +33,6 @@ from pyrung.core.analysis.pilot._ops import (
     fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
-from pyrung.core.analysis.pilot.charts import (
-    detect_opaque_loop,
-    detect_opaque_pipelines,
-)
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
@@ -45,7 +41,7 @@ from pyrung.core.analysis.pilot.compass import (
     ProbeExhaustedObservation,
 )
 from pyrung.core.analysis.pilot.gauge import build_gauge
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
     Coast,
@@ -57,6 +53,10 @@ from pyrung.core.analysis.pilot.navigation import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.pipeline_graph import (
+    detect_opaque_loop,
+    detect_opaque_pipelines,
+)
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
@@ -110,8 +110,8 @@ from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.charts import StaticTransitionGraph
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
+    from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -422,7 +422,7 @@ def _build_static_transition_graphs_for_context(
 ) -> tuple[StaticTransitionGraph, ...]:
     if not pipeline_roles:
         return ()
-    from pyrung.core.analysis.pilot.charts import build_static_transition_graphs
+    from pyrung.core.analysis.pilot.pipeline_graph import build_static_transition_graphs
 
     return build_static_transition_graphs(
         pipeline_roles,

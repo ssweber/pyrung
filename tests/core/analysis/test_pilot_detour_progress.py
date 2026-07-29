@@ -18,18 +18,18 @@ from pyrung import (
     rung,
 )
 from pyrung.core.analysis.pilot._ops import wait_edge_nogood
-from pyrung.core.analysis.pilot.charts import StaticTransitionGraph
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
     NavigationCatalog,
 )
 from pyrung.core.analysis.pilot.detour import (
+    _awaited_action_allowed,
     _continuation_safety,
-    _current_action_allowed,
 )
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
-from pyrung.core.analysis.pilot.navigation import pulse_identity
+from pyrung.core.analysis.pilot.navigation_contracts import pulse_identity
+from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
 
 
 def _knock_three_times_program():
@@ -122,7 +122,7 @@ def test_pilot_reaches_counter_gated_target_across_channel_revisits() -> None:
 
 def test_continuation_evidence_accepts_departure_already_at_goal() -> None:
     """A terminal departure has valid zero-edge continuation evidence."""
-    from pyrung.core.analysis.pilot.navigation_evidence import (
+    from pyrung.core.analysis.pilot.constrained_reachability import (
         NavigationEvidence,
         Reachable,
     )
@@ -222,19 +222,19 @@ def test_detour_excludes_settled_world_wait_nogood() -> None:
     assert not _detour_edge_allowed(edge, compass)
 
 
-def test_detour_current_action_uses_the_same_settled_world_pair_scope() -> None:
+def test_detour_awaited_action_uses_the_same_settled_world_pair_scope() -> None:
     action = ("Start", True)
     compass, _ = Compass().apply(
         (ActionNogoodObservation(("settled",), pulse_identity((action,))),)
     )
 
-    assert not _current_action_allowed(
+    assert not _awaited_action_allowed(
         action,
         settled_key=("settled",),
         knowledge=compass.knowledge,
         blocked_actions=frozenset(),
     )
-    assert _current_action_allowed(
+    assert _awaited_action_allowed(
         action,
         settled_key=("other-world",),
         knowledge=compass.knowledge,

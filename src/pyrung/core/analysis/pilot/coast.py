@@ -1,13 +1,13 @@
-"""Run bump-driven coasts and return exact observation receipts.
+"""Run trigger-driven coasts and return exact observation receipts.
 
-A ``Bump`` is a named state predicate. ``CoastSession`` advances with folding
+A ``CoastTrigger`` is a named state predicate. ``CoastSession`` advances with folding
 when safe, lands each crossing on a real recorded scan, re-arms nonterminal
-bumps, and records simultaneous terminal bumps in a ``CoastReceipt``.
-Steering execution may also arm trial-start-clear avoid bumps: readable
+triggers, and records simultaneous terminal triggers in a ``CoastReceipt``.
+Steering execution may also arm trial-start-clear avoid triggers: readable
 conditions constrain folded logical spans, while opaque predicates observe only
 the real kernel scans a fold executes.
 
-The predicate callable decides whether a bump fired. An optional compiled
+The predicate callable decides whether a trigger fired. An optional compiled
 condition supplies crossing and protected-read metadata for folding only; it
 does not replace predicate semantics. This module records what happened but
 does not classify the observation as progress, regression, or acceptance.
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Bump kinds are strings, not an enum — the vocabulary grows per cutover phase
+# Coast-trigger kinds are strings, not an enum — the vocabulary grows per cutover phase
 # and consumers match on names they know.
 TARGET = "target"
 DEPARTURE = "departure"
@@ -57,14 +57,14 @@ LIMITS = CoastLimits()
 
 
 @dataclass(frozen=True)
-class Bump:
+class CoastTrigger:
     """One armed pen on the trend recorder.
 
     ``predicate`` is authoritative.  ``condition`` (a compiled ``Condition``)
     is fold metadata only: its comparison atoms become crossing targets and
     its reads become fold-protected tags.  ``watched`` names the tags whose
-    transitions the receipt records when this bump fires.  ``terminal`` bumps
-    end the seek; nonterminal bumps record an event and re-arm (``one_shot``
+    transitions the receipt records when this trigger fires. ``terminal`` triggers
+    end the seek; nonterminal triggers record an event and re-arm (``one_shot``
     disarms after the first firing instead).
     """
 
@@ -78,8 +78,8 @@ class Bump:
 
 
 @dataclass(frozen=True)
-class BumpEvent:
-    """One pen mark: a bump firing at an exact scan."""
+class CoastTriggerEvent:
+    """One pen mark: a coast trigger firing at an exact scan."""
 
     name: str
     kind: str
@@ -91,12 +91,12 @@ class BumpEvent:
 class CoastReceipt:
     """What one seek observed.  Values only — safe to carry across reverts.
 
-    ``stop_reason``: ``"reached"`` (a target bump fired), ``"departed"`` (a
-    departure fired without a target), ``"quiescent"`` (a quiescence bump or
+    ``stop_reason``: ``"reached"`` (a target trigger fired), ``"departed"`` (a
+    departure fired without a target), ``"quiescent"`` (a quiescence trigger or
     cone fixpoint), ``"timeout"`` (budget/ceiling exhausted, nothing fired),
     ``"paused"`` (an external pause stopped the coast early), ``"dwell"``
     (a fixed dwell completed), or ``"skipped"`` (nothing to coast).
-    ``fired`` names every terminal bump true at the landing scan —
+    ``fired`` names every terminal trigger true at the landing scan —
     simultaneous firings are all present.  ``trajectory`` is populated only
     by :meth:`CoastSession.settle` (per-scan snapshots of the dwell).
     """
@@ -106,7 +106,7 @@ class CoastReceipt:
     end_scan: int
     stop_reason: str
     fired: tuple[str, ...]
-    events: tuple[BumpEvent, ...]
+    events: tuple[CoastTriggerEvent, ...]
     budget: int
     real_scans: int = 0
     folds: int = 0
@@ -158,7 +158,7 @@ class CoastReceipt:
 
 
 def _fold_metadata(
-    bumps: Iterable[Bump],
+    triggers: Iterable[CoastTrigger],
 ) -> tuple[
     dict[str, tuple[tuple[str, Any], ...]] | None,
     frozenset[str],
@@ -175,13 +175,13 @@ def _fold_metadata(
 
     crossings: dict[str, tuple[tuple[str, Any], ...]] = {}
     reads: set[str] = set()
-    for b in bumps:
-        reads.update(b.watched)
-        if b.condition is None:
+    for trigger in triggers:
+        reads.update(trigger.watched)
+        if trigger.condition is None:
             continue
-        for tag, cmps in _extract_condition_crossings(b.condition).items():
+        for tag, cmps in _extract_condition_crossings(trigger.condition).items():
             crossings[tag] = crossings.get(tag, ()) + cmps
-        reads |= _extract_condition_reads(b.condition)
+        reads |= _extract_condition_reads(trigger.condition)
 
     clock_reads = frozenset(reads) & frozenset(_CLOCK_HALF_PERIODS)
     scan_derived = frozenset(reads) & frozenset(_SCAN_DERIVED_NAMES)
@@ -206,18 +206,18 @@ class CoastSession:
     kernel_budget: bool | None = None
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
-    # seek the pens ride as one internal nonterminal bump (their tags are
+    # seek the pens ride as one internal nonterminal trigger (their tags are
     # fold-protected, so every transition is an exact landing); during
     # step-mode ops (dwell / settle / a caller's raw pulse scans) the caller
     # ticks :meth:`note_pens` once per scan.  Pens never end a seek — they
     # only write the timeline.
     pens: dict[str, Any] = field(default_factory=dict)
-    _events: list[BumpEvent] = field(default_factory=list)
+    _events: list[CoastTriggerEvent] = field(default_factory=list)
     _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
-    _avoid_bumps: tuple[Bump, ...] = field(default=(), init=False, repr=False)
+    _avoid_triggers: tuple[CoastTrigger, ...] = field(default=(), init=False, repr=False)
 
     @property
-    def events(self) -> tuple[BumpEvent, ...]:
+    def events(self) -> tuple[CoastTriggerEvent, ...]:
         """The session timeline so far — ordered, same-scan groups preserved."""
         return tuple(self._events)
 
@@ -236,7 +236,8 @@ class CoastSession:
     def note_pens(self) -> None:
         """Record one timeline event for every pen that moved since its baseline.
 
-        Step-mode counterpart of the seek-time pen bump: one BumpEvent per
+        Step-mode counterpart of the seek-time pen trigger: one
+        ``CoastTriggerEvent`` per
         scan carrying all simultaneous transitions (same-scan groups are one
         pen mark, never collapsed with a neighbor scan's).
         """
@@ -250,7 +251,7 @@ class CoastSession:
         )
         if not transitions:
             return
-        self._events.append(BumpEvent("pen", PEN, state.scan_id, transitions))
+        self._events.append(CoastTriggerEvent("pen", PEN, state.scan_id, transitions))
         for t, _, after in transitions:
             self.pens[t] = after
 
@@ -266,7 +267,7 @@ class CoastSession:
 
         members = getattr(avoid, "members", ()) if avoid is not None else ()
         start = dict(self.plc.state.tags)
-        bumps: list[Bump] = []
+        triggers: list[CoastTrigger] = []
         for member in members:
             condition = getattr(member, "condition", None)
             # Compiled members have an exact read-set. Opaque callables do not,
@@ -295,8 +296,8 @@ class CoastSession:
                 except Exception:
                     return False
 
-            bumps.append(
-                Bump(
+            triggers.append(
+                CoastTrigger(
                     name=member.name,
                     kind=AVOID,
                     predicate=_pred,
@@ -304,10 +305,10 @@ class CoastSession:
                     watched=tuple(sorted(member.tags)),
                 )
             )
-        self._avoid_bumps = tuple(bumps)
+        self._avoid_triggers = tuple(triggers)
 
-    def _pen_bump(self) -> Bump:
-        """The armed pens as one nonterminal bump for :meth:`seek`.
+    def _pen_trigger(self) -> CoastTrigger:
+        """The armed pens as one nonterminal trigger for :meth:`seek`.
 
         The predicate reads the live ``pens`` baselines, so a re-armed pen
         (seek's nonterminal refresh) is immediately consistent.
@@ -322,7 +323,7 @@ class CoastSession:
         condition = _departure_condition(self.plc, dict(pens), {})
         if condition is not None and not isinstance(condition, AnyCondition):
             condition = AnyCondition(condition)
-        return Bump(
+        return CoastTrigger(
             name="pen",
             kind=PEN,
             predicate=_pred,
@@ -331,8 +332,8 @@ class CoastSession:
             terminal=False,
         )
 
-    def seek(self, bumps: Iterable[Bump], *, budget: int) -> CoastReceipt:
-        """Coast until the first armed terminal bump fires; return the receipt.
+    def seek(self, triggers: Iterable[CoastTrigger], *, budget: int) -> CoastReceipt:
+        """Coast until the first armed terminal trigger fires; return the receipt.
 
         Uses the layered ``cycle_fold_until`` engine for every seek.  It tries
         the ordinary plateau/crossing fold first (over the full synthesis +
@@ -340,17 +341,17 @@ class CoastSession:
         changing inner state defeats the ordinary plateau proof.
         """
         plc = self.plc
-        armed: list[Bump] = [*bumps, *self._avoid_bumps]
+        armed: list[CoastTrigger] = [*triggers, *self._avoid_triggers]
         if not armed:
-            raise ValueError("seek() requires at least one bump")
+            raise ValueError("seek() requires at least one coast trigger")
         if self.pens:
-            armed.append(self._pen_bump())
+            armed.append(self._pen_trigger())
         start_scan = plc.state.scan_id
         # Pen baselines predate the seek (they carry from the session's last
         # note); other watched tags baseline at the current value.
         baseline: dict[str, Any] = dict(self.pens)
-        for b in armed:
-            for t in b.watched:
+        for trigger in armed:
+            for t in trigger.watched:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
         real_scans = 0
@@ -360,7 +361,7 @@ class CoastSession:
         stop_reason = "timeout"
         fired_terminal: tuple[str, ...] = ()
 
-        # After a nonterminal (pen) firing steps the world, the next armed bump
+        # After a nonterminal (pen) firing steps the world, the next armed trigger
         # may already be true at that very scan — judge it BEFORE folding
         # again, or the fold's advance-≥1-before-judging would land one scan
         # late and a cascading transition could carry the machine past the
@@ -373,23 +374,31 @@ class CoastSession:
                 break
             sterile = False
             state = plc.state
-            now_fired = [b for b in armed if b.predicate(state)] if judge_before_run else []
+            now_fired = (
+                [trigger for trigger in armed if trigger.predicate(state)]
+                if judge_before_run
+                else []
+            )
             judge_before_run = False
             if not now_fired:
                 # Rebuild the pen condition from its live baselines every time
                 # it re-arms; its predicate already reads the same mutable map.
-                live = [self._pen_bump() if b.kind == PEN else b for b in armed]
+                live = [
+                    self._pen_trigger() if trigger.kind == PEN else trigger for trigger in armed
+                ]
                 crossings, protected, clock_reads, scan_derived = _fold_metadata(live)
 
-                def _any_pred(s: Any, _live: list[Bump] = live) -> bool:
-                    return any(b.predicate(s) for b in _live)
+                def _any_pred(s: Any, _live: list[CoastTrigger] = live) -> bool:
+                    return any(trigger.predicate(s) for trigger in _live)
 
                 declared_predicate_reads = (
-                    protected | clock_reads if all(b.condition is not None for b in live) else None
+                    protected | clock_reads
+                    if all(trigger.condition is not None for trigger in live)
+                    else None
                 )
 
                 # NOTE(phase 4): like the legacy coasts (run_until semantics), a
-                # seek always advances at least one scan before judging — a bump
+                # seek always advances at least one scan before judging — a trigger
                 # already true at arm time lands after one scan, not zero.  The
                 # immediate-landing rule ("a target stops the scan it holds")
                 # arrives with the golden regeneration in the verify/outcome phase.
@@ -411,40 +420,42 @@ class CoastSession:
                 folds += stats.get("folds", 0)
                 timer_quanta_replayed += stats.get("timer_quanta_replayed", 0)
                 self._last_cyclefold_stats = stats
-                # A certified sterile cycle is a *proof* no armed bump can
+                # A certified sterile cycle is a *proof* no armed trigger can
                 # ever fire — the strongest form of timeout, arrived early.
                 sterile = bool(stats.get("sterile_cycle"))
 
                 state = plc.state
-                now_fired = [b for b in armed if b.predicate(state)]
+                now_fired = [trigger for trigger in armed if trigger.predicate(state)]
                 if not now_fired:
                     elapsed = state.scan_id - start_scan
                     stop_reason = "timeout" if sterile or elapsed >= budget else "paused"
                     break
 
             scan = state.scan_id
-            for b in now_fired:
+            for trigger in now_fired:
                 transitions = tuple(
                     (t, baseline.get(t), state.tags.get(t))
-                    for t in b.watched
+                    for t in trigger.watched
                     if not _values_match(baseline.get(t), state.tags.get(t))
                 )
-                self._events.append(BumpEvent(b.name, b.kind, scan, transitions))
-            # Refresh every fired bump's watched baseline AFTER all events are
-            # recorded (two bumps watching one tag must both see the old value)
+                self._events.append(
+                    CoastTriggerEvent(trigger.name, trigger.kind, scan, transitions)
+                )
+            # Refresh every fired trigger's watched baseline AFTER all events are
+            # recorded (two triggers watching one tag must both see the old value)
             # and BEFORE the terminal check, so a terminal exit leaves the
             # session pens current — the next session op must not re-record a
             # transition the terminal landing already wrote down.
-            for b in now_fired:
-                for t in b.watched:
+            for trigger in now_fired:
+                for t in trigger.watched:
                     baseline[t] = state.tags.get(t)
-                    if b.kind == PEN:
+                    if trigger.kind == PEN:
                         self.pens[t] = state.tags.get(t)
 
-            terminal = [b for b in now_fired if b.terminal]
+            terminal = [trigger for trigger in now_fired if trigger.terminal]
             if terminal:
-                fired_terminal = tuple(b.name for b in terminal)
-                kinds = {b.kind for b in terminal}
+                fired_terminal = tuple(trigger.name for trigger in terminal)
+                kinds = {trigger.kind for trigger in terminal}
                 if TARGET in kinds:
                     stop_reason = "reached"
                 elif DEPARTURE in kinds:
@@ -455,13 +466,13 @@ class CoastSession:
 
             # All firings nonterminal: re-arm (or disarm one-shots) and keep
             # coasting — baselines were already refreshed above.
-            for b in now_fired:
-                if b.one_shot:
-                    armed.remove(b)
+            for trigger in now_fired:
+                if trigger.one_shot:
+                    armed.remove(trigger)
             if not armed:
                 stop_reason = "departed"
                 break
-            # A nonterminal bump still true next scan would spin the loop
+            # A nonterminal trigger still true next scan would spin the loop
             # without motion; step once so the world moves past the firing,
             # then judge that scan directly on the next pass.
             plc.step()
@@ -510,7 +521,7 @@ class CoastSession:
         """Run exactly *scans* real scans — a fixed dwell, not a seek.
 
         The one waiting shape with no predicate (a pulse's fixed settle
-        window): explicit by design, never disguised as a bump.
+        window): explicit by design, never disguised as a trigger.
         """
         plc = self.plc
         start_scan = plc.state.scan_id
@@ -537,7 +548,7 @@ class CoastSession:
     ) -> CoastReceipt:
         """Ride a departure's transition chain to its stable landing.
 
-        Departure-then-quiescence: arm a departure bump off the channel's
+        Departure-then-quiescence: arm a departure trigger off the channel's
         current value with a *confirm_scans* budget.  A silent window is the
         landing (``"quiescent"``); a departure is the next hop — record it,
         re-arm off the new value, and keep riding, bounded by *cap* total
@@ -562,7 +573,7 @@ class CoastSession:
                 break
             held = plc.state.tags.get(channel_tag)
             receipt = self.seek(
-                [departure_bump(plc, "hop", {channel_tag: held})],
+                [departure_trigger(plc, "hop", {channel_tag: held})],
                 budget=min(confirm_scans, remaining),
             )
             real_scans += receipt.real_scans
@@ -590,16 +601,16 @@ class CoastSession:
 
     def settle(
         self,
-        watch: frozenset[str],
+        watched_tags: frozenset[str],
         *,
         floor: int = LIMITS.cone_floor,
         ceiling: int = LIMITS.cone_ceiling,
         reached_fn: Callable[[dict[str, Any]], bool] | None = None,
     ) -> CoastReceipt:
-        """Step scan-by-scan until the watched cone stops moving.
+        """Step scan-by-scan until the watched tags stop moving.
 
         Quiescence, not silence-for-N: stop the first scan (after *floor*)
-        that no watched tag changed since the previous scan — a cone
+        that no watched tag changed since the previous scan — a watched-tag
         fixpoint.  Deliberately step-mode: the fixpoint compares consecutive
         real scans, which a fold would compress away; the ceiling keeps the
         window small (the fold handles long dwells via :meth:`seek`).
@@ -626,7 +637,7 @@ class CoastSession:
             if reached_fn is not None and reached_fn(cur):
                 stop_reason = "reached"
                 break
-            if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in watch):
+            if i + 1 >= floor and all(cur.get(t) == prev.get(t) for t in watched_tags):
                 stop_reason = "quiescent"
                 break
             prev = cur
@@ -643,7 +654,7 @@ class CoastSession:
         )
 
 
-def value_bump(
+def value_trigger(
     plc: PLC,
     name: str,
     kind: str,
@@ -651,8 +662,8 @@ def value_bump(
     value: Any,
     *,
     terminal: bool = True,
-) -> Bump:
-    """``tag == value`` bump: authoritative ``_values_match`` predicate plus a
+) -> CoastTrigger:
+    """``tag == value`` trigger: authoritative ``_values_match`` predicate plus a
     compiled ``CompareEq`` condition for fold metadata when the tag is known."""
 
     def _pred(s: Any) -> bool:
@@ -664,7 +675,7 @@ def value_bump(
         from pyrung.core.condition import CompareEq
 
         condition = CompareEq(tag, value)
-    return Bump(
+    return CoastTrigger(
         name=name,
         kind=kind,
         predicate=_pred,
@@ -674,15 +685,15 @@ def value_bump(
     )
 
 
-def departure_bump(
+def departure_trigger(
     plc: PLC,
     name: str,
     holds: dict[str, Any],
     *,
     excluding: dict[str, Any] | None = None,
     terminal: bool = True,
-) -> Bump:
-    """Any held tag leaves its value — the ejection guard as an armed bump.
+) -> CoastTrigger:
+    """Any held tag leaves its value — the ejection guard as an armed trigger.
 
     ``excluding`` maps a tag to a value that does NOT count as a departure
     (the zoom's own target: reaching it is arrival, not ejection).
@@ -701,7 +712,7 @@ def departure_bump(
         return False
 
     condition = _departure_condition(plc, holds, excluding)
-    return Bump(
+    return CoastTrigger(
         name=name,
         kind=DEPARTURE,
         predicate=_pred,
@@ -733,7 +744,7 @@ def _departure_condition(plc: PLC, holds: dict[str, Any], excluding: dict[str, A
     return legs[0] if len(legs) == 1 else AnyCondition(*legs)
 
 
-def predicate_bump(
+def predicate_trigger(
     name: str,
     kind: str,
     predicate: Callable[[Any], bool],
@@ -741,9 +752,9 @@ def predicate_bump(
     condition: Any = None,
     watched: tuple[str, ...] = (),
     terminal: bool = True,
-) -> Bump:
-    """Callable bump with optional equivalent Condition fold metadata."""
-    return Bump(
+) -> CoastTrigger:
+    """Callable trigger with optional equivalent Condition fold metadata."""
+    return CoastTrigger(
         name=name,
         kind=kind,
         predicate=predicate,

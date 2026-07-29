@@ -15,7 +15,7 @@ Three internal gates enforce it:
   ``_hold_allowed`` for investigation-installed corrective holds) — a candidate
   whose overlaid action makes the predicate true is rejected *before* the pulse.
 * **Scan gate** (``coast.CoastSession`` -> ``verify.verify_gates``) —
-  condition-like members ride folded coasts as named bumps, while settle
+  condition-like members ride folded coasts as named triggers, while settle
   trajectories preserve every real snapshot. Opaque callables observe only
   endpoints, retained real snapshots, and kernel scans a fold executes.
 
@@ -265,7 +265,7 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     """The scan gate receives every real settle snapshot, not only its endpoint."""
     from pyrung.core.analysis.pilot import steer
     from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
-    from pyrung.core.analysis.pilot.navigation import (
+    from pyrung.core.analysis.pilot.navigation_contracts import (
         Bearing,
         BearingObjective,
         Dwell,
@@ -311,7 +311,7 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     captured: dict[str, tuple[dict[str, object], ...]] = {}
 
     monkeypatch.setattr(steer, "fork_with_rungs", lambda plc, _rungs: plc.fork())
-    monkeypatch.setattr(steer, "_cone_tags", lambda _frame, _ctx: frozenset({"Step"}))
+    monkeypatch.setattr(steer, "_watched_tags", lambda _frame, _ctx: frozenset({"Step"}))
     monkeypatch.setattr(steer, "_pen_tags", lambda _state, _ctx: frozenset())
     monkeypatch.setattr(steer, "_compass_observations", lambda *args, **kwargs: ())
 

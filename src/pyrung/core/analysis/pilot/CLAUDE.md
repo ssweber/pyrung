@@ -38,9 +38,9 @@ evidence.
 
 1. `trace.py` follows writers, guards, copies, calculations, and
    instruction-owned cross-scan state through `advance.py`.
-2. `availability.py`, `evidence.py`, `tide_tables.py`, and `currents.py` extend
-   that read with current-state guards, pipeline structure, finite
-   constant-backed tables, and program-awaited actions.
+2. `availability.py`, `evidence.py`, `tide_tables.py`, and
+   `awaited_actions.py` extend that read with current-state guards, pipeline
+   structure, finite constant-backed tables, and program-awaited actions.
 3. `program_step.py` checks one exact producer in an otherwise-unchanged fork,
    plus one counterfactual input patch per required input, and reports keep
    running, needs input, interrupted pipeline motion, or unclear. It never
@@ -121,11 +121,11 @@ this table only locates the owner.
   orientation groups live-work alternatives ahead of fresh alternatives
 - Target-relative Bearing objective: `orientation.py::_bearing`
 - Navigation act policy: `orientation.py::_orient_read` materializes one
-  `navigation.ActPolicy`; `steer.execute` applies it
+  `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Option materialization and ranking: `options.py::_build_candidates`;
   `_select_wait` owns wait-source choice
 - Static chart-edge admission:
-  `navigation_evidence.py::NavigationEvidence.static_edge_admission`
+  `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence: `verify.py::verify_gates`
 - Committed operation context: `pilot.py::_step_context`
 - Physical planning versus proof: orientation's
@@ -234,22 +234,22 @@ Static reading and orientation:
 - `availability.py` — current-state writer availability
 - `evidence.py` — pipeline roles, transition-route expansion
 - `tide_tables.py` — finite table/calc preimages, guard verdicts
-- `charts.py` — static transition graphs, path search
+- `pipeline_graph.py` — static transition graphs and path search
 - `static_expressions.py` — static-expression helpers
 - `compass.py` — navigation facade, durable knowledge
 - `orientation.py` — current-world read, result synthesis
 - `options.py` — option/wait materialization and ranking
-- `navigation_evidence.py` — constrained reachability evidence
-- `currents.py` — program-awaited actions, producer families
+- `constrained_reachability.py` — constrained reachability evidence
+- `awaited_actions.py` — program-awaited actions and producer families
 - `advance.py` — instruction-owned channels and boundaries
 - `program_step.py` — one-producer counterfactual proof
-- `navigation.py` — immutable navigation contracts
+- `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:
 
 - `steer.py` — execute one act through the trial gates
 - `_ops.py` — shared PLC ops, overlays, pulses, world keys
-- `coast.py` — bump-driven coasts with exact receipts
+- `coast.py` — trigger-observed coasts with exact receipts
 - `cyclefold.py` — proven cycle skipping in long waits
 - `skiff.py` — isolated probes of unreadable frontiers
 
@@ -279,15 +279,16 @@ plain language on first use.
 - **compass** — the `Compass` value containing static graph references and
   persistent transition knowledge.
 - **coast** — hold the required inputs while scans pass.
+- **coast trigger** — a named predicate that records why a coast stopped or
+  what it observed.
 - **skiff** — an isolated fork probe for an unreadable frontier.
 - **tide table** — a finite solver for constant-backed transition-availability
   conditions.
-- **current** — program-owned motion or the unique operator action that motion
-  currently awaits.
+- **awaited action** — the unique operator action that program-owned motion is
+  currently waiting for.
 - **frontier** — unresolved non-steerable requirements in the selected trace
   tree.
-- **cone** — a region of tags upstream of a requirement; settling a cone is an
-  execution operation.
+- **cone** — a region of tags upstream of a requirement.
 - **gauge** — conservative target-relative evidence of earned work.
 
 Avoid extending the nautical metaphor in technical contracts. Words such as
@@ -299,8 +300,9 @@ naming code abstractions.
 Run:
 
 ```text
-make test-pilot
 make lint
+make test
+make test-tumbler
 ```
 
 When a Tumbler golden changes during a PILOT refactor, find the first changed

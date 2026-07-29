@@ -4,12 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot._ops import PilotRung
-from pyrung.core.analysis.pilot.charts import (
-    StaticTransitionGraph,
-    _best_static_path,
-    _build_action_lookup,
-    _edges_from_routes,
-)
+from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
@@ -17,20 +12,19 @@ from pyrung.core.analysis.pilot.compass import (
     NavigationCatalog,
     _evidence_scope_key,
 )
-from pyrung.core.analysis.pilot.currents import CurrentReading, Producer
+from pyrung.core.analysis.pilot.constrained_reachability import (
+    NavigationEvidence,
+    Reachable,
+    StaticEdgeExclusionReason,
+)
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     NavigationConstraints,
     OrientationWorld,
     RouteEdgeContext,
     TargetSpec,
     pulse_identity,
-)
-from pyrung.core.analysis.pilot.navigation_evidence import (
-    NavigationEvidence,
-    Reachable,
-    StaticEdgeExclusionReason,
 )
 from pyrung.core.analysis.pilot.options import (
     PrerequisiteRead,
@@ -49,6 +43,12 @@ from pyrung.core.analysis.pilot.options import (
     _select_wait,
     _separate_prerequisites,
     _TraceAdmission,
+)
+from pyrung.core.analysis.pilot.pipeline_graph import (
+    StaticTransitionGraph,
+    _best_static_path,
+    _build_action_lookup,
+    _edges_from_routes,
 )
 from pyrung.core.analysis.pilot.program_step import (
     ProgramInputHandoff,
@@ -151,7 +151,7 @@ def test_convergent_actions_remain_ordered_independent_edges(monkeypatch) -> Non
         return [first, second]
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.charts.expand_routes",
+        "pyrung.core.analysis.pilot.pipeline_graph.expand_routes",
         routes_for_ctrl_cmd,
     )
     consumer = _convergence_consumer_route()
@@ -1012,7 +1012,7 @@ def test_wait_selection_keeps_its_three_evidence_sources_explicit() -> None:
     )
 
 
-def test_candidate_assembly_consumes_current_reading_without_rereading(
+def test_candidate_assembly_consumes_awaited_action_without_rereading(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.options as options
@@ -1031,7 +1031,7 @@ def test_candidate_assembly_consumes_current_reading_without_rereading(
         PrerequisiteRead(),
         None,
     )
-    current = CurrentReading(
+    awaited_action = AwaitedAction(
         action=("Acknowledge", True),
         command_tag="Command",
         command_value=True,
@@ -1049,23 +1049,23 @@ def test_candidate_assembly_consumes_current_reading_without_rereading(
     )
     monkeypatch.setattr(
         options,
-        "_current_bearing",
-        lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected current re-read")),
+        "_awaited_action_bearing",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected awaited-action re-read")),
     )
 
     read = _assemble_candidate_read(
         route_and_wait,
         separated,
         None,
-        current,
+        awaited_action,
         frame,
         ctx,
         set(),
     )
 
     assert tuple(option.pair for option in read.options) == (("Acknowledge", True),)
-    assert read.options[0].current_prescribed
-    assert read.options[0].current_note == "program awaits Acknowledge"
+    assert read.options[0].awaited_action_prescribed
+    assert read.options[0].awaited_action_note == "program awaits Acknowledge"
 
 
 def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:

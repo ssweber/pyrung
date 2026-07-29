@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot import progress, recording
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,

@@ -6,7 +6,7 @@ drivers. ``_best_static_path`` searches those graphs without executing the
 program. The module also detects opaque transition-pipeline slices used when
 building the analysis context.
 
-Charts enumerate every source match, exact edges before wildcard edges:
+Static graphs enumerate every source match, exact edges before wildcard edges:
 specificity is precedence, never a pre-filter veto of a surviving wildcard
 route.  A convergence lookup is an ordered multimap of primary-action
 alternatives — construction fans each alternative into its own edge, and only
@@ -258,7 +258,7 @@ def build_static_transition_graphs(
             opaque_loop,
             evidence,
         )
-        from pyrung.core.analysis.pilot.currents import sibling_producer_family
+        from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
         from pyrung.core.analysis.pilot.types import WorldView
 
         world = WorldView(

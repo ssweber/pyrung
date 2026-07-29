@@ -10,7 +10,7 @@ from pyrung.core.analysis.pilot._ops import (
     _StateKeyConfig,
     wait_edge_nogood,
 )
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,
@@ -373,7 +373,7 @@ def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolic
         heading=heading,
         provenance=option.provenance,
         wake=option.wake,
-        note=option.current_note or option.program_note,
+        note=option.awaited_action_note or option.program_note,
         context_actions=option.program_context_actions,
     )
 
@@ -476,7 +476,7 @@ def _orient_read(
             candidates,
             target=target,
             rationale=(
-                option.current_note
+                option.awaited_action_note
                 or getattr(option, "program_note", None)
                 or ("static route edge" if option.source is ActSource.ROUTE else "")
                 or ("learned transition" if option.source is ActSource.INFLUENCE else "")

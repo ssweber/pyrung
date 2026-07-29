@@ -8,7 +8,7 @@ from pyrung import PLC, Bool, Int, Program, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot._ops import PilotRung, _append_rungs, _set_rungs
 from pyrung.core.analysis.pilot.compass import Compass
-from pyrung.core.analysis.pilot.navigation import TargetSpec
+from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.options import _build_candidates
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,

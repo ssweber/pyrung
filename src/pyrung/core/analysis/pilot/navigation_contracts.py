@@ -92,7 +92,7 @@ class ActSource(StrEnum):
     ROUTE = "route"
     TRACE = "trace"
     INFLUENCE = "influence"
-    CURRENT = "current"
+    AWAITED_ACTION = "awaited_action"
     PROGRAM = "program"
     LEARNED = "learned"
     WIDENING = "widening"
@@ -165,7 +165,7 @@ class ActPolicy:
 
     @property
     def route_prescribed(self) -> bool:
-        return self.source in {ActSource.ROUTE, ActSource.CURRENT}
+        return self.source in {ActSource.ROUTE, ActSource.AWAITED_ACTION}
 
     @property
     def regression_nogoods(self) -> frozenset[_ActionPair]:

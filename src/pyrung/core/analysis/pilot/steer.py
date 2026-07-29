@@ -34,7 +34,7 @@ from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.coast import LIMITS, CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
     Coast,
@@ -91,16 +91,16 @@ def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, .
     )
 
 
-def _settle_cone(
+def _settle_watched_tags(
     fork: PLC,
-    cone: frozenset[str],
+    watched_tags: frozenset[str],
     *,
     floor: int = LIMITS.cone_floor,
     ceiling: int = _SETTLE_CONE_CEILING,
     reached_fn: Callable[[dict[str, Any]], bool] | None = None,
     session: CoastSession | None = None,
 ) -> list[dict[str, Any]]:
-    """Coast *fork* until the cone stops moving — dwell control only.
+    """Coast *fork* until the watched tags stop moving — dwell control only.
 
     Thin wrapper over :meth:`CoastSession.settle` (see its docstring for the
     fixpoint/floor/transient semantics); returns the per-scan trajectory.
@@ -112,7 +112,7 @@ def _settle_cone(
     if session is None:
         session = CoastSession(fork, kind="settle")
     assert session.plc is fork
-    receipt = session.settle(cone, floor=floor, ceiling=ceiling, reached_fn=reached_fn)
+    receipt = session.settle(watched_tags, floor=floor, ceiling=ceiling, reached_fn=reached_fn)
     return list(receipt.trajectory)
 
 
@@ -141,7 +141,7 @@ def _pen_tags(state: _PilotState, ctx: _PilotContext) -> frozenset[str]:
     return frozenset(tags - accs)
 
 
-def _cone_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
+def _watched_tags(frame: _IterationFrame, ctx: _PilotContext) -> frozenset[str]:
     """The tags whose motion matters this iteration.
 
     The trace-tree prerequisites toward the goal — satisfied *and* unsatisfied,
@@ -188,7 +188,7 @@ def _apply_actions(
     action_snap = dict(fork.state.tags)
     action_scan = fork.state.scan_id
 
-    # Stop the settle the scan the target holds — otherwise the cone-fixpoint
+    # Stop the settle the scan the target holds — otherwise the watched-tag fixpoint
     # coast (and the delayed-effect fast-forward) steps straight through a
     # one-scan transient (STARTING → EXECUTE) and the post-settle check never
     # sees it.  Landing the fork on the transient lets verify confirm it.
@@ -198,8 +198,8 @@ def _apply_actions(
     if _reached(action_snap):
         wait_snaps: list[dict[str, Any]] = []
     else:
-        wait_snaps = _settle_cone(
-            fork, _cone_tags(frame, ctx), floor=2, reached_fn=_reached, session=session
+        wait_snaps = _settle_watched_tags(
+            fork, _watched_tags(frame, ctx), floor=2, reached_fn=_reached, session=session
         )
 
     post_pulse_snap = dict(fork.state.tags)
@@ -506,7 +506,7 @@ def _try_zoom(
         fork,
         channel_tag,
         target_value,
-        cone=_cone_tags(frame, ctx),
+        watched_tags=_watched_tags(frame, ctx),
         session=session,
         boundary=boundary,
         route_channel_tag=route_channel_tag,
@@ -579,7 +579,7 @@ def _try_terminal_letrun(
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
     Reached here when no route zoom, no command candidate, and no widening made
-    progress, yet the cone is still live (things pending).  The only move left is
+    progress, yet the watched tags are still live (things pending). The only move left is
     to hold the current macro-state and coast toward the global target, letting
     the program's self-advancing sub-processes (timers, step-counters) complete.
 
@@ -591,7 +591,7 @@ def _try_terminal_letrun(
       - macro-state left -> AMBIENT_DRIFT; commit + _monitor_trend hands the
         ejection to investigation (the same path the doors took).
       - stall (budget, no target, no ejection) -> dead-end reject; the caller
-        falls back to a bounded cone settle.
+        falls back to a bounded watched-tag settle.
     """
     role_tags = coast_departure_tags(state, ctx)
     # fork_with_rungs re-establishes the steady holds on the coast fork: force
@@ -656,7 +656,7 @@ def _try_terminal_letrun(
     #   ejected  -> a role left its held value: AMBIENT_DRIFT, handed to
     #               investigation via the changed role as the deviation bearing.
     #   stall    -> nothing reached, no role moved: a true dead end; let the
-    #               caller fall back to a bounded cone settle.
+    #               caller fall back to a bounded watched-tag settle.
     reached = target_reached(snap_after, ctx.target.tag, ctx.target.value, ctx.target.predicate)
     changed_channel = next(
         (t for t in role_tags if not _values_match(snap_after.get(t), start_roles[t])),
@@ -719,7 +719,7 @@ def _try_terminal_dwell(
     so repeating the full ejection-guarded let-run would reproduce the same
     departure.
 
-    Perform one deterministic cone settle on a fork and route it through the
+    Perform one deterministic watched-tag settle on a fork and route it through the
     same :func:`verify_gates` target gate as terminal let-run:
 
       - a self-advancing frontier that crosses the target during the dwell is
@@ -747,8 +747,13 @@ def _try_terminal_dwell(
     )
     session = CoastSession(fork, kind="settle")
     session.arm_pens(_pen_tags(state, ctx))
-    dwell = _settle_cone(
-        fork, _cone_tags(frame, ctx), floor=2, ceiling=ceiling, reached_fn=_reached, session=session
+    dwell = _settle_watched_tags(
+        fork,
+        _watched_tags(frame, ctx),
+        floor=2,
+        ceiling=ceiling,
+        reached_fn=_reached,
+        session=session,
     )
 
     snap_after = dict(fork.state.tags)
@@ -767,7 +772,7 @@ def _try_terminal_dwell(
     )
 
     if not _reached(snap_after):
-        # No new input is possible here and the cone quiesced without crossing the
+        # No new input is possible here and the watched tags quiesced without crossing the
         # target: a true terminal stall.  Do not classify a self-ejection as an
         # advance — return dead-end so the caller routes to the skiff / stuck exit.
         return _AttemptResult(
@@ -806,7 +811,7 @@ def _letrun_zoom(
     work: PLC,
     channel_tag: str | None,
     target_value: Any,
-    cone: frozenset[str],
+    watched_tags: frozenset[str],
     session: CoastSession | None = None,
     *,
     boundary: Any = None,
@@ -819,16 +824,22 @@ def _letrun_zoom(
     searching.
 
     With a channel register and target value, seek with the target and
-    departure bumps armed — the coast lands on the exact scan either fires
+    departure triggers armed — the coast lands on the exact scan either fires
     and the returned receipt says which.  Without a channel register, fall
-    back to the bounded single-step cone settle (no receipt — outcome's
+    back to the bounded single-step watched-tag settle (no receipt — outcome's
     settle-path arm depends on its absence; the session still records pens).
 
     Returns ``(trajectory, receipt_or_None)``.
     """
     if channel_tag is None:
         return (
-            _settle_cone(work, cone, floor=2, ceiling=_LETRUN_DWELL_CEILING, session=session),
+            _settle_watched_tags(
+                work,
+                watched_tags,
+                floor=2,
+                ceiling=_LETRUN_DWELL_CEILING,
+                session=session,
+            ),
             None,
         )
 

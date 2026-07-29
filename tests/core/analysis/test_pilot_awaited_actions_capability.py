@@ -1,7 +1,7 @@
-"""CI gates for the program-owned-current capability pieces.
+"""CI gates for the program-awaited-action capability pieces.
 
 Covers the read-side building blocks that make a program-owned command producer
-visible beside the avoided operator button (see ``currents.py``):
+visible beside the avoided operator button (see ``awaited_actions.py``):
 
 * **const-fold** (piece 1) — a copy from a program constant (never-written,
   non-lever) folds to its declared default, so a value-by-literal producer search
@@ -16,7 +16,8 @@ visible beside the avoided operator button (see ``currents.py``):
 * **tide-gated edge** (piece 3, born STRICT-XFAIL) — a program-owned producer via a
   const-Ref copy, guarded by an internal step/timer chain that needs one external
   nudge, with the operator button for the same value avoided.  The recipe advance
-  is NOT an operator ack at a recognized state (so ``currents`` returns None), and
+  is NOT an operator ack at a recognized state (so ``awaited_actions`` returns
+  None), and
   the trace dead-ends on the opaque-loop state register — so today the pilot never
   surfaces the producer's step-chain prerequisites.  Flips when channel-punt
   expansion surfaces them into the trace tree.
@@ -46,7 +47,7 @@ from .test_pilot_table_detour import _packml_table_detour_program
 def _walkctx(logic, plc):
     """A drive-layer :class:`WorldView` (steerable has ref-constants subtracted)."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.charts import detect_opaque_loop
+    from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.pilot.trace import compute_reference_constants
     from pyrung.core.analysis.pilot.types import WorldView
     from pyrung.core.analysis.steerable import compute_steerable
@@ -67,7 +68,7 @@ def _walkctx(logic, plc):
 def test_const_fold_folds_program_constant_source() -> None:
     """An identity copy from a never-written, non-lever constant folds to its
     default, so the program-owned producer's written value is statically known."""
-    from pyrung.core.analysis.pilot.currents import (
+    from pyrung.core.analysis.pilot.awaited_actions import (
         fold_const_copy_source,
         is_program_constant,
     )
@@ -86,7 +87,7 @@ def test_const_fold_folds_program_constant_source() -> None:
 
 def test_const_fold_punts_on_program_written_source() -> None:
     """Fail-closed: a source with any program writer is not a constant — no fold."""
-    from pyrung.core.analysis.pilot.currents import (
+    from pyrung.core.analysis.pilot.awaited_actions import (
         fold_const_copy_source,
         is_program_constant,
     )
@@ -104,7 +105,7 @@ def test_const_fold_punts_on_program_written_source() -> None:
 def test_const_fold_punts_on_steerable_source() -> None:
     """A steerable/external operator word is a lever, not a constant — no fold
     (its value can change, so folding to the snapshot value would be unsound)."""
-    from pyrung.core.analysis.pilot.currents import (
+    from pyrung.core.analysis.pilot.awaited_actions import (
         fold_const_copy_source,
         is_program_constant,
     )
@@ -127,7 +128,7 @@ def test_sibling_family_includes_program_and_operator() -> None:
     """The family for the terminal command value carries BOTH the program-owned
     producer (a const-Ref copy under a timer done) and the operator button — the
     const-fold is what makes the program producer join the value's family."""
-    from pyrung.core.analysis.pilot.currents import sibling_producer_family
+    from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 
     logic, _tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -147,7 +148,7 @@ def test_sibling_family_without_steerable_exemplar() -> None:
     """A steerable exemplar is SUFFICIENT but not NECESSARY: the Hold command value
     is issued only by the program's own dwell timer (no operator Hold button), so
     the family is found with ``has_steerable_exemplar=False``."""
-    from pyrung.core.analysis.pilot.currents import sibling_producer_family
+    from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 
     logic, _tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -162,7 +163,7 @@ def test_sibling_family_without_steerable_exemplar() -> None:
 
 def test_sibling_family_none_for_unproduced_value() -> None:
     """No writer produces the value -> None (never fabricate a family)."""
-    from pyrung.core.analysis.pilot.currents import sibling_producer_family
+    from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 
     logic, _tags = _packml_table_detour_program()
     plc = PLC(logic, dt=0.010)
@@ -224,10 +225,12 @@ def _tide_gated_program() -> tuple[Program, dict[str, object]]:
     copy, gated by an INTERNAL step/timer chain that needs one external nudge.
 
     Unlike the sibling ``_packml_table_detour_program`` (whose detour turns on an
-    operator ack legal *at a recognized state*, which ``currents`` surfaces), here
+    operator ack legal *at a recognized state*, which ``awaited_actions``
+    surfaces), here
     the recipe advance is a step chain: Execute dwells a timer, the step needs one
     external ``DoorSensor`` rise to advance, and only at the final step does the
-    program self-issue Complete.  There is NO operator ack at any state the current
+    program self-issue Complete. There is NO operator ack at any state the
+    awaited-action
     reader recognizes, so recognition is silent and the trace dead-ends on the
     opaque-loop state register — the tide-gated edge the capability must open.
     """
@@ -342,7 +345,7 @@ def test_tide_gated_premise() -> None:
     assert plc.state.tags[tags["C_Complete"].name] is False
 
 
-def test_tide_gated_edge_reaches_via_program_current() -> None:
+def test_tide_gated_edge_reaches_via_program_awaited_action() -> None:
     """PILOT reaches Completed by opening the tide-gated program-owned edge —
     pressing the one external nudge (DoorSensor) at the right step and riding the
     program's self-issued Complete — without pressing the avoided C_Complete."""

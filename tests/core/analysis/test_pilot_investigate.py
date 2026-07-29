@@ -24,7 +24,7 @@ from pyrung.core.analysis.pilot._ops import (
     _set_rungs,
     _StateKeyConfig,
 )
-from pyrung.core.analysis.pilot.coast import BumpEvent, CoastSession
+from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
@@ -55,7 +55,7 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_deviation,
     investigate_excursion,
 )
-from pyrung.core.analysis.pilot.navigation import TargetSpec
+from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
@@ -2245,9 +2245,9 @@ class TestMultiReadCorrections:
         assert held["Enable"].value is True
         assert held["Mode"].value == 2
 
-    def test_conjunction_with_undrivable_read_declined(self):
+    def test_conjunction_with_unsteerable_read_declined(self):
         # (c) A conjunct that resolves to no steerable driver makes the whole
-        # coordinated hold undrivable — decline exactly as the single-read path did.
+        # coordinated hold unsteerable — decline exactly as the single-read path did.
         A = Bool("A", external=True)
         Locked = Bool("Locked", readonly=True)  # a constant PILOT cannot steer
         Internal = Bool("Internal")
@@ -2519,7 +2519,7 @@ def _clobber_copy_program() -> Program:
 
     ``State`` is set to 5 on a rising ``Command`` edge, but ``copy(0, State)``
     gated by ``And(Internal, Mode == 2)`` clobbers it back every scan.
-    ``Internal`` rides an unsteerable ``readonly`` latch, so the only drivable
+    ``Internal`` rides an unsteerable ``readonly`` latch, so the only steerable
     lever is the int ``Mode``.  The old bool-only fallback cannot flip an int
     comparison (this excursion is *unresolved* today); the generalized dispatch
     suppresses the copy by forcing its guard FALSE via the int-domain forcing
@@ -2690,27 +2690,27 @@ class TestFirstTimelineDeparture:
 
     def test_finds_first_transition_off_value(self):
         timeline = (
-            BumpEvent("pen", "pen", 5, (("B", False, True),)),
-            BumpEvent("pen", "pen", 9, (("B", True, False),)),
+            CoastTriggerEvent("pen", "pen", 5, (("B", False, True),)),
+            CoastTriggerEvent("pen", "pen", 9, (("B", True, False),)),
         )
         assert _first_timeline_departure(timeline, "B", False) == 5
 
     def test_departure_is_relative_to_the_queried_value(self):
         # A single True -> False transition is a departure off True (scan 3),
         # not off False (which it lands on).
-        timeline = (BumpEvent("pen", "pen", 3, (("B", True, False),)),)
+        timeline = (CoastTriggerEvent("pen", "pen", 3, (("B", True, False),)),)
         assert _first_timeline_departure(timeline, "B", True) == 3
         assert _first_timeline_departure(timeline, "B", False) is None
 
     def test_returns_the_first_of_several(self):
         timeline = (
-            BumpEvent("pen", "pen", 4, (("B", False, True),)),
-            BumpEvent("pen", "pen", 8, (("B", False, True),)),
+            CoastTriggerEvent("pen", "pen", 4, (("B", False, True),)),
+            CoastTriggerEvent("pen", "pen", 8, (("B", False, True),)),
         )
         assert _first_timeline_departure(timeline, "B", False) == 4
 
     def test_no_matching_tag_returns_none(self):
-        timeline = (BumpEvent("pen", "pen", 7, (("A", False, True),)),)
+        timeline = (CoastTriggerEvent("pen", "pen", 7, (("A", False, True),)),)
         assert _first_timeline_departure(timeline, "B", False) is None
 
     def test_empty_timeline_returns_none(self):
@@ -2788,7 +2788,7 @@ class TestBuildDeviationIncident:
         plc.patch({"A": True})
         plc.step()
         # The recorded evidence: B departed False -> True the scan A latched it.
-        timeline = (BumpEvent("pen", "pen", plc.state.scan_id, (("B", False, True),)),)
+        timeline = (CoastTriggerEvent("pen", "pen", plc.state.scan_id, (("B", False, True),)),)
         incident = build_deviation_incident(
             anchor_scan=anchor,
             end_scan=plc.state.scan_id,

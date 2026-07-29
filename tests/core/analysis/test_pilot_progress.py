@@ -30,6 +30,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
+from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
 from pyrung.core.analysis.pilot.detour import (
     ContinuationEvidence,
     DepartureClassification,
@@ -46,7 +47,7 @@ from pyrung.core.analysis.pilot.gauge import (
     GaugeReceipt,
 )
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
-from pyrung.core.analysis.pilot.navigation import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
     BatchPulse,
@@ -54,7 +55,6 @@ from pyrung.core.analysis.pilot.navigation import (
     BearingObjective,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.navigation_evidence import Reachable, Unknown
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -942,7 +942,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
     )
     departure = _departure_result(
         trial.fork,
-        reason="unique clean current",
+        reason="unique clean awaited action",
         settled_value=4,
         progress=GaugeReceipt((GaugeReading("Step", 1, 1, 1),)),
         from_value=2,

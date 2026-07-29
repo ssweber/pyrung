@@ -11,7 +11,13 @@ from typing import Any, Literal, TypeGuard, cast
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
 
-from pyrung.core.analysis.pilot.charts import (
+from pyrung.core.analysis.pilot.navigation_contracts import (
+    NavigationConstraints,
+    OrientationResult,
+    OrientationWorld,
+    TargetSpec,
+)
+from pyrung.core.analysis.pilot.pipeline_graph import (
     ANY_FROM,
     Action,
     ActionPair,
@@ -20,12 +26,6 @@ from pyrung.core.analysis.pilot.charts import (
     _applied_key,
     _canonical_applied,
     _context_value_key,
-)
-from pyrung.core.analysis.pilot.navigation import (
-    NavigationConstraints,
-    OrientationResult,
-    OrientationWorld,
-    TargetSpec,
 )
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -44,11 +44,11 @@ __all__ = [
     "WaitCause",
     "is_action",
     "is_composite_action",
-    "unique_legal_current_reading",
+    "unique_legal_awaited_action",
 ]
 
 
-def unique_legal_current_reading(
+def unique_legal_awaited_action(
     world: Any,
     channel_tag: str,
     pipeline_roles: Any,
@@ -57,10 +57,10 @@ def unique_legal_current_reading(
     action_allowed: Callable[[ActionPair], bool] = lambda _action: True,
     awaits_operator: bool = False,
 ) -> Any:
-    """Return the one legal current reading under the caller's stated policy."""
+    """Return the one legal awaited action under the caller's stated policy."""
 
-    from pyrung.core.analysis.pilot.currents import (
-        current_readings,
+    from pyrung.core.analysis.pilot.awaited_actions import (
+        awaited_actions,
         sibling_producer_family,
     )
 
@@ -80,7 +80,7 @@ def unique_legal_current_reading(
 
     legal = tuple(
         reading
-        for reading in current_readings(world, channel_tag, pipeline_roles)
+        for reading in awaited_actions(world, channel_tag, pipeline_roles)
         if action_allowed(reading.action)
         and not action_avoided(reading.action)
         and (not awaits_operator or _awaits_operator(reading))

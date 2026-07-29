@@ -16,11 +16,14 @@ import importlib
 
 from pyrung import PLC
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.charts import build_static_transition_graphs, detect_opaque_loop
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pilot import (
     _build_prover_context,
     _infer_pipeline_roles_for_context,
+)
+from pyrung.core.analysis.pilot.pipeline_graph import (
+    build_static_transition_graphs,
+    detect_opaque_loop,
 )
 from pyrung.core.analysis.pilot.trace import compute_reference_constants
 from pyrung.core.analysis.steerable import compute_steerable

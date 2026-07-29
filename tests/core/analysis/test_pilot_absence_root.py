@@ -27,7 +27,7 @@ from typing import Any
 
 from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot.coast import BumpEvent
+from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.investigate import (
     ReplayIncident,
     ReplayStep,
@@ -37,7 +37,7 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation import TargetSpec
+from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -118,7 +118,7 @@ def _incident(plc: PLC, anchor: int, before: dict[str, Any]):
         before_snap=before,
         after_snap=dict(plc.state.tags),
         timeline=(
-            BumpEvent(
+            CoastTriggerEvent(
                 "pen",
                 "pen",
                 plc.state.scan_id,
