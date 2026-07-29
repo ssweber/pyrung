@@ -1,14 +1,19 @@
 """Build and replay bounded hypotheses for departures and excursions.
 
-The module constructs incident windows and replay functions, derives candidate
-holds from causal roots, writer enablers, and pinned scans, ranks those
-hypotheses, closes the first explanation over sibling causes exposed by its
-counterfactual replay, resolves each attempt as accepted, extended, or rejected,
-and returns the first composite that survives. It also provides the shorter
-excursion investigation used by trial verification.
+``build_deviation_incident`` freezes the recorded window. Deviation
+investigation derives three hypothesis families (absence roots, precise
+fired-chain cuts, and ``correct_enablers`` results), orders them with
+``_rank_hypotheses``, and tests each with the exploratory replay returned by
+``build_replay_fn``. ``_resolve_replay_attempt`` either accepts, rejects, or
+extends an attempt; bounded replacement-cause closure uses
+``_compose_hypotheses`` and always replays the composite from the original
+checkpoint. A surviving exploratory result receives an evidence-derived
+lifetime from ``_scoped_correction_rungs`` and must survive a guarded replay
+before the first confirmed composite is returned.
 
-Investigation confirms a proposed correction but does not install it; recovery
-and installation belong to ``progress.py``.
+``investigate_excursion`` is the shorter verification-time path for a trial
+that reverted. Neither path installs its correction; recovery and installation
+belong to ``progress.py``.
 """
 
 from __future__ import annotations
@@ -1822,12 +1827,15 @@ def investigate_deviation(
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
-    Two sources, both instrument-derived:
-    1. Precise cause walk — single cause()-chain from the first departure
-       that reaches a steerable input (the *trigger-found* case).
-    2. Enabler correction — when cause finds no steerable trigger, the held
-       enablers are the cause; ``correct_enablers`` asks the writer for either
-       a guard-breaking assignment or an owner-declared accumulator operation.
+    Three hypothesis families, all instrument-derived:
+
+    1. Absence roots — a deep cause walk finds required signals that never
+       transitioned inside the incident.
+    2. Precise fired-chain cuts — recorded writer/cause chains identify a
+       steerable trigger or a pinned causal cut.
+    3. Enabler correction — ``correct_enablers`` asks a harmful writer for a
+       guard-breaking assignment or an owner-declared accumulator operation.
+
     No upstream cone sweep.
 
     Hypotheses are ranked by causal primacy. A counterfactual replacement with

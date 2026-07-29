@@ -2,11 +2,15 @@
 
 The solvers model indirect table operands, enumerate known finite index
 domains, and return satisfying assignments or calculation preimages for the
-backward trace. Unmodelled live operands produce no exact solution.
+backward trace. ``_index_domain`` may supply plausible values for a
+non-rejecting read, while ``_is_complete_domain`` recognizes only a domain that
+can support proof. ``_guard_operand_domain`` resolves the values to enumerate,
+but ``guard_verdict`` returns permanent ``GUARD_DEAD`` only when every free
+operand passed that completeness gate.
 
-Some helper paths can return plausible values for non-rejecting reads.
-``guard_verdict`` owns the complete-domain gate before it returns a permanent
-guard rejection.
+``bounded_product`` also bounds the proof search. A missing domain, undecidable
+term, or overflow of those enumeration limits returns ``GUARD_PUNT``—never a
+fabricated rejection.
 """
 
 from __future__ import annotations

@@ -384,7 +384,13 @@ def _orient_read(
     target: TargetSpec,
     constraints: NavigationConstraints,
 ) -> OrientationResult:
-    """Materialize the best result from one already-read alternative."""
+    """Materialize one alternative in act-precedence order.
+
+    A selected wait is considered before learned batches and individual action
+    options; widening, diagnosis, and terminal continuation follow. Each exact
+    act is checked against the current world's nogoods before it becomes a
+    bearing.
+    """
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
@@ -566,9 +572,11 @@ def _read_group(
     """Read alternatives once under the caller's work-ownership disposition.
 
     Alternative order remains the trace reader's deterministic order. There is
-    no cross-alternative score and no retained cursor. Fresh reads may look
-    past maintenance for a concrete bearing; once live work owns the group,
-    maintenance is itself the continuation and ends the read.
+    no cross-alternative score and no retained cursor. With
+    ``maintenance_owns=True``, an open operation's first bearing wins even when
+    it is terminal coast or dwell maintenance. Fresh alternatives instead look
+    past maintenance for a concrete bearing and use the first maintenance
+    result only as their fallback.
     """
 
     results: list[OrientationResult] = []

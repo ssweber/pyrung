@@ -5,6 +5,13 @@ canonicalizes pipeline aliases, identifies channel, action, stepping, and
 internal tags, and expands ingress paths into ``TransitionRoute`` values with
 separate source constraints and enablers.
 
+``pilot._infer_pipeline_roles_for_context`` owns the outer admission: it visits
+opaque-loop tags, keeps prover-classified stepping tags when evidence exists,
+and retains only roles with request tags. ``infer_pipeline_roles`` owns the
+inner partition: request tags come from expanded routes, internal guards are
+route/target-writer conditions read only by target writers, and scratch tags
+come from ``TransitionEvidence`` functional dependencies and elisions.
+
 The result is static evidence consumed by trace and graph construction; no
 program execution or runtime transition learning occurs here.
 """
@@ -535,10 +542,12 @@ def infer_pipeline_roles(
     """Infer generic roles for a transition pipeline writing *target_tag*.
 
     This is intentionally structural. It does not know state machines, commands,
-    or burner-specific names. A guard is considered pipeline-internal when it is
-    part of a route condition and all of its readers are the target writer
-    rungs. Request tags are retained as traceable because their writers often
-    reveal the meaningful transition causes.
+    or burner-specific names. Expanded routes identify request tags. A guard is
+    pipeline-internal only when it participates in a route or target-writer
+    condition and all of its readers are target-writer rungs. Request tags stay
+    traceable because their writers often reveal meaningful transition causes;
+    ``TransitionEvidence`` supplies the functionally dependent and elided
+    scratch tags hidden behind them.
     """
 
     routes = expand_routes(target_tag, pdg, program, steerable, opaque_loop, evidence)

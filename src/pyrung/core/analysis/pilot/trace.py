@@ -454,7 +454,7 @@ class TraceNode:
     owner_boundary: tuple[str, Any] | None = None
     owner_condition: Any = None
     # A non-linear profile's boundary is itself the next stage heading. Linear
-    # profiles keep the existing gauge/terminal-coast path.
+    # profiles keep the existing earned-work/terminal-coast path.
     stage_boundary: bool = False
     # A real linear profile keeps prerequisite holds until its parent producer
     # settles. Synthetic and non-linear boundaries use ``AdvanceStep.until``.

@@ -6,6 +6,13 @@ transitions, and program-awaited actions. Frozen private receipts keep those
 sources distinct until ``_select_wait`` applies their precedence and
 ``_assemble_candidate_read`` creates the sole durable ``CandidateRead``.
 
+Wait precedence is explicit: a prescribed learned wait wins, otherwise a
+charted completion wins, and a standalone instruction boundary is used only
+when there are no action candidates and no prescribed wait. Charted completion
+may borrow an instruction-owned heading while retaining its route context.
+``_AdmittedWait.viable`` and ``WaitRead.without_prescription`` ensure failed
+admission removes coast authority without discarding the evidence it exposed.
+
 Candidate construction reads the current world and knowledge but does not
 execute a trial, apply observations, or commit state.
 """
@@ -76,8 +83,8 @@ class _Candidate:
     # A program-awaited action (awaited_actions.py): the one operator action the program
     # is dwelling on at the current state of an opaque-loop channel, surfaced when
     # the trace dead-ends and the compass route is the avoided command.  Ordered
-    # like a prescribed edge (a recognized bearing), but below route/influence so
-    # it is the fallback, never overriding an available route.
+    # like a prescribed edge (a recognized bearing), but below static-route and
+    # learned-action evidence, so it never overrides an available route.
     awaited_action_note: str = ""
     # An external input required by the exact program producer selected for an
     # automatic route edge. It is a current-world bearing below an established
@@ -942,7 +949,7 @@ def _prescribe_wait(
     The single owner of "a wait is prescribed" for both mint paths. A route
     completion edge (bearing coast) must be *grounded* — a wildcard from-value has no
     dwell semantics, so its read has no prescription. An
-    influence-path wait passes ``edge=None`` with an explicit ``reason`` —
+    learned-path wait passes ``edge=None`` with an explicit ``reason`` —
     always coastable. Automatic sibling edges carry one exact-producer
     ``ProgramStep`` reading in the returned prescription.
 
@@ -1537,8 +1544,14 @@ def _select_wait(
     """Select one wait from three explicit evidence sources.
 
     This is the sole chooser among learned motion, charted completion, and an
-    instruction-owned boundary, under the established prescription and
-    candidate gates.
+    instruction-owned boundary. A prescribed learned wait wins; otherwise
+    charted completion wins. A standalone instruction boundary is selected
+    only when there are no action candidates and neither earlier source
+    supplied a prescription.
+
+    When charted completion and an instruction boundary describe the same
+    current work, the instruction heading is rebound with the chart route
+    context before precedence is applied.
     """
 
     charted = charted_completion

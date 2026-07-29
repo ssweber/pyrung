@@ -281,7 +281,22 @@ plain language on first use.
 - **coast** — hold the required inputs while scans pass.
 - **coast trigger** — a named predicate that records why a coast stopped or
   what it observed.
-- **skiff** — an isolated fork probe for an unreadable frontier.
+- **pen** — a nonterminal, re-arming `CoastSession` transition recorder. Each
+  firing records an exact event but never ends the coast; watch semantic
+  transitions, not raw accumulator churn.
+- **wake** — the size of an action tag's downstream PDG slice. It demotes broad
+  actions in ranking but never rejects them.
+- **channel** — the observable state-like boundary of an operation or coast,
+  usually `PipelineRoles.channel_tag`. `coast_departure_tags` adds an exact
+  stateful, non-earned-work target when no inferred pipeline owns it.
+- **world key** — `_pilot_state_key`'s state projection plus the ordered
+  identities of the active overlay rules. It scopes nogoods, probes, coast
+  receipts, and cycle detection.
+- **nogood** — durable evidence that one exact `act_identity` failed in one
+  world key. A failed joint act does not reject its individual members.
+- **skiff** — an isolated fork probe for an unreadable frontier. It returns
+  observations and commits nothing; the drive loop applies those observations
+  and owns the per-world-key probe budget.
 - **tide table** — a finite solver for constant-backed transition-availability
   conditions.
 - **awaited action** — the unique operator action that program-owned motion is
@@ -301,8 +316,7 @@ Run:
 
 ```text
 make lint
-make test
-make test-tumbler
+make test-pilot
 ```
 
 When a Tumbler golden changes during a PILOT refactor, find the first changed
@@ -319,4 +333,4 @@ different module that exposes `logic`. The tool stops at the first changed
 event and prints the preceding matching events, the expected event, the actual
 event, elapsed time, and the raw scan. Exit status 0 means the complete
 skeleton matches; 1 means it diverged; 2 means setup or the wall budget failed.
-It is a fast diagnosis loop, not a replacement for `make test-tumbler`.
+It is a fast diagnosis loop, not a replacement for `make test-pilot`.

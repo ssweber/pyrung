@@ -1,13 +1,19 @@
 """Measure conservative, target-relative work that search keys may alias.
 
-``build_earned_work`` recognizes retained ordinal and stepper registers whose writers
-all have classifiable discrete provenance. An ``EarnedWork`` compares marks across
-worlds and exposes reset boundaries used by verification and departure
-classification.
+``build_earned_work`` recognizes two families in the target cone: ordinal
+threshold-vector coordinates and discrete stateful steppers. Advance writers
+must establish one consistent stride direction, and each advance must be
+proved discrete-event-driven or self-limiting. Literal and
+counter-directional writes become reset evidence; steerable, clear-only,
+pipeline-internal, channel, and instruction-profile accumulator tags are
+excluded.
 
-If any effective writer of a component is unclassifiable, that component is
-omitted. Consumers receive unknown rather than inferred progress from an
-incomplete earned-work model.
+Unknown writer shapes, unproved advances, and mixed directions omit the
+component. Unresolved reset enablement does not: it is retained as
+``_ResetWriter(resolved=False)`` so departure safety becomes ``unknown`` rather
+than silently treating the reset as unreachable. An ``EarnedWork`` compares
+the resulting marks across worlds for verification and departure
+classification.
 """
 
 from __future__ import annotations
@@ -418,9 +424,10 @@ def build_earned_work(
 ) -> EarnedWork:
     """Build the target-relative earned-work model (see module docstring).
 
-    Conservative on every axis: unknown writer shapes, unresolvable guards, or
-    mixed stride directions omit the tag; an empty model is a valid answer
-    (downstream verdicts then say ``unknown`` instead of guessing).
+    Conservative on every axis: unknown writer shapes, unproved advances, or
+    mixed stride directions omit the tag; an unresolved reset guard is retained
+    as unsafe-to-classify evidence. An empty model is a valid answer (downstream
+    verdicts then say ``unknown`` instead of guessing).
     """
     from pyrung.core.analysis.pilot.advance import iter_advance_owners
 

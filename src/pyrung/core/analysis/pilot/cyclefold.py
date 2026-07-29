@@ -1,18 +1,17 @@
 """Fold long waits that contain a proven repeating active-hold cycle.
 
-``detect_cycle`` identifies a stable period and its monotone progress
-coordinate. ``cycle_fold_until`` advances that coordinate by whole periods,
-then executes one real period at normal scan time so cyclic tags retain their
-phase and time-dependent resets still run.
+``detect_cycle`` observes a period aligned to every read clock and certifies
+which coordinates advance monotonically. ``cycle_fold_until`` jumps only whole
+periods, stopping at ``k - 1`` before the nearest proved crossing and before
+the harness or configured work-budget boundary. The jump patches those coordinates
+and scan time together, replays fractional timer carry, clears the observation
+ring, and requires fresh evidence before another cycle fold.
 
-The coast loop first tries the ordinary plateau/crossing proof, then adds a
-cycle-preserving macro when changing inner state defeats that proof.  If
-neither can establish a safe jump, it continues with ordinary scans.
-
-Cycle detection, crossing arithmetic, and folded jumps all read one timed
-scalar coordinate: the public accumulator plus its fractional remainder.  The
-remainder proves continued execution to the simulator; the operation's
-``AdvanceStep.progress`` receipt is PILOT's observable evidence.
+The coast loop first tries the ordinary plateau/crossing proof, then the
+narrower cycle proof, then ordinary scans. A sterile-cycle shortcut additionally
+requires every predicate read to be ring-covered and the harness to be quiet.
+If any alignment, arithmetic, or safety fact is unavailable, folding fails
+closed.
 """
 
 from __future__ import annotations
@@ -347,7 +346,11 @@ def cycle_fold_until(
     Soundness mirrors the runner fold: observe ≥ ``min_repeats`` periods before
     trusting the cycle, bound every jump at the nearest comparison/preset crossing,
     and re-detect after each landing (the ring is cleared, so a regime change forces
-    fresh observation).  Fails closed everywhere it cannot certify a jump.
+    fresh observation). Fails closed everywhere it cannot certify a jump. The
+    public work metrics are ``kernel_scans`` and ``macro_folds`` (with
+    ``logical_scans`` and ``skipped_scans`` derived alongside the diagnostic
+    breakdown); the ordinary-fold fallback deliberately filters its older
+    ``real_scans`` and ``folds`` keys.
     """
     from pyrung.core.fold import (
         _acc_totals,
