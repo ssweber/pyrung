@@ -29,7 +29,11 @@ from pyrung.core.analysis.pilot.causal import (
 )
 from pyrung.core.analysis.pilot.charts import ANY_FROM
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
-from pyrung.core.analysis.pilot.compass import CompassKnowledge, unique_legal_current_reading
+from pyrung.core.analysis.pilot.compass import (
+    CompassKnowledge,
+    _evidence_scope_key,
+    unique_legal_current_reading,
+)
 from pyrung.core.analysis.pilot.currents import CurrentReading
 from pyrung.core.analysis.pilot.gauge import GaugeMovement, GaugeReceipt
 from pyrung.core.analysis.pilot.navigation import BearingObjective
@@ -254,6 +258,7 @@ def _continuation_safety(
     blocked_actions: frozenset[tuple[str, Any]],
     progress_erasing_values: frozenset[Any],
     completed_actions: set[tuple[str, Any, Any]],
+    evidence_scope_key: tuple[Any, ...] | None = None,
 ) -> ContinuationSafety:
     """Whether one admitted edge also preserves work recovery already earned."""
 
@@ -264,6 +269,7 @@ def _continuation_safety(
         knowledge=ctx.compass.knowledge,
         context=ctx,
         blocked_actions=blocked_actions,
+        evidence_scope_key=evidence_scope_key,
     )
     return ContinuationSafety(
         admission=admission,
@@ -551,6 +557,7 @@ def classify_departure(
         if state.key_config is not None
         else None
     )
+    evidence_scope_key = _evidence_scope_key(settled_key, settled_snap.items())
 
     def _safe_continuation_edge(edge: Any) -> bool:
         return _continuation_safety(
@@ -561,6 +568,7 @@ def classify_departure(
             blocked_actions=ctx.blocked_actions,
             progress_erasing_values=progress_erasing_values,
             completed_actions=completed_actions,
+            evidence_scope_key=evidence_scope_key,
         ).allowed
 
     continuation = NavigationEvidence.channel_continuation(

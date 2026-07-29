@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     CompassObservation,
     NavigationCatalog,
+    _evidence_scope_key,
 )
 from pyrung.core.analysis.pilot.currents import CurrentReading, Producer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
@@ -787,6 +788,52 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     rerouted = _compass_route_plan(frame, ctx, nogoods)
     assert rerouted is not None
     assert rerouted.first_edge.action == ("Unhold", True)
+
+
+def test_compass_route_plan_builds_evidence_scope_once(monkeypatch) -> None:
+    """Every edge in one orientation shares one exact-world scope key."""
+
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(
+        role,
+        (
+            _route(0, 1),
+            _route(1, 2),
+            _action_route(0, 2, "Skip"),
+        ),
+    )
+    frame = SimpleNamespace(
+        key=("world", "recipe"),
+        snap={"State": 0, "Skip": False, "Timer_Acc": 1234},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        opaque_loop=frozenset({"State"}),
+        target=TargetSpec("State", 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+    )
+    builds = 0
+
+    def counted_scope_key(world_key, context=None):
+        nonlocal builds
+        builds += 1
+        return _evidence_scope_key(world_key, context)
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.options._evidence_scope_key",
+        counted_scope_key,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.compass._evidence_scope_key",
+        counted_scope_key,
+    )
+
+    plan = _compass_route_plan(frame, ctx)
+
+    assert plan is not None
+    assert builds == 1
 
 
 def test_program_owned_sibling_preserves_an_automatic_edge() -> None:

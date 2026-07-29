@@ -29,6 +29,7 @@ from pyrung.core.analysis.pilot._ops import (
 )
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.compass import (
+    _evidence_scope_key,
     is_action,
     is_composite_action,
     unique_legal_current_reading,
@@ -581,18 +582,21 @@ def _compass_route_plan(
     from pyrung.core.analysis.pilot.charts import _best_static_path
 
     nogoods = key_nogoods if key_nogoods is not None else set()
+    world_key = getattr(frame, "key", None)
+    evidence_scope_key = _evidence_scope_key(world_key, frame.snap.items())
 
     def _edge_open(edge: Any) -> bool:
         if edge.identity in unavailable_producer_edges:
             return False
         admission = NavigationEvidence.static_edge_admission(
             edge,
-            world_key=getattr(frame, "key", None),
+            world_key=world_key,
             snapshot=frame.snap,
             knowledge=ctx.compass.knowledge,
             blocked_actions=ctx.blocked_actions,
             context=ctx,
             pair_nogoods=nogoods,
+            evidence_scope_key=evidence_scope_key,
         )
         return admission.allowed
 

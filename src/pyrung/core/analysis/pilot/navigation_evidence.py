@@ -12,6 +12,7 @@ from pyrung.core.analysis.pilot.charts import _best_static_path
 from pyrung.core.analysis.pilot.compass import (
     WAIT,
     CompassKnowledge,
+    _evidence_scope_key,
     is_action,
 )
 from pyrung.core.analysis.pilot.navigation import (
@@ -135,11 +136,17 @@ class NavigationEvidence:
         context: Any,
         blocked_actions: frozenset[tuple[str, Any]] = frozenset(),
         pair_nogoods: set[tuple[str, Any]] | frozenset[tuple[str, Any]] | None = None,
+        evidence_scope_key: tuple[Any, ...] | None = None,
     ) -> StaticEdgeAdmission:
         """Decide whether one chart edge may join a current-world path search."""
 
         exclusions: list[StaticEdgeExclusion] = []
-        status = knowledge.static_edge_status(edge, world_key, snapshot)
+        status = knowledge.static_edge_status(
+            edge,
+            world_key,
+            snapshot,
+            evidence_scope_key=evidence_scope_key,
+        )
         if status in {"contradicted", "no_change"}:
             exclusions.append(
                 StaticEdgeExclusion(
@@ -215,6 +222,10 @@ class NavigationEvidence:
         knowledge: CompassKnowledge,
     ) -> FrontierStatus:
         compass = world.context.compass
+        evidence_scope_key = _evidence_scope_key(
+            world.world_key,
+            world.snapshot.items(),
+        )
 
         def edge_allowed(edge: Any) -> bool:
             admission = NavigationEvidence.static_edge_admission(
@@ -224,6 +235,7 @@ class NavigationEvidence:
                 knowledge=knowledge,
                 context=world.context,
                 blocked_actions=constraints.blocked_actions,
+                evidence_scope_key=evidence_scope_key,
             )
             return admission.allowed
 

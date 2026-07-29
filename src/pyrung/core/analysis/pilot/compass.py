@@ -730,18 +730,25 @@ class CompassKnowledge:
         edge: Any,
         world_key: tuple[Any, ...] | None,
         snapshot: dict[str, Any] | None = None,
+        *,
+        evidence_scope_key: tuple[Any, ...] | None = None,
     ) -> Literal["confirmed", "contradicted", "no_change"] | None:
         """Evidence for one static edge in one world.
 
         Exact-world evidence overrides a deliberately global seeded overlay.
-        Callers never reconstruct the persistent-map storage key.
+        Callers never reconstruct the persistent-map storage key. Path searches
+        may supply the scope key they computed once for their fixed
+        world/snapshot; direct callers retain the compatibility path that
+        computes it here.
         """
         edge_id = edge.identity
         required_actions = () if edge.action is None else (edge.action, *edge.co_actions)
-        scope_key = _evidence_scope_key(
-            world_key,
-            snapshot.items() if snapshot is not None else None,
-        )
+        scope_key = evidence_scope_key
+        if scope_key is None:
+            scope_key = _evidence_scope_key(
+                world_key,
+                snapshot.items() if snapshot is not None else None,
+            )
         scoped_key = (scope_key, _applied_key(required_actions), edge_id)
         if scope_key is not None and scoped_key in self.static_overlays:
             return self.static_overlays[scoped_key]
