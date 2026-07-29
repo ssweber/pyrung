@@ -303,31 +303,6 @@ make test-pilot
 make lint
 ```
 
-Use the focused gate before the full suite when changing a risky invariant:
-
-- rejection/domain completeness:
-  `test_pilot_rejection_arm.py`, `test_pilot_sandbox_gate.py`
-- trial gates and outcome attribution:
-  `test_pilot_verify.py`, `test_pilot_outcome.py`
-- compass learning and recording:
-  `test_pilot_recording.py`, `test_pilot_nogood.py`
-- waits, coasts, and cycle folding:
-  `test_pilot_candidate_wait.py`, `test_pilot_coast.py`,
-  `test_pilot_cyclefold.py`
-- residual replay measurement: `devtools/profile_pilot_replay.py`; its scalar
-  partitions are observational only — it must not retain a second per-scan
-  log or enlarge `CoastReceipt`.
-- departures, gauges, and recovery:
-  `test_pilot_detour_progress.py`, `test_pilot_detour_hold_release.py`,
-  `test_pilot_gauge.py`, `test_pilot_investigate.py`
-- avoid semantics:
-  `test_pilot_avoid_gates.py`
-- writer selection and unresolved-need semantics:
-  `test_pilot_trace.py`, `test_pilot_needed_vocabulary.py`
-
-New mechanisms that can reject, wait, probe, install a hold, or revert need a
-small program that demonstrates both success and an honest failure mode.
-
 When a Tumbler golden changes during a PILOT refactor, find the first changed
 decision without waiting for the whole golden test:
 
