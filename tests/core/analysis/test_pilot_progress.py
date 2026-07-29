@@ -58,7 +58,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
-    Outcome,
     ProgressEffect,
     TrialAssessment,
 )
@@ -163,7 +162,11 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
     return _PilotState(**base)
 
 
-def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
+def _make_trial(
+    trend: int,
+    bearing: BearingEffect,
+    **over: Any,
+) -> _AcceptedTrial:
     """Build a structurally honest accepted trial for focused policy tests."""
     fork = over.pop("fork", _oneshot_plc())
     scan_before = over.pop("scan_before", 0)
@@ -219,16 +222,11 @@ def _make_trial(trend: int, outcome: Outcome, **over: Any) -> _AcceptedTrial:
     )
     assessment = over.pop("assessment", None)
     if assessment is None:
-        bearing_effect = {
-            Outcome.CONFIRMED: BearingEffect.SATISFIED,
-            Outcome.FRONTIER: BearingEffect.EXPOSED,
-            Outcome.AMBIENT_DRIFT: BearingEffect.DEPARTED,
-        }[outcome]
         assessment = TrialAssessment(
             agency=Agency.PROGRAM,
-            bearing=bearing_effect,
+            bearing=bearing,
             progress=ProgressEffect.PRESERVED,
-            new_frontier=outcome is Outcome.FRONTIER,
+            new_frontier=bearing is BearingEffect.EXPOSED,
             accepted=True,
         )
     trial = _AcceptedTrial(
@@ -346,7 +344,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     )
     trial = _make_trial(
         1,
-        Outcome.CONFIRMED,
+        BearingEffect.SATISFIED,
         fork=fork,
         scan_before=work.state.scan_id,
         before_snap=before,
@@ -404,7 +402,7 @@ class TestCheckpoints:
             TargetSpec("Completed", True),
             (("State", 17),),
         )
-        trial = _make_trial(3, Outcome.CONFIRMED, bearing_objective=objective)
+        trial = _make_trial(3, BearingEffect.SATISFIED, bearing_objective=objective)
         events = tuple(
             _monitor_trend(
                 trial,
@@ -422,10 +420,10 @@ class TestCheckpoints:
         assert len(state.checkpoints) == 1
         assert state.checkpoints[0].objective is objective
 
-    def test_flat_confirmed_creates_checkpoint(self):
-        # Equal trend, but a CONFIRMED outcome still banks a checkpoint.
+    def test_flat_satisfied_creates_checkpoint(self):
+        # Equal trend with a satisfied bearing still banks a checkpoint.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
-        trial = _make_trial(3, Outcome.CONFIRMED)
+        trial = _make_trial(3, BearingEffect.SATISFIED)
         events = tuple(
             _monitor_trend(
                 trial,
@@ -440,11 +438,51 @@ class TestCheckpoints:
         assert len(state.checkpoints) == 2
         assert state.best_trend == 3  # unchanged on a flat checkpoint
 
+    def test_flat_unchanged_creates_checkpoint(self):
+        state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
+        trial = _make_trial(3, BearingEffect.UNCHANGED)
+
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
+
+        assert [event.kind for event in events] == ["trend_checkpoint"]
+        assert events[0].data["flat"] is True
+        assert len(state.checkpoints) == 2
+        assert state.best_trend == 3
+
+    def test_flat_departed_does_not_create_checkpoint(self):
+        state = _make_state(best_trend=3, checkpoints=[])
+        trial = _make_trial(
+            3,
+            BearingEffect.DEPARTED,
+            channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+            before_snap={"State": 3},
+            fork_snap={"State": 8},
+        )
+
+        events = tuple(
+            _monitor_trend(
+                trial,
+                _frame(),
+                state,
+                SimpleNamespace(target=TargetSpec("State", 17)),
+            )
+        )
+
+        assert [event.kind for event in events] == ["letrun_ejection"]
+        assert len(state.checkpoints) == 0
+
     def test_frontier_preserves_baseline(self):
         # A FRONTIER knowingly exposes deeper prerequisites (worse trend) — the
         # pre-frontier checkpoint and high-water mark must survive.
         state = _make_state(best_trend=3, checkpoints=[_cp(("c",), _oneshot_plc(), 3)])
-        trial = _make_trial(8, Outcome.FRONTIER)
+        trial = _make_trial(8, BearingEffect.EXPOSED)
         events = tuple(
             _monitor_trend(
                 trial,
@@ -468,7 +506,7 @@ class TestCheckpoints:
         )
         trial = _make_trial(
             15,
-            Outcome.CONFIRMED,
+            BearingEffect.SATISFIED,
             bearing_objective=objective,
             channel_motion=ChannelMotion("State", 3, stop_reason="reached"),
             fork_snap={"State": 3},
@@ -506,7 +544,7 @@ class TestCheckpoints:
         )
         trial = _make_trial(
             15,
-            Outcome.CONFIRMED,
+            BearingEffect.SATISFIED,
             bearing_objective=objective,
             channel_motion=ChannelMotion("State", 3, stop_reason="reached"),
             fork_snap={"State": 3},
@@ -538,7 +576,7 @@ class TestCheckpoints:
                 _cp(("step",), later, 1),
             ],
         )
-        trial = _make_trial(1, Outcome.AMBIENT_DRIFT, scan_before=later.state.scan_id)
+        trial = _make_trial(1, BearingEffect.DEPARTED, scan_before=later.state.scan_id)
         frame = _frame()
         frame.snap = {"A": True, "FrameOnly": True}
 
@@ -557,7 +595,7 @@ class TestCheckpoints:
             best_trend=1,
             checkpoints=[_cp(("entered",), entered, 1)],
         )
-        trial = _make_trial(1, Outcome.AMBIENT_DRIFT, scan_before=entered.state.scan_id)
+        trial = _make_trial(1, BearingEffect.DEPARTED, scan_before=entered.state.scan_id)
         frame = _frame()
         frame.snap = {"A": True, "FrameOnly": True}
 
@@ -575,7 +613,7 @@ def test_improved_trace_distance_does_not_promote_pending_departure():
         state,
         progress_mark=(("Step", 101),),
     )
-    trial = _make_trial(3, Outcome.CONFIRMED)
+    trial = _make_trial(3, BearingEffect.SATISFIED)
     ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
@@ -602,7 +640,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
     )
     trial = _make_trial(
         5,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         before_snap={"State": 6, "Step": 105},
         fork_snap={"State": 10, "Step": 105},
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
@@ -645,7 +683,7 @@ def test_pending_expiry_without_saved_progress_rolls_back():
         progress_mark=(("Step", 101),),
         expires_at=0,  # already past — the attempt is out of budget
     )
-    trial = _make_trial(5, Outcome.CONFIRMED)
+    trial = _make_trial(5, BearingEffect.SATISFIED)
     ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
@@ -662,7 +700,7 @@ def test_target_acceptance_resolves_pending_departure_before_returning():
     state = _make_state(best_trend=5, checkpoints=[checkpoint])
     state.pending_departure = _pending_departure(state)
     trial = replace(
-        _make_trial(5, Outcome.CONFIRMED, fork_snap={"State": 17}),
+        _make_trial(5, BearingEffect.SATISFIED, fork_snap={"State": 17}),
         verification=TargetReached(),
     )
 
@@ -694,7 +732,7 @@ def test_pilot_caused_regression_does_not_rewrite_forward_gauge_evidence():
     )
     trial = _make_trial(
         6,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         fork_snap={"State": 8, "Step": 4},
         assessment=TrialAssessment(
             agency=Agency.PILOT,
@@ -725,7 +763,7 @@ def test_pending_expiry_restores_the_current_checkpoint_artifact():
     state.pending_departure = _pending_departure(state, expires_at=0)
     corrected = replace(checkpoint, key=("corrected",), trend=4)
     state.checkpoints[0] = corrected
-    trial = _make_trial(5, Outcome.CONFIRMED)
+    trial = _make_trial(5, BearingEffect.SATISFIED)
     ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
@@ -755,7 +793,7 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
     assert refreshed.owner is saved.owner
     events = tuple(
         _monitor_trend(
-            _make_trial(4, Outcome.CONFIRMED),
+            _make_trial(4, BearingEffect.SATISFIED),
             frame,
             state,
             SimpleNamespace(target=TargetSpec("State", 17)),
@@ -798,7 +836,7 @@ def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
     )
     trial = _make_trial(
         8,
-        Outcome.CONFIRMED,
+        BearingEffect.SATISFIED,
         fork=current_work,
         fork_snap=dict(current_work.state.tags),
         chase_regression_causes=False,
@@ -850,7 +888,7 @@ def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypat
     state.pending_departure = _pending_departure(state)
     trial = _make_trial(
         8,
-        Outcome.CONFIRMED,
+        BearingEffect.SATISFIED,
         fork=current_work,
         fork_snap=dict(current_work.state.tags),
         chase_regression_causes=False,
@@ -898,7 +936,7 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
         state,
         expires_at=50,
     )
-    trial = _make_trial(5, Outcome.CONFIRMED, fork=work.fork())
+    trial = _make_trial(5, BearingEffect.SATISFIED, fork=work.fork())
     ctx = SimpleNamespace(target=TargetSpec("State", 17))
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
@@ -930,7 +968,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
     checkpoint = _cp(("source",), _oneshot_plc(), 2)
     trial = _make_trial(
         2,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         before_snap={"State": 2},
         fork_snap={"State": 4},
         channel_motion=ChannelMotion("State", 17, stop_reason="departed"),
@@ -994,7 +1032,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_gauge(monkeypatch):
     checkpoint = _cp(("source",), _oneshot_plc(), 2)
     trial = _make_trial(
         2,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         before_snap={"State": 9},
         fork_snap={"State": 2},
         channel_motion=ChannelMotion("State", 1, stop_reason="departed"),
@@ -1103,7 +1141,7 @@ def _seal_in_regression_inputs():
     )
     trial = _make_trial(
         6,
-        Outcome.CONFIRMED,
+        BearingEffect.SATISFIED,
         fork=work,
         scan_before=anchor,
         candidate={"Command": True},
@@ -1168,7 +1206,7 @@ class TestRegression:
         cp_fork.step()
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
         work_before = state.work
-        trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
+        trial = _make_trial(6, BearingEffect.SATISFIED, chase_regression_causes=False)
         events = tuple(
             _monitor_trend(
                 trial,
@@ -1194,7 +1232,7 @@ class TestRegression:
         from pyrung.core.analysis.pilot._ops import PilotRung
 
         state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
-        trial = _make_trial(6, Outcome.CONFIRMED, chase_regression_causes=False)
+        trial = _make_trial(6, BearingEffect.SATISFIED, chase_regression_causes=False)
         tuple(
             _monitor_trend(
                 trial,
@@ -1216,7 +1254,7 @@ class TestRegression:
         state = _make_state(best_trend=2, checkpoints=[_cp(("cpk",), cp_fork, 2)])
         trial = _make_trial(
             6,
-            Outcome.CONFIRMED,
+            BearingEffect.SATISFIED,
             chase_regression_causes=False,
             regression_nogoods=frozenset({("X", True)}),
         )
@@ -1246,7 +1284,7 @@ class TestLetrunEjection:
         state = _make_state(best_trend=5, checkpoints=[_cp(("cpk",), _oneshot_plc(), 5)])
         trial = _make_trial(
             2,  # lower than best_trend — would normally checkpoint
-            Outcome.AMBIENT_DRIFT,
+            BearingEffect.DEPARTED,
             observe_label="letrun",
             channel_motion=ChannelMotion("S", 1, stop_reason="departed"),
             before_snap={"S": 0},
@@ -1276,7 +1314,7 @@ class TestLetrunEjection:
         state = _make_state(best_trend=5, checkpoints=[_cp(("cpk",), _oneshot_plc(), 5)])
         trial = _make_trial(
             2,
-            Outcome.AMBIENT_DRIFT,
+            BearingEffect.DEPARTED,
             channel_motion=ChannelMotion("State", 1, stop_reason="departed"),
             before_snap={"State": 6},
             fork_snap={"State": 10},
@@ -1332,7 +1370,7 @@ class TestLetrunEjection:
         state = _make_state(best_trend=10, checkpoints=[])
         trial = _make_trial(
             3,
-            Outcome.AMBIENT_DRIFT,
+            BearingEffect.DEPARTED,
             observe_label="letrun",
             channel_motion=ChannelMotion("S", 1, stop_reason="departed"),
             before_snap={"S": 0},
@@ -1410,7 +1448,7 @@ def test_zoom_accepted_payload_records_requested_and_landed():
 
     trial = _make_trial(
         7,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
         fork_snap={"State": 8},
     )
@@ -1418,6 +1456,7 @@ def test_zoom_accepted_payload_records_requested_and_landed():
 
     assert payload["zoom_target_value"] == 6  # requested bearing
     assert payload["zoom_actual_value"] == 8  # where the world actually landed
+    assert payload["outcome"] == "ambient"
     assert payload["ejected"] is True
 
 
@@ -1426,12 +1465,16 @@ def test_zoom_accepted_payload_records_owned_bearing_receipt():
 
     trial = _make_trial(
         7,
-        Outcome.CONFIRMED,
+        BearingEffect.SATISFIED,
         channel_motion=ChannelMotion("Acc", 4, stop_reason="reached"),
         fork_snap={"Acc": 5},
     )
 
-    assert _zoom_accepted_payload(trial)["bearing_stop_reason"] == "reached"
+    payload = _zoom_accepted_payload(trial)
+
+    assert payload["bearing_stop_reason"] == "reached"
+    assert payload["outcome"] == "confirmed"
+    assert payload["ejected"] is False
 
 
 def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
@@ -1442,7 +1485,7 @@ def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
     """
     trial = _make_trial(
         7,
-        Outcome.AMBIENT_DRIFT,
+        BearingEffect.DEPARTED,
         channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
         before_snap={"State": 6},
         fork_snap={"State": 8},

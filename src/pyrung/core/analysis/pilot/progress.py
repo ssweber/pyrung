@@ -62,7 +62,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
-    Outcome,
     ProgressEffect,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -242,6 +241,7 @@ def _monitor_trend(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
+    verified = trial.verification
     channel_ejection = trial.channel_motion.departed
     # A pending departure changes only the rollback boundary. Every trial inside
     # it still passes through the ordinary trend,
@@ -261,18 +261,18 @@ def _monitor_trend(
             yield from applied
             return
 
-    verified = trial.verification
     if isinstance(verified, TargetReached):
         return
 
     assert state.best_trend is not None
+    assessment = verified.assessment
 
-    # A FRONTIER outcome means the pilot knowingly exposed a world with
+    # An exposed bearing means the pilot knowingly exposed a world with
     # more prerequisites.  Commit the observation, but keep the previous
     # checkpoint and high-water mark alive: if the new world keeps drifting
     # away, the next verify pass should revert to the pre-frontier checkpoint
     # and chase the PLC-side cause.
-    if verified.outcome == Outcome.FRONTIER:
+    if assessment.bearing is BearingEffect.EXPOSED:
         yield PilotEvent(
             "trend_checkpoint",
             state.work.state.scan_id,
@@ -365,7 +365,10 @@ def _monitor_trend(
         yield checkpoint_event
         return
 
-    if verified.trend == state.best_trend and verified.outcome == Outcome.CONFIRMED:
+    if verified.trend == state.best_trend and assessment.bearing in {
+        BearingEffect.SATISFIED,
+        BearingEffect.UNCHANGED,
+    }:
         state.checkpoints.append(_trial_checkpoint(trial, state))
         yield PilotEvent(
             "trend_checkpoint",

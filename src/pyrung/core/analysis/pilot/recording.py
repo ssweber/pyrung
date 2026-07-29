@@ -21,7 +21,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     act_identity,
 )
-from pyrung.core.analysis.pilot.outcome import Outcome
+from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct, frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -573,7 +573,7 @@ def _zoom_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
     return {
         "new_key": assessed.new_key if assessed is not None else None,
         "trend": assessed.trend if assessed is not None else None,
-        "outcome": assessed.outcome.value if assessed is not None else None,
+        "outcome": assessed.assessment.legacy_outcome.value if assessed is not None else None,
         "observe_label": trial.observe_label,
         "zoom_channel_tag": motion.channel_tag,
         "zoom_before_value": (
@@ -582,7 +582,7 @@ def _zoom_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "zoom_target_value": motion.target_value,
         "zoom_actual_value": landed,
         "bearing_stop_reason": motion.stop_reason,
-        "ejected": assessed is not None and assessed.outcome is Outcome.AMBIENT_DRIFT,
+        "ejected": (assessed is not None and assessed.assessment.bearing is BearingEffect.DEPARTED),
         "scan_before": trial.scan_before,
         "scan_after": trial.fork.state.scan_id,
         "coast_logical_scans": receipt.logical_scans if receipt is not None else None,

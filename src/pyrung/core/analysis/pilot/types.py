@@ -30,7 +30,7 @@ if TYPE_CHECKING:
         BearingObjective,
         TargetSpec,
     )
-    from pyrung.core.analysis.pilot.outcome import Outcome, TrialAssessment
+    from pyrung.core.analysis.pilot.outcome import TrialAssessment
     from pyrung.core.analysis.pilot.progress import PendingDeparture
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.runner import PLC
@@ -825,11 +825,6 @@ class AssessedMotion:
     def __post_init__(self) -> None:
         if not self.assessment.accepted:
             raise ValueError("assessed motion requires an accepted assessment")
-
-    @property
-    def outcome(self) -> Outcome:
-        """Legacy event vocabulary derived from the owned assessment."""
-        return self.assessment.legacy_outcome
 
 
 TrialVerification = TargetReached | AssessedMotion
