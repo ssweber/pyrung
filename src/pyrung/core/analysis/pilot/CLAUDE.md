@@ -30,11 +30,11 @@ alternative, or learned transition is evidence for the next action only.
 
 Escalate according to what remains unreadable:
 
-Every rung consumes the instruction-owned `AdvanceProfile` contract. An
-`AdvanceStep.progress` receipt is owner-declared evidence that an operation is
-active when a quantized scalar cannot change on the next scan; fractional
-accumulator state remains simulator execution state, not public PILOT
-evidence.
+Instructions and harness couplings that own cross-scan result channels expose
+an `AdvanceProfile` contract. An `AdvanceStep.progress` receipt is
+owner-declared evidence that an operation is active when a quantized scalar
+cannot change on the next scan; fractional accumulator state remains simulator
+execution state, not public PILOT evidence.
 
 1. `trace.py` follows writers, guards, copies, calculations, and
    instruction-owned cross-scan state through `advance.py`.
@@ -155,7 +155,8 @@ this table only locates the owner.
 ## Actual control flow
 
 1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
-2. Compass reads trace, catalog, currents, constraints, and knowledge;
+2. Compass reads trace, static catalogs, awaited-action evidence, constraints,
+   and knowledge;
    `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
@@ -281,6 +282,10 @@ plain language on first use.
 - **bearing** — the next direction recomputed from the current world.
 - **compass** — the `Compass` value containing static graph references and
   persistent transition knowledge.
+- **ladder rung** — a rung in the user's PLC program.
+- **overlay rule** — a scoped piece of temporary PILOT steering represented by
+  `PilotRung`. Older helper names such as `_set_rungs`, `fork_with_rungs`, and
+  `_rung_identity` refer to these overlay rules, not ladder rungs.
 - **coast** — hold the required inputs while scans pass.
 - **coast trigger** — a named predicate that records why a coast stopped or
   what it observed.
@@ -333,9 +338,9 @@ an event stream, replay identity, or lower-level API.
   (`advanced`, `behind`, `preserved`, `unknown`), including the legacy
   gauge/earned-work reason prose produced by `departure.py`. Change them only
   with an event schema version and downstream migration.
-- `outcome.py::legacy_outcome` and `classify_outcome` are the legacy outcome
-  projection boundary. Remove them only with the corresponding API and event
-  migration.
+- `outcome.py::TrialAssessment.legacy_outcome` and
+  `outcome.py::classify_outcome` are the legacy outcome projection boundary.
+  Remove them only with the corresponding API and event migration.
 - `navigation_contracts.py::ActSource` keeps serialized values `influence` and
   `learned`; recording keeps the `influence_prescribed` payload, and VERIFY
   keeps the public `influence-override-cycle` gate event. Version and migrate
@@ -346,10 +351,11 @@ an event stream, replay identity, or lower-level API.
   vocabulary. Change these only through an event schema migration.
 - `recording.py` and `progress.py` serialize `rungs` and `revoked_rungs`.
   Renaming those payload keys requires an event schema migration.
-- `coast.py` owns typed reached evidence and its event projection;
-  `cycle_fold_until` retains its Boolean API; PILOT filters lower-runner
-  `real_scans` and `folds` cycle-fold details. Remove that filter only after the
-  lower runner normalizes those fields; migrate the other APIs explicitly.
+- `coast.py::CoastReceipt` owns structured stop evidence with stable string
+  `stop_reason` values; `cycle_fold_until` retains its Boolean return API.
+  PILOT filters lower-runner `real_scans` and `folds` cycle-fold details.
+  Remove that filter only after the lower runner normalizes those fields;
+  migrate the other APIs explicitly.
 - `world_key.py::_semantic_key` preserves the old
   `pyrung.core.analysis.pilot._ops` module token for `OperationReceipt`.
   Remove it only as an explicit world-key identity version.
