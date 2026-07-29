@@ -72,6 +72,7 @@ from pyrung.core.analysis.pilot.recording import (
     _frontier_clause,
     _iteration_payload,
     _knowledge_payload,
+    render_unsupported_construct,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
@@ -79,6 +80,7 @@ from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceChoice,
     TraceReadConstraints,
+    UnsupportedConstruct,
     _route_forced_names,
     compute_edge_tags,
     compute_reference_constants,
@@ -1167,6 +1169,8 @@ def _linked_feedback_block(
         return None
     try:
         tree = trace_back(target_tag, target_value, snapshot, pdg, program, steerable)
+    except UnsupportedConstruct:
+        raise
     except Exception:  # noqa: BLE001 — diagnostic only; never mask the real failure
         return None
     route_tags = {n.tag for n in tree.iter_nodes()}
@@ -1805,22 +1809,33 @@ def pilot_drive(
     :func:`pilot_how`).
     """
     target_tag, target_value, target_predicate = _parse_target(*conditions)
-    setup = _prepare_drive(plc, live=True, unlink=unlink)
-    ctx, route_taken = _prepare_target_context(
-        setup,
-        target_tag,
-        target_value,
-        target_predicate,
-        max_scans=max_scans,
-        avoid_pred=avoid_pred,
-    )
-    outcome = _pilot_loop(setup.work, ctx)
+    anchor_scan = plc.state.scan_id
+    try:
+        setup = _prepare_drive(plc, live=True, unlink=unlink)
+        ctx, route_taken = _prepare_target_context(
+            setup,
+            target_tag,
+            target_value,
+            target_predicate,
+            max_scans=max_scans,
+            avoid_pred=avoid_pred,
+        )
+        outcome = _pilot_loop(setup.work, ctx)
 
-    return _single_target_plan(
-        setup,
-        outcome,
-        target_tag,
-        target_value,
-        route_taken,
-        include_journal=False,
-    )
+        return _single_target_plan(
+            setup,
+            outcome,
+            target_tag,
+            target_value,
+            route_taken,
+            include_journal=False,
+        )
+    except UnsupportedConstruct as failure:
+        return Plan(
+            reachable=False,
+            target_tag=target_tag,
+            target_value=target_value,
+            reason=render_unsupported_construct(failure),
+            status=PlanStatus.STOPPED,
+            anchor_scan=anchor_scan,
+        )

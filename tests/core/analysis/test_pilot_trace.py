@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from pyrung import (
     PLC,
     And,
@@ -32,6 +34,7 @@ from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_ta
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
     TraceReadConstraints,
+    UnsupportedConstruct,
     _apply_writer_attempt,
     _env_for,
     _rank_writers,
@@ -39,6 +42,7 @@ from pyrung.core.analysis.pilot.trace import (
     _scan_transient_rest,
     _select_trace_alternative,
     _trace_back,
+    _trace_expression,
     _TraceAlternative,
     _TraceEnv,
     _WriterBuild,
@@ -46,8 +50,10 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
-from pyrung.core.analysis.simplified import Atom
+from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate
 from pyrung.core.analysis.steerable import compute_steerable
+from pyrung.core.condition import Condition
+from pyrung.core.context import ConditionView, ScanContext
 from pyrung.core.memory_block import Block
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.tag import TagType
@@ -60,6 +66,73 @@ def _steerable_names(node: TraceNode) -> set[str]:
 def _known(logic: Program) -> dict:
     plc = PLC(logic)
     return plc._known_tags_by_name
+
+
+class _UnsupportedGate(Condition):
+    """Test-only executable condition with no simplified trace rule."""
+
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
+        del ctx
+        return False
+
+
+def test_trace_raises_typed_receipt_for_unknown_condition() -> None:
+    target = Bool("UnsupportedTraceTarget")
+    unsupported = _UnsupportedGate()
+
+    with Program() as logic:
+        with rung(unsupported):
+            out(target)
+
+    pdg = build_program_graph(logic)
+    with pytest.raises(UnsupportedConstruct) as raised:
+        trace_back(target.name, True, {}, pdg, logic, frozenset())
+
+    failure = raised.value
+    assert failure.construct_kind == "condition"
+    assert failure.unsupported is unsupported
+    assert failure.provenance == ("Main:R0",)
+    assert failure.source_file is not None
+    assert failure.source_file.endswith("test_pilot_trace.py")
+    assert isinstance(failure.source_line, int)
+
+
+def test_unknown_condition_identity_survives_negation() -> None:
+    unsupported = _UnsupportedGate()
+
+    expression = _negate(_condition_to_expr(unsupported))
+
+    assert isinstance(expression, Atom)
+    assert expression.unsupported is unsupported
+
+
+def test_unknown_condition_metadata_does_not_change_atom_identity() -> None:
+    left = _condition_to_expr(_UnsupportedGate())
+    right = _condition_to_expr(_UnsupportedGate())
+    ordinary = Atom("_UnsupportedGate", "xic")
+
+    assert left == right == ordinary
+    assert hash(left) == hash(right) == hash(ordinary)
+    assert {left, right, ordinary} == {ordinary}
+
+
+def test_trace_raises_for_genuinely_unknown_expression_kind() -> None:
+    unsupported = object()
+
+    with pytest.raises(UnsupportedConstruct) as raised:
+        _trace_expression(
+            SimpleNamespace(),
+            unsupported,
+            "Target",
+            provenance=("Main:R4",),
+            _visited=set(),
+            _depth=0,
+        )
+
+    failure = raised.value
+    assert failure.construct_kind == "expression"
+    assert failure.unsupported is unsupported
+    assert failure.provenance == ("Main:R4",)
 
 
 def test_writer_builds_are_isolated_until_selection_adopts_one() -> None:

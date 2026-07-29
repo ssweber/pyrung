@@ -74,6 +74,26 @@ if TYPE_CHECKING:
 
 _TraceChoicePayload = TypeVar("_TraceChoicePayload")
 
+
+class UnsupportedConstruct(Exception):
+    """Trace encountered a program construct for which it has no read rule."""
+
+    def __init__(
+        self,
+        construct_kind: str,
+        unsupported: Any,
+        provenance: tuple[str, ...] = (),
+    ) -> None:
+        self.construct_kind = construct_kind
+        self.unsupported = unsupported
+        self.provenance = provenance
+        self.source_file = getattr(unsupported, "source_file", None)
+        self.source_line = getattr(unsupported, "source_line", None)
+        name = type(unsupported).__name__
+        context = f" at {provenance[-1]}" if provenance else ""
+        super().__init__(f"unsupported {construct_kind} {name}{context}")
+
+
 # The availability-layer names imported above are re-exported *by that import* —
 # external importers (``options.py``, ``tide_tables.py``, the pilot tests
 # that reach for these ``_``-prefixed names directly) keep importing them from
@@ -2015,6 +2035,8 @@ def _trace_expression(
         return []
 
     if isinstance(expr, Atom):
+        if expr.unsupported is not None:
+            raise UnsupportedConstruct("condition", expr.unsupported, provenance)
         target = _atom_target(expr, env.snapshot)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
@@ -2115,7 +2137,7 @@ def _trace_expression(
             child.provenance = provenance
         return [child]
 
-    return []
+    raise UnsupportedConstruct("expression", expr, provenance)
 
 
 def trace_back(

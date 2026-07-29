@@ -22,7 +22,7 @@ from pyrung.core.analysis.pilot.navigation import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import Outcome
-from pyrung.core.analysis.pilot.trace import frontier_pairs
+from pyrung.core.analysis.pilot.trace import UnsupportedConstruct, frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,
@@ -36,13 +36,58 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
 )
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.validation.render import operand_name
+from pyrung.core.validation.render import (
+    caret_of,
+    operand_name,
+    render_condition,
+    with_rung_line,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.charts import StaticPath
     from pyrung.core.analysis.pilot.compass import Compass
     from pyrung.core.analysis.pilot.options import CandidateRead, _Candidate
     from pyrung.core.analysis.pilot.program_step import ProgramStep
+
+
+def render_unsupported_construct(failure: UnsupportedConstruct) -> str:
+    """Render Trace's unsupported declaration as a source-oriented diagnostic."""
+
+    unsupported = failure.unsupported
+    kind = failure.construct_kind
+    name = type(unsupported).__name__
+    if kind == "condition":
+        token = render_condition(unsupported)
+        source_line = with_rung_line((unsupported,))
+    else:
+        token = repr(unsupported)
+        source_line = token
+
+    context = failure.provenance[-1] if failure.provenance else "trace"
+    if failure.source_file and failure.source_line:
+        context += f" ({failure.source_file}:{failure.source_line})"
+    elif failure.source_file:
+        context += f" ({failure.source_file})"
+    elif failure.source_line:
+        context += f" (line {failure.source_line})"
+
+    span = caret_of(source_line, token)
+    lines = [
+        f"PILOT cannot read {kind} {name}.",
+        f" --> {context}",
+        "  |",
+        f"  |  {source_line}",
+    ]
+    if span is not None:
+        start, length = span
+        lines.append(f"  |  {' ' * start}{'^' * length} unsupported {kind}")
+    lines.extend(
+        (
+            "  |",
+            f"  = hint: add a PILOT trace rule for {name}.",
+        )
+    )
+    return "\n".join(lines)
 
 
 def _investigation_started_event(

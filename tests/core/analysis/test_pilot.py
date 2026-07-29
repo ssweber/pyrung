@@ -8,6 +8,8 @@ Tests are organized in three sections:
 
 from __future__ import annotations
 
+import pytest
+
 from pyrung import (
     PLC,
     And,
@@ -32,12 +34,62 @@ from pyrung import (
     rung,
     subroutine,
 )
+from pyrung.core.analysis.graph import PlanStatus
 from pyrung.core.analysis.pilot import pilot_drive, pilot_events, pilot_how
+from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
+from pyrung.core.condition import Condition
+from pyrung.core.context import ConditionView, ScanContext
 
 
 def _replay(prog: Program, path) -> PLC:
     """Replay a path on a fresh PLC and return it."""
     return path.replay()
+
+
+class _UnsupportedPilotGate(Condition):
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
+        del ctx
+        return False
+
+
+def _unsupported_condition_program() -> tuple[Program, Bool]:
+    target = Bool("UnsupportedPilotTarget")
+    with Program() as logic:
+        with rung(_UnsupportedPilotGate()):
+            out(target)
+    return logic, target
+
+
+def test_how_propagates_unsupported_construct() -> None:
+    logic, target = _unsupported_condition_program()
+
+    with pytest.raises(UnsupportedConstruct):
+        PLC(logic).how(target)
+
+
+def test_pilot_events_propagates_unsupported_construct() -> None:
+    logic, target = _unsupported_condition_program()
+
+    with pytest.raises(UnsupportedConstruct):
+        list(pilot_events(PLC(logic), target))
+
+
+def test_live_drive_stops_with_unsupported_diagnostic_without_steering() -> None:
+    logic, target = _unsupported_condition_program()
+    plc = PLC(logic)
+
+    result = pilot_drive(plc, target)
+
+    assert result.reachable is False
+    assert result.status is PlanStatus.STOPPED
+    assert result.reason is not None
+    assert result.reason.startswith("PILOT cannot read condition _UnsupportedPilotGate.")
+    assert " --> Main:R0 (" in result.reason
+    assert "unsupported condition" in result.reason
+    scan_log = plc._scan_log.snapshot()
+    assert scan_log.patches_by_scan == {}
+    assert scan_log.force_changes_by_scan == {}
+    assert plc.state.tags[target.name] is False
 
 
 # ===================================================================

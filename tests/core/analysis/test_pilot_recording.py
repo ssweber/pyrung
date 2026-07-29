@@ -29,7 +29,11 @@ from pyrung import (
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.navigation import ActPolicy, ActSource
-from pyrung.core.analysis.pilot.recording import _build_plan_journal
+from pyrung.core.analysis.pilot.recording import (
+    _build_plan_journal,
+    render_unsupported_construct,
+)
+from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
@@ -39,6 +43,33 @@ from pyrung.core.analysis.pilot.types import (
     _Step,
     _StepContext,
 )
+from pyrung.core.condition import Condition
+from pyrung.core.context import ConditionView, ScanContext
+
+
+class _UnsupportedRecordingGate(Condition):
+    def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
+        del ctx
+        return False
+
+
+def test_unsupported_construct_renderer_names_source_and_carets_condition() -> None:
+    unsupported = _UnsupportedRecordingGate()
+    unsupported.source_file = "machine.py"
+    unsupported.source_line = 41
+    failure = UnsupportedConstruct("condition", unsupported, ("Main:R7",))
+
+    rendered = render_unsupported_construct(failure)
+
+    assert rendered == (
+        "PILOT cannot read condition _UnsupportedRecordingGate.\n"
+        " --> Main:R7 (machine.py:41)\n"
+        "  |\n"
+        "  |  with rung(_UnsupportedRecordingGate):\n"
+        "  |            ^^^^^^^^^^^^^^^^^^^^^^^^^ unsupported condition\n"
+        "  |\n"
+        "  = hint: add a PILOT trace rule for _UnsupportedRecordingGate."
+    )
 
 
 def _step_context(

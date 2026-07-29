@@ -30,7 +30,11 @@ from pyrung.core.analysis.pilot.advance import (
     build_advance_index,
     iter_advance_owners,
 )
-from pyrung.core.analysis.pilot.trace import TraceAction, trace_back
+from pyrung.core.analysis.pilot.trace import (
+    TraceAction,
+    UnsupportedConstruct,
+    trace_back,
+)
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import Eq
 
@@ -324,6 +328,8 @@ def _coil_corrections(
                 route=route,
                 prior=getattr(ctx, "domain_prior", None),
             )
+        except UnsupportedConstruct:
+            raise
         except Exception:  # noqa: BLE001
             return []
         return list(tree.steerable_leaves())
@@ -636,6 +642,8 @@ def _accumulator_corrections(
                 route=getattr(ctx, "route", None),
                 prior=getattr(ctx, "domain_prior", None),
             )
+        except UnsupportedConstruct:
+            raise
         except Exception:  # noqa: BLE001
             continue
         for leaf in tree.leaves():
@@ -727,6 +735,8 @@ def _resolve_steerable_action(
             for action in probe:
                 view[action.tag] = action.value
         actions = _actions(read_tag, value, view)
+    except UnsupportedConstruct:
+        raise
     except Exception:  # noqa: BLE001
         return None
     if not actions:

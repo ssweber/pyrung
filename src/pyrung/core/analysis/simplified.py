@@ -7,7 +7,7 @@ it as a human-readable formula.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import TagRole, build_program_graph
@@ -38,6 +38,12 @@ class Atom:
     form: str  # "xic"|"xio"|"rise"|"fall"|"truthy"|"eq"|"ne"|"lt"|"le"|"gt"|"ge"
     operand: Any = None
     operand_is_tag: bool = False
+    # Unknown Condition subclasses historically became a synthetic
+    # ``Atom(type_name, "xic")``. Keep that conservative projection for
+    # existing simplified-expression consumers, but retain the raw construct so
+    # readers with a strict support boundary can report that they did not
+    # understand it.
+    unsupported: Any = field(default=None, compare=False, hash=False, repr=False)
 
     def _key(self) -> tuple[str, str, Any, bool]:
         return (self.tag, self.form, self.operand, self.operand_is_tag)
@@ -270,7 +276,7 @@ def _condition_to_expr(condition: Any) -> Expr:
             operand_is_tag=_operand_is_tag(condition.value),
         )
 
-    return Atom(cls_name, "xic")
+    return Atom(cls_name, "xic", unsupported=condition)
 
 
 def _sp_to_expr(node: SPNode) -> Expr:
@@ -715,12 +721,14 @@ def _negate(expr: Expr) -> Expr:
                 flips[expr.form],
                 expr.operand,
                 operand_is_tag=expr.operand_is_tag,
+                unsupported=expr.unsupported,
             )
         return Atom(
             expr.tag,
             expr.form,
             expr.operand,
             operand_is_tag=expr.operand_is_tag,
+            unsupported=expr.unsupported,
         )
 
     # De Morgan for compound expressions
