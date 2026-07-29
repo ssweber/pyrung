@@ -177,8 +177,8 @@ def _commit_step(
 ) -> tuple[PLC, tuple[_Step, ...]]:
     """Record a step (or release+pulse pair) and swap the work fork.
 
-    ``inputs`` is the full applied set (``trial.applied``), not the narrow
-    ``trial.candidate``.  A ``rise()``/``fall()`` gate needs an edge — a transition
+    ``inputs`` is the policy's full ``ActPolicy.applied`` set, not only its
+    primary candidate. A ``rise()``/``fall()`` gate needs an edge — a transition
     — but a recorded ``_Step`` holds its ``inputs`` constant across the step's
     scans and the patch persists into the next step, so the naive replay
     (``patch(inputs); step``) cannot recreate the transition once the edge is
@@ -583,7 +583,9 @@ def _step_context(
     rungs; every other view derives from the policy and execution-evidence
     owners already inside the trial.
     """
-    is_coast = trial.motion.is_coast
+    bearing = trial.attempt.bearing
+    policy = bearing.act.policy
+    is_coast = policy.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()
     control_rungs: tuple[Any, ...] = ()
@@ -604,7 +606,7 @@ def _step_context(
         control_rungs = tuple(state.rungs)
 
     return _StepContext(
-        policy=trial.policy,
+        policy=policy,
         execution=trial.execution,
         frontier_tags=frontier_tags,
         control_rungs=control_rungs,
@@ -633,22 +635,24 @@ def _commit_and_monitor(
     # trial.  The accepted world key must describe that effective rung overlay,
     # not the pre-correction one used by the diagnostic fork.
     verified = trial.verification
+    execution = trial.execution
     if isinstance(verified, AssessedMotion):
         assert state.key_config is not None
         trial = replace(
             trial,
             verification=replace(
                 verified,
-                new_key=_pilot_world_key(dict(trial.fork_snap), state.key_config, state.rungs),
+                new_key=_pilot_world_key(dict(execution.after_snap), state.key_config, state.rungs),
             ),
         )
     _commit_trial(trial, frame, state, ctx)
+    policy = trial.attempt.bearing.act.policy
     yield PilotEvent(
         "trial_committed",
         state.work.state.scan_id,
         {
-            "candidate": trial.candidate,
-            "applied": trial.applied,
+            "candidate": dict(policy.action_pairs),
+            "applied": policy.applied,
             "steps": tuple(state.steps),
             "snapshot": dict(state.work.state.tags),
         },
@@ -662,13 +666,18 @@ def _commit_trial(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
+    attempt = trial.attempt
+    pulse = attempt.pulse
+    bearing = attempt.bearing
+    policy = bearing.act.policy
+    execution = trial.execution
     verified = trial.verification
     key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
     if isinstance(verified, AssessedMotion):
         state.seen_keys.add(verified.new_key)
     # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
-    # narrow ``trial.candidate``.  Replay and live apply must reproduce every input
+    # policy's narrow primary candidate. Replay and live apply must reproduce every input
     # that drove the transition.  ``applied`` is the full set and is empty exactly
     # for zoom/let-run, where an empty action correctly means "coast, no input".
     # A terminal let-run animates conditional holds during its coast; record them
@@ -680,12 +689,12 @@ def _commit_trial(
     # harness sensor's ramp) are the input that makes the coast advance — fold
     # them into the recorded inputs so replay re-establishes them.  ``applied``
     # is empty for a let-run, so this is the only place the driver is recorded.
-    step_inputs = dict(trial.applied)
+    step_inputs = dict(policy.applied)
     work, steps = _commit_step(
         state.work,
-        trial.fork,
+        pulse.fork,
         step_inputs,
-        trial.scan_before,
+        pulse.scan_before,
         ctx.resting,
         ctx.edge_tags,
         ctx.live,
@@ -709,14 +718,14 @@ def _commit_trial(
     # laps must still drain the budget (the old-wiring live run spun at HELD
     # committing 100k scan-ids per lap — free dwell there means no terminating
     # force).
-    if trial.motion.is_coast:
+    if policy.motion.is_coast:
         productive = (
             not key_was_seen
-            or trial.channel_motion.reached
+            or execution.channel_motion.reached
             or trial.earned_work_receipt.any_forward
         )
         if productive:
-            state.dwell_scans += state.work.state.scan_id - trial.scan_before
+            state.dwell_scans += state.work.state.scan_id - pulse.scan_before
 
 
 def _finished_event(
@@ -1025,8 +1034,11 @@ def _pilot_loop_events(
                 attempt.stall_receipt.stop_reason
                 if attempt.stall_receipt is not None
                 else (
-                    attempt.trial.coast_receipt.stop_reason
-                    if attempt.trial is not None and attempt.trial.coast_receipt is not None
+                    attempt.trial.execution.coast_receipt.stop_reason
+                    if (
+                        attempt.trial is not None
+                        and attempt.trial.execution.coast_receipt is not None
+                    )
                     else "terminal-coast"
                 )
             )
@@ -1052,7 +1064,7 @@ def _pilot_loop_events(
         accepted_event = _act_event(
             "accepted",
             act,
-            trial.fork.state.scan_id,
+            trial.attempt.pulse.fork.state.scan_id,
             trial=trial,
             frame=frame,
             state=state,

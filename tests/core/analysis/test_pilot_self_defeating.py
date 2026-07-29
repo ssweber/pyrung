@@ -622,18 +622,18 @@ def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
         return ReplayOutcome(
             accepted=True,
             trend=1,
-            snapshot={**trial.before_snap, "State": 6},
+            snapshot={**trial.execution.before_snap, "State": 6},
             reason="incident silenced",
         )
 
     incident = DeviationIncident(
-        anchor_scan=trial.scan_before,
-        departure_scan=trial.scan_before + 1,
-        end_scan=trial.fork.state.scan_id,
+        anchor_scan=trial.attempt.pulse.scan_before,
+        departure_scan=trial.attempt.pulse.scan_before + 1,
+        end_scan=trial.attempt.pulse.fork.state.scan_id,
         action=(),
         bearing=(("State", 6),),
-        before_snap=trial.before_snap,
-        after_snap=trial.fork_snap,
+        before_snap=trial.execution.before_snap,
+        after_snap=trial.execution.after_snap,
         changed_tags=("State",),
         departures=(),
         channel_tag="State",
@@ -713,7 +713,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     )
     frame.tree = SimpleNamespace(children=(), satisfied=True, is_steerable=False)
 
-    _record_attempt(attempt, frame, state, ctx, trial.bearing_objective)
+    _record_attempt(attempt, frame, state, ctx, trial.attempt.bearing.objective)
 
     assert tuple(state.rungs) == (replayed,)
     assert state.correction_receipts[0].correction is correction
@@ -945,7 +945,7 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
         source=6,
         departed=8,
         landing=8,
-        departure_scan=trial.fork.state.scan_id,
+        departure_scan=trial.attempt.pulse.fork.state.scan_id,
         cause=(CausalOccurrence(RungId("Program", 0), "State", 8),),
         causal_spine=frozenset(("Go", "State")),
         causal_roots=(("Go", True),),

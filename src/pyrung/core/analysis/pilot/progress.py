@@ -155,7 +155,7 @@ def _trial_checkpoint(
         verified.new_key,
         state.snapshot_world(),
         resolved_trend,
-        trial.bearing_objective,
+        trial.attempt.bearing.objective,
     )
 
 
@@ -222,14 +222,15 @@ def _channel_recovery_origin(
     # the fault. Using the post-action frame as "before" would already contain
     # alarm triggers and erase the counterfactual evidence that a permissive
     # clears them.
+    pulse = trial.attempt.pulse
     replay_from_checkpoint = (
-        checkpoint.world.work.state.scan_id < trial.scan_before
+        checkpoint.world.work.state.scan_id < pulse.scan_before
         or not _values_match(checkpoint_snap.get(channel_tag), channel_value)
     )
     return _RecoveryOrigin(
         checkpoint_owner=checkpoint.owner,
         anchor_scan=(
-            checkpoint.world.work.state.scan_id if replay_from_checkpoint else trial.scan_before
+            checkpoint.world.work.state.scan_id if replay_from_checkpoint else pulse.scan_before
         ),
         before_snap=(checkpoint_snap if replay_from_checkpoint else dict(frame.snap)),
     )
@@ -242,7 +243,10 @@ def _monitor_trend(
     ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
     verified = trial.verification
-    channel_ejection = trial.channel_motion.departed
+    attempt = trial.attempt
+    policy = attempt.bearing.act.policy
+    execution = trial.execution
+    channel_ejection = execution.channel_motion.departed
     # A pending departure changes only the rollback boundary. Every trial inside
     # it still passes through the ordinary trend,
     # regression, investigation, and retry machinery below. In particular, an
@@ -310,8 +314,8 @@ def _monitor_trend(
     # investigation must replay the action itself so it can discover the
     # missing hold and retry from the corrected PilotRungs world.
     if _bearing_satisfied(trial) and verified.trend > state.best_trend:
-        assert trial.channel_motion.channel_tag is not None
-        channel_tag = trial.channel_motion.channel_tag
+        assert execution.channel_motion.channel_tag is not None
+        channel_tag = execution.channel_motion.channel_tag
         previous = state.best_trend
         state.best_trend = verified.trend
         yield PilotEvent(
@@ -322,7 +326,7 @@ def _monitor_trend(
                 "key": verified.new_key,
                 "checkpoint_count": len(state.checkpoints),
                 "channel": channel_tag,
-                "channel_value": trial.fork_snap.get(channel_tag),
+                "channel_value": execution.after_snap.get(channel_tag),
                 "baseline_trend": previous,
                 "provisional": True,
             },
@@ -386,7 +390,7 @@ def _monitor_trend(
         return
 
     origin = _checkpoint_recovery_origin(state, before_snap=frame.snap)
-    if trial.chase_regression_causes:
+    if policy.chase_regression_causes:
         yield recording._investigation_started_event(trial, origin)
     yield from _investigate_and_revert(
         trial,
@@ -410,9 +414,15 @@ def _handle_channel_departure(
     ejection and investigation events in order, then owns pending/open/retain
     policy for that occurrence.
     """
-    chan = trial.channel_motion.channel_tag
+    attempt = trial.attempt
+    pulse = attempt.pulse
+    bearing = attempt.bearing
+    policy = bearing.act.policy
+    execution = trial.execution
+    channel_motion = execution.channel_motion
+    chan = channel_motion.channel_tag
     assert chan is not None
-    departed_from = trial.before_snap.get(chan)
+    departed_from = execution.before_snap.get(chan)
     investigated = bool(state.checkpoints)
     ejection = PilotEvent(
         "letrun_ejection",
@@ -420,10 +430,10 @@ def _handle_channel_departure(
         {
             "channel_tag": chan,
             "from_value": departed_from,
-            "requested_value": trial.channel_motion.target_value,
-            "to_value": trial.fork_snap.get(chan),
-            "observe_label": trial.observe_label,
-            "coast_span": (trial.scan_before, state.work.state.scan_id),
+            "requested_value": channel_motion.target_value,
+            "to_value": execution.after_snap.get(chan),
+            "observe_label": policy.observe_label,
+            "coast_span": (pulse.scan_before, state.work.state.scan_id),
             "investigated": investigated,
             "reason": None if investigated else "no checkpoint to revert to",
         },
@@ -441,7 +451,7 @@ def _handle_channel_departure(
         {
             "channel_tag": chan,
             "from_value": departed_from,
-            "to_value": trial.fork_snap.get(chan),
+            "to_value": execution.after_snap.get(chan),
         },
     )
     # Classify BEFORE investigating (detour.py): program-owned motion may
@@ -453,14 +463,14 @@ def _handle_channel_departure(
     departure = classify_departure(
         state,
         ctx,
-        trial.bearing_objective,
+        bearing.objective,
         chan,
         departed_from,
-        trial.before_snap,
+        execution.before_snap,
         occurrence_scan=next(
             (
                 event.scan
-                for event in trial.timeline
+                for event in execution.timeline
                 if any(
                     tag == chan
                     and _values_match(before, departed_from)
@@ -473,7 +483,9 @@ def _handle_channel_departure(
     )
     observation = departure.observation
     if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
-        prescribed_departure = trial.route_prescribed and verified.assessment.agency is Agency.PILOT
+        prescribed_departure = (
+            policy.route_prescribed and verified.assessment.agency is Agency.PILOT
+        )
         if (
             observation.progress.movement is EarnedWorkMovement.UNCHANGED
             and not prescribed_departure
@@ -497,7 +509,7 @@ def _handle_channel_departure(
                 chan,
                 departed_from,
             )
-            if trial.chase_regression_causes:
+            if policy.chase_regression_causes:
                 yield recording._investigation_started_event(trial, origin)
             yield from _investigate_and_revert(
                 trial,
@@ -524,7 +536,7 @@ def _handle_channel_departure(
         chan,
         departed_from,
     )
-    if trial.chase_regression_causes:
+    if policy.chase_regression_causes:
         yield recording._investigation_started_event(trial, origin)
     yield from _investigate_and_revert(
         trial,
@@ -542,7 +554,7 @@ def _handle_channel_departure(
 
 def _bearing_satisfied(trial: _AcceptedTrial) -> bool:
     """Whether trial verification proved the requested channel value."""
-    return trial.channel_motion.reached
+    return trial.execution.channel_motion.reached
 
 
 def _anchor_frame_receipt(
@@ -585,7 +597,7 @@ def _anchor_bearing_receipt(
     """
     if not _bearing_satisfied(trial):
         return
-    _anchor_frame_receipt(frame, state, trial.bearing_objective)
+    _anchor_frame_receipt(frame, state, trial.attempt.bearing.objective)
 
 
 def _open_pending_departure(
@@ -596,6 +608,7 @@ def _open_pending_departure(
 ) -> tuple[PilotEvent, ...]:
     """Record a clean departure whose progress is not yet conclusive."""
     observation = departure.observation
+    channel_motion = trial.execution.channel_motion
     earned_work = state.earned_work
     # The exact pre-coast world remains the replay/rollback receipt. Settle the
     # landing before marking progress: movement completed by the departing
@@ -632,7 +645,7 @@ def _open_pending_departure(
             {
                 "channel_tag": observation.channel_tag,
                 "from_value": observation.from_value,
-                "requested_value": trial.channel_motion.target_value,
+                "requested_value": channel_motion.target_value,
                 "settled_value": observation.settled_value,
                 "reason": departure.reason,
                 "route": legacy_route,
@@ -762,7 +775,7 @@ def _assess_pending_departure(
     """
     pending = state.pending_departure
     assert pending is not None
-    now_snap = trial.fork_snap or {}
+    now_snap = trial.execution.after_snap or {}
     reached = target_reached(
         now_snap,
         ctx.target.tag,
@@ -849,7 +862,7 @@ def _apply_departure_decision(
                     pending,
                     after_source_mark_fields={
                         "landing_mark": (
-                            state.earned_work.mark(trial.fork_snap)
+                            state.earned_work.mark(trial.execution.after_snap)
                             if state.earned_work is not None
                             else ()
                         ),
@@ -1182,6 +1195,12 @@ def _investigate_and_revert(
     ejection may anchor at the coast start. The origin owns that distinction;
     recovery derives the end from the committed world it is about to revert.
     """
+    attempt = trial.attempt
+    pulse = attempt.pulse
+    bearing_owner = attempt.bearing
+    policy = bearing_owner.act.policy
+    execution = trial.execution
+    channel_motion = execution.channel_motion
     verified = trial.verification
     if not isinstance(verified, AssessedMotion):
         raise ValueError("target acceptance cannot enter regression investigation")
@@ -1195,17 +1214,17 @@ def _investigate_and_revert(
     revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
     investigation_nogoods: set[_ActionPair] = set()
     investigation_payload: dict[str, Any] = {}
-    if trial.chase_regression_causes:
+    if policy.chase_regression_causes:
         # A watch tag that moved TO a value the target still needs (the
         # checkpoint frontier) is *progress*, not a departure — the coast exists
         # to move it (Heat_CurStep 0->1 en route to 3).  Chasing it spawns
         # corrective holds against the plan itself (lock the enabler of the
         # very advance we wanted).  Only anomalous motion enters the bearing.
         bearing = _deviation_bearing(
-            trial,
+            execution,
             frame,
             state.watch_tags,
-            trial.bearing_objective.frontier,
+            bearing_owner.objective.frontier,
         )
         # The incident's evidence is the recorded step timelines inside the
         # window — the trend recorder's pen marks — never a history re-diff.
@@ -1220,12 +1239,12 @@ def _investigate_and_revert(
         incident = build_deviation_incident(
             anchor_scan=origin.anchor_scan,
             end_scan=end_scan,
-            action=trial.applied,
+            action=policy.applied,
             bearing=bearing,
             before_snap=origin.before_snap,
-            after_snap=trial.fork_snap,
+            after_snap=execution.after_snap,
             timeline=window_timeline,
-            channel_tag=trial.channel_motion.channel_tag,
+            channel_tag=channel_motion.channel_tag,
         )
 
         # Replay re-arms each step's RECORDED session spec (kind + channel +
@@ -1238,7 +1257,7 @@ def _investigate_and_revert(
             if step.scan_before >= cp_fork.state.scan_id
         )
         role_tags = coast_departure_tags(state, ctx)
-        regression_witness = incident_regression_witness(trial.fork, incident)
+        regression_witness = incident_regression_witness(pulse.fork, incident)
         # A corrective fact belongs to the occurrence that exposed it. The
         # witness carries the scan-entry snapshot for the harmful writer; its
         # Earned-work coordinates distinguish a late fault from earlier useful work
@@ -1272,18 +1291,18 @@ def _investigate_and_revert(
             replay_steps,
             ctx=ctx,
             incident=ReplayIncident(
-                channel_tag=trial.channel_motion.channel_tag,
-                channel_target=trial.channel_motion.target_value,
+                channel_tag=channel_motion.channel_tag,
+                channel_target=channel_motion.target_value,
                 terminal_role_tags=(
-                    role_tags if trial.motion is MotionKind.COAST_HOLDING_WORLD else None
+                    role_tags if policy.motion is MotionKind.COAST_HOLDING_WORLD else None
                 ),
                 # The replay reproduces the incident, so its eject watch is the
                 # departed channel alone when one exists (audit I2 — an explicit
                 # caller decision, not buried dispatch); the full role set only
                 # when no channel register is recognized.
                 watch_roles=(
-                    (trial.channel_motion.channel_tag,)
-                    if trial.channel_motion.channel_tag is not None
+                    (channel_motion.channel_tag,)
+                    if channel_motion.channel_tag is not None
                     else role_tags
                 ),
                 departure_bearing=tuple((d.tag, d.value) for d in incident.departures),
@@ -1302,11 +1321,11 @@ def _investigate_and_revert(
         # checkpoint may predate this operation. Re-deriving from either loses
         # completion-frontier needs (``Sts_StateCurrent = 17``) that the target
         # tree alone cannot surface.
-        needed = list(trial.bearing_objective.frontier)
+        needed = list(bearing_owner.objective.frontier)
         investigation = investigate_deviation(
             # Derive hypotheses from the PLC that actually observed the
             # incident.  Replay still starts from ``cp_fork`` above.
-            trial.fork,
+            pulse.fork,
             incident,
             ctx,
             replay,
@@ -1369,13 +1388,13 @@ def _investigate_and_revert(
         # original rollback boundary, budget, and the actual first observed
         # landing. The classifier's later quiescent fork is evidence, not
         # permission to skip the next recomputation point.
-        assert trial.channel_motion.channel_tag is not None
+        assert channel_motion.channel_tag is not None
         retained = PilotEvent(
             "departure_investigated",
             state.work.state.scan_id,
             {
-                "channel_tag": trial.channel_motion.channel_tag,
-                "from_value": trial.before_snap.get(trial.channel_motion.channel_tag),
+                "channel_tag": channel_motion.channel_tag,
+                "from_value": execution.before_snap.get(channel_motion.channel_tag),
                 "retained": True,
                 "progress": retain_if_unresolved.observation.progress,
                 "investigation": investigation_payload,
@@ -1401,7 +1420,7 @@ def _investigate_and_revert(
     # every transcript.  Read the channel value at the checkpoint (from) vs. the
     # regressed frame (to); a channel is any opaque-loop pipeline register.
     channel_transitions: tuple[tuple[str, Any, Any], ...] = recording._channel_transitions(
-        ctx, trial, cp_fork, trial.fork_snap
+        ctx, trial, cp_fork, execution.after_snap
     )
 
     # Keep the failed action as a nogood in the exact world where it was tried.
@@ -1410,7 +1429,7 @@ def _investigate_and_revert(
     # A replay-confirmed correction changes that source key, so the same action
     # remains naturally eligible in the corrected executable world.
     regression_nogoods = set(investigation_nogoods)
-    regression_nogoods.update(trial.regression_nogoods)
+    regression_nogoods.update(policy.regression_nogoods)
     if regression_nogoods:
         ctx.compass, _ = ctx.compass.apply(
             tuple(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods)

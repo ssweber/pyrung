@@ -361,12 +361,12 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
 
     context = state.committed_acts[-1].context
     assert context.execution is trial.execution
-    assert context.policy is trial.policy
-    assert context.candidate == trial.candidate
-    assert context.motion is trial.motion
-    assert context.before_snap is trial.before_snap
-    assert context.after_snap is trial.fork_snap
-    assert context.timeline is trial.timeline
+    assert context.policy is trial.attempt.bearing.act.policy
+    assert context.candidate == dict(trial.attempt.bearing.act.policy.action_pairs)
+    assert context.motion is trial.attempt.bearing.act.policy.motion
+    assert context.before_snap is trial.execution.before_snap
+    assert context.after_snap is trial.execution.after_snap
+    assert context.timeline is trial.execution.timeline
     assert context.accelerators == (("Acc", 7),)
 
     state.extend_last_step(fork.state.scan_id + 3)
@@ -602,7 +602,7 @@ class TestCheckpoints:
         origin = _channel_recovery_origin(state, trial, frame, "A", True)
 
         assert origin.checkpoint_owner is state.checkpoints[0].owner
-        assert origin.anchor_scan == trial.scan_before
+        assert origin.anchor_scan == trial.attempt.pulse.scan_before
         assert origin.before_snap == frame.snap
 
 
@@ -650,7 +650,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         reason="clean continuation",
         settled_value=11,
         settle_scans=1,
-        progress=earned_work.receipt(trial.before_snap, settled.state.tags),
+        progress=earned_work.receipt(trial.execution.before_snap, settled.state.tags),
         from_value=6,
     )
 
@@ -973,13 +973,13 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         fork_snap={"State": 4},
         channel_motion=ChannelMotion("State", 17, stop_reason="departed"),
     )
-    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
+    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.attempt.pulse.fork)
     state.pending_departure = _pending_departure(
         state,
         expires_at=0,
     )
     departure = _departure_result(
-        trial.fork,
+        trial.attempt.pulse.fork,
         reason="unique clean awaited action",
         settled_value=4,
         progress=EarnedWorkReceipt((EarnedWorkReading("Step", 1, 1, 1),)),
@@ -1013,7 +1013,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
     ]
     assert investigated == [departure]
     assert state.pending_departure is not None
-    assert state.work is trial.fork
+    assert state.work is trial.attempt.pulse.fork
     assert len(state.checkpoints) == 1
 
 
@@ -1045,9 +1045,9 @@ def test_prescribed_departure_outranks_a_preserved_recipe_earned_work(monkeypatc
             accepted=True,
         ),
     )
-    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.fork)
+    state = _make_state(best_trend=2, checkpoints=[checkpoint], work=trial.attempt.pulse.fork)
     departure = _departure_result(
-        trial.fork,
+        trial.attempt.pulse.fork,
         reason="clean prescribed continuation",
         settled_value=2,
         progress=EarnedWorkReceipt((EarnedWorkReading("RecipeStep", 101, 101, 1),)),
@@ -1182,7 +1182,7 @@ class TestRegression:
             trial,
             attempt=replace(
                 trial.attempt,
-                bearing=replace(trial.bearing, objective=objective),
+                bearing=replace(trial.attempt.bearing, objective=objective),
             ),
         )
         assert state.checkpoints[-1].objective is not objective
@@ -1326,7 +1326,7 @@ class TestLetrunEjection:
             nonlocal classified
             classified = True
             return _departure_result(
-                trial.fork,
+                trial.attempt.pulse.fork,
                 reason="no clean continuation",
                 settled_value=10,
                 classification=DepartureClassification.UNKNOWN,
@@ -1492,7 +1492,7 @@ def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
     )
     frame = SimpleNamespace(snap={"State": 6})
 
-    bearing = _deviation_bearing(trial, frame, ["State"], ())
+    bearing = _deviation_bearing(trial.execution, frame, ["State"], ())
 
     assert bearing == (("State", 6),)
 

@@ -297,8 +297,8 @@ class DepartureDecision:
 @dataclass(frozen=True)
 class _Step:
     # The inputs physically applied for this step — the candidate plus its
-    # co-actions (command button + one-shot edge gate), i.e. ``trial.applied``,
-    # NOT the narrow ``trial.candidate``.  Named ``inputs`` (matching the prover's
+    # co-actions (command button + one-shot edge gate), i.e. ``ActPolicy.applied``,
+    # not only the policy's primary candidate. Named ``inputs`` (matching the prover's
     # reachability step) so the recording site can't confuse the two.
     inputs: dict[str, Any]
     scan_before: int
@@ -835,9 +835,8 @@ class _AcceptedTrial:
     """One accepted execution with verification's evidence and judgment.
 
     The executed attempt remains intact beside the frozen, PLC-free evidence
-    VERIFY selected from its final pulse. Compatibility views below derive
-    navigation declarations from the attempt's policy and durable observations
-    from that execution evidence.
+    VERIFY selected from its final pulse. Consumers read navigation declarations
+    from ``attempt`` and durable observations from ``execution`` explicitly.
     """
 
     attempt: _ExecutedAttempt
@@ -845,84 +844,6 @@ class _AcceptedTrial:
     verification: TrialVerification
     earned_work_receipt: EarnedWorkReceipt = field(default_factory=EarnedWorkReceipt)
     gate_events: tuple[PilotGateEvent, ...] = ()
-
-    @property
-    def pulse(self) -> _PulseState:
-        return self.attempt.pulse
-
-    @property
-    def bearing(self) -> Bearing:
-        return self.attempt.bearing
-
-    @property
-    def policy(self) -> ActPolicy:
-        return self.bearing.act.policy
-
-    @property
-    def fork(self) -> PLC:
-        return self.pulse.fork
-
-    @property
-    def scan_before(self) -> int:
-        return self.pulse.scan_before
-
-    @property
-    def candidate(self) -> dict[str, Any]:
-        return dict(self.policy.action_pairs)
-
-    @property
-    def applied(self) -> tuple[_ActionPair, ...]:
-        return self.policy.applied
-
-    @property
-    def before_snap(self) -> Mapping[str, Any]:
-        return self.execution.before_snap
-
-    @property
-    def post_pulse_snap(self) -> dict[str, Any]:
-        return self.pulse.post_pulse_snap
-
-    @property
-    def fork_snap(self) -> Mapping[str, Any]:
-        return self.execution.after_snap
-
-    @property
-    def channel_motion(self) -> ChannelMotion:
-        return self.execution.channel_motion
-
-    @property
-    def observe_label(self) -> str:
-        if isinstance(self.verification, TargetReached):
-            return self.policy.target_observe_label
-        return self.policy.observe_label
-
-    @property
-    def bearing_objective(self) -> BearingObjective:
-        return self.bearing.objective
-
-    @property
-    def route_prescribed(self) -> bool:
-        return self.policy.route_prescribed
-
-    @property
-    def motion(self) -> MotionKind:
-        return self.policy.motion
-
-    @property
-    def regression_nogoods(self) -> frozenset[_ActionPair]:
-        return self.policy.regression_nogoods
-
-    @property
-    def chase_regression_causes(self) -> bool:
-        return self.policy.chase_regression_causes
-
-    @property
-    def coast_receipt(self) -> CoastReceipt | None:
-        return self.execution.coast_receipt
-
-    @property
-    def timeline(self) -> tuple[CoastTriggerEvent, ...]:
-        return self.execution.timeline
 
 
 @dataclass(frozen=True)

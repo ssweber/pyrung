@@ -417,7 +417,9 @@ class TestGateDeadEnd:
 class TestVerifyGates:
     """Full pipeline: target check -> spin -> cycle -> dead-end -> outcome."""
 
-    def test_target_reached_preserves_executed_attempt(self):
+    def test_target_reached_records_zoom_target_from_owned_evidence(self):
+        from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
+
         source = Bool("VerifySource", external=True)
         target = Bool("VerifyTarget")
         with Program() as program:
@@ -481,21 +483,16 @@ class TestVerifyGates:
         assert result.trial.attempt.pulse is pulse
         assert result.trial.attempt.bearing is bearing
         assert isinstance(result.trial.verification, TargetReached)
-        assert result.trial.fork is pulse.fork
-        assert result.trial.candidate == dict(policy.action_pairs)
-        assert result.trial.applied == policy.applied
-        assert result.trial.observe_label == policy.target_observe_label
-        assert result.trial.bearing_objective is objective
-        assert result.trial.route_prescribed is True
-        assert result.trial.regression_nogoods == policy.regression_nogoods
-        assert result.trial.chase_regression_causes is policy.chase_regression_causes
-        assert result.trial.channel_motion.channel_tag == policy.heading.channel_tag
-        assert result.trial.channel_motion.target_value is True
-        assert result.trial.channel_motion.reached
-        assert result.trial.motion is MotionKind.COAST_TO_BEARING
-        assert result.trial.timeline == pulse.timeline
+        assert result.trial.attempt.pulse.fork is pulse.fork
+        assert result.trial.attempt.bearing.objective is objective
+        assert result.trial.attempt.bearing.act.policy is policy
+        assert result.trial.execution.channel_motion.channel_tag == policy.heading.channel_tag
+        assert result.trial.execution.channel_motion.target_value is True
+        assert result.trial.execution.channel_motion.reached
+        assert result.trial.execution.timeline == pulse.timeline
         assert result.trial.execution.coast_receipt is coast_receipt
         assert result.trial.execution.accelerators == (("VerifyAccumulator", 9),)
+        assert _zoom_accepted_payload(result.trial)["observe_label"] == "zoom-target"
         assert result.trial.execution.before_snap is not before
         assert result.trial.execution.after_snap is not after
         assert isinstance(result.trial.execution.before_snap, MappingProxyType)
@@ -506,8 +503,8 @@ class TestVerifyGates:
         assert result.trial.earned_work_receipt.landing_mark == (("VerifyStep", 2),)
         before["LateSourceMutation"] = True
         after["LateLandingMutation"] = True
-        assert "LateSourceMutation" not in result.trial.before_snap
-        assert "LateLandingMutation" not in result.trial.fork_snap
+        assert "LateSourceMutation" not in result.trial.execution.before_snap
+        assert "LateLandingMutation" not in result.trial.execution.after_snap
 
     def test_assessed_motion_requires_an_accepted_assessment(self):
         from pyrung.core.analysis.pilot.outcome import (

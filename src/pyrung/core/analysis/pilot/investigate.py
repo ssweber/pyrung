@@ -58,9 +58,9 @@ from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
     MotionKind,
-    _AcceptedTrial,
     _ActionPair,
     _ConfirmedCorrection,
+    _ExecutionEvidence,
     _IterationFrame,
     _Step,
     _StepContext,
@@ -173,7 +173,7 @@ def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
 
 
 def _deviation_bearing(
-    trial: _AcceptedTrial,
+    execution: _ExecutionEvidence,
     frame: _IterationFrame,
     watch_tags: list[str],
     frontier: tuple[_ActionPair, ...],
@@ -186,15 +186,16 @@ def _deviation_bearing(
     bearing: list[_ActionPair] = [
         (tag, frame.snap.get(tag))
         for tag in watch_tags
-        if not _values_match(frame.snap.get(tag), trial.fork_snap.get(tag))
+        if not _values_match(frame.snap.get(tag), execution.after_snap.get(tag))
         and not any(
-            _values_match(trial.fork_snap.get(tag), needed) for needed in needed_by_tag.get(tag, ())
+            _values_match(execution.after_snap.get(tag), needed)
+            for needed in needed_by_tag.get(tag, ())
         )
     ]
-    channel = trial.channel_motion.channel_tag
+    channel = execution.channel_motion.channel_tag
     if channel is not None:
-        source = trial.before_snap.get(channel)
-        landed = trial.fork_snap.get(channel)
+        source = execution.before_snap.get(channel)
+        landed = execution.after_snap.get(channel)
         if not _values_match(landed, source):
             bearing = [(tag, value) for tag, value in bearing if tag != channel]
             bearing.append((channel, source))
