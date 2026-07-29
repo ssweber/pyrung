@@ -577,7 +577,12 @@ def _step_context(
     frame: _IterationFrame,
     state: _PilotState,
 ) -> _StepContext:
-    """Build the context owned by one committed operation."""
+    """Build the context owned by one committed operation.
+
+    Commit adds only unresolved frontier tags and exact executable control
+    rungs; every other view derives from the policy and execution-evidence
+    owners already inside the trial.
+    """
     is_coast = trial.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()

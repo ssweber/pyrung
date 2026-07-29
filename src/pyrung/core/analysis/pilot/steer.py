@@ -412,7 +412,8 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
 
     This is deliberately narrower than orientation: it validates the world
     binding, installs declared prerequisites, and dispatches one act through
-    the existing verification pipeline.  It never selects a fallback.
+    the existing verification pipeline.  It never selects a fallback and
+    applies the declared ``ActPolicy`` without decoding its provenance.
     """
 
     frame = world.frame

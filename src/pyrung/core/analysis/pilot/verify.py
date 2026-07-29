@@ -337,6 +337,12 @@ def _gate_dead_end(
     collected_nogoods: list[_ActionPair],
     channel_motion: ChannelMotion,
 ) -> _DeadEndResult | None:
+    """Reject a trial that moved nothing and can prove no pending motion.
+
+    The post-trial trace here deliberately omits the harness coupling-driver
+    proposal model that planning may use: continued physical motion needs
+    executed evidence or a live pending effect on the exact trial fork.
+    """
     # A zoom that drove its channel register to the target value (e.g.
     # S_StateCurrent 3->6) is a confirmed advance, even if the global target's
     # onward leg is another dwell that trace_back can't surface.  And a zoom
@@ -492,6 +498,10 @@ def verify_gates(
     arrive on its receipt; opaque callables are checked only at endpoints and
     real snapshots retained by execution. All steering execution modes
     converge here.
+
+    Verification owns the accepted trial's gauge receipt and replaces it only
+    when spin recovery replaces the fork; outcome and commit consume that
+    receipt intact.
     """
     trial = attempt.pulse
     bearing = attempt.bearing

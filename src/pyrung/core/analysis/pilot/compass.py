@@ -166,7 +166,12 @@ class CoastObservation:
 
 @dataclass(frozen=True)
 class StaticEdgeObservation:
-    """Runtime evidence overlay for one immutable static edge identity."""
+    """Runtime evidence overlay for one immutable static edge identity.
+
+    Narrower than transition entries: negative evidence attaches only when the
+    trial exercised this edge's exact action/co-action set while its recorded
+    concrete conditions held.
+    """
 
     edge_id: tuple[Any, ...]
     status: Literal["confirmed", "contradicted", "no_change"]
@@ -260,6 +265,11 @@ class CompassEntry(PRecord):
     A CONFIRMED entry is minted only by ``outcome.confirmed_entry``; the
     general observation write path rejects that provenance, so
     confirmation cannot be asserted by a general observation writer.
+
+    Scoping is local-first: a tombstone cannot erase another recipe or
+    co-action context, but within its own exact context it overrides
+    deliberately global seeded evidence, just as an exact-world destination
+    supersedes a global destination.
     """
 
     tag = _precord_field(type=str)

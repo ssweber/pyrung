@@ -7,6 +7,12 @@ that can be proved from program structure.
 
 These are hypotheses, not installed corrections. ``investigate.py`` replay
 validates them and ``progress.py`` installs at most one confirmed result.
+
+An accumulator correction asks only the owner that completed in the recorded
+incident for its reset operation.  A plain trace handoff is a one-scan
+operation; an intermediate instruction contributes its own boundary and
+progress witness.  Later opposite operations compose as temporal phases when
+their owner boundaries differ; bare contradictory holds still revoke.
 """
 
 from __future__ import annotations

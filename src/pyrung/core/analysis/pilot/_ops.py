@@ -49,6 +49,11 @@ class PilotRung:
     ``guard`` is deliberately required: steering without a reason to release is
     a permanent force wearing ladder syntax.  The proposer owns this condition;
     installation only preserves its meaning and order.
+
+    A ``PilotRung`` is executable form, not correction provenance.  Only rungs
+    named by active correction receipts may renegotiate their concrete value
+    from a later incident boundary; prerequisites and route holds cannot enter
+    the correction lifecycle merely because they compile to this rung type.
     """
 
     dest: str
@@ -103,7 +108,14 @@ class PilotOverlayExecution:
 
 
 def _rung_identity(rung: PilotRung) -> tuple[Any, ...]:
-    """Exact executable identity used for overlay ownership and deduplication."""
+    """Exact executable identity used for overlay ownership and deduplication.
+
+    Correction nogoods are identities of replay-confirmed executable rungs
+    composed here; guard and operation boundary are part of the disproved
+    artifact.  A raw ``(tag, value)`` hypothesis does not own a scope and
+    cannot be compared with revoked evidence until investigation materializes
+    its guarded installed form.
+    """
     return (
         rung.dest,
         _semantic_key(rung.value),
@@ -506,7 +518,16 @@ def fork_with_rungs(
     *,
     history_budget: int | float | None = None,
 ) -> PLC:
-    """Fork *source* and rebuild its scoped steering overlay verbatim."""
+    """Fork *source* and rebuild its scoped steering overlay verbatim.
+
+    Every production PILOT fork that may execute is created here, with the
+    owning ``_World.rungs`` supplied explicitly (the drive bootstrap supplies
+    an explicit empty set).  Public ``PLC.fork()`` does not implicitly inherit
+    PILOT holds.  Runner-internal replay has a separate contract: a
+    reconstructed fork copies its source runner's **current** synthesis plant
+    and holds, making no claim that an older interval replays under the
+    overlay that existed then.
+    """
     fork = source.fork(history_budget=history_budget)
     _set_rungs(fork, rungs)
     return fork

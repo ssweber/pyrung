@@ -6,6 +6,12 @@ drivers. ``_best_static_path`` searches those graphs without executing the
 program. The module also detects opaque transition-pipeline slices used when
 building the analysis context.
 
+Charts enumerate every source match, exact edges before wildcard edges:
+specificity is precedence, never a pre-filter veto of a surviving wildcard
+route.  A convergence lookup is an ordered multimap of primary-action
+alternatives — construction fans each alternative into its own edge, and only
+a route's ``edge_gates`` are simultaneous co-actions.
+
 Runtime observations and probe history belong to ``compass.py``.
 """
 

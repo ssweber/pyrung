@@ -332,6 +332,12 @@ def _bearing(
     target: TargetSpec,
     rationale: str,
 ) -> Bearing:
+    """Assemble one Bearing with its target-relative objective.
+
+    The original ``TargetSpec`` and the complete unresolved frontier travel
+    unchanged inside :class:`BearingObjective` through execution and
+    verification; recovery consumes that receipt.
+    """
     trace = OrientationTrace(
         world_key=world.world_key,
         world=world,

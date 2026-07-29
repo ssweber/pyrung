@@ -8,6 +8,18 @@ that could produce the requested value.
 
 Tracing reads program structure and a snapshot. It does not execute trials,
 record transition knowledge, or choose the iteration's final candidate order.
+
+Trace consumes execution evidence without taking ownership of it: orientation
+may project an exact current-world singleton Pulse rejection back to its
+identical trace leaf, but never a rejected joint act onto one member.  Exact
+leaf rejections only order unlocked local OR, table-value, and nested-writer
+alternatives.  A multi-leaf branch is a distinct, still-untested joint
+artifact; a branch with a dead end cannot replace a rejected branch, and the
+best rejected branch is retained when no untried alternative without a dead
+end survives, so the frontier stays visible.  Only a retained writer attempt's
+children and visited state are adopted into the caller's tree; trace-wide
+caller locks and guard memoization remain shared evidence rather than
+writer-local build state.
 """
 
 from __future__ import annotations
@@ -76,7 +88,13 @@ _TraceChoicePayload = TypeVar("_TraceChoicePayload")
 
 
 class UnsupportedConstruct(Exception):
-    """Trace encountered a program construct for which it has no read rule."""
+    """Trace encountered a program construct for which it has no read rule.
+
+    Raised at read time and caught at exactly one drive boundary in
+    ``pilot.py``; ``recording.py`` renders the caret/source diagnostic.  Test
+    mode propagates the exception; drive mode degrades to a named terminal
+    result instead of probing a construct the reader did not understand.
+    """
 
     def __init__(
         self,
@@ -488,7 +506,11 @@ class TraceNode:
         *,
         order: typing.Literal["breadth_first", "depth_first"] = "breadth_first",
     ) -> Iterator[TraceNode]:
-        """Yield this trace in one of its two stable structural orders."""
+        """Yield this trace in one of its two stable structural orders.
+
+        Breadth-first is the package default; callers that need left-to-right
+        preorder request ``depth_first`` explicitly.
+        """
 
         if order == "breadth_first":
             pending: list[TraceNode] = [self]
@@ -1717,6 +1739,11 @@ def _select_trace_alternative(
     replaced only by an untried alternative with no dead end when the caller
     permits that replacement. If no allowed choice remains, the exact blocked
     baseline stays named for diagnosis.
+
+    Subroutine call sites are distinct program contexts, not alternate
+    recipes: a caller whose exact action was rejected is recorded but never
+    redirects selection to a different caller — it remains the honest
+    frontier for higher-level recovery.
     """
 
     if not alternatives:

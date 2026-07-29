@@ -138,7 +138,14 @@ class NavigationEvidence:
         pair_nogoods: set[tuple[str, Any]] | frozenset[tuple[str, Any]] | None = None,
         evidence_scope_key: tuple[Any, ...] | None = None,
     ) -> StaticEdgeAdmission:
-        """Decide whether one chart edge may join a current-world path search."""
+        """Decide whether one chart edge may join a current-world path search.
+
+        Evaluates the complete required action overlay, including co-actions,
+        and returns machine-readable exclusions for static status,
+        current-world pair/wait/Pulse nogoods, blocked required actions, and
+        avoid.  Graph search consumes only the ``allowed`` projection;
+        options keeps unavailable-producer edges local to its candidate read.
+        """
 
         exclusions: list[StaticEdgeExclusion] = []
         status = knowledge.static_edge_status(

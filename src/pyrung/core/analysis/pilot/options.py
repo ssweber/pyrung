@@ -1534,7 +1534,12 @@ def _select_wait(
     learned: _LearnedFallback | None,
     has_candidates: bool,
 ) -> WaitRead | None:
-    """Select one wait from three explicit evidence sources."""
+    """Select one wait from three explicit evidence sources.
+
+    This is the sole chooser among learned motion, charted completion, and an
+    instruction-owned boundary, under the established prescription and
+    candidate gates.
+    """
 
     charted = charted_completion
     if (

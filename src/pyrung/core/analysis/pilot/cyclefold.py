@@ -8,6 +8,11 @@ phase and time-dependent resets still run.
 The coast loop first tries the ordinary plateau/crossing proof, then adds a
 cycle-preserving macro when changing inner state defeats that proof.  If
 neither can establish a safe jump, it continues with ordinary scans.
+
+Cycle detection, crossing arithmetic, and folded jumps all read one timed
+scalar coordinate: the public accumulator plus its fractional remainder.  The
+remainder proves continued execution to the simulator; the operation's
+``AdvanceStep.progress`` receipt is PILOT's observable evidence.
 """
 
 from __future__ import annotations
