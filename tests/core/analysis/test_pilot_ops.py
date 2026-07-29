@@ -114,7 +114,6 @@ class TestCoastToValue:
         plc.patch({"Enable": True})
         plc.step()
         receipt = _coast_to_value(plc, "Done", True, budget=50)
-        assert receipt.reached
         assert receipt.stop_reason == "reached"
         assert receipt.fired == ("target",)
         assert plc.state.tags["Done"] is True
@@ -134,14 +133,14 @@ class TestCoastToValue:
         plc = PLC(prog, dt=0.010)
         # Don't enable the timer — Done stays False, never reaches True
         receipt = _coast_to_value(plc, "Done", True, budget=20)
-        assert not receipt.reached
+        assert receipt.stop_reason != "reached"
         assert receipt.stop_reason == "timeout"
 
     def test_none_channel_tag_returns_false(self):
         prog = _timer_program()
         plc = PLC(prog, dt=0.010)
         receipt = _coast_to_value(plc, None, True, budget=20)
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.stop_reason == "skipped"
 
 
@@ -202,7 +201,7 @@ class TestCoastHoldingState:
         scan_before = plc.state.scan_id
         receipt = _coast_holding_state(plc, "Target", True, role_tags=("State",), budget=200)
         # Target never reached; role State flipped 1 -> 2 so coast ejected early.
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.stop_reason == "departed"
         assert receipt.fired == ("ejected",)
         assert plc.state.tags["State"] == 2
@@ -226,7 +225,7 @@ class TestCoastHoldingState:
             ],
         )
         receipt = _coast_holding_state(plc, "Target", True, role_tags=(), budget=200)
-        assert receipt.reached is True
+        assert receipt.stop_reason == "reached"
         assert plc.state.tags["Target"] is True
 
         # The held input must have actually oscillated (not pinned steady).

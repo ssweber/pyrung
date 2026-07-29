@@ -108,8 +108,8 @@ class CoastReceipt:
     fired: tuple[str, ...]
     events: tuple[CoastTriggerEvent, ...]
     budget: int
-    real_scans: int = 0
-    folds: int = 0
+    kernel_scans: int = 0
+    macro_folds: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
     # Exact accumulator destinations written by cycle folding, in execution
     # order. These are the manual edits needed to reproduce each jump ahead.
@@ -118,23 +118,9 @@ class CoastReceipt:
     timer_quanta_replayed: int = 0
 
     @property
-    def reached(self) -> bool:
-        return self.stop_reason == "reached"
-
-    @property
     def logical_scans(self) -> int:
         """Logical scan IDs advanced, including scans skipped by folds."""
         return self.end_scan - self.start_scan
-
-    @property
-    def kernel_scans(self) -> int:
-        """Actual interpreter executions (the legacy ``real_scans`` field)."""
-        return self.real_scans
-
-    @property
-    def macro_folds(self) -> int:
-        """Macro-fold executions (the legacy ``folds`` field)."""
-        return self.folds
 
     @property
     def skipped_scans(self) -> int:
@@ -354,8 +340,8 @@ class CoastSession:
             for t in trigger.watched:
                 baseline.setdefault(t, plc.state.tags.get(t))
 
-        real_scans = 0
-        folds = 0
+        kernel_scans = 0
+        macro_folds = 0
         timer_quanta_replayed = 0
         advances: list[tuple[str, Any]] = []
         stop_reason = "timeout"
@@ -416,8 +402,8 @@ class CoastSession:
                     stats=stats,
                     advances=advances,
                 )
-                real_scans += stats.get("real_scans", 0)
-                folds += stats.get("folds", 0)
+                kernel_scans += stats.get("kernel_scans", 0)
+                macro_folds += stats.get("macro_folds", 0)
                 timer_quanta_replayed += stats.get("timer_quanta_replayed", 0)
                 self._last_cyclefold_stats = stats
                 # A certified sterile cycle is a *proof* no armed trigger can
@@ -476,7 +462,7 @@ class CoastSession:
             # without motion; step once so the world moves past the firing,
             # then judge that scan directly on the next pass.
             plc.step()
-            real_scans += 1
+            kernel_scans += 1
             judge_before_run = True
 
         # A timeout can break out after a step the loop never judged, and an
@@ -493,8 +479,8 @@ class CoastSession:
             fired=fired_terminal,
             events=tuple(self._events),
             budget=budget,
-            real_scans=real_scans,
-            folds=folds,
+            kernel_scans=kernel_scans,
+            macro_folds=macro_folds,
             advances=tuple(advances),
             timer_quanta_replayed=timer_quanta_replayed,
         )
@@ -536,7 +522,7 @@ class CoastSession:
             fired=(),
             events=tuple(self._events),
             budget=scans,
-            real_scans=scans,
+            kernel_scans=scans,
         )
 
     def settle_landing(
@@ -564,8 +550,8 @@ class CoastSession:
         plc = self.plc
         start_scan = plc.state.scan_id
         stop_reason = "timeout"
-        real_scans = 0
-        folds = 0
+        kernel_scans = 0
+        macro_folds = 0
         timer_quanta_replayed = 0
         while True:
             remaining = cap - (plc.state.scan_id - start_scan)
@@ -576,8 +562,8 @@ class CoastSession:
                 [departure_trigger(plc, "hop", {channel_tag: held})],
                 budget=min(confirm_scans, remaining),
             )
-            real_scans += receipt.real_scans
-            folds += receipt.folds
+            kernel_scans += receipt.kernel_scans
+            macro_folds += receipt.macro_folds
             timer_quanta_replayed += receipt.timer_quanta_replayed
             if receipt.stop_reason == "timeout":
                 # Silent through the whole confirmation window: landed.
@@ -594,8 +580,8 @@ class CoastSession:
             fired=(),
             events=tuple(self._events),
             budget=cap,
-            real_scans=real_scans,
-            folds=folds,
+            kernel_scans=kernel_scans,
+            macro_folds=macro_folds,
             timer_quanta_replayed=timer_quanta_replayed,
         )
 
@@ -649,7 +635,7 @@ class CoastSession:
             fired=(),
             events=tuple(self._events),
             budget=ceiling,
-            real_scans=len(snaps),
+            kernel_scans=len(snaps),
             trajectory=tuple(snaps),
         )
 

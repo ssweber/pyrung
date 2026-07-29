@@ -169,7 +169,7 @@ def test_pilot_watchdog_corrections_compose_into_alternating_owned_dwell() -> No
         (),
         budget=100,
     )
-    assert receipt.reached is True
+    assert receipt.stop_reason == "reached"
     assert replay.state.tags[tags["error"].name] == 0
 
 

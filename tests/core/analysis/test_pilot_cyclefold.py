@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import pytest
 
@@ -192,6 +193,54 @@ def _install_oscillator(plc: PLC, tag: str):
 
 
 class TestCycleFoldBitEqual:
+    @staticmethod
+    def _assert_normalized_fallback_stats(
+        plc: PLC,
+        *,
+        fold_context_updates: dict[str, object],
+    ) -> None:
+        fold_ctx = plc._ensure_fold_context()
+        assert fold_ctx is not None
+        stats: dict[str, int] = {}
+
+        reached = cycle_fold_until(
+            plc,
+            lambda _state: False,
+            budget=4,
+            fold_ctx=replace(fold_ctx, **fold_context_updates),
+            stats=stats,
+        )
+
+        assert reached is False
+        assert stats["logical_scans"] == 4
+        assert stats["kernel_scans"] <= stats["logical_scans"]
+        assert stats["macro_folds"] >= 0
+        assert "real_scans" not in stats
+        assert "folds" not in stats
+
+    def test_scan_derived_fallback_exposes_only_normalized_stats(self) -> None:
+        plc = PLC(_active_hold_soak())
+        self._assert_normalized_fallback_stats(
+            plc,
+            fold_context_updates={"scan_derived_names": frozenset({"scan_counter"})},
+        )
+
+    def test_off_grid_clock_fallback_exposes_only_normalized_stats(self) -> None:
+        plc = PLC(_active_hold_soak())
+        self._assert_normalized_fallback_stats(
+            plc,
+            # dt=0.01, so this clock's 2.5-scan full period cannot align.
+            fold_context_updates={"clock_half_periods": (0.0125,)},
+        )
+
+    def test_pathological_clock_lcm_fallback_exposes_only_normalized_stats(self) -> None:
+        plc = PLC(_active_hold_soak())
+        self._assert_normalized_fallback_stats(
+            plc,
+            # dt=0.01 gives a 4097-scan full period, beyond the cycle bound.
+            fold_context_updates={"clock_half_periods": (20.485,)},
+        )
+
     def test_recorded_window_can_budget_logical_scans_with_active_holds(self) -> None:
         Held = Bool("LogicalBudgetHeld", external=True)
         Mirror = Bool("LogicalBudgetMirror")
@@ -284,11 +333,9 @@ class TestCycleFoldBitEqual:
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.timestamp == pytest.approx(ref.state.timestamp)
         # And it got there by folding, in a tiny fraction of the real scans.
-        assert stats["folds"] >= 1
-        assert stats["real_scans"] < ref.state.scan_id // 10
+        assert stats["macro_folds"] >= 1
+        assert stats["kernel_scans"] < ref.state.scan_id // 10
         assert stats["logical_scans"] == cf.state.scan_id - 1
-        assert stats["kernel_scans"] == stats["real_scans"]
-        assert stats["macro_folds"] == stats["folds"]
         assert stats["skipped_scans"] == stats["logical_scans"] - stats["kernel_scans"]
         assert stats["saved_kernel_scans"] == stats["skipped_scans"]
         assert (
@@ -341,7 +388,7 @@ class TestCycleFoldBitEqual:
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert stats.get("sterile_cycle", 0) == 0
-        assert stats["folds"] >= 1
+        assert stats["macro_folds"] >= 1
 
     def test_minute_timer_roundoff_still_folds_bit_equal(self) -> None:
         Osc = Bool("MinuteOsc", external=True)
@@ -376,8 +423,8 @@ class TestCycleFoldBitEqual:
         assert reached is True
         assert folded.state.tags == ref.state.tags
         assert folded.state.scan_id == ref.state.scan_id
-        assert stats["folds"] >= 1
-        assert stats["real_scans"] < 500
+        assert stats["macro_folds"] >= 1
+        assert stats["kernel_scans"] < 500
 
     def test_subtick_time_drum_uses_its_current_step_preset(self) -> None:
         Osc = Bool("DrumOsc", external=True)
@@ -431,7 +478,7 @@ class TestCycleFoldBitEqual:
         assert folded.state.scan_id == ref.state.scan_id
         assert folded.state.tags[Step.name] == 2
         assert stats.get("sterile_cycle", 0) == 0
-        assert stats["folds"] >= 1
+        assert stats["macro_folds"] >= 1
 
 
 def _clocked_active_hold_soak(soak_counts: int = 3000) -> Program:
@@ -484,7 +531,7 @@ class TestCycleFoldAcrossClocks:
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.tags.get("Blink") == ref.state.tags.get("Blink")
-        assert stats["folds"] >= 1
+        assert stats["macro_folds"] >= 1
 
     def test_value_scales_with_soak_length(self) -> None:
         # Observation cost is ~fixed (period-bound); the fold absorbs the rest, so
@@ -496,7 +543,7 @@ class TestCycleFoldAcrossClocks:
             stats: dict[str, int] = {}
             cycle_fold_until(cf, lambda s: s.tags.get("Done") is True, budget=100000, stats=stats)
             assert cf.state.tags.get("Done") is True
-            return stats["real_scans"]
+            return stats["kernel_scans"]
 
         short = run(3_000)  # 3_000-scan soak
         long = run(30_000)  # 30_000-scan soak (10x)

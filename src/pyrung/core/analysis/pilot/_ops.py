@@ -561,7 +561,8 @@ def _coast_to_value(
     watchdog pet) that only the terminal let-run animated would silently drop
     out of every coast, re-tripping the watchdog it exists to feed.
 
-    ``receipt.reached`` is the legacy bool ("target reached, no ejection").
+    ``receipt.stop_reason == "reached"`` means the target was reached without
+    ejection.
     """
     from pyrung.core.analysis.pilot.coast import (
         TARGET,
@@ -626,7 +627,8 @@ def _coast_holding_state(
     trigger never fires and the coast simply runs to the target or the budget —
     still safe.
 
-    ``receipt.reached`` is the legacy bool ("target reached, no ejection").
+    ``receipt.stop_reason == "reached"`` means the target was reached without
+    ejection.
     """
     from pyrung.core.analysis.pilot.coast import (
         TARGET,

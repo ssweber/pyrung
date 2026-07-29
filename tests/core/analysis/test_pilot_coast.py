@@ -271,7 +271,6 @@ class TestReceiptBasics:
         target = value_trigger(plc, "target", TARGET, "Done", True)
         receipt = CoastSession(plc, kind="bearing_coast").seek([target], budget=500)
 
-        assert receipt.reached
         assert receipt.stop_reason == "reached"
         assert receipt.fired == ("target",)
         assert plc.state.tags["Done"] is True
@@ -303,7 +302,7 @@ class TestDepartureTerminal:
         receipt = CoastSession(plc, kind="bearing_coast").seek([dep], budget=500)
 
         assert receipt.stop_reason == "departed"
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.fired == ("ejected",)
 
         assert len(receipt.events) == 1
@@ -340,7 +339,6 @@ class TestSimultaneousTerminals:
         assert receipt.fired == ("target", "other")
         # A target among the simultaneous firings wins classification.
         assert receipt.stop_reason == "reached"
-        assert receipt.reached
 
     def test_target_and_avoid_same_scan_preserve_typed_avoid_evidence(self):
         from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -431,7 +429,7 @@ class TestTimeout:
         receipt = CoastSession(plc).seek([target], budget=20)
 
         assert receipt.stop_reason == "timeout"
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.fired == ()
         assert receipt.events == ()
         assert receipt.end_scan - receipt.start_scan <= 20
@@ -537,7 +535,6 @@ class TestPredicateBump:
         )
         receipt = CoastSession(plc).seek([trigger], budget=200)
 
-        assert receipt.reached
         assert receipt.stop_reason == "reached"
         # The transition is recorded: before < threshold <= after.
         assert len(receipt.events) == 1
@@ -568,7 +565,7 @@ class TestPredicateBump:
 
         receipt = session.seek([trigger], budget=1000)
 
-        assert receipt.reached
+        assert receipt.stop_reason == "reached"
         assert plc.state.tags[acc.name] == threshold
         assert session._last_cyclefold_stats["ordinary_folds"] >= 1
         assert receipt.kernel_scans <= 10
@@ -709,7 +706,7 @@ class TestAvoidBump:
             budget=20,
         )
 
-        assert receipt.reached
+        assert receipt.stop_reason == "reached"
         assert receipt.avoided == ()
         assert plc.state.tags["Temp"] == 5
 
@@ -746,7 +743,7 @@ class TestAvoidBump:
 
         assert receipt.stop_reason == AVOID
         assert receipt.avoided == ("opaque Temp == 2",)
-        assert receipt.real_scans == 1
+        assert receipt.kernel_scans == 1
 
     def test_opaque_member_predicate_retains_full_plain_snapshot(self):
         from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
@@ -821,7 +818,7 @@ class TestPenCondition:
         )
 
         pen_events = [event for event in receipt.events if event.kind == "pen"]
-        assert receipt.reached
+        assert receipt.stop_reason == "reached"
         assert len(pen_events) >= 2
         assert [event.scan for event in pen_events] == sorted({event.scan for event in pen_events})
 
@@ -864,7 +861,7 @@ class TestCyclefoldDispatch:
             budget=500,
         )
 
-        assert receipt.reached
+        assert receipt.stop_reason == "reached"
         assert folded.state.scan_id == reference.state.scan_id
         assert folded.state.tags[Input.name] == reference.state.tags[Input.name] is False
         assert folded.state.tags[Output.name] == reference.state.tags[Output.name] is False
@@ -890,10 +887,10 @@ class TestCyclefoldDispatch:
         target = value_trigger(plc, "target", TARGET, "Target", True)
         receipt = CoastSession(plc, kind="letrun").seek([target], budget=200)
 
-        assert receipt.reached
+        assert receipt.stop_reason == "reached"
         assert plc.state.tags["Target"] is True
         # cyclefold ran real scans (it can't dt-jump past the pet oscillation).
-        assert receipt.real_scans > 0
+        assert receipt.kernel_scans > 0
         # The held input actually oscillated during the coast.
         seen = {
             plc.history.at(s).tags.get("Input")
@@ -924,7 +921,7 @@ class TestSkippedReceipt:
         plc = PLC(_timer_program(), dt=0.010)
         receipt = _coast_to_value(plc, None, True, budget=20)
         assert receipt.stop_reason == "skipped"
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.fired == ()
         assert receipt.events == ()
 
@@ -944,11 +941,11 @@ class TestSettleQuiescent:
         # The watched tags moved for a few scans (Acc climbing) then held — a fixpoint,
         # not a ceiling exit.
         assert receipt.stop_reason == "quiescent"
-        assert receipt.real_scans < LIMITS.cone_ceiling
+        assert receipt.kernel_scans < LIMITS.cone_ceiling
         # trajectory length matches the scans stepped; end_scan is exact.
-        assert len(receipt.trajectory) == receipt.real_scans
-        assert receipt.end_scan == start + receipt.real_scans
-        assert receipt.end_scan - receipt.start_scan == receipt.real_scans
+        assert len(receipt.trajectory) == receipt.kernel_scans
+        assert receipt.end_scan == start + receipt.kernel_scans
+        assert receipt.end_scan - receipt.start_scan == receipt.kernel_scans
         # The last two snapshots are identical on the watched tag (what the
         # fixpoint observed).
         acc = [s.get("Counter_Acc") for s in receipt.trajectory]
@@ -975,8 +972,7 @@ class TestSettleReached:
         )
 
         assert receipt.stop_reason == "reached"
-        assert receipt.reached
-        assert receipt.real_scans == 1
+        assert receipt.kernel_scans == 1
         assert receipt.end_scan == start + 1
         assert len(receipt.trajectory) == 1
         assert receipt.trajectory[-1]["State"] == 2
@@ -1001,8 +997,8 @@ class TestSettleTimeout:
         # NAMES it "timeout" (the old settle wrapper returned a bare trajectory
         # with no such flag; settlement is never passed off as reached here).
         assert receipt.stop_reason == "timeout"
-        assert receipt.reached is False
-        assert receipt.real_scans == LIMITS.cone_ceiling
+        assert receipt.stop_reason != "reached"
+        assert receipt.kernel_scans == LIMITS.cone_ceiling
         assert len(receipt.trajectory) == LIMITS.cone_ceiling
         assert receipt.end_scan == start + LIMITS.cone_ceiling
         # Every snapshot genuinely moved (proving it was no false plateau).
@@ -1027,7 +1023,7 @@ class TestSettleFloor:
         receipt = CoastSession(plc, kind="settle").settle(frozenset({"Tmr_Done"}), floor=4)
 
         assert receipt.stop_reason == "quiescent"
-        assert receipt.real_scans == 4
+        assert receipt.kernel_scans == 4
         assert receipt.end_scan == start + 4
 
     def test_floor_of_two_steps_two(self):
@@ -1037,7 +1033,7 @@ class TestSettleFloor:
         receipt = CoastSession(plc, kind="settle").settle(frozenset({"Tmr_Done"}), floor=2)
 
         assert receipt.stop_reason == "quiescent"
-        assert receipt.real_scans == 2
+        assert receipt.kernel_scans == 2
         assert receipt.end_scan == start + 2
 
 
@@ -1054,7 +1050,7 @@ class TestDwell:
         receipt = CoastSession(plc, kind="pulse").dwell(4)
 
         assert receipt.stop_reason == "dwell"
-        assert receipt.real_scans == 4
+        assert receipt.kernel_scans == 4
         assert receipt.end_scan - receipt.start_scan == 4
         assert receipt.end_scan == start + 4
         assert receipt.fired == ()
@@ -1084,7 +1080,7 @@ class TestQuiescentThroughSeek:
         receipt = CoastSession(plc).seek([trigger], budget=500)
 
         assert receipt.stop_reason == "quiescent"
-        assert receipt.reached is False
+        assert receipt.stop_reason != "reached"
         assert receipt.fired == ("quiesced",)
         assert plc.state.tags["State"] == 2
 

@@ -2096,7 +2096,7 @@ class TestShaftRotateLiveness:
         fresh.step()
         _set_rungs(fresh, list(rungs))
         reached = _coast_holding_state(fresh, "Running", True, (), budget=200)
-        assert reached.reached is True
+        assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
         assert fresh.state.tags["Fault"] is False
 
@@ -2362,7 +2362,7 @@ class TestMultiReadCorrections:
         fresh.step()
         _set_rungs(fresh, list(rungs))
         reached = _coast_holding_state(fresh, "Running", True, (), budget=300)
-        assert reached.reached is True
+        assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
         assert fresh.state.tags["Fault"] is False
 

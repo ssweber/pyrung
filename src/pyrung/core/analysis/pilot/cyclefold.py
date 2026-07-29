@@ -334,8 +334,7 @@ def cycle_fold_until(
     Returns whether
     *predicate* holds at exit; ``stats`` (if given) collects logical scans,
     kernel scans, macro folds, skipped scans, and ``sterile_cycle`` for
-    diagnostics.  The original ``real_scans`` / ``folds`` keys remain as
-    compatibility aliases.
+    diagnostics.
 
     **Sterile-cycle proof** (*predicate_reads* required): a certified *exact*
     cycle — every observed tag repeating, no monotone coordinate — on a
@@ -362,19 +361,30 @@ def cycle_fold_until(
     assert fold_ctx is not None
     dt = fold_ctx.normal_dt
 
-    # Scan-id-derived signals (scan_clock_toggle / scan_counter) change *every*
-    # scan with no periodic timestamp edge to align to — no sound jump exists, so
-    # degrade to the runner fold (still skips clean plateaus, just not the cycle).
-    if fold_ctx.scan_derived_names or dt <= 0:
+    def _fall_back_to_runner_fold() -> bool:
+        fallback_stats: dict[str, int] | None = {} if stats is not None else None
         fold_run_until(
             plc,
             predicate,
             max_cycles=budget,
             fold_ctx=fold_ctx,
             extra_comparisons=extra_comparisons,
-            stats=stats,
+            stats=fallback_stats,
         )
+        if stats is not None:
+            assert fallback_stats is not None
+            stats.update(
+                (key, value)
+                for key, value in fallback_stats.items()
+                if key not in {"real_scans", "folds"}
+            )
         return bool(predicate(plc.state))
+
+    # Scan-id-derived signals (scan_clock_toggle / scan_counter) change *every*
+    # scan with no periodic timestamp edge to align to — no sound jump exists, so
+    # degrade to the runner fold (still skips clean plateaus, just not the cycle).
+    if fold_ctx.scan_derived_names or dt <= 0:
+        return _fall_back_to_runner_fold()
 
     # Align the cycle period to every read system clock's *full* period (in scans)
     # so the observed window spans each clock's whole cycle (its net effect is
@@ -394,26 +404,10 @@ def cycle_fold_until(
         r = round(full_scans)
         if r <= 0 or abs(full_scans - r) > 1e-6:
             # A read clock not on the scan grid — no aligned period exists.
-            fold_run_until(
-                plc,
-                predicate,
-                max_cycles=budget,
-                fold_ctx=fold_ctx,
-                extra_comparisons=extra_comparisons,
-                stats=stats,
-            )
-            return bool(predicate(plc.state))
+            return _fall_back_to_runner_fold()
         period_multiple_of = math.lcm(period_multiple_of, r)
     if period_multiple_of > 4096:  # pathological clock LCM — give up on the cycle
-        fold_run_until(
-            plc,
-            predicate,
-            max_cycles=budget,
-            fold_ctx=fold_ctx,
-            extra_comparisons=extra_comparisons,
-            stats=stats,
-        )
-        return bool(predicate(plc.state))
+        return _fall_back_to_runner_fold()
     max_period = max(max_period, period_multiple_of * 4)
 
     monotone_allowed = frozenset(
@@ -433,8 +427,8 @@ def cycle_fold_until(
     ordinary = _OrdinaryFoldStrategy(fold_ctx, extra_comparisons)
     ring: list[Mapping[str, Any]] = []
     ring_cap = max_period * (min_repeats + 2) + 4
-    real_scans = 0
-    folds = 0
+    kernel_scans = 0
+    macro_folds = 0
     ordinary_folds = 0
     cycle_folds = 0
     ordinary_folded_scans = 0
@@ -473,19 +467,17 @@ def cycle_fold_until(
         if stats is not None:
             logical_scans = plc.state.scan_id - start_scan
             stats["logical_scans"] = logical_scans
-            stats["kernel_scans"] = real_scans
-            stats["macro_folds"] = folds
+            stats["kernel_scans"] = kernel_scans
+            stats["macro_folds"] = macro_folds
             stats["ordinary_folds"] = ordinary_folds
             stats["cycle_folds"] = cycle_folds
-            stats["skipped_scans"] = logical_scans - real_scans
+            stats["skipped_scans"] = logical_scans - kernel_scans
             stats["ordinary_folded_scans"] = ordinary_folded_scans
             stats["cycle_folded_scans"] = cycle_folded_scans
-            stats["residual_scans"] = real_scans
+            stats["residual_scans"] = kernel_scans
             stats["scan_by_scan_counterfactual"] = logical_scans
-            stats["saved_kernel_scans"] = logical_scans - real_scans
+            stats["saved_kernel_scans"] = logical_scans - kernel_scans
             stats["timer_quanta_replayed"] = timer_quanta_replayed
-            stats["real_scans"] = real_scans
-            stats["folds"] = folds
         return reached
 
     def _harness_quiet() -> bool:
@@ -503,7 +495,7 @@ def cycle_fold_until(
         return True
 
     def _within_budget() -> bool:
-        used = real_scans if kernel_budget else plc.state.scan_id - start_scan
+        used = kernel_scans if kernel_budget else plc.state.scan_id - start_scan
         return used < budget
 
     while _within_budget():
@@ -511,7 +503,7 @@ def cycle_fold_until(
         ordinary_probe = ordinary.capture(plc) if probe_ordinary else None
         plc._consume_pause_request()
         plc._run_single_scan(consume_pause_request=False)
-        real_scans += 1
+        kernel_scans += 1
         since_ordinary_probe = 0 if probe_ordinary else since_ordinary_probe + 1
         paused = plc._consume_pause_request()
         if predicate(plc.state) or paused:
@@ -520,7 +512,7 @@ def cycle_fold_until(
         # Layer 1: the ordinary plateau/crossing proof.  Probe periodically so
         # an active cycle does not pay for a full-tag comparison on every scan.
         # A failed probe still supplies a genuine scan to the cycle observer.
-        if ordinary_probe is not None and (not kernel_budget or real_scans < budget):
+        if ordinary_probe is not None and (not kernel_budget or kernel_scans < budget):
             logical_room = None if kernel_budget else budget - (plc.state.scan_id - start_scan)
             advance = ordinary.try_fold(
                 plc,
@@ -529,8 +521,8 @@ def cycle_fold_until(
                 min_skip=ordinary_min_skip,
             )
             if advance is not None:
-                real_scans += advance.kernel_scans
-                folds += 1
+                kernel_scans += advance.kernel_scans
+                macro_folds += 1
                 ordinary_folds += 1
                 ordinary_folded_scans += advance.logical_scans - advance.kernel_scans
                 ring.clear()
@@ -673,7 +665,7 @@ def cycle_fold_until(
             scan_id=plc._state.scan_id + jump_scans,
             timestamp=plc._state.timestamp + jump_scans * dt,
         )
-        folds += 1
+        macro_folds += 1
         cycle_folds += 1
         cycle_folded_scans += jump_scans
         ring.clear()  # consecutive gap — re-observe before trusting the cycle again
