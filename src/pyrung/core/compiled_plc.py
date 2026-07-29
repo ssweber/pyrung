@@ -267,9 +267,6 @@ class CompiledPLC:
         }
         if seed:
             self._state = self._state.with_tags(seed)
-        self._live_block_tags: set[str] = set(
-            name for name in self._state.tags if name in self._block_element_names
-        )
         self._initialize_from_state(self._state)
 
     @property
@@ -284,6 +281,24 @@ class CompiledPLC:
     def forces(self) -> Mapping[str, bool | int | float | str]:
         return self._input_overrides.forces
 
+    def _register_override_metadata(self, tag: str | Tag) -> None:
+        if isinstance(tag, Tag) and tag.name in self._block_element_names:
+            self._materialized_block_tag_names.add(tag.name)
+
+    def _mark_override_name_live(self, name: str) -> None:
+        if name in self._block_element_names:
+            self._live_block_tags.add(name)
+        else:
+            self._extra_commit_tag_names.add(name)
+
+    def _apply_pre_scan_overrides(self, scan_ctx: ScanContext) -> None:
+        force_names = tuple(self._input_overrides.forces)
+        drained = self._input_overrides.apply_pre_scan(scan_ctx)
+        for name in drained:
+            self._mark_override_name_live(name)
+        for name in force_names:
+            self._mark_override_name_live(name)
+
     def patch(
         self,
         tags: Mapping[str, bool | int | float | str]
@@ -291,23 +306,11 @@ class CompiledPLC:
         | Mapping[str | Tag, bool | int | float | str],
     ) -> None:
         for key in tags:
-            name = key.name if isinstance(key, Tag) else key
-            if name in self._block_element_names:
-                self._live_block_tags.add(name)
-                if isinstance(key, Tag):
-                    self._materialized_block_tag_names.add(name)
-            else:
-                self._extra_commit_tag_names.add(name)
+            self._register_override_metadata(key)
         self._input_overrides.patch(tags)
 
     def force(self, tag: str | Tag, value: bool | int | float | str) -> None:
-        name = tag.name if isinstance(tag, Tag) else tag
-        if name in self._block_element_names:
-            self._live_block_tags.add(name)
-            if isinstance(tag, Tag):
-                self._materialized_block_tag_names.add(name)
-        else:
-            self._extra_commit_tag_names.add(name)
+        self._register_override_metadata(tag)
         self._input_overrides.add_force(tag, value)
 
     def unforce(self, tag: str | Tag) -> None:
@@ -323,6 +326,8 @@ class CompiledPLC:
         | Mapping[Tag, bool | int | float | str]
         | Mapping[str | Tag, bool | int | float | str],
     ):
+        for key in overrides:
+            self._register_override_metadata(key)
         with self._input_overrides.force(overrides):
             yield self
 
@@ -464,7 +469,7 @@ class CompiledPLC:
             # ``plant`` pass: reads the previous commit (before the input drain),
             # synthesizing feedback as this scan's input image.
             self._run_kernel_pass(self._compiled.pre_step_fn)
-        self._input_overrides.apply_pre_scan(scan_ctx)
+        self._apply_pre_scan_overrides(scan_ctx)
         self._run_kernel_pass(self._compiled.step_fn)
         # Post-logic forces re-apply *inside* the bracket so a force that fights a
         # rung write lands in the block array (and is flushed), keeping the array
@@ -535,7 +540,7 @@ class CompiledPLC:
             ctx.blocks_live = True
             if self._compiled.pre_step_fn is not None:
                 self._run_kernel_pass(self._compiled.pre_step_fn)
-            self._input_overrides.apply_pre_scan(scan_ctx)
+            self._apply_pre_scan_overrides(scan_ctx)
             self._run_kernel_pass(self._compiled.step_fn)
             self._input_overrides.apply_post_logic(scan_ctx)
             ctx.blocks_live = False
@@ -593,6 +598,13 @@ class CompiledPLC:
         self._set_rtc_internal(self._normalize_rtc_datetime(value), self._state.timestamp)
 
     def _initialize_from_state(self, state: SystemState) -> None:
+        # The installed state is the complete materialization boundary for a
+        # fresh runtime scope.  Reboot and STOP->RUN may deliberately remove
+        # block cells that were live before the reset; retaining the old set
+        # would make their kernel defaults reappear on the next commit.
+        self._live_block_tags: set[str] = {
+            name for name in state.tags if name in self._block_element_names
+        }
         self._kernel = self._compiled.create_kernel()
         self._kernel.tags.update(dict(state.tags))
         self._kernel.memory.update(dict(state.memory))

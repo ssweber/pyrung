@@ -15,6 +15,7 @@ from pyrung.core import (
     Int,
     Program,
     Rung,
+    SystemState,
     TagType,
     Timer,
     blockcopy,
@@ -124,6 +125,201 @@ def test_compiled_plc_does_not_seed_static_block_ranges_from_compiler_cache() ->
     assert not set(runner.current_state.tags).intersection(
         {"DS1", "DS2", "DS3", "DS10", "DS11", "DS12"}
     )
+
+
+@pytest.mark.parametrize("transition", ["reboot", "stop_to_run"])
+def test_compiled_plc_reset_does_not_resurrect_dormant_block_range(
+    transition: str,
+) -> None:
+    enabled = Bool("ResetRangeEnabled", external=True)
+    values = Block("ResetRange", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+
+    for runner in (plc, compiled):
+        runner.patch({enabled: True})
+        runner.step()
+        runner.patch({enabled: False})
+        runner.step()
+    _assert_states_equivalent(plc, compiled)
+    assert {"ResetRange1", "ResetRange2"} <= set(plc.current_state.tags)
+
+    if transition == "reboot":
+        plc.reboot()
+        compiled.reboot()
+        _assert_states_equivalent(plc, compiled)
+    else:
+        plc.stop()
+        compiled.stop()
+        _assert_states_equivalent(plc, compiled)
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert not {"ResetRange1", "ResetRange2"} & set(compiled.current_state.tags)
+
+
+def test_compiled_plc_initial_state_defines_live_block_membership() -> None:
+    enabled = Bool("AnchorRangeEnabled", external=True)
+    values = Block("AnchorRange", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    initial = SystemState().with_tags(
+        {
+            enabled.name: False,
+            "AnchorRange1": 9,
+        }
+    )
+    plc = PLC(program, initial_state=initial, dt=0.010)
+    compiled = CompiledPLC(program, initial_state=initial, dt=0.010)
+
+    # This guards membership installed by the current-state anchor.  Avoid
+    # materializing values[1] into Block._tag_cache: durable reset-known status
+    # is a separate contract established by an explicit Tag override.
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["AnchorRange1"] == 9
+    assert "AnchorRange2" not in compiled.current_state.tags
+
+
+def test_compiled_plc_forced_block_tag_survives_battery_reboot() -> None:
+    enabled = Bool("ForcedRangeEnabled", external=True)
+    values = Block("ForcedRange", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+    forced_cell = values[1]
+
+    with plc.forced({forced_cell: 23}), compiled.forced({forced_cell: 23}):
+        plc.step()
+        compiled.step()
+        _assert_states_equivalent(plc, compiled)
+
+    plc.reboot()
+    compiled.reboot()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["ForcedRange1"] == 23
+    assert "ForcedRange2" not in compiled.current_state.tags
+
+
+@pytest.mark.parametrize("key_kind", ["tag", "string"])
+@pytest.mark.parametrize("override_kind", ["forced", "force_then_unforce"])
+def test_unused_block_override_does_not_materialize_current_state(
+    key_kind: str,
+    override_kind: str,
+) -> None:
+    enabled = Bool("UnusedOverrideEnabled", external=True)
+    values = Block("UnusedOverride", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+    key = values[1] if key_kind == "tag" else "UnusedOverride1"
+
+    if override_kind == "forced":
+        with plc.forced({key: 23}), compiled.forced({key: 23}):
+            _assert_states_equivalent(plc, compiled)
+    else:
+        plc.force(key, 23)
+        compiled.force(key, 23)
+        plc.unforce(key)
+        compiled.unforce(key)
+
+    _assert_states_equivalent(plc, compiled)
+    assert "UnusedOverride1" not in compiled.current_state.tags
+
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert "UnusedOverride1" not in compiled.current_state.tags
+
+
+@pytest.mark.parametrize("key_kind", ["tag", "string"])
+def test_applied_block_patch_materializes_at_scan_and_matches_reboot_policy(
+    key_kind: str,
+) -> None:
+    enabled = Bool("PatchedRangeEnabled", external=True)
+    values = Block("PatchedRange", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(program, dt=0.010)
+    key = values[1] if key_kind == "tag" else "PatchedRange1"
+
+    plc.patch({key: 31})
+    compiled.patch({key: 31})
+    plc.step()
+    compiled.step()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["PatchedRange1"] == 31
+
+    plc.reboot()
+    compiled.reboot()
+
+    _assert_states_equivalent(plc, compiled)
+    if key_kind == "tag":
+        assert compiled.current_state.tags["PatchedRange1"] == 31
+    else:
+        assert "PatchedRange1" not in compiled.current_state.tags
+
+
+@pytest.mark.parametrize("compiled_step", ["step", "step_replay"])
+@pytest.mark.parametrize("split_after", [None, 1])
+def test_applied_block_patch_materializes_on_every_compiled_pre_scan_path(
+    compiled_step: str,
+    split_after: int | None,
+) -> None:
+    enabled = Bool("PreScanRangeEnabled", external=True)
+    marker = Int("PreScanMarker")
+    values = Block("PreScanRange", TagType.INT, 1, 2)
+
+    with Program(strict=False) as program:
+        with Rung():
+            copy(1, marker)
+        with Rung(enabled):
+            fill(7, values.select(1, 2))
+
+    plc = PLC(program, dt=0.010)
+    compiled = CompiledPLC(
+        program,
+        compiled=compile_kernel(program, split_after=split_after),
+        dt=0.010,
+    )
+
+    plc.patch({"PreScanRange1": 41})
+    compiled.patch({"PreScanRange1": 41})
+    plc.step()
+    getattr(compiled, compiled_step)()
+    if compiled_step == "step_replay":
+        compiled._materialize_replay_state()
+
+    _assert_states_equivalent(plc, compiled)
+    assert compiled.current_state.tags["PreScanRange1"] == 41
+    assert "PreScanRange2" not in compiled.current_state.tags
 
 
 @pytest.mark.parametrize("blockless", [False, True])
