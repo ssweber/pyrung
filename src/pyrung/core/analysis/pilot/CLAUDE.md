@@ -81,8 +81,10 @@ Pending-departure expiry rolls the world back without creating a nogood.
 Every repeated activity must either consume a finite budget or accumulate
 durable knowledge that prevents byte-identical repetition.
 
-- `_PilotState.search_scan` owns both `max_scans` and pending-departure
-  lifetimes; accepted instruction-owned coast dwell is credited separately.
+- `_PilotState.search_start_scan`, `search_scans`, and
+  `remaining_search_scans` own the invocation-relative `max_scans` budget and
+  pending-departure lifetimes. `_World.dwell_scans` credits accepted productive
+  coast dwell; tentative fork scans remain search work until accepted.
 - Skiff retries use a per-world-key budget and continue only when
   `Compass.apply` reports new knowledge.
 - Pending program motion has a finite scan budget and exact rollback
