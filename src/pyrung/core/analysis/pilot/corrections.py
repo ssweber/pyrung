@@ -23,24 +23,24 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot._ops import (
-    OperationReceipt,
-    PilotRung,
-    _hold_allowed,
-    _semantic_key,
-    _union_conditions,
-    _until_unresolved_condition,
-)
 from pyrung.core.analysis.pilot.advance import (
     AdvanceOwner,
     build_advance_index,
     iter_advance_owners,
+)
+from pyrung.core.analysis.pilot.avoid import _hold_allowed
+from pyrung.core.analysis.pilot.overlay import (
+    OperationReceipt,
+    PilotRung,
+    _union_conditions,
+    _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     UnsupportedConstruct,
     trace_back,
 )
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import Eq
 

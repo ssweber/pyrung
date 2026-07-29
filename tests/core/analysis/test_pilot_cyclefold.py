@@ -9,8 +9,8 @@ import pytest
 
 from pyrung import Bool, Counter, Int, Program, Rung, Timer, count_up, on_delay, out, time_drum
 from pyrung.core import system
-from pyrung.core.analysis.pilot._ops import PilotRung, _set_rungs
 from pyrung.core.analysis.pilot.cyclefold import _Cycle, cycle_fold_until, detect_cycle
+from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
 from pyrung.core.runner import PLC
 
 

@@ -223,7 +223,7 @@ def test_explicit_scan_cause_is_shared_across_investigation_passes(
     assert second is first
     assert calls == 1
 
-    from pyrung.core.analysis.pilot._ops import _set_synth_holds
+    from pyrung.core.analysis.pilot.overlay import _set_synth_holds
 
     _set_synth_holds(plc, [])
     assert _shared_cause(plc, "Out", scan) is not None

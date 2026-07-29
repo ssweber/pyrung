@@ -26,12 +26,6 @@ from pyrung.core.analysis.graph import (
     RoutePivot,
     RouteTaken,
 )
-from pyrung.core.analysis.pilot._ops import (
-    _apply_pulse,
-    _pilot_world_key,
-    _StateKeyConfig,
-    fork_with_rungs,
-)
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
@@ -52,6 +46,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
+from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
@@ -65,6 +60,7 @@ from pyrung.core.analysis.pilot.progress import (
     _promote_probationary_corrections,
     _record_pending_landing,
 )
+from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.recording import (
     _act_event,
     _build_plan_journal,
@@ -105,6 +101,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 

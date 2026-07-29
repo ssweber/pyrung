@@ -2,8 +2,8 @@
 
 These exercise ``CoastSession.seek`` and the trigger helpers
 (``value_trigger`` / ``departure_trigger`` / ``predicate_trigger``) directly,
-not through the ``_ops``
-wrappers — the wrappers are covered in ``test_pilot_ops.py``.
+not through the higher-level adapters. Those adapters are covered in
+``test_pilot_plc_primitives.py``.
 
 Coverage targets (per the CoastSession v2 design):
 - Receipt basics + fold/no-fold landing-scan parity (perfect reaction)
@@ -26,12 +26,6 @@ import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
 from pyrung.core import Counter
-from pyrung.core.analysis.pilot._ops import (
-    PilotRung,
-    _coast_to_value,
-    _set_rungs,
-    _settle_delayed_effects,
-)
 from pyrung.core.analysis.pilot.coast import (
     AVOID,
     DEPARTURE,
@@ -41,10 +35,13 @@ from pyrung.core.analysis.pilot.coast import (
     CoastReceipt,
     CoastSession,
     CoastTrigger,
+    _coast_to_value,
+    _settle_delayed_effects,
     departure_trigger,
     predicate_trigger,
     value_trigger,
 )
+from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
 from pyrung.core.analysis.pilot.steer import _settle_watched_tags
 from pyrung.core.condition import (
     AllCondition,
@@ -190,7 +187,7 @@ def _transient_program():
 def _harness_feedback_program():
     """Harness-fed program: Enable drives a Physical feedback that resolves
     after a plant delay, then a gated copy fires (mirrors the fixture in
-    test_pilot_ops.py's TestSettleDelayedEffects)."""
+    test_pilot_plc_primitives.py's TestSettleDelayedEffects)."""
     FB = Physical("MotorFb", on_delay="200ms", off_delay="100ms")
     Enable = Bool("Enable", external=True)
     Feedback = Bool("Feedback", physical=FB, link="Enable")

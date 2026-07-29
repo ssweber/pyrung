@@ -31,7 +31,6 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pyrung.core.analysis import steerable as _steerable
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
-from pyrung.core.analysis.pilot._ops import OperationReceipt
 from pyrung.core.analysis.pilot.advance import demand_holds
 from pyrung.core.analysis.pilot.availability import (
     _GUARD_CONTRADICTION,
@@ -41,6 +40,7 @@ from pyrung.core.analysis.pilot.availability import (
     _writer_availability,
     _WriterAvailability,
 )
+from pyrung.core.analysis.pilot.overlay import OperationReceipt
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
     _heuristic_inequality_target,

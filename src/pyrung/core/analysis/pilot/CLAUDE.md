@@ -138,7 +138,7 @@ this table only locates the owner.
 - Evidence classification: `outcome.py::assess_outcome`;
   `classify_outcome` stays as the small ergonomic compatibility projection
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
-- Coast-departure channel ownership: `_ops.py::coast_departure_tags`
+- Coast-departure channel ownership: `coast.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`;
   `_handle_channel_departure` is the terminal event-streaming owner after
   `_monitor_trend` detects a channel departure
@@ -147,9 +147,9 @@ this table only locates the owner.
   confirmation: `investigate.py::build_replay_fn` and
   `_resolve_replay_attempt`
 - Corrective operation lifetime: the instruction owner, carried through
-  `trace.py::TraceAction.operation`; `_ops.py::_set_rungs` only compiles that
+  `trace.py::TraceAction.operation`; `overlay.py::_set_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
-- Temporary-logic execution ownership: `_ops.py::_rung_execution_receipt` over
+- Temporary-logic execution ownership: `overlay.py::_rung_execution_receipt` over
   the same `_expand_pilot_rules` branches installed by `_set_rungs`
 
 ## Actual control flow
@@ -188,12 +188,12 @@ knowledge that must survive:
   `Compass` value.
 
 Every production PILOT fork that may execute is created through
-`_ops.py::fork_with_rungs`; public `PLC.fork()` does not implicitly inherit
+`overlay.py::fork_with_rungs`; public `PLC.fork()` does not implicitly inherit
 PILOT holds. `Compass.apply` is the sole knowledge write path; runtime
 instruments return `CompassObservation` values and never mutate the compass.
 Knowledge scoping (tombstone locality, static-edge overlay narrowness) is
 documented on `CompassEntry` and `StaticEdgeObservation`; recovery-floor and
-nogood-identity policy on `PendingDeparture` and `_ops.py::_rung_identity`.
+nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
 
 ## Soundness and behavior invariants
 
@@ -248,8 +248,11 @@ Static reading and orientation:
 Execution and observation:
 
 - `steer.py` — execute one act through the trial gates
-- `_ops.py` — shared PLC ops, overlays, pulses, world keys
-- `coast.py` — trigger-observed coasts with exact receipts
+- `overlay.py` — guarded temporary-logic records, compilation, and PLC forks
+- `world_key.py` — stable state, rung, and executable-world identities
+- `coast.py` — trigger-observed coasts, exact receipts, departure tags, and delayed effects
+- `pulse.py` — edge-aware intervention pulses
+- `avoid.py` — avoid and hold-admission checks
 - `cyclefold.py` — proven cycle skipping in long waits
 - `skiff.py` — isolated probes of unreadable frontiers
 

@@ -28,8 +28,8 @@ from types import MappingProxyType
 from typing import Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
-from pyrung.core.analysis.pilot._ops import fork_with_rungs
 from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
+from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceNode,

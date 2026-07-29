@@ -15,24 +15,20 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot._ops import (
+from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
+from pyrung.core.analysis.pilot.avoid import _avoid_violations
+from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
-    PilotRung,
-    _append_rungs,
-    _avoid_violations,
+    LIMITS,
+    CoastReceipt,
+    CoastSession,
     _coast_holding_state,
     _coast_to_value,
-    _constraint_condition,
     _has_pending_effects,
-    _pilot_world_key,
-    _rung_identity,
     _settle_delayed_effects,
     coast_departure_tags,
-    fork_with_rungs,
 )
-from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
-from pyrung.core.analysis.pilot.causal import chase_cause_roots
-from pyrung.core.analysis.pilot.coast import LIMITS, CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
@@ -41,6 +37,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     OrientationWorld,
     Pulse,
+)
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _append_rungs,
+    _constraint_condition,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -56,6 +58,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import verify_gates
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:

@@ -24,7 +24,6 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     DeviationIncident,
@@ -52,6 +51,7 @@ from pyrung.core.analysis.pilot.outcome import (
     ProgressEffect,
     TrialAssessment,
 )
+from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
 from pyrung.core.analysis.pilot.pilot import _record_attempt
 from pyrung.core.analysis.pilot.progress import (
     _causally_harmful_corrections,

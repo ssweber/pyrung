@@ -23,7 +23,7 @@ from pyrung.core import (
     rise,
 )
 from pyrung.core.analysis.graph import Plan, PlanStep
-from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.condition import AllCondition
 
 # ---------------------------------------------------------------------------

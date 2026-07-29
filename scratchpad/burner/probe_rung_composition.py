@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from pyrung.core.analysis.pilot._ops import PilotRung, _set_rungs
+from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
 from pyrung.core.condition import AllCondition, CompareEq, CompareLt, CompareNe
 from tests.fixtures.tumbler import enter_production
 from tests.tumbler.bench import Bench

@@ -5,11 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from pyrung.core.analysis.pilot._ops import (
-    _pilot_world_key,
-    _StateKeyConfig,
-    wait_edge_nogood,
-)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -47,6 +42,11 @@ from pyrung.core.analysis.pilot.trace import (
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import MotionKind, _IterationFrame
+from pyrung.core.analysis.pilot.world_key import (
+    _pilot_world_key,
+    _StateKeyConfig,
+    wait_edge_nogood,
+)
 from pyrung.core.analysis.sp_values import _values_match
 
 _PROBE_BUDGET = 2

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung.core.analysis.graph import PlanStep
-from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.types import _HoldLogEntry
 from tests.tumbler.skeleton import _jsonify_dataclass, extract_skeleton
 

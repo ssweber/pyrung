@@ -529,7 +529,7 @@ class TestCausalVerbs:
 
     def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
         from pyrung import Bool, Int
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _PilotProgressFormatter
 
@@ -578,7 +578,7 @@ class TestCausalVerbs:
 
     def test_how_progress_does_not_call_a_sustained_control_a_pulse(self):
         from pyrung import Bool, Int
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _PilotProgressFormatter
 
@@ -619,7 +619,7 @@ class TestCausalVerbs:
 
     def test_how_progress_prints_the_exact_self_guarded_correction(self):
         from pyrung import Bool
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.core.condition import AllCondition
         from pyrung.dap.console import _PilotProgressFormatter
@@ -649,7 +649,7 @@ class TestCausalVerbs:
 
     def test_how_progress_groups_corrections_on_their_exact_rung(self):
         from pyrung import Bool, Int
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _PilotProgressFormatter
 
@@ -679,7 +679,7 @@ class TestCausalVerbs:
 
     def test_how_progress_names_actual_temporary_logic_revocation_and_replacement(self):
         from pyrung import Bool, Int
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
         from pyrung.core.analysis.pilot.types import PilotEvent
         from pyrung.dap.console import _PilotProgressFormatter
 

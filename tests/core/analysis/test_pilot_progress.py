@@ -1224,7 +1224,7 @@ class TestRegression:
             best_trend=2,
             checkpoints=[_cp(("cpk",), cp_fork, 2)],
         )
-        from pyrung.core.analysis.pilot._ops import PilotRung
+        from pyrung.core.analysis.pilot.overlay import PilotRung
 
         state.overlay_rules = (
             *state.overlay_rules,

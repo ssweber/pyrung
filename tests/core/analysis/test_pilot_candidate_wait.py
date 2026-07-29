@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot._ops import PilotRung
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
@@ -44,6 +43,7 @@ from pyrung.core.analysis.pilot.options import (
     _separate_prerequisites,
     _TraceAdmission,
 )
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.pipeline_graph import (
     StaticTransitionGraph,
     _best_static_path,
@@ -754,7 +754,7 @@ def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
     """A rejected wait is remembered at its world key; the next ORIENT's route
     query excludes the sterile automatic edge and falls to the surviving
     operator route (the Unhold shape at a held state)."""
-    from pyrung.core.analysis.pilot._ops import wait_edge_nogood
+    from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 
     role = PipelineRoles("State")
     graph = StaticTransitionGraph(

@@ -849,7 +849,7 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
 
 
 def test_interpreted_replay_preserves_active_pilot_holds() -> None:
-    from pyrung.core.analysis.pilot._ops import PilotRung, _set_rungs
+    from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
 
     held_input = Bool("ReplayHeldInput", default=True, external=True)
     hold_scope = Bool("ReplayHoldScope", default=True)

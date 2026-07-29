@@ -182,9 +182,9 @@ def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) 
 
 
 def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
-    from pyrung.core.analysis.pilot._ops import _StateKeyConfig
     from pyrung.core.analysis.pilot.orientation import _assemble_world
     from pyrung.core.analysis.pilot.trace import TraceChoice, TraceNode
+    from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 
     route = TraceChoice(id="route-a", label="A", route=("A",))
     assembled = _assemble_world(
@@ -661,8 +661,8 @@ def test_joint_pulse_nogood_does_not_reject_its_primary_pair() -> None:
 
 
 def test_stale_bearing_cannot_execute() -> None:
-    from pyrung.core.analysis.pilot._ops import _StateKeyConfig
     from pyrung.core.analysis.pilot.steer import StaleBearingError, execute
+    from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 
     state = SimpleNamespace(
         key_config=_StateKeyConfig(
@@ -746,4 +746,4 @@ def test_production_pilot_forks_only_through_rung_aware_helper() -> None:
         visitor.visit(tree)
         direct_forks.extend(visitor.calls)
 
-    assert direct_forks == [("_ops.py", "fork_with_rungs", "source")]
+    assert direct_forks == [("overlay.py", "fork_with_rungs", "source")]

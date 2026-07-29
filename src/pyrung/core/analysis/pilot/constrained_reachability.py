@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from pyrung.core.analysis.pilot._ops import _avoid_forces, wait_edge_nogood
+from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.compass import (
     WAIT,
     CompassKnowledge,
@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     pulse_identity,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
+from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
 
 

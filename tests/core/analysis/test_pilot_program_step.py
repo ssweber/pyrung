@@ -19,9 +19,10 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import PilotRung, _settle_delayed_effects
 from pyrung.core.analysis.pilot.awaited_actions import Producer, sibling_producer_family
+from pyrung.core.analysis.pilot.coast import _settle_delayed_effects
 from pyrung.core.analysis.pilot.evidence import PipelineRoles
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.program_step import (
     ProgramStepStatus,
     _first_advance,

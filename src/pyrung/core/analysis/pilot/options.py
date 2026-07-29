@@ -25,16 +25,8 @@ from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
-from pyrung.core.analysis.pilot._ops import (
-    PilotRung,
-    _atom_condition,
-    _avoid_forces,
-    _rung_execution_receipt,
-    _target_unresolved_condition,
-    _until_unresolved_condition,
-    wait_edge_nogood,
-)
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
+from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.compass import (
     _evidence_scope_key,
@@ -48,12 +40,20 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     RouteEdgeContext,
 )
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _atom_condition,
+    _rung_execution_receipt,
+    _target_unresolved_condition,
+    _until_unresolved_condition,
+)
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     frontier_pairs,
     trace_back,
 )
 from pyrung.core.analysis.pilot.types import _ActionPair
+from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:

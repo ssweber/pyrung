@@ -25,30 +25,19 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.analysis.pilot._ops import (
-    _COAST_BUDGET,
-    PilotRung,
-    _apply_pulse,
-    _coast_holding_state,
-    _coast_to_value,
-    _hold_allowed,
-    _pilot_state_key,
-    _rung_execution_receipt,
-    _rung_identity,
-    _rungs_from_proposals,
-    _semantic_key,
-    _set_rungs,
-    _settle_delayed_effects,
-    _target_unresolved_condition,
-    _union_conditions,
-    fork_with_rungs,
-)
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
+from pyrung.core.analysis.pilot.avoid import _hold_allowed
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
     chase_cause_roots,
     chase_chain_tags,
     empirical_program_writes,
+)
+from pyrung.core.analysis.pilot.coast import (
+    _COAST_BUDGET,
+    _coast_holding_state,
+    _coast_to_value,
+    _settle_delayed_effects,
 )
 from pyrung.core.analysis.pilot.corrections import (
     break_guard_holds,
@@ -57,6 +46,16 @@ from pyrung.core.analysis.pilot.corrections import (
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _rung_execution_receipt,
+    _rungs_from_proposals,
+    _set_rungs,
+    _target_unresolved_condition,
+    _union_conditions,
+    fork_with_rungs,
+)
+from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
 from pyrung.core.analysis.pilot.types import (
@@ -69,6 +68,11 @@ from pyrung.core.analysis.pilot.types import (
     _IterationFrame,
     _Step,
     _StepContext,
+)
+from pyrung.core.analysis.pilot.world_key import (
+    _pilot_state_key,
+    _rung_identity,
+    _semantic_key,
 )
 from pyrung.core.analysis.sp_values import (
     _values_match,

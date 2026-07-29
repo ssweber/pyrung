@@ -2242,7 +2242,7 @@ def test_skiff_scan_suppresses_non_participants():
 def test_skiff_scan_preserves_active_pilot_rungs():
     """A skiff experiment executes the same explicit PILOT overlay as its world."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot._ops import PilotRung
+    from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 
     HeldInput = Bool("SkiffHeldInput", default=True, external=True)

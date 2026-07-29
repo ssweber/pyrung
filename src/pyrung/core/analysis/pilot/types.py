@@ -21,7 +21,6 @@ from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot._ops import PilotRung, _StateKeyConfig
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -31,8 +30,10 @@ if TYPE_CHECKING:
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
+    from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.progress import PendingDeparture
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
+    from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
     from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -217,7 +218,7 @@ class _World(PRecord):
     best_trend = _precord_field()
     overlay_rules = _precord_field()
     # Committed scan-ids spent *waiting* — accepted bearing-coast / let-run spans.
-    # Timer dwell is waiting, not searching (see ``_ops._COAST_BUDGET``),
+    # Timer dwell is waiting, not searching (see ``coast._COAST_BUDGET``),
     # so invocation-relative search scans subtract this credit. An accepted
     # coast that rides a 39k-scan dwell must not bankrupt the search. Lives in
     # the world so a revert rewinds the credit together with the scans it
@@ -693,7 +694,7 @@ class _PilotState:
         step vectors and ``best_trend`` are already immutable, so the returned
         value is a stable snapshot even as the live world keeps advancing.
         """
-        from pyrung.core.analysis.pilot._ops import fork_with_rungs
+        from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 
         return self.world.set(work=fork_with_rungs(self.world.work, self.overlay_rules))
 
@@ -707,7 +708,7 @@ class _PilotState:
         pointer already holds exactly the state that existed when the checkpoint
         was taken.
         """
-        from pyrung.core.analysis.pilot._ops import fork_with_rungs
+        from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 
         self.world = world.set(work=fork_with_rungs(world.work, world.overlay_rules))
 

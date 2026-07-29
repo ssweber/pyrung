@@ -15,12 +15,9 @@ import logging
 from dataclasses import dataclass, replace
 from typing import Any
 
-from pyrung.core.analysis.pilot._ops import (
-    _avoid_snap_names,
-    _has_pending_effects,
-    _pilot_world_key,
-)
+from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.coast import _has_pending_effects
 from pyrung.core.analysis.pilot.constrained_reachability import (
     NavigationEvidence,
     Reachable,
@@ -47,6 +44,7 @@ from pyrung.core.analysis.pilot.types import (
     _ExecutionEvidence,
     _PulseState,
 )
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 logger = logging.getLogger(__name__)

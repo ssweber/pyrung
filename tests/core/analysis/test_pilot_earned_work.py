@@ -256,7 +256,7 @@ def test_level_driven_counter_stays_out_of_the_earned_work() -> None:
     only advancing writer is gated by a plain level, neither discrete nor
     self-limiting.
     """
-    from pyrung.core.analysis.pilot._ops import _StateKeyConfig
+    from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 
     Run = Bool("LV_Run", external=True)
     Count = Int("LV_Count")

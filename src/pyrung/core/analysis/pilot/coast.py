@@ -55,6 +55,10 @@ class CoastLimits:
 
 LIMITS = CoastLimits()
 
+# A bearing coast gets a generous budget of its own — timer dwell is waiting,
+# not searching, so it does not consume the pilot's iteration budget.
+_COAST_BUDGET = 10_000
+
 
 @dataclass(frozen=True)
 class CoastTrigger:
@@ -748,3 +752,202 @@ def predicate_trigger(
         watched=watched,
         terminal=terminal,
     )
+
+
+def coast_departure_tags(state: Any, ctx: Any) -> tuple[str, ...]:
+    """Channels whose departure terminates a coast holding the current world.
+
+    Pipeline analysis owns recognized request/state channels. EarnedWork owns
+    monotone progress coordinates. An exact stateful target with no EarnedWork
+    owner is itself a discrete channel, even when the program has no inferred
+    operator-request pipeline. Keeping that arbitration here gives coast,
+    VERIFY replay, and investigation the same channel set.
+    """
+    channels = list(dict.fromkeys(role.channel_tag for role in ctx.pipeline_roles))
+    config = state.key_config
+    target = ctx.target.tag
+    earned_work_tags = {
+        component.tag
+        for component in getattr(getattr(state, "earned_work", None), "components", ())
+    }
+    if (
+        ctx.target.predicate is None
+        and config is not None
+        and target in config.stateful_names
+        and target not in earned_work_tags
+        and target not in channels
+    ):
+        channels.append(target)
+    return tuple(channels)
+
+
+def _coast_to_value(
+    plc: PLC,
+    channel_tag: str | None,
+    target_value: Any,
+    *,
+    budget: int = _COAST_BUDGET,
+    session: Any = None,
+) -> CoastReceipt:
+    """Coast *plc* forward (folding) until ``channel_tag == target_value``.
+
+    Arms two coast triggers — the target and a departure (the channel leaving
+    its start value for anything but the target) — so the coast lands on the
+    exact scan either fires and the receipt says which. This is the single
+    mechanism for "hold heading and let scans pass": the live bearing coast
+    (``steer``) and the investigation replay (``investigate``) both coast
+    through timer dwell identically, so a replay reproduces the live coast.
+
+    Conditional holds animate during the coast exactly as in
+    :func:`_coast_holding_state` — a confirmed oscillation corrective (a
+    watchdog pet) that only the terminal let-run animated would silently drop
+    out of every coast, re-tripping the watchdog it exists to feed.
+
+    ``receipt.stop_reason == "reached"`` means the target was reached without
+    ejection.
+    """
+    if channel_tag is None:
+        return CoastReceipt(
+            kind=session.kind if session is not None else "bearing_coast",
+            start_scan=plc.state.scan_id,
+            end_scan=plc.state.scan_id,
+            stop_reason="skipped",
+            fired=(),
+            events=(),
+            budget=0,
+        )
+
+    start = plc.state.tags.get(channel_tag)
+    triggers = [
+        value_trigger(plc, "target", TARGET, channel_tag, target_value),
+        departure_trigger(
+            plc,
+            "ejected",
+            {channel_tag: start},
+            excluding={channel_tag: target_value},
+        ),
+    ]
+    if session is None:
+        session = CoastSession(plc, kind="bearing_coast")
+    assert session.plc is plc
+    return session.seek(triggers, budget=budget)
+
+
+def _coast_holding_state(
+    plc: PLC,
+    target_tag: str,
+    target_value: Any,
+    role_tags: tuple[str, ...],
+    *,
+    budget: int = _COAST_BUDGET,
+    reached_fn: Callable[[Any], bool] | None = None,
+    reached_condition: Any = None,
+    session: Any = None,
+) -> CoastReceipt:
+    """Coast toward the global target while holding the current macro-state.
+
+    *reached_fn* overrides the stop condition — supply it for a relational
+    target (``Temp >= 5.0``), where the goal is the predicate holding, not the
+    register hitting an exact ``target_value``. Defaults to exact-value match.
+
+    Heading is the global target itself — no intermediate bearing or channel
+    register is assumed. The ejection guard is "the macro-state I am parked in
+    changed on its own": any recognized state-machine role register
+    (``role_tags``) leaving the value it held at coast start pauses the coast at
+    that scan, so an ejection (Execute -> Aborting) hands a tight incident to
+    investigation instead of burning the whole budget.
+
+    With no roles (a program without a recognized state machine) the departure
+    trigger never fires and the coast simply runs to the target or the budget —
+    still safe.
+
+    ``receipt.stop_reason == "reached"`` means the target was reached without
+    ejection.
+    """
+    if reached_fn is not None:
+        target = predicate_trigger(
+            "target",
+            TARGET,
+            reached_fn,
+            condition=reached_condition,
+            watched=(target_tag,),
+        )
+    else:
+        target = value_trigger(plc, "target", TARGET, target_tag, target_value)
+
+    triggers = [target]
+    if role_tags:
+        start = {tag: plc.state.tags.get(tag) for tag in role_tags}
+        triggers.append(departure_trigger(plc, "ejected", start))
+    if session is None:
+        session = CoastSession(plc, kind="letrun")
+    assert session.plc is plc
+    return session.seek(triggers, budget=budget)
+
+
+def _settle_delayed_effects(
+    fork: PLC,
+    *,
+    scan_budget: int = 2000,
+    session: Any = None,
+) -> list[CoastReceipt]:
+    """Settle environment-owned latency after an intervention.
+
+    If the harness has scheduled patches (Physical on_delay/off_delay), seek
+    harness quiescence (``pending_count == 0``), then dwell one scan — the plant
+    commits feedback the scan it settles; the program that reads it reacts the
+    next scan (the scan boundary is the plant latency).
+
+    Program instruction progress is deliberately not settled here. A newly
+    armed timer/counter/drum is a distinct operation owned by its
+    :class:`AdvanceProfile`; trace/program-step must re-read that owner and
+    prescribe the observable boundary as an ordinary coast. Fast-forwarding
+    timing bits here used to execute that operation a second time, invisibly,
+    before option ordering or correction lifecycle could observe it.
+    """
+    budget = scan_budget
+    receipts: list[CoastReceipt] = []
+    if session is None:
+        session = CoastSession(fork, kind="delayed-effects")
+    assert session.plc is fork
+
+    harness = getattr(fork, "_harness", None)
+    if harness is not None and harness.pending_count > 0:
+        scan_before = fork.state.scan_id
+        receipt = session.seek(
+            [
+                predicate_trigger(
+                    "harness_quiescent",
+                    QUIESCENT,
+                    lambda state: harness.pending_count == 0,
+                )
+            ],
+            budget=budget,
+        )
+        receipts.append(receipt)
+        if harness.pending_count == 0 and fork.state.scan_id - scan_before < budget:
+            session.dwell(1)
+    return receipts
+
+
+def _has_pending_effects(fork: PLC) -> bool:
+    """True if the fork has unsettled harness feedback.
+
+    Bool dwell reports via ``pending_count``; an analog coupling is "pending"
+    while its enable is active — its plant rung is still driving the feedback
+    register this scan.
+    """
+    harness = getattr(fork, "_harness", None)
+    if harness is None:
+        return False
+    if harness.pending_count > 0:
+        return True
+    snap = fork.current_state.tags
+    for coupling in getattr(harness, "_profile_couplings", ()):
+        en_raw = snap.get(coupling.en_name, False)
+        enabled = (
+            en_raw == coupling.trigger_value if coupling.trigger_value is not None else bool(en_raw)
+        )
+        if enabled:
+            return True
+    return False

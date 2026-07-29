@@ -122,7 +122,7 @@ def run_pinned_scan(
     if scans < 1:
         raise ValueError("scans must be >= 1")
 
-    from pyrung.core.analysis.pilot._ops import fork_with_rungs
+    from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 
     fork = fork_with_rungs(plc, rungs)
     before = dict(fork.state.tags)

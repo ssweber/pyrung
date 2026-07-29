@@ -15,8 +15,8 @@ from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _StateKey
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot._ops import PilotRung
     from pyrung.core.analysis.pilot.options import CandidateRead
+    from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
 

@@ -28,7 +28,7 @@ import pytest
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot._ops import PilotRung
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.tumbler import enter_production

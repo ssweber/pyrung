@@ -17,7 +17,6 @@ from pyrung import (
     rise,
     rung,
 )
-from pyrung.core.analysis.pilot._ops import wait_edge_nogood
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
@@ -30,6 +29,7 @@ from pyrung.core.analysis.pilot.departure import (
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation_contracts import pulse_identity
 from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
+from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 
 
 def _knock_three_times_program():

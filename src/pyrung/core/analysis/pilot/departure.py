@@ -18,11 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.analysis.pilot._ops import (
-    _avoid_forces,
-    _pilot_world_key,
-    fork_with_rungs,
-)
+from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
@@ -43,7 +39,9 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
+from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:

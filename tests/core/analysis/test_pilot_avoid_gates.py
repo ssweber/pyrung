@@ -264,7 +264,6 @@ def test_edge_sensitive_avoid_is_rejected_clearly() -> None:
 def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     """The scan gate receives every real settle snapshot, not only its endpoint."""
     from pyrung.core.analysis.pilot import steer
-    from pyrung.core.analysis.pilot._ops import _pilot_world_key, _StateKeyConfig
     from pyrung.core.analysis.pilot.navigation_contracts import (
         Bearing,
         BearingObjective,
@@ -272,6 +271,7 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.types import _AttemptResult
+    from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 
     Run = Bool("Run", default=True)
     Step = Int("Step")
@@ -428,7 +428,7 @@ def test_avoid_hold_is_inadmissible() -> None:
     """A corrective hold that drives an avoided tag is inadmissible — the seam
     every corrective-hold install site (investigate/corrections) routes through.
     """
-    from pyrung.core.analysis.pilot._ops import _avoid_forces, _hold_allowed
+    from pyrung.core.analysis.pilot.avoid import _avoid_forces, _hold_allowed
     from pyrung.core.analysis.pilot.types import _AvoidMember, _AvoidPredicate
 
     avoid = _AvoidPredicate(

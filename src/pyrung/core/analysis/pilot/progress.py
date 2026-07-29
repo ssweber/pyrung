@@ -21,17 +21,7 @@ from typing import Any
 from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.recording as recording
-from pyrung.core.analysis.pilot._ops import (
-    PilotRung,
-    _append_rungs,
-    _pilot_world_key,
-    _rung_execution_receipt,
-    _rung_identity,
-    _semantic_key,
-    _set_rungs,
-    coast_departure_tags,
-    fork_with_rungs,
-)
+from pyrung.core.analysis.pilot.coast import coast_departure_tags
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.departure import (
     DepartureClassification,
@@ -64,6 +54,13 @@ from pyrung.core.analysis.pilot.outcome import (
     BearingEffect,
     ProgressEffect,
 )
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _append_rungs,
+    _rung_execution_receipt,
+    _set_rungs,
+    fork_with_rungs,
+)
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -85,6 +82,11 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _RecoveryOrigin,
+)
+from pyrung.core.analysis.pilot.world_key import (
+    _pilot_world_key,
+    _rung_identity,
+    _semantic_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
 

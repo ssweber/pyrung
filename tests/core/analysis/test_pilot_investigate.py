@@ -16,15 +16,7 @@ import pytest
 
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import (
-    OperationReceipt,
-    PilotRung,
-    _coast_holding_state,
-    _pilot_state_key,
-    _set_rungs,
-    _StateKeyConfig,
-)
-from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent
+from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
@@ -56,7 +48,13 @@ from pyrung.core.analysis.pilot.investigate import (
     investigate_excursion,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
+from pyrung.core.analysis.pilot.overlay import (
+    OperationReceipt,
+    PilotRung,
+    _set_rungs,
+)
 from pyrung.core.analysis.pilot.types import BearingDeparture
+from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq, CompareNe

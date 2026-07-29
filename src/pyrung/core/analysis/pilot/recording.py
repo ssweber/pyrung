@@ -11,7 +11,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
-from pyrung.core.analysis.pilot._ops import _rung_execution_receipt, _rung_identity
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -22,6 +21,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
+from pyrung.core.analysis.pilot.overlay import _rung_execution_receipt
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct, frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot.types import (
     _RecoveryOrigin,
     _StepContext,
 )
+from pyrung.core.analysis.pilot.world_key import _rung_identity
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.validation.render import (
     caret_of,

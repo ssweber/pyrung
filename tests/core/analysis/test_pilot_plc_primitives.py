@@ -1,4 +1,4 @@
-"""Tests for pilot _ops — low-level PLC manipulation primitives.
+"""Tests for PILOT's low-level PLC manipulation primitives.
 
 Coverage targets:
 - PilotRung: guarded-rule value_for selection
@@ -18,27 +18,33 @@ from __future__ import annotations
 import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
-from pyrung.core.analysis.pilot._ops import (
+from pyrung.core.analysis.pilot.advance import build_advance_index
+from pyrung.core.analysis.pilot.coast import (
+    _coast_holding_state,
+    _coast_to_value,
+    _has_pending_effects,
+    _settle_delayed_effects,
+)
+from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
     PilotRungExecutionState,
     _append_rungs,
-    _apply_pulse,
-    _coast_holding_state,
-    _coast_to_value,
     _constraint_condition,
-    _has_pending_effects,
-    _pilot_state_key,
-    _pilot_world_key,
     _rung_execution_receipt,
     _set_rungs,
-    _settle_delayed_effects,
-    _StateKeyConfig,
-    _threshold_crossed_snap,
     _until_unresolved_condition,
     fork_with_rungs,
 )
-from pyrung.core.analysis.pilot.advance import build_advance_index
+from pyrung.core.analysis.pilot.pulse import _apply_pulse
+from pyrung.core.analysis.pilot.world_key import (
+    _pilot_state_key,
+    _pilot_world_key,
+    _rung_identity,
+    _semantic_key,
+    _StateKeyConfig,
+    _threshold_crossed_snap,
+)
 from pyrung.core.analysis.prove.absorb import (
     _done_acc_state,
     _ThresholdAtomSpec,
@@ -387,6 +393,25 @@ class TestPilotRungs:
     def test_guard_is_required(self):
         with pytest.raises(ValueError, match="guard is required"):
             PilotRung("In", True, None)
+
+    def test_operation_receipt_move_preserves_semantic_rung_identity(self):
+        _prog, _In, Scope = _scoped_input_program()
+        receipt = OperationReceipt(Scope)
+        old_receipt_key = (
+            "pyrung.core.analysis.pilot._ops",
+            "OperationReceipt",
+            (("progress", None), ("until", ("tag", Scope.name))),
+        )
+        rung = PilotRung("In", True, ~Scope, receipt)
+
+        assert OperationReceipt.__module__ == "pyrung.core.analysis.pilot.overlay"
+        assert _semantic_key(receipt) == old_receipt_key
+        assert _rung_identity(rung) == (
+            "In",
+            True,
+            _semantic_key(~Scope),
+            old_receipt_key,
+        )
 
     def test_all_guards_read_one_pre_overlay_snapshot(self):
         prog, In, _Scope = _scoped_input_program()

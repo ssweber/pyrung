@@ -16,12 +16,6 @@ import pytest
 
 from pyrung import Bool, Int, Program, Real, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
-from pyrung.core.analysis.pilot._ops import (
-    PilotRung,
-    _pilot_world_key,
-    _set_rungs,
-    _StateKeyConfig,
-)
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.earned_work import (
@@ -40,6 +34,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     TargetSpec,
 )
+from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
@@ -59,6 +54,7 @@ from pyrung.core.analysis.pilot.verify import (
     _owned_channel_motion,
     verify_gates,
 )
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.condition import CompareEq
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
