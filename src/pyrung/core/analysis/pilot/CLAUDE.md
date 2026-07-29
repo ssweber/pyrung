@@ -219,76 +219,50 @@ nogood-identity policy on `PendingDeparture` and `_ops.py::_rung_identity`.
 
 ## Navigation
 
-### Orchestration and package surface
+Orchestration:
 
-- `pilot.py` — shared drive preparation, target-context construction, user
-  route lock, event loop, knowledge application, world commit, terminal
-  results, and public drive entry points.
-- `recording.py` — pure event-payload, terminal-frontier, and plan-journal
-  rendering; it does not make drive decisions.
-- `types.py` — cross-module protocols and world, trial, event, incident, and
-  accepted execution-evidence records; recovery policy records stay with
-  `progress.py`.
-- `__init__.py` — package exports.
-- `physical.py` — harness installation and feedback-tag exclusion.
-- `multitarget.py` — conservative incompatibility proof and target ordering.
+- `pilot.py` — drive loop, world commit, public entry points
+- `recording.py` — event/plan rendering; no drive decisions
+- `types.py` — cross-module records and protocols
+- `__init__.py` — package exports
+- `physical.py` — harness install, feedback-tag exclusion
+- `multitarget.py` — multi-target incompatibility proof, ordering
 
-### Static reading and orientation
+Static reading and orientation:
 
-- `trace.py` — backward requirement tree, traversal, route enumeration,
-  steerability, writer ranking, and alternative selection.
-- `availability.py` — current-state writer availability used for ordering.
-- `evidence.py` — pipeline-role inference and static transition-route expansion.
-- `tide_tables.py` — finite constant-backed table and calculation preimages,
-  plus complete-domain guard verdicts.
-- `charts.py` — immutable static transition graphs, constrained path evidence,
-  and opaque pipeline detection.
-- `static_expressions.py` — low-level static-expression helpers shared by trace
-  and tide readers.
-- `compass.py` — thin immutable facade plus durable `CompassKnowledge`.
-- `orientation.py` — current-world read, complete frame assembly, sole result
-  synthesis, and terminal/probe policy.
-- `options.py` — phased private current-world readings, wait-source selection,
-  and final option materialization and ranking.
-- `navigation_evidence.py` — narrow constrained reachability evidence shared
-  with verification and recovery; never returns an action.
-- `currents.py` — structural program-awaited-action readings and producer
-  families; Compass owns filtering and ambiguity policy.
-- `advance.py` — unambiguous instruction-owned channel lookup and boundary
-  estimates. Instruction semantics live in each instruction's `AdvanceProfile`.
-- `program_step.py` — counterfactual proof for one exact producer; reports a
-  boundary, unmet input, or interruption but never an action.
-- `navigation.py` — immutable evidence, act, result, target, constraint,
-  target-relative Bearing objective, and world-view contracts.
+- `trace.py` — backward requirement tree, writer ranking
+- `availability.py` — current-state writer availability
+- `evidence.py` — pipeline roles, transition-route expansion
+- `tide_tables.py` — finite table/calc preimages, guard verdicts
+- `charts.py` — static transition graphs, path search
+- `static_expressions.py` — static-expression helpers
+- `compass.py` — navigation facade, durable knowledge
+- `orientation.py` — current-world read, result synthesis
+- `options.py` — option/wait materialization and ranking
+- `navigation_evidence.py` — constrained reachability evidence
+- `currents.py` — program-awaited actions, producer families
+- `advance.py` — instruction-owned channels and boundaries
+- `program_step.py` — one-producer counterfactual proof
+- `navigation.py` — immutable navigation contracts
 
-### Execution and observation
+Execution and observation:
 
-- `steer.py` — forked action/coast execution and invocation of trial gates.
-  `_settle_cone` stays as the thin execution adapter around
-  `CoastSession.settle`.
-- `_ops.py` — shared PLC operations, world keys, temporary-logic compilation and
-  effective-owner receipts, pulses, coast adapters, and action-admission checks.
-- `coast.py` — bump-driven coasts with exact-scan receipts, including typed
-  trial-avoid firings owned by execution.
-- `cyclefold.py` — proven active-cycle skipping during long waits.
-- `skiff.py` — finite isolated probes of unreadable frontiers.
+- `steer.py` — execute one act through the trial gates
+- `_ops.py` — shared PLC ops, overlays, pulses, world keys
+- `coast.py` — bump-driven coasts with exact receipts
+- `cyclefold.py` — proven cycle skipping in long waits
+- `skiff.py` — isolated probes of unreadable frontiers
 
-### Judgment and recovery
+Judgment and recovery:
 
-- `verify.py` — avoid, target, spin, cycle, dead-end, and outcome gates.
-- `outcome.py` — agency, bearing, progress, and frontier evidence.
-- `progress.py` — checkpoints, the `PendingDeparture` policy record, regression
-  recovery, the terminal channel-departure handler, correction installation,
-  and reverts.
-- `detour.py` — immutable channel-departure observation and typed
-  classification for progress handling.
-- `gauge.py` — conservative target-relative earned-work marks and reset
-  boundaries.
-- `causal.py` — recorded cause-chain queries and empirical program-write
-  evidence.
-- `investigate.py` — incident construction, hypothesis ranking, typed replay
-  resolution, and confirmation.
-- `corrections.py` — scoped corrective-hold hypothesis derivation.
+- `verify.py` — trial gates
+- `outcome.py` — evidence classification
+- `progress.py` — retention, recovery, corrections, reverts
+- `detour.py` — departure observation and classification
+- `gauge.py` — target-relative earned-work marks
+- `causal.py` — recorded cause-chain queries
+- `investigate.py` — hypothesis replay and confirmation
+- `corrections.py` — corrective-hold hypothesis derivation
 
 Module docstrings define the current local contracts. If a change moves a
 decision between modules, update both affected docstrings and this navigation
