@@ -208,7 +208,7 @@ def _gate_spin(
             rungs=state.rungs,
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
-            scan_budget=ctx.max_scans - state.work.state.scan_id,
+            scan_budget=state.remaining_search_scans(ctx.max_scans),
             pdg=ctx.pdg,
             program=ctx.program,
             ctx=ctx,

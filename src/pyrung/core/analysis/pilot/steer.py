@@ -210,7 +210,10 @@ def _apply_actions(
             fork,
             frame.snap,
             key_config,
-            scan_budget=ctx.max_scans - fork.state.scan_id,
+            scan_budget=state.remaining_search_scans(
+                ctx.max_scans,
+                scan_id=fork.state.scan_id,
+            ),
             session=session,
         )
     fork_snap = dict(fork.state.tags)
@@ -612,7 +615,13 @@ def _try_terminal_letrun(
         else None
     )
 
-    budget = min(_ZOOM_BUDGET, max(2, ctx.max_scans - scan_before))
+    budget = min(
+        _ZOOM_BUDGET,
+        max(
+            2,
+            state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
+        ),
+    )
     session = CoastSession(fork, kind="letrun")
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -719,7 +728,7 @@ def _try_terminal_dwell(
 
     No ejection is committed and no investigation re-runs, so the loop cannot spin
     re-ejecting: a non-completing dwell terminates at the stuck exit rather than
-    burning budget by coasting ``state.work`` to ``max_scans``.
+    repeatedly spending the invocation's remaining search budget.
     """
     fork = fork_with_rungs(state.work, state.rungs)
     scan_before = fork.state.scan_id
@@ -728,7 +737,13 @@ def _try_terminal_dwell(
     def _reached(tags: dict[str, Any]) -> bool:
         return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
 
-    ceiling = min(_LETRUN_DWELL_CEILING, max(2, ctx.max_scans - scan_before))
+    ceiling = min(
+        _LETRUN_DWELL_CEILING,
+        max(
+            2,
+            state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
+        ),
+    )
     session = CoastSession(fork, kind="settle")
     session.arm_pens(_pen_tags(state, ctx))
     dwell = _settle_cone(

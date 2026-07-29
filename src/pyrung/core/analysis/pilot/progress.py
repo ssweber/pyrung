@@ -94,12 +94,25 @@ _PENDING_DEPARTURE_SCAN_BUDGET = 2000
 
 @dataclass(frozen=True)
 class PendingDeparture:
-    """Progress policy for one durable departure observation."""
+    """Progress policy for one durable departure observation.
+
+    Carries detour's opening observation intact and adds only mutable policy
+    anchors: the post-settlement progress mark, the stable rollback-checkpoint
+    owner, an optional saved-progress owner, and a finite search-scan
+    deadline.  The saved-progress owner is an irreversible recovery floor —
+    expiry and regression may discard only work after it; until it exists, the
+    opening rollback owner remains the floor.  Correction install/revoke may
+    replace a checkpoint's executable artifact but must preserve that owner.
+    Policy resolves in two phases: a plain :class:`DepartureDecision` (wait,
+    promote, regress, or expire) is computed first, then applied to the
+    receipts this record owns.  The ``provisional_*`` event names surfaced to
+    consumers are compatibility vocabulary only, not an internal state.
+    """
 
     opening: DepartureObservation
     progress_mark: tuple[tuple[str, Any], ...]
     rollback_owner: _CheckpointOwner
-    expires_at: int
+    expires_at_search_scan: int
     saved_progress_owner: _CheckpointOwner | None = None
 
 
@@ -590,12 +603,15 @@ def _open_pending_departure(
     progress_mark = (
         gauge.mark(dict(state.work.state.tags)) if gauge is not None and gauge.components else ()
     )
-    search_scan = state.search_scan
+    search_scans = state.search_scans
     state.pending_departure = PendingDeparture(
         opening=observation,
         progress_mark=progress_mark,
         rollback_owner=state.checkpoints[-1].owner,
-        expires_at=min(ctx.max_scans, search_scan + _PENDING_DEPARTURE_SCAN_BUDGET),
+        expires_at_search_scan=min(
+            ctx.max_scans,
+            search_scans + _PENDING_DEPARTURE_SCAN_BUDGET,
+        ),
     )
     # ``route`` and ``classification`` are stable diagnostic vocabulary. The
     # former is a projection of the exact current evidence, never retained
@@ -777,7 +793,7 @@ def _assess_pending_departure(
         return DepartureDecision(DepartureAction.REGRESS, progress)
     if progress.movement is GaugeMovement.FORWARD:
         return DepartureDecision(DepartureAction.PROMOTE, progress)
-    if state.search_scan < pending.expires_at:
+    if state.search_scans < pending.expires_at_search_scan:
         return DepartureDecision(DepartureAction.WAIT, progress)
     return DepartureDecision(DepartureAction.EXPIRE, progress)
 
@@ -887,7 +903,15 @@ def _install_confirmed_correction(
     scan: int,
     source: str,
 ) -> _CorrectionReceipt:
-    """Install one locally replay-proven correction on probation."""
+    """Install one locally replay-proven correction on probation.
+
+    A correction is installed only in the exact guarded form that survived
+    replay, and only one competing explanation is installed for an incident.
+    The checks below reject forged identities and already-owned rungs;
+    prerequisite installation reuses an identical rung without claiming it.
+    Installation banks active corrections into every revert anchor, and
+    revocation removes them symmetrically.
+    """
     if not correction.rungs:
         raise ValueError("a confirmed correction must own at least one rung")
     if any(not isinstance(rung, PilotRung) for rung in correction.rungs):

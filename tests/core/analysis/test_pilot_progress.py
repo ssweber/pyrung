@@ -285,7 +285,7 @@ def _pending_departure(
         opening=opening,
         progress_mark=progress_mark,
         rollback_owner=rollback_owner or state.checkpoints[-1].owner,
-        expires_at=expires_at,
+        expires_at_search_scan=expires_at,
     )
 
 
@@ -885,12 +885,13 @@ def test_pending_regression_without_saved_progress_uses_rollback_owner(monkeypat
 def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
     """Raw timer scans are waiting; only the shared search coordinate expires."""
     work = _oneshot_plc()
-    work.run(cycles=100)
+    work.run(cycles=140)
     checkpoint = _cp(("src",), _oneshot_plc(), 5)
     state = _make_state(
         best_trend=5,
         checkpoints=[checkpoint],
         work=work,
+        search_start_scan=40,
         dwell_scans=100,
     )
     state.pending_departure = _pending_departure(
@@ -903,8 +904,25 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert all(event.kind != "provisional_expired" for event in events)
-    assert state.search_scan == 0
+    assert state.search_scans == 0
     assert state.pending_departure is not None
+
+
+def test_credited_dwell_preserves_remaining_search_budget_for_tentative_scans():
+    """The shared owner removes committed dwell but charges new fork scans."""
+    work = _oneshot_plc()
+    work.run(cycles=140)
+    state = _make_state(
+        best_trend=5,
+        checkpoints=[_cp(("src",), _oneshot_plc(), 5)],
+        work=work,
+        search_start_scan=40,
+        dwell_scans=90,
+    )
+
+    assert state.search_scans == 10
+    assert state.remaining_search_scans(50) == 40
+    assert state.remaining_search_scans(50, scan_id=work.state.scan_id + 7) == 33
 
 
 def test_preserved_departure_while_pending_is_investigated(monkeypatch):

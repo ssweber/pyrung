@@ -177,7 +177,13 @@ class TestGateSpin:
             trial,
             ((source.name, True),),
             SimpleNamespace(key=frame_key, snap=snap),
-            SimpleNamespace(key_config=cfg, gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(
+                key_config=cfg,
+                gauge=None,
+                work=plc,
+                rungs=[],
+                remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
+            ),
             SimpleNamespace(
                 steerable=frozenset((source.name,)),
                 resting={source.name: False},
@@ -250,7 +256,13 @@ class TestGateSpin:
             trial,
             ((source.name, True),),
             SimpleNamespace(key=frame_key, snap=snap),
-            SimpleNamespace(key_config=cfg, gauge=None, work=plc, rungs=[]),
+            SimpleNamespace(
+                key_config=cfg,
+                gauge=None,
+                work=plc,
+                rungs=[],
+                remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
+            ),
             SimpleNamespace(
                 steerable=frozenset((source.name,)),
                 resting={source.name: False},

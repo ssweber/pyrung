@@ -293,7 +293,15 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
         key=_pilot_world_key(snap, cfg, ()),
         tree=None,
     )
-    state = SimpleNamespace(work=work, rungs=(), key_config=cfg, watch_tags=[])
+    state = SimpleNamespace(
+        work=work,
+        rungs=(),
+        key_config=cfg,
+        watch_tags=[],
+        remaining_search_scans=lambda max_scans, scan_id=None: (
+            max_scans - ((work.state.scan_id if scan_id is None else scan_id) - work.state.scan_id)
+        ),
+    )
     ctx = SimpleNamespace(
         target=SimpleNamespace(tag="Target", value=True, predicate=None),
         max_scans=100,

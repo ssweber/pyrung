@@ -218,9 +218,10 @@ class _World(PRecord):
     rungs = _precord_field()
     # Committed scan-ids spent *waiting* — the spans of accepted zoom / let-run
     # coasts.  Timer dwell is waiting, not searching (see ``_ops._ZOOM_BUDGET``),
-    # so the loop budget charges ``scan_id - dwell_scans``: an accepted coast
-    # that rides a 39k-scan dwell must not bankrupt the search.  Lives in the
-    # world so a revert rewinds the credit together with the scans it excused.
+    # so invocation-relative search scans subtract this credit. An accepted
+    # coast that rides a 39k-scan dwell must not bankrupt the search. Lives in
+    # the world so a revert rewinds the credit together with the scans it
+    # excused.
     dwell_scans = _precord_field()
 
 
@@ -419,6 +420,8 @@ class _PilotContext:
     # Public ``how()`` supplies none; other navigation clients may constrain an
     # exact action without implying a retained route choice.
     blocked_actions: frozenset[_ActionPair]
+    # Relative count of new PILOT search scans allowed for this invocation.
+    # Accepted productive dwell does not consume it.
     max_scans: int
     live: bool
     key_config: _StateKeyConfig | None = None
@@ -598,6 +601,10 @@ class _PilotState:
     seen_keys: set[_StateKey]
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
+    # Physical scan where this PILOT invocation began. Search budgets are
+    # relative to this anchor; accepted productive dwell is removed separately
+    # by ``dwell_scans`` as the world advances and reverts.
+    search_start_scan: int = 0
     last_wait_log: tuple[Any, ...] | None = None
     # Reporting-only provenance from the most recently selected current-world
     # bearing. It never feeds Orientation or constrains a later read.
@@ -695,10 +702,21 @@ class _PilotState:
         self.world = self.world.set(dwell_scans=value)
 
     @property
-    def search_scan(self) -> int:
-        """Committed scan coordinate after owner-verified waiting is removed."""
+    def search_scans(self) -> int:
+        """New scans spent searching during this PILOT invocation."""
 
-        return self.work.state.scan_id - self.dwell_scans
+        return self.search_scans_at(self.work.state.scan_id)
+
+    def search_scans_at(self, scan_id: int) -> int:
+        """Search scans spent by the time a live or tentative fork reaches *scan_id*."""
+
+        return scan_id - self.search_start_scan - self.dwell_scans
+
+    def remaining_search_scans(self, max_scans: int, *, scan_id: int | None = None) -> int:
+        """Search budget remaining at the live world or a tentative fork scan."""
+
+        at_scan = self.work.state.scan_id if scan_id is None else scan_id
+        return max(0, max_scans - self.search_scans_at(at_scan))
 
     def snapshot_world(self) -> _World:
         """Freeze the live world for a checkpoint pointer.
@@ -749,6 +767,13 @@ class _IterationFrame:
 
 @dataclass
 class _PulseState:
+    """Physical execution evidence for one attempted act.
+
+    Navigation's ``ChannelHeading`` is a declaration; the coast's actually
+    selected landing and every trial observation live here, on the execution
+    side, until VERIFY freezes what it accepts into ``_ExecutionEvidence``.
+    """
+
     fork: PLC
     scan_before: int
     action_scan: int

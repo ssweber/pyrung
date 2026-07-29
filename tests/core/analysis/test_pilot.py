@@ -310,6 +310,25 @@ def test_simple_latch():
     assert "x_Go" in path.changes
 
 
+def test_max_scans_counts_new_search_scans_on_a_prescanned_plc():
+    x_Go = Bool("x_Go", external=True)
+    y_Out = Bool("y_Out")
+
+    with Program() as logic:
+        with rung(x_Go):
+            out(y_Out)
+
+    plc = PLC(logic)
+    plc.run(cycles=20)
+    start_scan = plc.state.scan_id
+
+    path = pilot_how(plc, y_Out, max_scans=20)
+
+    assert path.reachable
+    assert path.fork is not None
+    assert path.fork.state.scan_id > start_scan
+
+
 def test_pilot_events_stream_candidate_decisions():
     x_Go = Bool("x_Go", external=True)
     y_Out = Bool("y_Out")

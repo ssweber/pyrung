@@ -697,13 +697,13 @@ def _commit_trial(
     state.journey.extend(steps)
     # Waiting is not searching: an accepted coast's span is dwell — the machine
     # advancing itself while the pilot holds heading — so it must not drain the
-    # search budget (the loop charges ``scan_id - dwell_scans``).  A revert
-    # rewinds this credit with the world.  The credit is earned only when the
-    # machine actually moved its own work — the coast reached its channel
-    # target or advanced the progress gauge; a coast that parks with
-    # nothing moving is the *search* failing, and sterile laps must still
-    # drain the budget (the old-wiring live run spun at HELD committing 100k
-    # scan-ids per lap — free dwell there means no terminating force).
+    # invocation's search budget. A revert rewinds this credit with the world.
+    # The credit is earned only when the machine actually moved its own work —
+    # the coast reached its channel target or advanced the progress gauge; a
+    # coast that parks with nothing moving is the *search* failing, and sterile
+    # laps must still drain the budget (the old-wiring live run spun at HELD
+    # committing 100k scan-ids per lap — free dwell there means no terminating
+    # force).
     if trial.motion.is_coast:
         productive = (
             not key_was_seen or trial.channel_motion.reached or trial.gauge_receipt.any_forward
@@ -833,6 +833,7 @@ def _pilot_loop_events(
         seen_keys=set(),
         checkpoints=[],
         watch_tags=[],
+        search_start_scan=plc.state.scan_id,
     )
     # The target-relative progress gauge (gauge.py): event-earned
     # ordinals the threshold-masked search key deliberately aliases.  Static
@@ -879,12 +880,14 @@ def _pilot_loop_events(
     # to progress.py, which may checkpoint it, keep a departure pending, or
     # investigate and revert it. Rejected modes fall through to the next mode in
     # the same turn.
-    # The budget charges *searching*, never *waiting*: committed scan-ids minus
-    # the accepted-coast dwell credit (see ``_World.dwell_scans``).  An armed
-    # self-advancing dwell — a 39k-scan dry timer the coast rides — is the
-    # machine doing its own work, not the pilot spending effort.
+    # ``max_scans`` counts new search scans from this invocation's start.
+    # Accepted productive coasts credit their dwell back (see
+    # ``_World.dwell_scans``); tentative fork scans still count until their
+    # operation is accepted. An armed self-advancing dwell — a 39k-scan dry
+    # timer the coast rides — is the machine doing its own work, not the pilot
+    # spending effort.
     last_frame: _IterationFrame | None = None
-    while state.search_scan < ctx.max_scans:
+    while state.search_scans < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate):
             _promote_probationary_corrections(state)
@@ -1053,17 +1056,17 @@ def _pilot_loop_events(
         state.last_wait_log = None
         continue
 
-    # ── Budget exhausted: the work fork ran past max_scans ──
-    # A dwell that drains the budget is a stall, not a wrap-up: route the
-    # terminal through a fresh frame so the reason names the outstanding
-    # frontier, and revert to the last checkpoint like the stuck exits do
-    # ("How we fail" #1 — every stop points at a named leaf).
+    # ── This invocation spent its relative search budget ──
+    # Unproductive scans that drain the budget are a stall, not a wrap-up:
+    # route the terminal through a fresh frame so the reason names the
+    # outstanding frontier, and revert to the last checkpoint like the stuck
+    # exits do ("How we fail" #1 — every stop points at a named leaf).
     snap = dict(state.work.state.tags)
     reached = target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate)
     if not reached:
         frame = last_frame
         reason = _with_avoid_reason(
-            f"budget exhausted ({ctx.max_scans} scans searched + {state.dwell_scans} waited)",
+            f"budget exhausted ({state.search_scans} scans searched + {state.dwell_scans} waited)",
             state,
             ctx,
             frame,
@@ -1744,7 +1747,7 @@ def _pilot_how_multi(
             t_val,
             t_pred,
             influence=inf,
-            max_scans=work.state.scan_id + max_scans,
+            max_scans=max_scans,
             avoid_pred=avoid_pred,
             work=work,
         )
