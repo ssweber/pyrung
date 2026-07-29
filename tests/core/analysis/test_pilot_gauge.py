@@ -94,15 +94,6 @@ def test_gauge_receipt_keeps_source_landing_and_progress_order() -> None:
     )
 
 
-def test_old_gauge_comparison_methods_remain_compatibility_projections() -> None:
-    from pyrung.core.analysis.pilot.gauge import Gauge, GaugeComponent
-
-    gauge = Gauge((GaugeComponent("Step", "stepper", 1),))
-
-    assert gauge.compare({"Step": 1}, {"Step": 2}) == "advanced"
-    assert gauge.ordinal_advanced({"Step": 1}, {"Step": 2})
-
-
 def _step_chain_program():
     """A discrete stepper with a reset — the recipe-coordinate shape.
 

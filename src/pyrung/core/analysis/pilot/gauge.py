@@ -166,14 +166,6 @@ class Gauge:
             )
         )
 
-    def compare(self, anchor: Any, now: Any) -> str:
-        """Temporary compatibility wrapper preserving the former strings."""
-        return legacy_movement(self.receipt(anchor, now).movement)
-
-    def ordinal_advanced(self, before: Any, after: Any) -> bool:
-        """Temporary compatibility wrapper around the owned receipt."""
-        return self.receipt(before, after).any_forward
-
     def has_banked_work(self, snap: Any) -> bool:
         """Whether a component is ahead of one of its proved reset floors.
 
