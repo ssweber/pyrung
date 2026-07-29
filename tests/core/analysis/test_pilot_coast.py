@@ -670,9 +670,7 @@ class TestAvoidBump:
         )
         session = CoastSession(plc)
         session.arm_avoid(avoid)
-        session._avoid_bumps[0].predicate(
-            SimpleNamespace(tags={"Temp": 7, "Unrelated": 99})
-        )
+        session._avoid_bumps[0].predicate(SimpleNamespace(tags={"Temp": 7, "Unrelated": 99}))
 
         assert observed[-1] == {"Temp": 7}
         assert "Absent" not in observed[-1]

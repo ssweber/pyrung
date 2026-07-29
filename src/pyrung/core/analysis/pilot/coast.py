@@ -271,9 +271,7 @@ class CoastSession:
             condition = getattr(member, "condition", None)
             # Compiled members have an exact read-set. Opaque callables do not,
             # so they retain the historical full-snapshot contract.
-            declared_reads = (
-                tuple(sorted(member.tags)) if condition is not None else None
-            )
+            declared_reads = tuple(sorted(member.tags)) if condition is not None else None
             try:
                 already_true = bool(member.pred(start))
             except Exception:
@@ -291,11 +289,7 @@ class CoastSession:
                     snapshot = (
                         dict(tags)
                         if _declared_reads is None
-                        else {
-                            name: tags[name]
-                            for name in _declared_reads
-                            if name in tags
-                        }
+                        else {name: tags[name] for name in _declared_reads if name in tags}
                     )
                     return bool(_member.pred(snapshot))
                 except Exception:
