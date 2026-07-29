@@ -134,7 +134,7 @@ this table only locates the owner.
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`
 - Target-relative movement: `earned_work.py::EarnedWork.receipt`; verification owns the
   accepted trial's receipt
-- Departure observation and classification: `detour.py::classify_departure`
+- Departure observation and classification: `departure.py::classify_departure`
 - Evidence classification: `outcome.py::assess_outcome`;
   `classify_outcome` stays as the small ergonomic compatibility projection
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
@@ -178,7 +178,7 @@ progress". Use distinct language for those two decisions.
 `types.py` and `compass.py` separate state that a revert may undo from
 knowledge that must survive:
 
-- `_World`: PLC fork, committed steps and contexts, active rungs, trend, and
+- `_World`: PLC fork, committed steps and contexts, overlay rules, trend, and
   dwell accounting.
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
   recovery, earned work, correction receipts/revocations, and diagnostic history.
@@ -258,7 +258,7 @@ Judgment and recovery:
 - `verify.py` — trial gates
 - `outcome.py` — evidence classification
 - `progress.py` — retention, recovery, corrections, reverts
-- `detour.py` — departure observation and classification
+- `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
 - `investigate.py` — hypothesis replay and confirmation

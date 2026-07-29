@@ -113,7 +113,12 @@ class TestGateSpin:
             trial,
             (("SpinSource", False),),
             SimpleNamespace(key=key, snap=snap),
-            SimpleNamespace(key_config=object(), earned_work=None, work=plc, rungs=[]),
+            SimpleNamespace(
+                key_config=object(),
+                earned_work=None,
+                work=plc,
+                overlay_rules=[],
+            ),
             SimpleNamespace(),
             nogood_pair=("SpinSource", False),
             gate_events=gates,
@@ -185,7 +190,7 @@ class TestGateSpin:
                 key_config=cfg,
                 earned_work=None,
                 work=plc,
-                rungs=[],
+                overlay_rules=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
             ),
             SimpleNamespace(
@@ -264,7 +269,7 @@ class TestGateSpin:
                 key_config=cfg,
                 earned_work=None,
                 work=plc,
-                rungs=[],
+                overlay_rules=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
             ),
             SimpleNamespace(
@@ -417,8 +422,8 @@ class TestGateDeadEnd:
 class TestVerifyGates:
     """Full pipeline: target check -> spin -> cycle -> dead-end -> outcome."""
 
-    def test_target_reached_records_zoom_target_from_owned_evidence(self):
-        from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
+    def test_target_reached_records_bearing_target_from_owned_evidence(self):
+        from pyrung.core.analysis.pilot.recording import _bearing_coast_accepted_payload
 
         source = Bool("VerifySource", external=True)
         target = Bool("VerifyTarget")
@@ -492,7 +497,7 @@ class TestVerifyGates:
         assert result.trial.execution.timeline == pulse.timeline
         assert result.trial.execution.coast_receipt is coast_receipt
         assert result.trial.execution.accelerators == (("VerifyAccumulator", 9),)
-        assert _zoom_accepted_payload(result.trial)["observe_label"] == "zoom-target"
+        assert _bearing_coast_accepted_payload(result.trial)["observe_label"] == "zoom-target"
         assert result.trial.execution.before_snap is not before
         assert result.trial.execution.after_snap is not after
         assert isinstance(result.trial.execution.before_snap, MappingProxyType)
@@ -679,4 +684,4 @@ class TestVerifyGates:
     def test_avoid_predicate_rejects(self): ...
 
     @pytest.mark.skip(reason="stub")
-    def test_zoom_result_routes_through_gates(self): ...
+    def test_bearing_coast_result_routes_through_gates(self): ...

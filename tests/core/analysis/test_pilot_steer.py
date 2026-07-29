@@ -2,8 +2,8 @@
 
 Coverage targets:
 - _settle_watched_tags: dwell control, fixpoint detection
-- _letrun_zoom: channel-register coast, ejection guard, settle fallback
-- _try_zoom / _try_terminal_letrun: full-context wrappers (stubbed — exercised
+- _coast_to_bearing: channel-register coast, ejection guard, settle fallback
+- _try_bearing_coast / _try_terminal_letrun: full-context wrappers (stubbed — exercised
   through the pilot_how integration path rather than direct unit calls)
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
-from pyrung.core.analysis.pilot.steer import _letrun_zoom, _settle_watched_tags
+from pyrung.core.analysis.pilot.steer import _coast_to_bearing, _settle_watched_tags
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -82,30 +82,30 @@ class TestSettleCone:
 
 
 # ---------------------------------------------------------------------------
-# Zoom
+# Bearing coast
 # ---------------------------------------------------------------------------
 
 
-class TestZoom:
-    """_letrun_zoom: coast past timer/step-counter plateaus."""
+class TestBearingCoast:
+    """_coast_to_bearing: cross timer/step-counter plateaus."""
 
     def test_channel_tag_reaches_target(self):
         plc = PLC(_stage_program(5), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        snaps, receipt = _letrun_zoom(plc, "Stage", 5, frozenset({"Stage"}))
+        snaps, receipt = _coast_to_bearing(plc, "Stage", 5, frozenset({"Stage"}))
         assert snaps[-1]["Stage"] == 5
         assert plc.state.tags["Stage"] == 5
         assert receipt is not None and receipt.stop_reason == "reached"
 
-    def test_ejection_guard_stops_zoom(self):
+    def test_ejection_guard_stops_bearing_coast(self):
         # Target 9, but the program drives Stage to 5 — a third value that is
         # neither the start (0) nor the target (9), so the guard ejects.
         plc = PLC(_stage_program(5), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        assert plc.state.tags["Stage"] == 0  # zoom start value
-        snaps, receipt = _letrun_zoom(plc, "Stage", 9, frozenset({"Stage"}))
+        assert plc.state.tags["Stage"] == 0  # bearing-coast start value
+        snaps, receipt = _coast_to_bearing(plc, "Stage", 9, frozenset({"Stage"}))
         assert snaps[-1]["Stage"] != 9
         assert snaps[-1]["Stage"] == 5
         assert receipt is not None and receipt.stop_reason == "departed"
@@ -114,7 +114,7 @@ class TestZoom:
         plc = PLC(_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
         plc.step()
-        snaps, receipt = _letrun_zoom(plc, None, None, frozenset({"Done"}))
+        snaps, receipt = _coast_to_bearing(plc, None, None, frozenset({"Done"}))
         assert receipt is None
         # Settle fallback returns the per-scan trajectory (>= floor), not the
         # single final snapshot a channel coast returns.

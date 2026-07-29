@@ -31,7 +31,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
-from pyrung.core.analysis.pilot.detour import (
+from pyrung.core.analysis.pilot.departure import (
     ContinuationEvidence,
     DepartureClassification,
     DepartureDisposition,
@@ -120,7 +120,7 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
             work=fork,
             committed_acts=pvector([]),
             best_trend=trend,
-            rungs=pvector([]),
+            overlay_rules=pvector([]),
             dwell_scans=0,
         ),
         trend,
@@ -148,7 +148,7 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         work=over.pop("work", None) or _oneshot_plc(),
         committed_acts=pvector(committed_acts),
         best_trend=best_trend,
-        rungs=pvector(over.pop("rungs", [])),
+        overlay_rules=pvector(over.pop("overlay_rules", [])),
         dwell_scans=over.pop("dwell_scans", 0),
     )
     base: dict[str, Any] = {
@@ -298,7 +298,7 @@ def _departure_result(
     from_value: Any = None,
     settle_scans: int = 0,
 ) -> DepartureResult:
-    """Build a complete detour receipt for focused progress-policy tests."""
+    """Build a complete departure receipt for focused progress-policy tests."""
     start_scan = settled_fork.state.scan_id - settle_scans
     observation = DepartureObservation(
         channel_tag=channel_tag,
@@ -1226,7 +1226,10 @@ class TestRegression:
         )
         from pyrung.core.analysis.pilot._ops import PilotRung
 
-        state.rungs = (*state.rungs, PilotRung("A", True, ~state.work._known_tags_by_name["B"]))
+        state.overlay_rules = (
+            *state.overlay_rules,
+            PilotRung("A", True, ~state.work._known_tags_by_name["B"]),
+        )
         trial = _make_trial(6, BearingEffect.SATISFIED, chase_regression_causes=False)
         tuple(
             _monitor_trend(
@@ -1238,7 +1241,7 @@ class TestRegression:
         )
 
         state.work.step()
-        assert not state.rungs
+        assert not state.overlay_rules
         assert state.work.state.tags["A"] is False
 
     def test_regression_nogoods_recorded_at_action_source(self):
@@ -1431,15 +1434,15 @@ class TestCheckpointStream:
 
 
 # ---------------------------------------------------------------------------
-# Recording grounds — zoom landing + investigation rejection slugs
+# Recording grounds — bearing-coast landing + investigation rejection slugs
 # ---------------------------------------------------------------------------
 
 
-def test_zoom_accepted_payload_records_requested_and_landed():
+def test_bearing_coast_accepted_payload_records_requested_and_landed():
     """An overshooting coast records both the requested bearing and where it
-    actually landed, so a zoom that ejected past its target no longer reads as a
+    actually landed, so a bearing coast that ejected past its target no longer reads as a
     clean advance."""
-    from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
+    from pyrung.core.analysis.pilot.recording import _bearing_coast_accepted_payload
 
     trial = _make_trial(
         7,
@@ -1447,7 +1450,7 @@ def test_zoom_accepted_payload_records_requested_and_landed():
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
         fork_snap={"State": 8},
     )
-    payload = _zoom_accepted_payload(trial)
+    payload = _bearing_coast_accepted_payload(trial)
 
     assert payload["zoom_target_value"] == 6  # requested bearing
     assert payload["zoom_actual_value"] == 8  # where the world actually landed
@@ -1455,8 +1458,8 @@ def test_zoom_accepted_payload_records_requested_and_landed():
     assert payload["ejected"] is True
 
 
-def test_zoom_accepted_payload_records_owned_bearing_receipt():
-    from pyrung.core.analysis.pilot.recording import _zoom_accepted_payload
+def test_bearing_coast_accepted_payload_records_owned_bearing_receipt():
+    from pyrung.core.analysis.pilot.recording import _bearing_coast_accepted_payload
 
     trial = _make_trial(
         7,
@@ -1465,15 +1468,15 @@ def test_zoom_accepted_payload_records_owned_bearing_receipt():
         fork_snap={"Acc": 5},
     )
 
-    payload = _zoom_accepted_payload(trial)
+    payload = _bearing_coast_accepted_payload(trial)
 
     assert payload["bearing_stop_reason"] == "reached"
     assert payload["outcome"] == "confirmed"
     assert payload["ejected"] is False
 
 
-def test_deviation_bearing_is_departed_source_not_unvisited_zoom_target():
-    """A failed 6 -> 16 zoom that ejects to 8 departed Execute (6).
+def test_deviation_bearing_is_departed_source_not_unvisited_coast_target():
+    """A failed 6 -> 16 bearing coast that ejects to 8 departed Execute (6).
 
     The navigation destination remains 16 on the trial/replay contract, but it
     was never held and therefore cannot own a departure timestamp.

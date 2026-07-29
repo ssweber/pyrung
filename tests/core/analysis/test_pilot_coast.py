@@ -269,7 +269,7 @@ class TestReceiptBasics:
 
         manual = plc.fork()  # fold=False reference
         target = value_trigger(plc, "target", TARGET, "Done", True)
-        receipt = CoastSession(plc, kind="zoom").seek([target], budget=500)
+        receipt = CoastSession(plc, kind="bearing_coast").seek([target], budget=500)
 
         assert receipt.reached
         assert receipt.stop_reason == "reached"
@@ -300,7 +300,7 @@ class TestDepartureTerminal:
 
         manual = plc.fork()
         dep = departure_trigger(plc, "ejected", {"State": 1})
-        receipt = CoastSession(plc, kind="zoom").seek([dep], budget=500)
+        receipt = CoastSession(plc, kind="bearing_coast").seek([dep], budget=500)
 
         assert receipt.stop_reason == "departed"
         assert receipt.reached is False
@@ -1265,11 +1265,11 @@ class TestClassifyDepartureRefusal:
     def test_non_quiescent_receipt_is_refused_as_unknown(self, monkeypatch):
         # Constructing a full _PilotState/_PilotContext is heavy, so exercise
         # the refusal at the seam: a timeout receipt from _settle_departure is
-        # the cap-hit, possibly-mid-transition value the detour reader must NOT
+        # the cap-hit, possibly-mid-transition value the departure reader must NOT
         # trust as a settled landing.
         from types import SimpleNamespace
 
-        from pyrung.core.analysis.pilot import detour
+        from pyrung.core.analysis.pilot import departure
         from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, TargetSpec
 
         timeout_receipt = CoastReceipt(
@@ -1283,12 +1283,12 @@ class TestClassifyDepartureRefusal:
         )
         fake_fork = SimpleNamespace(state=SimpleNamespace(tags={"Chan": 7}, scan_id=2000))
         monkeypatch.setattr(
-            detour,
+            departure,
             "_settle_departure",
             lambda state, channel_tag: (fake_fork, timeout_receipt),
         )
 
-        verdict = detour.classify_departure(
+        verdict = departure.classify_departure(
             SimpleNamespace(),  # state — consumed only by the (mocked) settle
             SimpleNamespace(),  # ctx — untouched on the refusal arm
             BearingObjective(TargetSpec("Target", True)),
@@ -1297,7 +1297,7 @@ class TestClassifyDepartureRefusal:
             source_snap={"Chan": 1},
         )
 
-        assert verdict.classification is detour.DepartureClassification.UNKNOWN
+        assert verdict.classification is departure.DepartureClassification.UNKNOWN
         assert "did not settle within cap" in verdict.reason
         assert "timeout" in verdict.reason
         # The receipt's landing value is still surfaced, just not trusted.
@@ -1306,6 +1306,6 @@ class TestClassifyDepartureRefusal:
         assert verdict.observation.landing_receipt.logical_scans == 2000
         assert isinstance(
             verdict.observation.continuation.channel_status,
-            detour.Unknown,
+            departure.Unknown,
         )
         assert verdict.observation.continuation.awaited_action_inspected is False

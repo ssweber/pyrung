@@ -69,7 +69,7 @@ class _Candidate:
     provenance: tuple[str, ...] = ()
     wake: int | None = None
     # The first compass edge's executable promise. Trial verification uses this for every
-    # route-prescribed action, not only a coast/zoom: landing elsewhere means
+    # route-prescribed action, not only a bearing coast: landing elsewhere means
     # the program displaced the route and must be investigated.
     bearing_channel_tag: str | None = None
     bearing_channel_value: Any = None
@@ -94,8 +94,8 @@ class _Candidate:
         return self.source is ActSource.ROUTE
 
     @property
-    def influence_prescribed(self) -> bool:
-        return self.source is ActSource.INFLUENCE
+    def learned_prescribed(self) -> bool:
+        return self.source is ActSource.LEARNED_ACTION
 
     @property
     def awaited_action_prescribed(self) -> bool:
@@ -147,7 +147,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             for anchor_tag, anchor_value in anchors
         )
 
-    for rung in getattr(state, "rungs", ()):
+    for rung in getattr(state, "overlay_rules", ()):
         tag = getattr(rung, "dest", None)
         value = getattr(rung, "value", None)
         if (
@@ -750,8 +750,8 @@ def _managed_boolean_rungs(
     """
     from pyrung.core.condition import AllCondition, CompareNe
 
-    managed = {rung.dest for rung in state.rungs}
-    overlay = _rung_execution_receipt(state.rungs, frame.snap)
+    managed = {rung.dest for rung in state.overlay_rules}
+    overlay = _rung_execution_receipt(state.overlay_rules, frame.snap)
     proposed: list[PilotRung] = []
     lowered: set[_ActionPair] = set()
     for detail in details:
@@ -940,7 +940,7 @@ def _prescribe_wait(
     """Mint a prescribed-wait bearing from one current-world edge read.
 
     The single owner of "a wait is prescribed" for both mint paths. A route
-    completion edge (zoom) must be *grounded* — a wildcard from-value has no
+    completion edge (bearing coast) must be *grounded* — a wildcard from-value has no
     dwell semantics, so its read has no prescription. An
     influence-path wait passes ``edge=None`` with an explicit ``reason`` —
     always coastable. Automatic sibling edges carry one exact-producer
@@ -1034,7 +1034,7 @@ def _prescribe_wait(
             world,
             producers[0],
             state.work,
-            state.rungs,
+            state.overlay_rules,
             resting=ctx.resting,
         )
         preferred_channel = (
@@ -1385,7 +1385,7 @@ def _separate_prerequisites(
         pulse_tags = {detail.tag for detail in trace_action_details if detail.pulse}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
-            if tag in seen_prereq or tag in {rung.dest for rung in state.rungs}:
+            if tag in seen_prereq or tag in {rung.dest for rung in state.overlay_rules}:
                 continue
             detail = admission.detail_by_pair.get((tag, value))
             if detail is None or detail.until is None:
@@ -1412,7 +1412,7 @@ def _separate_prerequisites(
     held_command_tags = frozenset(
         tag
         for tag in ctx.compass.action_tags
-        if tag not in {rung.dest for rung in state.rungs}
+        if tag not in {rung.dest for rung in state.overlay_rules}
         and not _values_match(frame.snap.get(tag), ctx.resting.get(tag, False))
     )
     updated_trace = replace(
@@ -1635,7 +1635,7 @@ def _assemble_candidate_read(
             source=(
                 ActSource.ROUTE
                 if pair in route_candidate_set
-                else ActSource.INFLUENCE
+                else ActSource.LEARNED_ACTION
                 if pair == learned_action
                 else ActSource.PROGRAM
                 if pair in program_pairs
@@ -1827,7 +1827,7 @@ def _candidate_applied(
                 actions.append((other, ctx.resting.get(other, False)))
                 seen.add(other)
 
-    # Prerequisite holds (trace actions split into rungs for coast/zoom)
+    # Prerequisite holds (trace actions split into rungs for a bearing coast)
     # are applied to the fork but were removed from trace_actions — record them
     # so the scan_log faithfully captures everything the fork sees.
     for rung in candidates.prerequisites.rungs:

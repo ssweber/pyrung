@@ -494,7 +494,7 @@ def _append_rungs(
 
     The returned persistent vector is the new world value.  Mutating a plain
     list remains supported for the low-level public seam and older callers, but
-    PILOT itself always assigns the returned value into ``_World.rungs``.
+    PILOT itself always assigns the returned value into ``_World.overlay_rules``.
     """
     updated_list = list(rungs)
     seen = {_rung_identity(rung) for rung in updated_list}
@@ -522,7 +522,7 @@ def fork_with_rungs(
     """Fork *source* and rebuild its scoped steering overlay verbatim.
 
     Every production PILOT fork that may execute is created here, with the
-    owning ``_World.rungs`` supplied explicitly (the drive bootstrap supplies
+    owning ``_World.overlay_rules`` supplied explicitly (the drive bootstrap supplies
     an explicit empty set).  Public ``PLC.fork()`` does not implicitly inherit
     PILOT holds.  Runner-internal replay has a separate contract: a
     reconstructed fork copies its source runner's **current** synthesis plant
@@ -534,9 +534,9 @@ def fork_with_rungs(
     return fork
 
 
-# A zoom/coast gets a generous budget of its own — timer dwell is waiting, not
+# A bearing coast gets a generous budget of its own — timer dwell is waiting, not
 # searching, so it does not consume the pilot's iteration budget.
-_ZOOM_BUDGET = 10_000
+_COAST_BUDGET = 10_000
 
 
 def _coast_to_value(
@@ -544,7 +544,7 @@ def _coast_to_value(
     channel_tag: str | None,
     target_value: Any,
     *,
-    budget: int = _ZOOM_BUDGET,
+    budget: int = _COAST_BUDGET,
     session: Any = None,
 ) -> CoastReceipt:
     """Coast *plc* forward (folding) until ``channel_tag == target_value``.
@@ -552,9 +552,9 @@ def _coast_to_value(
     Arms two coast triggers — the target and a departure (the channel leaving its
     start value for anything but the target) — so the coast lands on the
     exact scan either fires and the receipt says which.  This is the single
-    mechanism for "hold heading and let scans pass": the live zoom
+    mechanism for "hold heading and let scans pass": the live bearing coast
     (``steer``) and the investigation replay (``investigate``) both coast
-    through timer dwell identically, so a replay reproduces the live zoom.
+    through timer dwell identically, so a replay reproduces the live coast.
 
     *conditional* holds animate during the coast exactly as in
     :func:`_coast_holding_state` — a confirmed oscillation corrective (a
@@ -572,7 +572,7 @@ def _coast_to_value(
 
     if channel_tag is None:
         return CoastReceipt(
-            kind=session.kind if session is not None else "zoom",
+            kind=session.kind if session is not None else "bearing_coast",
             start_scan=plc.state.scan_id,
             end_scan=plc.state.scan_id,
             stop_reason="skipped",
@@ -592,7 +592,7 @@ def _coast_to_value(
         ),
     ]
     if session is None:
-        session = CoastSession(plc, kind="zoom")
+        session = CoastSession(plc, kind="bearing_coast")
     assert session.plc is plc
     return session.seek(triggers, budget=budget)
 
@@ -603,7 +603,7 @@ def _coast_holding_state(
     target_value: Any,
     role_tags: tuple[str, ...],
     *,
-    budget: int = _ZOOM_BUDGET,
+    budget: int = _COAST_BUDGET,
     reached_fn: Callable[[Any], bool] | None = None,
     reached_condition: Any = None,
     session: Any = None,
@@ -640,7 +640,7 @@ def _coast_holding_state(
     # holds overlay (the rung form of the old reactive breakpoints); steady holds
     # are already rungs from ``fork_with_rungs``.  Both run every scan under the
     # session's fold dispatch — the single mechanism for "hold heading and let
-    # scans pass", identical for the live zoom and the investigation replay coast.
+    # scans pass", identical for the live bearing coast and investigation replay.
     if reached_fn is not None:
         # Relational target: the callable remains authoritative while the
         # equivalent Condition supplies exact fold reads and crossings.

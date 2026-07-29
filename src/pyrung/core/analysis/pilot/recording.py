@@ -264,7 +264,7 @@ def _build_plan_journal(
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
                         accelerators=display_accel,
-                        rungs=sc.control_rungs,
+                        rungs=sc.overlay_rules,
                     ),
                 )
             )
@@ -395,7 +395,7 @@ def _iteration_payload(
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
         "nogoods": ctx.compass.knowledge.nogood_pairs(frame.key),
-        "rungs": tuple(state.rungs),
+        "rungs": tuple(state.overlay_rules),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
         "steps": tuple(state.steps),
@@ -485,7 +485,7 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "tag": tag,
         "value": value,
         "pair": pair,
-        "influence_prescribed": policy.influence_prescribed,
+        "influence_prescribed": policy.learned_prescribed,
         "route_prescribed": policy.source is ActSource.ROUTE,
         "bearing_channel_tag": (policy.heading.channel_tag if policy.heading is not None else None),
         "bearing_channel_value": (
@@ -509,7 +509,7 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "tag": candidate.tag,
         "value": candidate.value,
         "pair": candidate.pair,
-        "influence_prescribed": candidate.influence_prescribed,
+        "influence_prescribed": candidate.learned_prescribed,
         "route_prescribed": candidate.route_prescribed,
         "bearing_channel_tag": candidate.bearing_channel_tag,
         "bearing_channel_value": candidate.bearing_channel_value,
@@ -577,8 +577,8 @@ def _diff_snapshots(
     return tuple(changes)
 
 
-def _zoom_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
-    """Render a ``zoom_accepted`` event payload."""
+def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
+    """Render the stable ``zoom_accepted`` event payload for a bearing coast."""
     attempt = trial.attempt
     pulse = attempt.pulse
     policy = attempt.bearing.act.policy
@@ -753,7 +753,7 @@ def _act_event(
             assert attempt is not None
             return PilotEvent("zoom_rejected", scan, {"gates": attempt.gate_events})
         assert trial is not None
-        return PilotEvent("zoom_accepted", scan, _zoom_accepted_payload(trial))
+        return PilotEvent("zoom_accepted", scan, _bearing_coast_accepted_payload(trial))
 
     assert kind == "batch" and isinstance(act, BatchPulse)
     if phase == "try":

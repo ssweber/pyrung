@@ -182,7 +182,7 @@ def test_conveyor_is_large_reachable():
 def test_conveyor_state_sorting_reachable():
     """SORTING is the committed state after the DETECTING dwell.  PILOT pulses
     EntrySensor (IDLE→DETECTING), then let-run coasts DetTimer to Done, which
-    advances State→SORTING — a command pulse handed off to a timer-dwell zoom."""
+    advances State→SORTING — a command pulse handed off to a timer-dwell bearing coast."""
     cv = _conveyor()
     target_value = 2  # SortState.SORTING
     path = pilot_how(_cv_plc(cv), cv.State == target_value, max_scans=500)
@@ -290,7 +290,7 @@ def _green():
 def test_traffic_light_yellow_reachable():
     """green→yellow is a pure timer dwell: GreenTimer completes on its own under
     the held state and ``copy("y", State)`` fires.  No steerable input — let-run
-    zoom coasts the accumulator to Done.  Exercises a Char-valued ``==`` target."""
+    bearing coast advances the accumulator to Done. Exercises a Char-valued ``==`` target."""
     tl, plc = _green()
     path = pilot_how(plc, tl.State == "y", max_scans=2000)
     assert path.reachable

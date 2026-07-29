@@ -33,7 +33,7 @@ from pyrung.core.analysis.pilot._ops import (
     fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
-from pyrung.core.analysis.pilot.detour import (
+from pyrung.core.analysis.pilot.departure import (
     DepartureClassification,
     DepartureDisposition,
     DepartureObservation,
@@ -95,7 +95,7 @@ _PENDING_DEPARTURE_SCAN_BUDGET = 2000
 class PendingDeparture:
     """Progress policy for one durable departure observation.
 
-    Carries detour's opening observation intact and adds only mutable policy
+    Carries departure's opening observation intact and adds only mutable policy
     anchors: the post-settlement progress mark, the stable rollback-checkpoint
     owner, an optional saved-progress owner, and a finite search-scan
     deadline.  The saved-progress owner is an irreversible recovery floor —
@@ -292,7 +292,7 @@ def _monitor_trend(
 
     # A coast that *ejected* — the macro-state left the value it was held at
     # and wandered into a side branch (Execute -> Holding/Aborting). Route
-    # zoom and terminal let-run use the same evidence and rollback mechanics.
+    # Bearing and terminal let-run coasts share evidence and rollback mechanics.
     # That branch's trace distance is misleadingly LOW (fewer open leaves than the
     # held state), so the ordinary ``trend < best_trend`` test below would
     # checkpoint the ejection as progress.  It is not progress: the watchdog that
@@ -454,7 +454,7 @@ def _handle_channel_departure(
             "to_value": execution.after_snap.get(chan),
         },
     )
-    # Classify BEFORE investigating (detour.py): program-owned motion may
+    # Classify BEFORE investigating (departure.py): program-owned motion may
     # preserve earned work and offer a clean forward route. Reverting
     # it would throw away the whole march, and investigation would honestly
     # confirm nothing. Affirmative clean-route evidence opens bounded pending
@@ -564,7 +564,7 @@ def _anchor_frame_receipt(
 ) -> int:
     """Capture the executable source world and its owned target objective."""
     key = (
-        _pilot_world_key(frame.snap, state.key_config, state.rungs)
+        _pilot_world_key(frame.snap, state.key_config, state.overlay_rules)
         if state.key_config is not None
         else frame.key
     )
@@ -671,7 +671,7 @@ def _adopt_settled_departure(departure: DepartureResult, state: _PilotState) -> 
     scan_before = state.work.state.scan_id
     # Rebuild the overlay from the canonical rung list before adopting the
     # settled fork as the working PLC.
-    _set_rungs(settled, state.rungs)
+    _set_rungs(settled, state.overlay_rules)
     state.work = settled
     state.dwell_scans += settled.state.scan_id - scan_before
     if state.steps:
@@ -943,14 +943,18 @@ def _install_confirmed_correction(
     correction_rung_ids = tuple(_rung_identity(rung) for rung in correction.rungs)
     if len(set(correction_rung_ids)) != len(correction_rung_ids):
         raise ValueError("a confirmed correction cannot contain duplicate rungs")
-    existing = {_rung_identity(rung) for rung in state.rungs}
+    existing = {_rung_identity(rung) for rung in state.overlay_rules}
     duplicate = tuple(rung for rung in correction.rungs if _rung_identity(rung) in existing)
     if duplicate:
         raise ValueError(
             "confirmed correction cannot claim already-owned rung(s): "
             f"{tuple((rung.dest, rung.value) for rung in duplicate)!r}"
         )
-    state.rungs = _append_rungs(state.work, list(correction.rungs), state.rungs)
+    state.overlay_rules = _append_rungs(
+        state.work,
+        list(correction.rungs),
+        state.overlay_rules,
+    )
     state.hold_log.append(
         _HoldLogEntry(
             scan=scan,
@@ -973,8 +977,8 @@ def _install_confirmed_correction(
     key_config = state.key_config
     banked: list[_Checkpoint] = []
     for checkpoint in state.checkpoints:
-        existing_ids = {_rung_identity(rung) for rung in checkpoint.world.rungs}
-        checkpoint_rungs = [*checkpoint.world.rungs]
+        existing_ids = {_rung_identity(rung) for rung in checkpoint.world.overlay_rules}
+        checkpoint_rungs = [*checkpoint.world.overlay_rules]
         checkpoint_rungs.extend(
             rung for rung in correction.rungs if _rung_identity(rung) not in existing_ids
         )
@@ -1007,10 +1011,10 @@ def _checkpoint_with_rungs(
     key_config: Any,
 ) -> _Checkpoint:
     """Return one checkpoint re-keyed around an exact executable overlay."""
-    if tuple(rungs) == tuple(checkpoint.world.rungs):
+    if tuple(rungs) == tuple(checkpoint.world.overlay_rules):
         return checkpoint
     work = fork_with_rungs(checkpoint.world.work, rungs)
-    world = checkpoint.world.set(work=work, rungs=pvector(rungs))
+    world = checkpoint.world.set(work=work, overlay_rules=pvector(rungs))
     key = (
         _pilot_world_key(dict(work.state.tags), key_config, rungs)
         if key_config is not None
@@ -1048,7 +1052,8 @@ def _contradicted_corrections(
         )
 
     effective_ids = {
-        _rung_identity(rung) for rung in _rung_execution_receipt(state.rungs, snapshot).effective
+        _rung_identity(rung)
+        for rung in _rung_execution_receipt(state.overlay_rules, snapshot).effective
     }
     contradicted: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
@@ -1109,7 +1114,7 @@ def _causally_harmful_corrections(
         return ()
 
     overlay = _rung_execution_receipt(
-        state.rungs,
+        state.overlay_rules,
         dict(witness.owner_snapshot or snapshot),
     )
     active_owner = {rung.dest: rung for rung in overlay.effective}
@@ -1159,14 +1164,18 @@ def _revoke_corrections(
             )
         )
 
-    remaining = [rung for rung in state.rungs if _rung_identity(rung) not in revoked_rung_ids]
-    state.rungs = remaining
+    remaining = [
+        rung for rung in state.overlay_rules if _rung_identity(rung) not in revoked_rung_ids
+    ]
+    state.overlay_rules = remaining
     _set_rungs(state.work, remaining)
     key_config = state.key_config
     cleaned_checkpoints: list[_Checkpoint] = []
     for saved in state.checkpoints:
         saved_rungs = [
-            rung for rung in saved.world.rungs if _rung_identity(rung) not in revoked_rung_ids
+            rung
+            for rung in saved.world.overlay_rules
+            if _rung_identity(rung) not in revoked_rung_ids
         ]
         cleaned_checkpoints.append(_checkpoint_with_rungs(saved, saved_rungs, key_config))
     state.checkpoints = cleaned_checkpoints
@@ -1287,7 +1296,7 @@ def _investigate_and_revert(
         replay = build_replay_fn(
             cp_fork,
             cp_trend,
-            tuple(state.rungs),
+            tuple(state.overlay_rules),
             replay_steps,
             ctx=ctx,
             incident=ReplayIncident(
@@ -1330,7 +1339,7 @@ def _investigate_and_revert(
             ctx,
             replay,
             needed=needed,
-            installed_rungs=tuple(state.rungs),
+            installed_rungs=tuple(state.overlay_rules),
             correction_rungs=tuple(
                 rung
                 for receipt in state.correction_receipts
@@ -1469,7 +1478,7 @@ def _investigate_and_revert(
                 "to_trend": cp_trend,
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),
-                "rungs": tuple(state.rungs),
+                "rungs": tuple(state.overlay_rules),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
                 "revoked_corrections": revoked_ids,

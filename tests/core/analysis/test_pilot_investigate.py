@@ -907,11 +907,11 @@ class TestBoundedReplay:
 
 
 # ---------------------------------------------------------------------------
-# Zoom incident — channel register reaches its requested value
+# Bearing-coast incident — channel register reaches its requested value
 # ---------------------------------------------------------------------------
 
 
-def _zoom_transition_program() -> tuple[Program, Timer, Any]:
+def _bearing_coast_transition_program() -> tuple[Program, Timer, Any]:
     """``State`` advances 3 -> 6 after a watchdog timer, but ejects to 8 (Aborting)
     if the door (``Guard``) is open at completion.  Holding the door closed lets
     the coast reach the requested value (6); leaving it open ejects (8).
@@ -933,8 +933,8 @@ def _zoom_transition_program() -> tuple[Program, Timer, Any]:
     return prog, Tmr, State
 
 
-class TestZoomReplay:
-    """build_replay_fn for a zoom incident.
+class TestBearingCoastReplay:
+    """build_replay_fn for a bearing-coast incident.
 
     Judged by the channel register reaching its requested value over an
     *unbounded*, ejection-guarded coast — never by the bounded bearing-held test
@@ -943,17 +943,25 @@ class TestZoomReplay:
     """
 
     def _setup(self):
-        prog, _tmr, _state = _zoom_transition_program()
+        prog, _tmr, _state = _bearing_coast_transition_program()
         plc = PLC(prog, dt=0.010)
         plc.patch({"State": 3})
         plc.step()
         assert plc.state.tags["State"] == 3
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "State", 6)
-        # A recorded zoom step: the coast re-arms State -> 6 under the ejection
+        # A recorded bearing coast re-arms State -> 6 under the ejection
         # guard, unbounded — the requested value is a full coast away, so no
         # departure-window bound may cut it short.
-        steps = [ReplayStep(inputs=(), scans=0, kind="zoom", channel_tag="State", channel_target=6)]
+        steps = [
+            ReplayStep(
+                inputs=(),
+                scans=0,
+                kind="bearing_coast",
+                channel_tag="State",
+                channel_target=6,
+            )
+        ]
         return cp, steps, ctx
 
     def _build(self, cp, steps, ctx):
@@ -966,7 +974,7 @@ class TestZoomReplay:
             incident=ReplayIncident(channel_tag="State", channel_target=6),
         )
 
-    def test_zoom_accepts_hold_that_reaches_corridor_target(self):
+    def test_bearing_coast_accepts_hold_that_reaches_corridor_target(self):
         cp, steps, ctx = self._setup()
         replay = self._build(cp, steps, ctx)
         outcome = replay((("Guard", True),))  # close the door
@@ -974,7 +982,7 @@ class TestZoomReplay:
         assert outcome.snapshot["State"] == 6
         assert "State -> 6" in outcome.reason
 
-    def test_zoom_rejects_hold_that_ejects(self):
+    def test_bearing_coast_rejects_hold_that_ejects(self):
         cp, steps, ctx = self._setup()
         replay = self._build(cp, steps, ctx)
         outcome = replay(())  # door rests open -> ejects to 8

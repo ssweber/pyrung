@@ -91,10 +91,10 @@ class ActSource(StrEnum):
 
     ROUTE = "route"
     TRACE = "trace"
-    INFLUENCE = "influence"
+    LEARNED_ACTION = "influence"
     AWAITED_ACTION = "awaited_action"
     PROGRAM = "program"
-    LEARNED = "learned"
+    LEARNED_BATCH = "learned"
     WIDENING = "widening"
     TERMINAL = "terminal"
 
@@ -145,7 +145,7 @@ class ActPolicy:
 
     @property
     def observe_label(self) -> str:
-        if self.source is ActSource.LEARNED:
+        if self.source is ActSource.LEARNED_BATCH:
             return "batch"
         if self.source is ActSource.WIDENING:
             return "width"
@@ -160,8 +160,8 @@ class ActPolicy:
         return f"{self.observe_label}-target" if self.observe_label != "accept" else "target"
 
     @property
-    def influence_prescribed(self) -> bool:
-        return self.source in {ActSource.INFLUENCE, ActSource.LEARNED}
+    def learned_prescribed(self) -> bool:
+        return self.source in {ActSource.LEARNED_ACTION, ActSource.LEARNED_BATCH}
 
     @property
     def route_prescribed(self) -> bool:
@@ -173,7 +173,7 @@ class ActPolicy:
 
     @property
     def chase_regression_causes(self) -> bool:
-        return self.source not in {ActSource.LEARNED, ActSource.WIDENING}
+        return self.source not in {ActSource.LEARNED_BATCH, ActSource.WIDENING}
 
 
 @dataclass(frozen=True)
@@ -224,7 +224,7 @@ NavigationAct = Pulse | BatchPulse | Coast | Dwell
 
 
 @dataclass(frozen=True)
-class OrientationTrace:
+class OrientationRead:
     """Named current-world readings and diagnostics for one orientation.
 
     ``world`` carries the fully assembled frame consumed by execution.
@@ -251,7 +251,7 @@ class Bearing:
     objective: BearingObjective
     prerequisites: tuple[PilotRung, ...] = ()
     rationale: str = ""
-    trace: OrientationTrace | None = None
+    orientation: OrientationRead | None = None
 
 
 @dataclass(frozen=True)
@@ -271,7 +271,7 @@ class NeedProbe:
     request: ProbeRequest
     rationale: str
     provenance: tuple[str, ...] = ()
-    trace: OrientationTrace | None = None
+    orientation: OrientationRead | None = None
 
 
 @dataclass(frozen=True)
@@ -284,7 +284,7 @@ class Stuck:
     exclusions: tuple[Any, ...] = ()
     evidence: tuple[Any, ...] = ()
     rationale: str = ""
-    trace: OrientationTrace | None = None
+    orientation: OrientationRead | None = None
 
 
 OrientationResult = Bearing | NeedProbe | Stuck

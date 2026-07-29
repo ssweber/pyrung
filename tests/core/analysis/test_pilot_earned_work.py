@@ -22,7 +22,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, build_earned_work
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
-from tests.core.analysis.test_pilot_detour_progress import _knock_three_times_program
+from tests.core.analysis.test_pilot_departure_progress import _knock_three_times_program
 
 
 def _earned_work_for(logic, plc, target_tag, channel_tags=frozenset()):

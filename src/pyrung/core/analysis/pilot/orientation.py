@@ -21,8 +21,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     NavigationConstraints,
     NeedProbe,
+    OrientationRead,
     OrientationResult,
-    OrientationTrace,
     OrientationWorld,
     ProbeRequest,
     Pulse,
@@ -150,7 +150,7 @@ def _read_route_trees(
     key_config = world.state.key_config
     exclusions = (
         ctx.compass.knowledge.nogood_identities(
-            _pilot_world_key(world.snapshot, key_config, world.state.rungs)
+            _pilot_world_key(world.snapshot, key_config, world.state.overlay_rules)
         )
         if key_config is not None
         else frozenset()
@@ -204,7 +204,7 @@ def _assemble_world(
         context=ctx,
         root_route=selected_route,
     )
-    key = _pilot_world_key(world.snapshot, key_config, state.rungs)
+    key = _pilot_world_key(world.snapshot, key_config, state.overlay_rules)
     details = tuple(
         TraceAction(
             tag=action.tag,
@@ -293,7 +293,7 @@ def _probe_or_stuck(
     frontier = _frontier(world, candidates)
     count = compass.knowledge.probe_count(world.world_key)
     exclusions = tuple(compass.knowledge.nogood_identities(world.world_key))
-    trace = OrientationTrace(
+    orientation_read = OrientationRead(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
@@ -309,7 +309,7 @@ def _probe_or_stuck(
             request=request,
             rationale=f"static navigation evidence is unresolved: {reason}",
             provenance=("trace", "static-path", "learned-path"),
-            trace=trace,
+            orientation=orientation_read,
         )
     evidence = (f"probe budget {count}",)
     rationale = f"no admissible bearing remains after {count} probe round(s)"
@@ -320,7 +320,7 @@ def _probe_or_stuck(
         exclusions=exclusions,
         evidence=evidence,
         rationale=rationale,
-        trace=trace,
+        orientation=orientation_read,
     )
 
 
@@ -338,7 +338,7 @@ def _bearing(
     unchanged inside :class:`BearingObjective` through execution and
     verification; recovery consumes that receipt.
     """
-    trace = OrientationTrace(
+    orientation_read = OrientationRead(
         world_key=world.world_key,
         world=world,
         candidates=candidates,
@@ -353,7 +353,7 @@ def _bearing(
         objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
         prerequisites=candidates.prerequisites.rungs,
         rationale=rationale,
-        trace=trace,
+        orientation=orientation_read,
     )
 
 
@@ -451,7 +451,7 @@ def _orient_read(
         actions = candidates.learned_batch.actions
         act = BatchPulse(
             ActPolicy(
-                source=ActSource.LEARNED,
+                source=ActSource.LEARNED_BATCH,
                 action_pairs=actions,
                 applied=actions,
             )
@@ -479,7 +479,7 @@ def _orient_read(
                 option.awaited_action_note
                 or getattr(option, "program_note", None)
                 or ("static route edge" if option.source is ActSource.ROUTE else "")
-                or ("learned transition" if option.source is ActSource.INFLUENCE else "")
+                or ("learned transition" if option.source is ActSource.LEARNED_ACTION else "")
                 or "ranked trace action"
             ),
         )

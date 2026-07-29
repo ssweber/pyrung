@@ -588,7 +588,7 @@ def _step_context(
     is_coast = policy.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()
-    control_rungs: tuple[Any, ...] = ()
+    overlay_rules: tuple[Any, ...] = ()
 
     if is_coast:
         seen: set[str] = set()
@@ -603,13 +603,13 @@ def _step_context(
                 seen.add(n.tag)
                 frontier.append(n.tag)
         frontier_tags = tuple(frontier)
-        control_rungs = tuple(state.rungs)
+        overlay_rules = tuple(state.overlay_rules)
 
     return _StepContext(
         policy=policy,
         execution=trial.execution,
         frontier_tags=frontier_tags,
-        control_rungs=control_rungs,
+        overlay_rules=overlay_rules,
     )
 
 
@@ -642,7 +642,11 @@ def _commit_and_monitor(
             trial,
             verification=replace(
                 verified,
-                new_key=_pilot_world_key(dict(execution.after_snap), state.key_config, state.rungs),
+                new_key=_pilot_world_key(
+                    dict(execution.after_snap),
+                    state.key_config,
+                    state.overlay_rules,
+                ),
             ),
         )
     _commit_trial(trial, frame, state, ctx)
@@ -679,11 +683,11 @@ def _commit_trial(
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
     # policy's narrow primary candidate. Replay and live apply must reproduce every input
     # that drove the transition.  ``applied`` is the full set and is empty exactly
-    # for zoom/let-run, where an empty action correctly means "coast, no input".
+    # for bearing/let-run coasts, where an empty action means "coast, no input".
     # A terminal let-run animates conditional holds during its coast; record them
     # on the step so the path is self-describing.  ``rungs`` is the live
     # round-by-round accumulator — snapshot the conditional ones active now.  A
-    # pulse/zoom step animates nothing, so it carries no reactive holds.
+    # pulse/bearing-coast step animates nothing, so it carries no reactive holds.
     #
     # The *steady* holds active during the coast (e.g. the Enable that drives a
     # harness sensor's ramp) are the input that makes the coast advance — fold
@@ -842,7 +846,7 @@ def _pilot_loop_events(
             work=plc,
             committed_acts=pvector([]),
             best_trend=None,
-            rungs=pvector([]),
+            overlay_rules=pvector([]),
             dwell_scans=0,
         ),
         key_config=ctx.key_config,
@@ -934,11 +938,11 @@ def _pilot_loop_events(
         target = ctx.target
         constraints = NavigationConstraints(avoid_predicate=ctx.avoid_pred)
         result = ctx.compass.orient(raw_world, target, constraints)
-        trace = result.trace
-        if trace is None:
+        orientation_read = result.orientation
+        if orientation_read is None:
             raise RuntimeError("Compass orientation omitted its current-world reading")
-        orientation_world = trace.world
-        candidates = trace.candidates
+        orientation_world = orientation_read.world
+        candidates = orientation_read.candidates
         frame = orientation_world.frame
         last_frame = frame
         if state.key_config is None:

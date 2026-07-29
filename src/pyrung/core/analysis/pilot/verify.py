@@ -199,7 +199,7 @@ def _gate_spin(
             list(action_pairs),
             cfg=key_config,
             steerable=ctx.steerable,
-            rungs=state.rungs,
+            rungs=state.overlay_rules,
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
             scan_budget=state.remaining_search_scans(ctx.max_scans),
@@ -209,7 +209,7 @@ def _gate_spin(
         )
         if result.retry_fork is not None and result.correction is not None:
             retry_snap = dict(result.retry_fork.state.tags)
-            retry_rungs = (*state.rungs, *result.correction.rungs)
+            retry_rungs = (*state.overlay_rules, *result.correction.rungs)
             if ctx.avoid_pred is not None:
                 retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
                 for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):
@@ -337,9 +337,9 @@ def _gate_dead_end(
     proposal model that planning may use: continued physical motion needs
     executed evidence or a live pending effect on the exact trial fork.
     """
-    # A zoom that drove its channel register to the target value (e.g.
+    # A bearing coast that drove its channel register to the target value (e.g.
     # S_StateCurrent 3->6) is a confirmed advance, even if the global target's
-    # onward leg is another dwell that trace_back can't surface.  And a zoom
+    # onward leg is another dwell that trace_back can't surface. A bearing coast
     # whose channel register *moved away* on its own (an ejection,
     # S_StateCurrent 6->8) is an AMBIENT_DRIFT the investigation must own — not a
     # stall.  Either way the trial must reach outcome classification, not be
@@ -674,7 +674,7 @@ def verify_gates(
         state,
         pending=pending,
         earned_work_receipt=earned_work_receipt,
-        influence_prescribed=policy.influence_prescribed,
+        influence_prescribed=policy.learned_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -689,7 +689,7 @@ def verify_gates(
         ctx,
         target=bearing.objective.target,
         earned_work_receipt=earned_work_receipt,
-        influence_prescribed=policy.influence_prescribed,
+        influence_prescribed=policy.learned_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,

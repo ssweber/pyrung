@@ -696,7 +696,7 @@ def departure_trigger(
     """Any held tag leaves its value — the ejection guard as an armed trigger.
 
     ``excluding`` maps a tag to a value that does NOT count as a departure
-    (the zoom's own target: reaching it is arrival, not ejection).
+    (the bearing coast's own target: reaching it is arrival, not ejection).
     """
     excluding = excluding or {}
 

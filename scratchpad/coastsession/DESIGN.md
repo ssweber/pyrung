@@ -35,7 +35,7 @@ From the census (all file:line current on dev):
 
 | Collapses into the session | Count | Today |
 |---|---|---|
-| Literal coast/settle loops → one seek primitive | 8 | `_settle_departure`, `_observe_stable_channel_landing`, `_coast_to_value`, `_coast_holding_state`, `_letrun_zoom`, `_try_terminal_letrun`, `_try_terminal_dwell`, `measure_scans` |
+| Literal coast/settle loops → one seek primitive | 8 | `_settle_departure`, `_observe_stable_channel_landing`, `_coast_to_value`, `_coast_holding_state`, `_coast_to_bearing`, `_try_terminal_letrun`, `_try_terminal_dwell`, `measure_scans` |
 | "Channel departed/ejected" detectors → one departure bump | 5 | `_ops.py:237,301`, `steer.py:810`, `progress.py:113`, `investigate.py:794` |
 | "It settled" detectors → one quiescence protocol | 3 | detour 100-stable, investigate 100-stable, steer cone fixpoint |
 | "Did we arrive" closures → one target bump | ~10 | `_reached` closures across `_ops`/steer/investigate/progress/pilot |
@@ -147,7 +147,7 @@ Fields, with the consumer that demanded them:
 |---|---|
 | `session_id` + `coast_kind` (zoom / letrun / settle / replay / measure / dwell) | recorded onto journey steps — kills the positional `is_eject_coast` inference (`investigate.py:333`), the documented false-confirm hazard if step shape ever changes |
 | `start_scan`, `end_scan`, real+virtual scans elapsed | every settle-count consumer; budget accounting |
-| **snapshot references** (start fork/world, settled fork/world) | GAP 6: no-op screens and `correct_enablers` read arbitrary guard/coil tags beyond the bump set (`corrections.py:217,416`); the timeline alone is insufficient. GAP 8: carrying the settled fork deletes `classify_departure`'s second settle coast (`detour.py:103-124`) |
+| **snapshot references** (start fork/world, settled fork/world) | GAP 6: no-op screens and `correct_enablers` read arbitrary guard/coil tags beyond the bump set (`corrections.py:217,416`); the timeline alone is insufficient. GAP 8: carrying the settled fork deletes `classify_departure`'s second settle coast (`departure.py:103-124`) |
 | **timeline**: ordered `BumpEvent`s, per-transition, same-scan groups preserved | GAP 5: `changed_tags` deliberately captures fire-then-reset pulses (`investigate.py:781-783`); a net before≠after timeline loses the complement-reset oscillation `correct_enablers` hunts. Also V1's excursion (two bumps in one window) reads straight off it |
 | `stop_reason` ∈ {reached, departed, avoid_veto, quiescent, timeout, gauge_advance, gauge_loss, budget_clipped} + simultaneous-terminal set | the six swallowed timeouts; D2's timeout-vs-settled distinction; I3's first-of-several |
 | **`state_key_before` / `state_key_after` + `key_dims_moved`** | GAP 1: SPIN/CYCLE/seen_keys/nogoods all pivot on `_pilot_world_key` (`_ops.py:392-411,469-478`); the key is threshold-masked and acc-masked, so a bump timeline cannot substitute for key equality — the key must be a recorded field, and `key_dims_moved` names which dimension a bump crossed |
@@ -245,7 +245,7 @@ names CoastSession as its step.
 
 ## Part 6 — persistence and revert (the landmine)
 
-`load_world` restores only `state.rungs` via `_set_rungs` (`types.py:476-489`); replay
+`load_world` restores only `state.overlay_rules` via `_set_rungs` (`types.py:476-489`); replay
 fidelity exists *because* holds re-materialize as synthesis rungs on every fork
 (`harness.fork_onto`, `runner.py:1364-1368`). Therefore, by construction:
 

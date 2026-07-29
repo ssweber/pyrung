@@ -666,7 +666,7 @@ def test_pending_departure_keeps_the_ordinary_pilot_loop_active() -> None:
     # Focus the gate on the program departure. Starting from Idle lets the
     # candidate settlement fast-forward the phase timer and land directly in
     # HELD, so no Execute checkpoint, earned Door=True hold, or detour loan ever
-    # exists.  At Execute the first zoom earns that hold before the program's
+    # exists. At Execute the first bearing coast earns that hold before the program's
     # own Hold ejects the coast.
     plc.patch({tags["Door"].name: True, tags["State"].name: tags["Execute"]})
     plc.step()

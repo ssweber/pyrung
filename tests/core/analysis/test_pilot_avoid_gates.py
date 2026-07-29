@@ -295,7 +295,7 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     )
     state = SimpleNamespace(
         work=work,
-        rungs=(),
+        overlay_rules=(),
         key_config=cfg,
         watch_tags=[],
         remaining_search_scans=lambda max_scans, scan_id=None: (

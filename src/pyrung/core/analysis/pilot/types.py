@@ -199,7 +199,7 @@ class _World(PRecord):
 
     ``knowledge commits, the world reverts``: every field here rolls back to a
     checkpoint on regression, and every field *not* here (compass, nogoods,
-    journey, …) survives.  Pilot rungs belong here: they change what the next
+    journey, …) survives. Overlay rules belong here: they change what the next
     scan means, so the same PLC tags under a different rung overlay are a
     different world.  A ``pyrsistent`` PRecord so the value is
     persistent: the ``committed_acts`` PVector is immutable, so once a checkpoint
@@ -215,9 +215,9 @@ class _World(PRecord):
     work = _precord_field()
     committed_acts = _precord_field()
     best_trend = _precord_field()
-    rungs = _precord_field()
-    # Committed scan-ids spent *waiting* — the spans of accepted zoom / let-run
-    # coasts.  Timer dwell is waiting, not searching (see ``_ops._ZOOM_BUDGET``),
+    overlay_rules = _precord_field()
+    # Committed scan-ids spent *waiting* — accepted bearing-coast / let-run spans.
+    # Timer dwell is waiting, not searching (see ``_ops._COAST_BUDGET``),
     # so invocation-relative search scans subtract this credit. An accepted
     # coast that rides a 39k-scan dwell must not bankrupt the search. Lives in
     # the world so a revert rewinds the credit together with the scans it
@@ -339,7 +339,7 @@ class DeviationIncident:
     # before/after endpoint difference. Consumers filter it locally.
     changed_tags: tuple[str, ...]
     departures: tuple[BearingDeparture, ...]
-    # The macro-state register whose departure IS the incident (the zoom /
+    # The macro-state register whose departure IS the incident (the bearing /
     # terminal-letrun channel tag) — other departures downstream of it are
     # collateral.  Hypothesis ranking keys causal primacy off its cause chain.
     channel_tag: str | None = None
@@ -465,14 +465,14 @@ class _StepContext:
     policy: ActPolicy
     execution: _ExecutionEvidence
     frontier_tags: tuple[str, ...] = ()
-    # Exact synthesis rules present during this step. Kept as ``Any`` here to
+    # Exact overlay rules present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
-    control_rungs: tuple[Any, ...] = ()
+    overlay_rules: tuple[Any, ...] = ()
 
     @property
     def steady_holds(self) -> tuple[str, ...]:
         """Concise view derived from the exact executable rung evidence."""
-        return tuple(dict.fromkeys(rung.dest for rung in self.control_rungs))
+        return tuple(dict.fromkeys(rung.dest for rung in self.overlay_rules))
 
 
 @dataclass(frozen=True)
@@ -654,12 +654,12 @@ class _PilotState:
         self.world = self.world.set(best_trend=value)
 
     @property
-    def rungs(self) -> PVector[Any]:
-        return self.world.rungs
+    def overlay_rules(self) -> PVector[Any]:
+        return self.world.overlay_rules
 
-    @rungs.setter
-    def rungs(self, value: Any) -> None:
-        self.world = self.world.set(rungs=pvector(value))
+    @overlay_rules.setter
+    def overlay_rules(self, value: Any) -> None:
+        self.world = self.world.set(overlay_rules=pvector(value))
 
     @property
     def dwell_scans(self) -> int:
@@ -695,13 +695,13 @@ class _PilotState:
         """
         from pyrung.core.analysis.pilot._ops import fork_with_rungs
 
-        return self.world.set(work=fork_with_rungs(self.world.work, self.rungs))
+        return self.world.set(work=fork_with_rungs(self.world.work, self.overlay_rules))
 
     def load_world(self, world: _World) -> None:
         """Revert: the checkpoint's world *is* the answer.
 
         Re-fork ``work`` so the checkpoint stays reusable for a repeat revert;
-        ``committed_acts`` / ``best_trend`` / ``rungs`` restore by assignment.
+        ``committed_acts`` / ``best_trend`` / ``overlay_rules`` restore by assignment.
         Rebuild the overlay explicitly on the fresh fork so the runner and the
         persistent world cannot disagree. No scan-cutoff reconstruction — the
         pointer already holds exactly the state that existed when the checkpoint
@@ -709,7 +709,7 @@ class _PilotState:
         """
         from pyrung.core.analysis.pilot._ops import fork_with_rungs
 
-        self.world = world.set(work=fork_with_rungs(world.work, world.rungs))
+        self.world = world.set(work=fork_with_rungs(world.work, world.overlay_rules))
 
 
 @dataclass(frozen=True)
@@ -751,7 +751,7 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
-    # The CoastReceipt of the trial's coast (zoom / terminal let-run), when the
+    # The CoastReceipt of the trial's coast (bearing / terminal let-run), when the
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
     coast_receipt: CoastReceipt | None = None

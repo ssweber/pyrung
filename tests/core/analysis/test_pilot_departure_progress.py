@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     NavigationCatalog,
 )
-from pyrung.core.analysis.pilot.detour import (
+from pyrung.core.analysis.pilot.departure import (
     _awaited_action_allowed,
     _continuation_safety,
 )
@@ -160,7 +160,7 @@ def _charted_edge(
     return graph, replace(edge, co_actions=co_actions)
 
 
-def _detour_edge_allowed(
+def _departure_edge_allowed(
     edge,
     compass: Compass,
     *,
@@ -184,7 +184,7 @@ def _detour_edge_allowed(
     ).allowed
 
 
-def test_detour_excludes_settled_world_pair_and_exact_pulse_nogoods() -> None:
+def test_departure_excludes_settled_world_pair_and_exact_pulse_nogoods() -> None:
     primary = ("Start", True)
     gate_a = ("Gate", True)
     gate_b = ("OtherGate", True)
@@ -194,21 +194,21 @@ def test_detour_excludes_settled_world_pair_and_exact_pulse_nogoods() -> None:
     compass = Compass(NavigationCatalog(graphs=(graph,)))
 
     pair_rejected, _ = compass.apply((ActionNogoodObservation(("settled",), ("pair", primary)),))
-    assert not _detour_edge_allowed(edge_a, pair_rejected)
+    assert not _departure_edge_allowed(edge_a, pair_rejected)
 
     exact_rejected, _ = compass.apply(
         (ActionNogoodObservation(("settled",), pulse_identity((primary, gate_a))),)
     )
-    assert not _detour_edge_allowed(edge_a, exact_rejected)
-    assert _detour_edge_allowed(edge_b, exact_rejected)
+    assert not _departure_edge_allowed(edge_a, exact_rejected)
+    assert _departure_edge_allowed(edge_b, exact_rejected)
 
     other_world_rejected, _ = compass.apply(
         (ActionNogoodObservation(("other-world",), pulse_identity((primary, gate_a))),)
     )
-    assert _detour_edge_allowed(edge_a, other_world_rejected)
+    assert _departure_edge_allowed(edge_a, other_world_rejected)
 
 
-def test_detour_excludes_settled_world_wait_nogood() -> None:
+def test_departure_excludes_settled_world_wait_nogood() -> None:
     graph, edge = _charted_edge(action=None)
     compass, _ = Compass(NavigationCatalog(graphs=(graph,))).apply(
         (
@@ -219,10 +219,10 @@ def test_detour_excludes_settled_world_wait_nogood() -> None:
         )
     )
 
-    assert not _detour_edge_allowed(edge, compass)
+    assert not _departure_edge_allowed(edge, compass)
 
 
-def test_detour_awaited_action_uses_the_same_settled_world_pair_scope() -> None:
+def test_departure_awaited_action_uses_the_same_settled_world_pair_scope() -> None:
     action = ("Start", True)
     compass, _ = Compass().apply(
         (ActionNogoodObservation(("settled",), pulse_identity((action,))),)
@@ -242,28 +242,28 @@ def test_detour_awaited_action_uses_the_same_settled_world_pair_scope() -> None:
     )
 
 
-def test_detour_checks_required_co_actions_and_recovery_only_exclusions() -> None:
+def test_departure_checks_required_co_actions_and_recovery_only_exclusions() -> None:
     primary = ("Start", True)
     gate = ("Gate", True)
     graph, edge = _charted_edge(action=primary, co_actions=(gate,))
     compass = Compass(NavigationCatalog(graphs=(graph,)))
 
-    assert not _detour_edge_allowed(
+    assert not _departure_edge_allowed(
         edge,
         compass,
         blocked_actions=frozenset({gate}),
     )
-    assert not _detour_edge_allowed(
+    assert not _departure_edge_allowed(
         edge,
         compass,
         avoid_pred=lambda snap: snap.get("Gate") is True,
     )
-    assert not _detour_edge_allowed(
+    assert not _departure_edge_allowed(
         edge,
         compass,
         progress_erasing_values=frozenset({2}),
     )
-    assert not _detour_edge_allowed(
+    assert not _departure_edge_allowed(
         edge,
         compass,
         completed_actions={("Start", True, 0)},

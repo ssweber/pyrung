@@ -100,7 +100,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         raw_trace_actions=actions,
         raw_trace_action_details=details,
     )
-    pilot_state = SimpleNamespace(work=plc, rungs=rungs)
+    pilot_state = SimpleNamespace(work=plc, overlay_rules=rungs)
     ctx = SimpleNamespace(
         compass=Compass(),
         edge_tags=compute_edge_tags(pdg, logic),

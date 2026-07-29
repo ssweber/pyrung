@@ -16,7 +16,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot._ops import (
-    _ZOOM_BUDGET,
+    _COAST_BUDGET,
     PilotRung,
     _append_rungs,
     _avoid_violations,
@@ -77,11 +77,15 @@ class StaleBearingError(RuntimeError):
 
 def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, ...]) -> None:
     """Install only prerequisite rungs that do not already have an owner."""
-    existing = {_rung_identity(rung) for rung in state.rungs}
+    existing = {_rung_identity(rung) for rung in state.overlay_rules}
     new_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
     if not new_rungs:
         return
-    state.rungs = _append_rungs(state.work, list(new_rungs), state.rungs)
+    state.overlay_rules = _append_rungs(
+        state.work,
+        list(new_rungs),
+        state.overlay_rules,
+    )
     state.hold_log.append(
         _HoldLogEntry(
             scan=state.work.state.scan_id,
@@ -167,7 +171,7 @@ def _apply_actions(
     key_config = state.key_config
     assert key_config is not None
 
-    fork = fork_with_rungs(state.work, state.rungs)
+    fork = fork_with_rungs(state.work, state.overlay_rules)
     scan_before = fork.state.scan_id
     session = CoastSession(fork, kind="pulse")
     session.arm_avoid(ctx.avoid_pred)
@@ -203,7 +207,7 @@ def _apply_actions(
         )
 
     post_pulse_snap = dict(fork.state.tags)
-    post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.rungs)
+    post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.overlay_rules)
     delayed_receipts: list[CoastReceipt] = []
     if not _reached(post_pulse_snap):
         delayed_receipts = _settle_delayed_effects(
@@ -228,7 +232,7 @@ def _apply_actions(
         post_pulse_snap=post_pulse_snap,
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
-        key=_pilot_world_key(fork_snap, key_config, state.rungs),
+        key=_pilot_world_key(fork_snap, key_config, state.overlay_rules),
         coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
         timeline=session.events,
     )
@@ -375,7 +379,7 @@ def _try_action_batch(
                 trial.action_snap,
                 ctx,
                 contradict_no_change=True,
-                world_key=_pilot_world_key(frame.snap, key_config, state.rungs),
+                world_key=_pilot_world_key(frame.snap, key_config, state.overlay_rules),
                 applied=policy.applied,
                 fork=trial.fork,
                 scan=trial.action_scan,
@@ -391,7 +395,7 @@ def _try_action_batch(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
-                world_key=_pilot_world_key(wait_before, key_config, state.rungs),
+                world_key=_pilot_world_key(wait_before, key_config, state.overlay_rules),
             )
         )
         wait_before = wait_after
@@ -420,7 +424,11 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
     key_config = state.key_config
     if key_config is None:
         raise StaleBearingError("cannot execute a bearing before the world key is configured")
-    live_key = _pilot_world_key(dict(state.work.state.tags), key_config, state.rungs)
+    live_key = _pilot_world_key(
+        dict(state.work.state.tags),
+        key_config,
+        state.overlay_rules,
+    )
     if live_key != bearing.world_key:
         raise StaleBearingError(
             f"bearing world {bearing.world_key!r} is stale; current world is {live_key!r}"
@@ -447,7 +455,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         )
     if isinstance(act, Coast):
         if act.mode == "bearing":
-            return _try_zoom(
+            return _try_bearing_coast(
                 bearing,
                 frame,
                 state,
@@ -460,20 +468,20 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
 
 
 # ---------------------------------------------------------------------------
-# Zoom — coast past timer/step-counter plateaus
+# Bearing coast — cross timer/step-counter plateaus
 # ---------------------------------------------------------------------------
 
 
-def _try_zoom(
+def _try_bearing_coast(
     bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> _AttemptResult:
-    """Let-run zoom through the verify pipeline — same shape as _try_candidate.
+    """Run a bearing coast through the verify pipeline.
 
-    Forks, zooms past timer/step-counter plateaus, then runs the shared
-    verify gates.  The outcome classifier sees zoom results the same way it
+    Forks, coasts past timer/step-counter plateaus, then runs the shared
+    verify gates. The outcome classifier sees coast results the same way it
     sees command results: SPIN if nothing moved, CONFIRMED if the channel
     register transitioned forward, AMBIENT_DRIFT if the program ejected.
 
@@ -490,17 +498,17 @@ def _try_zoom(
     target_value = heading.target_value if heading is not None else None
     boundary = heading.boundary if heading is not None else None
     route_channel_tag = route.channel_tag if route is not None else None
-    fork = fork_with_rungs(state.work, state.rungs)
+    fork = fork_with_rungs(state.work, state.overlay_rules)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_rungs installs
     # only the steady half.
-    session = CoastSession(fork, kind="zoom")
+    session = CoastSession(fork, kind="bearing_coast")
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
-    dwell, zoom_receipt = _letrun_zoom(
+    dwell, bearing_coast_receipt = _coast_to_bearing(
         fork,
         channel_tag,
         target_value,
@@ -513,7 +521,7 @@ def _try_zoom(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
+    key_after = _pilot_world_key(snap_after, key_config, state.overlay_rules)
 
     observations: list[CompassObservation] = []
     wait_before = snap_before
@@ -526,13 +534,15 @@ def _try_zoom(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
-                world_key=_pilot_world_key(wait_before, key_config, state.rungs),
+                world_key=_pilot_world_key(wait_before, key_config, state.overlay_rules),
             )
         )
         wait_before = wait_after
 
     departed_route = (
-        zoom_receipt is not None and zoom_receipt.stop_reason == "departed" and route is not None
+        bearing_coast_receipt is not None
+        and bearing_coast_receipt.stop_reason == "departed"
+        and route is not None
     )
     verify_channel = channel_tag
     verify_target = target_value
@@ -550,7 +560,7 @@ def _try_zoom(
         post_pulse_key=frame.key,
         snap=snap_after,
         key=key_after,
-        coast_receipt=zoom_receipt,
+        coast_receipt=bearing_coast_receipt,
         timeline=session.events,
         channel_motion=ChannelMotion(
             verify_channel,
@@ -576,7 +586,7 @@ def _try_terminal_letrun(
 ) -> _AttemptResult:
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
-    Reached here when no route zoom, no command candidate, and no widening made
+    Reached here when no route bearing coast, command candidate, or widening made
     progress, yet the watched tags are still live (things pending). The only move left is
     to hold the current macro-state and coast toward the global target, letting
     the program's self-advancing sub-processes (timers, step-counters) complete.
@@ -596,7 +606,7 @@ def _try_terminal_letrun(
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
     # been scanned onto state.work yet, so its value isn't carried either.
-    fork = fork_with_rungs(state.work, state.rungs)
+    fork = fork_with_rungs(state.work, state.overlay_rules)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
@@ -615,7 +625,7 @@ def _try_terminal_letrun(
     )
 
     budget = min(
-        _ZOOM_BUDGET,
+        _COAST_BUDGET,
         max(
             2,
             state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
@@ -637,7 +647,7 @@ def _try_terminal_letrun(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
+    key_after = _pilot_world_key(snap_after, key_config, state.overlay_rules)
 
     observations = _compass_observations(
         WAIT,
@@ -646,7 +656,7 @@ def _try_terminal_letrun(
         snap_after,
         ctx,
         contradict_no_change=False,
-        world_key=_pilot_world_key(snap_before, key_config, state.rungs),
+        world_key=_pilot_world_key(snap_before, key_config, state.overlay_rules),
     )
 
     # Decide the outcome here — only the let-run knows the macro-state sentinel.
@@ -729,7 +739,7 @@ def _try_terminal_dwell(
     re-ejecting: a non-completing dwell terminates at the stuck exit rather than
     repeatedly spending the invocation's remaining search budget.
     """
-    fork = fork_with_rungs(state.work, state.rungs)
+    fork = fork_with_rungs(state.work, state.overlay_rules)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
@@ -757,7 +767,7 @@ def _try_terminal_dwell(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.rungs)
+    key_after = _pilot_world_key(snap_after, key_config, state.overlay_rules)
 
     observations = _compass_observations(
         WAIT,
@@ -766,7 +776,7 @@ def _try_terminal_dwell(
         snap_after,
         ctx,
         contradict_no_change=False,
-        world_key=_pilot_world_key(snap_before, key_config, state.rungs),
+        world_key=_pilot_world_key(snap_before, key_config, state.overlay_rules),
     )
 
     if not _reached(snap_after):
@@ -805,7 +815,7 @@ def _try_terminal_dwell(
     return replace(result, observations=observations)
 
 
-def _letrun_zoom(
+def _coast_to_bearing(
     work: PLC,
     channel_tag: str | None,
     target_value: Any,
@@ -817,7 +827,7 @@ def _letrun_zoom(
 ) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
-    The zoom has its own generous budget (``_ZOOM_BUDGET``) — it does NOT
+    The bearing coast has its own generous budget (``_COAST_BUDGET``) — it does NOT
     consume the pilot's iteration budget.  Timer dwell is waiting, not
     searching.
 
@@ -841,7 +851,7 @@ def _letrun_zoom(
             None,
         )
 
-    budget = _ZOOM_BUDGET
+    budget = _COAST_BUDGET
     if boundary is not None:
         from pyrung.core.instruction.advance import constraint_holds
 

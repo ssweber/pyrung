@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pilot._ops import (
-    _ZOOM_BUDGET,
+    _COAST_BUDGET,
     PilotRung,
     _apply_pulse,
     _coast_holding_state,
@@ -139,9 +139,9 @@ ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
 class ReplayStep:
     """One recorded journey step with its session spec, replay-ready.
 
-    ``kind`` is the *recorded* coast kind (``"pulse"`` / ``"zoom"`` /
+    ``kind`` is the private replay kind (``"pulse"`` / ``"bearing_coast"`` /
     ``"letrun"`` / ``"dwell"``), read off the committed step context — never
-    inferred from position or input emptiness.  A zoom step re-arms its own
+    inferred from position or input emptiness. A bearing coast re-arms its own
     recorded ``channel_tag``/``channel_target``; a letrun step re-coasts
     toward the global target bounded by its own recorded span.
     """
@@ -158,11 +158,11 @@ def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
 
     kind = {
         MotionKind.INTERVENTION: "pulse",
-        MotionKind.COAST_TO_BEARING: "zoom",
+        MotionKind.COAST_TO_BEARING: "bearing_coast",
         MotionKind.COAST_HOLDING_WORLD: "letrun",
     }[context.policy.motion]
     channel_motion = context.execution.channel_motion
-    if kind == "zoom" and channel_motion.channel_tag is None:
+    if kind == "bearing_coast" and channel_motion.channel_tag is None:
         kind = "dwell"
     return ReplayStep(
         inputs=tuple(step.inputs.items()),
@@ -925,10 +925,10 @@ def build_replay_fn(
 
     The judgment depends on the incident shape:
 
-    * **Channel incident** (``zoom_channel_tag`` set — a channel coast or a
+    * **Channel incident** (``bearing_channel_tag`` set — a bearing coast or a
       terminal let-run holding a macro-state) — a hold is *good* iff the
       channel register sits at its target/held value instead of ejecting.  The
-      coast differs by shape: a **zoom** coast is unbounded and ejection-guarded
+      coast differs by shape: a **bearing** coast is unbounded and ejection-guarded
       (the immediate bearing may be a full coast away), a **let-run** coast is
       **bounded** to the departure window (its far-off global target is
       unreachable inside it).  In both cases the bearing's far-off conjuncts (the
@@ -962,8 +962,8 @@ def build_replay_fn(
     route = ctx.route
     prior = getattr(ctx, "domain_prior", None)
     clear_only = getattr(ctx, "clear_only", frozenset())
-    zoom_channel_tag = incident.channel_tag
-    zoom_target_value = incident.channel_target
+    bearing_channel_tag = incident.channel_tag
+    bearing_target_value = incident.channel_target
     terminal_letrun_role_tags = incident.terminal_role_tags
     replay_watch_roles = incident.watch_roles
     departure_bearing = incident.departure_bearing
@@ -991,8 +991,8 @@ def build_replay_fn(
         # trigger-local verdict ("did the recorded departure reproduce?") the
         # judgment below reads alongside the endpoint snapshot.
         eject_receipt: Any = None
-        if zoom_channel_tag is not None:
-            session.arm_pens((zoom_channel_tag,))
+        if bearing_channel_tag is not None:
+            session.arm_pens((bearing_channel_tag,))
         for step in steps:
             # Each step re-arms its RECORDED session spec (``ReplayStep.kind``
             # off the committed step context) — a letrun eject-coast is coasted,
@@ -1019,17 +1019,19 @@ def build_replay_fn(
                     budget=max(1, step.scans),
                     session=session,
                 )
-            elif step.kind == "zoom" and step.channel_tag is not None:
+            elif step.kind == "bearing_coast" and step.channel_tag is not None:
                 # Reproduce the recorded incident, not the rest of its route.
                 # A correction only has to neutralize the causal regression
-                # inside this bounded step; extending replay to the zoom's
+                # inside this bounded step; extending replay to the bearing's
                 # distant destination lets a later unrelated fault reuse the
                 # same state executor and falsely refute the correction.
                 eject_receipt = _coast_to_value(
                     probe,
                     step.channel_tag,
                     step.channel_target,
-                    budget=(max(1, step.scans) if regression_witness is not None else _ZOOM_BUDGET),
+                    budget=(
+                        max(1, step.scans) if regression_witness is not None else _COAST_BUDGET
+                    ),
                     session=session,
                 )
             else:
@@ -1096,28 +1098,28 @@ def build_replay_fn(
                 cp_fork.state.scan_id,
                 probe.state.scan_id,
                 len(steps),
-                ("letrun" if terminal_letrun_role_tags is not None else "zoom"),
-                zoom_channel_tag,
-                snap.get(zoom_channel_tag) if zoom_channel_tag else None,
+                ("letrun" if terminal_letrun_role_tags is not None else "bearing_coast"),
+                bearing_channel_tag,
+                snap.get(bearing_channel_tag) if bearing_channel_tag else None,
                 {t: snap.get(t) for t in roles},
             )
 
         # Channel incident (channel coast OR terminal let-run hold): the hold is
-        # good iff it reaches the requested zoom destination, advances the
+        # good iff it reaches the requested bearing destination, advances the
         # target-relative earned work, or suppresses the incident's exact departure
         # causal branch within the incident window. A terminal let-run's
         # "target" is the state it was trying to hold, so equality alone is not
         # success there: a direct channel override could mask a still-firing
         # cause. Exact firing testimony distinguishes suppression from masking.
-        if zoom_channel_tag is not None:
+        if bearing_channel_tag is not None:
             reached = terminal_letrun_role_tags is None and _values_match(
-                snap.get(zoom_channel_tag), zoom_target_value
+                snap.get(bearing_channel_tag), bearing_target_value
             )
             neutralized_reason = None
             if neutralized and regression_witness is not None:
                 neutralized_reason = (
                     "recorded regression neutralized: "
-                    f"preserved {zoom_channel_tag}={regression_witness.source!r} "
+                    f"preserved {bearing_channel_tag}={regression_witness.source!r} "
                     f"and suppressed its {len(regression_witness.cause)}-write causal branch"
                     if source_preserved
                     else "recorded cause silenced before an unrelated replacement departure"
@@ -1146,7 +1148,7 @@ def build_replay_fn(
                     "recorded regression cause replayed; correction masked its result"
                     if cause_repeated
                     else (
-                        f"{zoom_channel_tag} -> {zoom_target_value!r} reached={reached}"
+                        f"{bearing_channel_tag} -> {bearing_target_value!r} reached={reached}"
                         + (
                             f" (eject coast: {eject_receipt.stop_reason})"
                             if eject_receipt is not None

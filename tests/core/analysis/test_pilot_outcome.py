@@ -16,7 +16,7 @@ from pyrung.core.analysis.pilot.outcome import (
 from pyrung.core.analysis.pilot.types import ChannelMotion
 
 
-def _zoom(
+def _bearing_coast(
     after: int,
     *,
     trend_before: int = 2,
@@ -47,8 +47,8 @@ def _zoom(
     )
 
 
-def test_zoom_that_reaches_requested_channel_is_confirmed() -> None:
-    assert _zoom(16) is Outcome.CONFIRMED
+def test_bearing_coast_that_reaches_requested_channel_is_confirmed() -> None:
+    assert _bearing_coast(16) is Outcome.CONFIRMED
 
 
 def test_action_receipt_survives_later_program_departure() -> None:
@@ -101,8 +101,8 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
     assert assessment.bearing is BearingEffect.DEPARTED
 
 
-def test_zoom_that_really_departs_elsewhere_is_ambient_drift() -> None:
-    assert _zoom(10) is Outcome.AMBIENT_DRIFT
+def test_bearing_coast_that_really_departs_elsewhere_is_ambient_drift() -> None:
+    assert _bearing_coast(10) is Outcome.AMBIENT_DRIFT
 
 
 def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
@@ -130,18 +130,18 @@ def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
     assert assessment.legacy_outcome is Outcome.AMBIENT_DRIFT
 
 
-def test_zoom_timeout_with_unchanged_channel_is_rejected() -> None:
-    assert _zoom(11) is Outcome.BAD_EDGE
+def test_bearing_coast_timeout_with_unchanged_channel_is_rejected() -> None:
+    assert _bearing_coast(11) is Outcome.BAD_EDGE
 
 
 def test_unchanged_channel_can_still_earn_progress_inside_corridor() -> None:
-    assert _zoom(11, credential=True) is Outcome.CONFIRMED
-    assert _zoom(11, frontier=True) is Outcome.FRONTIER
+    assert _bearing_coast(11, credential=True) is Outcome.CONFIRMED
+    assert _bearing_coast(11, frontier=True) is Outcome.FRONTIER
 
 
 def test_unchanged_channel_trend_drop_alone_is_rejected() -> None:
     """Earned-work-authoritative: trace-trend is coordinate-relative noise for a
     frozen channel (incidental sub-registers can drop the tree count while
-    the channel sits stuck at its start value — the tumbler zoom
+    the channel sits stuck at its start value — the tumbler bearing-coast
     false-confirm).  Only earned work or a genuinely new frontier confirms."""
-    assert _zoom(11, trend_after=1) is Outcome.BAD_EDGE
+    assert _bearing_coast(11, trend_after=1) is Outcome.BAD_EDGE

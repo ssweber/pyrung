@@ -174,7 +174,7 @@ def assess_outcome(
 
     if channel_motion.active:
         if channel_motion.reached:
-            # The zoom achieved its channel subgoal (e.g. S_StateCurrent 3->6).
+            # The bearing coast achieved its channel subgoal (e.g. State 3->6).
             # That is a confirmed advance even when the *global* target's onward
             # leg is another self-advancing dwell (HeatDelay timer -> Heat steps)
             # that trace_back cannot surface yet.  Do not fall through to the

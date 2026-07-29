@@ -13,6 +13,7 @@ from pyrung.core.analysis.pilot.compass import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    BatchPulse,
     Bearing,
     BearingObjective,
     ChannelHeading,
@@ -64,7 +65,7 @@ def _candidate(tag: str) -> SimpleNamespace:
         source=ActSource.TRACE,
         awaited_action_note="",
         route_prescribed=False,
-        influence_prescribed=False,
+        learned_prescribed=False,
         awaited_action_prescribed=False,
         program_prescribed=False,
         program_note="",
@@ -115,7 +116,11 @@ def _world(compass: Compass) -> OrientationWorld:
             tree=TraceNode("Target", True, satisfied=False),
             completion_frontier=(),
         ),
-        state=SimpleNamespace(key_config=None, rungs=(), work=SimpleNamespace()),
+        state=SimpleNamespace(
+            key_config=None,
+            overlay_rules=(),
+            work=SimpleNamespace(),
+        ),
         context=context,
     )
 
@@ -251,15 +256,14 @@ def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     assert result.objective.frontier == ()
     assert not hasattr(result, "path")
     assert not hasattr(result, "candidates")
-    assert result.trace is not None
-    assert result.trace.world.frame is world.frame
-    assert result.trace.candidates.options == (first,)
-    assert not hasattr(result.trace, "readings")
+    assert result.orientation is not None
+    assert result.orientation.world.frame is world.frame
+    assert result.orientation.candidates.options == (first,)
+    assert not hasattr(result.orientation, "readings")
 
 
 def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
-    from pyrung.core.analysis.pilot.navigation_contracts import BatchPulse
 
     actions = (("First", True), ("Gate", True))
     monkeypatch.setattr(
@@ -277,13 +281,28 @@ def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
 
     assert isinstance(result, Bearing)
     assert isinstance(result.act, BatchPulse)
-    assert result.act.policy.source is ActSource.LEARNED
+    assert result.act.policy.source is ActSource.LEARNED_BATCH
     assert result.act.policy.action_pairs == actions
     assert result.act.policy.applied == actions
     assert result.act.policy.observe_label == "batch"
     assert result.act.policy.target_observe_label == "batch-target"
-    assert result.act.policy.influence_prescribed
+    assert result.act.policy.learned_prescribed
     assert not result.act.policy.chase_regression_causes
+
+
+def test_learned_source_names_preserve_legacy_values_and_batch_identity() -> None:
+    actions = (("First", True), ("Gate", True))
+    act = BatchPulse(
+        ActPolicy(
+            source=ActSource.LEARNED_BATCH,
+            action_pairs=actions,
+            applied=actions,
+        )
+    )
+
+    assert ActSource.LEARNED_ACTION.value == "influence"
+    assert ActSource.LEARNED_BATCH.value == "learned"
+    assert act_identity(act) == ("batch", "learned", actions)
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:
@@ -325,7 +344,7 @@ def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> 
         ),
     )
     state = SimpleNamespace(
-        rungs=(),
+        overlay_rules=(),
         pending_departure=None,
         committed_acts=(
             SimpleNamespace(
@@ -653,7 +672,7 @@ def test_stale_bearing_cannot_execute() -> None:
             acc_indices=frozenset(),
         ),
         work=SimpleNamespace(state=SimpleNamespace(tags={"X": 1})),
-        rungs=(),
+        overlay_rules=(),
     )
     world = OrientationWorld(
         world_key=("stale",),
