@@ -685,3 +685,44 @@ def test_driver_has_no_direct_option_builder_or_probe_policy() -> None:
     assert "_build_candidates" not in source
     assert "_orient_escalate_skiff" not in source
     assert "from pyrung.core.analysis.pilot.options" not in source
+
+
+def test_production_pilot_forks_only_through_rung_aware_helper() -> None:
+    import ast
+    from pathlib import Path
+
+    import pyrung.core.analysis.pilot as pilot_package
+
+    class ForkVisitor(ast.NodeVisitor):
+        def __init__(self, filename: str) -> None:
+            self.filename = filename
+            self.functions: list[str] = []
+            self.calls: list[tuple[str, str, str | None]] = []
+
+        def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+            self.functions.append(node.name)
+            self.generic_visit(node)
+            self.functions.pop()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            self._visit_function(node)
+
+        def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+            self._visit_function(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "fork":
+                receiver = node.func.value.id if isinstance(node.func.value, ast.Name) else None
+                owner = self.functions[-1] if self.functions else "<module>"
+                self.calls.append((self.filename, owner, receiver))
+            self.generic_visit(node)
+
+    package_dir = Path(pilot_package.__file__).parent
+    direct_forks: list[tuple[str, str, str | None]] = []
+    for path in sorted(package_dir.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        visitor = ForkVisitor(path.name)
+        visitor.visit(tree)
+        direct_forks.extend(visitor.calls)
+
+    assert direct_forks == [("_ops.py", "fork_with_rungs", "source")]

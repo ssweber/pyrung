@@ -30,6 +30,7 @@ from pyrung.core.analysis.pilot._ops import (
     _semantic_key,
     _set_rungs,
     coast_departure_tags,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.detour import (
@@ -962,8 +963,7 @@ def _checkpoint_with_rungs(
     """Return one checkpoint re-keyed around an exact executable overlay."""
     if tuple(rungs) == tuple(checkpoint.world.rungs):
         return checkpoint
-    work = checkpoint.world.work.fork()
-    _set_rungs(work, rungs)
+    work = fork_with_rungs(checkpoint.world.work, rungs)
     world = checkpoint.world.set(work=work, rungs=pvector(rungs))
     key = (
         _pilot_world_key(dict(work.state.tags), key_config, rungs)

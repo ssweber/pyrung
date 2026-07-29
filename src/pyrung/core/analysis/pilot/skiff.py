@@ -12,6 +12,7 @@ committed plan step.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -74,6 +75,7 @@ def run_skiff_scan(
     role: PipelineRoles,
     pdg: ProgramGraph,
     *,
+    rungs: Sequence[Any],
     actions: tuple[ActionPair, ...] = (),
     routes: tuple[TransitionRoute, ...] = (),
     extra_tags: frozenset[str] = frozenset(),
@@ -91,7 +93,14 @@ def run_skiff_scan(
         actions=actions,
         extra_tags=extra_tags,
     )
-    return run_pinned_scan(plc, allowed, pdg, actions=actions, scans=scans)
+    return run_pinned_scan(
+        plc,
+        allowed,
+        pdg,
+        rungs=rungs,
+        actions=actions,
+        scans=scans,
+    )
 
 
 def run_pinned_scan(
@@ -99,6 +108,7 @@ def run_pinned_scan(
     allowed_tags: frozenset[str],
     pdg: ProgramGraph,
     *,
+    rungs: Sequence[Any],
     actions: tuple[ActionPair, ...] = (),
     scans: int = 1,
 ) -> SkiffResult:
@@ -112,7 +122,9 @@ def run_pinned_scan(
     if scans < 1:
         raise ValueError("scans must be >= 1")
 
-    fork = plc.fork()
+    from pyrung.core.analysis.pilot._ops import fork_with_rungs
+
+    fork = fork_with_rungs(plc, rungs)
     before = dict(fork.state.tags)
     force_map = _skiff_force_map(fork, before, allowed_tags, pdg)
     scan_before = fork.state.scan_id
@@ -254,6 +266,7 @@ def probe_live_guard_frontiers(
             context.setdefault(tag, value)
 
     observations: list[NavigationObservation] = []
+    active_rungs = tuple(state.rungs)
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         # Canonical key: a frontier can surface probe pairs whose values mix types
@@ -272,7 +285,12 @@ def probe_live_guard_frontiers(
         # Control run: context alone.  If the frontier moves without any probe,
         # the stall is not this frontier — attributing edges to probes would lie.
         control = run_pinned_scan(
-            state.work, allowed, ctx.pdg, actions=tuple(context.items()), scans=scans
+            state.work,
+            allowed,
+            ctx.pdg,
+            rungs=active_rungs,
+            actions=tuple(context.items()),
+            scans=scans,
         )
         if not _values_match(control.after.get(node.tag), cur_val):
             continue
@@ -298,6 +316,7 @@ def probe_live_guard_frontiers(
                 allowed,
                 state,
                 ctx,
+                active_rungs,
                 scans,
                 frame.key,
             )
@@ -330,6 +349,7 @@ def probe_live_guard_frontiers(
                     allowed,
                     state,
                     ctx,
+                    active_rungs,
                     scans,
                     frame.key,
                 )
@@ -361,6 +381,7 @@ def probe_live_guard_frontiers(
                     allowed,
                     state,
                     ctx,
+                    active_rungs,
                     scans,
                     frame.key,
                 )
@@ -379,6 +400,7 @@ def _send_probe(
     allowed: frozenset[str],
     state: Any,
     ctx: Any,
+    rungs: Sequence[Any],
     scans: int,
     world_key: tuple[Any, ...],
 ) -> CompassObservation:
@@ -386,7 +408,12 @@ def _send_probe(
     actions = dict(context)
     actions.update(probe_actions)
     result = run_pinned_scan(
-        state.work, allowed, ctx.pdg, actions=tuple(actions.items()), scans=scans
+        state.work,
+        allowed,
+        ctx.pdg,
+        rungs=rungs,
+        actions=tuple(actions.items()),
+        scans=scans,
     )
     new_val = result.after.get(frontier_tag)
     before = tuple(sorted(dict(state.work.state.tags).items()))

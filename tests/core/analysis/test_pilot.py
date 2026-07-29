@@ -2156,6 +2156,7 @@ def test_skiff_scan_suppresses_non_participants():
         plc,
         role,
         pdg,
+        rungs=(),
         actions=(("CmdStart", True),),
         extra_tags=frozenset({"JumpIdx"}),
         scans=1,
@@ -2165,6 +2166,36 @@ def test_skiff_scan_suppresses_non_participants():
     assert result.after["SideEffect"] == 0
     assert ("StateCurrent", 4, 6) in result.participating_changes
     assert not result.suppressed_changes
+
+
+def test_skiff_scan_preserves_active_pilot_rungs():
+    """A skiff experiment executes the same explicit PILOT overlay as its world."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot._ops import PilotRung
+    from pyrung.core.analysis.pilot.skiff import run_pinned_scan
+
+    HeldInput = Bool("SkiffHeldInput", default=True, external=True)
+    HoldScope = Bool("SkiffHoldScope", default=True)
+    SawHold = Bool("SkiffSawHold")
+
+    with Program(strict=False) as prog:
+        with rung(HoldScope, ~HeldInput):
+            latch(SawHold)
+
+    plc = PLC(prog)
+    pdg = build_program_graph(prog)
+    active = (PilotRung(HeldInput.name, False, HoldScope),)
+    result = run_pinned_scan(
+        plc,
+        frozenset({HeldInput.name, HoldScope.name, SawHold.name}),
+        pdg,
+        rungs=active,
+    )
+
+    assert result.after[HeldInput.name] is False
+    assert result.after[SawHold.name] is True
+    assert plc.state.tags[HeldInput.name] is True
+    assert plc.state.tags[SawHold.name] is False
 
 
 def test_static_routes_remain_in_catalog_not_learned_knowledge():

@@ -1851,6 +1851,28 @@ class PLC:
         self._compiled_replay_kernel = kernel
         return kernel
 
+    def _copy_current_synthesis_onto(self, target: PLC) -> None:
+        """Give *target* this runner's current soft-execution overlay.
+
+        Internal replay reconstructs one current executable World, so its
+        interpreted and compiled paths must see the same plant and PILOT hold
+        rungs. Public :meth:`fork` deliberately keeps its existing semantics;
+        callers that own PILOT rung records rebuild them explicitly.
+        """
+        from pyrung.core.synthesis import Synthesis
+
+        target._synthesis = (
+            None
+            if self._synthesis is None
+            else Synthesis(
+                holds=list(self._synthesis.holds),
+                plant=list(self._synthesis.plant),
+            )
+        )
+        target._fold_context_cache = None
+        target._compiled_replay_kernel = None
+        target._soft_exec_program_cache = None
+
     def _fork_from_reconstructed_state(
         self,
         state: SystemState,
@@ -1892,18 +1914,10 @@ class PLC:
         fork._pdg_consumed_tags = self._pdg_consumed_tags
         fork._input_overrides._forces.clear()
         fork._input_overrides._forces.update(forces)
-        if self._synthesis is not None:
-            # Historical at-fire replay must execute the same soft program as
-            # the recorded scan.  PILOT holds and Harness plant rungs live in
-            # the synthesis brackets rather than the user Program; dropping
-            # them here reconstructs a different intra-scan command path and
-            # makes consumed commands appear as steady/default enablers.
-            from pyrung.core.synthesis import Synthesis
-
-            fork._synthesis = Synthesis(
-                holds=list(self._synthesis.holds),
-                plant=list(self._synthesis.plant),
-            )
+        # Historical at-fire replay must execute the same current soft program
+        # as its source. PILOT holds and Harness plant rungs live outside the
+        # user Program, so copy both brackets explicitly.
+        self._copy_current_synthesis_onto(fork)
         fork._replay_mode = replay_mode
         fork._sync_runtime_flags_from_state()
         return fork
@@ -1925,6 +1939,7 @@ class PLC:
         log = self._scan_log.snapshot()
         anchor_scan_id = anchor if anchor is not None else self._initial_scan_id
         replay = self.fork(scan_id=anchor_scan_id, inherit_log=False)
+        self._copy_current_synthesis_onto(replay)
         replay._replay_mode = True
         if anchor is not None:
             replay._input_overrides._forces.clear()

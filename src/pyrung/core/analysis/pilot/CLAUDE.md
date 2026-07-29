@@ -277,6 +277,16 @@ knowledge that must survive:
 - `_PilotContext`: static program analysis plus the current persistent
   `Compass` value.
 
+Every production PILOT fork that may execute is created through
+`_ops.py::fork_with_rungs`, with the owning `_World.rungs` supplied explicitly;
+the initial drive bootstrap supplies an explicit empty rung set. Public
+`PLC.fork()` does not implicitly inherit PILOT holds. Runner-internal replay has
+a separate contract: a reconstructed fork copies its source runner's **current**
+synthesis plant and holds so interpreted and compiled replay execute the same
+current World. This is not a historical overlay-epoch log and makes no claim
+that an older interval is being replayed under the overlay that existed then;
+that temporal ownership remains the later E2 concern.
+
 `Compass.apply` returns a new compass and a `changed` flag. When no entry
 changes, it returns the same object. Runtime instruments return
 `CompassObservation` values and do not mutate the compass themselves.

@@ -462,6 +462,41 @@ def test_replay_to_prefers_compiled_path_when_supported() -> None:
     )
 
 
+def test_interpreted_replay_preserves_active_pilot_holds() -> None:
+    from pyrung.core.analysis.pilot._ops import PilotRung, _set_rungs
+
+    held_input = Bool("ReplayHeldInput", default=True, external=True)
+    hold_scope = Bool("ReplayHoldScope", default=True)
+    alarm = Bool("ReplayHoldAlarm")
+
+    with Program(strict=False) as program:
+        with Rung(hold_scope, ~held_input):
+            latch(alarm)
+
+    source = PLC(program, dt=0.01, cache=0, checkpoint_interval=10_000)
+    _set_rungs(source, [PilotRung(held_input.name, False, hold_scope)])
+    recorded = [source.step(), source.step()]
+
+    kernel = source._compiled_replay_supported_kernel()
+    assert kernel is not None
+    interpreted = source._replay_range_interpreted(1, 2)
+    compiled = source._replay_range_compiled(1, 2, kernel)
+
+    def semantic(states):
+        return [
+            (
+                state.scan_id,
+                state.tags[held_input.name],
+                state.tags[alarm.name],
+            )
+            for state in states
+        ]
+
+    assert semantic(recorded) == [(1, False, True), (2, False, True)]
+    assert semantic(interpreted) == semantic(recorded)
+    assert semantic(compiled) == semantic(recorded)
+
+
 def test_history_at_and_replay_range_use_compiled_path_when_supported(monkeypatch) -> None:
     enable = Bool("Enable")
     light = Bool("Light")

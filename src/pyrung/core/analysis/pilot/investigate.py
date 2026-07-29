@@ -36,6 +36,7 @@ from pyrung.core.analysis.pilot._ops import (
     _settle_delayed_effects,
     _target_unresolved_condition,
     _union_conditions,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.causal import (
@@ -972,7 +973,7 @@ def build_replay_fn(
     def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
         from pyrung.core.analysis.pilot.coast import CoastSession
 
-        probe = cp_fork.fork()
+        probe = fork_with_rungs(cp_fork, rungs)
         probe_rungs = list(rungs)
         scope = _target_unresolved_condition(probe, target_tag, target_value)
         probe_rungs.extend(_rungs_from_proposals(probe, list(holds), scope))
@@ -1361,7 +1362,14 @@ def investigate_excursion(
                 if holds is None:
                     # Live-word guard: enumeration punted -> isolated skiff probes.
                     holds = _skiff_suppression_nominations(
-                        work, tag, desired, node, action, pdg, steerable
+                        work,
+                        tag,
+                        desired,
+                        node,
+                        action,
+                        pdg,
+                        steerable,
+                        rungs,
                     )
                 for hold in holds or ():
                     if hold not in seen:
@@ -1401,7 +1409,7 @@ def investigate_excursion(
     if not candidate_holds:
         return ExcursionResult(reverted=reverted)
 
-    retry = work.fork()
+    retry = fork_with_rungs(work, rungs)
     retry_rungs = list(rungs)
     from pyrung.core.analysis.pilot.coast import CoastSession
     from pyrung.core.condition import CompareEq
@@ -1480,6 +1488,7 @@ def _skiff_suppression_nominations(
     action: list[ActionPair],
     pdg: Any,
     steerable: frozenset[str],
+    rungs: Sequence[PilotRung],
 ) -> list[ActionPair]:
     """Bounded isolated probes for a live-word-gated antagonist — nominations only.
 
@@ -1520,7 +1529,12 @@ def _skiff_suppression_nominations(
         val = not cur  # flip off the polarity under which the antagonist fires
         probe_actions = tuple({**dict(action), lever: val}.items())
         result = run_pinned_scan(
-            work, frozenset(allowed | {lever}), pdg, actions=probe_actions, scans=_SKIFF_SCANS
+            work,
+            frozenset(allowed | {lever}),
+            pdg,
+            rungs=rungs,
+            actions=probe_actions,
+            scans=_SKIFF_SCANS,
         )
         if _values_match(result.after.get(tag), desired):
             nominations.append((lever, val))

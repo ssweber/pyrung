@@ -707,7 +707,9 @@ class _PilotState:
         step vectors and ``best_trend`` are already immutable, so the returned
         value is a stable snapshot even as the live world keeps advancing.
         """
-        return self.world.set(work=self.world.work.fork())
+        from pyrung.core.analysis.pilot._ops import fork_with_rungs
+
+        return self.world.set(work=fork_with_rungs(self.world.work, self.rungs))
 
     def load_world(self, world: _World) -> None:
         """Revert: the checkpoint's world *is* the answer.
@@ -719,10 +721,9 @@ class _PilotState:
         pointer already holds exactly the state that existed when the checkpoint
         was taken.
         """
-        self.world = world.set(work=world.work.fork())
-        from pyrung.core.analysis.pilot._ops import _set_rungs
+        from pyrung.core.analysis.pilot._ops import fork_with_rungs
 
-        _set_rungs(self.work, list(self.rungs))
+        self.world = world.set(work=fork_with_rungs(world.work, world.rungs))
 
 
 @dataclass(frozen=True)

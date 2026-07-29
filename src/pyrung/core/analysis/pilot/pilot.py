@@ -30,6 +30,7 @@ from pyrung.core.analysis.pilot._ops import (
     _apply_pulse,
     _pilot_world_key,
     _StateKeyConfig,
+    fork_with_rungs,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.charts import (
@@ -305,7 +306,7 @@ def _prepare_drive(
 
     from pyrung.core.analysis.pdg import build_program_graph
 
-    work = plc if live else plc.fork(history_budget=math.inf)
+    work = plc if live else fork_with_rungs(plc, (), history_budget=math.inf)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)

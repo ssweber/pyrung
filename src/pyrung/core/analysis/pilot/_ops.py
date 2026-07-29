@@ -500,9 +500,14 @@ def _append_rungs(
     return pvector(updated)
 
 
-def fork_with_rungs(source: PLC, rungs: Iterable[PilotRung]) -> PLC:
+def fork_with_rungs(
+    source: PLC,
+    rungs: Iterable[PilotRung],
+    *,
+    history_budget: int | float | None = None,
+) -> PLC:
     """Fork *source* and rebuild its scoped steering overlay verbatim."""
-    fork = source.fork()
+    fork = source.fork(history_budget=history_budget)
     _set_rungs(fork, rungs)
     return fork
 
