@@ -20,6 +20,7 @@ from pyrung import (
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
+    EvidenceScope,
     NavigationCatalog,
 )
 from pyrung.core.analysis.pilot.departure import (
@@ -173,11 +174,14 @@ def _departure_edge_allowed(
         compass=compass,
         avoid_pred=avoid_pred,
     )
+    settled_key = ("settled",)
+    settled_snap = {"State": 0, "Start": False, "Gate": False}
     return _continuation_safety(
         edge,
         ctx,
-        settled_key=("settled",),
-        settled_snap={"State": 0, "Start": False, "Gate": False},
+        settled_key=settled_key,
+        settled_snap=settled_snap,
+        evidence_scope=EvidenceScope.capture(settled_key, settled_snap.items()),
         blocked_actions=blocked_actions,
         progress_erasing_values=progress_erasing_values,
         completed_actions=completed_actions or set(),

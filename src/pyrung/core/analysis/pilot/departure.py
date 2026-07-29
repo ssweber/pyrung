@@ -27,7 +27,7 @@ from pyrung.core.analysis.pilot.causal import (
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastSession
 from pyrung.core.analysis.pilot.compass import (
     CompassKnowledge,
-    _evidence_scope_key,
+    EvidenceScope,
     unique_legal_awaited_action,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import (
@@ -253,10 +253,10 @@ def _continuation_safety(
     *,
     settled_key: tuple[Any, ...] | None,
     settled_snap: dict[str, Any],
+    evidence_scope: EvidenceScope | None,
     blocked_actions: frozenset[tuple[str, Any]],
     progress_erasing_values: frozenset[Any],
     completed_actions: set[tuple[str, Any, Any]],
-    evidence_scope_key: tuple[Any, ...] | None = None,
 ) -> ContinuationSafety:
     """Whether one admitted edge also preserves work recovery already earned."""
 
@@ -266,8 +266,8 @@ def _continuation_safety(
         snapshot=settled_snap,
         knowledge=ctx.compass.knowledge,
         context=ctx,
+        evidence_scope=evidence_scope,
         blocked_actions=blocked_actions,
-        evidence_scope_key=evidence_scope_key,
     )
     return ContinuationSafety(
         admission=admission,
@@ -555,7 +555,7 @@ def classify_departure(
         if state.key_config is not None
         else None
     )
-    evidence_scope_key = _evidence_scope_key(settled_key, settled_snap.items())
+    evidence_scope = EvidenceScope.capture(settled_key, settled_snap.items())
 
     def _safe_continuation_edge(edge: Any) -> bool:
         return _continuation_safety(
@@ -563,10 +563,10 @@ def classify_departure(
             ctx,
             settled_key=settled_key,
             settled_snap=settled_snap,
+            evidence_scope=evidence_scope,
             blocked_actions=ctx.blocked_actions,
             progress_erasing_values=progress_erasing_values,
             completed_actions=completed_actions,
-            evidence_scope_key=evidence_scope_key,
         ).allowed
 
     continuation = NavigationEvidence.channel_continuation(

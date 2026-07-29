@@ -272,15 +272,46 @@ def test_compass_contradict_falsifies_seeded_edge():
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
     compass = Compass()
-    compass, _ = compass.apply((CompassObservation("edge", "State", ("Cmd", True), 1, 6),))
+    compass, _ = compass.apply(
+        (
+            CompassObservation(
+                "edge",
+                "State",
+                ("Cmd", True),
+                1,
+                6,
+                applied=(("Cmd", True),),
+            ),
+        )
+    )
     assert compass.knowledge.find_path("State", 1, 6) == [("Cmd", True)]
 
-    compass, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
+    compass, changed = compass.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                ("Cmd", True),
+                1,
+                applied=(("Cmd", True),),
+            ),
+        )
+    )
     assert changed is True
     assert compass.knowledge.find_path("State", 1, 6) is None
     assert compass.knowledge.unprobed_actions("State", 1, {("Cmd", True)}) == []
     # Idempotent: the tombstone stays and no new knowledge is reported.
-    same, changed = compass.apply((CompassObservation("contradict", "State", ("Cmd", True), 1),))
+    same, changed = compass.apply(
+        (
+            CompassObservation(
+                "contradict",
+                "State",
+                ("Cmd", True),
+                1,
+                applied=(("Cmd", True),),
+            ),
+        )
+    )
     assert same is compass
     assert changed is False
 
@@ -305,9 +336,28 @@ def test_compass_apply_identity_on_no_new_knowledge():
 
     wk = ("wk", 1)
     batch = (
-        CompassObservation("edge", "State", ("Cmd", True), 1, 6),
-        CompassObservation("no_change", "State", ("Cmd", False), 1),
-        CompassObservation("contradict", "State", ("Stop", True), 2),
+        CompassObservation(
+            "edge",
+            "State",
+            ("Cmd", True),
+            1,
+            6,
+            applied=(("Cmd", True),),
+        ),
+        CompassObservation(
+            "no_change",
+            "State",
+            ("Cmd", False),
+            1,
+            applied=(("Cmd", False),),
+        ),
+        CompassObservation(
+            "contradict",
+            "State",
+            ("Stop", True),
+            2,
+            applied=(("Stop", True),),
+        ),
         ActionNogoodObservation(wk, ("act", "Cmd", True)),
         CoastObservation(wk, "budget"),
         StaticEdgeObservation(("edge-id",), "confirmed"),
@@ -351,7 +401,18 @@ def test_confirmed_provenance_only_from_outcome_factory():
     entry = confirmed_entry("State", 1, ("Cmd", True), 6)
     assert entry.provenance is Provenance.CONFIRMED
     assert entry.is_live
-    compass, _ = compass.apply((CompassObservation("edge", "State", ("Cmd", True), 1, 6),))
+    compass, _ = compass.apply(
+        (
+            CompassObservation(
+                "edge",
+                "State",
+                ("Cmd", True),
+                1,
+                6,
+                applied=(("Cmd", True),),
+            ),
+        )
+    )
     stored = tuple(compass.knowledge.tag_entries("State"))[0][2]
     assert stored.provenance is Provenance.OBSERVED
 

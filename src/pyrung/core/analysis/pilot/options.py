@@ -29,7 +29,7 @@ from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.compass import (
-    _evidence_scope_key,
+    EvidenceScope,
     is_action,
     is_composite_action,
     unique_legal_awaited_action,
@@ -590,7 +590,7 @@ def _compass_route_plan(
 
     nogoods = key_nogoods if key_nogoods is not None else set()
     world_key = getattr(frame, "key", None)
-    evidence_scope_key = _evidence_scope_key(world_key, frame.snap.items())
+    evidence_scope = EvidenceScope.capture(world_key, frame.snap.items())
 
     def _edge_open(edge: Any) -> bool:
         if edge.identity in unavailable_producer_edges:
@@ -602,8 +602,8 @@ def _compass_route_plan(
             knowledge=ctx.compass.knowledge,
             blocked_actions=ctx.blocked_actions,
             context=ctx,
+            evidence_scope=evidence_scope,
             pair_nogoods=nogoods,
-            evidence_scope_key=evidence_scope_key,
         )
         return admission.allowed
 

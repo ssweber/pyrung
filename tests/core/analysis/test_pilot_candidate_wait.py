@@ -8,8 +8,8 @@ from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
     CompassObservation,
+    EvidenceScope,
     NavigationCatalog,
-    _evidence_scope_key,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import (
     NavigationEvidence,
@@ -337,6 +337,10 @@ def test_static_edge_admission_names_full_artifact_exclusions() -> None:
         knowledge=compass.knowledge,
         blocked_actions=frozenset({gate}),
         context=ctx,
+        evidence_scope=EvidenceScope.capture(
+            world,
+            {"State": 0, "Start": False, "Gate": False}.items(),
+        ),
     )
 
     assert not admission.allowed
@@ -508,7 +512,15 @@ def test_runtime_no_change_overlays_static_edge_without_mutating_catalog() -> No
     edge = graph.edges[0]
 
     observed, changed = compass.apply(
-        (CompassObservation("no_change", "State", ("Start", True), 0),)
+        (
+            CompassObservation(
+                "no_change",
+                "State",
+                ("Start", True),
+                0,
+                applied=(("Start", True),),
+            ),
+        )
     )
 
     assert changed
@@ -672,7 +684,9 @@ def test_exact_world_tombstone_overrides_global_seed_only_locally() -> None:
     other_world = ("other-world", 6)
     snap = {"State": 6, "Start": False}
     context = tuple(sorted(snap.items()))
-    compass, _ = Compass().apply((CompassObservation("edge", "State", action, 6, 8),))
+    compass, _ = Compass().apply(
+        (CompassObservation("edge", "State", action, 6, 8, applied=(action,)),)
+    )
     compass, _ = compass.apply(
         (CompassObservation("contradict", "State", action, 6, None, world, context, (action,)),)
     )
@@ -713,7 +727,8 @@ def test_static_edge_negative_overlay_requires_exact_context_and_actions() -> No
             ),
         )
     )
-    assert unchanged.knowledge.static_edge_status(edge, world, snap) is None
+    scope = EvidenceScope.capture(world, snap.items())
+    assert unchanged.knowledge.static_edge_status(edge, evidence_scope=scope) is None
 
     # Extra interference is a different artifact too.
     interfered, _ = unchanged.apply(
@@ -730,7 +745,7 @@ def test_static_edge_negative_overlay_requires_exact_context_and_actions() -> No
             ),
         )
     )
-    assert interfered.knowledge.static_edge_status(edge, world, snap) is None
+    assert interfered.knowledge.static_edge_status(edge, evidence_scope=scope) is None
 
     scoped, _ = interfered.apply(
         (
@@ -746,8 +761,14 @@ def test_static_edge_negative_overlay_requires_exact_context_and_actions() -> No
             ),
         )
     )
-    assert scoped.knowledge.static_edge_status(edge, world, snap) == "contradicted"
-    assert scoped.knowledge.static_edge_status(edge, other_world, snap) is None
+    assert scoped.knowledge.static_edge_status(edge, evidence_scope=scope) == "contradicted"
+    assert (
+        scoped.knowledge.static_edge_status(
+            edge,
+            evidence_scope=EvidenceScope.capture(other_world, snap.items()),
+        )
+        is None
+    )
 
 
 def test_wait_nogood_walks_around_the_sterile_completion_edge() -> None:
@@ -816,19 +837,14 @@ def test_compass_route_plan_builds_evidence_scope_once(monkeypatch) -> None:
     )
     builds = 0
 
-    def counted_scope_key(world_key, context=None):
+    original_capture = EvidenceScope.capture
+
+    def counted_capture(cls, world_key, context=None):
         nonlocal builds
         builds += 1
-        return _evidence_scope_key(world_key, context)
+        return original_capture(world_key, context)
 
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.options._evidence_scope_key",
-        counted_scope_key,
-    )
-    monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.compass._evidence_scope_key",
-        counted_scope_key,
-    )
+    monkeypatch.setattr(EvidenceScope, "capture", classmethod(counted_capture))
 
     plan = _compass_route_plan(frame, ctx)
 
@@ -1334,7 +1350,14 @@ def test_apply_reports_changed_and_returns_self_when_nothing_new():
     identity guarantee the skiff relies on, established from the table ops rather
     than a whole-table equality scan.
     """
-    obs = CompassObservation("edge", "State", ("Cmd", True), 6, 8)
+    obs = CompassObservation(
+        "edge",
+        "State",
+        ("Cmd", True),
+        6,
+        8,
+        applied=(("Cmd", True),),
+    )
     base = Compass()
 
     learned, changed = base.apply((obs,))
@@ -1346,7 +1369,14 @@ def test_apply_reports_changed_and_returns_self_when_nothing_new():
     assert again is learned
 
     # A probe mark is knowledge too: a fresh no-change tombstone counts as changed.
-    probe = CompassObservation("no_change", "State", ("Other", True), 6, None)
+    probe = CompassObservation(
+        "no_change",
+        "State",
+        ("Other", True),
+        6,
+        None,
+        applied=(("Other", True),),
+    )
     with_probe, probe_changed = learned.apply((probe,))
     assert probe_changed is True
     assert with_probe is not learned
@@ -1376,7 +1406,14 @@ def test_equivalent_applied_order_is_one_compass_receipt() -> None:
 def test_duplicate_probe_evidence_requires_explicit_exhaustion_observation():
     from pyrung.core.analysis.pilot.compass import ProbeExhaustedObservation
 
-    obs = CompassObservation("edge", "State", ("Cmd", True), 6, 8)
+    obs = CompassObservation(
+        "edge",
+        "State",
+        ("Cmd", True),
+        6,
+        8,
+        applied=(("Cmd", True),),
+    )
     compass, _ = Compass().apply((obs,))
     same, changed = compass.apply((obs,))
     assert same is compass

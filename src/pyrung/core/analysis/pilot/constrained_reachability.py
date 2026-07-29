@@ -11,7 +11,7 @@ from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.compass import (
     WAIT,
     CompassKnowledge,
-    _evidence_scope_key,
+    EvidenceScope,
     is_action,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -135,9 +135,9 @@ class NavigationEvidence:
         snapshot: dict[str, Any],
         knowledge: CompassKnowledge,
         context: Any,
+        evidence_scope: EvidenceScope | None,
         blocked_actions: frozenset[tuple[str, Any]] = frozenset(),
         pair_nogoods: set[tuple[str, Any]] | frozenset[tuple[str, Any]] | None = None,
-        evidence_scope_key: tuple[Any, ...] | None = None,
     ) -> StaticEdgeAdmission:
         """Decide whether one chart edge may join a current-world path search.
 
@@ -151,9 +151,7 @@ class NavigationEvidence:
         exclusions: list[StaticEdgeExclusion] = []
         status = knowledge.static_edge_status(
             edge,
-            world_key,
-            snapshot,
-            evidence_scope_key=evidence_scope_key,
+            evidence_scope=evidence_scope,
         )
         if status in {"contradicted", "no_change"}:
             exclusions.append(
@@ -230,7 +228,7 @@ class NavigationEvidence:
         knowledge: CompassKnowledge,
     ) -> FrontierStatus:
         compass = world.context.compass
-        evidence_scope_key = _evidence_scope_key(
+        evidence_scope = EvidenceScope.capture(
             world.world_key,
             world.snapshot.items(),
         )
@@ -242,8 +240,8 @@ class NavigationEvidence:
                 snapshot=world.snapshot,
                 knowledge=knowledge,
                 context=world.context,
+                evidence_scope=evidence_scope,
                 blocked_actions=constraints.blocked_actions,
-                evidence_scope_key=evidence_scope_key,
             )
             return admission.allowed
 

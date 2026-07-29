@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, TypeGuard, cast
+from typing import Any, Literal, TypeGuard
 
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
@@ -38,6 +38,7 @@ __all__ = [
     "CompassKnowledge",
     "CompassEntry",
     "CompassObservation",
+    "EvidenceScope",
     "NavigationCatalog",
     "Provenance",
     "TransitionCause",
@@ -110,6 +111,31 @@ def is_action(cause: TransitionCause) -> TypeGuard[Action]:
 
 
 @dataclass(frozen=True)
+class EvidenceScope:
+    """Canonical identity of the exact world that proved an observation."""
+
+    world_key: tuple[Any, ...]
+    context_key: tuple[tuple[str, Any], ...] | None
+
+    @classmethod
+    def capture(
+        cls,
+        world_key: tuple[Any, ...] | None,
+        context: Iterable[ActionPair] | None = None,
+    ) -> EvidenceScope | None:
+        """Capture one exact evidence scope; ``None`` denotes global evidence."""
+
+        if world_key is None:
+            return None
+        context_key = (
+            None
+            if context is None
+            else tuple(sorted((tag, _context_value_key(value)) for tag, value in context))
+        )
+        return cls(world_key=world_key, context_key=context_key)
+
+
+@dataclass(frozen=True)
 class CompassObservation:
     """One transition observation waiting to be applied by the drive loop.
 
@@ -139,6 +165,16 @@ class CompassObservation:
     # verify that the trial actually exercised the guarded artifact.
     context: tuple[ActionPair, ...] = ()
     applied: tuple[ActionPair, ...] = ()
+
+    def __post_init__(self) -> None:
+        if is_action(self.cause) and not self.applied:
+            raise ValueError("action observations require a non-empty applied artifact")
+
+    @property
+    def applied_artifact(self) -> tuple[ActionPair, ...]:
+        """Canonical form of the explicitly recorded executable artifact."""
+
+        return _canonical_applied(self.applied)
 
 
 @dataclass(frozen=True)
@@ -175,7 +211,7 @@ class StaticEdgeObservation:
 
     edge_id: tuple[Any, ...]
     status: Literal["confirmed", "contradicted", "no_change"]
-    scope_key: tuple[Any, ...] | None = None
+    evidence_scope: EvidenceScope | None = None
     artifact_key: tuple[tuple[str, Any], ...] = ()
 
 
@@ -225,32 +261,6 @@ def _canon(value: Any) -> Any:
     ``_values_match`` — this only normalizes the bool/int duplicate.
     """
     return int(value) if isinstance(value, bool) else value
-
-
-def _evidence_scope_key(
-    world_key: tuple[Any, ...] | None,
-    context: Iterable[ActionPair] | None = None,
-) -> tuple[Any, ...] | None:
-    """Canonical identity of the exact world that proved an observation."""
-    if world_key is None:
-        return None
-    if context is None:
-        return (world_key, None)
-    return (
-        world_key,
-        tuple(sorted(((tag, _context_value_key(value)) for tag, value in context))),
-    )
-
-
-def _observation_applied(observation: CompassObservation) -> tuple[ActionPair, ...]:
-    """Exact artifact, with legacy action observations interpreted literally."""
-    if observation.applied:
-        return _canonical_applied(observation.applied)
-    if not is_action(observation.cause):
-        return ()
-    if is_composite_action(observation.cause):
-        return _canonical_applied(cast("tuple[ActionPair, ...]", tuple(observation.cause)))
-    return (observation.cause,)
 
 
 class CompassEntry(PRecord):
@@ -334,7 +344,7 @@ def _table_record(
     from_val: Any,
     to_val: Any,
     provenance: Provenance,
-    scope_key: tuple[Any, ...] | None,
+    evidence_scope: EvidenceScope | None,
     applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool]:
     """Write a live edge, overwriting only the same exact trial artifact.
@@ -356,7 +366,7 @@ def _table_record(
             "CONFIRMED entries must come from outcome.confirmed_entry(); record() cannot mint them"
         )
     fv = _canon(from_val)
-    key = (scope_key, tag, fv, cause, _applied_key(applied))
+    key = (evidence_scope, tag, fv, cause, _applied_key(applied))
     entry = CompassEntry(
         tag=tag,
         from_val=fv,
@@ -375,7 +385,7 @@ def _table_no_change(
     tag: str,
     cause: TransitionCause,
     from_val: Any,
-    scope_key: tuple[Any, ...] | None,
+    evidence_scope: EvidenceScope | None,
     applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool]:
     """Probe mark only.
@@ -386,7 +396,7 @@ def _table_no_change(
     when a fresh probe mark was added.
     """
     fv = _canon(from_val)
-    key = (scope_key, tag, fv, cause, _applied_key(applied))
+    key = (evidence_scope, tag, fv, cause, _applied_key(applied))
     if key in entries:
         return entries, False
     return (
@@ -410,7 +420,7 @@ def _table_contradict(
     tag: str,
     cause: TransitionCause,
     from_val: Any,
-    scope_key: tuple[Any, ...] | None,
+    evidence_scope: EvidenceScope | None,
     applied: tuple[ActionPair, ...],
 ) -> tuple[PMap, bool, bool]:
     """Demote every matching live edge to a CONTRADICTED tombstone.
@@ -425,7 +435,7 @@ def _table_contradict(
     removed = False
     for key, entry in entries.items():
         if (
-            key[0] == scope_key
+            key[0] == evidence_scope
             and key[1] == tag
             and key[3] == cause
             and _values_match(key[2], from_val)
@@ -437,7 +447,7 @@ def _table_contradict(
     # Ensure the passed key carries a probe mark.  When it collapses onto a
     # just-demoted edge (bool/int keys share a PMap slot) it is already a
     # tombstone; otherwise record a bare NO_CHANGE probe.
-    pkey = (scope_key, tag, _canon(from_val), cause, _applied_key(applied))
+    pkey = (evidence_scope, tag, _canon(from_val), cause, _applied_key(applied))
     probe_added = False
     if pkey not in entries:
         evolver[pkey] = CompassEntry(
@@ -534,7 +544,7 @@ class CompassKnowledge:
         """
         if world_key is _ALL_CONTEXTS:
             for (
-                _entry_world,
+                _entry_scope,
                 entry_tag,
                 from_value,
                 cause,
@@ -548,7 +558,7 @@ class CompassKnowledge:
         # global live entry just as an exact-world destination supersedes a
         # global destination. Persistent-map iteration order is irrelevant.
         resolved: dict[tuple[Any, TransitionCause, Any], CompassEntry] = {}
-        exact_scope = _evidence_scope_key(
+        exact_scope = EvidenceScope.capture(
             world_key if isinstance(world_key, tuple) else None,
             snapshot.items() if snapshot is not None else None,
         )
@@ -556,14 +566,14 @@ class CompassKnowledge:
         exact_artifact = _applied_key(applied) if applied is not None else None
         for scope in scopes:
             for (
-                entry_world,
+                entry_scope,
                 entry_tag,
                 from_value,
                 cause,
                 artifact,
             ), entry in self.entries.items():
                 if (
-                    entry_world == scope
+                    entry_scope == scope
                     and entry_tag == tag
                     and (scope is None or exact_artifact is None or artifact == exact_artifact)
                 ):
@@ -738,29 +748,19 @@ class CompassKnowledge:
     def static_edge_status(
         self,
         edge: Any,
-        world_key: tuple[Any, ...] | None,
-        snapshot: dict[str, Any] | None = None,
         *,
-        evidence_scope_key: tuple[Any, ...] | None = None,
+        evidence_scope: EvidenceScope | None,
     ) -> Literal["confirmed", "contradicted", "no_change"] | None:
         """Evidence for one static edge in one world.
 
         Exact-world evidence overrides a deliberately global seeded overlay.
-        Callers never reconstruct the persistent-map storage key. Path searches
-        may supply the scope key they computed once for their fixed
-        world/snapshot; direct callers retain the compatibility path that
-        computes it here.
+        Callers capture the scope once for their fixed world/snapshot and never
+        reconstruct the persistent-map storage key.
         """
         edge_id = edge.identity
         required_actions = () if edge.action is None else (edge.action, *edge.co_actions)
-        scope_key = evidence_scope_key
-        if scope_key is None:
-            scope_key = _evidence_scope_key(
-                world_key,
-                snapshot.items() if snapshot is not None else None,
-            )
-        scoped_key = (scope_key, _applied_key(required_actions), edge_id)
-        if scope_key is not None and scoped_key in self.static_overlays:
+        scoped_key = (evidence_scope, _applied_key(required_actions), edge_id)
+        if evidence_scope is not None and scoped_key in self.static_overlays:
             return self.static_overlays[scoped_key]
         return self.static_overlays.get(edge_id)
 
@@ -799,9 +799,9 @@ class CompassKnowledge:
             elif isinstance(observation, StaticEdgeObservation):
                 overlay_key = (
                     observation.edge_id
-                    if observation.scope_key is None
+                    if observation.evidence_scope is None
                     else (
-                        observation.scope_key,
+                        observation.evidence_scope,
                         observation.artifact_key,
                         observation.edge_id,
                     )
@@ -813,8 +813,11 @@ class CompassKnowledge:
                     )
                     changed = True
             elif observation.kind == "edge":
-                scope_key = _evidence_scope_key(observation.world_key, observation.context)
-                applied = _observation_applied(observation)
+                evidence_scope = EvidenceScope.capture(
+                    observation.world_key,
+                    observation.context,
+                )
+                applied = observation.applied_artifact
                 table, touched = _table_record(
                     table,
                     observation.tag,
@@ -822,31 +825,37 @@ class CompassKnowledge:
                     observation.from_val,
                     observation.to_val,
                     Provenance.OBSERVED,
-                    scope_key,
+                    evidence_scope,
                     applied,
                 )
                 changed |= touched
             elif observation.kind == "contradict":
-                scope_key = _evidence_scope_key(observation.world_key, observation.context)
-                applied = _observation_applied(observation)
+                evidence_scope = EvidenceScope.capture(
+                    observation.world_key,
+                    observation.context,
+                )
+                applied = observation.applied_artifact
                 table, touched, _ = _table_contradict(
                     table,
                     observation.tag,
                     observation.cause,
                     observation.from_val,
-                    scope_key,
+                    evidence_scope,
                     applied,
                 )
                 changed |= touched
             else:
-                scope_key = _evidence_scope_key(observation.world_key, observation.context)
-                applied = _observation_applied(observation)
+                evidence_scope = EvidenceScope.capture(
+                    observation.world_key,
+                    observation.context,
+                )
+                applied = observation.applied_artifact
                 table, touched = _table_no_change(
                     table,
                     observation.tag,
                     observation.cause,
                     observation.from_val,
-                    scope_key,
+                    evidence_scope,
                     applied,
                 )
                 changed |= touched
@@ -905,6 +914,11 @@ class Compass:
             # contradiction, is still meaningful overlay evidence.
             if observation.kind == "no_change" and not is_action(observation.cause):
                 continue
+            evidence_scope = EvidenceScope.capture(
+                observation.world_key,
+                observation.context,
+            )
+            applied_artifact = observation.applied_artifact
             for graph in self.catalog.graphs:
                 if graph.role.channel_tag != observation.tag:
                     continue
@@ -921,7 +935,7 @@ class Compass:
                     )
                     if not (cause_matches and _values_match(edge.from_value, observation.from_val)):
                         continue
-                    if not edge.exercised_by(observation, _observation_applied(observation)):
+                    if not edge.exercised_by(observation, applied_artifact):
                         continue
                     if observation.kind == "edge":
                         # An alternate observed destination does not globally
@@ -940,8 +954,8 @@ class Compass:
                         StaticEdgeObservation(
                             edge.identity,
                             status,
-                            _evidence_scope_key(observation.world_key, observation.context),
-                            _applied_key(_observation_applied(observation)),
+                            evidence_scope,
+                            _applied_key(applied_artifact),
                         )
                     )
         knowledge, changed = self.knowledge.apply((*supplied, *overlays))

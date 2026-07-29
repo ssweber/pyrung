@@ -1597,6 +1597,26 @@ def test_harness_feedback_excluded_from_steerable():
 # ===================================================================
 
 
+@pytest.mark.parametrize("kind", ("edge", "no_change", "contradict"))
+def test_action_compass_observation_requires_applied_artifact(kind):
+    from pyrung.core.analysis.pilot.compass import CompassObservation
+
+    with pytest.raises(
+        ValueError,
+        match="action observations require a non-empty applied artifact",
+    ):
+        CompassObservation(kind, "State", ("Cmd", True), 0, 1)
+
+
+def test_wait_compass_observation_allows_empty_applied_artifact():
+    from pyrung.core.analysis.pilot.compass import WAIT, CompassObservation
+
+    observation = CompassObservation("edge", "State", WAIT, 0, 1)
+
+    assert observation.applied == ()
+    assert observation.applied_artifact == ()
+
+
 def test_compass_bfs_shortest_path():
     """BFS finds the shortest action sequence through a transition table."""
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
@@ -1609,10 +1629,10 @@ def test_compass_bfs_shortest_path():
     action_d = ("Recipe", 7)
     inf, changed = inf.apply(
         (
-            CompassObservation("edge", tag, action_a, 0, 1),
-            CompassObservation("edge", tag, action_b, 1, 2),
-            CompassObservation("edge", tag, action_c, 2, 3),
-            CompassObservation("edge", tag, action_d, 0, 3),
+            CompassObservation("edge", tag, action_a, 0, 1, applied=(action_a,)),
+            CompassObservation("edge", tag, action_b, 1, 2, applied=(action_b,)),
+            CompassObservation("edge", tag, action_c, 2, 3, applied=(action_c,)),
+            CompassObservation("edge", tag, action_d, 0, 3, applied=(action_d,)),
         )
     )
     assert changed
@@ -1637,10 +1657,10 @@ def test_compass_paths_include_wait_transitions():
     action_bad = ("Cmd", "abort")
     inf, _ = inf.apply(
         (
-            CompassObservation("edge", tag, action_a, 9, 1),
+            CompassObservation("edge", tag, action_a, 9, 1, applied=(action_a,)),
             CompassObservation("edge", tag, WAIT, 1, 2),
-            CompassObservation("edge", tag, action_b, 2, 6),
-            CompassObservation("edge", tag, action_bad, 1, 9),
+            CompassObservation("edge", tag, action_b, 2, 6, applied=(action_b,)),
+            CompassObservation("edge", tag, action_bad, 1, 9, applied=(action_bad,)),
         )
     )
 
@@ -1667,8 +1687,22 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     composite_probed = (("C_Start", True), ("InterlockAck", True))
     inf, _ = inf.apply(
         (
-            CompassObservation("edge", tag, flat_probed, from_val, 1),
-            CompassObservation("edge", tag, composite_probed, from_val, 2),
+            CompassObservation(
+                "edge",
+                tag,
+                flat_probed,
+                from_val,
+                1,
+                applied=(flat_probed,),
+            ),
+            CompassObservation(
+                "edge",
+                tag,
+                composite_probed,
+                from_val,
+                2,
+                applied=composite_probed,
+            ),
         )
     )
 
