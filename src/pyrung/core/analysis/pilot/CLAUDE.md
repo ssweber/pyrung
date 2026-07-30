@@ -14,6 +14,142 @@ Use WWTD — *what would the tech do?* — as the first-principles check: read t
 ladder and trend first, make the smallest reversible intervention, then observe
 what the program actually did.
 
+## The happy path
+
+The ordinary loop is small:
+
+```text
+read current world -> choose one bearing -> try it on a fork -> verify
+-> record observations -> commit -> assess progress -> read again
+```
+
+On an uncomplicated turn, `trace.py` exposes a steerable leaf or an owned
+boundary, `options.py` materializes it, orientation returns one `Bearing`,
+`steer.py` executes it, verification accepts it, and progress handling banks a
+checkpoint. The read is then discarded and the loop starts again from the
+committed snapshot.
+
+The rest of PILOT exists mainly to answer three questions when that path is not
+straightforward:
+
+1. Can PILOT read what should happen next?
+2. Did the attempted action produce a trustworthy result?
+3. Did the committed result become durable progress?
+
+These are separate escalation boundaries. Extending a partial trace is not the
+same decision as accepting a trial, and accepting a trial is not the same
+decision as retaining its world.
+
+## The three escalation questions
+
+### 1. Can PILOT read what should happen next?
+
+`trace.py` is the base reader. It walks backward through writers, guards,
+copies, calculations, and accumulating instructions until it reaches a
+steerable action, an instruction-owned boundary, or an unresolved frontier.
+The following modules extend that read:
+
+1. `advance.py` supplies owner-declared cross-scan boundaries and progress
+   receipts. `availability.py` orders currently available writers without
+   rejecting the others. `tide_tables.py` resolves finite table/calc preimages
+   and may permanently reject a guard only from a complete finite domain.
+2. `evidence.py`, `pipeline_graph.py`, `static_expressions.py`, and
+   `constrained_reachability.py` add static transition, route, and reachability
+   evidence around the backward trace.
+3. `options.py` combines the target trace with charted completion,
+   instruction-owned boundaries, persistent Compass knowledge, and
+   program-awaited actions. For a charted edge with one exact producer,
+   `program_step.py` projects that producer in an otherwise-unchanged fork and
+   reports `KEEP_RUNNING`, `NEEDS_INPUT`, `INTERRUPTED`, or `UNCLEAR`. It reports
+   a reading; it never chooses an action.
+4. Compass knowledge may supply one empirically learned wait, action, or joint
+   action when the current static read has no local bearing. Learned evidence
+   still passes the ordinary live-trial gates.
+5. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
+   unrelated state, probes a finite action domain on isolated forks, and
+   returns observations without committing or choosing an action. Probe rounds
+   are bounded per world key; exhaustion makes the next complete orientation
+   return `Stuck`.
+
+These are layers of evidence, not a rigid call stack: several static readers
+contribute during the same orientation. Within the completed read,
+`orientation.py` applies the explicit act precedence: prescribed wait, learned
+joint action, individual candidates, then widened atomic action. If no concrete
+act remains, it requests a probe or gives program-owned motion a bounded
+terminal coast/dwell before probing. Every observation restarts the read from
+the current world.
+
+### 2. Did the attempted action produce a trustworthy result?
+
+`steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, or `Dwell` on a
+fork. All four modes converge on `verify.py`:
+
+1. Avoid and banked-work gates run before target acceptance.
+2. Spin, cycle, and dead-end gates reject locally provable failures.
+3. `outcome.py` classifies agency, bearing effect, target-relative progress,
+   and frontier change. Passing makes the fork eligible for commit; it does not
+   prove durable progress.
+4. A suspicious excursion is the exceptional branch.
+   `pilot.py::_resolve_excursion` invokes `investigate.py` at most once and
+   passes the exact replay to `verify.verify_excursion_retry`, which resumes
+   the remaining gates.
+5. A rejected act records its observations and exact world-scoped nogood, then
+   returns to orientation. PILOT never advances to a sibling from a retained
+   candidate list.
+
+`overlay.py`, `pulse.py`, and `coast.py` implement the executable intervention
+and observation receipts used by this layer. `cyclefold.py` may accelerate a
+long coast only by skipping a proven cycle and landing back on a real recorded
+scan.
+
+### 3. Did the committed result become durable progress?
+
+`progress.py` owns this question after a trial has passed verification:
+
+1. A clean target-relative improvement banks or refreshes a checkpoint.
+2. An exposed frontier or satisfied channel bearing may reset the local trend
+   baseline without yet declaring the departure durable.
+3. `departure.py` settles and classifies observed channel motion.
+   `earned_work.py` supplies conservative target-relative evidence for whether
+   a pending departure should be promoted, kept pending, regressed, or expired.
+4. A regression or anomalous departure invokes `causal.py` to read recorded
+   causes. `corrections.py` produces hypotheses; `investigate.py` ranks and
+   replay-tests them; `progress.py` alone installs one confirmed correction and
+   reverts to the selected checkpoint.
+5. Pending-departure expiry rolls back without claiming the transition was
+   impossible and without creating a nogood.
+
+This third question accounts for most of the recovery machinery: a fork can be
+safe enough to commit while its meaning remains unsettled. Search, probe,
+pending-motion, and coast budgets ensure that an unresolved world ends with a
+named frontier rather than silent churn.
+
+## Actual control flow
+
+1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
+2. Compass reads trace, static catalogs, awaited-action evidence, constraints,
+   and knowledge;
+   `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
+3. `steer.execute` rejects stale bearings, installs their declarative
+   prerequisites, and executes exactly one act through `verify.verify_gates`.
+   A spin-shaped excursion is returned with its exact execution rather than
+   investigated inside the gate.
+4. `pilot.py::_resolve_excursion` owns at most one investigation and passes its
+   replay to `verify.verify_excursion_retry`, which resumes after spin.
+   `_record_attempt` then applies all observations, including rejected
+   attempts, exactly once before any further orientation.
+5. An accepted fork is committed and `progress.py` decides retention,
+   pending continuation, investigation, or revert. Trend monitoring hands a
+   detected channel departure to its terminal `_handle_channel_departure`
+   generator without reconstructing the departure receipt.
+6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
+   exhaustion mark are applied before orientation runs again.
+7. `Stuck` is terminal. No candidate list or route suffix survives an
+   observation.
+
+Passing verification means "eligible to commit and assess", not "durable
+progress". Use distinct language for those two decisions.
+
 ## Working principles
 
 ### Recompute from the current world
@@ -28,7 +164,9 @@ alternative, or learned transition is evidence for the next action only.
 
 ### Read before probing
 
-Escalate according to what remains unreadable:
+Use the evidence ladder in question 1 before returning `NeedProbe`. Static and
+projected readers may use controlled forks, but isolated action search belongs
+only to `skiff.py`.
 
 Instructions and harness couplings that own cross-scan result channels expose
 an `AdvanceProfile` contract. An `AdvanceStep.progress` receipt is
@@ -36,25 +174,18 @@ owner-declared evidence that an operation is active when a quantized scalar
 cannot change on the next scan; fractional accumulator state remains simulator
 execution state, not public PILOT evidence.
 
-1. `trace.py` follows writers, guards, copies, calculations, and
-   instruction-owned cross-scan state through `advance.py`.
-2. `availability.py`, `evidence.py`, `tide_tables.py`, and
-   `awaited_actions.py` extend that read with current-state guards, pipeline
-   structure, finite constant-backed tables, and program-awaited actions.
-3. `program_step.py` checks one exact producer in an otherwise-unchanged fork,
-   plus one counterfactual input patch per required input, and reports keep
-   running, needs input, interrupted pipeline motion, or unclear. It never
-   chooses an action. Observed pipeline motion makes the reading interrupted
-   even when the producer exposes no external input; the current transition
-   owner must be observed before option ordering may select an alternative.
-   A requirement read while the program is crossing a boundary it owns belongs
-   to the world after that crossing, not to this one — an input the program is
-   genuinely stopped at is still required once its own motion finishes. Such a
-   reading keeps running with the crossing itself as the immediate boundary,
-   so the caller coasts to its landing and the drive loop reads the settled
-   world again.
-4. `skiff.py` runs isolated fork probes only for a genuinely unreadable
-   frontier.
+`program_step.py` checks one exact producer in an otherwise-unchanged fork,
+plus one counterfactual input patch per required input. Observed pipeline motion
+makes the reading interrupted even when the producer exposes no external input;
+the current transition owner must be observed before option ordering may select
+an alternative.
+
+A requirement read while the program is crossing a boundary it owns belongs to
+the world after that crossing, not to this one. An input the program is
+genuinely stopped at is still required once its own motion finishes. A
+mid-crossing reading therefore keeps running with the crossing as its immediate
+boundary, so the caller coasts to the landing and the drive loop reads the
+settled world again.
 
 The line between exact-producer proof and skiff is who may return an action, not
 who may probe: `program_step.py` only reports a reading; skiff may propose one.
@@ -160,32 +291,6 @@ this table only locates the owner.
 - Temporary-logic execution ownership:
   `overlay.py::_pilot_rung_execution_receipt` over the same
   `_expand_pilot_rules` branches installed by `_set_pilot_rungs`
-
-## Actual control flow
-
-1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
-2. Compass reads trace, static catalogs, awaited-action evidence, constraints,
-   and knowledge;
-   `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
-3. `steer.execute` rejects stale bearings, installs their declarative
-   prerequisites, and executes exactly one act through `verify.verify_gates`.
-   A spin-shaped excursion is returned with its exact execution rather than
-   investigated inside the gate.
-4. `pilot.py::_resolve_excursion` owns at most one investigation and passes its
-   replay to `verify.verify_excursion_retry`, which resumes after spin.
-   `_record_attempt` then applies all observations, including rejected
-   attempts, exactly once before any further orientation.
-5. An accepted fork is committed and `progress.py` decides retention,
-   pending continuation, investigation, or revert. Trend monitoring hands a
-   detected channel departure to its terminal `_handle_channel_departure`
-   generator without reconstructing the departure receipt.
-6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
-   exhaustion mark are applied before orientation runs again.
-7. `Stuck` is terminal. No candidate list or route suffix survives an
-   observation.
-
-Passing verification means "eligible to commit and assess", not "durable
-progress". Use distinct language for those two decisions.
 
 ## World and knowledge
 
