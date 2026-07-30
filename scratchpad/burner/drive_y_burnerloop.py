@@ -31,10 +31,10 @@ SHOW = {
     "letrun_ejection",
     "trend_checkpoint",
     "trend_regression",
-    "provisional_started",
-    "provisional_promoted",
-    "provisional_regressed",
-    "provisional_expired",
+    "pending_departure_started",
+    "pending_departure_promoted",
+    "pending_departure_regressed",
+    "pending_departure_expired",
     "skiff",
     "stuck",
     "finished",
@@ -83,7 +83,7 @@ def brief(kind: str, data: dict) -> str:
         return f"reached={data.get('reached')} reason={data.get('reason')!r}"
     if kind == "stuck":
         return f"reason={data.get('reason')!r}"
-    if kind.startswith("provisional"):
+    if kind.startswith("pending_departure"):
         return (
             f"chan={data.get('channel_tag')} from={data.get('from_value')!r} "
             f"reason={str(data.get('reason'))[:80]!r}"

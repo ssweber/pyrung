@@ -105,12 +105,11 @@ class PendingDeparture:
     replace a checkpoint's executable artifact but must preserve that owner.
     Policy resolves in two phases: a plain :class:`DepartureDecision` (wait,
     promote, regress, or expire) is computed first, then applied to the
-    receipts this record owns.  The ``provisional_*`` event names surfaced to
-    consumers are compatibility vocabulary only, not an internal state.
+    receipts this record owns.
     """
 
     opening: DepartureObservation
-    progress_mark: tuple[tuple[str, Any], ...]
+    earned_work_mark: tuple[tuple[str, Any], ...]
     rollback_owner: _CheckpointOwner
     expires_at_search_scan: int
     saved_progress_owner: _CheckpointOwner | None = None
@@ -160,7 +159,7 @@ def _trial_checkpoint(
     )
 
 
-def _provisional_payload(
+def _pending_departure_payload(
     pending: PendingDeparture,
     *,
     before_source_mark_fields: Mapping[str, Any] | None = None,
@@ -171,7 +170,7 @@ def _provisional_payload(
         "channel_tag": pending.opening.channel_tag,
         "from_value": pending.opening.from_value,
         **dict(before_source_mark_fields or {}),
-        "gauge_at_source": pending.progress_mark,
+        "earned_work_mark": pending.earned_work_mark,
         **dict(after_source_mark_fields or {}),
     }
 
@@ -329,7 +328,7 @@ def _monitor_trend(
                 "channel": channel_tag,
                 "channel_value": execution.after_snap.get(channel_tag),
                 "baseline_trend": previous,
-                "provisional": True,
+                "unbanked": True,
             },
         )
         return
@@ -350,7 +349,7 @@ def _monitor_trend(
                     "trend": state.best_trend,
                     "key": verified.new_key,
                     "checkpoint_count": len(state.checkpoints),
-                    "provisional": True,
+                    "unbanked": True,
                 },
             )
             return
@@ -501,8 +500,8 @@ def _handle_channel_departure(
             #
             # Positive reactive attribution requires investigation on the
             # first occurrence. An already-open pending state retains the
-            # established compatibility rule: every preserved departure is
-            # concrete new evidence and must be understood before retention.
+            # established rule: every preserved departure is concrete new
+            # evidence and must be understood before retention.
             origin = _channel_recovery_origin(
                 state,
                 trial,
@@ -617,7 +616,7 @@ def _open_pending_departure(
     # in. Only work earned after PILOT can read the departed world may validate
     # staying there.
     _adopt_settled_departure(departure, state)
-    progress_mark = (
+    earned_work_mark = (
         earned_work.mark(dict(state.work.state.tags))
         if earned_work is not None and earned_work.components
         else ()
@@ -625,23 +624,16 @@ def _open_pending_departure(
     search_scans = state.search_scans
     state.pending_departure = PendingDeparture(
         opening=observation,
-        progress_mark=progress_mark,
+        earned_work_mark=earned_work_mark,
         rollback_owner=state.checkpoints[-1].owner,
         expires_at_search_scan=min(
             ctx.max_scans,
             search_scans + _PENDING_DEPARTURE_SCAN_BUDGET,
         ),
     )
-    # ``route`` and ``classification`` are stable diagnostic vocabulary. The
-    # former is a projection of the exact awaited-action evidence, never retained
-    # navigation state; static continuation has always rendered an empty route.
-    legacy_route = (
-        (observation.settled_value,) if observation.continuation.awaited_action is not None else ()
-    )
     return (
         PilotEvent(
-            # Stable diagnostic vocabulary retained for existing consumers.
-            "provisional_started",
+            "pending_departure_started",
             state.work.state.scan_id,
             {
                 "channel_tag": observation.channel_tag,
@@ -649,11 +641,10 @@ def _open_pending_departure(
                 "requested_value": channel_motion.target_value,
                 "settled_value": observation.settled_value,
                 "reason": departure.reason,
-                "route": legacy_route,
                 "settle_scans": observation.landing_receipt.logical_scans,
-                "gauge_at_source": progress_mark,
+                "earned_work_mark": earned_work_mark,
                 "entry_progress": observation.progress,
-                "classification": "continue",
+                "classification": departure.classification.value,
             },
         ),
     )
@@ -718,7 +709,7 @@ def _record_pending_landing(
     progress = pending.opening.progress
     if progress.movement not in {EarnedWorkMovement.FORWARD, EarnedWorkMovement.BACKWARD}:
         progress = (
-            earned_work.receipt(dict(pending.progress_mark), frame.snap)
+            earned_work.receipt(dict(pending.earned_work_mark), frame.snap)
             if earned_work is not None
             else EarnedWorkReceipt()
         )
@@ -737,15 +728,14 @@ def _record_pending_landing(
         # Unhold/rejoin transaction its ordinary local recovery semantics.
         state.pending_departure = replace(
             pending,
-            progress_mark=landing_mark,
+            earned_work_mark=landing_mark,
             saved_progress_owner=receipt.owner,
         )
         return (
             PilotEvent(
-                # Stable diagnostic vocabulary retained for existing consumers.
-                "provisional_promoted",
+                "pending_departure_promoted",
                 state.work.state.scan_id,
-                _provisional_payload(
+                _pending_departure_payload(
                     pending,
                     after_source_mark_fields={
                         "entry_progress": pending.opening.progress,
@@ -784,7 +774,7 @@ def _assess_pending_departure(
         ctx.target.predicate,
     )
     earned_work = state.earned_work
-    anchor = dict(pending.progress_mark)
+    anchor = dict(pending.earned_work_mark)
     progress = (
         earned_work.receipt(anchor, now_snap) if earned_work is not None else EarnedWorkReceipt()
     )
@@ -856,10 +846,9 @@ def _apply_departure_decision(
         promoted_corrections = _promote_probationary_corrections(state)
         return (
             PilotEvent(
-                # Stable diagnostic vocabulary retained for existing consumers.
-                "provisional_promoted",
+                "pending_departure_promoted",
                 state.work.state.scan_id,
-                _provisional_payload(
+                _pending_departure_payload(
                     pending,
                     after_source_mark_fields={
                         "landing_mark": (
@@ -878,10 +867,9 @@ def _apply_departure_decision(
         )
     if decision.action is DepartureAction.REGRESS:
         event = PilotEvent(
-            # Stable diagnostic vocabulary retained for existing consumers.
-            "provisional_regressed",
+            "pending_departure_regressed",
             state.work.state.scan_id,
-            _provisional_payload(
+            _pending_departure_payload(
                 pending,
                 before_source_mark_fields={"outcome": _departure_event_outcome(decision)},
             ),
@@ -907,10 +895,9 @@ def _apply_departure_decision(
     state.best_trend = checkpoint.trend
     return (
         PilotEvent(
-            # Stable diagnostic vocabulary retained for existing consumers.
-            "provisional_expired",
+            "pending_departure_expired",
             state.work.state.scan_id,
-            _provisional_payload(
+            _pending_departure_payload(
                 pending,
                 before_source_mark_fields={"outcome": _departure_event_outcome(decision)},
             ),

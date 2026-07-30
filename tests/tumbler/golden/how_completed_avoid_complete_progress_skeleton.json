@@ -965,18 +965,17 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "continue",
-  "from_value": 9,
-  "gauge_at_source": [
+  "classification": "clean_continuation",
+  "earned_work_mark": [
    [
     "Internal__Step",
     101
    ]
   ],
-  "kind": "provisional_started",
+  "from_value": 9,
+  "kind": "pending_departure_started",
   "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
   "requested_value": 1,
-  "route": [],
   "settled_value": 2
  },
  {
@@ -1441,8 +1440,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 16
+  "trend": 16,
+  "unbanked": true
  },
  {
   "distance": 16,
@@ -2076,8 +2075,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 16
+  "trend": 16,
+  "unbanked": true
  },
  {
   "distance": 16,
@@ -2175,8 +2174,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 11
+  "trend": 11,
+  "unbanked": true
  },
  {
   "distance": 11,
@@ -2333,8 +2332,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 5
+  "trend": 5,
+  "unbanked": true
  },
  {
   "distance": 5,
@@ -2461,8 +2460,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 3
+  "trend": 3,
+  "unbanked": true
  },
  {
   "distance": 3,
@@ -3189,14 +3188,14 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "gauge_at_source": [
+  "earned_work_mark": [
    [
     "Internal__Step",
     101
    ]
   ],
-  "kind": "provisional_promoted",
+  "from_value": 9,
+  "kind": "pending_departure_promoted",
   "landing_mark": [
    [
     "Internal__Step",
@@ -3652,30 +3651,29 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "continue",
-  "from_value": 6,
-  "gauge_at_source": [
+  "classification": "clean_continuation",
+  "earned_work_mark": [
    [
     "Internal__Step",
     107
    ]
   ],
-  "kind": "provisional_started",
+  "from_value": 6,
+  "kind": "pending_departure_started",
   "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
   "requested_value": 16,
-  "route": [],
   "settled_value": 11
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "from_value": 6,
-  "gauge_at_source": [
+  "earned_work_mark": [
    [
     "Internal__Step",
     107
    ]
   ],
-  "kind": "provisional_promoted",
+  "from_value": 6,
+  "kind": "pending_departure_promoted",
   "landing_mark": [
    [
     "Internal__Step",
@@ -3921,8 +3919,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 14
+  "trend": 14,
+  "unbanked": true
  },
  {
   "distance": 14,
@@ -4492,8 +4490,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 12,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 14
+  "trend": 14,
+  "unbanked": true
  },
  {
   "distance": 14,
@@ -4665,8 +4663,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 11
+  "trend": 11,
+  "unbanked": true
  },
  {
   "distance": 11,
@@ -4823,8 +4821,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 8
+  "trend": 8,
+  "unbanked": true
  },
  {
   "distance": 8,
@@ -4966,8 +4964,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 5
+  "trend": 5,
+  "unbanked": true
  },
  {
   "distance": 5,
@@ -5094,8 +5092,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 3
+  "trend": 3,
+  "unbanked": true
  },
  {
   "distance": 3,
@@ -5206,14 +5204,14 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "from_value": 6,
-  "gauge_at_source": [
+  "earned_work_mark": [
    [
     "Internal__Step",
     107
    ]
   ],
-  "kind": "provisional_promoted",
+  "from_value": 6,
+  "kind": "pending_departure_promoted",
   "landing_mark": [
    [
     "Internal__Step",

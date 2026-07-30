@@ -343,18 +343,17 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "continue",
-  "from_value": 9,
-  "gauge_at_source": [
+  "classification": "clean_continuation",
+  "earned_work_mark": [
    [
     "Internal__Step",
     101
    ]
   ],
-  "kind": "provisional_started",
+  "from_value": 9,
+  "kind": "pending_departure_started",
   "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
   "requested_value": 1,
-  "route": [],
   "settled_value": 2
  },
  {

@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot import progress as prog
 from pyrung.core.analysis.pilot import program_step as program_step_module
+from pyrung.core.analysis.pilot import progress as prog
 from pyrung.core.runner import _compile_avoid
 
 WALL_S = 180.0
@@ -158,10 +158,10 @@ def main() -> None:
             "zoom_accepted",
             "zoom_rejected",
             "letrun_ejection",
-            "provisional_started",
-            "provisional_promoted",
-            "provisional_regressed",
-            "provisional_expired",
+            "pending_departure_started",
+            "pending_departure_promoted",
+            "pending_departure_regressed",
+            "pending_departure_expired",
             "departure_investigated",
             "trend_regression",
             "candidates_built",
@@ -217,8 +217,8 @@ def main() -> None:
                     )
                     if key in data
                 }
-                if event.kind.startswith("provisional_"):
-                    selected["gauge_at_source"] = data.get("gauge_at_source")
+                if event.kind.startswith("pending_departure_"):
+                    selected["earned_work_mark"] = data.get("earned_work_mark")
                     selected["landing_mark"] = data.get("landing_mark")
                 if event.kind == "candidate_accepted":
                     selected["applied"] = data.get("applied")

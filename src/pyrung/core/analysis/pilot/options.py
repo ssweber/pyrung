@@ -202,7 +202,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             and any(component.tag in anchor_tags for component in components)
             and earned_work.receipt(before, after).any_forward
         ):
-            reasons.append("gauge:advanced")
+            reasons.append("earned-work:forward")
 
     return tuple(dict.fromkeys(reasons))
 

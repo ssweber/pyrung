@@ -666,7 +666,7 @@ class _PilotProgressFormatter:
             self._departure_open = True
             return " Checking..."
 
-        if kind in {"provisional_started", "departure_investigated"}:
+        if kind in {"pending_departure_started", "departure_investigated"}:
             if self._departure_open:
                 self._departure_open = False
                 return " valid.\n"

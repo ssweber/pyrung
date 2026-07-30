@@ -184,7 +184,7 @@ def _gate_spin(
             else EarnedWorkReceipt()
         )
     if earned_work_receipt.any_forward:
-        _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
+        _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         return trial
 
     if trial.post_pulse_key != frame.key:
@@ -289,7 +289,7 @@ def _gate_cycle(
     # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
     # the threshold-masked projection (see _gate_spin's twin check).
     if earned_work_receipt.any_forward:
-        _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
+        _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         return True
     if not influence_prescribed:
         if nogood_pair is not None:
@@ -431,7 +431,7 @@ def _gate_dead_end(
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
         if earned_work_receipt.any_forward:
-            _record_gate("ORDINAL-ADVANCE", ": gauge earned", gate_events)
+            _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
@@ -609,7 +609,7 @@ def verify_gates(
         gate_events.append(
             PilotGateEvent(
                 "banked-work",
-                "intervention would erase target-relative gauge progress",
+                "intervention would erase target-relative earned work",
                 evidence={
                     "source_mark": earned_work_receipt.source_mark,
                     "landing_mark": earned_work_receipt.landing_mark,

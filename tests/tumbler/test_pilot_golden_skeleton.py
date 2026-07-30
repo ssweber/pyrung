@@ -493,7 +493,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     assert any(
         pair[0] == "Internal__Step" and pair[1] >= 109
         for event in events
-        if event.kind == "provisional_promoted"
+        if event.kind == "pending_departure_promoted"
         for pair in event.data.get("landing_mark") or ()
     )
     assert not any(
@@ -569,7 +569,7 @@ def _recipe_era_evidence(skeleton: list[dict]) -> bool:
         for field in ("to_value", "settled_value", "zoom_actual_value", "channel_value"):
             if entry.get(field) == 11 and "Sts_StateCurrent" in json.dumps(entry):
                 return True
-        for field in ("gauge_at_source", "landing_mark"):
+        for field in ("earned_work_mark", "landing_mark"):
             for pair in entry.get(field) or ():
                 if pair[0] == "Internal__Step" and isinstance(pair[1], int) and pair[1] >= 103:
                     return True

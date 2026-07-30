@@ -28,7 +28,6 @@ from pyrsistent import pvector
 from pyrung import And, Bool, Or, Program, Rung, latch, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
 from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
@@ -258,7 +257,7 @@ def _make_trial(
 def _pending_departure(
     state: _PilotState,
     *,
-    progress_mark: tuple[tuple[str, Any], ...] = (),
+    earned_work_mark: tuple[tuple[str, Any], ...] = (),
     expires_at: int = 2000,
     opening_progress: EarnedWorkReceipt | None = None,
     from_value: Any = 9,
@@ -283,7 +282,7 @@ def _pending_departure(
     )
     return PendingDeparture(
         opening=opening,
-        progress_mark=progress_mark,
+        earned_work_mark=earned_work_mark,
         rollback_owner=rollback_owner or state.checkpoints[-1].owner,
         expires_at_search_scan=expires_at,
     )
@@ -522,7 +521,7 @@ class TestCheckpoints:
         assert events[0].data["channel"] == "State"
         assert events[0].data["channel_value"] == 3
         assert events[0].data["baseline_trend"] == 2
-        assert events[0].data["provisional"] is True
+        assert events[0].data["unbanked"] is True
         assert state.best_trend == 15
         assert len(state.checkpoints) == 1  # preserve the pre-route rollback receipt
 
@@ -608,7 +607,7 @@ def test_improved_trace_distance_does_not_promote_pending_departure():
     state = _make_state(best_trend=5, checkpoints=[_cp(("src",), _oneshot_plc(), 5)])
     state.pending_departure = _pending_departure(
         state,
-        progress_mark=(("Step", 101),),
+        earned_work_mark=(("Step", 101),),
     )
     trial = _make_trial(3, BearingEffect.SATISFIED)
     ctx = SimpleNamespace(target=TargetSpec("State", 17))
@@ -616,7 +615,7 @@ def test_improved_trace_distance_does_not_promote_pending_departure():
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
     assert [e.kind for e in events] == ["trend_checkpoint"]
-    assert events[0].data["provisional"] is True
+    assert events[0].data["unbanked"] is True
     assert state.pending_departure is not None
     assert len(state.checkpoints) == 2
     assert state.best_trend == 3
@@ -661,67 +660,15 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
     assert state.pending_departure is not None
     assert state.pending_departure.opening is departure.observation
     assert state.pending_departure.opening.landing_receipt.logical_scans == 1
-    assert state.pending_departure.progress_mark == (("Step", 107),)
+    assert state.pending_departure.earned_work_mark == (("Step", 107),)
     assert not hasattr(state.pending_departure, "opening_progress")
     assert not hasattr(state.pending_departure, "settled_fork")
     assert not hasattr(state.pending_departure.opening.reading, "progress")
-    assert events[0].data["gauge_at_source"] == (("Step", 107),)
+    assert events[0].data["earned_work_mark"] == (("Step", 107),)
     assert events[0].data["settle_scans"] == 1
-    assert events[0].data["classification"] == "continue"
-    assert events[0].kind == "provisional_started"
-    assert events[0].data["route"] == ()
-
-
-def test_pending_departure_projects_awaited_action_route():
-    source = _oneshot_plc()
-    source._state = source.state.with_tags({"State": 6})
-    settled = source.fork()
-    settled._state = settled.state.with_tags({"State": 11})
-    checkpoint = _cp(("source",), source, 5)
-    state = _make_state(best_trend=5, checkpoints=[checkpoint], work=source)
-    trial = _make_trial(
-        5,
-        BearingEffect.DEPARTED,
-        before_snap={"State": 6},
-        fork_snap={"State": 10},
-        channel_motion=ChannelMotion("State", 16, stop_reason="departed"),
-    )
-    departure = _departure_result(
-        settled,
-        reason="awaiting operator continuation",
-        settled_value=11,
-        from_value=6,
-    )
-    awaited = AwaitedAction(
-        action=("Start", True),
-        command_tag="Command",
-        command_value=2,
-        command_writes=(("Command", 2),),
-        from_state=11,
-        to_state=16,
-        note="operator start",
-    )
-    departure = replace(
-        departure,
-        observation=replace(
-            departure.observation,
-            continuation=ContinuationEvidence(
-                departure.observation.continuation.channel_status,
-                awaited_action_inspected=True,
-                awaited_action=awaited,
-            ),
-        ),
-    )
-
-    events = _open_pending_departure(
-        departure,
-        trial,
-        state,
-        SimpleNamespace(max_scans=10_000),
-    )
-
-    assert events[0].kind == "provisional_started"
-    assert events[0].data["route"] == (11,)
+    assert events[0].data["classification"] == "clean_continuation"
+    assert events[0].kind == "pending_departure_started"
+    assert "route" not in events[0].data
 
 
 def test_pending_expiry_without_saved_progress_rolls_back():
@@ -731,7 +678,7 @@ def test_pending_expiry_without_saved_progress_rolls_back():
     state = _make_state(best_trend=5, checkpoints=[checkpoint])
     state.pending_departure = _pending_departure(
         state,
-        progress_mark=(("Step", 101),),
+        earned_work_mark=(("Step", 101),),
         expires_at=0,  # already past — the attempt is out of budget
     )
     trial = _make_trial(5, BearingEffect.SATISFIED)
@@ -739,7 +686,7 @@ def test_pending_expiry_without_saved_progress_rolls_back():
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
-    assert [e.kind for e in events] == ["provisional_expired"]
+    assert [e.kind for e in events] == ["pending_departure_expired"]
     assert state.pending_departure is None
     assert len(state.checkpoints) == 1  # rolled back to the boundary
     assert state.best_trend == 5
@@ -764,7 +711,7 @@ def test_target_acceptance_resolves_pending_departure_before_returning():
         )
     )
 
-    assert [event.kind for event in events] == ["provisional_promoted"]
+    assert [event.kind for event in events] == ["pending_departure_promoted"]
     assert events[0].data["terminal"] is True
     assert state.pending_departure is None
 
@@ -779,7 +726,7 @@ def test_pilot_caused_regression_does_not_rewrite_forward_earned_work_evidence()
     )
     state.pending_departure = _pending_departure(
         state,
-        progress_mark=(("Step", 3),),
+        earned_work_mark=(("Step", 3),),
     )
     trial = _make_trial(
         6,
@@ -839,7 +786,7 @@ def test_pending_expiry_restores_the_current_checkpoint_artifact():
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
-    assert [event.kind for event in events] == ["provisional_expired"]
+    assert [event.kind for event in events] == ["pending_departure_expired"]
     assert state.checkpoints == [corrected]
     assert state.best_trend == 4
 
@@ -870,7 +817,7 @@ def test_same_key_checkpoint_refresh_preserves_saved_progress_ownership():
             SimpleNamespace(target=TargetSpec("State", 17)),
         )
     )
-    assert [event.kind for event in events] == ["provisional_expired"]
+    assert [event.kind for event in events] == ["pending_departure_expired"]
     assert state.checkpoints[-1] is refreshed
 
 
@@ -933,7 +880,10 @@ def test_pending_regression_recovers_from_refreshed_saved_progress(monkeypatch):
     )
 
     assert events is not None
-    assert [event.kind for event in events] == ["provisional_regressed", "trend_regression"]
+    assert [event.kind for event in events] == [
+        "pending_departure_regressed",
+        "trend_regression",
+    ]
     assert captured["origin"].checkpoint_owner is saved.owner
     assert captured["origin"].anchor_scan == saved_work.state.scan_id
     assert captured["origin"].before_snap == dict(saved_work.state.tags)
@@ -1012,7 +962,7 @@ def test_instruction_owned_dwell_does_not_expire_pending_search_budget():
 
     events = tuple(_monitor_trend(trial, _frame(), state, ctx))
 
-    assert all(event.kind != "provisional_expired" for event in events)
+    assert all(event.kind != "pending_departure_expired" for event in events)
     assert state.search_scans == 0
     assert state.pending_departure is not None
 
@@ -1146,7 +1096,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_earned_work(monkeypatc
     assert [event.kind for event in events] == [
         "letrun_ejection",
         "departure_check_started",
-        "provisional_started",
+        "pending_departure_started",
     ]
     assert state.pending_departure is not None
     assert state.pending_departure.opening.progress.movement is EarnedWorkMovement.UNCHANGED

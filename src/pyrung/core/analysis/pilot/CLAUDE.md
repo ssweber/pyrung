@@ -334,10 +334,6 @@ an event stream, replay identity, or lower-level API.
 - `trace.py` retains the affine walker fallback when a registered reverse
   declines. Remove it only when registered reverse rules cover those affine
   writers.
-- `progress.py::PendingDeparture` owns the stable `provisional_*` events and
-  their legacy `route` and `gauge_at_source`, including the legacy
-  gauge/earned-work reason prose produced by `departure.py`. Change them only
-  with an event schema version and downstream migration.
 - `navigation_contracts.py::ActSource` keeps serialized values `influence` and
   `learned`; recording keeps the `influence_prescribed` payload, and VERIFY
   keeps the public `influence-override-cycle` gate event. Version and migrate

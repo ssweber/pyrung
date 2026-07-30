@@ -408,11 +408,11 @@ def _departure_reading(
     )
     if producer_rungs and has_target_earned_work and not external_supports:
         disposition = DepartureDisposition.OWNED
-        reason = "exact departure producer is bounded by target Gauge accomplishments"
+        reason = "exact departure producer is bounded by target earned-work accomplishments"
     elif external_supports:
         disposition = DepartureDisposition.REACTIVE
         reason = (
-            "exact departure producer is conditional on external support, not target Gauge work"
+            "exact departure producer is conditional on external support, not target earned work"
         )
     else:
         disposition = DepartureDisposition.UNKNOWN

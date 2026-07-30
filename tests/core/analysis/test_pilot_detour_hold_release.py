@@ -539,7 +539,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
             iteration_snapshot = dict(event.data["snapshot"])
         elif event.kind == "letrun_ejection":
             departures.append((len(events) - 1, dict(last_committed)))
-        elif event.kind == "provisional_started":
+        elif event.kind == "pending_departure_started":
             pending_step = last_committed.get(tags["Step"].name)
         elif event.kind == "candidates_built" and pending_step == 105:
             later_build = event.data
@@ -569,12 +569,12 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     resolution = next(
         event
         for event in events[initial_index + 1 :]
-        if event.kind in {"trend_regression", "provisional_started"}
+        if event.kind in {"trend_regression", "pending_departure_started"}
     )
     assert resolution.kind == "trend_regression", [
         (event.kind, event.data)
         for event in events[initial_index + 1 :]
-        if event.kind in {"departure_investigated", "trend_regression", "provisional_started"}
+        if event.kind in {"departure_investigated", "trend_regression", "pending_departure_started"}
     ]
     assert resolution.data["investigation"]["confirmed"] > 0
     assert any(rung.dest == tags["Door"].name for rung in resolution.data["rungs"])
@@ -610,7 +610,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         departure for departure in departures if departure[1].get(tags["Step"].name) == 105
     )
     recipe_started = next(
-        event for event in events[recipe_index + 1 :] if event.kind == "provisional_started"
+        event for event in events[recipe_index + 1 :] if event.kind == "pending_departure_started"
     )
     # The earlier correction releases once Execute/103 is discharged, so the
     # HELD-era 105 -> 107 work can legitimately occur while this station
@@ -619,7 +619,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     assert recipe_started.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
     assert recipe_started.data["entry_progress"].source_mark == ((tags["Step"].name, 105),)
     recipe_promoted = next(
-        event for event in events[recipe_index + 1 :] if event.kind == "provisional_promoted"
+        event for event in events[recipe_index + 1 :] if event.kind == "pending_departure_promoted"
     )
     assert recipe_promoted.data["entry_progress"].movement is EarnedWorkMovement.FORWARD
     assert recipe_promoted.data["corridor_open"] is True
@@ -628,7 +628,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     assert later_candidates is not None, [
         (event.kind, event.data.get("settled_value"))
         for event in events
-        if event.kind in {"letrun_ejection", "provisional_started", "finished"}
+        if event.kind in {"letrun_ejection", "pending_departure_started", "finished"}
     ]
     assert later_snapshot is not None
     later_pairs = [(candidate["tag"], candidate["value"]) for candidate in later_candidates]
@@ -685,8 +685,8 @@ def test_pending_departure_keeps_the_ordinary_pilot_loop_active() -> None:
             break
 
     assert finished is not None and finished["reached"], (finished or {}).get("reason")
-    assert "provisional_started" in kinds, kinds
-    assert "provisional_promoted" in kinds, kinds
+    assert "pending_departure_started" in kinds, kinds
+    assert "pending_departure_promoted" in kinds, kinds
     final = finished["work"].state.tags
     assert final[tags["State"].name] == tags["Completed"]
     assert final[tags["C_Complete"].name] is not True

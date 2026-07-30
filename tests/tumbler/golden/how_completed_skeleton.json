@@ -958,18 +958,17 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "classification": "continue",
-  "from_value": 9,
-  "gauge_at_source": [
+  "classification": "clean_continuation",
+  "earned_work_mark": [
    [
     "Internal__Step",
     101
    ]
   ],
-  "kind": "provisional_started",
+  "from_value": 9,
+  "kind": "pending_departure_started",
   "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
   "requested_value": 1,
-  "route": [],
   "settled_value": 2
  },
  {
@@ -1426,8 +1425,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 15
+  "trend": 15,
+  "unbanked": true
  },
  {
   "distance": 15,
@@ -2061,8 +2060,8 @@
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 15
+  "trend": 15,
+  "unbanked": true
  },
  {
   "distance": 15,
@@ -2158,8 +2157,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 10
+  "trend": 10,
+  "unbanked": true
  },
  {
   "distance": 10,
@@ -2317,8 +2316,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 4
+  "trend": 4,
+  "unbanked": true
  },
  {
   "distance": 4,
@@ -2446,8 +2445,8 @@
  },
  {
   "kind": "trend_checkpoint",
-  "provisional": true,
-  "trend": 2
+  "trend": 2,
+  "unbanked": true
  },
  {
   "distance": 2,
