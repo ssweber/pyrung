@@ -3,7 +3,7 @@ have earned (doors + both FBs), leave x_RotateSensor dead, run how(y_BurnerLoop)
 
 Ground truth (trajectory B): Execute at ~816, Rotate_SensorOffWD_tmr.Done at
 ~1316 (pen mark), state 6->8 at ~1852, ABORTED ~1854, goal needs ~2017.
-Expected: letrun/zoom ejection from 6, incident carrying the OffWD Done pen,
+Expected: let-run/bearing-coast ejection from 6, incident carrying the OffWD Done pen,
 liveness OSCILLATE (or steady FLIP + complement round) on x_RotateSensor,
 then the drive completes.
 
@@ -44,16 +44,24 @@ def main() -> None:
         if kind in ("candidate_accepted",):
             cd = data.get("candidate_detail") or {}
             print(f"[{wall:6.1f}s] scan {event.scan:6d} accept {cd.get('tag')}={cd.get('value')!r}")
-        elif kind in ("zoom",):
-            print(f"[{wall:6.1f}s] scan {event.scan:6d} zoom   {data.get('reason')!r}")
-        elif kind == "zoom_accepted":
+        elif kind in ("bearing_coast",):
             print(
-                f"[{wall:6.1f}s] scan {event.scan:6d} zoomOK chan={data.get('zoom_channel_tag')}"
-                f" target={data.get('zoom_target_value')!r} landed={data.get('zoom_actual_value')!r}"
+                f"[{wall:6.1f}s] scan {event.scan:6d} "
+                f"bearing coast   {data.get('reason')!r}"
+            )
+        elif kind == "bearing_coast_accepted":
+            print(
+                f"[{wall:6.1f}s] scan {event.scan:6d} bearing-coast OK "
+                f"chan={data.get('bearing_coast_channel_tag')}"
+                f" target={data.get('bearing_coast_target_value')!r} "
+                f"landed={data.get('bearing_coast_actual_value')!r}"
                 f" ejected={data.get('ejected')} scans={data.get('scan_before')}->{data.get('scan_after')}"
             )
-        elif kind == "zoom_rejected":
-            print(f"[{wall:6.1f}s] scan {event.scan:6d} zoomNO {[(g.event, g.detail[:50]) for g in data.get('gates', ())]}")
+        elif kind == "bearing_coast_rejected":
+            print(
+                f"[{wall:6.1f}s] scan {event.scan:6d} bearing-coast NO "
+                f"{[(g.event, g.detail[:50]) for g in data.get('gates', ())]}"
+            )
         elif kind == "letrun_ejection":
             print(
                 f"[{wall:6.1f}s] scan {event.scan:6d} EJECT  {data.get('channel_tag')}"

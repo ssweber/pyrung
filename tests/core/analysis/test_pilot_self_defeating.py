@@ -911,8 +911,8 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     assert all(harmful not in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     assert all(opposite in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     assert any(entry.source == "revocation" for entry in state.hold_log)
-    assert events[-1].data["rungs"] == tuple(state.pilot_rungs)
-    assert events[-1].data["revoked_rungs"] == (harmful,)
+    assert events[-1].data["pilot_rungs"] == tuple(state.pilot_rungs)
+    assert events[-1].data["revoked_pilot_rungs"] == (harmful,)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
 

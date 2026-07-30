@@ -1150,7 +1150,7 @@ def test_prerequisite_separation_retains_trace_action_evidence() -> None:
 
     assert separated.trace.actions == ()
     assert separated.trace.active_actions == ()
-    assert separated.prerequisites.rungs == (rung,)
+    assert separated.prerequisites.pilot_rungs == (rung,)
     assert separated.trace.details == (detail,)
 
 

@@ -3,7 +3,7 @@
 A "decision skeleton" is the ordered list of pilot events reduced to the
 fields that record *reasoning* — which candidates were built, in what order,
 which were accepted/rejected and on what grounds, route choices, provisional
-lifecycle outcomes, investigation slugs, correction kinds, and zoom
+lifecycle outcomes, investigation slugs, correction kinds, and bearing-coast
 requested-vs-landed pairs.  Everything run-variable is dropped: scan ids,
 timestamps, dwell/duration counts, fork ids, memory/perf numbers.
 
@@ -46,7 +46,7 @@ _ACTIVE_LATCH_DETAIL_RE = re.compile(r"^(clear \d+ active latches: )(.+)$")
 #: number into the skeleton through the generic fallback.
 _DROP_KEY_RE = re.compile(
     r"scan|snapshot|state_key|new_key|checkpoint_key|seen_key|_count$|"
-    r"coast_span|settle_scans|dwell|wake|memory|elapsed|duration|"
+    r"coast_span|settle_scans|dwell|downstream_reach|memory|elapsed|duration|"
     r"^key$|^work$|^steps$|^journey$|^tree$",
 )
 
@@ -193,12 +193,12 @@ def _jsonify_dataclass(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 #: Candidate payload fields kept (see ``_candidate_payload`` in recording.py).
-#: ``wake`` (downstream fan-out magnitude) is deliberately dropped.
+#: ``downstream_reach`` is deliberately dropped.
 _CANDIDATE_KEEP = (
     "tag",
     "value",
     "pair",
-    "influence_prescribed",
+    "learned_prescribed",
     "route_prescribed",
     "bearing_channel_tag",
     "bearing_channel_value",
@@ -310,22 +310,22 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
         "regression_nogoods",
         "investigation",
     ),
-    "zoom": ("prescribed", "reason", "channel_tag"),
-    "zoom_accepted": (
+    "bearing_coast": ("prescribed", "reason", "channel_tag"),
+    "bearing_coast_accepted": (
         "observe_label",
         "accepted",
         "agency",
         "bearing",
         "progress",
         "new_frontier",
-        "zoom_channel_tag",
-        "zoom_target_value",
-        "zoom_actual_value",
+        "bearing_coast_channel_tag",
+        "bearing_coast_target_value",
+        "bearing_coast_actual_value",
         "bearing_stop_reason",
         "ejected",
         "trend",
     ),
-    "zoom_rejected": ("gates",),
+    "bearing_coast_rejected": ("gates",),
     "skiff": ("reason", "observations"),
     "stuck": ("reason", "distance", "candidate_count", "nogoods_at_key", "terminal"),
     "finished": ("reached", "reason", "knowledge", "plan_journal"),

@@ -1478,8 +1478,8 @@ def test_bearing_coast_accepted_payload_records_requested_and_landed():
     )
     payload = _bearing_coast_accepted_payload(trial)
 
-    assert payload["zoom_target_value"] == 6  # requested bearing
-    assert payload["zoom_actual_value"] == 8  # where the world actually landed
+    assert payload["bearing_coast_target_value"] == 6  # requested bearing
+    assert payload["bearing_coast_actual_value"] == 8  # where the world actually landed
     assert payload["accepted"] is True
     assert payload["agency"] == "program"
     assert payload["bearing"] == "departed"

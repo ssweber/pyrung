@@ -49,7 +49,7 @@ millions of `pmap`/`pvector` lookups and iterations. In particular,
 `fold._visible_items` rebuilds a large visible-state dictionary for every fold
 probe.
 
-The three quiet 10,000-scan zooms each took about 25-26 seconds unprofiled.
+The three quiet 10,000-scan bearing coasts each took about 25-26 seconds unprofiled.
 Ordinary folding was active, but in small jumps:
 
 - 30,200 logical scan IDs advanced.

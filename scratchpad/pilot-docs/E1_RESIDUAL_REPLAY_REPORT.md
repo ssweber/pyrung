@@ -40,7 +40,7 @@ The current executor divided the route as follows:
 | Coast kind | Logical scans | Ordinary-folded | Cycle-folded | Residual |
 | --- | ---: | ---: | ---: | ---: |
 | investigation replay | 4,699 | 0 | 2,700 | 1,999 |
-| live zoom | 665,375 | 0 | 658,900 | 6,475 |
+| live bearing coast | 665,375 | 0 | 658,900 | 6,475 |
 | departure settlement | 812 | 0 | 0 | 812 |
 
 Cycle folding removed 57.5% of investigation replay scans. The remaining 1,999

@@ -396,7 +396,7 @@ def _iteration_payload(
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
         "nogoods": ctx.compass.knowledge.nogood_pairs(frame.key),
-        "rungs": tuple(state.pilot_rungs),
+        "pilot_rungs": tuple(state.pilot_rungs),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
         "steps": tuple(state.steps),
@@ -410,7 +410,7 @@ def _candidates_built_payload(
     route = candidates.route
     wait = candidates.wait
     prescription = wait.prescription if wait is not None else None
-    prerequisites = candidates.prerequisites.rungs
+    prerequisites = candidates.prerequisites.pilot_rungs
     return {
         "candidates": tuple(_candidate_read_payload(c) for c in candidates.options),
         "trace_actions": candidates.trace.actions,
@@ -418,10 +418,10 @@ def _candidates_built_payload(
         "active_trace_actions": candidates.trace.active_actions,
         "route_candidates": route.candidates if route is not None else (),
         "route_plan": _route_plan_payload(route.plan if route is not None else None),
-        "wake_cap": candidates.downstream_reach_cap,
+        "downstream_reach_cap": candidates.downstream_reach_cap,
         "wait_prescribed": prescription is not None,
         "wait_reason": wait.reason if wait is not None else None,
-        "prerequisite_rungs": prerequisites,
+        "prerequisite_pilot_rungs": prerequisites,
         "lever_notes": {
             rung.dest: lever_notes[rung.dest]
             for rung in prerequisites
@@ -486,7 +486,7 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "tag": tag,
         "value": value,
         "pair": pair,
-        "influence_prescribed": policy.learned_prescribed,
+        "learned_prescribed": policy.learned_prescribed,
         "route_prescribed": policy.source is ActSource.ROUTE,
         "bearing_channel_tag": (policy.heading.channel_tag if policy.heading is not None else None),
         "bearing_channel_value": (
@@ -498,7 +498,7 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "program_note": policy.note if policy.source is ActSource.PROGRAM else "",
         "program_context_actions": policy.context_actions,
         "provenance": policy.provenance,
-        "wake": policy.downstream_reach,
+        "downstream_reach": policy.downstream_reach,
         "prescribed": policy.source is not ActSource.TRACE,
     }
 
@@ -510,7 +510,7 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "tag": candidate.tag,
         "value": candidate.value,
         "pair": candidate.pair,
-        "influence_prescribed": candidate.learned_prescribed,
+        "learned_prescribed": candidate.learned_prescribed,
         "route_prescribed": candidate.route_prescribed,
         "bearing_channel_tag": candidate.bearing_channel_tag,
         "bearing_channel_value": candidate.bearing_channel_value,
@@ -520,7 +520,7 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "program_note": candidate.program_note,
         "program_context_actions": candidate.program_context_actions,
         "provenance": candidate.provenance,
-        "wake": candidate.downstream_reach,
+        "downstream_reach": candidate.downstream_reach,
         "prescribed": candidate.source is not ActSource.TRACE,
     }
 
@@ -579,7 +579,7 @@ def _diff_snapshots(
 
 
 def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
-    """Render the stable ``zoom_accepted`` event payload for a bearing coast."""
+    """Render the ``bearing_coast_accepted`` event payload."""
     attempt = trial.attempt
     pulse = attempt.pulse
     policy = attempt.bearing.act.policy
@@ -603,14 +603,14 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
         "progress": assessed.assessment.progress.value if assessed is not None else None,
         "new_frontier": assessed.assessment.new_frontier if assessed is not None else None,
         "observe_label": observe_label,
-        "zoom_channel_tag": motion.channel_tag,
-        "zoom_before_value": (
+        "bearing_coast_channel_tag": motion.channel_tag,
+        "bearing_coast_before_value": (
             execution.before_snap.get(motion.channel_tag)
             if motion.channel_tag is not None
             else None
         ),
-        "zoom_target_value": motion.target_value,
-        "zoom_actual_value": landed,
+        "bearing_coast_target_value": motion.target_value,
+        "bearing_coast_actual_value": landed,
         "bearing_stop_reason": motion.stop_reason,
         "ejected": (assessed is not None and assessed.assessment.bearing is BearingEffect.DEPARTED),
         "scan_before": pulse.scan_before,
@@ -745,20 +745,24 @@ def _act_event(
                 if heading is not None:
                     channel_tag = route.channel_tag if route is not None else heading.channel_tag
             return PilotEvent(
-                "zoom",
+                "bearing_coast",
                 scan,
                 {
                     "prescribed": True,
                     "reason": rationale,
-                    "prerequisite_rungs": prerequisites,
+                    "prerequisite_pilot_rungs": prerequisites,
                     "channel_tag": channel_tag,
                 },
             )
         if phase == "rejected":
             assert attempt is not None
-            return PilotEvent("zoom_rejected", scan, {"gates": attempt.gate_events})
+            return PilotEvent("bearing_coast_rejected", scan, {"gates": attempt.gate_events})
         assert trial is not None
-        return PilotEvent("zoom_accepted", scan, _bearing_coast_accepted_payload(trial))
+        return PilotEvent(
+            "bearing_coast_accepted",
+            scan,
+            _bearing_coast_accepted_payload(trial),
+        )
 
     assert kind == "batch" and isinstance(act, BatchPulse)
     if phase == "try":

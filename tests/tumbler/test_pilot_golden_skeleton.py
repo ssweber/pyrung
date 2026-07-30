@@ -6,7 +6,7 @@ lost route beat, a coast overshoot accepted as 'ambient') fails here.
 
 The skeleton (see ``tests/tumbler/skeleton.py``) keeps decision fields only —
 event kinds, tags, accept/reject grounds, slugs, route beats, provisional
-lifecycle, zoom requested-vs-landed — and drops everything run-variable
+lifecycle, bearing-coast requested-vs-landed — and drops everything run-variable
 (scan ids, dwell counts, fork/perf numbers).
 
 Regenerating a golden::
@@ -117,28 +117,28 @@ def _assert_matches_golden(skeleton: list[dict], golden_path: Path) -> None:
         pytest.fail(divergence_message(golden, skeleton, "golden", "actual"))
 
 
-def _assert_zoom_tripwire(skeleton: list[dict]) -> None:
+def _assert_bearing_coast_tripwire(skeleton: list[dict]) -> None:
     """The state-6 tripwire, independent of the golden (survives regeneration).
 
     Historical bug: a coast requested 3->6 landed at 8 and was accepted as
-    a program-attributed departure. Every ``zoom_accepted`` must either land
+    a program-attributed departure. Every ``bearing_coast_accepted`` must either land
     exactly on the requested bearing value, carry a receipt proving its
     relational boundary was reached, or be explicitly classified as a
     departure (``ejected`` under the departure guard).
     """
     for index, entry in enumerate(skeleton):
-        if entry["kind"] != "zoom_accepted":
+        if entry["kind"] != "bearing_coast_accepted":
             continue
-        requested = entry.get("zoom_target_value")
+        requested = entry.get("bearing_coast_target_value")
         if requested is None:
             continue  # target-terminal let-run: no channel bearing requested
-        landed = entry.get("zoom_actual_value")
+        landed = entry.get("bearing_coast_actual_value")
         assert (
             landed == requested
             or entry.get("bearing_stop_reason") == "reached"
             or entry.get("ejected") is True
         ), (
-            f"zoom_accepted[{index}] landed at {landed!r} but requested "
+            f"bearing_coast_accepted[{index}] landed at {landed!r} but requested "
             f"{requested!r} without being classified as a departure "
             f"(ejected={entry.get('ejected')!r}): {entry}"
         )
@@ -180,7 +180,7 @@ def test_pilot_golden_skeleton_execute(tumbler_logic) -> None:
     # Behavioral assertions independent of the golden (survive regeneration).
     finished = _finished(skeleton)
     assert finished["reached"] is True, f"Execute drive did not reach: {finished}"
-    _assert_zoom_tripwire(skeleton)
+    _assert_bearing_coast_tripwire(skeleton)
 
     # Machine-correct beat order: sm_CopyOrJumpState R3 hard-enables states
     # 2/4/6/9 regardless of mode, so the Execute drive needs NO mode-change
@@ -204,7 +204,7 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
     skeleton = extract_skeleton(events)
 
     finished = _finished(skeleton)
-    _assert_zoom_tripwire(skeleton)
+    _assert_bearing_coast_tripwire(skeleton)
     _assert_no_factory_reset(skeleton)
 
     # This drive DOES require Production mode (the recipe/completion path
@@ -274,7 +274,7 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
 
     finished = _finished(skeleton)
     assert finished["reached"] is True, f"BurnerLoop drive did not reach: {finished}"
-    _assert_zoom_tripwire(skeleton)
+    _assert_bearing_coast_tripwire(skeleton)
     _assert_no_factory_reset(skeleton)
     assert any(
         tag == "x_RotateFB"
@@ -514,7 +514,7 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
         )
     )
     skeleton = extract_skeleton(events)
-    _assert_zoom_tripwire(skeleton)
+    _assert_bearing_coast_tripwire(skeleton)
     _assert_no_factory_reset(skeleton)
 
     # The program-owned route must earn completion without Pilot pressing the
@@ -566,7 +566,12 @@ def _recipe_era_evidence(skeleton: list[dict]) -> bool:
     if "S_Fluffing_tmr" in dumped or "S_CurrStep_Fluff" in dumped:
         return True
     for entry in skeleton:
-        for field in ("to_value", "settled_value", "zoom_actual_value", "channel_value"):
+        for field in (
+            "to_value",
+            "settled_value",
+            "bearing_coast_actual_value",
+            "channel_value",
+        ):
             if entry.get(field) == 11 and "Sts_StateCurrent" in json.dumps(entry):
                 return True
         for field in ("earned_work_mark", "landing_mark"):

@@ -351,7 +351,7 @@ def _bearing(
         world_key=world.world_key,
         act=act,
         objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
-        prerequisites=candidates.prerequisites.rungs,
+        prerequisites=candidates.prerequisites.pilot_rungs,
         rationale=rationale,
         orientation=orientation_read,
     )

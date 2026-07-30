@@ -536,8 +536,8 @@ class _PilotProgressFormatter:
             return f"Finding a way to reach {tag}={_pilot_value(value)}...\n"
 
         if kind == "candidates_built":
-            rungs = data.get("prerequisite_rungs", ())
-            holds = tuple(sorted((rung.dest, rung.value) for rung in rungs))
+            pilot_rungs = data.get("prerequisite_pilot_rungs", ())
+            holds = tuple(sorted((rung.dest, rung.value) for rung in pilot_rungs))
             if not holds or holds == self._last_holds or self._after_correction:
                 return None
             self._last_holds = holds
@@ -588,7 +588,7 @@ class _PilotProgressFormatter:
             # A retry stays open until its resulting motion is known.
             return None
 
-        if kind == "zoom":
+        if kind == "bearing_coast":
             if self._retry_open:
                 return None
             self._resuming_open = self._after_correction
@@ -603,7 +603,7 @@ class _PilotProgressFormatter:
                 return prefix
             return f"{prefix} for {channel}..." if channel else f"{prefix}..."
 
-        if kind == "zoom_rejected":
+        if kind == "bearing_coast_rejected":
             if self._wait_open:
                 self._wait_open = False
                 self._wait_channel = None
@@ -611,15 +611,15 @@ class _PilotProgressFormatter:
                 return " not ready yet.\n"
             return None
 
-        if kind == "zoom_accepted":
+        if kind == "bearing_coast_accepted":
             scan_before = data.get("scan_before")
             scan_after = data.get("scan_after", event.scan)
             span = scan_after - scan_before if scan_before is not None else None
             skipped = data.get("coast_skipped_scans")
             kernel = data.get("coast_kernel_scans")
-            channel = data.get("zoom_channel_tag")
-            before = data.get("zoom_before_value")
-            after = data.get("zoom_actual_value")
+            channel = data.get("bearing_coast_channel_tag")
+            before = data.get("bearing_coast_before_value")
+            after = data.get("bearing_coast_actual_value")
             elapsed = f" after {span} scan{'s' if span != 1 else ''}" if span is not None else ""
             if isinstance(skipped, int) and skipped > 0 and isinstance(kernel, int):
                 elapsed += f" ({skipped:,} folded; {kernel:,} kernel)"
@@ -680,7 +680,7 @@ class _PilotProgressFormatter:
 
         if kind == "trend_regression":
             corrections = self._confirmed_corrections(data)
-            revoked = self._render_rungs(data.get("revoked_rungs", ()))
+            revoked = self._render_rungs(data.get("revoked_pilot_rungs", ()))
             transitions = data.get("channel_transitions", ())
             was_investigating = self._investigation_open
             self._investigation_open = False

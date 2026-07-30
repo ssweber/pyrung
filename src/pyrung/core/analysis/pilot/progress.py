@@ -1462,11 +1462,11 @@ def _investigate_and_revert(
                 "to_trend": cp_trend,
                 "checkpoint_key": cp_key,
                 "regression_nogoods": frozenset(regression_nogoods),
-                "rungs": tuple(state.pilot_rungs),
+                "pilot_rungs": tuple(state.pilot_rungs),
                 "channel_transitions": channel_transitions,
                 "investigation": investigation_payload,
                 "revoked_corrections": revoked_ids,
-                "revoked_rungs": tuple(
+                "revoked_pilot_rungs": tuple(
                     rung for receipt in revoked_receipts for rung in receipt.rungs
                 ),
             },

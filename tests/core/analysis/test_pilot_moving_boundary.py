@@ -66,7 +66,7 @@ def test_pilot_renegotiates_a_moving_process_boundary() -> None:
         rung
         for event in events
         if event.kind == "trend_regression"
-        for rung in event.data["rungs"]
+        for rung in event.data["pilot_rungs"]
         if rung.dest == tags["pv"].name
     ]
     assert len({rung.value for rung in pv_corrections}) >= 2, pv_corrections

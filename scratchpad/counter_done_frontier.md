@@ -53,7 +53,7 @@ with rung(RunCount):
 - LevelCounter_Done=True  self_adv=False
   - RunCount=True          steer=True self_adv=False
 ```
-`pilot_how(..., LevelCounter.Done)` → **REACHABLE: False**. The let-run/zoom never engages
+`pilot_how(..., LevelCounter.Done)` → **REACHABLE: False**. The let-run/bearing coast never engages
 because the frontier was never classified as self-advancing — proving the gap is *not*
 specific to edges.
 
@@ -74,7 +74,7 @@ surfaces an Enable hold as a *sibling* of an analog coast leaf).
 
 **(B) Lever selection by advance shape (the user's point — already correct).** Once
 recognized, the `advance` condition shape — already on the profile — picks the lever:
-- **level advance** (`BitCondition`) → hold it True and **let-run/zoom** coasts Acc to
+- **level advance** (`BitCondition`) → hold it True and **let-run/bearing coast** coasts Acc to
   preset (counter increments every held scan, identical to Timer.Acc). `scans_to_eject`
   gives the dwell length.
 - **edge advance** (`RisingEdgeCondition`/fall) → holding does nothing past scan 1; emit a

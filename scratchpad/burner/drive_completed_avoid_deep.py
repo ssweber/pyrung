@@ -154,9 +154,9 @@ def main() -> None:
                 last_landing = landing
         elif event.kind in {
             "candidate_accepted",
-            "zoom",
-            "zoom_accepted",
-            "zoom_rejected",
+            "bearing_coast",
+            "bearing_coast_accepted",
+            "bearing_coast_rejected",
             "letrun_ejection",
             "pending_departure_started",
             "pending_departure_promoted",
@@ -183,7 +183,7 @@ def main() -> None:
                     f" unresolved={investigation.get('unresolved')}"
                     f" retained={data.get('retained')}"
                     f" revoked={data.get('revoked_corrections')}"
-                    f" revoked_rungs={data.get('revoked_rungs')}"
+                    f" revoked_pilot_rungs={data.get('revoked_pilot_rungs')}"
                 )
                 for hypothesis in investigation.get("hypothesis_detail", ()):
                     holds = hypothesis.get("holds", ())
@@ -223,7 +223,7 @@ def main() -> None:
                 if event.kind == "candidate_accepted":
                     selected["applied"] = data.get("applied")
                     selected["candidate"] = data.get("candidate_detail")
-                if event.kind == "zoom_rejected":
+                if event.kind == "bearing_coast_rejected":
                     selected["gates"] = data.get("gates")
                 if event.kind == "candidates_built":
                     selected["candidates"] = [

@@ -64,7 +64,7 @@ def test_passing_shadow_does_not_qualify_unshadowed_populations() -> None:
         CoastCall("replay", "overlay-a", 10, 20, 10, 0, 0, 5),
         CoastCall("replay", "overlay-a", 20, 30, 10, 0, 0, 7),
         CoastCall("replay", "overlay-b", 10, 20, 10, 0, 0, 11),
-        CoastCall("zoom", "overlay-a", 10, 20, 10, 0, 0, 13),
+        CoastCall("bearing_coast", "overlay-a", 10, 20, 10, 0, 0, 13),
     ]
     shadow = {
         "advancement_kind": "replay_coast",

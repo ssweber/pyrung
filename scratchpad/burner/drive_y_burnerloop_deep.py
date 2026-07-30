@@ -15,8 +15,8 @@ import time
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.causal import _shared_cause
 from pyrung.core.analysis.pilot import progress as prog
+from pyrung.core.analysis.pilot.causal import _shared_cause
 
 WALL_S = 480.0
 
@@ -71,7 +71,8 @@ def build_replay(*args, **kw):
     replay = _real_build_replay(*args, **kw)
     print(f"    replay specs: {[(s.kind, s.scans, s.channel_tag, s.channel_target) for s in args[3]]}")
     print(f"    replay_watch_roles={kw.get('replay_watch_roles')} "
-          f"zoom_chan={kw.get('zoom_channel_tag')}={kw.get('zoom_target_value')!r} "
+          f"bearing_coast_chan={kw.get('bearing_coast_channel_tag')}="
+          f"{kw.get('bearing_coast_target_value')!r} "
           f"letrun_roles={kw.get('terminal_letrun_role_tags')} "
           f"witness={kw.get('regression_witness')}")
 
@@ -114,7 +115,13 @@ def main() -> None:
     t0 = time.perf_counter()
     regressions = 0
     for event in pilot_events(plc, target, max_scans=40_000):
-        if event.kind in ("candidate_accepted", "zoom_accepted", "letrun_ejection", "stuck", "finished"):
+        if event.kind in (
+            "candidate_accepted",
+            "bearing_coast_accepted",
+            "letrun_ejection",
+            "stuck",
+            "finished",
+        ):
             print(f"[{time.perf_counter() - t0:6.1f}s] scan {event.scan:6d} {event.kind}")
         if event.kind == "trend_regression":
             regressions += 1

@@ -936,12 +936,12 @@ def test_broad_downstream_reach_lever_deprioritized_not_dropped():
 
     # First iteration batches all five levers; the broad-reach one exceeds the cap.
     first = built[0].data
-    assert first["wake_cap"] == 20
+    assert first["downstream_reach_cap"] == 20
     cand_tags = [c["tag"] for c in first["candidates"]]
     # Present (not dropped) and tried last of all — deprioritized, never excluded.
     assert "x_Master" in cand_tags
     assert cand_tags[-1] == "x_Master"
-    assert first["candidates"][-1]["wake"] > first["wake_cap"]
+    assert first["candidates"][-1]["downstream_reach"] > first["downstream_reach_cap"]
     # Split off the batch-facing trace_actions so it can't poison a batch trial.
     assert ("x_Master", True) not in first["trace_actions"]
 

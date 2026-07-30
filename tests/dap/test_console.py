@@ -543,7 +543,7 @@ class TestCausalVerbs:
                 "candidates_built",
                 10,
                 {
-                    "prerequisite_rungs": (PilotRung(temperature.name, -1, ~target),),
+                    "prerequisite_pilot_rungs": (PilotRung(temperature.name, -1, ~target),),
                     "lever_notes": {
                         temperature.name: (
                             f"held {temperature.name} < {low_band.name} "
@@ -590,7 +590,7 @@ class TestCausalVerbs:
                 "candidates_built",
                 10,
                 {
-                    "prerequisite_rungs": (PilotRung(temperature.name, -1, ~target),),
+                    "prerequisite_pilot_rungs": (PilotRung(temperature.name, -1, ~target),),
                 },
             )
         )
@@ -613,7 +613,7 @@ class TestCausalVerbs:
         progress._after_correction = True
 
         assert (
-            progress.format(PilotEvent("zoom", 10, {"channel_tag": "HeatDelayDone"}))
+            progress.format(PilotEvent("bearing_coast", 10, {"channel_tag": "HeatDelayDone"}))
             == "\n  Resuming..."
         )
 
@@ -695,7 +695,7 @@ class TestCausalVerbs:
                 "trend_regression",
                 20,
                 {
-                    "revoked_rungs": (old,),
+                    "revoked_pilot_rungs": (old,),
                     "investigation": {
                         "confirmed_detail": ({"holds": (replacement,)},),
                     },
@@ -716,14 +716,14 @@ class TestCausalVerbs:
         from pyrung.dap.console import _format_pilot_progress
 
         event = PilotEvent(
-            "zoom_accepted",
+            "bearing_coast_accepted",
             120,
             {
                 "scan_before": 100,
                 "scan_after": 120,
-                "zoom_channel_tag": "State",
-                "zoom_before_value": 6,
-                "zoom_actual_value": 7,
+                "bearing_coast_channel_tag": "State",
+                "bearing_coast_before_value": 6,
+                "bearing_coast_actual_value": 7,
             },
         )
 
@@ -734,14 +734,14 @@ class TestCausalVerbs:
         from pyrung.dap.console import _format_pilot_progress
 
         event = PilotEvent(
-            "zoom_accepted",
+            "bearing_coast_accepted",
             3897,
             {
                 "scan_before": 100,
                 "scan_after": 3897,
-                "zoom_channel_tag": "State",
-                "zoom_before_value": 6,
-                "zoom_actual_value": 7,
+                "bearing_coast_channel_tag": "State",
+                "bearing_coast_before_value": 6,
+                "bearing_coast_actual_value": 7,
                 "coast_skipped_scans": 3300,
                 "coast_kernel_scans": 497,
             },

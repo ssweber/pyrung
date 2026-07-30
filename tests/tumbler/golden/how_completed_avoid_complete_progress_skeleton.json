@@ -152,7 +152,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
      true
@@ -170,7 +170,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -311,7 +311,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
     true
@@ -341,7 +341,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
     true
@@ -418,7 +418,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -555,7 +555,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
     true
@@ -585,7 +585,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Cmd_UnitMode",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
     true
@@ -670,7 +670,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -813,7 +813,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -877,7 +877,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -1009,7 +1009,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -1121,7 +1121,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -1168,7 +1168,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -1262,7 +1262,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -1351,7 +1351,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1393,7 +1393,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1513,7 +1513,7 @@
  },
  {
   "channel_tag": "Rotate_tmr_Acc",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
@@ -1525,7 +1525,7 @@
     "event": "dead-end"
    }
   ],
-  "kind": "zoom_rejected"
+  "kind": "bearing_coast_rejected"
  },
  {
   "distance": 16,
@@ -1698,7 +1698,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -1708,14 +1708,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 7,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -1727,7 +1727,7 @@
   "from_value": 3,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 6,
   "to_value": 8
@@ -1891,7 +1891,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -1980,7 +1980,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -2022,7 +2022,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -2148,7 +2148,7 @@
  },
  {
   "channel_tag": "Rotate_tmr_Acc",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
@@ -2158,14 +2158,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 11,
-  "zoom_actual_value": 5,
-  "zoom_channel_tag": "Rotate_tmr_Acc",
-  "zoom_target_value": 4
+  "bearing_coast_actual_value": 5,
+  "bearing_coast_channel_tag": "Rotate_tmr_Acc",
+  "bearing_coast_target_value": 4
  },
  {
   "applied": [],
@@ -2306,7 +2306,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -2316,14 +2316,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5,
-  "zoom_actual_value": 3,
-  "zoom_channel_tag": "Blower_tmr_Acc",
-  "zoom_target_value": 2
+  "bearing_coast_actual_value": 3,
+  "bearing_coast_channel_tag": "Blower_tmr_Acc",
+  "bearing_coast_target_value": 2
  },
  {
   "applied": [],
@@ -2434,7 +2434,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -2444,14 +2444,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 6,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -2540,7 +2540,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its operation reading is no longer current"
  },
@@ -2550,14 +2550,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "backward",
   "trend": 9,
-  "zoom_actual_value": 10,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 16
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 16
  },
  {
   "applied": [],
@@ -2569,7 +2569,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 16,
   "to_value": 10
@@ -2764,7 +2764,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
  },
@@ -2774,14 +2774,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "backward",
   "trend": 11,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 16
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 16
  },
  {
   "applied": [],
@@ -2793,7 +2793,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 16,
   "to_value": 8
@@ -2965,7 +2965,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
  },
@@ -2975,14 +2975,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "backward",
   "trend": 11,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 16
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 16
  },
  {
   "applied": [],
@@ -2994,7 +2994,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 16,
   "to_value": 8
@@ -3162,7 +3162,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; supply its current input and hand off to S_HeatAtTemp_tmr_Acc"
  },
@@ -3172,14 +3172,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 60,
-  "zoom_channel_tag": "S_HeatAtTemp_tmr_Acc",
-  "zoom_target_value": 60
+  "bearing_coast_actual_value": 60,
+  "bearing_coast_channel_tag": "S_HeatAtTemp_tmr_Acc",
+  "bearing_coast_target_value": 60
  },
  {
   "applied": [],
@@ -3288,7 +3288,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16 (Internal__Step: 102->103)"
  },
@@ -3298,14 +3298,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 103,
-  "zoom_channel_tag": "Internal__Step",
-  "zoom_target_value": 103
+  "bearing_coast_actual_value": 103,
+  "bearing_coast_channel_tag": "Internal__Step",
+  "bearing_coast_target_value": 103
  },
  {
   "applied": [],
@@ -3399,7 +3399,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; the owner reports progress through its operation witness"
  },
@@ -3409,14 +3409,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 15,
-  "zoom_channel_tag": "S_CoolCycle_tmr_Acc",
-  "zoom_target_value": 15
+  "bearing_coast_actual_value": 15,
+  "bearing_coast_channel_tag": "S_CoolCycle_tmr_Acc",
+  "bearing_coast_target_value": 15
  },
  {
   "applied": [],
@@ -3504,7 +3504,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its operation reading is no longer current"
  },
@@ -3514,14 +3514,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 6,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -3609,7 +3609,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; Sts_StateCurrent, isCmdValid__allowed_mask, isCmdValid__cmd, sm_isStateEnbl__stmask moved while checking the selected producer; its operation reading is no longer current"
  },
@@ -3619,14 +3619,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "backward",
   "trend": 9,
-  "zoom_actual_value": 10,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 16
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 16
  },
  {
   "applied": [],
@@ -3638,7 +3638,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 16,
   "to_value": 10
@@ -3725,7 +3725,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -3814,7 +3814,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -3861,7 +3861,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -4066,7 +4066,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 12->6"
  },
@@ -4076,14 +4076,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 7,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -4095,7 +4095,7 @@
   "from_value": 12,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 6,
   "to_value": 8
@@ -4296,7 +4296,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 12,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Unhold",
      true
@@ -4385,7 +4385,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -4432,7 +4432,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 12,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Unhold",
     true
@@ -4637,7 +4637,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 12->6"
  },
@@ -4647,14 +4647,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 11,
-  "zoom_actual_value": 5,
-  "zoom_channel_tag": "Rotate_tmr_Acc",
-  "zoom_target_value": 4
+  "bearing_coast_actual_value": 5,
+  "bearing_coast_channel_tag": "Rotate_tmr_Acc",
+  "bearing_coast_target_value": 4
  },
  {
   "applied": [],
@@ -4795,7 +4795,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 12->6"
  },
@@ -4805,14 +4805,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 8,
-  "zoom_actual_value": 2,
-  "zoom_channel_tag": "Blower_tmr_Acc",
-  "zoom_target_value": 2
+  "bearing_coast_actual_value": 2,
+  "bearing_coast_channel_tag": "Blower_tmr_Acc",
+  "bearing_coast_target_value": 2
  },
  {
   "applied": [],
@@ -4938,7 +4938,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 12->6"
  },
@@ -4948,14 +4948,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5,
-  "zoom_actual_value": 3,
-  "zoom_channel_tag": "Blower_tmr_Acc",
-  "zoom_target_value": 2
+  "bearing_coast_actual_value": 3,
+  "bearing_coast_channel_tag": "Blower_tmr_Acc",
+  "bearing_coast_target_value": 2
  },
  {
   "applied": [],
@@ -5066,7 +5066,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 12->6"
  },
@@ -5076,14 +5076,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 6,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -5178,7 +5178,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 6->16; the owner reports progress through its operation witness"
  },
@@ -5188,14 +5188,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 9,
-  "zoom_actual_value": 30,
-  "zoom_channel_tag": "S_Fluffing_tmr_Acc",
-  "zoom_target_value": 30
+  "bearing_coast_actual_value": 30,
+  "bearing_coast_channel_tag": "S_Fluffing_tmr_Acc",
+  "bearing_coast_target_value": 30
  },
  {
   "applied": [],
@@ -5323,7 +5323,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 16->17"
  },
@@ -5333,14 +5333,14 @@
   "bearing": null,
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": null,
-  "observe_label": "zoom-target",
+  "observe_label": "bearing_coast-target",
   "progress": null,
   "trend": null,
-  "zoom_actual_value": 17,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 17
+  "bearing_coast_actual_value": 17,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 17
  },
  {
   "applied": [],

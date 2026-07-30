@@ -303,7 +303,7 @@ class TestGateCycle:
             SimpleNamespace(seen_keys={key}, earned_work=None),
             pending=False,
             earned_work_receipt=EarnedWorkReceipt(),
-            influence_prescribed=False,
+            learned_prescribed=False,
             nogood_pair=("Cmd", True),
             gate_events=gates,
             collected_nogoods=[],
@@ -312,9 +312,9 @@ class TestGateCycle:
         assert gates[-1].event == "cycle"
         assert gates[-1].evidence["trial_key"] == key
         assert gates[-1].evidence["seen"] is True
-        assert gates[-1].evidence["influence_prescribed"] is False
+        assert gates[-1].evidence["learned_prescribed"] is False
 
-    def test_influence_prescribed_overrides_cycle(self):
+    def test_learned_prescribed_overrides_cycle(self):
         key = ("visited",)
         trial = SimpleNamespace(key=key, snap={})
         gates = []
@@ -326,7 +326,7 @@ class TestGateCycle:
             SimpleNamespace(seen_keys={key}, earned_work=None),
             pending=False,
             earned_work_receipt=EarnedWorkReceipt(),
-            influence_prescribed=True,
+            learned_prescribed=True,
             nogood_pair=("Cmd", True),
             gate_events=gates,
             collected_nogoods=collected_nogoods,
@@ -335,8 +335,8 @@ class TestGateCycle:
         assert accepted is True
         assert collected_nogoods == []
         assert len(gates) == 1
-        assert gates[0].event == "influence-override-cycle"
-        assert gates[0].detail == "influence-prescribed"
+        assert gates[0].event == "learned-override-cycle"
+        assert gates[0].detail == "learned-prescribed"
 
 
 class TestGateDeadEnd:
@@ -408,7 +408,7 @@ class TestGateDeadEnd:
                 ctx,
                 target=TargetSpec(target.name, 1),
                 earned_work_receipt=EarnedWorkReceipt(),
-                influence_prescribed=False,
+                learned_prescribed=False,
                 nogood_pair=None,
                 gate_events=[],
                 collected_nogoods=[],
@@ -514,7 +514,9 @@ class TestVerifyGates:
         assert result.trial.execution.timeline == pulse.timeline
         assert result.trial.execution.coast_receipt is coast_receipt
         assert result.trial.execution.accelerators == (("VerifyAccumulator", 9),)
-        assert _bearing_coast_accepted_payload(result.trial)["observe_label"] == "zoom-target"
+        assert (
+            _bearing_coast_accepted_payload(result.trial)["observe_label"] == "bearing_coast-target"
+        )
         assert result.trial.execution.before_snap is not before
         assert result.trial.execution.after_snap is not after
         assert isinstance(result.trial.execution.before_snap, MappingProxyType)

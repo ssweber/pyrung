@@ -192,7 +192,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -208,7 +208,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
      true
@@ -226,7 +226,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Cmd_UnitMode",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
      true
@@ -354,7 +354,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -426,7 +426,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -615,7 +615,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -697,7 +697,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -744,7 +744,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -869,7 +869,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -928,7 +928,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -975,7 +975,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1198,7 +1198,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -1208,14 +1208,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 23,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -1227,7 +1227,7 @@
   "from_value": 3,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 6,
   "to_value": 8
@@ -1418,7 +1418,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -1477,7 +1477,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1524,7 +1524,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -1753,7 +1753,7 @@
  },
  {
   "channel_tag": "Sts_StateCurrent",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
@@ -1763,14 +1763,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 10,
-  "zoom_actual_value": 6,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 6,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -1848,7 +1848,7 @@
  },
  {
   "channel_tag": "HeatDelay_Tmr_Done",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
@@ -1860,7 +1860,7 @@
     "event": "dead-end"
    }
   ],
-  "kind": "zoom_rejected"
+  "kind": "bearing_coast_rejected"
  },
  {
   "distance": 10,
@@ -1936,7 +1936,7 @@
  },
  {
   "channel_tag": "y_BurnerLoop",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "hold the current macro-state and allow program motion"
  },
@@ -1946,14 +1946,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": true,
   "observe_label": "letrun",
   "progress": "backward",
   "trend": 19,
-  "zoom_actual_value": 10,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -2143,7 +2143,7 @@
  },
  {
   "channel_tag": "HeatDelay_Tmr_Done",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
@@ -2153,14 +2153,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5,
-  "zoom_actual_value": true,
-  "zoom_channel_tag": "HeatDelay_Tmr_Done",
-  "zoom_target_value": true
+  "bearing_coast_actual_value": true,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
+  "bearing_coast_target_value": true
  },
  {
   "applied": [],
@@ -2233,7 +2233,7 @@
  },
  {
   "channel_tag": "Heat_tmr_Acc",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance Heat_tmr_Acc to its next boundary 1"
  },
@@ -2245,7 +2245,7 @@
     "event": "dead-end"
    }
   ],
-  "kind": "zoom_rejected"
+  "kind": "bearing_coast_rejected"
  },
  {
   "distance": 5,
@@ -2316,7 +2316,7 @@
  },
  {
   "channel_tag": "y_BurnerLoop",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "hold the current macro-state and allow program motion"
  },
@@ -2326,14 +2326,14 @@
   "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "letrun",
   "progress": "unchanged",
   "trend": 5,
-  "zoom_actual_value": 8,
-  "zoom_channel_tag": "Sts_StateCurrent",
-  "zoom_target_value": 6
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6
  },
  {
   "applied": [],
@@ -2519,7 +2519,7 @@
  },
  {
   "channel_tag": "HeatDelay_Tmr_Done",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
  },
@@ -2529,14 +2529,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5,
-  "zoom_actual_value": true,
-  "zoom_channel_tag": "HeatDelay_Tmr_Done",
-  "zoom_target_value": true
+  "bearing_coast_actual_value": true,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
+  "bearing_coast_target_value": true
  },
  {
   "applied": [],
@@ -2609,7 +2609,7 @@
  },
  {
   "channel_tag": "Heat_tmr_Acc",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "advance Heat_tmr_Acc to its next boundary 1"
  },
@@ -2619,14 +2619,14 @@
   "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "zoom",
+  "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3,
-  "zoom_actual_value": 2,
-  "zoom_channel_tag": "Heat_tmr_Acc",
-  "zoom_target_value": 1
+  "bearing_coast_actual_value": 2,
+  "bearing_coast_channel_tag": "Heat_tmr_Acc",
+  "bearing_coast_target_value": 1
  },
  {
   "applied": [],
@@ -2697,7 +2697,7 @@
  },
  {
   "channel_tag": "y_BurnerLoop",
-  "kind": "zoom",
+  "kind": "bearing_coast",
   "prescribed": true,
   "reason": "hold the current macro-state and allow program motion"
  },
@@ -2707,14 +2707,14 @@
   "bearing": null,
   "bearing_stop_reason": null,
   "ejected": false,
-  "kind": "zoom_accepted",
+  "kind": "bearing_coast_accepted",
   "new_frontier": null,
   "observe_label": "letrun-target",
   "progress": null,
   "trend": null,
-  "zoom_actual_value": null,
-  "zoom_channel_tag": null,
-  "zoom_target_value": null
+  "bearing_coast_actual_value": null,
+  "bearing_coast_channel_tag": null,
+  "bearing_coast_target_value": null
  },
  {
   "applied": [],

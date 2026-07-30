@@ -84,7 +84,7 @@ def main() -> None:
         trace = tuple(event.data["trace_actions"])
         route = tuple(event.data["route_candidates"])
         prerequisites = tuple(
-            (rung.dest, rung.value) for rung in event.data.get("prerequisite_rungs", ())
+            (rung.dest, rung.value) for rung in event.data.get("prerequisite_pilot_rungs", ())
         )
         print(
             "[decision] "

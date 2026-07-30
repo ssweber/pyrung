@@ -91,10 +91,10 @@ class ActSource(StrEnum):
 
     ROUTE = "route"
     TRACE = "trace"
-    LEARNED_ACTION = "influence"
+    LEARNED_ACTION = "learned_action"
     AWAITED_ACTION = "awaited_action"
     PROGRAM = "program"
-    LEARNED_BATCH = "learned"
+    LEARNED_BATCH = "learned_batch"
     WIDENING = "widening"
     TERMINAL = "terminal"
 
@@ -150,7 +150,7 @@ class ActPolicy:
         if self.source is ActSource.WIDENING:
             return "width"
         if self.motion is MotionKind.COAST_TO_BEARING:
-            return "zoom"
+            return "bearing_coast"
         if self.motion is MotionKind.COAST_HOLDING_WORLD:
             return "letrun"
         return "accept"

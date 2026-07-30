@@ -92,7 +92,7 @@ class Bench:
     def force_done(self, acc_tag: str, preset: int) -> None:
         """Fast-forward a self-advancing timer by writing its accumulator to preset.
 
-        Mirrors PILOT let-run/zoom: once the dwell's guard holds, jump the
+        Mirrors PILOT let-run/bearing-coast behavior: once the dwell's guard holds, jump the
         governing register to completion rather than stepping the
         (minute-scale) real dwell.
         """

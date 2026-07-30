@@ -145,7 +145,7 @@ Fields, with the consumer that demanded them:
 
 | Field | Consumers / gap closed |
 |---|---|
-| `session_id` + `coast_kind` (zoom / letrun / settle / replay / measure / dwell) | recorded onto journey steps — kills the positional `is_eject_coast` inference (`investigate.py:333`), the documented false-confirm hazard if step shape ever changes |
+| `session_id` + `coast_kind` (bearing_coast / letrun / settle / replay / measure / dwell) | recorded onto journey steps — kills the positional `is_eject_coast` inference (`investigate.py:333`), the documented false-confirm hazard if step shape ever changes |
 | `start_scan`, `end_scan`, real+virtual scans elapsed | every settle-count consumer; budget accounting |
 | **snapshot references** (start fork/world, settled fork/world) | GAP 6: no-op screens and `correct_enablers` read arbitrary guard/coil tags beyond the bump set (`corrections.py:217,416`); the timeline alone is insufficient. GAP 8: carrying the settled fork deletes `classify_departure`'s second settle coast (`departure.py:103-124`) |
 | **timeline**: ordered `BumpEvent`s, per-transition, same-scan groups preserved | GAP 5: `changed_tags` deliberately captures fire-then-reset pulses (`investigate.py:781-783`); a net before≠after timeline loses the complement-reset oscillation `correct_enablers` hunts. Also V1's excursion (two bumps in one window) reads straight off it |
@@ -166,7 +166,7 @@ engines own those), the global `seen_keys` set (the loop owns it; the receipt ex
 
 | Today | v2 |
 |---|---|
-| `_coast_to_value` / `_coast_holding_state` + pause guards | `seek({target, departure(watch_set), avoid…}, ZOOM_BUDGET)` |
+| `_coast_to_value` / `_coast_holding_state` + pause guards | `seek({target, departure(watch_set), avoid…}, BEARING_COAST_BUDGET)` |
 | `_settle_cone` (16/64 ceilings, no did-not-settle flag) | `seek({reached, quiescent}, ceiling)` — floor stays; timeout is a recorded stop_reason |
 | `_settle_delayed_effects` (two phases + `+1`) | two chained seeks inside one session: `seek({harness_quiescent}) → dwell(1) → seek({tt_clear})`; the receipt records both phases. Sequencing is a session capability, not a violation of the shape |
 | `_settle_departure` (100-stable, cap 2000) | departure already recorded at its exact scan by the *originating* session; classification consumes `seek({quiescent}, cap)` continuation on the same session — one coast, not two |
@@ -176,11 +176,11 @@ engines own those), the global `seen_keys` set (the loop owns it; the receipt ex
 | `letrun_tried[(key, len(rungs))]` | quiescent-receipt memo keyed `(state_key_after, rung-overlay key)`, trusted **only when `quiescent` and not `pending_effects`** (the audit's C2 accumulator-masking caveat, now enforceable) |
 | `_apply_pulse` 4-scan settle | `dwell(4)` — explicit fixed dwell op, unchanged behavior |
 
-`CoastLimits` centralizes the **values** (ZOOM 10_000 virtual, cone floor 2 / ceiling 16,
+`CoastLimits` centralizes the **values** (bearing coast 10_000 virtual, cone floor 2 / ceiling 16,
 dwell 64, delayed-effects 2_000, skiff window 4, provisional 2_000, measure 2_000); the
 **decisions** about when each applies stay with their owners — "scheduling is triggers,
 not positions," one owner per decision. A provisional-owned session is clipped to the
-provisional's remaining budget (fixes the zoom-outruns-its-provisional 5× pathology).
+provisional's remaining budget (fixes the bearing-coast-outruns-its-provisional 5× pathology).
 Drive-by: collapse the `_SKIFF_SCANS` duplication and name the intentional
 `_SKIFF_MAX_PROBES` 8-vs-16 split (investigate.py:53-54 vs skiff.py:177-178).
 
@@ -211,8 +211,8 @@ different-coordinate world; the gauge is the only target-relative signal. Struct
   the from/to transition off the timeline is exactly the "learn both edges" material; the
   policy itself stays a stub, now an explicit one with its evidence recorded.
 
-Acceptance for this part is already codified: the golden-skeleton **zoom tripwire**
-(`test_pilot_golden_skeleton.py:95-114` — every `zoom_accepted` lands exactly on target
+Acceptance for this part is already codified: the golden-skeleton **bearing-coast tripwire**
+(`test_pilot_golden_skeleton.py:95-114` — every `bearing_coast_accepted` lands exactly on target
 or is `ejected=True`) and the strict-xfail internal-route gate (240s wall budget) that
 names CoastSession as its step.
 
@@ -259,8 +259,10 @@ fidelity exists *because* holds re-materialize as synthesis rungs on every fork
 
 ## Part 7 — events and test compatibility
 
-- Preserve per-landing `zoom_accepted` triplet (`zoom_channel_tag`, `zoom_target_value`,
-  `zoom_actual_value`, `ejected`) — the tripwire and `console.py:478-483` both read it.
+- Preserve per-landing `bearing_coast_accepted` triplet
+  (`bearing_coast_channel_tag`, `bearing_coast_target_value`,
+  `bearing_coast_actual_value`, `ejected`) — the tripwire and
+  `console.py:478-483` both read it.
   `ejected` derives from `stop_reason == departed`.
 - Preserve `trend_regression.investigation` sub-structure (`confirmed_detail[].holds`,
   `rejected_detail[].slug/ground`) — `console.py:493-503` and `skeleton.py:367-378`.
@@ -288,7 +290,7 @@ fidelity exists *because* holds re-materialize as synthesis rungs on every fork
    consumes the settled receipt (double-settle deleted).
 5. **Receipt-driven verify/outcome**: gauge-authoritative ADVANCED, key-dims SPIN,
    sterile arm on stop_reason. This is the phase that flips the strict-xfail gate and
-   must satisfy the zoom tripwire. Also revisit here (decided during phase 2, NOTE in
+   must satisfy the bearing-coast tripwire. Also revisit here (decided during phase 2, NOTE in
    coast.py): a seek currently advances ≥1 scan before judging, matching legacy
    `run_until` semantics so pre-regen goldens hold — the immediate-landing rule ("a
    target stops the scan it holds") lands with this phase's golden regeneration.
@@ -302,7 +304,7 @@ fidelity exists *because* holds re-materialize as synthesis rungs on every fork
   the 240s wall budget; golden recorded.
 - `how(y_BurnerLoop)` completes in Drive-2-class time; receipt contains the rotate
   watchdog bump; confirmed liveness/OSCILLATE correction; no manual sensor animation.
-- Zoom tripwire holds across regenerated goldens.
+- Bearing-coast tripwire holds across regenerated goldens.
 - Full suite + lint + type; fresh-process deterministic golden checks.
 - New: no coast primitive returns a bare bool or None; every session in the burner and
   tumbler drives carries a stop_reason (grep-able assertion in the golden skeletons).

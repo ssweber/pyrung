@@ -278,7 +278,7 @@ def _gate_cycle(
     *,
     pending: bool,
     earned_work_receipt: EarnedWorkReceipt,
-    influence_prescribed: bool,
+    learned_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -291,7 +291,7 @@ def _gate_cycle(
     if earned_work_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         return True
-    if not influence_prescribed:
+    if not learned_prescribed:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
         _record_gate(
@@ -302,13 +302,13 @@ def _gate_cycle(
                 "seen": True,
                 "pending_effects": pending,
                 "ordinal_advanced": False,
-                "influence_prescribed": influence_prescribed,
+                "learned_prescribed": learned_prescribed,
             },
         )
         return False
     _record_gate(
-        "INFLUENCE-OVERRIDE-CYCLE",
-        ": influence-prescribed",
+        "LEARNED-OVERRIDE-CYCLE",
+        ": learned-prescribed",
         gate_events,
     )
     return True
@@ -323,7 +323,7 @@ def _gate_dead_end(
     *,
     target: TargetSpec,
     earned_work_receipt: EarnedWorkReceipt,
-    influence_prescribed: bool,
+    learned_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -346,7 +346,7 @@ def _gate_dead_end(
     # is unchanged for them.)
     channel_reached = channel_motion.reached
     channel_moved = channel_motion.departed
-    accept_override = influence_prescribed or channel_reached or channel_moved
+    accept_override = learned_prescribed or channel_reached or channel_moved
     new_tree = trace_back(
         target.tag,
         target.value,
@@ -388,10 +388,10 @@ def _gate_dead_end(
         ),
         ctx.compass.knowledge,
     )
-    influence_frontier = isinstance(frontier_status, Reachable)
+    reachable_frontier = isinstance(frontier_status, Reachable)
     pending = _has_pending_effects(trial.fork)
 
-    if not new_actions and not influence_frontier and not pending:
+    if not new_actions and not reachable_frontier and not pending:
         if not accept_override:
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
@@ -401,9 +401,9 @@ def _gate_dead_end(
                 gate_events,
                 evidence={
                     "new_actions": tuple(sorted(new_actions, key=repr)),
-                    "influence_frontier": influence_frontier,
+                    "reachable_frontier": reachable_frontier,
                     "pending_effects": pending,
-                    "influence_prescribed": influence_prescribed,
+                    "learned_prescribed": learned_prescribed,
                     "channel_reached": channel_reached,
                     "channel_moved": channel_moved,
                     "trend_before": frame.distance_before,
@@ -414,12 +414,12 @@ def _gate_dead_end(
         _record_gate(
             "CHANNEL-OVERRIDE-DEAD-END"
             if (channel_reached or channel_moved)
-            else "INFLUENCE-OVERRIDE-DEAD-END",
+            else "LEARNED-OVERRIDE-DEAD-END",
             ": channel target reached"
             if channel_reached
             else ": channel ejected"
             if channel_moved
-            else ": influence-prescribed",
+            else ": learned-prescribed",
             gate_events,
         )
     elif (
@@ -445,7 +445,7 @@ def _gate_dead_end(
                     "action_inputs": tuple(sorted(action_inputs, key=repr)),
                     "trend_before": frame.distance_before,
                     "trend_after": new_trend,
-                    "influence_prescribed": influence_prescribed,
+                    "learned_prescribed": learned_prescribed,
                     "channel_reached": channel_reached,
                     "channel_moved": channel_moved,
                 },
@@ -455,12 +455,12 @@ def _gate_dead_end(
             _record_gate(
                 "CHANNEL-OVERRIDE-LATERAL"
                 if (channel_reached or channel_moved)
-                else "INFLUENCE-OVERRIDE-LATERAL",
+                else "LEARNED-OVERRIDE-LATERAL",
                 ": channel target reached"
                 if channel_reached
                 else ": channel ejected"
                 if channel_moved
-                else ": influence-prescribed",
+                else ": learned-prescribed",
                 gate_events,
             )
 
@@ -672,7 +672,7 @@ def verify_gates(
         state,
         pending=pending,
         earned_work_receipt=earned_work_receipt,
-        influence_prescribed=policy.learned_prescribed,
+        learned_prescribed=policy.learned_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -687,7 +687,7 @@ def verify_gates(
         ctx,
         target=bearing.objective.target,
         earned_work_receipt=earned_work_receipt,
-        influence_prescribed=policy.learned_prescribed,
+        learned_prescribed=policy.learned_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -713,7 +713,7 @@ def verify_gates(
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
         _record_gate(
-            "ZOOM-STALL" if channel_motion.active else "BAD-EDGE",
+            "BEARING-COAST-STALL" if channel_motion.active else "BAD-EDGE",
             f": distance {frame.distance_before} -> {dead_end.trend}",
             gate_events,
             evidence={
@@ -724,9 +724,9 @@ def verify_gates(
                 "new_frontier": assessment.new_frontier,
                 "trend_before": frame.distance_before,
                 "trend_after": dead_end.trend,
-                "zoom_channel_tag": channel_motion.channel_tag,
-                "zoom_target_value": channel_motion.target_value,
-                "zoom_actual_value": (
+                "bearing_coast_channel_tag": channel_motion.channel_tag,
+                "bearing_coast_target_value": channel_motion.target_value,
+                "bearing_coast_actual_value": (
                     trial.snap.get(channel_motion.channel_tag)
                     if channel_motion.channel_tag is not None
                     else None

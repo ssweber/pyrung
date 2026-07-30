@@ -522,7 +522,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     pending_step = None
     later_build = None
     later_candidates = None
-    later_prerequisite_rungs = ()
+    later_prerequisite_pilot_rungs = ()
     later_snapshot = None
     later_try = None
     iteration_snapshot = {}
@@ -544,7 +544,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         elif event.kind == "candidates_built" and pending_step == 105:
             later_build = event.data
             later_candidates = event.data["candidates"]
-            later_prerequisite_rungs = event.data["prerequisite_rungs"]
+            later_prerequisite_pilot_rungs = event.data["prerequisite_pilot_rungs"]
             later_snapshot = iteration_snapshot
         elif event.kind == "candidate_try" and later_candidates is not None:
             later_try = event.data
@@ -577,9 +577,9 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         if event.kind in {"departure_investigated", "trend_regression", "pending_departure_started"}
     ]
     assert resolution.data["investigation"]["confirmed"] > 0
-    assert any(rung.dest == tags["Door"].name for rung in resolution.data["rungs"])
+    assert any(rung.dest == tags["Door"].name for rung in resolution.data["pilot_rungs"])
     door_correction = next(
-        rung for rung in reversed(resolution.data["rungs"]) if rung.dest == tags["Door"].name
+        rung for rung in reversed(resolution.data["pilot_rungs"]) if rung.dest == tags["Door"].name
     )
     # The exact missing-support requirement belongs to the safety producer's
     # Execute tenure, not to the Step-103 earned-work coordinate. It must survive the
@@ -646,7 +646,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
         or later_snapshot[tags["Door"].name] is False
         or any(
             rung.dest == tags["Door"].name and rung.value is False
-            for rung in later_prerequisite_rungs
+            for rung in later_prerequisite_pilot_rungs
         )
     ), later_build
     assert all(candidate["tag"] != tags["C_Complete"].name for candidate in later_candidates)

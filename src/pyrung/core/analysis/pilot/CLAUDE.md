@@ -280,8 +280,12 @@ plain language on first use.
 - **pilot** — continuously steers a running program; never executes a stored
   plan.
 - **bearing** — the next direction recomputed from the current world.
+- **bearing coast** — coast toward the channel value declared by the current
+  bearing.
 - **compass** — the `Compass` value containing static graph references and
   persistent transition knowledge.
+- **learned action** — an action prescribed by persistent transition
+  knowledge rather than the current static trace.
 - **ladder rung** — a rung in the user's PLC program.
 - **pilot rung** — a scoped piece of temporary PILOT steering represented by
   `PilotRung`. The `pilot_rungs` fields and helpers such as `_set_rungs`,
@@ -334,18 +338,6 @@ an event stream, replay identity, or lower-level API.
 - `trace.py` retains the affine walker fallback when a registered reverse
   declines. Remove it only when registered reverse rules cover those affine
   writers.
-- `navigation_contracts.py::ActSource` keeps serialized values `influence` and
-  `learned`; recording keeps the `influence_prescribed` payload, and VERIFY
-  keeps the public `influence-override-cycle` gate event. Version and migrate
-  consumers before changing any of them.
-- `recording.py` owns the `zoom`, `zoom_accepted`, and `zoom_rejected` events and
-  their `zoom_*` payload keys. The public stall spelling is lowercase
-  `zoom-stall`; uppercase spellings are internal gate labels, not public
-  vocabulary. Change these only through an event schema migration.
-- `recording.py` and `progress.py` serialize `rungs` and `revoked_rungs`.
-  Renaming those payload keys requires an event schema migration.
-- `recording.py` serializes internal downstream reach as `wake` and
-  `wake_cap`. Renaming those payload keys requires an event schema migration.
 - `coast.py::CoastReceipt` owns structured stop evidence with stable string
   `stop_reason` values; `cycle_fold_until` retains its Boolean return API.
   PILOT filters lower-runner `real_scans` and `folds` cycle-fold details.

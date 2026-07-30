@@ -327,7 +327,7 @@ class RouteRead:
 class PrerequisiteRead:
     """Executable prerequisites and convergence state admitted by this read."""
 
-    rungs: tuple[PilotRung, ...] = ()
+    pilot_rungs: tuple[PilotRung, ...] = ()
     held_command_tags: frozenset[str] = frozenset()
 
 
@@ -1382,7 +1382,7 @@ def _separate_prerequisites(
             if instruction_boundary is not None:
                 break
 
-    prerequisite_rungs = list(admission.managed_boolean_rungs)
+    prerequisite_pilot_rungs = list(admission.managed_boolean_rungs)
     trace_actions = admission.actions
     active_trace_actions = admission.active_actions
     trace_action_details = admission.details
@@ -1401,7 +1401,7 @@ def _separate_prerequisites(
             if tag in pulse_tags:
                 seen_prereq.add(tag)
                 if _action_allowed(ctx, (tag, value)):
-                    prerequisite_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
+                    prerequisite_pilot_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
             elif tag not in action_or_edge and not _values_match(frame.snap.get(tag), value):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
                     continue
@@ -1409,8 +1409,8 @@ def _separate_prerequisites(
                 if _action_allowed(ctx, (tag, value)) and not _avoid_forces(
                     ctx, [(tag, value)], frame.snap
                 ):
-                    prerequisite_rungs.append(PilotRung(tag, value, scope))
-        prereq_tags = {rung.dest for rung in prerequisite_rungs}
+                    prerequisite_pilot_rungs.append(PilotRung(tag, value, scope))
+        prereq_tags = {rung.dest for rung in prerequisite_pilot_rungs}
         trace_actions = tuple(pair for pair in trace_actions if pair[0] not in prereq_tags)
         active_trace_actions = tuple(
             pair for pair in active_trace_actions if pair[0] not in prereq_tags
@@ -1430,7 +1430,7 @@ def _separate_prerequisites(
     )
     return _PrerequisiteSeparation(
         updated_trace,
-        PrerequisiteRead(tuple(prerequisite_rungs), held_command_tags),
+        PrerequisiteRead(tuple(prerequisite_pilot_rungs), held_command_tags),
         instruction_boundary,
     )
 
@@ -1743,7 +1743,7 @@ def _assemble_candidate_read(
     stuck_reason: str | None = None
     if (
         not candidates
-        and not separated.prerequisites.rungs
+        and not separated.prerequisites.pilot_rungs
         and (wait is None or wait.prescription is None)
         and learned_batch is None
     ):
@@ -1847,7 +1847,7 @@ def _candidate_applied(
     # Prerequisite holds (trace actions split into rungs for a bearing coast)
     # are applied to the fork but were removed from trace_actions — record them
     # so the scan_log faithfully captures everything the fork sees.
-    for rung in candidates.prerequisites.rungs:
+    for rung in candidates.prerequisites.pilot_rungs:
         tag, value = rung.dest, rung.value
         if tag not in seen:
             actions.append((tag, value))

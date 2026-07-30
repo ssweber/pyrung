@@ -173,7 +173,7 @@ class PlanStep:
     ``kind`` classifies the move so the repr can group/filter:
     - ``"command"`` — a candidate pulse (button press).
     - ``"hold"``    — a hold installation (discovered prerequisite).
-    - ``"coast"``   — a zoom or let-run dwell (waiting for timers/sequences).
+    - ``"coast"``   — a bearing coast or let-run dwell (waiting for timers/sequences).
     - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
     """
 

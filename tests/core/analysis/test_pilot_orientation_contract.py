@@ -140,7 +140,7 @@ def test_candidate_read_exposes_only_owned_receipts() -> None:
         "advance_boundary",
         "advance_condition",
         "prescribed_batch",
-        "prerequisite_rungs",
+        "prerequisite_pilot_rungs",
         "held_command_tags",
         "stuck_reason",
         "completion_frontier",
@@ -290,7 +290,7 @@ def test_learned_batch_materializes_the_common_policy_once(monkeypatch) -> None:
     assert not result.act.policy.chase_regression_causes
 
 
-def test_learned_source_names_preserve_legacy_values_and_batch_identity() -> None:
+def test_learned_source_names_define_batch_identity() -> None:
     actions = (("First", True), ("Gate", True))
     act = BatchPulse(
         ActPolicy(
@@ -300,9 +300,9 @@ def test_learned_source_names_preserve_legacy_values_and_batch_identity() -> Non
         )
     )
 
-    assert ActSource.LEARNED_ACTION.value == "influence"
-    assert ActSource.LEARNED_BATCH.value == "learned"
-    assert act_identity(act) == ("batch", "learned", actions)
+    assert ActSource.LEARNED_ACTION.value == "learned_action"
+    assert ActSource.LEARNED_BATCH.value == "learned_batch"
+    assert act_identity(act) == ("batch", "learned_batch", actions)
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:

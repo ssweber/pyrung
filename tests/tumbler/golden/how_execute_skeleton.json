@@ -126,7 +126,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Clear",
      true
@@ -241,7 +241,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -283,7 +283,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 1,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
     true
@@ -382,7 +382,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 15,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Reset",
      true
@@ -474,7 +474,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -516,7 +516,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 15,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
     true
@@ -600,7 +600,7 @@
     "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 3,
-    "influence_prescribed": false,
+    "learned_prescribed": false,
     "pair": [
      "Cmd_State_Start",
      true
@@ -669,7 +669,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true
@@ -711,7 +711,7 @@
    "awaited_action_prescribed": false,
    "bearing_channel_tag": "Sts_StateCurrent",
    "bearing_channel_value": 3,
-   "influence_prescribed": false,
+   "learned_prescribed": false,
    "pair": [
     "Cmd_State_Start",
     true

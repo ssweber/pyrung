@@ -25,9 +25,9 @@ SHOW = {
     "candidate_accepted",
     "batch_accepted",
     "widening_accepted",
-    "zoom",
-    "zoom_accepted",
-    "zoom_rejected",
+    "bearing_coast",
+    "bearing_coast_accepted",
+    "bearing_coast_rejected",
     "letrun_ejection",
     "trend_checkpoint",
     "trend_regression",
@@ -45,16 +45,17 @@ def brief(kind: str, data: dict) -> str:
     if kind == "candidate_accepted":
         cd = data.get("candidate_detail") or {}
         return f"tag={cd.get('tag')} value={cd.get('value')!r} applied={data.get('applied')}"
-    if kind == "zoom":
+    if kind == "bearing_coast":
         return f"reason={data.get('reason')!r} channel={data.get('channel_tag')}"
-    if kind == "zoom_accepted":
+    if kind == "bearing_coast_accepted":
         return (
             f"label={data.get('observe_label')} outcome={data.get('outcome')} "
-            f"chan={data.get('zoom_channel_tag')} target={data.get('zoom_target_value')!r} "
-            f"landed={data.get('zoom_actual_value')!r} ejected={data.get('ejected')} "
+            f"chan={data.get('bearing_coast_channel_tag')} "
+            f"target={data.get('bearing_coast_target_value')!r} "
+            f"landed={data.get('bearing_coast_actual_value')!r} ejected={data.get('ejected')} "
             f"trend={data.get('trend')} scans={data.get('scan_before')}->{data.get('scan_after')}"
         )
-    if kind == "zoom_rejected":
+    if kind == "bearing_coast_rejected":
         return f"gates={[(g.event, g.detail[:60]) for g in data.get('gates', ())]}"
     if kind == "letrun_ejection":
         return (
