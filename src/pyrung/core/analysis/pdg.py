@@ -24,8 +24,10 @@ from pyrung.core.memory_block import (
     IndirectExprRef,
     IndirectRef,
 )
-from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag, TagType
+from pyrung.core.tag import ImmediateRef, InputTag, OutputTag, Tag
 from pyrung.core.validation.walker import _condition_children, _instruction_fields
+
+from .write_sites import instruction_write_targets
 
 if TYPE_CHECKING:
     from pyrung.core.program import Program
@@ -975,65 +977,28 @@ def _extract_instruction_writes(
     tag_refs: dict[str, Tag],
     ranges: dict[str, list[str]] | None = None,
 ) -> tuple[set[str], set[str], set[str]]:
-    """Extract write targets for one instruction plus target-address reads.
+    """Extract shared write targets for one instruction plus target-address reads.
 
-    Returns ``(writes, reads, implicit_writes)`` — fault writes are tracked
-    separately so they don't pollute ``writers_of`` or cone computations.
+    Declared writes, declared status fields, and static sequential-copy fan-out
+    come from :mod:`write_sites`.  This PDG-specific layer retains indirect
+    address reads and conservative regions.  Returns
+    ``(writes, reads, implicit_writes)`` — fault writes are tracked separately
+    so they don't pollute ``writers_of`` or cone computations.
     """
     writes: set[str] = set()
     reads: set[str] = set()
 
-    cls = type(instr)
-    for field_name in getattr(cls, "_writes", ()):
+    for target in instruction_write_targets(instr):
         target_writes, target_reads = _extract_write_targets(
-            getattr(instr, field_name),
+            target,
             tag_refs,
             ranges=ranges,
         )
         writes.update(target_writes)
         reads.update(target_reads)
 
-    writes.update(_static_copy_fanout_writes(instr, tag_refs))
     implicit_writes = _implicit_fault_writes(instr, tag_refs)
     return writes, reads, implicit_writes
-
-
-def _static_copy_fanout_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
-    """Return sequential writes that a statically-known copy fan-out performs."""
-    if not isinstance(instr, CopyInstruction):
-        return set()
-
-    dest = instr.dest
-    if isinstance(dest, ImmediateRef):
-        dest = dest.value
-    if not isinstance(dest, Tag):
-        return set()
-
-    source = instr.source
-    converter = instr.convert
-    count = 0
-
-    if converter is None and isinstance(source, str) and len(source) > 1:
-        if dest.type == TagType.CHAR:
-            count = len(source)
-    elif converter is not None and getattr(converter, "mode", None) in {"value", "ascii"}:
-        if isinstance(source, str):
-            count = len(source)
-
-    if count <= 1:
-        return set()
-
-    from pyrung.core.instruction.resolvers import _sequential_tags
-
-    try:
-        tags = _sequential_tags(dest, count)
-    except ValueError:
-        return set()
-
-    writes: set[str] = set()
-    for tag in tags:
-        _register_tag(tag, tag_refs, writes)
-    return writes
 
 
 def _implicit_fault_writes(instr: Any, tag_refs: dict[str, Tag]) -> set[str]:
@@ -1493,18 +1458,15 @@ def _collect_pointer_tags(program: Program) -> dict[str, tuple[str, int, int]]:
 
 
 def _named_write_dests(instr: Any) -> list[str]:
-    """Names of the single-``Tag`` destinations *instr* writes (direct writes only).
+    """Names of exact single-``Tag`` destinations *instr* writes.
 
     The affine-pointer hop and the root's literal-write domain
     (:mod:`pyrung.core.analysis.crossings.indirect_dest`) both follow these named,
-    non-indirect writes — a ``copy(k, D)`` / ``calc(f(S), D)`` whose ``D`` is a
-    plain ``Tag``.  Indirect / range / expression destinations are skipped (they
-    resolve to no single root register).
+    non-indirect writes.  Indirect, range, and expression destinations are
+    skipped because they resolve to no single root register.
     """
-    cls = type(instr)
     out: list[str] = []
-    for field_name in getattr(cls, "_writes", ()):
-        dest = getattr(instr, field_name, None)
+    for dest in instruction_write_targets(instr):
         if isinstance(dest, ImmediateRef):
             dest = dest.value
         if isinstance(dest, Tag):
@@ -1554,9 +1516,7 @@ def _collect_indirect_writes(
 
     def _check_instruction(instr: Any, node_index: int) -> None:
         cls = type(instr)
-        write_fields = getattr(cls, "_writes", ())
-        for field_name in write_fields:
-            dest = getattr(instr, field_name)
+        for dest in instruction_write_targets(instr):
             if isinstance(dest, ImmediateRef):
                 dest = dest.value
             if not isinstance(dest, (IndirectRef, IndirectExprRef)):

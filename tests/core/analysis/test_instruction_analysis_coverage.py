@@ -747,7 +747,14 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _on_delay_case,
         frozenset({"TonEnable", "TonReset"}),
         data_reads=frozenset({"TonPreset"}),
-        writes=frozenset({"AnalysisTon_Done", "AnalysisTon_Acc"}),
+        writes=frozenset(
+            {
+                "AnalysisTon_Done",
+                "AnalysisTon_Acc",
+                "AnalysisTon_EN",
+                "AnalysisTon_TT",
+            }
+        ),
     ),
     GraphCase(
         "off_delay",
@@ -755,7 +762,14 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _off_delay_case,
         frozenset({"TofEnable"}),
         data_reads=frozenset({"TofPreset"}),
-        writes=frozenset({"AnalysisTof_Done", "AnalysisTof_Acc"}),
+        writes=frozenset(
+            {
+                "AnalysisTof_Done",
+                "AnalysisTof_Acc",
+                "AnalysisTof_EN",
+                "AnalysisTof_TT",
+            }
+        ),
     ),
     GraphCase(
         "count_up",
@@ -763,7 +777,14 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _count_up_case,
         frozenset({"CtuUp", "CtuDown", "CtuReset"}),
         data_reads=frozenset({"CtuPreset"}),
-        writes=frozenset({"AnalysisCtu_Done", "AnalysisCtu_Acc"}),
+        writes=frozenset(
+            {
+                "AnalysisCtu_Done",
+                "AnalysisCtu_Acc",
+                "AnalysisCtu_CU",
+                "AnalysisCtu_CD",
+            }
+        ),
     ),
     GraphCase(
         "count_down",
@@ -771,7 +792,14 @@ GRAPH_CASES: tuple[GraphCase, ...] = (
         _count_down_case,
         frozenset({"CtdDown", "CtdReset"}),
         data_reads=frozenset({"CtdPreset"}),
-        writes=frozenset({"AnalysisCtd_Done", "AnalysisCtd_Acc"}),
+        writes=frozenset(
+            {
+                "AnalysisCtd_Done",
+                "AnalysisCtd_Acc",
+                "AnalysisCtd_CU",
+                "AnalysisCtd_CD",
+            }
+        ),
     ),
     GraphCase(
         "call",
@@ -929,14 +957,19 @@ def test_sp_values_cover_literal_tag_fill_reset_latch_and_calc_priors() -> None:
             fill(7, block.select(1, 2))
             calc(dest + 1, dest)
 
-    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.crossing import Affine, Literal, StoreTransform
 
     rung = logic.rungs[0]
     assert _written_value_for_tag(rung, "SpFlag") == Literal(True)
     assert _written_value_for_tag(rung, "SpOtherFlag") == Literal(False)
     # copy-from-named-tag classifies as an affine pass-through (scale 1, offset 0)
     # so cause(to=)/effect(from_=) can trace the value through the copy.
-    assert _written_value_for_tag(rung, "SpDest") == Affine(source="SpSource", scale=1, offset=0)
+    assert _written_value_for_tag(rung, "SpDest") == Affine(
+        source="SpSource",
+        scale=1,
+        offset=0,
+        storage=StoreTransform("clamp", -32768, 32767),
+    )
     assert _written_value_for_tag(rung, "SpBlock1") == Literal(7)
 
 

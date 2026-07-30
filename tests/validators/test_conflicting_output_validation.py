@@ -278,14 +278,18 @@ class TestLatchResetExcluded:
 class TestBlockRangeTarget:
     def test_overlapping_block_ranges(self):
         Y = OutputBlock("Y", TagType.BOOL, 1, 16)
+        first = Y.select(1, 4)
+        second = Y.select(1, 4)
         with Program() as prog:
             with Rung(ButtonA):
-                out(Y.select(1, 4))
+                out(first)
             with Rung(ButtonB):
-                out(Y.select(1, 4))
+                out(second)
 
         report = validate_conflicting_outputs(prog)
         assert len(report.findings) == 4  # Y1, Y2, Y3, Y4
+        assert "_tag_name_cache" not in vars(first)
+        assert "_tag_name_cache" not in vars(second)
 
 
 # ---------------------------------------------------------------------------
