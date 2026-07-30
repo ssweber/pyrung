@@ -37,7 +37,7 @@ from pyrung import (
     rise,
     rung,
 )
-from pyrung.core.crossing import Affine
+from pyrung.core.crossing import Affine, StoreTransform
 
 from .test_pilot_table_detour import _packml_table_detour_program
 
@@ -81,6 +81,27 @@ def test_const_fold_folds_program_constant_source() -> None:
     folded = fold_const_copy_source(Affine(source="PackTbl_CmdCompleteRef"), ctx)
     assert folded is not None
     assert folded.value == 10
+
+
+def test_const_fold_applies_destination_storage() -> None:
+    """Constant folding returns the stored value, not the raw affine result."""
+    from pyrung.core.analysis.pilot.awaited_actions import fold_const_copy_source
+
+    logic, _tags = _packml_table_detour_program()
+    plc = PLC(logic, dt=0.010)
+    plc.step()
+    ctx = _walkctx(logic, plc)
+
+    folded = fold_const_copy_source(
+        Affine(
+            source="PackTbl_CmdCompleteRef",
+            offset=32760,
+            storage=StoreTransform("wrap", -32768, 32767),
+        ),
+        ctx,
+    )
+    assert folded is not None
+    assert folded.value == -32766
 
 
 def test_const_fold_punts_on_program_written_source() -> None:

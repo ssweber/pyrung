@@ -12,6 +12,7 @@ from pyrung.core.analysis.crossings import (
     BaseCrossing,
     crossing_for,
     forward,
+    propose,
     register,
     registered_classes,
     reverse,
@@ -22,6 +23,7 @@ from pyrung.core.crossing import (
     Constraint,
     CrossingContext,
     Eq,
+    Literal,
     ReverseResult,
     eq_target,
     satisfied,
@@ -42,6 +44,11 @@ class _DummyCrossing(BaseCrossing):
     def reverse(self, instr, rung, target, ctx):
         (value,) = target.values  # target is Eq(tag, {value})
         return single(Eq("Src", frozenset({value})), exact=True)
+
+
+class _TargetAwareCrossing(BaseCrossing):
+    def forward(self, instr, target_tag, ctx):
+        return Literal(target_tag)
 
 
 def _ctx() -> CrossingContext:
@@ -94,12 +101,6 @@ def test_unsatisfiable_encoding_is_empty_eq() -> None:
     assert not r.fallthrough
 
 
-def test_projected_context_has_no_recorded_evidence() -> None:
-    # Soundness invariant: a projected / prover-path context never carries
-    # recorded evidence, so it cannot leak into seeding.
-    assert _ctx().value_at_scan is None
-
-
 # --- registry machinery -------------------------------------------------------
 
 
@@ -108,7 +109,14 @@ def test_unregistered_reverse_is_fallthrough() -> None:
 
 
 def test_unregistered_forward_is_unknown() -> None:
-    assert forward(_Dummy(), _ctx()) is UNKNOWN
+    assert forward(_Dummy(), "Dest", _ctx()) is UNKNOWN
+
+
+def test_unregistered_proposal_is_empty_and_not_a_reverse_claim() -> None:
+    proposal = propose(_Dummy(), None, eq_target("X", 1), _ctx())
+    assert proposal.empty
+    assert proposal.branches == ()
+    assert proposal.verify_required is False
 
 
 def test_register_and_exact_lookup() -> None:
@@ -137,4 +145,13 @@ def test_mro_walk_resolves_subclass_to_base() -> None:
 def test_base_crossing_defaults_are_sound() -> None:
     base = BaseCrossing()
     assert base.reverse(_Dummy(), None, eq_target("X", 1), _ctx()).fallthrough is True
-    assert base.forward(_Dummy(), _ctx()) is UNKNOWN
+    assert base.forward(_Dummy(), "X", _ctx()) is UNKNOWN
+    assert base.propose(_Dummy(), None, eq_target("X", 1), _ctx()).empty
+
+
+def test_target_aware_forward_preserves_destination_identity() -> None:
+    register(_Dummy, _TargetAwareCrossing())
+    try:
+        assert forward(_Dummy(), "Dest2", _ctx()) == Literal("Dest2")
+    finally:
+        crossings._REGISTRY.pop(_Dummy, None)

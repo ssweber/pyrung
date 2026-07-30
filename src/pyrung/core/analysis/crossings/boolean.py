@@ -11,10 +11,13 @@ can.
   makes it necessary but not sufficient).  A non-Boolean target is unsatisfiable.
 - **SET** only ever writes True (else it holds), so ``coil == True`` is *fired*
   (``CondAttr(True)``) **or** *held* (``Prior`` — chase the coil one scan back);
-  ``coil == False`` can only be *held* (the latch never drives it false) — a
-  single ``Prior``.  That "SET can't drive False" is the value-polarity oracle:
-  a latch is never the writer that cleared a bit.
-- **RST** clears the target to its type's OFF/zero value.
+  ``coil == False`` requires both a false prior value and a false rung condition.
+  That "SET can't drive False" is the value-polarity oracle: a latch is never
+  the writer that cleared a bit.
+- **RST** clears the target to its type's OFF/zero value.  A scalar exposes
+  that type directly; static and indirect ranges expose their homogeneous
+  element type through the backing block, including an immediate-wrapped
+  scalar or static range.
 
 The held branch is a :class:`Prior` so the recorded resolver reads the prior
 scan and the projected resolver recurses — one constraint, two resolvers.
@@ -45,7 +48,7 @@ from pyrung.core.instruction.coils import (
     ResetInstruction,
     reset_value_for_type,
 )
-from pyrung.core.tag import TagType
+from pyrung.core.tag import ImmediateRef, TagType
 
 
 def _eq_single(target: Constraint) -> tuple[str, Any] | None:
@@ -78,7 +81,7 @@ class OutCrossing(BaseCrossing):
 class LatchCrossing(BaseCrossing):
     """SET: True is fired-or-held; False can only be held (polarity oracle)."""
 
-    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+    def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         return Literal(True)
 
     def reverse(
@@ -91,7 +94,11 @@ class LatchCrossing(BaseCrossing):
         if value is True:
             return disjoint((CondAttr(expected=True),), (_held(tag),), exact=True)
         if value is False:
-            return single(_held(tag), exact=True)  # SET never drives False
+            return single(
+                _held(tag),
+                CondAttr(expected=False),
+                exact=True,
+            )  # SET never drives False
         return unsatisfiable(tag)
 
 
@@ -101,12 +108,16 @@ class ResetCrossing(BaseCrossing):
     @staticmethod
     def _reset_value(instr: Any) -> Any:
         target = getattr(instr, "target", None)
+        if isinstance(target, ImmediateRef):
+            target = target.value
         tag_type = getattr(target, "type", None)
+        if not isinstance(tag_type, TagType):
+            tag_type = getattr(getattr(target, "block", None), "type", None)
         if isinstance(tag_type, TagType):
             return reset_value_for_type(tag_type)
         return None
 
-    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+    def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         reset_value = self._reset_value(instr)
         if reset_value is not None:
             return Literal(reset_value)
@@ -121,10 +132,14 @@ class ResetCrossing(BaseCrossing):
         tag, value = st
         reset_value = self._reset_value(instr)
         if reset_value is None:
-            return REVERSE_FALLTHROUGH  # block / indirect target -> defer
+            return REVERSE_FALLTHROUGH
         if value == reset_value:
             return disjoint((CondAttr(expected=True),), (_held(tag),), exact=True)
-        return single(_held(tag), exact=True)  # RST never drives a non-reset value
+        return single(
+            _held(tag),
+            CondAttr(expected=False),
+            exact=True,
+        )  # RST never drives a non-reset value
 
 
 register(OutInstruction, OutCrossing())

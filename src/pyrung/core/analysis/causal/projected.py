@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.analysis.sp_values import (
     _chase_inequality_source,
@@ -781,7 +782,15 @@ def projected_cause(
     # the writer must fire in) and the pinned set used to reject counterfactual
     # guard leaves during classification.
     candidate_rungs: list[
-        tuple[int, Rung, str | None, tuple[str, Any] | None, SystemState, frozenset[str]]
+        tuple[
+            int,
+            Rung,
+            str | None,
+            tuple[str, Any] | None,
+            bool | None,
+            SystemState,
+            frozenset[str],
+        ]
     ] = []
     snapshot = dict(state.tags)
     for node_idx in writer_indices:
@@ -801,13 +810,10 @@ def projected_cause(
         local_pinned = (built[1] if built is not None else set()) | set(pinned)
         cand_state = state.with_tags(overlay) if overlay else state
         cand_pinned = frozenset(local_pinned)
-        if _rung_produces_value(rung, node.rung_index, tag_name, to_value, cand_state):
-            candidate_rungs.append(
-                (node.rung_index, rung, node.subroutine, None, cand_state, cand_pinned)
-            )
-            continue
         instruction = _writer_for_tag(rung, tag_name)
+        reverse_result = None
         source_req: tuple[str, Any] | None = None
+        crossing_exact: bool | None = None
         if instruction is not None:
             from pyrung.core.analysis import crossings
 
@@ -817,8 +823,13 @@ def projected_cause(
                 eq_target(tag_name, to_value),
                 CrossingContext(snapshot=snapshot, tags_by_name=pdg.tags),
             )
-            if not reverse_result.fallthrough and len(reverse_result.branches) == 1:
-                (branch,) = reverse_result.branches
+            normalized = normalize_reverse_result(reverse_result)
+            if normalized.contradiction:
+                continue
+            if not normalized.fallthrough:
+                crossing_exact = normalized.exact
+            if len(normalized.branches) == 1:
+                (branch,) = normalized.branches
                 if len(branch) == 1:
                     constraint = branch[0]
                     if (
@@ -830,9 +841,30 @@ def projected_cause(
                             constraint.tag,
                             next(iter(constraint.values)),
                         )
+        if _rung_produces_value(rung, node.rung_index, tag_name, to_value, cand_state):
+            candidate_rungs.append(
+                (
+                    node.rung_index,
+                    rung,
+                    node.subroutine,
+                    source_req,
+                    crossing_exact,
+                    cand_state,
+                    cand_pinned,
+                )
+            )
+            continue
         if source_req is not None:
             candidate_rungs.append(
-                (node.rung_index, rung, node.subroutine, source_req, cand_state, cand_pinned)
+                (
+                    node.rung_index,
+                    rung,
+                    node.subroutine,
+                    source_req,
+                    crossing_exact,
+                    cand_state,
+                    cand_pinned,
+                )
             )
 
     if not candidate_rungs:
@@ -854,7 +886,15 @@ def projected_cause(
     best_proximate: list[Transition] | None = None
     all_blockers: list[BlockingCondition] = []
 
-    for rung_idx, rung, sub_name, source_req, cand_state, cand_pinned in candidate_rungs:
+    for (
+        rung_idx,
+        rung,
+        sub_name,
+        source_req,
+        crossing_exact,
+        cand_state,
+        cand_pinned,
+    ) in candidate_rungs:
         sp_tree = rung.sp_tree()
 
         proximate: list[Transition] = []
@@ -924,6 +964,7 @@ def projected_cause(
                     enablers=tuple(enabling),
                     fidelity=step_fidelity,
                     subroutine=sub_name,
+                    crossing_exact=crossing_exact,
                 )
             ]
             if best_steps is None or (
@@ -975,6 +1016,7 @@ def projected_cause(
                 enablers=tuple(enabling),
                 fidelity=step_fidelity,
                 subroutine=sub_name,
+                crossing_exact=crossing_exact,
             )
             if best_steps is None or (
                 best_proximate is not None and len(proximate) < len(best_proximate)

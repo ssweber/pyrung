@@ -1,22 +1,21 @@
-"""Counter / timer crossings — the done-bit inverts to an accumulator inequality.
+"""Counter crossings — the done-bit inverts to a predecessor accumulator bound.
 
 A counter or timer sets its done bit by comparing its accumulator to a preset:
 
 - ``count_up`` / ``on_delay``: ``done == (acc >= preset)``
 - ``count_down``: ``done == (acc <= -preset)``
 
-So ``done == True`` inverts to an exact-shaped :class:`Cmp` on the accumulator —
-the answer to "why is it done?".  It is marked ``exact=False`` because the reset
-path also forces ``done == False``: ``done == True`` *implies* ``acc >= preset``
-(a sound necessary condition / superset) but is not equivalent to it.
+Counters change the accumulator before comparing it. A count-up can therefore
+finish from ``acc == preset - 1`` and a count-down from
+``acc == -preset + 1``. Their inexact reverse bounds include that one-scan
+frontier, producing a sound predecessor superset. Dynamic presets use an
+explicit :class:`~pyrung.core.crossing.AffineCmp`, preserving both the preset
+dependency and the one-scan offset.
 
-Only the active-true direction is emitted.  ``done == False`` and the accumulator
-itself fall through: ``done == False`` admits the reset/never-enabled states (no
-clean accumulator bound), and the accumulator's predecessor is condition-driven
-(reset makes any static predecessor constraint vacuous) — that chase is the
-walker's value-stepping domain.  ``off_delay`` (TOF) inverts cleanly in neither
-direction (enabled forces ``done == True`` regardless of ``acc``) and is a
-registered fallthrough.
+Timers can advance by a scan-duration- and unit-dependent amount, including
+fractional hidden memory. Until those inputs are representable, both timer
+families deliberately fall through. ``done == False`` and accumulator targets
+also fall through because reset/hold paths do not have one useful sound bound.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from typing import Any
 from pyrung.core.analysis.crossings import BaseCrossing, register
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
+    AffineCmp,
     Cmp,
     Constraint,
     CrossingContext,
@@ -47,11 +47,12 @@ def _preset_bound(preset: Any) -> tuple[Any, bool] | None:
     return (name, True) if name is not None else None
 
 
-class _DoneBitCrossing(BaseCrossing):
-    """Invert ``done == True`` to ``acc <op> preset``.  Subclasses set ``_op``."""
+class _CounterDoneCrossing(BaseCrossing):
+    """Invert ``done == True`` to a sound one-scan predecessor bound."""
 
     _op = ">="  # comparison that makes the done bit true
     _negate_preset = False  # count_down compares against -preset
+    _frontier_offset = -1
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
@@ -66,40 +67,54 @@ class _DoneBitCrossing(BaseCrossing):
         if bound is None:
             return REVERSE_FALLTHROUGH
         bound_value, is_tag = bound
+        if is_tag:
+            return single(
+                AffineCmp(
+                    instr.accumulator.name,
+                    self._op,
+                    bound_value,
+                    scale=-1 if self._negate_preset else 1,
+                    offset=self._frontier_offset,
+                )
+            )
         if self._negate_preset:
-            if is_tag:
-                return REVERSE_FALLTHROUGH  # -preset of a tag is not a plain bound
             bound_value = -bound_value
-        # exact=False: the reset path also forces done False, so acc <op> preset
-        # is necessary for done==True but not sufficient.
-        return single(Cmp(instr.accumulator.name, self._op, bound_value, bound_is_tag=is_tag))
+        return single(
+            Cmp(
+                instr.accumulator.name,
+                self._op,
+                bound_value + self._frontier_offset,
+            )
+        )
 
 
-class CountUpDoneCrossing(_DoneBitCrossing):
-    """count_up / on_delay: ``done == True`` -> ``acc >= preset``."""
+class CountUpDoneCrossing(_CounterDoneCrossing):
+    """Count-up: ``done`` can cross true from ``acc == preset - 1``."""
 
     _op = ">="
+    _frontier_offset = -1
 
 
-class CountDownDoneCrossing(_DoneBitCrossing):
-    """count_down: ``done == True`` -> ``acc <= -preset`` (literal preset only)."""
+class CountDownDoneCrossing(_CounterDoneCrossing):
+    """Count-down: ``done`` can cross true from ``acc == -preset + 1``."""
 
     _op = "<="
     _negate_preset = True
+    _frontier_offset = 1
 
 
-class OffDelayCrossing(BaseCrossing):
-    """off_delay (TOF) — registered fallthrough (no clean accumulator inversion)."""
+class TimerDoneCrossing(BaseCrossing):
+    """Timers fall through until dt, unit, and fractional state are constraints."""
 
 
 register(CountUpInstruction, CountUpDoneCrossing())
 register(CountDownInstruction, CountDownDoneCrossing())
-register(OnDelayInstruction, CountUpDoneCrossing())
-register(OffDelayInstruction, OffDelayCrossing())
+register(OnDelayInstruction, TimerDoneCrossing())
+register(OffDelayInstruction, TimerDoneCrossing())
 
 
 __all__ = [
     "CountDownDoneCrossing",
     "CountUpDoneCrossing",
-    "OffDelayCrossing",
+    "TimerDoneCrossing",
 ]

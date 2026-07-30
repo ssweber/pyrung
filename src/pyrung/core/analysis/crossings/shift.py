@@ -2,7 +2,7 @@
 
 On a clock rising edge a shift register sets bit[0] to the rung (data) condition
 and copies each later bit from its lower neighbour; with no edge it holds.  So a
-*True* cell inverts to an exact disjunction:
+*True* cell inverts to a sound candidate disjunction:
 
 - ``bit[k] == True`` (k >= 1): came from ``bit[k-1]`` on a clock edge **or** was
   already True and held — ``Prior(bit_k, bit_{k-1})`` OR ``Prior(bit_k, bit_k)``.
@@ -11,6 +11,9 @@ and copies each later bit from its lower neighbour; with no edge it holds.  So a
 
 ``== False`` falls through: the reset path drives every cell false, so a static
 constraint there is vacuous (that branch is the consumer's to observe).
+
+The disjunction is not exact because it does not encode the clock edge or reset
+condition.  In particular, a prior-True cell can be replaced on a rising edge.
 """
 
 from __future__ import annotations
@@ -51,9 +54,9 @@ class ShiftCrossing(BaseCrossing):
             if getattr(bit, "name", None) == tag:
                 held = Prior(tag, tag, 1, 0)
                 if k == 0:  # data/rung condition drove it, or it held
-                    return disjoint((CondAttr(expected=True),), (held,), exact=True)
+                    return disjoint((CondAttr(expected=True),), (held,), exact=False)
                 neighbour = Prior(tag, tags[k - 1].name, 1, 0)  # came from lower cell on edge
-                return disjoint((neighbour,), (held,), exact=True)
+                return disjoint((neighbour,), (held,), exact=False)
         return REVERSE_FALLTHROUGH
 
 

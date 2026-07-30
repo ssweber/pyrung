@@ -21,7 +21,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pyrung.core.crossing import REVERSE_FALLTHROUGH, UNKNOWN, Affine, Literal, ReverseResult
+from pyrung.core.crossing import (
+    NO_CROSSING_PROPOSAL,
+    REVERSE_FALLTHROUGH,
+    UNKNOWN,
+    Affine,
+    CrossingProposal,
+    Literal,
+    ReverseResult,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.crossing import Constraint, CrossingContext
@@ -46,8 +54,15 @@ class BaseCrossing:
     ) -> ReverseResult:
         return REVERSE_FALLTHROUGH
 
-    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+    def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
+        """Forward-classify the value written to one concrete destination."""
         return UNKNOWN
+
+    def propose(
+        self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
+    ) -> CrossingProposal:
+        """Return verify-required candidates without making a reverse claim."""
+        return NO_CROSSING_PROPOSAL
 
 
 _REGISTRY: dict[type, BaseCrossing] = {}
@@ -83,12 +98,31 @@ def reverse(instr: Any, rung: Any, target: Constraint, ctx: CrossingContext) -> 
     return crossing.reverse(instr, rung, target, ctx)
 
 
-def forward(instr: Any, ctx: CrossingContext) -> Any:
-    """Forward-evaluate *instr* — locked protocol, reverse-first; returns ``UNKNOWN``."""
+def forward(instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
+    """Forward-evaluate *instr* for one concrete destination tag.
+
+    Destination identity is part of the crossing contract because sequential
+    fan-out and heterogeneous co-write instructions can produce different
+    values at different write sites. Unregistered instructions remain
+    ``UNKNOWN``.
+    """
     crossing = crossing_for(instr)
     if crossing is None:
         return UNKNOWN
-    return crossing.forward(instr, ctx)
+    return crossing.forward(instr, target_tag, ctx)
+
+
+def propose(
+    instr: Any,
+    rung: Any,
+    target: Constraint,
+    ctx: CrossingContext,
+) -> CrossingProposal:
+    """Propose predecessor candidates; empty when unregistered/unsupported."""
+    crossing = crossing_for(instr)
+    if crossing is None:
+        return NO_CROSSING_PROPOSAL
+    return crossing.propose(instr, rung, target, ctx)
 
 
 def registered_classes() -> frozenset[type]:
@@ -99,9 +133,11 @@ def registered_classes() -> frozenset[type]:
 __all__ = [
     "Affine",
     "BaseCrossing",
+    "CrossingProposal",
     "Literal",
     "crossing_for",
     "forward",
+    "propose",
     "register",
     "registered_classes",
     "reverse",

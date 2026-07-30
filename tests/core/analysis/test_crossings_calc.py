@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from pyrung import Dint, Int, Real
 from pyrung.core.analysis.crossings.calc import CalcCrossing
-from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Cmp, CrossingContext, Eq, eq_target
+from pyrung.core.crossing import (
+    UNKNOWN,
+    Affine,
+    Aggregate,
+    Cmp,
+    CrossingContext,
+    Eq,
+    StoreTransform,
+    eq_target,
+)
 from pyrung.core.instruction.calc import CalcInstruction
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
@@ -47,23 +56,22 @@ def test_affine_negate_inverts_exactly() -> None:
     assert r.exact is True
 
 
-def test_affine_mismatched_width_stays_candidate() -> None:
-    # DINT src wrapped into an INT dest admits other preimages -> exact=False.
+def test_affine_mismatched_width_falls_through_instead_of_dropping_aliases() -> None:
+    # DINT src wrapped into an INT dest admits other preimages; one candidate
+    # singleton would under-approximate the crossing.
     src, dest = Dint("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(src + 5, dest), None, eq_target("Dest", 42), _ctx(src, dest))
-    assert _only(r) == (Eq("Src", frozenset({37})),)
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
-def test_affine_mul_exact_division_is_candidate() -> None:
-    # Multiply is not bijective under wrap -> the divisible preimage is a candidate.
+def test_affine_mul_exact_division_falls_through_instead_of_dropping_aliases() -> None:
+    # Multiply is not bijective under wrap; Src==3 is not the only producer.
     src, dest = Int("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(src * 3, dest), None, eq_target("Dest", 9), _ctx(src, dest))
-    assert _only(r) == (Eq("Src", frozenset({3})),)
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
-def test_real_multiply_inverts_float_target() -> None:
+def test_real_multiply_falls_through_without_full_float_preimage() -> None:
     src, dest = Real("Src"), Real("Dest")
     r = _CALC.reverse(
         CalcInstruction(src * 2.5, dest),
@@ -71,8 +79,7 @@ def test_real_multiply_inverts_float_target() -> None:
         eq_target("Dest", 7.5),
         _ctx(src, dest),
     )
-    assert _only(r) == (Eq("Src", frozenset({3.0})),)
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
 def test_mul_non_integer_preimage_falls_through() -> None:
@@ -105,10 +112,28 @@ def test_multi_tag_expr_falls_through() -> None:
     assert r.fallthrough
 
 
-def test_non_numeric_target_falls_through() -> None:
+def test_impossible_stored_targets_are_unsatisfiable() -> None:
     src, dest = Int("Src"), Int("Dest")
-    r = _CALC.reverse(CalcInstruction(src + 5, dest), None, eq_target("Dest", "x"), _ctx(src, dest))
-    assert r.fallthrough
+    for impossible in ("x", 7.5, 40_000):
+        r = _CALC.reverse(
+            CalcInstruction(src + 5, dest),
+            None,
+            eq_target("Dest", impossible),
+            _ctx(src, dest),
+        )
+        assert r.exact is True
+        assert _only(r) == (Eq("Dest", frozenset()),)
+
+
+def test_integer_destination_accepts_equivalent_integral_float_target() -> None:
+    src, dest = Int("Src"), Int("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(src + 5, dest),
+        None,
+        eq_target("Dest", 10.0),
+        _ctx(src, dest),
+    )
+    assert r.fallthrough is True
 
 
 def test_ne_target_falls_through() -> None:
@@ -129,7 +154,7 @@ def _ctx_snap(snapshot, *tags) -> CrossingContext:
 
 def test_cmp_affine_add_shifts_bound() -> None:
     # dest = src + 10; dest > 60  ⟹  src > 50.
-    src, dest = Int("Src"), Int("Dest")
+    src, dest = Dint("Src"), Real("Dest")
     r = _CALC.reverse(CalcInstruction(src + 10, dest), None, Cmp("Dest", ">", 60), _ctx(src, dest))
     assert _only(r) == (Cmp("Src", ">", 50),)
     assert r.exact is False
@@ -137,14 +162,14 @@ def test_cmp_affine_add_shifts_bound() -> None:
 
 def test_cmp_affine_sub_shifts_bound() -> None:
     # dest = src - 5; dest <= 10  ⟹  src <= 15.
-    src, dest = Int("Src"), Int("Dest")
+    src, dest = Dint("Src"), Real("Dest")
     r = _CALC.reverse(CalcInstruction(src - 5, dest), None, Cmp("Dest", "<=", 10), _ctx(src, dest))
     assert _only(r) == (Cmp("Src", "<=", 15),)
 
 
 def test_cmp_affine_negate_flips_operator() -> None:
     # dest = 100 - src; dest > 40  ⟹  src < 60 (scale -1 flips > to <).
-    src, dest = Int("Src"), Int("Dest")
+    src, dest = Dint("Src"), Real("Dest")
     r = _CALC.reverse(CalcInstruction(100 - src, dest), None, Cmp("Dest", ">", 40), _ctx(src, dest))
     assert _only(r) == (Cmp("Src", "<", 60),)
 
@@ -164,31 +189,56 @@ def test_cmp_tag_bound_falls_through() -> None:
     assert r.fallthrough
 
 
-def test_cmp_two_tag_add_freezes_partner_dnf() -> None:
-    # dest = A + B; dest > 8, snapshot A=2,B=3  ⟹  (A > 5) ∨ (B > 6).
-    a, b, dest = Int("A"), Int("B"), Int("Dest")
+def test_cmp_two_tag_add_falls_through_instead_of_freezing_partner() -> None:
+    a, b, dest = Dint("A"), Dint("B"), Real("Dest")
     r = _CALC.reverse(
         CalcInstruction(a + b, dest),
         None,
         Cmp("Dest", ">", 8),
         _ctx_snap({"A": 2, "B": 3}, a, b, dest),
     )
-    assert r.branches == ((Cmp("A", ">", 5),), (Cmp("B", ">", 6),))
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
-def test_cmp_two_tag_sub_flips_partner_branch() -> None:
-    # dest = A - B; dest > 3, snapshot A=4,B=1
-    #   left:  A > 3 + B_now = 4
-    #   right: B < A_now - 3 = 1  (the -B term flips > to <)
-    a, b, dest = Int("A"), Int("B"), Int("Dest")
+def test_cmp_two_tag_add_exposes_snapshot_freeze_as_verified_proposal() -> None:
+    a, b, dest = Dint("A"), Dint("B"), Real("Dest")
+    instr = CalcInstruction(a + b, dest)
+    target = Cmp("Dest", ">", 8)
+    ctx = _ctx_snap({"A": 2, "B": 3}, a, b, dest)
+
+    assert _CALC.reverse(instr, None, target, ctx).fallthrough is True
+    proposal = _CALC.propose(instr, None, target, ctx)
+    assert proposal.branches == (
+        (Cmp("A", ">", 5),),
+        (Cmp("B", ">", 6),),
+    )
+    assert proposal.verify_required is True
+    assert "snapshot-frozen" in proposal.reason
+
+
+def test_cmp_two_tag_sub_falls_through_instead_of_freezing_partner() -> None:
+    a, b, dest = Dint("A"), Dint("B"), Real("Dest")
     r = _CALC.reverse(
         CalcInstruction(a - b, dest),
         None,
         Cmp("Dest", ">", 3),
         _ctx_snap({"A": 4, "B": 1}, a, b, dest),
     )
-    assert r.branches == ((Cmp("A", ">", 4),), (Cmp("B", "<", 1),))
+    assert r.fallthrough is True
+
+
+def test_cmp_two_tag_sub_proposal_flips_right_branch() -> None:
+    a, b, dest = Dint("A"), Dint("B"), Real("Dest")
+    proposal = _CALC.propose(
+        CalcInstruction(a - b, dest),
+        None,
+        Cmp("Dest", ">", 3),
+        _ctx_snap({"A": 4, "B": 1}, a, b, dest),
+    )
+    assert proposal.branches == (
+        (Cmp("A", ">", 4),),
+        (Cmp("B", "<", 1),),
+    )
 
 
 def test_cmp_two_tag_no_snapshot_falls_through() -> None:
@@ -196,6 +246,13 @@ def test_cmp_two_tag_no_snapshot_falls_through() -> None:
     a, b, dest = Int("A"), Int("B"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(a + b, dest), None, Cmp("Dest", ">", 8), _ctx(a, b, dest))
     assert r.fallthrough
+    proposal = _CALC.propose(
+        CalcInstruction(a + b, dest),
+        None,
+        Cmp("Dest", ">", 8),
+        _ctx(a, b, dest),
+    )
+    assert proposal.empty
 
 
 def test_cmp_sum_expr_falls_through() -> None:
@@ -210,77 +267,82 @@ def test_cmp_sum_expr_falls_through() -> None:
 
 
 def test_forward_tag_plus_literal() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(src + 10, dest), CrossingContext()) == Affine(
-        source="Src", scale=1, offset=10
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(src + 10, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=1, offset=10, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_literal_plus_tag() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(10 + src, dest), CrossingContext()) == Affine(
-        source="Src", scale=1, offset=10
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(10 + src, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=1, offset=10, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_tag_minus_literal() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(src - 5, dest), CrossingContext()) == Affine(
-        source="Src", scale=1, offset=-5
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(src - 5, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=1, offset=-5, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_literal_minus_tag() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(100 - src, dest), CrossingContext()) == Affine(
-        source="Src", scale=-1, offset=100
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(100 - src, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=-1, offset=100, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_tag_mul_literal() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(src * 3, dest), CrossingContext()) == Affine(
-        source="Src", scale=3, offset=0
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(src * 3, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=3, offset=0, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_literal_mul_tag() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(3 * src, dest), CrossingContext()) == Affine(
-        source="Src", scale=3, offset=0
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(3 * src, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=3, offset=0, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_unary_plus() -> None:
     src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(+src, dest), CrossingContext()) == Affine(
-        source="Src", scale=1, offset=0
+    assert _CALC.forward(CalcInstruction(+src, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=1, offset=0, storage=StoreTransform("wrap", -(2**15), 2**15 - 1)
     )
 
 
 def test_forward_unary_negate() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(-src, dest), CrossingContext()) == Affine(
-        source="Src", scale=-1, offset=0
+    src, dest = Int("Src"), Dint("Dest")
+    assert _CALC.forward(CalcInstruction(-src, dest), dest.name, _ctx(src, dest)) == Affine(
+        source="Src", scale=-1, offset=0, storage=StoreTransform("wrap", -(2**31), 2**31 - 1)
     )
 
 
 def test_forward_multi_tag_returns_unknown() -> None:
     a, b, dest = Int("A"), Int("B"), Int("Dest")
-    assert _CALC.forward(CalcInstruction(a + b, dest), CrossingContext()) is UNKNOWN
+    assert _CALC.forward(CalcInstruction(a + b, dest), dest.name, CrossingContext()) is UNKNOWN
 
 
 def test_forward_self_referential_still_works() -> None:
     acc = Int("Acc")
-    assert _CALC.forward(CalcInstruction(acc + 1, acc), CrossingContext()) == Affine(
-        source="Acc", scale=1, offset=1
-    )
+    result = _CALC.forward(CalcInstruction(acc + 1, acc), acc.name, _ctx(acc))
+    assert isinstance(result, Affine)
+    assert result.storage == StoreTransform("wrap", -(2**15), 2**15 - 1)
 
 
 def test_forward_sum_returns_aggregate() -> None:
     blk = Block("DS", TagType.INT, 1, 5)
-    dest = Int("Total")
-    result = _CALC.forward(CalcInstruction(blk.select(1, 3).sum(), dest), CrossingContext())
+    dest = Dint("Total")
+    result = _CALC.forward(
+        CalcInstruction(blk.select(1, 3).sum(), dest),
+        dest.name,
+        CrossingContext(),
+    )
     assert isinstance(result, Aggregate)
     assert result.operation == "sum"
     assert result.tags == ("DS1", "DS2", "DS3")
+    assert result.storage == StoreTransform("wrap", -(2**31), 2**31 - 1)

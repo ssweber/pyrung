@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from pyrung.core import PLC, And, Bool, Int, Or, Program, Rung, calc, copy, latch, out, reset
@@ -1010,6 +1012,19 @@ class TestProjectedCauseCopyWriters:
         assert ("Src", 7) in triggers
         assert ("Gate", True) in triggers
 
+    def test_impossible_stored_copy_target_is_not_a_projected_writer(self) -> None:
+        dest = Int("Dest")
+        with Program() as logic:
+            with Rung():
+                copy(40_000, dest)
+
+        runner = PLC(logic)
+        runner.step()
+
+        assert runner.current_state.tags[dest.name] == 32_767
+        chain = runner.cause(dest.name, to=40_000)
+        assert chain.mode == "unreachable"
+
 
 class TestProjectedEffectUnreachable:
     """Projected effect: unreachable trigger and edge cases."""
@@ -1786,6 +1801,33 @@ class TestProjectedCauseCopyCalc:
         assert chain.mode == "projected"
         assert len(chain.steps) >= 1
         assert chain.steps[0].rung_index == 0
+
+    @pytest.mark.parametrize("exact", [True, False])
+    def test_copy_step_preserves_crossing_exactness(self, monkeypatch, exact: bool) -> None:
+        from pyrung.core.analysis import crossings
+
+        Enable = Bool("FidelityEnable")
+        Src = Int("FidelitySrc")
+        Dest = Int("FidelityDest")
+        with Program() as logic:
+            with Rung(Enable):
+                copy(Src, Dest)
+
+        original_reverse = crossings.reverse
+
+        def reverse_with_fidelity(*args, **kwargs):
+            return replace(original_reverse(*args, **kwargs), exact=exact)
+
+        monkeypatch.setattr(crossings, "reverse", reverse_with_fidelity)
+        runner = PLC(logic)
+        runner.patch({Src.name: 42})
+        runner.step()
+
+        chain = runner.cause(Dest.name, to=42)
+
+        assert chain.mode == "projected"
+        assert chain.steps[0].crossing_exact is exact
+        assert chain.steps[0].to_dict()["crossing_exact"] is exact
 
     def test_calc_rung_candidate(self) -> None:
         """cause(to=) finds a calc rung that would produce the value."""

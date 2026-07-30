@@ -17,14 +17,18 @@ It also inverts the two **bijective** conversions:
   range fits one byte (else ``& 0xFF`` aliasing -> fallthrough).
 
 Affine expression sources are inverted according to the destination store:
-REAL destinations are value-preserving, while INT/DINT rail targets produce
-source-side :class:`Cmp` ranges with the inequality flipped for a negative
-scale.  Non-divisible integer interiors and zero-scale expressions fall
-through.
+INT/DINT rail targets produce source-side :class:`Cmp` ranges with the
+inequality flipped for a negative scale, and discrete integer interiors have a
+singleton preimage. REAL destinations, continuous-to-integer interiors,
+non-divisible integer interiors, and zero-scale expressions fall through when
+their complete preimage cannot be represented.
 
 Lossy / variable-width forms (``to_value``, ``to_text``) and indirect sources
 fall through. :class:`BlockCopyCrossing` is element-wise and resolves aligned
 static slots; converting and indirect ranges fall through.
+
+Literal and readonly-constant forward/reverse claims are normalized through the
+concrete destination store, so they describe the clamped value actually written.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from pyrung.core.analysis.crossings._ranges import (
     clamps_on_store,
     range_subset,
     range_tags,
+    stored_value_possible,
     type_bounds,
 )
 from pyrung.core.crossing import (
@@ -54,6 +59,10 @@ from pyrung.core.crossing import (
     unsatisfiable,
 )
 from pyrung.core.expression import BinaryExpr, LiteralExpr, TagExpr, UnaryExpr
+from pyrung.core.instruction.conversions import (
+    _store_copy_value_to_tag_type,
+    copy_store_transform,
+)
 from pyrung.core.instruction.data_transfer import (
     BlockCopyInstruction,
     CopyInstruction,
@@ -64,6 +73,7 @@ from pyrung.core.tag import TagType
 
 _ASCII_MAX = 127  # _ascii_char_from_code / to_ascii cap (instruction/conversions.py)
 _INEQ_OPS = frozenset({"<", "<=", ">", ">="})  # ordering ops a copy passes through
+_NO_STORED_VALUE = object()
 
 
 def _named_source(src: Any) -> Any | None:
@@ -139,6 +149,33 @@ def _dest_type(instr: Any, dest_name: str, ctx: CrossingContext) -> TagType | No
     return t if isinstance(t, TagType) else None
 
 
+def _dest_tag(instr: Any, dest_name: str, ctx: CrossingContext) -> Any | None:
+    """Resolve the concrete destination element named by *dest_name*."""
+    dest = getattr(instr, "dest", None)
+    if getattr(dest, "name", None) == dest_name:
+        return dest
+    tags = range_tags(dest)
+    if tags is not None:
+        for tag in tags:
+            if getattr(tag, "name", None) == dest_name:
+                return tag
+    return ctx.tags_by_name.get(dest_name)
+
+
+def _stored_literal(instr: Any, dest_name: str, value: Any, ctx: CrossingContext) -> Any:
+    """Apply the instruction's concrete destination-storage semantics."""
+    dest = _dest_tag(instr, dest_name, ctx)
+    if dest is None:
+        return _NO_STORED_VALUE
+    # Multi-character CHAR writes are fan-out/fault paths, not a scalar literal.
+    if getattr(dest, "type", None) is TagType.CHAR and isinstance(value, str) and len(value) > 1:
+        return _NO_STORED_VALUE
+    try:
+        return _store_copy_value_to_tag_type(value, dest)
+    except (TypeError, ValueError, OverflowError):
+        return _NO_STORED_VALUE
+
+
 def _single_value(target: Constraint) -> tuple[str, Any] | None:
     """``(tag, value)`` when *target* is a single-valued ``Eq``; else ``None``."""
     if isinstance(target, Eq) and len(target.values) == 1:
@@ -151,12 +188,16 @@ def _value_preserving(
 ) -> ReverseResult:
     """Invert a value-preserving store (copy/fill/block slot), honouring clamp rails.
 
-    Copy/fill/block-copy write ``dest == clamp(src)``.  Away from a rail the
-    inverse is the exact singleton ``src == value``; at an INT/DINT rail every
-    over-range source collapses there, so the inverse is the exact *range*
-    ``src >= max`` / ``src <= min`` (a :class:`Cmp`).  Narrowing the rail to
-    ``Eq(src, {rail})`` would drop the over-range preimages — unsound.
+    Copy/fill/block-copy write ``dest == clamp/truncate(src)``. For a discrete
+    source, away from a rail the inverse is the exact singleton
+    ``src == value``; at an INT/DINT rail every over-range source collapses
+    there, so the inverse is the exact *range* ``src >= max`` / ``src <= min``
+    (a :class:`Cmp`). A continuous source at an interior integer has an interval
+    preimage and therefore falls through.
     """
+    if dest_type is not None and not stored_value_possible(dest_type, value):
+        return unsatisfiable(src_name)
+
     # Source can never overflow the destination -> the copy never clamps.
     if range_subset(src_type, dest_type):
         return single(Eq(src_name, frozenset({value})), exact=True)
@@ -169,7 +210,11 @@ def _value_preserving(
             return single(Cmp(src_name, ">=", hi), exact=True)
         if value == lo:  # lower rail: any src <= lo clamps here
             return single(Cmp(src_name, "<=", lo), exact=True)
-        return single(Eq(src_name, frozenset({value})), exact=True)  # interior
+        if src_type in (TagType.INT, TagType.DINT, TagType.WORD, TagType.BOOL):
+            return single(Eq(src_name, frozenset({value})), exact=True)  # discrete interior
+        # ``int(REAL)`` truncates an interval of source values to one interior
+        # integer, which cannot be represented by a singleton Eq.
+        return REVERSE_FALLTHROUGH
 
     # Same-type non-clamping copy (e.g. CHAR->CHAR) is exact; otherwise we cannot
     # rule out a lossy store -> defer (the sound direction).
@@ -181,35 +226,39 @@ def _value_preserving(
 class CopyCrossing(BaseCrossing):
     """Reverse for single-value copy / fill writers (and bijective conversions)."""
 
-    def forward(self, instr: Any, ctx: CrossingContext) -> Any:
+    def forward(self, instr: Any, target_tag: str, ctx: CrossingContext) -> Any:
         if getattr(instr, "convert", None) is not None:
             return UNKNOWN
         src = instr.source if isinstance(instr, CopyInstruction) else instr.value
+        storage = copy_store_transform(_dest_type(instr, target_tag, ctx))
+        if storage is None:
+            return UNKNOWN
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):
-                return Literal(named.default)
-            dest_name = getattr(getattr(instr, "dest", None), "name", None)
-            if range_subset(
-                getattr(named, "type", None),
-                _dest_type(instr, dest_name, ctx) if dest_name is not None else None,
-            ):
-                return Affine(source=named.name, scale=1, offset=0)
-            return UNKNOWN
+                stored = _stored_literal(instr, target_tag, named.default, ctx)
+                return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
+            return Affine(source=named.name, scale=1, offset=0, storage=storage)
         if isinstance(src, (bool, int, float, str)):
-            return Literal(src)
+            stored = _stored_literal(instr, target_tag, src, ctx)
+            return Literal(stored) if stored is not _NO_STORED_VALUE else UNKNOWN
         affine = _affine_of(src)  # copy(scale*S + off, D) -> the affine relation
         if affine is not None:
             src_tag, scale, offset = affine
             if not getattr(src_tag, "readonly", False):
-                return Affine(source=src_tag.name, scale=scale, offset=offset)
+                return Affine(
+                    source=src_tag.name,
+                    scale=scale,
+                    offset=offset,
+                    storage=storage,
+                )
         return UNKNOWN
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
         if isinstance(target, Cmp):
-            return self._reverse_cmp(instr, target)
+            return self._reverse_cmp(instr, target, ctx)
         single_target = _single_value(target)
         if single_target is None:
             return REVERSE_FALLTHROUGH  # multi-valued / non-Eq target -> defer
@@ -223,13 +272,19 @@ class CopyCrossing(BaseCrossing):
         named = _named_source(src)
         if named is not None:
             if getattr(named, "readonly", False):  # constant ref: dest is fixed
-                return satisfied() if named.default == value else unsatisfiable(dest_name)
+                stored = _stored_literal(instr, dest_name, named.default, ctx)
+                if stored is _NO_STORED_VALUE:
+                    return REVERSE_FALLTHROUGH
+                return satisfied() if stored == value else unsatisfiable(dest_name)
             return self._reverse_named(named, dest_name, value, instr, ctx)
         affine = self._reverse_affine_expr(src, dest_name, value, instr, ctx)
         if affine is not None:  # copy(scale*S + off, D): invert through the clamp
             return affine
         if isinstance(src, (bool, int, float, str)):  # literal copy: dest forced to src
-            return satisfied() if src == value else unsatisfiable(dest_name)
+            stored = _stored_literal(instr, dest_name, src, ctx)
+            if stored is _NO_STORED_VALUE:
+                return REVERSE_FALLTHROUGH
+            return satisfied() if stored == value else unsatisfiable(dest_name)
         return REVERSE_FALLTHROUGH  # indirect source -> idx-chase stays in the walker
 
     def _reverse_affine_expr(
@@ -238,14 +293,14 @@ class CopyCrossing(BaseCrossing):
         """Invert an affine expression-source copy ``copy(scale*S + off, D)``.
 
         The copy-source twin of calc's affine reverse, but through copy's
-        destination store semantics.  An INT/DINT interior has the exact
-        integer preimage ``S == (value - off) / scale``.  At a clamp rail, all
+        destination store semantics. A discrete INT/DINT interior has the exact
+        integer preimage ``S == (value - off) / scale``. At a clamp rail, all
         expression values beyond the rail collapse there, so the inverse is a
-        source-side :class:`Cmp` range.  A REAL destination preserves the
-        affine value and accepts the ordinary non-zero-scale preimage.
+        source-side :class:`Cmp` range.
 
-        Non-divisible integer interiors, zero scale, non-numeric targets, and
-        unsupported destination types defer.
+        Floating aliases, continuous-to-integer interiors, non-divisible
+        integer interiors, zero scale, non-numeric targets, and unsupported
+        destination types defer.
         """
         affine = _affine_of(src)
         if affine is None:
@@ -264,18 +319,16 @@ class CopyCrossing(BaseCrossing):
             return None
 
         if dest_type is TagType.REAL:
-            preimage = (value - offset) / scale
-            src_type = getattr(src_tag, "type", None)
-            if src_type is TagType.REAL:
-                return single(Eq(src_tag.name, frozenset({preimage})), exact=False)
-            if (
-                src_type in (TagType.INT, TagType.DINT, TagType.WORD)
-                and float(preimage).is_integer()
-            ):
-                return single(Eq(src_tag.name, frozenset({int(preimage)})), exact=True)
+            # Floating storage can alias multiple raw/source values through
+            # rounding. A singleton belongs to the proposal path, not the sound
+            # reverse preimage contract.
             return None
 
-        if not clamps_on_store(dest_type) or not _is_int(value):
+        if not clamps_on_store(dest_type):
+            return None
+        if not stored_value_possible(dest_type, value):
+            return unsatisfiable(dest_name)
+        if not _is_int(value):
             return None
         bounds = type_bounds(dest_type)
         assert bounds is not None  # clamps_on_store implies INT/DINT bounds
@@ -289,7 +342,9 @@ class CopyCrossing(BaseCrossing):
 
         # Interior clamp values have a singleton preimage only over integer
         # arithmetic.  Preserve fallthrough for fractional/non-divisible cases.
-        if not (_is_int(scale) and _is_int(offset)):
+        if getattr(src_tag, "type", None) not in (TagType.INT, TagType.DINT, TagType.WORD) or not (
+            _is_int(scale) and _is_int(offset)
+        ):
             return None
         num = value - offset
         if num % scale != 0:
@@ -304,18 +359,26 @@ class CopyCrossing(BaseCrossing):
             named.name, getattr(named, "type", None), _dest_type(instr, dest_name, ctx), value
         )
 
-    def _reverse_cmp(self, instr: Any, target: Cmp) -> ReverseResult:
+    def _reverse_cmp(self, instr: Any, target: Cmp, ctx: CrossingContext) -> ReverseResult:
         """Reverse an inequality through a value-preserving copy: ``dest op b`` ⟺
         ``src op b``.  Deferred for converting / literal / readonly / indirect
-        sources (the sound direction).  ``exact=False``: a copy clamps at the
-        destination's rails, where a boundary value can collapse — the consumer
-        verifies, so the passed-through inequality is a candidate region."""
+        sources and for narrowing stores. Passing an inequality through a clamp
+        can omit concrete rail producers, so only provably non-narrowing copies
+        retain this candidate reverse."""
         if target.op not in _INEQ_OPS or getattr(instr, "convert", None) is not None:
             return REVERSE_FALLTHROUGH
         src = instr.source if isinstance(instr, CopyInstruction) else instr.value
         named = _named_source(src)
         if named is None or getattr(named, "readonly", False):
             return REVERSE_FALLTHROUGH  # literal / constant / indirect source -> defer
+        if not range_subset(
+            getattr(named, "type", None),
+            _dest_type(instr, target.tag, ctx),
+        ):
+            # Passing an inequality through a narrowing clamp can omit actual
+            # producers at a rail. Until interval preimages are represented,
+            # fallthrough is the only sound result.
+            return REVERSE_FALLTHROUGH
         return single(
             Cmp(named.name, target.op, target.bound, bound_is_tag=target.bound_is_tag),
             exact=False,

@@ -45,7 +45,7 @@ def _enrich_atom_index(
         return atom_index
 
     enriched: dict[str, list[Atom]] = {tag: list(atoms) for tag, atoms in atom_index.items()}
-    existing_keys: dict[str, set[tuple[str, str, Any, bool]]] = {
+    existing_keys: dict[str, set[tuple[str, str, Any, bool, int | float, int | float]]] = {
         tag: {a._key() for a in atoms} for tag, atoms in enriched.items()
     }
 
@@ -71,6 +71,8 @@ def _enrich_atom_index(
                         form=atom.form,
                         operand=atom.operand,
                         operand_is_tag=True,
+                        operand_scale=atom.operand_scale,
+                        operand_offset=atom.operand_offset,
                     )
                 else:
                     new_threshold = composed_invert(atom.operand)

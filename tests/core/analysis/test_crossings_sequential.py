@@ -10,7 +10,6 @@ from pyrung.core.analysis.crossings.shift import ShiftCrossing
 from pyrung.core.crossing import (
     CondAttr,
     CrossingContext,
-    Eq,
     External,
     Prior,
     Quant,
@@ -18,6 +17,7 @@ from pyrung.core.crossing import (
 )
 from pyrung.core.instruction.advanced import SearchInstruction, ShiftInstruction
 from pyrung.core.instruction.drums import EventDrumInstruction
+from pyrung.core.instruction.send_receive._core import ModbusReceiveInstruction
 from pyrung.core.memory_block import Block
 from pyrung.core.tag import TagType
 
@@ -37,7 +37,7 @@ def _shift():
 def test_shift_interior_true_came_from_neighbour_or_held() -> None:
     r = ShiftCrossing().reverse(_shift(), None, eq_target("C3", True), _ctx())
     assert r.branches == ((Prior("C3", "C2", 1, 0),), (Prior("C3", "C3", 1, 0),))
-    assert r.exact is True
+    assert r.exact is False
 
 
 def test_shift_head_true_is_data_condition_or_held() -> None:
@@ -61,15 +61,14 @@ def _drum():
     )
 
 
-def test_drum_output_true_pins_step_set_or_held() -> None:
+def test_drum_output_true_falls_through_to_transition_owner() -> None:
     r = DrumCrossing().reverse(_drum(), None, eq_target("Y2", True), _ctx())
-    assert r.branches == ((Eq("Step", frozenset({2})),), (Prior("Y2", "Y2", 1, 0),))
-    assert r.exact is True
+    assert r.fallthrough is True
 
 
-def test_drum_output_false_pins_complementary_steps() -> None:
+def test_drum_output_false_falls_through_to_transition_owner() -> None:
     r = DrumCrossing().reverse(_drum(), None, eq_target("Y1", False), _ctx())
-    assert r.branches == ((Eq("Step", frozenset({2})),), (Prior("Y1", "Y1", 1, 0),))
+    assert r.fallthrough is True
 
 
 def test_drum_step_target_falls_through() -> None:
@@ -102,7 +101,30 @@ def test_search_result_address_falls_through() -> None:
 # --- modbus receive -----------------------------------------------------------
 
 
+def _receive() -> ModbusReceiveInstruction:
+    return ModbusReceiveInstruction(
+        target_name="peer",
+        bank="DS",
+        start=1,
+        addresses=(1,),
+        dest=Int("RemoteValue"),
+        receiving=Bool("RequestActive"),
+        success=Bool("RequestSucceeded"),
+        error=Bool("RequestFailed"),
+        exception_response=Int("RequestCode"),
+    )
+
+
 def test_modbus_receive_target_is_external() -> None:
-    r = ModbusReceiveCrossing().reverse(None, None, eq_target("RemoteTemp", 72), _ctx())
-    assert r.branches == ((External("RemoteTemp"),),)
+    r = ModbusReceiveCrossing().reverse(
+        _receive(), None, eq_target("RemoteValue", 72), _ctx()
+    )
+    assert r.branches == ((External("RemoteValue"),),)
     assert r.exact is True
+
+
+def test_modbus_receive_status_is_local_temporal_fallthrough() -> None:
+    r = ModbusReceiveCrossing().reverse(
+        _receive(), None, eq_target("RequestSucceeded", True), _ctx()
+    )
+    assert r.fallthrough

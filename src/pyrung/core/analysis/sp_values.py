@@ -18,8 +18,13 @@ from typing import TYPE_CHECKING, Any, cast
 from pyrung.core.analysis.pdg import ProgramGraph, resolve_rung
 from pyrung.core.analysis.simplified import And, Atom, Const, Expr, Or
 from pyrung.core.analysis.sp_tree import SPLeaf, SPParallel, SPSeries, attribute
-from pyrung.core.crossing import UNKNOWN, Affine, Literal
-from pyrung.core.memory_block import BlockRange
+from pyrung.core.analysis.write_sites import instruction_writes_tag
+from pyrung.core.crossing import (
+    UNKNOWN,
+    Affine,
+    Literal,
+    invert_affine_candidate,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.condition import Condition
@@ -45,23 +50,15 @@ def _values_match(a: Any, b: Any) -> bool:
 def _invert_affine(wv: Any, value: Any) -> Any | None:
     """Source value an ``Affine`` write needs to produce *value*, or ``None``.
 
-    Inverts ``value = source * scale + offset``.  Integer targets only accept a
-    clean integer source (a fractional inverse means the value is unreachable
-    through this affine write).  Duck-typed on ``scale``/``offset`` so it does
-    not need the concrete ``Affine`` type.
+    This is a candidate projection, not a complete preimage: a clamp rail or
+    modular store can have multiple producers.  The central crossing helper
+    accounts for destination storage and returns one representative that the
+    interpreted fork must still verify.
     """
-    try:
-        if wv.scale == 0:
-            return None
-        src_val = (value - wv.offset) / wv.scale
-        if isinstance(value, int) and isinstance(wv.offset, (int, float)):
-            src_val_int = int(src_val)
-            if float(src_val) == src_val_int:
-                return src_val_int
-            return None
-        return src_val
-    except (TypeError, ValueError, ZeroDivisionError, AttributeError):
+    if not isinstance(wv, Affine):
         return None
+    candidate = invert_affine_candidate(wv, value)
+    return None if candidate is UNKNOWN else candidate
 
 
 # Comparison operators shared by the inequality-resolution helpers.
@@ -196,47 +193,16 @@ def _written_value_for_tag(rung_obj: Any, tag_name: str) -> Any:
     instr = _writer_for_tag(rung_obj, tag_name)
     if instr is None:
         return UNKNOWN
-    return _crossings.forward(instr, CrossingContext())
-
-
-def _block_range_writes(target: BlockRange, tag_name: str) -> bool:
-    """Whether *target* covers *tag_name*, via a name set cached on the range.
-
-    Membership only needs the names, so this never rebuilds the block's
-    ``LiveTag`` objects on repeat calls — ``_writer_for_tag`` runs on the order
-    of 10^5 times per pilot run, each previously materializing a whole block.
-    """
-    names = target.__dict__.get("_tag_name_set_cache")
-    if names is None:
-        names = frozenset(t.name for t in target.tags())
-        object.__setattr__(target, "_tag_name_set_cache", names)
-    return tag_name in names
+    return _crossings.forward(instr, tag_name, CrossingContext())
 
 
 def _writer_for_tag(rung_obj: Any, tag_name: str) -> Any | None:
-    """The first instruction in *rung_obj* that writes *tag_name* (via ``_writes``)."""
+    """The first instruction with an exact static write to *tag_name*."""
     if rung_obj is None:
         return None
     for instr in getattr(rung_obj, "_instructions", ()):
-        for field in getattr(instr, "_writes", ()):
-            obj = getattr(instr, field, None)
-            if getattr(obj, "name", None) == tag_name:
-                return instr
-            if isinstance(obj, BlockRange):
-                if _block_range_writes(obj, tag_name):
-                    return instr
-                continue
-            tags_fn = getattr(obj, "tags", None)
-            if tags_fn is not None:
-                try:
-                    if any(getattr(t, "name", None) == tag_name for t in tags_fn()):
-                        return instr
-                except (TypeError, IndexError):
-                    pass
-            if isinstance(obj, (tuple, list)) and any(
-                getattr(t, "name", None) == tag_name for t in obj
-            ):
-                return instr
+        if instruction_writes_tag(instr, tag_name):
+            return instr
     return None
 
 

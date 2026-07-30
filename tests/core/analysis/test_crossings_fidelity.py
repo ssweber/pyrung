@@ -11,10 +11,10 @@ fails the completeness check.  This is the per-class companion to
 Levels:
 - ``exact``    — necessary-and-sufficient ``Eq``/``Mask`` (copy/pack/affine).
 - ``cond``     — condition-level ``CondAttr`` (coils).
-- ``prior``    — prior-scan ``Prior`` provenance (shift/drum held).
-- ``partial``  — a sound superset ``Cmp``/``Quant`` (counter/timer done, search).
+- ``prior``    — prior-scan ``Prior`` provenance (shift).
+- ``partial``  — a sound superset ``Cmp``/``Quant`` (counter done, search).
 - ``external`` — an input ``External`` stop (modbus receive).
-- ``fallthrough`` — no inversion (lossy PackText, off_delay).
+- ``fallthrough`` — no sound inversion yet (drums, lossy PackText, off_delay).
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from pyrung.core.analysis.crossings import registered_classes, reverse
 from pyrung.core.analysis.crossings.external import ModbusReceiveCrossing
 from pyrung.core.copy_converters import to_text, to_value
 from pyrung.core.crossing import (
+    AffineCmp,
     Cmp,
     CondAttr,
     CrossingContext,
@@ -69,7 +70,7 @@ def _classify(result) -> str:
         return "cond"
     if any(isinstance(c, Prior) for c in flat):
         return "prior"
-    if any(isinstance(c, (Cmp, Quant)) for c in flat):
+    if any(isinstance(c, (Cmp, AffineCmp, Quant)) for c in flat):
         return "partial"
     return "exact" if result.exact else "partial"
 
@@ -116,6 +117,20 @@ def _search():
     return SearchInstruction(blk.select(1, 3) >= 100, result=Int("R"), found=Bool("F"))
 
 
+def _receive():
+    return ModbusReceiveInstruction(
+        target_name="peer",
+        bank="DS",
+        start=1,
+        addresses=(1,),
+        dest=Int("RemoteValue"),
+        receiving=Bool("RequestActive"),
+        success=Bool("RequestSucceeded"),
+        error=Bool("RequestFailed"),
+        exception_response=Int("RequestCode"),
+    )
+
+
 _CASES = [
     (CopyInstruction(Int("S"), Int("D")), "D", 7, "exact", ()),
     (FillInstruction(Int("S"), _words().select(1, 3)), "DS2", 4, "exact", ()),
@@ -155,7 +170,13 @@ _CASES = [
         "partial",
         (),
     ),
-    (OnDelayInstruction(Bool("Done"), Int("Acc"), 100, Bool("En")), "Done", True, "partial", ()),
+    (
+        OnDelayInstruction(Bool("Done"), Int("Acc"), 100, Bool("En")),
+        "Done",
+        True,
+        "fallthrough",
+        (),
+    ),
     (
         OffDelayInstruction(Bool("Done"), Int("Acc"), 100, Bool("En")),
         "Done",
@@ -170,8 +191,8 @@ _CASES = [
         "prior",
         (),
     ),
-    (_event_drum(), "Y2", True, "prior", ()),
-    (_time_drum(), "Y2", True, "prior", ()),
+    (_event_drum(), "Y2", True, "fallthrough", ()),
+    (_time_drum(), "Y2", True, "fallthrough", ()),
     (_search(), "F", True, "partial", ()),
 ]
 
@@ -209,9 +230,8 @@ def test_converting_block_copy_and_to_text_are_fallthrough() -> None:
 
 
 def test_modbus_receive_is_external() -> None:
-    # ModbusReceive is hard to construct standalone; its crossing ignores instr.
     result = ModbusReceiveCrossing().reverse(
-        None, None, eq_target("RemoteTemp", 1), CrossingContext()
+        _receive(), None, eq_target("RemoteValue", 1), CrossingContext()
     )
     assert _classify(result) == "external"
     assert FIDELITY[ModbusReceiveInstruction] == "external"

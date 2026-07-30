@@ -83,7 +83,11 @@ def _eval_atom_from_state(atom: Atom, state: Mapping[str, Any]) -> bool | None:
 
     eval_atom = atom
     if atom.operand_is_tag and atom.operand in state:
-        eval_atom = Atom(atom.tag, atom.form, state[atom.operand])
+        try:
+            operand = atom.operand_scale * state[atom.operand] + atom.operand_offset
+        except TypeError:
+            return None
+        eval_atom = Atom(atom.tag, atom.form, operand)
     return _eval_atom(eval_atom, state[atom.tag])
 
 
@@ -160,7 +164,11 @@ def _known_eval_atom(atom: Atom, known: dict[str, Any]) -> bool | None:
     if atom.operand_is_tag:
         if atom.operand not in known:
             return None
-        eval_expr = Atom(atom.tag, atom.form, known[atom.operand])
+        try:
+            operand = atom.operand_scale * known[atom.operand] + atom.operand_offset
+        except TypeError:
+            return None
+        eval_expr = Atom(atom.tag, atom.form, operand)
     return _eval_atom(eval_expr, known[atom.tag])
 
 
@@ -200,6 +208,8 @@ def _substitute_elided_atoms(
             expr.form,
             expr.operand,
             operand_is_tag=expr.operand_is_tag,
+            operand_scale=expr.operand_scale,
+            operand_offset=expr.operand_offset,
         )
 
     if isinstance(expr, And):

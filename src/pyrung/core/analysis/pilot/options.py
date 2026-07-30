@@ -822,7 +822,8 @@ def _completion_reread(
 def _boundary_heading(boundary: Any, frame: Any, state: Any) -> ChannelHeading | None:
     """Lower an owned relational boundary to an exact observable heading."""
     from pyrung.core.analysis.pilot.advance import build_advance_index
-    from pyrung.core.crossing import Cmp, Eq
+    from pyrung.core.crossing import AffineCmp, Cmp, Eq
+    from pyrung.core.instruction.advance import scalar_boundary
 
     if isinstance(boundary, Eq) and len(boundary.values) == 1:
         return ChannelHeading(
@@ -830,7 +831,7 @@ def _boundary_heading(boundary: Any, frame: Any, state: Any) -> ChannelHeading |
             target_value=next(iter(boundary.values)),
             boundary=boundary,
         )
-    if not isinstance(boundary, Cmp) or boundary.op not in {">=", "<="}:
+    if not isinstance(boundary, (Cmp, AffineCmp)) or boundary.op not in {">=", "<="}:
         return None
     owner = build_advance_index(
         state.work.program,
@@ -838,7 +839,7 @@ def _boundary_heading(boundary: Any, frame: Any, state: Any) -> ChannelHeading |
     ).resolve(boundary.tag)
     if owner is None:
         return None
-    target = frame.snap.get(str(boundary.bound)) if boundary.bound_is_tag else boundary.bound
+    target = scalar_boundary(boundary, frame.snap)
     if target is None:
         return None
     return ChannelHeading(

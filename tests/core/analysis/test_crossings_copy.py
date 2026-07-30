@@ -102,6 +102,28 @@ def test_wide_source_interior_value_is_still_exact_singleton() -> None:
     assert r.exact is True
 
 
+def test_integer_destination_impossible_targets_are_unsatisfiable() -> None:
+    src, dest = Dint("Wide"), Int("Dest")
+    for impossible in (40_000, 7.5):
+        r = _COPY.reverse(
+            CopyInstruction(src, dest),
+            None,
+            eq_target("Dest", impossible),
+            _ctx(src, dest),
+        )
+        assert r.exact is True
+        constraint = _only(r)[0]
+        assert isinstance(constraint, Eq)
+        assert not constraint.values
+
+
+def test_integer_destination_accepts_equivalent_integral_float_target() -> None:
+    src, dest = Dint("Wide"), Int("Dest")
+    r = _COPY.reverse(CopyInstruction(src, dest), None, eq_target("Dest", 1.0), _ctx(src, dest))
+    assert _only(r) == (Eq("Wide", frozenset({1.0})),)
+    assert r.exact is True
+
+
 def test_same_width_source_at_rail_is_exact_singleton() -> None:
     # INT -> INT can't overflow, so the rail value is the only producer.
     src, dest = Int("Src"), Int("Dest")
@@ -123,8 +145,8 @@ def test_affine_expr_source_interior_inverts_exactly() -> None:
 
 
 def test_affine_expr_source_forward_is_affine() -> None:
-    src, dest = Int("Src"), Int("Dest")
-    fwd = _COPY.forward(CopyInstruction(src + 100, dest), _ctx(src, dest))
+    src, dest = Int("Src"), Dint("Dest")
+    fwd = _COPY.forward(CopyInstruction(src + 100, dest), dest.name, _ctx(src, dest))
     assert (fwd.source, fwd.scale, fwd.offset) == ("Src", 1, 100)
 
 
@@ -204,14 +226,13 @@ def test_affine_expr_readonly_source_punts() -> None:
     assert r.fallthrough is True
 
 
-def test_affine_expr_real_dest_inverts_value_preserving_store() -> None:
+def test_affine_expr_real_dest_falls_through_without_full_float_preimage() -> None:
     src, dest = Real("Src"), Real("RD")
     r = _COPY.reverse(CopyInstruction(src + 100, dest), None, eq_target("RD", 250), _ctx(src, dest))
-    assert _only(r) == (Eq("Src", frozenset({150.0})),)
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
-def test_fill_affine_expr_real_dest_inverts_value_preserving_store() -> None:
+def test_fill_affine_expr_real_dest_falls_through_without_full_float_preimage() -> None:
     src = Real("Src")
     dest = Block("RD", TagType.REAL, 1, 3)
     r = _COPY.reverse(
@@ -220,8 +241,7 @@ def test_fill_affine_expr_real_dest_inverts_value_preserving_store() -> None:
         eq_target("RD2", 10.0),
         _ctx(src),
     )
-    assert _only(r) == (Eq("Src", frozenset({4.0})),)
-    assert r.exact is False
+    assert r.fallthrough is True
 
 
 def test_affine_expr_zero_scale_still_falls_through() -> None:
@@ -239,6 +259,17 @@ def test_real_source_at_dint_lower_rail_uses_runtime_bound() -> None:
         _ctx(src, dest),
     )
     assert _only(r) == (Cmp("Src", "<=", -2147483648),)
+
+
+def test_real_source_at_dint_interior_falls_through() -> None:
+    src, dest = Real("Src"), Dint("Dest")
+    r = _COPY.reverse(
+        CopyInstruction(src, dest),
+        None,
+        eq_target("Dest", 7),
+        _ctx(src, dest),
+    )
+    assert r.fallthrough is True
 
 
 # --- bijective conversions ----------------------------------------------------

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_node
@@ -24,6 +24,15 @@ from .support import (
     _HistoricalView,
     _TimelineView,
 )
+
+
+@dataclass(frozen=True)
+class _CrossedReads:
+    """Recorded predecessor receipt, optionally derived from a crossing."""
+
+    triggers: tuple[Transition, ...]
+    enablers: tuple[EnablingCondition, ...]
+    crossing_exact: bool | None = None
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -251,7 +260,7 @@ def _cross_opaque_data_reads(
     fire_view: Any = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
-) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+) -> _CrossedReads | None:
     """Cross an opaque writer: the recorded read-diff, then the crossings registry.
 
     First the instruction-agnostic footprint read-diff (Phase 1/Tier 2); when it
@@ -303,7 +312,7 @@ def _cross_via_footprint(
     fire_view: Any = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
-) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+) -> _CrossedReads | None:
     """The instruction-agnostic read-diff crossing (Crossings Phase 1/Tier 2).
 
     Returns ``(triggers, enablers)`` derived from the writer's observed data
@@ -372,7 +381,7 @@ def _cross_via_footprint(
         for t in diff.nonzero_now
         if t not in changed_tags
     )
-    return triggers, enablers
+    return _CrossedReads(triggers, enablers)
 
 
 def _registry_writer_for_tag(rung: Any, tag_name: str) -> Any | None:
@@ -392,7 +401,7 @@ def _cross_via_registry(
     pdg: ProgramGraph | None,
     scan_log: Any,
     initial_tags: Any,
-) -> tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]] | None:
+) -> _CrossedReads | None:
     """Cross a writer the footprint diff missed via the projected registry.
 
     Reverses the writer for its *observed* value through ``crossings.reverse`` and
@@ -421,12 +430,16 @@ def _cross_via_registry(
     # Tags co-written by the same instruction are internal state (e.g. a timer's
     # accumulator alongside its done bit).  A transition on internal state is the
     # instruction's mechanism, not a user-visible cause — skip it.
-    co_writes: set[str] = set()
-    for field in getattr(instr, "_writes", ()):
-        obj = getattr(instr, field, None)
-        name = getattr(obj, "name", None)
-        if name is not None:
-            co_writes.add(name)
+    from pyrung.core.analysis.write_sites import (
+        instruction_write_targets,
+        static_write_target_names,
+    )
+
+    co_writes = {
+        name
+        for target in instruction_write_targets(instr)
+        for name in static_write_target_names(target)
+    }
 
     triggers: list[Transition] = []
     enablers: list[EnablingCondition] = []
@@ -456,7 +469,7 @@ def _cross_via_registry(
             )
     if not triggers and not enablers:
         return None
-    return tuple(triggers), tuple(enablers)
+    return _CrossedReads(tuple(triggers), tuple(enablers), crossing_exact=result.exact)
 
 
 def _indexed_value_transition_scans(
@@ -903,13 +916,15 @@ def _walk_backward(
                 node_reads_cache=node_reads_cache,
             )
             if crossed is not None:
-                triggers, enablers = crossed
+                triggers = crossed.triggers
+                enablers = crossed.enablers
                 step = ChainStep(
                     transition=transition,
                     rung_index=rung_idx,
                     triggers=triggers,
                     enablers=enablers,
                     subroutine=sub_name,
+                    crossing_exact=crossed.crossing_exact,
                 )
                 wrapped = _with_caller_gate(
                     step,
@@ -1191,11 +1206,13 @@ def _walk_backward(
                 node_reads_cache=node_reads_cache,
             )
             if crossed is not None:
-                dr_triggers, dr_enablers = crossed
+                dr_triggers = crossed.triggers
+                dr_enablers = crossed.enablers
                 steps[step_idx] = replace(
                     steps[step_idx],
                     triggers=steps[step_idx].triggers + dr_triggers,
                     enablers=steps[step_idx].enablers + dr_enablers,
+                    crossing_exact=crossed.crossing_exact,
                 )
                 for p in dr_triggers:
                     _walk_backward(
@@ -1754,7 +1771,7 @@ def _replayed_writer_proves_value(
         _writer_for_tag,
         _written_value_for_tag,
     )
-    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
     from pyrung.core.instruction.coils import LatchInstruction, OutInstruction
     from pyrung.core.instruction.data_transfer import (
         CopyInstruction,
@@ -1768,7 +1785,8 @@ def _replayed_writer_proves_value(
     if isinstance(written, Affine):
         try:
             source = fire_view.get_tag(written.source)
-            return _values_match(source * written.scale + written.offset, to_value)
+            produced = evaluate_forward(written, {written.source: source})
+            return produced is not UNKNOWN and _values_match(produced, to_value)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
     # A named slot inside a block can evade the generic forward crossing even

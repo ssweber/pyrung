@@ -11,7 +11,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import Bool, Dint
+from pyrung.core.analysis import crossings
 from pyrung.core.analysis.causal.recorded import _cross_via_registry, _registry_writer_for_tag
+from pyrung.core.crossing import Eq, single
 from pyrung.core.instruction.counters import CountUpInstruction
 
 
@@ -77,3 +79,66 @@ def test_no_registry_writer_returns_none() -> None:
         initial_tags=None,
     )
     assert crossed is None
+
+
+def test_tag_bound_done_crossing_retains_changed_preset_cause() -> None:
+    preset = Dint("Preset")
+    instr = CountUpInstruction(Bool("Done"), Dint("Acc"), preset, Bool("En"), Bool("Rst"))
+    rung = SimpleNamespace(_instructions=[instr])
+    history = _History(
+        {
+            1: {"Acc": 5, "Preset": 10, "Done": False},
+            2: {"Acc": 5, "Preset": 5, "Done": True},
+        }
+    )
+
+    crossed = _cross_via_registry(
+        rung=rung,
+        tag_name="Done",
+        scan_id=2,
+        history=history,
+        timelines=None,
+        pdg=None,
+        scan_log=None,
+        initial_tags=None,
+    )
+
+    assert crossed is not None
+    triggers = crossed.triggers
+    enablers = crossed.enablers
+    assert [(trigger.tag_name, trigger.from_value, trigger.to_value) for trigger in triggers] == [
+        ("Preset", 10, 5)
+    ]
+    assert enablers == ()
+
+
+def test_registry_receipt_preserves_reverse_exactness(monkeypatch) -> None:
+    rung, _ = _counter_rung()
+    history = _History(
+        {
+            1: {"Source": 1, "Done": False},
+            2: {"Source": 2, "Done": True},
+        }
+    )
+
+    for exact in (True, False):
+        monkeypatch.setattr(
+            crossings,
+            "reverse",
+            lambda *_args, _exact=exact, **_kwargs: single(
+                Eq("Source", frozenset({2})), exact=_exact
+            ),
+        )
+        crossed = _cross_via_registry(
+            rung=rung,
+            tag_name="Done",
+            scan_id=2,
+            history=history,
+            timelines=None,
+            pdg=None,
+            scan_log=None,
+            initial_tags=None,
+        )
+
+        assert crossed is not None
+        assert crossed.crossing_exact is exact

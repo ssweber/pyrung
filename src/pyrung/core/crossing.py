@@ -26,14 +26,18 @@ invert but only to a superset says so with ``exact=False`` (the caller verifies)
 it must never narrow to a singleton it cannot guarantee (the clamp-rail trap).
 
 This module runtime-imports nothing from ``analysis/``; it depends only on the
-standard library so it can sit below every consumer.
+neutral core storage primitive and the standard library, so it can sit below
+every consumer.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
+
+from pyrung.core.storage import IDENTITY_STORE, StoreTransform, store_value
 
 #: Sentinel for "no forward value is known".  The forward protocol is locked but
 #: reverse-first — the interpreted fork is the forward oracle.
@@ -49,23 +53,137 @@ class Literal:
 
 @dataclass(frozen=True)
 class Affine:
-    """Writer produces ``source * scale + offset`` this scan.
+    """Writer produces and stores ``source * scale + offset`` this scan.
 
     Self-referential when *source* equals the destination tag
-    (the increment/decrement pattern).
+    (the increment/decrement pattern). ``storage`` describes the concrete
+    destination conversion after the raw affine expression.
     """
 
     source: str
     scale: int | float = 1
     offset: int | float = 0
+    storage: StoreTransform = IDENTITY_STORE
 
 
 @dataclass(frozen=True)
 class Aggregate:
-    """Writer produces an aggregate (sum/count) over a block range."""
+    """Writer produces and stores an aggregate (sum/count) over a block range."""
 
     tags: tuple[str, ...]
     operation: str = "sum"
+    storage: StoreTransform = IDENTITY_STORE
+
+
+def _apply_store(value: Any, storage: StoreTransform) -> Any:
+    """Apply a forward claim's concrete destination-store transform.
+
+    Returns :data:`UNKNOWN` when the descriptor or conversion is not
+    representable.  The numeric behavior mirrors the interpreter's copy/calc
+    stores, including non-finite-to-zero handling and integer coercion before
+    clamp/wrap.
+    """
+
+    try:
+        return store_value(value, storage)
+    except (OverflowError, TypeError, ValueError):
+        return UNKNOWN
+
+
+def evaluate_forward(
+    claim: Literal | Affine | Aggregate,
+    values: Mapping[str, Any],
+) -> Any:
+    """Evaluate a forward claim against concrete source values.
+
+    This is the single place consumers should combine a relationship with its
+    destination storage.  A missing source, unsupported aggregate, or failed
+    conversion returns :data:`UNKNOWN`.
+    """
+
+    if isinstance(claim, Literal):
+        return claim.value
+    if isinstance(claim, Affine):
+        if claim.source not in values:
+            return UNKNOWN
+        try:
+            # A named copy is represented by the affine identity even for
+            # non-numeric types. Preserve the raw source before applying CHAR /
+            # BOOL destination storage instead of attempting string arithmetic.
+            raw = (
+                values[claim.source]
+                if claim.scale == 1 and claim.offset == 0
+                else values[claim.source] * claim.scale + claim.offset
+            )
+        except (OverflowError, TypeError, ValueError):
+            return UNKNOWN
+        return _apply_store(raw, claim.storage)
+    if isinstance(claim, Aggregate):
+        if claim.operation != "sum" or any(tag not in values for tag in claim.tags):
+            return UNKNOWN
+        try:
+            raw = sum(values[tag] for tag in claim.tags)
+        except (OverflowError, TypeError, ValueError):
+            return UNKNOWN
+        return _apply_store(raw, claim.storage)
+    return UNKNOWN
+
+
+def invert_affine_candidate(claim: Affine, output: Any) -> Any:
+    """Return one source candidate that may make *claim* produce *output*.
+
+    This is a proposal helper, not a complete reverse preimage: clamp rails and
+    modular stores can have many producers.  Callers must verify the candidate
+    in the interpreted fork. :data:`UNKNOWN` means no useful representative
+    could be derived.
+    """
+
+    scale = claim.scale
+    offset = claim.offset
+    if not isinstance(scale, (int, float)) or isinstance(scale, bool) or scale == 0:
+        return UNKNOWN
+
+    storage = claim.storage
+    if storage.kind == "wrap":
+        if (
+            not isinstance(scale, int)
+            or isinstance(scale, bool)
+            or not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or not isinstance(output, int)
+            or isinstance(output, bool)
+            or storage.lower is None
+            or storage.upper is None
+        ):
+            return UNKNOWN
+        modulus = storage.upper - storage.lower + 1
+        divisor = math.gcd(abs(scale), modulus)
+        residue = output - offset
+        if modulus <= 0 or residue % divisor != 0:
+            return UNKNOWN
+        reduced_modulus = modulus // divisor
+        if reduced_modulus == 1:
+            candidate = 0
+        else:
+            inverse = pow(scale // divisor, -1, reduced_modulus)
+            candidate = (residue // divisor * inverse) % reduced_modulus
+        candidate = _apply_store(candidate, storage)
+        if candidate is UNKNOWN:
+            return UNKNOWN
+        produced = evaluate_forward(claim, {claim.source: candidate})
+        return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
+
+    if storage.kind in {"bool", "char"}:
+        return UNKNOWN
+    try:
+        candidate = (output - offset) / scale
+    except (OverflowError, TypeError, ValueError, ZeroDivisionError):
+        return UNKNOWN
+    if isinstance(output, int) and isinstance(scale, int) and isinstance(offset, int):
+        if (output - offset) % scale == 0:
+            candidate = (output - offset) // scale
+    produced = evaluate_forward(claim, {claim.source: candidate})
+    return candidate if produced is not UNKNOWN and produced == output else UNKNOWN
 
 
 #: Comparison operators a :class:`Cmp` may carry.
@@ -109,6 +227,22 @@ class Cmp(Constraint):
     op: str
     bound: Any
     bound_is_tag: bool = False
+
+
+@dataclass(frozen=True)
+class AffineCmp(Constraint):
+    """``tag <op> scale * bound_tag + offset``.
+
+    This is distinct from :class:`Cmp` so consumers that only understand plain
+    scalar bounds cannot silently erase the transform. Counter completion uses
+    it for dynamic presets at the same-scan frontier.
+    """
+
+    tag: str
+    op: str
+    bound_tag: str
+    scale: int | float = 1
+    offset: int | float = 0
 
 
 @dataclass(frozen=True)
@@ -210,6 +344,28 @@ class ReverseResult:
 REVERSE_FALLTHROUGH = ReverseResult(fallthrough=True)
 
 
+@dataclass(frozen=True)
+class CrossingProposal:
+    """Verify-required predecessor candidates, expressed as constraint DNF.
+
+    A proposal is deliberately separate from :class:`ReverseResult`: its
+    branches may omit concrete preimages and therefore make no sound reverse
+    claim. ``reason`` records the heuristic used, and ``verify_required`` makes
+    the consumer obligation explicit.
+    """
+
+    branches: tuple[tuple[Constraint, ...], ...] = ()
+    reason: str = ""
+    verify_required: bool = True
+
+    @property
+    def empty(self) -> bool:
+        return not self.branches
+
+
+NO_CROSSING_PROPOSAL = CrossingProposal(verify_required=False)
+
+
 # --- constructors (the common shapes, so handlers read declaratively) ---------
 
 
@@ -243,18 +399,7 @@ def eq_target(tag: str, value: Any) -> Eq:
 
 @dataclass(frozen=True)
 class CrossingContext:
-    """What a consumer knows when it asks a crossing to reverse.
-
-    Each consumer fills only the fields it has.  ``value_at_scan`` carries
-    *recorded* evidence (a callable ``(tag, scan_id) -> value``); **projected /
-    prover-path contexts must leave it ``None``** so recorded evidence cannot
-    leak into seeding (asserted by tests).
-    """
+    """Concrete values and tag declarations available to a crossing."""
 
     snapshot: Mapping[str, Any] = field(default_factory=dict)
     tags_by_name: Mapping[str, Any] = field(default_factory=dict)
-    nondeterministic_dims: frozenset[str] = frozenset()
-    nd_domains: Mapping[str, tuple[Any, ...]] | None = None
-    value_at_scan: Callable[[str, int], Any] | None = None
-    scan_id: int | None = None
-    bounds_index: Any | None = None  # reserved; no producer yet, unread

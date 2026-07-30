@@ -719,7 +719,7 @@ def _producible_int_domain(
     plain copy (not a literal decode) resolves to just its current value."""
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.sp_values import _written_value_for_tag
-    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
 
     domains = domains or {}
     if idx_tag in _seen or _hops < 0:
@@ -751,7 +751,9 @@ def _producible_int_domain(
             for v in _producible_int_domain(
                 wv.source, snapshot, pdg, program, domains, _hops - 1, seen
             ):
-                shifted = wv.scale * v + wv.offset
+                shifted = evaluate_forward(wv, {wv.source: v})
+                if shifted is UNKNOWN:
+                    continue
                 if isinstance(shifted, int) and not isinstance(shifted, bool):
                     vals.add(shifted)
     return vals

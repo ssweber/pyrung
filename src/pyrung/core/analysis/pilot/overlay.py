@@ -129,9 +129,9 @@ def _constraint_condition(
         CompareLt,
         CompareNe,
     )
-    from pyrung.core.crossing import Cmp, Eq
+    from pyrung.core.crossing import AffineCmp, Cmp, Eq
 
-    if not isinstance(constraint, (Eq, Cmp)):
+    if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
         return None
 
     tag = plc._known_tags_by_name.get(constraint.tag)
@@ -164,7 +164,15 @@ def _constraint_condition(
         # not(x in {a, b}) == x != a AND x != b
         return AllCondition(*terms) if unresolved else AnyCondition(*terms)
 
-    if constraint.bound_is_tag:
+    if isinstance(constraint, AffineCmp):
+        operand = plc._known_tags_by_name.get(constraint.bound_tag)
+        if operand is None:
+            return None
+        if constraint.scale != 1:
+            operand = operand * constraint.scale
+        if constraint.offset != 0:
+            operand = operand + constraint.offset
+    elif constraint.bound_is_tag:
         operand = plc._known_tags_by_name.get(str(constraint.bound))
         if operand is None:
             return None
@@ -212,10 +220,10 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
         CompareLt,
         CompareNe,
     )
-    from pyrung.core.crossing import Cmp, Eq
+    from pyrung.core.crossing import AffineCmp, Cmp, Eq
     from pyrung.core.tag import Bool
 
-    if isinstance(atom, (Eq, Cmp)):
+    if isinstance(atom, (Eq, Cmp, AffineCmp)):
         condition = _constraint_condition(plc, atom, unresolved=unresolved)
         if condition is None:
             raise ValueError(f"constraint {atom!r} cannot lower to a runtime condition")
@@ -231,6 +239,11 @@ def _atom_condition(plc: PLC, atom: Any, *, unresolved: bool = False) -> Any:
         if atom.operand_is_tag
         else atom.operand
     )
+    if atom.operand_is_tag:
+        if atom.operand_scale != 1:
+            operand = operand * atom.operand_scale
+        if atom.operand_offset != 0:
+            operand = operand + atom.operand_offset
     if unresolved:
         if form in ("xic", "truthy"):
             return CompareEq(tag, False)

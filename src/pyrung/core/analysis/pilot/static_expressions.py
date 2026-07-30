@@ -24,6 +24,20 @@ _REAL_STRICT_EPSILON = 1e-6
 _FORM_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
 
 
+def _resolved_atom_operand(atom: Atom, snapshot: dict[str, Any]) -> Any:
+    """Resolve a literal or affine tag operand against *snapshot*."""
+
+    if not atom.operand_is_tag:
+        return atom.operand
+    value = snapshot.get(atom.operand)
+    if value is None:
+        return None
+    try:
+        return atom.operand_scale * value + atom.operand_offset
+    except TypeError:
+        return None
+
+
 def simplified_expr_tags(expr: Any) -> set[str]:
     """Tag names referenced by a simplified expression."""
 
@@ -74,7 +88,7 @@ def _resolve_inequality_target(
 ) -> tuple[str, Any] | None:
     """Resolve an inequality to a reachable or boundary satisfying value."""
 
-    threshold = snapshot.get(atom.operand) if atom.operand_is_tag else atom.operand
+    threshold = _resolved_atom_operand(atom, snapshot)
     if atom.operand_is_tag and threshold is None:
         return None
 
@@ -161,7 +175,7 @@ def _heuristic_inequality_target(
 
     if atom.form not in ("lt", "le", "gt", "ge") or atom.tag not in steerable:
         return None
-    threshold = snapshot.get(atom.operand) if atom.operand_is_tag else atom.operand
+    threshold = _resolved_atom_operand(atom, snapshot)
     if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
         return None
     if atom.form in ("ge", "le"):
@@ -194,6 +208,8 @@ def _atom_text(atom: Atom) -> str:
 
     operand = atom.operand
     rhs = operand if isinstance(operand, str) else repr(operand)
+    if atom.operand_is_tag and (atom.operand_scale != 1 or atom.operand_offset != 0):
+        rhs = f"({atom.operand_scale!r} * {rhs} + {atom.operand_offset!r})"
     return f"{atom.tag} {_FORM_SYMBOL.get(atom.form, atom.form)} {rhs}"
 
 

@@ -23,7 +23,7 @@ from pyrung.core.analysis.sp_values import (
     _values_match,
     _written_value_for_tag,
 )
-from pyrung.core.crossing import Affine, Literal
+from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
 
 
 @dataclass(frozen=True)
@@ -268,10 +268,8 @@ def fold_const_copy_source(wv: Any, ctx: WalkContext) -> Literal | None:
         src = getattr(tag_obj, "default", None)
     if not isinstance(src, (int, float, bool)):
         return None
-    try:
-        return Literal(wv.scale * src + wv.offset)
-    except TypeError:
-        return None
+    produced = evaluate_forward(wv, {wv.source: src})
+    return None if produced is UNKNOWN else Literal(produced)
 
 
 def producer_value(ctx: WalkContext, ro: Any, tag: str) -> Any:

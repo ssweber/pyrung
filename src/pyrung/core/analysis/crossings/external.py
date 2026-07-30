@@ -1,9 +1,11 @@
-"""Modbus-receive crossing — the target is an external input, so the chase stops.
+"""Modbus-receive crossing — external payload, local request/status writes.
 
-``modbus_receive`` writes local tags from off-PLC data, so a target on one of
-them inverts to :class:`External` — not a fallthrough (could not invert) but a
-*stop* (there is nothing upstream in this program to chase).  ``modbus_send``
-writes no local tag and stays exempt.
+Only tags in ``dest`` are supplied by the recorded/injected transport result;
+those invert to :class:`External`, a deliberate chase stop. ``receiving``,
+``success``, ``error``, and ``exception_response`` are written by the local
+request state machine from enable/pending/result state. Their full temporal
+preimage is not represented, so they fall through instead of being mislabeled
+as external payload.
 """
 
 from __future__ import annotations
@@ -24,14 +26,20 @@ from pyrung.core.instruction.send_receive._core import ModbusReceiveInstruction
 
 
 class ModbusReceiveCrossing(BaseCrossing):
-    """Reverse ``modbus_receive``: the written tag is an external input."""
+    """Reverse only receive payload destinations to an external-input stop."""
 
     def reverse(
         self, instr: Any, rung: Any, target: Constraint, ctx: CrossingContext
     ) -> ReverseResult:
         if not (isinstance(target, Eq) and len(target.values) == 1):
             return REVERSE_FALLTHROUGH
-        return single(External(target.tag), exact=True)
+        if not isinstance(instr, ModbusReceiveInstruction):
+            return REVERSE_FALLTHROUGH
+        if target.tag in instr.external_payload_names:
+            return single(External(target.tag), exact=True)
+        # Status fields are locally written from request/replay state. Until
+        # that temporal state has a constraint shape, make no reverse claim.
+        return REVERSE_FALLTHROUGH
 
 
 register(ModbusReceiveInstruction, ModbusReceiveCrossing())

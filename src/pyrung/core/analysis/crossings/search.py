@@ -8,6 +8,8 @@ Marked ``exact=False``: continuous mode resumes from the previous result, so the
 existential is necessary but not, in general, sufficient.  Chasing the matched
 ``result`` address (the positive ``elem@addr`` conjunct plus the "no earlier
 match" universal) is the documented frontier and falls through for now.
+Multi-character text search also falls through because it compares consecutive
+windows rather than individual block elements.
 """
 
 from __future__ import annotations
@@ -44,6 +46,12 @@ class SearchCrossing(BaseCrossing):
         if not tags:
             return REVERSE_FALLTHROUGH
         search_value = instr.value
+        if isinstance(search_value, str) and len(search_value) > 1:
+            # Text search compares consecutive windows, not each CHAR cell to
+            # the whole string. Quant is element-wise and would omit concrete
+            # matching windows, so defer until the constraint algebra has a
+            # window-search shape.
+            return REVERSE_FALLTHROUGH
         value_is_tag = hasattr(search_value, "name")
         bound = search_value.name if value_is_tag else search_value
         block = tuple(t.name for t in tags)

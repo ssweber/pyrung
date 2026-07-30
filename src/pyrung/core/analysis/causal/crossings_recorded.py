@@ -24,10 +24,12 @@ scan.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.crossing import (
+    AffineCmp,
     Cmp,
     CondAttr,
     Constraint,
@@ -183,6 +185,10 @@ class ResolvedConstraint:
     after: Any = None
     changed: bool = False
     expected: bool | None = None
+    # Fidelity of the ReverseResult that produced this recorded conclusion.
+    # ``None`` when resolved directly from a bare Constraint rather than through
+    # the branch adapter.
+    exact: bool | None = None
 
 
 def _read_pair(history: History, tag: str, scan_id: int) -> tuple[Any, Any, bool]:
@@ -204,7 +210,9 @@ def resolve_recorded(
     ``Eq``/``Cmp`` value bound is not re-checked here — the resolver reads what
     the operand actually held and lets the walk continue.
     """
-    if isinstance(constraint, (Eq, Cmp, Mask)):
+    if isinstance(constraint, Eq) and not constraint.values:
+        return None
+    if isinstance(constraint, (Eq, Cmp, AffineCmp, Mask)):
         before, after, changed = _read_pair(history, constraint.tag, scan_id)
         return ResolvedConstraint("value", constraint.tag, scan_id, before, after, changed)
     if isinstance(constraint, Prior):
@@ -222,20 +230,69 @@ def resolve_recorded(
     return None
 
 
+def _resolve_recorded_constraint(
+    constraint: Constraint, *, history: History, scan_id: int
+) -> tuple[ResolvedConstraint, ...] | None:
+    """Resolve every value-bearing side of one constraint.
+
+    ``resolve_recorded`` retains its one-result public contract.  A tag-bound
+    comparison additionally depends on its bound tag, so branch resolution
+    carries both observed values into the cause adapter.
+    """
+    resolved = resolve_recorded(constraint, history=history, scan_id=scan_id)
+    if resolved is None:
+        return None
+    left_tag = constraint.tag if isinstance(constraint, (Cmp, AffineCmp)) else None
+    bound_tag = (
+        constraint.bound
+        if isinstance(constraint, Cmp)
+        and constraint.bound_is_tag
+        and isinstance(constraint.bound, str)
+        else constraint.bound_tag
+        if isinstance(constraint, AffineCmp)
+        else None
+    )
+    if bound_tag is not None and bound_tag != left_tag:
+        before, after, changed = _read_pair(history, bound_tag, scan_id)
+        return (
+            resolved,
+            ResolvedConstraint(
+                "value",
+                bound_tag,
+                scan_id,
+                before,
+                after,
+                changed,
+            ),
+        )
+    return (resolved,)
+
+
 def resolve_recorded_branches(
     result: ReverseResult, *, history: History, scan_id: int
 ) -> list[list[ResolvedConstraint]]:
     """Discharge a DNF :class:`ReverseResult` — one resolved list per branch.
 
-    A fallthrough yields ``[]`` (no branches).  An unresolvable constraint within
-    a branch (a ``Prior`` with no prior scan) drops out of that branch; an empty
-    inner result list is a trivially-satisfied branch.
+    Fallthrough and contradiction yield ``[]``.  An unresolvable constraint
+    invalidates its whole conjunction; it must not be silently removed and turn
+    the remaining constraints into a weaker causal explanation.  An original
+    empty conjunction remains a trivially-satisfied branch.
     """
-    if result.fallthrough:
+    normalized = normalize_reverse_result(result)
+    if normalized.fallthrough or normalized.contradiction:
         return []
     resolved: list[list[ResolvedConstraint]] = []
-    for branch in result.branches:
-        resolved.append(
-            [r for c in branch if (r := resolve_recorded(c, history=history, scan_id=scan_id))]
-        )
+    for branch in normalized.branches:
+        resolved_branch: list[ResolvedConstraint] = []
+        for constraint in branch:
+            facts = _resolve_recorded_constraint(
+                constraint,
+                history=history,
+                scan_id=scan_id,
+            )
+            if facts is None:
+                break
+            resolved_branch.extend(replace(fact, exact=normalized.exact) for fact in facts)
+        else:
+            resolved.append(resolved_branch)
     return resolved

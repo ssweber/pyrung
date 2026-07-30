@@ -6,9 +6,9 @@ from pyrung import Bool, Dint, Int
 from pyrung.core.analysis.crossings.accumulating import (
     CountDownDoneCrossing,
     CountUpDoneCrossing,
-    OffDelayCrossing,
+    TimerDoneCrossing,
 )
-from pyrung.core.crossing import Cmp, CrossingContext, eq_target
+from pyrung.core.crossing import AffineCmp, Cmp, CrossingContext, eq_target
 from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
 from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
 
@@ -26,20 +26,20 @@ def _count_up(preset):
     return CountUpInstruction(Bool("Done"), Dint("Acc"), preset, Bool("En"), Bool("Rst"))
 
 
-# --- count_up / on_delay (acc >= preset) --------------------------------------
+# --- count_up predecessor frontier --------------------------------------------
 
 
-def test_count_up_done_true_inverts_to_ge_preset_literal() -> None:
+def test_count_up_done_true_includes_one_scan_frontier() -> None:
     r = CountUpDoneCrossing().reverse(_count_up(10), None, eq_target("Done", True), _ctx())
-    assert _only(r) == (Cmp("Acc", ">=", 10, bound_is_tag=False),)
-    assert r.exact is False  # reset also forces done False -> necessary, not sufficient
+    assert _only(r) == (Cmp("Acc", ">=", 9, bound_is_tag=False),)
+    assert r.exact is False
 
 
-def test_count_up_done_true_inverts_to_ge_preset_tag() -> None:
+def test_count_up_done_true_tag_preset_preserves_frontier_offset() -> None:
     r = CountUpDoneCrossing().reverse(
         _count_up(Dint("Preset")), None, eq_target("Done", True), _ctx()
     )
-    assert _only(r) == (Cmp("Acc", ">=", "Preset", bound_is_tag=True),)
+    assert _only(r) == (AffineCmp("Acc", ">=", "Preset", scale=1, offset=-1),)
 
 
 def test_count_up_done_false_falls_through() -> None:
@@ -57,25 +57,29 @@ def test_count_up_accumulator_target_falls_through() -> None:
     )
 
 
-def test_on_delay_done_true_inverts_to_ge_preset() -> None:
+def test_on_delay_done_true_falls_through_without_dt_constraint() -> None:
     instr = OnDelayInstruction(Bool("Done"), Int("Acc"), 100, Bool("En"))
-    r = CountUpDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx())
-    assert _only(r) == (Cmp("Acc", ">=", 100, bound_is_tag=False),)
+    assert TimerDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx()).fallthrough
 
 
-# --- count_down (acc <= -preset) ----------------------------------------------
+# --- count_down predecessor frontier ------------------------------------------
 
 
-def test_count_down_done_true_inverts_to_le_neg_preset_literal() -> None:
+def test_count_down_done_true_includes_one_scan_frontier() -> None:
     instr = CountDownInstruction(Bool("Done"), Dint("Acc"), 5, Bool("Dn"), Bool("Rst"))
     r = CountDownDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx())
-    assert _only(r) == (Cmp("Acc", "<=", -5, bound_is_tag=False),)
+    assert _only(r) == (Cmp("Acc", "<=", -4, bound_is_tag=False),)
 
 
-def test_count_down_done_true_tag_preset_falls_through() -> None:
-    # -preset of a tag is not a plain bound -> defer.
+def test_count_down_done_true_tag_preset_preserves_negation_and_frontier() -> None:
     instr = CountDownInstruction(Bool("Done"), Dint("Acc"), Dint("Preset"), Bool("Dn"), Bool("Rst"))
-    assert CountDownDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx()).fallthrough
+    result = CountDownDoneCrossing().reverse(
+        instr,
+        None,
+        eq_target("Done", True),
+        _ctx(),
+    )
+    assert _only(result) == (AffineCmp("Acc", "<=", "Preset", scale=-1, offset=1),)
 
 
 # --- off_delay (no clean inversion) -------------------------------------------
@@ -83,4 +87,4 @@ def test_count_down_done_true_tag_preset_falls_through() -> None:
 
 def test_off_delay_falls_through() -> None:
     instr = OffDelayInstruction(Bool("Done"), Int("Acc"), 100, Bool("En"))
-    assert OffDelayCrossing().reverse(instr, None, eq_target("Done", True), _ctx()).fallthrough
+    assert TimerDoneCrossing().reverse(instr, None, eq_target("Done", True), _ctx()).fallthrough

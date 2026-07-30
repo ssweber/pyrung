@@ -452,7 +452,7 @@ def test_cross_falls_back_to_static_without_replay() -> None:
     )
 
     assert crossed is not None
-    triggers, _enablers = crossed
+    triggers = crossed.triggers
     assert "DS2" in [t.tag_name for t in triggers]
 
 

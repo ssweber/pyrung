@@ -16,7 +16,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from pyrung.core.crossing import Cmp, Constraint, Eq
+from pyrung.core.crossing import AffineCmp, Cmp, Constraint, Eq
 
 if TYPE_CHECKING:
     from pyrung.core.tag import Tag
@@ -36,7 +36,7 @@ class ConditionDemand:
 class AdvanceStep:
     """The next cross-scan operation for an instruction-owned result."""
 
-    until: Eq | Cmp
+    until: Eq | Cmp | AffineCmp
     holds: tuple[ConditionDemand, ...] = ()
     pulse: ConditionDemand | None = None
     # Observable evidence that this exact operation owns continuing motion
@@ -87,13 +87,22 @@ def constraint_holds(constraint: Constraint, snapshot: Snapshot) -> bool | None:
     actual = snapshot.get(getattr(constraint, "tag", ""))
     if isinstance(constraint, Eq):
         return actual in constraint.values
-    if not isinstance(constraint, Cmp):
+    if isinstance(constraint, AffineCmp):
+        raw_bound = snapshot.get(constraint.bound_tag)
+        if raw_bound is None:
+            return None
+        try:
+            bound = constraint.scale * raw_bound + constraint.offset
+        except TypeError:
+            return None
+    elif isinstance(constraint, Cmp):
+        bound = (
+            snapshot.get(str(constraint.bound))
+            if constraint.bound_is_tag
+            else resolve_snapshot_value(constraint.bound, snapshot)
+        )
+    else:
         return None
-    bound = (
-        snapshot.get(str(constraint.bound))
-        if constraint.bound_is_tag
-        else resolve_snapshot_value(constraint.bound, snapshot)
-    )
     if actual is None or bound is None:
         return None
     try:
@@ -123,6 +132,14 @@ def scalar_boundary(constraint: Constraint, snapshot: Snapshot) -> float | None:
             if constraint.bound_is_tag
             else resolve_snapshot_value(constraint.bound, snapshot)
         )
+    elif isinstance(constraint, AffineCmp):
+        raw_value = snapshot.get(constraint.bound_tag)
+        if raw_value is None:
+            return None
+        try:
+            value = constraint.scale * raw_value + constraint.offset
+        except TypeError:
+            return None
     else:
         return None
     if value is None or isinstance(value, bool):
@@ -219,7 +236,7 @@ def monotone_profile(
         return Cmp(accumulator.name, ">=" if sign > 0 else "<=", target)
 
     def _operation(
-        until: Eq | Cmp,
+        until: Eq | Cmp | AffineCmp,
         demand: ConditionDemand,
         pulse: bool,
         *,
@@ -234,7 +251,7 @@ def monotone_profile(
         )
 
     def plan(constraint: Constraint, snapshot: Snapshot) -> AdvanceStep | None:
-        if not isinstance(constraint, (Eq, Cmp)):
+        if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
             return None
         held = constraint_holds(constraint, snapshot)
         if held is True:
@@ -292,8 +309,11 @@ def monotone_profile(
         rate_per_scan=rate_per_scan,
     )
 
-    def _linear_boundary(constraint: Constraint, snapshot: Snapshot) -> Eq | Cmp | None:
-        if not isinstance(constraint, (Eq, Cmp)):
+    def _linear_boundary(
+        constraint: Constraint,
+        snapshot: Snapshot,
+    ) -> Eq | Cmp | AffineCmp | None:
+        if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
             return None
         if constraint.tag == accumulator.name:
             return constraint

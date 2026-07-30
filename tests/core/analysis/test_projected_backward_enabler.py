@@ -19,9 +19,11 @@ from pyrung.core import Bool, Int, Program, Rung, calc, copy
 from pyrung.core.analysis.pdg import build_program_graph, resolve_rung
 from pyrung.core.analysis.sp_values import (
     _enabler_reachable,
+    _invert_affine,
     _writer_projection,
     projected_writer_overlay,
 )
+from pyrung.core.crossing import Affine, StoreTransform
 
 
 def _build_sfc() -> Program:
@@ -62,6 +64,25 @@ def test_projected_writer_overlay_pins_affine_source_and_derives_parity() -> Non
     assert overlay["CurStep"] == 1
     assert overlay["valstepisodd"] == 1
     assert {"CurStep", "valstepisodd"} <= pinned
+
+
+def test_affine_candidate_inversion_accounts_for_modular_storage() -> None:
+    claim = Affine(
+        source="Counter",
+        offset=1,
+        storage=StoreTransform("wrap", -32768, 32767),
+    )
+
+    assert _invert_affine(claim, -32768) == 32767
+
+
+def test_affine_candidate_rejects_output_outside_wrapped_store_domain() -> None:
+    claim = Affine(
+        source="Counter",
+        storage=StoreTransform("wrap", -32768, 32767),
+    )
+
+    assert _invert_affine(claim, 65536) is None
 
 
 def test_writer_projection_rejects_even_step_admits_transition_for_step2() -> None:

@@ -62,7 +62,8 @@ from pyrung.core.condition import (
     CompareLt,
     CompareNe,
 )
-from pyrung.core.crossing import Cmp, Eq
+from pyrung.core.context import ScanContext
+from pyrung.core.crossing import AffineCmp, Cmp, Eq
 from pyrung.core.harness import Harness
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.instruction.timers import OnDelayInstruction
@@ -608,6 +609,26 @@ class TestPilotRungs:
         condition = _constraint_condition(PLC(prog), Cmp(Value.name, op, 50))
 
         assert isinstance(condition, condition_type)
+
+    def test_affine_tag_bound_lowers_without_losing_offset(self):
+        Value = Int("ConstraintValue")
+        Preset = Int("ConstraintPreset")
+        with Program() as prog:
+            with Rung():
+                copy(Preset, Value)
+
+        plc = PLC(prog)
+        condition = _constraint_condition(
+            plc,
+            AffineCmp(Value.name, ">=", Preset.name, scale=1, offset=-1),
+        )
+
+        assert condition.evaluate(
+            ScanContext(plc.state.with_tags({Value.name: 9, Preset.name: 10}))
+        )
+        assert not condition.evaluate(
+            ScanContext(plc.state.with_tags({Value.name: 8, Preset.name: 10}))
+        )
 
     def test_multivalue_equality_and_its_inverse_preserve_set_semantics(self):
         prog, _In, Scope = _scoped_input_program()

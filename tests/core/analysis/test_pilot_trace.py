@@ -37,7 +37,9 @@ from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     UnsupportedConstruct,
     _apply_writer_attempt,
+    _constraint_atom,
     _env_for,
+    _inequality_levers,
     _rank_writers,
     _rewrite_internal_compare,
     _scan_transient_rest,
@@ -55,7 +57,7 @@ from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
-from pyrung.core.crossing import REVERSE_FALLTHROUGH
+from pyrung.core.crossing import REVERSE_FALLTHROUGH, AffineCmp
 from pyrung.core.memory_block import Block
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.tag import TagType
@@ -462,7 +464,8 @@ def test_calc_affine():
     assert "Raw" in names
 
 
-def test_registered_reverse_fallthrough_does_not_bypass_registry(monkeypatch) -> None:
+def test_reverse_fallthrough_can_use_separate_forward_candidate(monkeypatch) -> None:
+    """A sound reverse punt does not suppress a verify-required forward proposal."""
     x_Go = Bool("RegistryOnlyGo", external=True)
     Raw = Int("RegistryOnlyRaw", external=True)
     Scaled = Int("RegistryOnlyScaled")
@@ -481,10 +484,10 @@ def test_registered_reverse_fallthrough_does_not_bypass_registry(monkeypatch) ->
 
     names = _steerable_names(tree)
     assert x_Go.name in names
-    assert Raw.name not in names
+    assert Raw.name in names
 
 
-def test_calc_real_multiply_uses_registered_reverse() -> None:
+def test_calc_real_multiply_uses_forward_candidate() -> None:
     x_Go = Bool("RealCalcGo", external=True)
     Raw = Real("RealCalcRaw", external=True)
     Scaled = Real("RealCalcScaled")
@@ -663,6 +666,55 @@ def test_timer_done_idle_keeps_owner_boundary_on_enable():
     assert action.operation.until == action.until
     assert action.operation.progress is not None
     assert action.operation.progress.condition.tag.name == timer.TT.name
+
+
+def test_future_timer_coast_survives_actionless_program_stage():
+    """A scan-owned stage does not hide the later instruction-owned coast."""
+    stage = Int("AutoStage")
+    timer = Timer.clone("AutoTimer")
+
+    with Program() as logic:
+        with rung(stage == 0):
+            copy(1, stage)
+        with rung(stage == 1):
+            on_delay(timer, preset=100)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back(timer.Done.name, True, {stage.name: 0}, pdg, logic, steerable)
+    coast = [leaf for leaf in _leaves(tree) if leaf.advance is not None]
+
+    assert [(leaf.tag, leaf.value) for leaf in coast] == [(timer.Acc.name, 100)]
+    assert not _steerable_names(tree)
+
+
+def test_future_timer_coast_waits_for_external_program_stage_action():
+    """A blocked stage remains the nearer frontier than the later timer."""
+    permit = Bool("AdvancePermission", external=True)
+    stage = Int("BlockedStage")
+    timer = Timer.clone("BlockedTimer")
+
+    with Program() as logic:
+        with rung(stage == 0, permit):
+            copy(1, stage)
+        with rung(stage == 1):
+            on_delay(timer, preset=100)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+
+    tree = trace_back(
+        timer.Done.name,
+        True,
+        {stage.name: 0, permit.name: False},
+        pdg,
+        logic,
+        steerable,
+    )
+
+    assert not [leaf for leaf in _leaves(tree) if leaf.advance is not None]
+    assert _steerable_names(tree) == {permit.name}
 
 
 def test_timer_done_owner_boundary_reaches_call_gate():
@@ -1724,6 +1776,32 @@ def test_internal_compare_conjunction_rewrites_both(monkeypatch):
     }
 
 
+def test_two_source_compare_consumes_verified_proposal_after_reverse_fallthrough():
+    A = Real("ProposalA", external=True)
+    B = Real("ProposalB", external=True)
+    Mid = Real("ProposalMid")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(A + B, Mid)
+
+    pdg = build_program_graph(logic)
+    snap = {"ProposalA": 2.0, "ProposalB": 3.0, "ProposalMid": 5.0}
+    rewritten = _rewrite_internal_compare(
+        Atom(tag="ProposalMid", form="gt", operand=8.0),
+        frozenset({"ProposalA", "ProposalB"}),
+        pdg,
+        logic,
+        snap,
+    )
+
+    assert {(a.tag, a.form, a.operand) for a in rewritten} == {
+        ("ProposalA", "gt", 5.0),
+        ("ProposalB", "gt", 6.0),
+    }
+    assert all(a.verify_required for a in rewritten)
+    assert all("snapshot-frozen" in a.proposal_reason for a in rewritten)
+
+
 # -- Test 16: strict-inequality step is domain/epsilon-aware ------------------
 
 
@@ -1758,6 +1836,48 @@ def test_real_inequality_steps_epsilon_int_steps_one():
         pdg,
     )
     assert int_hit == ("IntPV", 16)
+
+
+def test_affine_comparison_reaches_both_projected_levers():
+    accumulator = Dint("Accumulator", external=True)
+    preset = Dint("Preset", external=True)
+    output = Bool("Output")
+    with Program(strict=False) as logic:
+        with rung(accumulator >= preset):
+            out(output)
+    pdg = build_program_graph(logic)
+    snapshot = {"Accumulator": 9, "Preset": 12}
+    constraint = AffineCmp(
+        "Accumulator",
+        ">=",
+        "Preset",
+        scale=1,
+        offset=-1,
+    )
+
+    atom = _constraint_atom(constraint)
+    assert atom == Atom(
+        "Accumulator",
+        "ge",
+        "Preset",
+        operand_is_tag=True,
+        operand_scale=1,
+        operand_offset=-1,
+    )
+    assert _resolve_inequality_target(atom, snapshot, None, pdg) == ("Accumulator", 11)
+
+    levers = _inequality_levers(
+        atom,
+        snapshot,
+        frozenset({"Accumulator", "Preset"}),
+        pdg,
+        None,
+        logic,
+    )
+    assert {(lever.tag, lever.value) for lever in levers} == {
+        ("Accumulator", 11),
+        ("Preset", 10.0),
+    }
 
 
 # -- Test 17: multi-scope producer rest — provable vs ambiguous ---------------

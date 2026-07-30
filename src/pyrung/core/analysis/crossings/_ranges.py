@@ -9,29 +9,44 @@ the copy is value-preserving and the inverse is exact).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
+from pyrung.core.instruction.conversions import copy_store_transform
 from pyrung.core.memory_block import IndirectExprRef, IndirectRef
 from pyrung.core.tag import TagType
-
-# Saturating bounds, mirroring instruction/conversions.py (INT/DINT clamp; WORD
-# is 16-bit unsigned).  REAL/CHAR/BOOL do not participate in integer clamping.
-_INT = (-32768, 32767)
-_DINT = (-2147483648, 2147483647)
-_WORD = (0, 65535)
-
-_BOUNDS: dict[TagType, tuple[int, int]] = {
-    TagType.INT: _INT,
-    TagType.DINT: _DINT,
-    TagType.WORD: _WORD,
-}
 
 
 def type_bounds(tag_type: TagType | None) -> tuple[int, int] | None:
     """The ``(min, max)`` saturating bounds of *tag_type*, or ``None``."""
-    if tag_type is None:
+    if tag_type not in (TagType.INT, TagType.DINT, TagType.WORD):
         return None
-    return _BOUNDS.get(tag_type)
+    transform = copy_store_transform(tag_type)
+    if transform is None or transform.lower is None or transform.upper is None:
+        return None
+    return transform.lower, transform.upper
+
+
+def stored_value_possible(tag_type: TagType | None, value: Any) -> bool:
+    """Whether *value* belongs to the concrete stored domain of *tag_type*."""
+    bounds = type_bounds(tag_type)
+    if bounds is not None:
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and float(value).is_integer()
+            and bounds[0] <= value <= bounds[1]
+        )
+    if tag_type is TagType.REAL:
+        return (
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        )
+    if tag_type is TagType.BOOL:
+        return isinstance(value, bool)
+    if tag_type is TagType.CHAR:
+        return isinstance(value, str) and len(value) == 1
+    return False
 
 
 def clamps_on_store(tag_type: TagType | None) -> bool:
@@ -40,8 +55,8 @@ def clamps_on_store(tag_type: TagType | None) -> bool:
 
 
 def wraps_on_store(tag_type: TagType | None) -> bool:
-    """Whether a calc into *tag_type* modular-wraps the signed range (INT/DINT)."""
-    return tag_type in (TagType.INT, TagType.DINT)
+    """Whether a calc into *tag_type* modular-wraps its integer range."""
+    return tag_type in (TagType.INT, TagType.DINT, TagType.WORD)
 
 
 def wrap_to_type(value: int, tag_type: TagType | None) -> int | None:

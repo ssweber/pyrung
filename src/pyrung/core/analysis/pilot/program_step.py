@@ -36,7 +36,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
 )
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.crossing import Cmp, Eq
+from pyrung.core.crossing import AffineCmp, Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceStep, constraint_holds
 
 
@@ -52,7 +52,7 @@ class ProgramInputHandoff:
     """One input's proved handoff to the next instruction-owned operation."""
 
     action: tuple[str, Any]
-    boundary: Eq | Cmp
+    boundary: Eq | Cmp | AffineCmp
     channel: str
 
 
@@ -71,7 +71,7 @@ class ProgramStep:
 
     status: ProgramStepStatus
     producer: Any
-    boundary: Eq | Cmp | None
+    boundary: Eq | Cmp | AffineCmp | None
     channel: str | None
     required_inputs: tuple[TraceAction, ...] = ()
     context_actions: tuple[tuple[str, Any], ...] = ()
@@ -89,7 +89,10 @@ class ProgramStep:
         repr=False,
         compare=False,
     )
-    uniform_handoff_boundary: Eq | Cmp | None = field(init=False, default=None)
+    uniform_handoff_boundary: Eq | Cmp | AffineCmp | None = field(
+        init=False,
+        default=None,
+    )
     required_pairs: frozenset[tuple[str, Any]] = field(init=False, default=frozenset())
     inputs_with_lifetime: tuple[TraceAction, ...] = field(init=False, default=())
     observable_motions: tuple[ProgramMotion, ...] = field(init=False, default=())
@@ -97,7 +100,7 @@ class ProgramStep:
     def __post_init__(self) -> None:
         handoffs = {handoff.action: handoff for handoff in self.input_handoffs}
         required_pairs = frozenset(action.pair for action in self.required_inputs)
-        boundary: Eq | Cmp | None = None
+        boundary: Eq | Cmp | AffineCmp | None = None
         if required_pairs and required_pairs <= handoffs.keys():
             required_handoffs = tuple(handoffs[action.pair] for action in self.required_inputs)
             candidate = required_handoffs[0].boundary
@@ -419,7 +422,7 @@ def read_program_step(
     def _step(
         status: ProgramStepStatus,
         *,
-        step_boundary: Eq | Cmp | None = boundary,
+        step_boundary: Eq | Cmp | AffineCmp | None = boundary,
         channel: str | None = None,
         required_inputs: tuple[TraceAction, ...],
         context: tuple[tuple[str, Any], ...] = (),

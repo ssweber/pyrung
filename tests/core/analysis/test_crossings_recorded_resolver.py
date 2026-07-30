@@ -21,7 +21,9 @@ from pyrung.core.crossing import (
     External,
     Prior,
     Quant,
+    ReverseResult,
     eq_target,
+    single,
 )
 from pyrung.core.instruction.advanced import ShiftInstruction
 from pyrung.core.instruction.coils import LatchInstruction
@@ -63,6 +65,41 @@ def test_cmp_resolves_held_value_as_unchanged() -> None:
     assert r is not None and r.changed is False and r.after == 7
 
 
+def test_tag_bound_cmp_branch_resolves_both_operands() -> None:
+    history = _History(
+        {
+            1: {"Acc": 5, "Preset": 10},
+            2: {"Acc": 5, "Preset": 5},
+        }
+    )
+
+    branches = resolve_recorded_branches(
+        single(Cmp("Acc", ">=", "Preset", bound_is_tag=True), exact=True),
+        history=history,
+        scan_id=2,
+    )
+
+    assert len(branches) == 1
+    assert [(fact.tag, fact.changed) for fact in branches[0]] == [
+        ("Acc", False),
+        ("Preset", True),
+    ]
+
+
+def test_branch_resolution_preserves_reverse_exactness() -> None:
+    history = _History({1: {"Source": 1}, 2: {"Source": 2}})
+
+    for exact in (True, False):
+        branches = resolve_recorded_branches(
+            single(Eq("Source", frozenset({2})), exact=exact),
+            history=history,
+            scan_id=2,
+        )
+
+        assert len(branches) == 1
+        assert [fact.exact for fact in branches[0]] == [exact]
+
+
 # --- Prior shifts the chase one scan back -------------------------------------
 
 
@@ -78,6 +115,21 @@ def test_prior_reads_source_at_previous_scan() -> None:
 def test_prior_with_no_previous_scan_is_unresolvable() -> None:
     history = _History({2: {"C3": True}})  # scan 2 is the earliest retained
     assert resolve_recorded(Prior("C3", "C2", 1, 0), history=history, scan_id=2) is None
+
+
+def test_unresolved_prior_invalidates_whole_conjunctive_branch() -> None:
+    history = _History({2: {"C3": True, "Gate": True}})
+    result = ReverseResult(
+        branches=(
+            (
+                Prior("C3", "C2", 1, 0),
+                Eq("Gate", frozenset({True})),
+            ),
+        ),
+        exact=True,
+    )
+
+    assert resolve_recorded_branches(result, history=history, scan_id=2) == []
 
 
 # --- leaves -------------------------------------------------------------------

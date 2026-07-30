@@ -38,6 +38,13 @@ class Atom:
     form: str  # "xic"|"xio"|"rise"|"fall"|"truthy"|"eq"|"ne"|"lt"|"le"|"gt"|"ge"
     operand: Any = None
     operand_is_tag: bool = False
+    operand_scale: int | float = 1
+    operand_offset: int | float = 0
+    # A crossing may surface this atom as a verify-required steering proposal
+    # after its sound reverse has fallen through. These receipts are reporting
+    # metadata only and do not change Boolean identity/deduplication.
+    proposal_reason: str = field(default="", compare=False, hash=False, repr=False)
+    verify_required: bool = field(default=False, compare=False, hash=False, repr=False)
     # Unknown Condition subclasses historically became a synthetic
     # ``Atom(type_name, "xic")``. Keep that conservative projection for
     # existing simplified-expression consumers, but retain the raw construct so
@@ -45,8 +52,15 @@ class Atom:
     # understand it.
     unsupported: Any = field(default=None, compare=False, hash=False, repr=False)
 
-    def _key(self) -> tuple[str, str, Any, bool]:
-        return (self.tag, self.form, self.operand, self.operand_is_tag)
+    def _key(self) -> tuple[str, str, Any, bool, int | float, int | float]:
+        return (
+            self.tag,
+            self.form,
+            self.operand,
+            self.operand_is_tag,
+            self.operand_scale,
+            self.operand_offset,
+        )
 
 
 @dataclass(frozen=True)
@@ -721,6 +735,8 @@ def _negate(expr: Expr) -> Expr:
                 flips[expr.form],
                 expr.operand,
                 operand_is_tag=expr.operand_is_tag,
+                operand_scale=expr.operand_scale,
+                operand_offset=expr.operand_offset,
                 unsupported=expr.unsupported,
             )
         return Atom(
@@ -728,6 +744,8 @@ def _negate(expr: Expr) -> Expr:
             expr.form,
             expr.operand,
             operand_is_tag=expr.operand_is_tag,
+            operand_scale=expr.operand_scale,
+            operand_offset=expr.operand_offset,
             unsupported=expr.unsupported,
         )
 
@@ -751,7 +769,15 @@ def _expr_key(expr: Expr) -> tuple[Any, ...]:
     if isinstance(expr, Const):
         return (0, expr.value)
     if isinstance(expr, Atom):
-        return (1, expr.tag, expr.form, str(expr.operand), expr.operand_is_tag)
+        return (
+            1,
+            expr.tag,
+            expr.form,
+            str(expr.operand),
+            expr.operand_is_tag,
+            expr.operand_scale,
+            expr.operand_offset,
+        )
     if isinstance(expr, And):
         return (2, tuple(_expr_key(t) for t in expr.terms))
     if isinstance(expr, Or):
@@ -896,7 +922,10 @@ def _render(expr: Expr, parent: type | None) -> str:
         if expr.form == "truthy":
             return f"{expr.tag} != 0"
         if expr.form in _OP_SYMBOLS:
-            return f"{expr.tag} {_OP_SYMBOLS[expr.form]} {expr.operand}"
+            operand = str(expr.operand)
+            if expr.operand_is_tag and (expr.operand_scale != 1 or expr.operand_offset != 0):
+                operand = f"({expr.operand_scale!r} * {expr.operand} + {expr.operand_offset!r})"
+            return f"{expr.tag} {_OP_SYMBOLS[expr.form]} {operand}"
         return expr.tag
 
     if isinstance(expr, And):

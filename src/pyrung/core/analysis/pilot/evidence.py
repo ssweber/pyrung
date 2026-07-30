@@ -143,7 +143,13 @@ def expand_routes(
         _extract_condition_values,
         _written_value_for_tag,
     )
-    from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Literal
+    from pyrung.core.crossing import (
+        UNKNOWN,
+        Affine,
+        Aggregate,
+        Literal,
+        evaluate_forward,
+    )
 
     writer_nodes = sorted(pdg.writers_of.get(target_tag, frozenset()))
     if not writer_nodes:
@@ -157,6 +163,7 @@ def expand_routes(
     request_tags: set[str] = set()
     # {candidate_request_tag: {request_value: destination_value}}
     dest_maps: dict[str, dict[Any, Any]] = {}
+    affine_transforms: dict[str, list[Affine]] = {}
     indirect_sources: dict[str, list[Any]] = {}
 
     for node_idx in writer_nodes:
@@ -203,6 +210,7 @@ def expand_routes(
 
         elif isinstance(written, Affine):
             request_tags.add(written.source)
+            affine_transforms.setdefault(written.source, []).append(written)
 
         elif written is UNKNOWN:
             indirect = table_operand_from_copy(
@@ -284,7 +292,14 @@ def expand_routes(
                             dest_value = read
                             break
                 if dest_value is None:
-                    dest_value = req_value
+                    transformed = {
+                        result
+                        for claim in affine_transforms.get(request_tag, ())
+                        if (result := evaluate_forward(claim, {request_tag: req_value}))
+                        is not UNKNOWN
+                    }
+                    if len(transformed) == 1:
+                        dest_value = transformed.pop()
 
             call_gates = _call_site_conditions(req_node, pdg, program)
             route_conds = _merge_condition_values(req_conds, call_gates)
@@ -326,7 +341,7 @@ def expand_routes(
 
 def _static_request_value(written: Any, pdg: ProgramGraph) -> tuple[bool, Any]:
     """Resolve a request writer's static value when it is literal or tag-copy."""
-    from pyrung.core.crossing import Affine, Literal
+    from pyrung.core.crossing import UNKNOWN, Affine, Literal, evaluate_forward
 
     if isinstance(written, Literal):
         return True, written.value
@@ -334,10 +349,8 @@ def _static_request_value(written: Any, pdg: ProgramGraph) -> tuple[bool, Any]:
         tag = pdg.tags.get(written.source)
         if tag is None:
             return False, None
-        try:
-            return True, tag.default * written.scale + written.offset
-        except (TypeError, ValueError):
-            return False, None
+        produced = evaluate_forward(written, {written.source: tag.default})
+        return (False, None) if produced is UNKNOWN else (True, produced)
     return False, None
 
 

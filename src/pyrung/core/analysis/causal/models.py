@@ -206,6 +206,10 @@ class ChainStep:
     instruction: str | None = None
     subroutine: str | None = None
     caller_rung_index: int | None = None
+    # Fidelity of the crossing-derived predecessor conclusion attached to this
+    # causal step. ``None`` means the step came from ordinary SP-tree/timeline
+    # attribution rather than a ReverseResult adapter.
+    crossing_exact: bool | None = None
 
     def with_caller(
         self,
@@ -250,6 +254,8 @@ class ChainStep:
             d["subroutine"] = self.subroutine
         if self.caller_rung_index is not None:
             d["caller_rung_index"] = self.caller_rung_index
+        if self.crossing_exact is not None:
+            d["crossing_exact"] = self.crossing_exact
         return d
 
 

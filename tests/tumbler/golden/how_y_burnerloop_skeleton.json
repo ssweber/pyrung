@@ -393,14 +393,14 @@
     },
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 25 -> 19",
+     "detail": "distance 25 -> 18",
      "event": "departed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 19,
+   "trend_after": 18,
    "trend_before": 25
   },
   "applied": [
@@ -459,7 +459,7 @@
    },
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 25 -> 19",
+    "detail": "distance 25 -> 18",
     "event": "departed"
    }
   ],
@@ -554,7 +554,7 @@
   "settled_value": 2
  },
  {
-  "distance": 19,
+  "distance": 18,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
@@ -565,16 +565,16 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
-   "HeatDelay_Tmr_Done=True (have False)",
+   "Sts_State_Execute=True (have False)",
    "Blower_x=True (have False)",
    "Heat_CurStep=1 (have 0)",
-   "Sts_State_Execute=True (have False)",
-   "Blower__x=1 (have 0)",
    "Sts_StateCurrent=6 (have 2)",
-   "Blower_xCall=1 (have 0)",
+   "Blower__x=1 (have 0)",
    "Sts_StateRequested=6 (have 0)",
+   "Blower_xCall=1 (have 0)",
    "Sts_State_Starting=True (have False)",
    "Sts_StateCurrent=3 (have 2)",
    "Sts_StateRequested=3 (have 0)"
@@ -723,15 +723,15 @@
     },
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 19 -> 19",
+     "detail": "distance 18 -> 18",
      "event": "departed"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
-   "trend_after": 19,
-   "trend_before": 19
+   "trend_after": 18,
+   "trend_before": 18
   },
   "applied": [
    [
@@ -764,7 +764,7 @@
    },
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 19 -> 19",
+    "detail": "distance 18 -> 18",
     "event": "departed"
    }
   ],
@@ -808,7 +808,7 @@
   "to_value": 4
  },
  {
-  "distance": 19,
+  "distance": 18,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
@@ -819,16 +819,16 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
-   "HeatDelay_Tmr_Done=True (have False)",
+   "Sts_State_Execute=True (have False)",
    "Blower_x=True (have False)",
    "Heat_CurStep=1 (have 0)",
-   "Sts_State_Execute=True (have False)",
-   "Blower__x=1 (have 0)",
    "Sts_StateCurrent=6 (have 4)",
-   "Blower_xCall=1 (have 0)",
+   "Blower__x=1 (have 0)",
    "Sts_StateRequested=6 (have 0)",
+   "Blower_xCall=1 (have 0)",
    "Sts_State_Starting=True (have False)",
    "Sts_StateCurrent=3 (have 4)",
    "Sts_StateRequested=3 (have 0)"
@@ -954,7 +954,7 @@
     },
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 19 -> 25",
+     "detail": "distance 18 -> 25",
      "event": "satisfied"
     }
    ],
@@ -962,7 +962,7 @@
    "state_key_changed": true,
    "target_reached": false,
    "trend_after": 25,
-   "trend_before": 19
+   "trend_before": 18
   },
   "applied": [
    [
@@ -995,7 +995,7 @@
    },
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 19 -> 25",
+    "detail": "distance 18 -> 25",
     "event": "satisfied"
    }
   ],
@@ -1029,7 +1029,7 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 19,
+  "baseline_trend": 18,
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
@@ -1048,6 +1048,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -1206,16 +1207,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6,
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "bearing_coast_accepted",
   "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 23,
-  "bearing_coast_actual_value": 8,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "trend": 23
  },
  {
   "applied": [],
@@ -1346,10 +1347,10 @@
   },
   "kind": "trend_regression",
   "regression_nogoods": [],
-  "to_trend": 19
+  "to_trend": 18
  },
  {
-  "distance": 19,
+  "distance": 18,
   "kind": "iteration",
   "nogoods": [],
   "raw_trace_actions": [],
@@ -1360,16 +1361,16 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
-   "HeatDelay_Tmr_Done=True (have False)",
+   "Sts_State_Execute=True (have False)",
    "Blower_x=True (have False)",
    "Heat_CurStep=1 (have 0)",
-   "Sts_State_Execute=True (have False)",
-   "Blower__x=1 (have 0)",
    "Sts_StateCurrent=6 (have 4)",
-   "Blower_xCall=1 (have 0)",
+   "Blower__x=1 (have 0)",
    "Sts_StateRequested=6 (have 0)",
+   "Blower_xCall=1 (have 0)",
    "Sts_State_Starting=True (have False)",
    "Sts_StateCurrent=3 (have 4)",
    "Sts_StateRequested=3 (have 0)"
@@ -1503,7 +1504,7 @@
     },
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 19 -> 25",
+     "detail": "distance 18 -> 25",
      "event": "satisfied"
     }
    ],
@@ -1511,7 +1512,7 @@
    "state_key_changed": true,
    "target_reached": false,
    "trend_after": 25,
-   "trend_before": 19
+   "trend_before": 18
   },
   "applied": [
    [
@@ -1544,7 +1545,7 @@
    },
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 19 -> 25",
+    "detail": "distance 18 -> 25",
     "event": "satisfied"
    }
   ],
@@ -1584,7 +1585,7 @@
   "kind": "trial_committed"
  },
  {
-  "baseline_trend": 19,
+  "baseline_trend": 18,
   "channel": "Sts_StateCurrent",
   "channel_value": 3,
   "kind": "trend_checkpoint",
@@ -1603,6 +1604,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -1761,16 +1763,177 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": 5,
+  "bearing_coast_channel_tag": "Rotate_tmr_Acc",
+  "bearing_coast_target_value": 4,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 10,
+  "trend": 22
+ },
+ {
+  "applied": [],
+  "candidate": {},
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 22,
+  "unbanked": true
+ },
+ {
+  "distance": 22,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "HeatDelay_Tmr_Done=True (have False)",
+   "Blower_x=True (have False)",
+   "Heat_CurStep=1 (have 0)",
+   "Sts_State_Execute=True (have False)",
+   "Blower__x=1 (have 0)",
+   "Sts_StateCurrent=6 (have 3)",
+   "Blower_xCall=1 (have 0)",
+   "Sts_StateRequested=6 (have 0)",
+   "Sts_StateCompleteFlag=True (have False)",
+   "Sts_StateCompleteBool=1 (have 0)",
+   "Blower__init=1 (have 0)",
+   "Blower_CurStep=2 (have 0)",
+   "Blower_Trans=1 (have 0)",
+   "Blower_CurStep=1 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop",
+   "Blower_CurStep",
+   "Blower_Trans",
+   "Blower__init",
+   "Rotate_CurStep",
+   "Rotate_Trans",
+   "Rotate__init",
+   "Sts_StateCompleteBool",
+   "Sts_StateCompleteFlag"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [],
+  "completion_frontier": [
+   [
+    "Sts_StateCompleteFlag",
+    true
+   ],
+   [
+    "Sts_StateCompleteBool",
+    1
+   ],
+   [
+    "Blower__init",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    2
+   ],
+   [
+    "Blower__x",
+    1
+   ],
+   [
+    "Blower_Trans",
+    1
+   ],
+   [
+    "Blower_xCall",
+    1
+   ],
+   [
+    "Blower_CurStep",
+    1
+   ]
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    6
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [],
+     "from": 3,
+     "request": [
+      "Sts_StateRequested",
+      6
+     ],
+     "to": 6
+    }
+   ],
+   "target_value": 6
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": true,
+  "wait_reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "kind": "bearing_coast",
+  "prescribed": true,
+  "reason": "let-run Sts_StateCurrent: 3->6"
+ },
+ {
+  "accepted": true,
+  "agency": "program",
+  "bearing": "satisfied",
   "bearing_coast_actual_value": 6,
   "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "bearing_coast_target_value": 6,
+  "bearing_stop_reason": "reached",
+  "ejected": false,
+  "kind": "bearing_coast_accepted",
+  "new_frontier": false,
+  "observe_label": "bearing_coast",
+  "progress": "forward",
+  "trend": 10
  },
  {
   "applied": [],
@@ -1794,6 +1957,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -1882,6 +2046,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -1944,16 +2109,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6,
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "bearing_coast_accepted",
   "new_frontier": true,
   "observe_label": "letrun",
   "progress": "backward",
-  "trend": 19,
-  "bearing_coast_actual_value": 10,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "trend": 19
  },
  {
   "applied": [],
@@ -2089,6 +2254,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -2151,16 +2317,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": true,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
+  "bearing_coast_target_value": true,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 5,
-  "bearing_coast_actual_value": true,
-  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
-  "bearing_coast_target_value": true
+  "trend": 5
  },
  {
   "applied": [],
@@ -2324,16 +2490,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6,
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "letrun",
   "progress": "unchanged",
-  "trend": 5,
-  "bearing_coast_actual_value": 8,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "trend": 5
  },
  {
   "applied": [],
@@ -2465,6 +2631,7 @@
    "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
    "Heat__x=1 (have 0)",
    "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
    "Heat_xCall=1 (have 0)",
    "Heat_Trans=1 (have 0)",
    "HeatDelay_Tmr_Done=True (have False)",
@@ -2527,16 +2694,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": true,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
+  "bearing_coast_target_value": true,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 5,
-  "bearing_coast_actual_value": true,
-  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
-  "bearing_coast_target_value": true
+  "trend": 5
  },
  {
   "applied": [],
@@ -2617,16 +2784,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": 2,
+  "bearing_coast_channel_tag": "Heat_tmr_Acc",
+  "bearing_coast_target_value": 1,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 3,
-  "bearing_coast_actual_value": 2,
-  "bearing_coast_channel_tag": "Heat_tmr_Acc",
-  "bearing_coast_target_value": 1
+  "trend": 3
  },
  {
   "applied": [],
@@ -2705,16 +2872,16 @@
   "accepted": null,
   "agency": null,
   "bearing": null,
+  "bearing_coast_actual_value": null,
+  "bearing_coast_channel_tag": null,
+  "bearing_coast_target_value": null,
   "bearing_stop_reason": null,
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": null,
   "observe_label": "letrun-target",
   "progress": null,
-  "trend": null,
-  "bearing_coast_actual_value": null,
-  "bearing_coast_channel_tag": null,
-  "bearing_coast_target_value": null
+  "trend": null
  },
  {
   "applied": [],
@@ -2955,11 +3122,63 @@
       0
      ],
      [
-      "A_ModeTimeCurrent_tmr.Acc",
+      "A_StateTimeCurrent_tmr.Acc",
       0
      ],
      [
-      "A_StateTimeCurrent_tmr.Acc",
+      "Rotate_CurStep_tmr.Acc",
+      3
+     ],
+     [
+      "Rotate_tmr.Acc",
+      3
+     ],
+     [
+      "_1stScanDebounce_tmr.Acc",
+      4
+     ]
+    ],
+    "inputs": [],
+    "kind": "coast",
+    "label": "Rotate_tmr_Acc",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [
+     "S_DryerTemp_F",
+     "x_BlowerFB",
+     "x_DoorClosed",
+     "x_LintDoorClosed",
+     "x_RotateFB"
+    ],
+    "transition": "",
+    "waiting_for": [
+     "Blower_Trans",
+     "Blower__x",
+     "Blower_CurStep",
+     "Rotate_Trans",
+     "Heat__x",
+     "Sts_P1_OperatingTemp_F",
+     "Rotate_tmr_Acc",
+     "Heat_xInit",
+     "Sts_StateCompleteBool",
+     "Heat_tmr_Acc",
+     "Blower__init",
+     "Rotate__init",
+     "Rotate_CurStep",
+     "Heat_CurStep",
+     "Blower_tmr_Acc",
+     "i_BlowerFB",
+     "Blower_xInit",
+     "Blower_xCall",
+     "i_RotateFB",
+     "Heat_TargetTemp_F"
+    ]
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [
+     [
+      "A_ModeTimeCurrent_tmr.Acc",
       0
      ],
      [
@@ -2976,10 +3195,6 @@
      ],
      [
       "Rotate_CurStep_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
       4
      ],
      [
@@ -2988,15 +3203,7 @@
      ],
      [
       "Rotate_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_tmr.Acc",
       8
-     ],
-     [
-      "_1stScanDebounce_tmr.Acc",
-      4
      ],
      [
       "_1stScanDebounce_tmr.Acc",
@@ -3020,21 +3227,17 @@
      "Blower_Trans",
      "Blower__x",
      "Blower_CurStep",
-     "Rotate_Trans",
-     "HeatDelay_Tmr_Acc",
-     "Rotate_tmr_Acc",
+     "Heat__x",
+     "Sts_P1_OperatingTemp_F",
      "Heat_xInit",
      "Sts_StateCompleteBool",
      "Heat_tmr_Acc",
      "Blower__init",
-     "Rotate__init",
-     "Rotate_CurStep",
      "Heat_CurStep",
      "Blower_tmr_Acc",
-     "i_BlowerFB",
      "Blower_xInit",
      "Blower_xCall",
-     "i_RotateFB"
+     "Heat_TargetTemp_F"
     ]
    },
    {
@@ -3131,9 +3334,12 @@
     "transition": "Heat_xCall 0 -> 1",
     "waiting_for": [
      "HeatDelay_Tmr_Acc",
+     "Heat__x",
+     "Sts_P1_OperatingTemp_F",
      "Heat_xInit",
      "Heat_tmr_Acc",
-     "Heat_CurStep"
+     "Heat_CurStep",
+     "Heat_TargetTemp_F"
     ]
    },
    {

@@ -1407,7 +1407,7 @@ def _analog_boundary_hold(
                 yield from _iter_atoms(term)
 
     step_keys = {(step.rung_index, step.subroutine) for step in chain.steps}
-    seen: set[tuple[str, str, Any, bool]] = set()
+    seen: set[tuple[str, str, Any, bool, int | float, int | float]] = set()
     for node in pdg.rung_nodes:
         if name not in getattr(node, "condition_reads", ()):
             continue
@@ -1419,12 +1419,19 @@ def _analog_boundary_hold(
         for atom in _iter_atoms(_conditions_list_to_expr(getattr(rung, "_conditions", []))):
             if atom.tag == name:
                 atom_on_root = atom
-            elif atom.operand_is_tag and atom.operand == name and atom.form in _FLIP_FORM:
+            elif (
+                atom.operand_is_tag
+                and atom.operand == name
+                and atom.form in _FLIP_FORM
+                and atom.operand_scale != 0
+            ):
                 atom_on_root = Atom(
                     tag=name,
-                    form=_FLIP_FORM[atom.form],
+                    form=(_FLIP_FORM[atom.form] if atom.operand_scale > 0 else atom.form),
                     operand=atom.tag,
                     operand_is_tag=True,
+                    operand_scale=1 / atom.operand_scale,
+                    operand_offset=-atom.operand_offset / atom.operand_scale,
                 )
             else:
                 continue
@@ -1432,7 +1439,18 @@ def _analog_boundary_hold(
                 continue
             seen.add(atom_on_root._key())
             operand = atom_on_root.operand
-            threshold = snapshot.get(operand) if atom_on_root.operand_is_tag else operand
+            if atom_on_root.operand_is_tag:
+                raw_threshold = snapshot.get(operand)
+                try:
+                    if raw_threshold is None:
+                        raise TypeError
+                    threshold = (
+                        atom_on_root.operand_scale * raw_threshold + atom_on_root.operand_offset
+                    )
+                except TypeError:
+                    threshold = None
+            else:
+                threshold = operand
             truth = _ordered_truth(atom_on_root.form, root.value, threshold)
             if truth is None:
                 continue
@@ -1442,6 +1460,8 @@ def _analog_boundary_hold(
                     form=_NEGATE_FORM[atom_on_root.form],
                     operand=operand,
                     operand_is_tag=atom_on_root.operand_is_tag,
+                    operand_scale=atom_on_root.operand_scale,
+                    operand_offset=atom_on_root.operand_offset,
                 )
                 if truth
                 else atom_on_root

@@ -49,6 +49,7 @@ from pyrung.core.analysis.pilot.static_expressions import (
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
+from pyrung.core.analysis.reverse_semantics import normalize_reverse_result
 from pyrung.core.analysis.simplified import (
     And,
     Atom,
@@ -69,7 +70,9 @@ from pyrung.core.analysis.sp_values import (
 )
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
+    UNKNOWN,
     Affine,
+    AffineCmp,
     Aggregate,
     Cmp,
     Constraint,
@@ -78,6 +81,7 @@ from pyrung.core.crossing import (
     Literal,
     ReverseResult,
     eq_target,
+    evaluate_forward,
 )
 from pyrung.core.instruction.advance import constraint_holds
 
@@ -497,6 +501,9 @@ class TraceNode:
     # ``empirically_rejected`` / ``alternative_has_dead_end`` /
     # ``unresolved_rung``). Empty when the top-ranked writer was taken directly.
     writer_skips: tuple[tuple[int, str], ...] = ()
+    # Fidelity of the ReverseResult used for this selected writer conclusion.
+    # ``None`` for non-crossing nodes and forward-only verified candidates.
+    crossing_exact: bool | None = None
 
     def iter_nodes(
         self,
@@ -809,7 +816,11 @@ def _atom_target(
         if atom.operand_is_tag:
             if snapshot is None or atom.operand not in snapshot:
                 return None
-            return (atom.tag, snapshot[atom.operand])
+            try:
+                operand = atom.operand_scale * snapshot[atom.operand] + atom.operand_offset
+            except TypeError:
+                return None
+            return (atom.tag, operand)
         return (atom.tag, atom.operand)
     if form == "rise":
         return (atom.tag, True)
@@ -839,18 +850,18 @@ class _Lever:
 
 
 def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
-    """The sole instruction writing *tag*, or ``None`` (multi/zero writer or
-    unresolved rung) — the structural reader's narrow entry."""
+    """The sole exact static instruction writing *tag*, or ``None``.
+
+    Rung selection belongs to the PDG; destination-shape resolution belongs to
+    the shared write-site enumerator consumed by :func:`_writer_for_tag`.
+    """
     writers = pdg.writers_of.get(tag, frozenset())
     if len(writers) != 1:
         return None
     ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
     if ro is None:
         return None
-    for instr in ro._instructions:
-        if getattr(getattr(instr, "dest", None), "name", None) == tag:
-            return instr
-    return None
+    return _writer_for_tag(ro, tag)
 
 
 def _reverse_writer(
@@ -859,7 +870,6 @@ def _reverse_writer(
     value: Any,
     snapshot: dict[str, Any],
     pdg: ProgramGraph,
-    prior: DomainPrior | None = None,
 ) -> ReverseResult:
     """Reverse the exact instruction selected inside a writer rung.
 
@@ -879,7 +889,6 @@ def _reverse_writer(
         CrossingContext(
             snapshot=snapshot,
             tags_by_name=pdg.tags,
-            nd_domains=prior.nd_domains if prior is not None else None,
         ),
     )
 
@@ -895,12 +904,13 @@ def _producer_constraints(
     established specialized consumers; fallthrough never fabricates a need.
     A constraint identical to the target is a hold/self-copy, not progress.
     """
-    if result.fallthrough or len(result.branches) != 1:
+    normalized = normalize_reverse_result(result)
+    if normalized.fallthrough or normalized.contradiction or len(normalized.branches) != 1:
         return ()
-    (branch,) = result.branches
+    (branch,) = normalized.branches
     requirements: list[Constraint] = []
     for constraint in branch:
-        if not isinstance(constraint, (Eq, Cmp)):
+        if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
             return ()
         if constraint == target:
             continue
@@ -946,8 +956,9 @@ def _rewrite_internal_compare(
     - single-source affine (copy / ``scale*src + offset``): one rewritten atom on
       ``src`` with the threshold shifted (form flipped on a negative scale).
       Recurses, so copy/calc chains collapse to the steerable source.
-    - two-tag ``A ± B`` against a threshold: the calc crossing freezes each
-      partner at its *snapshot* value and returns one branch per operand
+    - two-tag ``A ± B`` against a threshold: after sound reverse falls through,
+      the calc crossing proposal freezes each partner at its *snapshot* value
+      and returns one verify-required branch per operand
       (``A op bound-B_now`` ∨ ``B op bound-A_now``); each becomes an alternative
       atom whose lever re-points against the live partner next scan. The
       subtraction-at-zero form is the ``bound == 0`` instance.
@@ -958,6 +969,10 @@ def _rewrite_internal_compare(
     consumer that drives it and recurses for multi-hop chains.
     """
     if _depth > 6 or atom.tag in steerable:
+        return [atom]
+    if atom.operand_is_tag and (atom.operand_scale != 1 or atom.operand_offset != 0):
+        # This is already a sound affine producer boundary. Registered
+        # instruction crossings accept plain Cmp targets, so preserve it.
         return [atom]
     op = _FORM_TO_OP.get(atom.form)
     if op is None:
@@ -971,11 +986,35 @@ def _rewrite_internal_compare(
 
     target = Cmp(atom.tag, op, atom.operand, bound_is_tag=atom.operand_is_tag)
     result = crossings.reverse(instr, None, target, CrossingContext(snapshot=snapshot))
-    if result.fallthrough or not result.branches:
+    normalized = normalize_reverse_result(result)
+    proposal_reason = atom.proposal_reason
+    verify_required = atom.verify_required
+    if normalized.fallthrough:
+        proposal = crossings.propose(
+            instr,
+            None,
+            target,
+            CrossingContext(snapshot=snapshot),
+        )
+        if proposal.empty:
+            return [atom]
+        branches = proposal.branches
+        proposal_reason = "; ".join(
+            reason for reason in (proposal_reason, proposal.reason) if reason
+        )
+        verify_required = verify_required or proposal.verify_required
+        # The current consumer returns alternative scalar levers. It can
+        # preserve DNF grouping only when every proposal branch is one scalar
+        # constraint; a conjunctive proposal remains an explicit frontier.
+        if any(len(branch) != 1 for branch in branches):
+            return [atom]
+    elif normalized.contradiction or normalized.trivial:
         return [atom]
+    else:
+        branches = normalized.branches
 
     rewritten: list[Atom] = []
-    for branch in result.branches:
+    for branch in branches:
         cmps = [c for c in branch if isinstance(c, Cmp)]
         if not cmps:
             return [atom]  # no inequality atom (Eq / unsat) -> stay honest
@@ -997,6 +1036,8 @@ def _rewrite_internal_compare(
                         form=form,
                         operand=c.bound,
                         operand_is_tag=c.bound_is_tag,
+                        proposal_reason=proposal_reason,
+                        verify_required=verify_required,
                     ),
                     steerable,
                     pdg,
@@ -1061,8 +1102,12 @@ def _inequality_levers(
         return tag in steerable or bool(pdg.writers_of.get(tag))
 
     def _add(label: str, req: Atom) -> None:
-        heuristic = False
-        marker = ""
+        heuristic = req.verify_required
+        marker = (
+            f"crossing proposal: {req.proposal_reason}; verification required"
+            if req.verify_required
+            else ""
+        )
         target = _resolve_inequality_target(req, snapshot, prior, pdg)
         if target is None:
             hit = _heuristic_inequality_target(req, snapshot, steerable, pdg)
@@ -1071,6 +1116,15 @@ def _inequality_levers(
             value, marker = hit
             target = (req.tag, value)
             heuristic = True
+            if req.verify_required:
+                marker = "; ".join(
+                    part
+                    for part in (
+                        marker,
+                        f"crossing proposal: {req.proposal_reason}; verification required",
+                    )
+                    if part
+                )
         tag, value = target
         if tag in seen or not _actionable(tag):
             return
@@ -1090,16 +1144,27 @@ def _inequality_levers(
         # atom key so an unchanged rewrite adds nothing new.
         seen_atoms = {a._key() for a in base}
         frozen: list[Atom] = []
-        threshold = snapshot.get(operand)
+        raw_threshold = snapshot.get(operand)
+        try:
+            threshold = (
+                atom.operand_scale * raw_threshold + atom.operand_offset
+                if raw_threshold is not None
+                else None
+            )
+        except TypeError:
+            threshold = None
         if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
             frozen.extend(_rewrite(Atom(tag=atom.tag, form=atom.form, operand=threshold)))
         lhs_now = snapshot.get(atom.tag)
         if (
             atom.form in _FLIP_FORM
+            and atom.operand_scale != 0
             and isinstance(lhs_now, (int, float))
             and not isinstance(lhs_now, bool)
         ):
-            frozen.extend(_rewrite(Atom(tag=operand, form=_FLIP_FORM[atom.form], operand=lhs_now)))
+            right_form = _FLIP_FORM[atom.form] if atom.operand_scale > 0 else atom.form
+            right_bound = (lhs_now - atom.operand_offset) / atom.operand_scale
+            frozen.extend(_rewrite(Atom(tag=operand, form=right_form, operand=right_bound)))
         for a in frozen:
             if a._key() not in seen_atoms:
                 seen_atoms.add(a._key())
@@ -1107,14 +1172,17 @@ def _inequality_levers(
 
     for a in base:
         _add("left", a)
-        if a.operand_is_tag and a.form in _FLIP_FORM:
+        if a.operand_is_tag and a.form in _FLIP_FORM and a.operand_scale != 0:
+            right_form = _FLIP_FORM[a.form] if a.operand_scale > 0 else a.form
             _add(
                 "right",
                 Atom(
                     tag=a.operand,
-                    form=_FLIP_FORM[a.form],
+                    form=right_form,
                     operand=a.tag,
                     operand_is_tag=True,
+                    operand_scale=1 / a.operand_scale,
+                    operand_offset=-a.operand_offset / a.operand_scale,
                 ),
             )
 
@@ -1169,6 +1237,23 @@ def _constraint_atom(constraint: Constraint) -> Atom | None:
             form,
             constraint.bound,
             operand_is_tag=constraint.bound_is_tag,
+        )
+    if isinstance(constraint, AffineCmp):
+        form = {
+            "==": "eq",
+            "!=": "ne",
+            "<": "lt",
+            "<=": "le",
+            ">": "gt",
+            ">=": "ge",
+        }.get(constraint.op, constraint.op)
+        return Atom(
+            constraint.tag,
+            form,
+            constraint.bound_tag,
+            operand_is_tag=True,
+            operand_scale=constraint.scale,
+            operand_offset=constraint.offset,
         )
     return None
 
@@ -1363,7 +1448,7 @@ def _advance_frontier(
 ) -> TraceNode | None:
     """Return the one generic frontier for an instruction-owned channel."""
 
-    if not isinstance(constraint, (Eq, Cmp)):
+    if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
         return None
     owner = env.advance_index.resolve(constraint.tag)
     if owner is None:
@@ -1398,7 +1483,7 @@ def _advance_frontier(
         value=(atom.operand if atom is not None else step.until),
         satisfied=constraint_holds(step.until, env.snapshot) is True,
         provenance=provenance,
-        relational=isinstance(step.until, Cmp) and stage_boundary,
+        relational=isinstance(step.until, (Cmp, AffineCmp)) and stage_boundary,
         predicate=atom if stage_boundary else None,
         advance=step,
         owner_boundary=(
@@ -1413,7 +1498,7 @@ def _advance_frontier(
         linear_boundary=not stage_boundary,
     )
     if (
-        isinstance(constraint, Cmp)
+        isinstance(constraint, (Cmp, AffineCmp))
         and owner.profile.linear is not None
         and owner.profile.accumulator is not None
         and constraint.tag == owner.profile.accumulator.name
@@ -1456,11 +1541,35 @@ def _advance_frontier(
         for node in (*gate_nodes, *demand_nodes)
         if node.data_flow == "enable" and not node.satisfied
     ]
-    # This instruction is not the next operation while a persistent program
-    # prerequisite is still closed.  Let the ordinary writer trace expose that
-    # nearer state transition; after it lands, retracing will make this profile
-    # the immediate frontier.
     if establish_nodes:
+        scalar_coast = (
+            owner.profile.linear is not None
+            and owner.profile.accumulator is not None
+            and step.until.tag == owner.profile.accumulator.name
+            and owner.instruction is not None
+        )
+        requires_action = any(
+            not leaf.satisfied
+            and (
+                leaf.is_steerable
+                or leaf.tag in env.steerable
+                or env.pdg.tag_roles.get(leaf.tag) == TagRole.INPUT
+            )
+            for node in establish_nodes
+            for leaf in node.leaves()
+        )
+        if (
+            scalar_coast
+            and not requires_action
+            and _route_has_no_dead_end(establish_nodes)
+        ):
+            # The instruction is not active yet, but its owned program stage
+            # will establish itself without an external act. Keep the future
+            # scalar boundary: scanning/coasting is the only useful operation.
+            return boundary
+        # A persistent program prerequisite still needs an action. Let the
+        # ordinary writer trace expose that nearer transition; after it lands,
+        # retracing will make this profile the immediate frontier.
         return None
     children = [boundary, *gate_nodes, *demand_nodes]
     target_atom = _constraint_atom(constraint)
@@ -1468,7 +1577,7 @@ def _advance_frontier(
         tag=constraint.tag,
         value=(target_atom.operand if target_atom is not None else constraint),
         provenance=provenance,
-        relational=isinstance(constraint, Cmp),
+        relational=isinstance(constraint, (Cmp, AffineCmp)),
         predicate=target_atom,
         children=children,
     )
@@ -1653,6 +1762,7 @@ class _WriterAttempt:
     writer_rung: int
     writer_availability: _WriterAvailability
     live_guard: bool
+    crossing_exact: bool | None
     visited_after: frozenset[tuple[str, Any]]
 
 
@@ -1686,6 +1796,7 @@ class _WriterBuild:
             writer_rung=self.node.writer_rung,
             writer_availability=self.node.writer_availability,
             live_guard=self.node.live_guard,
+            crossing_exact=self.node.crossing_exact,
             visited_after=frozenset(self.visited),
         )
 
@@ -1701,6 +1812,7 @@ def _apply_writer_attempt(
     node.writer_rung = attempt.writer_rung
     node.writer_availability = attempt.writer_availability
     node.live_guard = attempt.live_guard
+    node.crossing_exact = attempt.crossing_exact
     visited.clear()
     visited.update(attempt.visited_after)
 
@@ -2066,17 +2178,28 @@ def _trace_expression(
         target = _atom_target(expr, env.snapshot)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
-                constraint = Cmp(
-                    expr.tag,
-                    {
-                        "lt": "<",
-                        "le": "<=",
-                        "gt": ">",
-                        "ge": ">=",
-                        "ne": "!=",
-                    }[expr.form],
-                    expr.operand,
-                    bound_is_tag=expr.operand_is_tag,
+                op = {
+                    "lt": "<",
+                    "le": "<=",
+                    "gt": ">",
+                    "ge": ">=",
+                    "ne": "!=",
+                }[expr.form]
+                constraint = (
+                    AffineCmp(
+                        expr.tag,
+                        op,
+                        expr.operand,
+                        scale=expr.operand_scale,
+                        offset=expr.operand_offset,
+                    )
+                    if expr.operand_is_tag and (expr.operand_scale != 1 or expr.operand_offset != 0)
+                    else Cmp(
+                        expr.tag,
+                        op,
+                        expr.operand,
+                        bound_is_tag=expr.operand_is_tag,
+                    )
                 )
                 advance = _advance_frontier(
                     env,
@@ -2350,10 +2473,28 @@ def _trace_back(
 
         reverse_result = writer_reverses.get(ri)
         if reverse_result is None:
-            reverse_result = _reverse_writer(ro, tag, value, env.snapshot, env.pdg, env.prior)
+            reverse_result = _reverse_writer(ro, tag, value, env.snapshot, env.pdg)
+        if normalize_reverse_result(reverse_result).contradiction:
+            writer_skips.append((ri, "reverse_contradiction"))
+            continue
         producer_target = eq_target(tag, value)
         producer_constraints = _producer_constraints(reverse_result, producer_target)
         producer_pins = _producer_pins(reverse_result, producer_target)
+        # A forward affine relationship can still offer one useful *proposal*
+        # when the sound reverse contract must fall through (floating rounding
+        # aliases, modular multiplication, clamp rails).  Keep that candidate
+        # out of ReverseResult: it is not a complete preimage and the drive
+        # layer must verify it in the interpreted fork.  A self-copy candidate
+        # equal to the target is only a hold, so it contributes no progress.
+        affine_candidate: tuple[str, Any] | None = None
+        if (
+            normalize_reverse_result(reverse_result).fallthrough
+            and not producer_constraints
+            and isinstance(wv, Affine)
+        ):
+            candidate = _invert_affine(wv, value)
+            if candidate is not None and not (wv.source == tag and _values_match(candidate, value)):
+                affine_candidate = (wv.source, candidate)
 
         sp = ro.sp_tree()
         guard_expr = _sp_to_expr(sp) if sp is not None else None
@@ -2409,6 +2550,10 @@ def _trace_back(
         attempt_visited = writer_build.visited
         attempt_node.writer_rung = ri
         attempt_node.writer_availability = writer_availability.get(ri, _WriterAvailability.UNKNOWN)
+        normalized_reverse = normalize_reverse_result(reverse_result)
+        attempt_node.crossing_exact = (
+            None if normalized_reverse.fallthrough else normalized_reverse.exact
+        )
 
         if guard_expr is not None:
             attempt_node.children.extend(
@@ -2492,6 +2637,19 @@ def _trace_back(
             for child in children:
                 child.data_flow = "producer"
             attempt_node.children.extend(children)
+
+        if affine_candidate is not None:
+            source_tag, source_value = affine_candidate
+            child = _trace_back(
+                env,
+                source_tag,
+                source_value,
+                _visited=attempt_visited,
+                _ancestry=_child_ancestry,
+                _depth=_depth + 1,
+            )
+            child.data_flow = "producer"
+            attempt_node.children.append(child)
 
         # Enablement gate decided by a constant-table predicate (PackML
         # state-enable / cmd-valid mask): the flag on this transition is a
@@ -3804,19 +3962,10 @@ def _concrete_written_value(wv: Any, snapshot: dict[str, Any]) -> Any:
     known number.  Anything else — an opaque copy, an aggregate, an absent or
     non-numeric source — is unresolved (punt, never fabricate).
     """
-    if isinstance(wv, Literal):
-        return wv.value
-    if isinstance(wv, Affine):
-        if wv.source not in snapshot:
-            return _UNRESOLVED
-        src = snapshot[wv.source]
-        if not isinstance(src, (int, float, bool)):
-            return _UNRESOLVED
-        try:
-            return wv.scale * src + wv.offset
-        except TypeError:
-            return _UNRESOLVED
-    return _UNRESOLVED
+    if not isinstance(wv, (Literal, Affine, Aggregate)):
+        return _UNRESOLVED
+    produced = evaluate_forward(wv, snapshot)
+    return _UNRESOLVED if produced is UNKNOWN else produced
 
 
 def _writer_clobbers_codemand(
@@ -3939,6 +4088,8 @@ def _rank_writers(
         reverse_result = _reverse_writer(ro, tag, value, snapshot, pdg)
         if reverse_out is not None:
             reverse_out[ri] = reverse_result
+        if normalize_reverse_result(reverse_result).contradiction:
+            continue
         proj = _writer_projection(ro, tag, value, snapshot, pdg, program, pinned_overlay, pinned)
         is_counterfactual = proj is not None and proj[0]
         availability = _writer_availability(
@@ -3955,7 +4106,7 @@ def _rank_writers(
             is_counterfactual,
             ancestry_tags,
         )
-        if isinstance(wv, Affine) and wv.source == tag:
+        if isinstance(wv, Affine) and wv.source == tag and wv.storage.kind == "identity":
             src_val = _invert_affine(wv, value)
             if src_val is not None and any(
                 _values_match(src_val, prior) for prior in prior_same_tag_values

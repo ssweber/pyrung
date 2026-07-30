@@ -24,12 +24,11 @@ from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import And, Atom, Const, Or, _sp_to_expr
 from pyrung.core.analysis.sp_values import (
     _extract_condition_values,
-    _invert_affine,
     _required_from_atom,
     _values_match,
     projected_writer_overlay,
 )
-from pyrung.core.crossing import Affine
+from pyrung.core.crossing import UNKNOWN, Affine, evaluate_forward
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -354,16 +353,14 @@ def _writer_availability(
     current_tags = frozenset((tag,)) | opaque_loop | ancestry_tags
     availability = _caller_availability(rung_node, snapshot, steerable, current_tags, pdg, program)
     if isinstance(wv, Affine) and wv.source == tag:
-        src_val = _invert_affine(wv, value)
-        if src_val is None:
-            return _WriterAvailability.UNAVAILABLE_FROM_HERE
-        if not _values_match(snapshot.get(tag), src_val):
+        produced = evaluate_forward(wv, snapshot)
+        if produced is UNKNOWN or not _values_match(produced, value):
             availability = _WriterAvailability.AFTER_PREREQ
     elif isinstance(wv, Affine):
-        src_val = _invert_affine(wv, value)
+        produced = evaluate_forward(wv, snapshot)
         if (
-            src_val is not None
-            and not _values_match(snapshot.get(wv.source), src_val)
+            produced is not UNKNOWN
+            and not _values_match(produced, value)
             and wv.source not in steerable
             and not pdg.writers_of.get(wv.source)
         ):
