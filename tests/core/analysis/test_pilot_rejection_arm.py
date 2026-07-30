@@ -8,15 +8,13 @@ would — a provably-dead writer never burns a drive-loop trial.
 
 Soundness is non-negotiable and one-directional:
 
-- reject ONLY on a definite ``GUARD_DEAD``; ``SAT``/``PUNT`` keep today's behavior;
+- reject ONLY on a definite ``GUARD_DEAD``; ``SAT``/``PUNT`` retain the writer;
 - the fixed pins are the writer's OWN (never borrowed);
 - a ``DEAD`` proof is trusted only over *complete* free-tag domains — the prover's
-  ``nd_domains`` or a Bool type — so without a domain prior the arm punts and the
-  pre-existing behavior is reproduced exactly.
+  ``nd_domains`` or a Bool type — so without a domain prior the arm punts.
 
 A ``PUNT`` on a frontier the walk cannot otherwise drive marks the ``TraceNode``
-with ``live_guard=True`` — the (behavior-free) signal the future sandbox skiff
-will consume.
+with ``live_guard=True`` for the sandbox skiff to consume.
 """
 
 from __future__ import annotations
@@ -139,8 +137,8 @@ def test_choices_dead_writer_kept_without_domain_prior():
     """Soundness gate: with no complete domain for ``Mode`` the arm PUNTS.
 
     ``Mode``'s value space is not knowable to be complete (no ``nd_domains``), so a
-    ``DEAD`` proof would be unsound — the arm keeps today's behavior exactly, which
-    admits the first writer and surfaces its ``Mode == 9`` frontier.  This pins the
+    ``DEAD`` proof would be unsound — the arm admits the first writer and surfaces
+    its ``Mode == 9`` frontier. This pins the
     "reject only over complete domains" rule.
     """
     logic = _choices_dead_program()
@@ -158,7 +156,7 @@ def test_choices_dead_writer_kept_without_domain_prior():
 # ``St`` is written under ``Mask == 0`` where ``Mask = calc(Live & 0x40)`` is a
 # bitwise function of a runtime-loaded word — un-invertible and with no finite
 # domain.  The oracle can neither prove the guard satisfiable nor dead, so it
-# PUNTS: the writer is admitted exactly as before, and because the ``Mask`` gate
+# PUNTS: the writer is admitted, and because the ``Mask`` gate
 # is a genuine dead-end (nothing steerable), the frontier is flagged ``live_guard``.
 
 
@@ -180,14 +178,14 @@ def _live_guard_program():
 
 
 def test_live_guard_admits_writer_and_flags_frontier():
-    """Undecidable guard → identical admission today AND ``live_guard`` is set."""
+    """An undecidable guard admits the writer and sets ``live_guard``."""
     logic = _live_guard_program()
     pdg = build_program_graph(logic)
     snap = {"Trig": False, "Cfg": 0, "Load": False, "Live": 0x40, "Mask": 0x40, "St": 0}
 
     tree = trace_back("St", 7, snap, pdg, logic, _steer(logic))
 
-    # Behavior unchanged: the writer is admitted and its steerable trigger surfaces.
+    # The writer is admitted and its steerable trigger surfaces.
     assert tree.writer_rung == 2
     assert ("Trig", True) in _leaf_pairs(tree)
 

@@ -393,12 +393,13 @@ def _coil_corrections(
             # latch rung's condition false regardless of the other reads
             # (``i_DoorClosed=True`` kills the door rung; a watchdog
             # ``Done=False`` kills the alarm rung).  Flipping off the guard's
-            # ``after_snap`` value — the old heuristic — lies for a
+            # ``after_snap`` value is insufficient for a
             # fire-then-reset guard: the Done bit that latched the alarm has
             # already reset by the after snapshot, so the flip proposed the
             # latch-CAUSING polarity and the hypothesis silently vanished.
-            # Fallback when no forcing value exists (guard absent from the
-            # resolved expr): the legacy flip, judged by replay as before.
+            # When no forcing value exists (guard absent from the resolved
+            # expression), flip the guard's current value and let replay judge
+            # the proposal.
             expr = _conditions_list_to_expr(getattr(ro, "_conditions", []))
             condition_tags = set(node.condition_reads)
             state_tags = condition_tags & opaque_loop
@@ -599,8 +600,8 @@ def _accumulator_corrections(
         *,
         why: str,
     ) -> None:
-        # A multi-read advance now yields the coordinated set of levers that
-        # *break* advancement (a minimal forcing assignment).  They must ride one
+        # A multi-read advance yields the coordinated set of levers that *break*
+        # advancement (a minimal forcing assignment).  They must ride one
         # correction — for an ``Or``-driven advance no single lever stops it, so
         # splitting them into separate FREEZEs would propose holds that each fail
         # replay alone.
@@ -724,8 +725,8 @@ def _resolve_steerable_action(
 
     Either *read_tag* is itself steerable, or ``trace_back`` bridges it to its
     nearest steerable driver (e.g. the ``i_DoorClosed`` PIVOT to physical
-    ``x_DoorClosed``). Unlike the old pair projection, the returned action keeps
-    the intermediate owner's boundary and progress receipt.
+    ``x_DoorClosed``). The returned action keeps the intermediate owner's
+    boundary and progress receipt.
     """
     steerable = getattr(ctx, "steerable", frozenset()) if steerable is None else steerable
     if read_tag in steerable:
@@ -801,8 +802,8 @@ def _cannot_hold_pairs(demand: Any, snap: Mapping[str, Any], ctx: Any) -> list[t
     Enumerates the advance condition over its reads' value spaces to find the
     minimal lever assignment that makes it evaluate ``!= advance_value`` (stops
     advancing), then resolves each participating read to its steerable driver.
-    A single-read advance yields one lever (the old behaviour); a conjunction
-    yields the cheapest single conjunct to break; an ``Or`` yields every arm as a
+    A single-read advance yields one lever; a conjunction yields the cheapest
+    single conjunct to break; an ``Or`` yields every arm as a
     coordinated set. Returns ``[]`` when no steerable stopping assignment exists.
     """
     from pyrung.core.analysis.pdg import _extract_reads_from_condition
@@ -957,8 +958,7 @@ def _best_forcing_actions(
     Enumerates the reads' finite domains (capped like ``tide_tables``), finds
     the minimal forcing assignments, and among the steerable ones prefers (a)
     fewest levers that differ from the current snapshot, then (b) fewest levers
-    total. ``None`` when no assignment is steerable — the honest decline the
-    single-read path made for a missing lever, now generalized to conjunctions.
+    total. ``None`` means no forcing assignment is steerable.
     """
     from pyrung.core.analysis.pilot.tide_tables import bounded_product
 
@@ -1022,8 +1022,8 @@ def break_guard_holds(
 
     The **suppression dual** of the accumulator arm's satisfy-the-reset
     enumeration: the same :func:`_best_forcing_holds` machinery with the polarity
-    inverted (``satisfies=lambda v: not v`` instead of ``bool``).  Used to
-    *suppress* a clobbering writer — force its guard false so the deviated
+    inverted (``satisfies=lambda v: not v`` instead of ``bool``).  This
+    *suppresses* a clobbering writer — forces its guard false so the deviated
     register keeps the value the pulse established.
 
     ``changeable`` narrows the correction frontier to selected guard reads,

@@ -909,7 +909,7 @@ def test_completion_edge_records_its_bearing_action_edge_does_not() -> None:
 
 def test_completion_defaults_empty_without_a_recorded_bearing() -> None:
     """No ``completion_by_route`` entry → the completion edge records ``()`` and
-    behaves exactly as before (chart evidence, never invented)."""
+    never invents chart evidence."""
     role = PipelineRoles("State")
     edges = _edges_from_routes(role, (_route(6, 16),), {})
 

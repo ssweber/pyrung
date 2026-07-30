@@ -91,10 +91,9 @@ def _variant_named_timer_program():
     """On-delay timer whose Done/TT/Acc bits break the ``<base>_Done`` /
     ``<base>_TT`` naming convention.
 
-    Fast-forwarding must resolve the timing (TT) register through the
-    instruction's ``advance_profile()`` — the old ``done_name.rsplit(
-    "_Done")[0] + "_TT"`` surgery would look for ``TimerReady_TT`` (absent) and
-    silently never coast this timer.
+    Fast-forwarding resolves the timing (TT) register through the instruction's
+    ``advance_profile()``. Deriving ``TimerReady_TT`` from the Done name would
+    miss the actual ``TimerActive`` register.
     """
     Enable = Bool("Enable", external=True)
     Ready = Bool("TimerReady")  # done bit — not ``*_Done``
@@ -706,8 +705,7 @@ class TestSettleDelayedEffects:
     def test_variant_named_timing_is_also_left_for_its_advance_owner(self):
         # A timer whose bits are NOT named ``<base>_Done`` / ``<base>_TT``: the
         # settle must still coast it by resolving the TT register off the
-        # instruction's profile.  The old name surgery derived ``TimerReady_TT``
-        # (absent) and left this timer pending forever.
+        # instruction's profile, not by deriving the absent ``TimerReady_TT``.
         prog = _variant_named_timer_program()
         plc = PLC(prog, dt=0.010)
 

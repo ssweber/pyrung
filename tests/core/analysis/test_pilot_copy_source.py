@@ -1,4 +1,4 @@
-"""Copy-source chain ported from test_walk_copy_source for PILOT.
+"""PILOT coverage for a copy-source chain.
 
 PackML state register written only by copy(Requested, Current) — the
 goal value never appears as a literal, so the engine must trace through

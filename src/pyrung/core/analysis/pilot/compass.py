@@ -347,9 +347,9 @@ def _table_record(
 ) -> tuple[PMap, bool]:
     """Write a live edge, overwriting only the same exact trial artifact.
 
-    Including reviving a CONTRADICTED tombstone if the edge is learned again
-    (old behavior: ``_transitions[key] = to_val``).  The entry is its own probe
-    mark, so there is no separate ``_probed`` write.
+    Learning an edge revives a matching CONTRADICTED tombstone and records the
+    destination value.  The entry is its own probe mark, so there is no separate
+    ``_probed`` write.
 
     Returns ``(next_table, changed)`` — ``changed`` is False (and the table is
     returned untouched) when the key already carries an identical entry, so a
@@ -426,8 +426,8 @@ def _table_contradict(
     The evolver advances the persistent table and its ``.persistent()`` is the
     next value.  Returns ``(next_table, changed, demoted_any)`` — ``changed`` is
     True when a live edge was demoted *or* a fresh probe mark was added;
-    ``demoted_any`` (the historic second element) is True only for a live-edge
-    demotion, which is what the public ``contradict`` reports.
+    ``demoted_any`` is True only for a live-edge demotion, which is what the
+    public ``contradict`` reports.
     """
     evolver = entries.evolver()
     removed = False
@@ -500,7 +500,7 @@ class CompassKnowledge:
     def nogood_pairs(self, world_key: tuple[Any, ...]) -> frozenset[ActionPair]:
         """Pair-level rejections proven in *world_key*.
 
-        A legacy pair observation and a singleton Pulse both disprove one
+        An explicit pair identity and a singleton Pulse both disprove one
         action pair. A joint Pulse is a distinct executable artifact: its
         primary pair remains eligible with a different co-action overlay.
         """

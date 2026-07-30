@@ -1,4 +1,4 @@
-"""Rendezvous pattern ported from test_walk_real_patterns for PILOT engine.
+"""PILOT coverage for a rendezvous pattern.
 
 Two independent SFCs must both complete (timer-gated) before Output.
 The walker must hold both enables simultaneously.

@@ -395,7 +395,7 @@ def _route_completion_pairs(
     from-value and the operator's own buttons (``action_tags`` — pressing one is
     the *alternative* to waiting, never part of the wait).  Recorded chart
     evidence, verbatim and read-side; a route whose gate names nothing else
-    records ``()`` and the edge behaves exactly as before.
+    records ``()``.
     """
     seen: set[tuple[str, str]] = set()
     pairs: list[tuple[str, Any]] = []

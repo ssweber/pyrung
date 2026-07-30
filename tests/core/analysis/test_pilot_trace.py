@@ -801,10 +801,9 @@ def _program_advance_counter():
 def test_counter_done_program_owned_live_advance_yields_coast():
     """A counter counting under a live program-owned level gets the coast anyway.
 
-    ``_counter_driver_leaf`` resolves no steerable driver (the advance reads the
-    program-owned ``Running``), which used to fall to the blind ordinary walk —
-    the running-counter twin of the running-timer gap.  With the advance
-    satisfied on the snapshot, the Done trace emits the coast-only node.
+    ``_counter_driver_leaf`` resolves no steerable driver because the advance
+    reads the program-owned ``Running``. With the advance satisfied on the
+    snapshot, the Done trace emits the coast-only node.
     """
     logic = _program_advance_counter()
     pdg = build_program_graph(logic)
@@ -820,8 +819,8 @@ def test_counter_done_program_owned_live_advance_yields_coast():
 def test_counter_done_idle_program_advance_keeps_enable_walk():
     """The advance-unsatisfied arm is unchanged: the walk surfaces the chain.
 
-    With ``Running`` false the counter is not provably counting, so the helper
-    falls back to today's shape — the walk descends ``Running``'s writer and
+    With ``Running`` false the counter is not provably counting, so the walk
+    descends ``Running``'s writer and
     surfaces ``x_Run`` as the steerable lever, no self-advancing leaf.
     """
     logic = _program_advance_counter()
@@ -1139,8 +1138,8 @@ def test_subroutine_writer_reuses_its_call_gate_across_trace_occurrences():
     assert {tag for tag, _value in first.ordered_actions()} == {"x_ModeProd", "x_Request"}
     assert env.caller_locks
 
-    # Model the different local context that used to make a repeated visit pick
-    # the alternate caller.  The trace env deliberately owns mutable memo/lock
+    # Model a different local context in which an unlocked visit would pick the
+    # alternate caller. The trace env deliberately owns mutable memo/lock
     # knowledge even though its structural shell is frozen.
     snapshot["x_SimFirst"] = True
     repeated = _trace_back(env, "AppliedB", True)
@@ -1622,9 +1621,8 @@ def _int_advance_counter(sel_tag):
 def test_counter_int_advance_resolves_steerable_value():
     """An int advance (``Sel == 3``) resolves to the steerable value that fires it.
 
-    The level-advance loop used to iterate only ``(True, False)``, so an int/word
-    advance never matched and the driver dead-ended.  Enumerating ``Sel``'s
-    declared choice domain finds ``Sel == 3``.
+    Enumerating ``Sel``'s declared choice domain finds ``Sel == 3`` rather than
+    restricting level advances to Boolean values.
     """
     Sel = Int("Sel", choices={0: "IDLE", 1: "WARM", 3: "GO"})
     logic = _int_advance_counter(Sel)
@@ -1696,8 +1694,7 @@ def test_internal_compare_conjunction_rewrites_both(monkeypatch):
     """A crossing branch of two ``Cmp``s (a conjunction) rewrites onto both atoms.
 
     The reversal of an internal register can yield a single conjunctive branch
-    (``A > 5 ∧ B < 10``); the rewriter used to require exactly one ``Cmp`` per
-    branch and dead-ended.  Both conjuncts must now surface as levers.
+    (``A > 5 ∧ B < 10``). Both conjuncts surface as levers.
     """
     from pyrung.core.analysis import crossings
     from pyrung.core.crossing import Cmp, single

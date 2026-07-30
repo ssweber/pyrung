@@ -1,7 +1,6 @@
-"""PILOT decision-rationale recordings (recording only — zero behavior change).
+"""PILOT decision-rationale recordings.
 
-Two rich decisions PILOT used to compute and throw away are now carried on the
-event stream and on :class:`Plan`:
+The event stream and :class:`Plan` carry two rich decisions:
 
 1. **Writer-ranking rationale** — the traced node stashes the FULL ``_rank_writers``
    ordering (winner + losers, each with its availability/bucket/clobber) plus the
@@ -319,8 +318,7 @@ def test_writer_ranking_names_winner_and_losers() -> None:
 
 def test_writer_skips_records_avoid_shadowed() -> None:
     """A ranked writer skipped because its subtree forces the avoided predicate is
-    named ``avoid_shadowed`` in ``writer_skips`` — the silent avoid-fallback
-    decision the ranker/loop used to lose."""
+    named ``avoid_shadowed`` in ``writer_skips``."""
     Cmd = Bool("SkCmd", external=True)
     Alt = Bool("SkAlt", external=True)
     Step = Int("SkStep", default=1)

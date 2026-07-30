@@ -1,4 +1,4 @@
-"""Fill-station shape ported from test_walk_why_regression for PILOT engine."""
+"""PILOT coverage for a fill-station shape."""
 
 from __future__ import annotations
 

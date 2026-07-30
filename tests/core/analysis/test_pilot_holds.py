@@ -1,4 +1,4 @@
-"""Shared-gate hold pattern ported from test_walk_holds for PILOT.
+"""PILOT coverage for a shared-gate hold pattern.
 
 Two stages sharing a Common gate; Target needs both. StageB seals on
 a rising EnableB edge but its seal-in is gated by Common.

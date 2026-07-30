@@ -1479,8 +1479,7 @@ class TestTerminalLetrunReplay:
         cp = plc.fork()
         ctx = _make_replay_context(prog, plc, "Goal", True)
         # A recorded let-run step whose span covers the watchdog eject (~20 scans)
-        # so the bad hold ejects inside the bounded coast — the recorded coast
-        # span replaces the old departure-window bound.
+        # so the bad hold ejects inside the bounded coast.
         steps = [ReplayStep(inputs=(), scans=25, kind="letrun")]
         recorded = cp.fork()
         incident_session = CoastSession(recorded, kind="recorded-regression")
@@ -2166,12 +2165,11 @@ class TestShaftRotateLiveness:
 
 
 # ---------------------------------------------------------------------------
-# Multi-read reset/advance conditions — coordinated-hold generalization
+# Multi-read reset/advance conditions — coordinated holds
 #
-# A reset/advance guard that is a *conjunction* of inputs used to be skipped
-# ("no single unambiguous lever").  ``correct_enablers`` now evaluates the real
-# Condition over its reads' value spaces to find the minimal lever assignment
-# producing the needed polarity, and proposes coordinated holds.
+# ``correct_enablers`` evaluates a reset/advance guard's real Condition over its
+# reads' value spaces to find the minimal lever assignment producing the needed
+# polarity, and proposes coordinated holds.
 # ---------------------------------------------------------------------------
 
 
@@ -2505,10 +2503,9 @@ class TestInvestigateExcursion:
 
 
 # ---------------------------------------------------------------------------
-# Generalized antagonist dispatch — any causally-implicated clobbering writer
+# Antagonist dispatch — any causally implicated clobbering writer
 #
-# The old excursion path only recognized ``ResetInstruction`` antagonists.  The
-# dispatch is now by causal implication (``cause()``) + producibility, so a plain
+# Dispatch is by causal implication (``cause()``) + producibility, so a plain
 # clobbering ``copy`` is suppressed by forcing its guard FALSE — and a live-word
 # guard escalates to the skiff.  Both flow through the same replay-retry gate.
 # ---------------------------------------------------------------------------
@@ -2560,9 +2557,8 @@ def _clobber_copy_program() -> Program:
     ``State`` is set to 5 on a rising ``Command`` edge, but ``copy(0, State)``
     gated by ``And(Internal, Mode == 2)`` clobbers it back every scan.
     ``Internal`` rides an unsteerable ``readonly`` latch, so the only steerable
-    lever is the int ``Mode``.  The old bool-only fallback cannot flip an int
-    comparison (this excursion is *unresolved* today); the generalized dispatch
-    suppresses the copy by forcing its guard FALSE via the int-domain forcing
+    lever is the int ``Mode``. Antagonist dispatch suppresses the copy by forcing
+    its guard FALSE via the int-domain forcing
     enumeration (``Mode -> 1``), a value the ``copy`` can never turn into a 5.
     """
     Command = Bool("Command", external=True)
@@ -2614,9 +2610,8 @@ class TestGeneralizedAntagonistExcursion:
     not just ``ResetInstruction`` — via guard-force enumeration, with a skiff
     escalation for a live-word guard.  Every hold rides the existing retry gate."""
 
-    def test_non_reset_copy_clobber_now_corrected(self):
-        # Compound int guard: unresolved under the old ResetInstruction dispatch,
-        # corrected by forcing the copy's guard FALSE (Mode -> 1).
+    def test_non_reset_copy_clobber_is_corrected(self):
+        # The compound int guard is suppressed by forcing the copy's guard false.
         prog = _clobber_copy_program()
         (work, fork, pre, post, pre_key, cfg, steerable, pdg, resting) = _run_excursion(
             prog,

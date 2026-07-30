@@ -1,4 +1,4 @@
-"""Cross-guard mutual-clobber patterns ported from test_walk_nogood for PILOT.
+"""PILOT coverage for cross-guard mutual-clobber patterns.
 
 Two latches feed Target with mutual cross-guards — arming one blocks the
 other. Requires a multi-phase sequence: arm A, reset guard, arm B.

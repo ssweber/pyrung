@@ -1,15 +1,10 @@
 """PILOT integration against the shipped ``examples/`` programs.
 
-These drive ``pilot_how`` end-to-end on realistic programs.  Two kinds of case:
+These drive ``pilot_how`` end-to-end on realistic programs:
 
 * **Clean targets** — ``how()`` reaches them today; the test asserts ``reachable``
   *and* replays the returned path on a fresh PLC (two-oracle check, matching the
   convention in ``test_packml_diagnosis``).
-* **Frontier targets** — cases PILOT *should* solve but cannot yet, marked
-  strict ``xfail`` with a ``pilot:`` reason.  They assert the behaviour PILOT
-  should have, so the day it gains the capability the test **xpasses** and
-  requires the marker to be removed.
-
 The example modules run an import-time simulation unless ``PYRUNG_DAP_ACTIVE``
 is set; PILOT only needs the program object, so we skip the demo run.
 """

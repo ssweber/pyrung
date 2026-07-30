@@ -1,4 +1,4 @@
-"""Handshake and PackML chain patterns ported from test_walk_handshake for PILOT.
+"""PILOT coverage for handshake and PackML chain patterns.
 
 Consumed-same-scan handshakes: a tag produced and cleared within one scan
 is never true at a scan boundary. PILOT must fire the whole chain mid-scan.

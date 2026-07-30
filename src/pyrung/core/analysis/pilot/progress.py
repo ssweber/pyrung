@@ -1272,9 +1272,8 @@ def _investigate_and_revert(
             channel_tag=channel_motion.channel_tag,
         )
 
-        # Replay re-arms each step's RECORDED session spec (kind + channel +
-        # target off the committed step context), replacing the old positional
-        # "last empty-input step is the eject coast" inference.
+        # Replay re-arms each step's recorded session spec (kind + channel +
+        # target) from the committed step context.
         replay_steps = tuple(
             _replay_step(step, act.context)
             for act in state.committed_acts

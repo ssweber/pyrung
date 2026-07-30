@@ -261,7 +261,7 @@ class CoastSession:
         for member in members:
             condition = getattr(member, "condition", None)
             # Compiled members have an exact read-set. Opaque callables do not,
-            # so they retain the historical full-snapshot contract.
+            # so their contract observes the full snapshot.
             declared_reads = tuple(sorted(member.tags)) if condition is not None else None
             try:
                 already_true = bool(member.pred(start))
@@ -355,7 +355,7 @@ class CoastSession:
         # may already be true at that very scan — judge it BEFORE folding
         # again, or the fold's advance-≥1-before-judging would land one scan
         # late and a cascading transition could carry the machine past the
-        # crossing the legacy (pen-less) coast landed on exactly.
+        # crossing the active trigger selected.
         judge_before_run = False
         while True:
             elapsed = plc.state.scan_id - start_scan
@@ -387,11 +387,8 @@ class CoastSession:
                     else None
                 )
 
-                # NOTE(phase 4): like the legacy coasts (run_until semantics), a
-                # seek always advances at least one scan before judging — a trigger
-                # already true at arm time lands after one scan, not zero.  The
-                # immediate-landing rule ("a target stops the scan it holds")
-                # arrives with the golden regeneration in the verify/outcome phase.
+                # A seek always advances at least one scan before judging: a
+                # trigger already true at arm time lands after one scan, not zero.
                 from pyrung.core.analysis.pilot.cyclefold import cycle_fold_until
 
                 stats: dict[str, int] = {}
@@ -545,8 +542,8 @@ class CoastSession:
         scans (``"timeout"`` — a cap-hit value may be mid-transition and
         must never be classified as settled).
 
-        The confirmation window is the old 100-stable-scans policy kept as
-        policy, not as a stepping loop: the seek folds through the silence
+        The confirmation window requires 100 stable scans as policy, not as a
+        stepping loop: the seek folds through the silence
         (one fold for a quiet second; cyclefold when oscillating holds are
         active), and every intermediate hop lands exactly and is recorded
         on the session timeline — the transition chain becomes evidence.
@@ -905,7 +902,7 @@ def _settle_delayed_effects(
     armed timer/counter/drum is a distinct operation owned by its
     :class:`AdvanceProfile`; trace/program-step must re-read that owner and
     prescribe the observable boundary as an ordinary coast. Fast-forwarding
-    timing bits here used to execute that operation a second time, invisibly,
+    timing bits here would execute that operation a second time, invisibly,
     before option ordering or correction lifecycle could observe it.
     """
     budget = scan_budget

@@ -36,10 +36,10 @@ the one operator action legal while HELD (``InterlockAck``) and coasts the
 program's own Unhold -> Phase-advance -> self-issued Complete all the way to
 Completed(17), **never pressing the avoided ``C_Complete``**.  The undeclared
 mask-table neighbor (``PackTbl_A_Alm100``) rests at 0 the whole run, so the enable
-is satisfied naturally and the old mis-attribution decline never fires.
+is satisfied naturally.
 
-This is the **program-awaited action capability** (``pilot/awaited_actions.py``, future
-direction item 0): when the trace dead-ends on the opaque-loop state register and
+This is the **program-awaited action capability** (``pilot/awaited_actions.py``):
+when the trace dead-ends on the opaque-loop state register and
 the compass route is the avoided command, the pilot recognizes the one operator
 push the program is dwelling on at the current ``(state, step)`` and surfaces it as
 a fallback bearing — the program executes the detour, the pilot supplies the single
@@ -532,8 +532,7 @@ def test_pilot_table_detour_reaches_completed_avoiding_complete() -> None:
     self-issued Complete -> Completing(16) -> Completed(17), reaching the target
     without ever pressing ``C_Complete``.  The undeclared mask-table neighbor
     ``PackTbl_A_Alm100`` rests at 0 throughout, so the enable is satisfied
-    naturally and the old free-word mis-attribution decline never fires —
-    proving that reaching Completed was a drive problem, not a free-word
+    naturally. Reaching Completed is therefore a drive problem, not a free-word
     suppression problem.
 
     ``C_Start`` records ``False`` in ``path.changes`` (not ``True``): it is a

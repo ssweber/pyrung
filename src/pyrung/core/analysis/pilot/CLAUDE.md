@@ -143,7 +143,8 @@ this table only locates the owner.
   alone adopts or discards the returned settled work
 - Evidence classification: `outcome.py::assess_outcome`; consumers read the
   returned `TrialAssessment` axes directly
-- Transition-knowledge update: `Compass.apply`, invoked by the drive loop
+- Transition-knowledge update: `Compass.apply`, invoked by drive-loop
+  observation commits and post-commit regression-nogood retention
 - Coast-departure channel ownership: `coast.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`;
   `_handle_channel_departure` is the terminal event-streaming owner after

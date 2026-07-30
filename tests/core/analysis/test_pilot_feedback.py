@@ -1,4 +1,4 @@
-"""Physical feedback patterns ported from test_walk_feedback for PILOT.
+"""PILOT coverage for physical feedback patterns.
 
 Bool on_delay, bool off_delay, and profile-driven analog ramp through
 the Harness.

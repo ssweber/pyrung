@@ -753,10 +753,8 @@ def _commit_trial(
     # invocation's search budget. A revert rewinds this credit with the world.
     # The credit is earned only when the machine actually moved its own work —
     # the coast reached its channel target or advanced earned work; a
-    # coast that parks with nothing moving is the *search* failing, and sterile
-    # laps must still drain the budget (the old-wiring live run spun at HELD
-    # committing 100k scan-ids per lap — free dwell there means no terminating
-    # force).
+    # coast that parks with nothing moving is the *search* failing. Sterile laps
+    # must still drain the budget so a parked machine has a terminating force.
     if policy.motion.is_coast:
         productive = (
             not key_was_seen
@@ -892,8 +890,8 @@ def _pilot_loop_events(
     )
     # The target-relative earned-work model (earned_work.py): event-earned
     # ordinals the threshold-masked search key deliberately aliases.  Static
-    # for the loop's life; knowledge side (never reverted). Best-effort — an
-    # empty model degrades every consumer to its earlier behavior.
+    # for the loop's life; knowledge side (never reverted). Best-effort: an
+    # empty model leaves target-relative coordinates uncredited.
     try:
         state.earned_work = build_earned_work(
             ctx.pdg,

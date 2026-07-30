@@ -189,8 +189,8 @@ def chase_cause_roots(
     (:func:`empirical_program_writes`): tags that look steerable to the static
     classifier but that the recorded run shows the *program* wrote in the incident
     window.  Such a tag must not be a terminal nogood — the walk descends through
-    it toward the real root.  ``None`` = the exact prior behavior; positive
-    evidence only ever demotes, never promotes.
+    it toward the real root.  ``None`` or an empty set applies no empirical veto;
+    positive evidence only ever demotes, never promotes.
     """
     # Empirical veto: demote statically-steerable tags the recorded run shows the
     # PROGRAM wrote, so the walk descends through them instead of nogood-stopping
@@ -374,7 +374,7 @@ def _roots_from_chain(
 ) -> tuple[set[str], list[tuple[str, Any]]]:
     """Nogoods + holds from a single deep chain, stopping at the nearest lever.
 
-    Two passes, mirroring the old recursive walk over the flattened chain:
+    Two passes traverse the flattened chain:
 
     1. **Mover pass** — descend the trigger graph from the effect (``step
        transition -> step.triggers``), stopping at the first steerable tag on

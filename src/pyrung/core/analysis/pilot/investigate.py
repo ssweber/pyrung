@@ -1311,9 +1311,9 @@ def investigate_excursion(
     (``break_guard_holds``); when that punts on a genuinely-live word guard, the
     skiff runs bounded isolated probes for a suppressing lever (nominations only).
 
-    Fallback: cause-chain walk and cause() enablers (original path — this is what
-    resolves seal-in establishment cases, where the writer *can* still produce the
-    desired value so it is not a suppression antagonist).
+    Fallback: cause-chain walk and ``cause()`` enablers resolve seal-in
+    establishment cases, where the writer *can* still produce the desired value
+    and therefore is not a suppression antagonist.
 
     The successful result carries the exact guarded pilot rungs used by retry.
     The caller may admit and install that correction, but must not reconstruct
@@ -1459,7 +1459,7 @@ def _implicated_writers(plc: PLC, tag: str, pdg: Any) -> list[int]:
     the settled window; those are the antagonists worth suppressing.  A writer
     that never fired is not in the chain and is left alone.  Maps the chain's
     ``(rung_index, subroutine)`` back to the PDG writer nodes.  ``[]`` when
-    ``cause()`` is unavailable — the fallback path then runs unchanged.
+    ``cause()`` is unavailable, allowing the cause-chain fallback to run.
     """
     try:
         chain = plc.cause(tag, deep=False)

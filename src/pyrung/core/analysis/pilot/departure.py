@@ -488,8 +488,7 @@ def observe_departure(
 
     if receipt.stop_reason != "quiescent":
         # A cap-hit value may be mid-transition; refuse to classify it as a
-        # landing (the receipt names the distinction the old stable-counter
-        # could not — a timeout is not a settlement).
+        # landing. A timeout is not a settlement.
         reason = f"landing did not settle within cap ({receipt.stop_reason})"
         return _observation(_not_inspected(reason))
 

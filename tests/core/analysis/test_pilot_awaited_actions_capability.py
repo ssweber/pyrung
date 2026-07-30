@@ -13,14 +13,12 @@ visible beside the avoided operator button (see ``awaited_actions.py``):
 * **regression legibility** (piece 6) — the ``trend_regression`` console line
   prints the channel transition being reverted, so a destructive Abort (``6->8``)
   is distinguishable from a program-intended detour (``6->11``);
-* **tide-gated edge** (piece 3, born STRICT-XFAIL) — a program-owned producer via a
+* **tide-gated edge** (piece 3) — a program-owned producer via a
   const-Ref copy, guarded by an internal step/timer chain that needs one external
   nudge, with the operator button for the same value avoided.  The recipe advance
   is NOT an operator ack at a recognized state (so ``awaited_actions`` returns
-  None), and
-  the trace dead-ends on the opaque-loop state register — so today the pilot never
-  surfaces the producer's step-chain prerequisites.  Flips when channel-punt
-  expansion surfaces them into the trace tree.
+  None); channel-punt expansion surfaces the producer's step-chain prerequisites
+  from the opaque-loop state register.
 """
 
 from __future__ import annotations
@@ -216,7 +214,7 @@ def test_regression_console_without_a_transition_still_explains_the_revert() -> 
 
 
 # --------------------------------------------------------------------------- #
-# piece 3 — tide-gated edge (born STRICT-XFAIL, flipped by channel-punt expansion)
+# piece 3 — tide-gated edge through channel-punt expansion
 # --------------------------------------------------------------------------- #
 
 

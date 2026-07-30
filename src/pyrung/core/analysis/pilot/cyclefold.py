@@ -161,8 +161,8 @@ def detect_cycle(
 
     *significant_keys* restricts classification to a fixed, caller-proven tag
     surface.  This lets callers retain immutable full-state snapshots instead
-    of materializing a filtered dictionary per scan.  When omitted, the
-    historical union-of-snapshot-keys behavior is preserved.
+    of materializing a filtered dictionary per scan.  When omitted, every key
+    present in any snapshot is significant.
 
     Returns the :class:`_Cycle` for the smallest accepted P, or ``None`` if the
     data is too short or no clean cycle exists at any P ≤ *max_period*.

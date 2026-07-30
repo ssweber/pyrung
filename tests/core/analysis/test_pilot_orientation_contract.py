@@ -649,7 +649,7 @@ def test_trace_rejections_require_exact_singleton_pulse_artifact() -> None:
         {
             ("pulse", (first,)),
             ("pulse", (second, ("Gate", True))),
-            ("pair", ("Legacy", True)),
+            ("pair", ("Direct", True)),
         }
     )
 
@@ -675,18 +675,18 @@ def test_joint_pulse_nogood_does_not_reject_its_primary_pair() -> None:
     assert not compass.knowledge.act_is_nogood(("other-world",), rejected)
 
     singleton_world = ("singleton-world",)
-    legacy_world = ("legacy-world",)
+    direct_pair_world = ("direct-pair-world",)
     compass, _ = compass.apply(
         (
             ActionNogoodObservation(
                 singleton_world,
                 pulse_identity((primary,)),
             ),
-            ActionNogoodObservation(legacy_world, ("pair", primary)),
+            ActionNogoodObservation(direct_pair_world, ("pair", primary)),
         )
     )
     assert primary in compass.knowledge.nogood_pairs(singleton_world)
-    assert primary in compass.knowledge.nogood_pairs(legacy_world)
+    assert primary in compass.knowledge.nogood_pairs(direct_pair_world)
 
 
 def test_stale_bearing_cannot_execute() -> None:

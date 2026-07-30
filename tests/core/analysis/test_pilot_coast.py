@@ -990,9 +990,8 @@ class TestSettleTimeout:
 
         receipt = CoastSession(plc, kind="settle").settle(frozenset({"Counter_Acc"}))
 
-        # Watched tags that never quiesce exhaust the ceiling — and the receipt
-        # NAMES it "timeout" (the old settle wrapper returned a bare trajectory
-        # with no such flag; settlement is never passed off as reached here).
+        # Watched tags that never quiesce exhaust the ceiling, and the receipt
+        # names the result "timeout"; settlement is never passed off as reached.
         assert receipt.stop_reason == "timeout"
         assert receipt.stop_reason != "reached"
         assert receipt.kernel_scans == LIMITS.cone_ceiling

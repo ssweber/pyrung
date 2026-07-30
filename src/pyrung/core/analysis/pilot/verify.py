@@ -77,8 +77,8 @@ def _avoid_names_after_clear(
 ) -> tuple[str, ...]:
     """Avoid members clear at *start* that fire in one later observation.
 
-    Compiled unions own the per-member distinction. A bare callable retains the
-    legacy aggregate rule: starting true exempts its later snapshots.
+    Compiled unions own the per-member distinction. A bare callable has only
+    aggregate identity, so starting true exempts its later snapshots.
     """
 
     violated_after_clear = getattr(avoid, "violated_after_clear", None)

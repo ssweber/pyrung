@@ -57,8 +57,8 @@ class TransitionRoute:
     taken straight off the writer's own condition — including the **disjunction**
     (``Or(StateCurrent==STOPPED, ==COMPLETED)``) that ``source_constraints`` drops
     because ``_partition_conditions`` keeps only single-valued gates.  The compass
-    value-graph fans one edge per from-value, so a command-gated hop whose source
-    is an OR is no longer lost.  ``edge_gates`` are the steerable rise/fall tags
+    value graph fans one edge per from-value, so every source arm of a
+    command-gated hop remains charted. ``edge_gates`` are the steerable rise/fall tags
     that gate the writer (typically at the call site — ``rise(CmdChgRequest)``):
     co-actions that must fire *in the same scan* as the command, as
     ``(tag, level)`` where ``level`` is the post-edge value (``True`` for rise).

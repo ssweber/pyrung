@@ -362,10 +362,8 @@ class TraceAction:
     # cannot fire in the same scan as the command it gates, so options.py makes
     # it the sole bearing (stage 0) and defers the gated commands.
     establish: bool = False
-    # Exact nearest program-owned transition this action serves. Backward trace
-    # used to retain the lever but discard the output that made it useful;
-    # verification then depended on a later frontier or ambient settling. Keep
-    # the selected trace branch intact and carry its observable handoff boundary.
+    # Exact nearest program-owned transition this action serves. Keep the
+    # selected trace branch intact and carry its observable handoff boundary.
     operation_boundary: tuple[str, Any] | None = None
     # Stage-3 heuristic boundary proposal on a steerable free word: the value is
     # an example that satisfies a relation, not a sound derivation.  ``note`` is
@@ -951,8 +949,8 @@ def _rewrite_internal_compare(
     - two-tag ``A ± B`` against a threshold: the calc crossing freezes each
       partner at its *snapshot* value and returns one branch per operand
       (``A op bound-B_now`` ∨ ``B op bound-A_now``); each becomes an alternative
-      atom whose lever re-points against the live partner next scan.  Subsumes the
-      old subtraction-at-zero special case (it is the ``bound == 0`` instance).
+      atom whose lever re-points against the live partner next scan. The
+      subtraction-at-zero form is the ``bound == 0`` instance.
 
     Returns ``[atom]`` unchanged when the tag is steerable or the registry falls
     through — honest: the caller dead-ends, it never fabricates a lever.  The
@@ -2391,7 +2389,7 @@ def _trace_back(
         # never fire to produce it.  Skip it exactly as a False ``_can_produce``
         # would, so a provably-dead writer never burns drive-loop trials.
         # Punt-biased and sound: ONLY a definite ``GUARD_DEAD`` rejects; ``SAT``
-        # and ``PUNT`` keep today's behavior untouched.
+        # and ``PUNT`` retain the writer.
         guard_punted = False
         if guard_expr is not None:
             from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_PUNT
@@ -3731,7 +3729,7 @@ def _table_enablement_prereqs(
         # source pin in its own guard, not in data flow — those conjuncts hold
         # the scan the writer fires, so they are sound pins for the recomputed
         # predicate).  Nothing pinned means the planned transition constrains
-        # nothing the tide tables could key on — punt, exactly as before.
+        # nothing the tide tables could key on, so this path punts.
         fixed = dict(pins)
         for other_tag, other_val in required:
             if other_tag not in (tag, flag_tag) and other_tag not in fixed:

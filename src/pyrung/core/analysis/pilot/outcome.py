@@ -189,9 +189,8 @@ def assess_outcome(
         # The channel did not move.  That is not ambient drift.  Accept only
         # evidence of useful work during the motion: an event-earned
         # credential (earned work) or genuinely new prerequisites.  Otherwise
-        # this was a sterile timeout and must be rejected; treating
-        # ``actual != requested`` alone as drift used to commit 10k-scan HELD
-        # laps forever.
+        # this was a sterile timeout and must be rejected. ``actual !=
+        # requested`` alone is not enough to commit a frozen-channel lap.
         #
         # Earned-work-authoritative: trace-trend is a coordinate-relative count that
         # legitimately drops when the surrounding world shifts, so a frozen

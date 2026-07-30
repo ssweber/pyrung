@@ -1,29 +1,21 @@
-"""Boundary gate for the native pipeline crossing (``pilot/causal.py``).
+"""Native cause-chain crossing through a PackML jump-table pipeline.
 
-The cause-chain walkers (``chase_cause_roots`` / ``chase_chain_tags``) once
-dead-ended at a PackML jump table: ``S_StateCurrent`` is written by an indirect
-copy gated by a freshly-computed constant-table enable flag, while the requester
-(``S_StateRequested``) is a *held* enabler at the transfer scan — so the shallow
-recorded walk stopped short of the watchdog that requested the state.  A
-route-inversion *compass bridge* used to cross that hop.
-
-The deep ``cause()`` walk crosses it natively: it chases the held enable-flag /
-request enabler to its establishing transition and continues the recorded walk
-from there, reaching the latched alarm and the starved watchdog without any
-route inversion.  These gates pin that native crossing — the bridge is gone.
+``S_StateCurrent`` is written by an indirect copy gated by a freshly computed
+constant-table enable flag, while ``S_StateRequested`` is a held enabler at the
+transfer scan. The deep ``cause()`` walk chases that enable/request chain to its
+establishing transition, then reaches the latched alarm and starved watchdog.
 
 Gate discipline (pilot/CLAUDE.md §Testing changes):
 
 * ``test_watchdog_starve_ejects`` — hand-driveable ground truth: a starved
   watchdog latches the alarm which requests the state, bumping StateCurrent 6->8.
-* ``test_recorded_walk_crosses_pipeline_natively`` — the capability: the deep
-  recorded walk reaches the requester chain (held request register, latched
-  alarm, watchdog Done) with no bridge.  Permanent; trips if the deep walk ever
-  loses the ability to cross the pipeline hop on its own.
+* ``test_recorded_walk_crosses_pipeline_natively`` — the deep recorded walk
+  reaches the requester chain (held request register, latched alarm, watchdog
+  Done).
 * ``test_ranking_prefers_watchdog_natively`` — the ranking seam: causal primacy
   puts the watchdog first because the deep chain places the watchdog Done inside
   the channel chain, so the same-scan collateral no longer ties it on chain
-  membership and wins on temporal proximity (the luck the crossing removes).
+  membership and wins on temporal proximity.
 """
 
 from __future__ import annotations
@@ -86,8 +78,8 @@ def _pipeline_watchdog_program() -> tuple[Program, Any]:
             latch(Alm)
         with Rung(OnWD.Done):
             latch(Alm)
-        # Alarm handling requests ABORT (writes the REQUEST register, not the
-        # destination — this is what made the shallow walk dead-end).
+        # Alarm handling requests ABORT by writing the request register, not the
+        # destination.
         with Rung(Alm):
             copy(8, StateRequested)
         # Operator abort command (steerable) — same request register.  Present so
@@ -99,8 +91,7 @@ def _pipeline_watchdog_program() -> tuple[Program, Any]:
         # enable flag (a constant-table predicate), copies the requested state
         # through the jump table, and clears the request in the same scan.  The
         # enable flag is computed AFTER this rung, so it lags one scan:
-        # StateRequested is a HELD enabler at the transfer scan (not a trigger) —
-        # exactly what dead-ended the shallow walk short of the alarm.
+        # StateRequested is a held enabler at the transfer scan, not a trigger.
         with rung(StateEnableYes == 1):
             copy(ds[StateJumpIdx], StateCurrent)
             copy(0, StateRequested)
@@ -159,7 +150,7 @@ def test_watchdog_starve_ejects():
 
 
 def test_recorded_walk_crosses_pipeline_natively():
-    """The deep recorded walk crosses the jump-table hop with no bridge: it
+    """The deep recorded walk crosses the jump-table hop: it
     chases the held enable-flag / request enabler to the scan the alarm set it,
     and continues to the latched alarm and the watchdog Done that starved.
 
@@ -203,7 +194,7 @@ def _incident(anchor: int, eject: int) -> DeviationIncident:
 
 def test_ranking_prefers_watchdog_natively():
     """The watchdog hypothesis ranks first because the deep chain places the
-    watchdog Done inside the channel chain — no bridge.  The same-scan collateral
+    watchdog Done inside the channel chain. The same-scan collateral
     (state-8 shared-init resetting Step) is a downstream *effect* of StateCurrent,
     not a cause, so it never enters StateCurrent's backward chain and loses on
     chain membership."""

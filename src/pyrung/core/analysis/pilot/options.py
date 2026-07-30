@@ -245,7 +245,7 @@ class PrerequisiteRead:
 
 @dataclass(frozen=True)
 class LearnedBatchRead:
-    """One learned joint action retained as its own compatibility variant."""
+    """One learned joint action retained as a single executable artifact."""
 
     actions: tuple[_ActionPair, ...]
 

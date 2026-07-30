@@ -749,9 +749,8 @@ def test_route_conflict_set_alias_intersection_semantics():
 
     ``HiLo=True`` implies ``Mode in {3, 5}``.  Beside a sibling pin on ``Mode``:
     ``Mode=1`` is disjoint from ``{3, 5}`` → conflict; ``Mode=3`` intersects it →
-    no conflict.  This is the set-intersection test :func:`_route_conflicts`
-    performs (empty intersection = contradiction), replacing the old
-    two-distinct-scalar-values test."""
+    no conflict. This is the set-intersection test :func:`_route_conflicts`
+    performs: empty intersection means contradiction."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflicts
 
@@ -899,9 +898,8 @@ def test_broad_downstream_reach_lever_deprioritized_not_dropped():
 
     ``x_Master`` gates a subroutine that writes ``Mode`` plus two dozen broad
     tags, so its downstream write cone dwarfs the median of the tight gates and
-    lands over the downstream-reach cap. The old hard filter removed it from
-    the candidate list outright, which made ``Target`` (needs ``Mode==1``)
-    silently unreachable. Downstream reach is now an ordering effect only: the
+    lands over the downstream-reach cap. Downstream reach is an ordering effect
+    only: the
     master enable is split off the batch-facing ``trace_actions`` (so it can't
     poison a widening/co-pulse batch) but is still a candidate — sorted to the
     tail so it is tried after every tighter lever, never excluded."""
@@ -1672,10 +1670,9 @@ def test_compass_paths_include_wait_transitions():
 def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     """unprobed_actions must not crash when the action set mixes a flat
     ``Action`` ``(tag, value)`` with a skiff-learned composite pair-probe
-    cause ``((tag, value), (tag, value))`` — sorting the raw tuples compares
-    element 0 of a flat action (a ``str``) against element 0 of a composite
-    (a ``tuple``), which used to raise ``TypeError`` (crash observed live
-    during skiff pair-probing at a Held state).
+    cause ``((tag, value), (tag, value))``. The canonical sort key normalizes
+    both shapes before ordering, so it never compares a flat action's ``str``
+    head with a composite cause's ``tuple`` head.
     """
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 

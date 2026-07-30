@@ -463,7 +463,7 @@ def _frontier_probes(
 
     *empirical_writes* (the empirical steerable veto) names cone words the
     recorded run shows the program wrote — not sound probe levers, so they are
-    skipped (positive evidence only; empty = the prior behavior).
+    skipped. An empty set applies no empirical veto.
 
     Bools probe to their non-resting value (one rising edge inside the pinned
     window), and are restricted to tags some rung CONDITION reads: a lever the
