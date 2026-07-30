@@ -1207,7 +1207,6 @@ def _precise_causes(
             departure.tag,
             effective_steerable,
             scan=departure.scan,
-            bridge=ctx,
         )
         moved_tags = {
             transition.tag_name

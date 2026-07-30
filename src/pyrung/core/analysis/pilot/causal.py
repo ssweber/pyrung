@@ -168,7 +168,6 @@ def chase_cause_roots(
     steerable: frozenset[str],
     *,
     scan: int | None = None,
-    bridge: Any | None = None,
     empirical_writes: frozenset[str] | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
     """Chase the deep ``cause()`` chain to steerable-input roots.
@@ -192,11 +191,6 @@ def chase_cause_roots(
     window.  Such a tag must not be a terminal nogood — the walk descends through
     it toward the real root.  ``None`` = the exact prior behavior; positive
     evidence only ever demotes, never promotes.
-
-    *bridge* is accepted but ignored — the deep walk crosses the opaque-pipeline
-    hop the compass bridge used to invert.  Retained only so investigation (which
-    still passes ``bridge=ctx``) keeps working; deletable once that caller drops
-    the keyword.
     """
     # Empirical veto: demote statically-steerable tags the recorded run shows the
     # PROGRAM wrote, so the walk descends through them instead of nogood-stopping
@@ -238,7 +232,6 @@ def chase_chain_tags(
     tag: str,
     *,
     scan: int | None = None,
-    bridge: Any | None = None,
 ) -> set[str]:
     """Every meaningful tag on the deep cause chain of *tag*'s transition.
 
@@ -255,8 +248,6 @@ def chase_chain_tags(
     classified roots. Steady enablers remain enablers rather than gaining
     trigger standing merely through recursion. System tags (``sys.*`` /
     ``rtc.*``) and lookup-table reference constants are dropped.
-
-    *bridge* is accepted but ignored (see :func:`chase_cause_roots`).
     """
     chain = _shared_cause(plc, tag, scan)
     if chain is None:

@@ -1678,7 +1678,6 @@ def _rank_hypotheses(
     plc: PLC,
     hypotheses: Sequence[CorrectionHypothesis],
     incident: DeviationIncident,
-    ctx: Any,
     primal_extra: frozenset[str] = frozenset(),
 ) -> list[CorrectionHypothesis]:
     """Order competing hypotheses by **causal primacy**, not generation order.
@@ -1689,14 +1688,9 @@ def _rank_hypotheses(
     strongest first:
 
     * **chain membership** — the hypothesis's tags sit inside the cause chain
-      of the channel departure.  ``chase_chain_tags(..., bridge=ctx)`` crosses
-      the opaque-pipeline hop by route inversion (the compass bridge): where the
-      recorded-history walk dead-ends at a held ``S_StateRequested`` /
-      ``isStateEnbl_Yes`` enabler, the bridge consults ``ctx.compass.graphs`` for
-      the requesters of the observed destination transition, confirms which route
-      fired against recorded history, and resumes the walk from that route's
-      guard tags — so on a PackML-shaped program the chain reaches the starved
-      watchdog directly instead of stopping short of it.
+      of the channel departure.  ``chase_chain_tags`` follows the native deep
+      cause chain across held pipeline enablers, so on a PackML-shaped program
+      the chain reaches the starved watchdog directly.
     * **temporal precedence** — how close the hypothesis's most recent source
       transition sits to the channel departure scan.  Pure scan-log
       observation, no inversion: the ejecting watchdog's Done rises *at* the
@@ -1716,11 +1710,10 @@ def _rank_hypotheses(
             chan_scan = dep_scan[chan]
         # All tags on the chain, not just steerable roots: an absence-caused
         # ejection (a sensor that never moved) has no steerable mover at all.
-        # ``bridge=ctx`` crosses the opaque-pipeline hop by route inversion, so
-        # the chain reaches the true root (the starved watchdog) instead of
-        # dead-ending at the held ``S_StateRequested`` enabler — making causal
-        # primacy exact rather than won on temporal proximity.
-        primal = {chan} | chase_chain_tags(plc, chan, scan=dep_scan.get(chan), bridge=ctx)
+        # The native deep chain crosses held pipeline enablers and reaches the
+        # true root, making causal primacy exact rather than won on temporal
+        # proximity.
+        primal = {chan} | chase_chain_tags(plc, chan, scan=dep_scan.get(chan))
     # Deep-walk roots of the channel departure (``primal_extra``) are chain
     # members by construction — an absence root has no transition for the
     # proximity signal to see, so without this it would rank dead last behind
@@ -1838,7 +1831,6 @@ def investigate_deviation(
         plc,
         produced,
         incident,
-        ctx,
         primal_extra=absence_tags,
     )
     observed_hypotheses = list(hypotheses)
@@ -1869,7 +1861,6 @@ def investigate_deviation(
             evidence.plc,
             nested_raw,
             evidence.incident,
-            ctx,
             primal_extra=nested_absence,
         )
         for candidate in nested:

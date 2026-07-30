@@ -226,7 +226,6 @@ def test_ranking_prefers_watchdog_natively():
     )
     incident = _incident(anchor, eject)
 
-    # ctx is only consulted as the (now ignored) bridge= argument, so causal
-    # primacy is decided entirely by the native deep chain.
-    ranked = _rank_hypotheses(plc, [collateral, watchdog], incident, None)
+    # Causal primacy is decided entirely by the native deep chain.
+    ranked = _rank_hypotheses(plc, [collateral, watchdog], incident)
     assert ranked[0] is watchdog
