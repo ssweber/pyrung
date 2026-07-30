@@ -223,6 +223,33 @@ class TestCycleFoldBitEqual:
             fold_context_updates={"scan_derived_names": frozenset({"scan_counter"})},
         )
 
+    def test_clock_lcm_fallback_forwards_exact_visible_patches(self) -> None:
+        Soak = Counter.clone("FallbackReceipt")
+        NeverReset = Bool("FallbackReceiptNeverReset", external=True)
+        with Program() as program:
+            with Rung():
+                count_up(Soak, 100).reset(NeverReset)
+
+        plc = PLC(program)
+        base_fold_ctx = plc._ensure_fold_context()
+        assert base_fold_ctx is not None
+        fold_ctx = replace(
+            base_fold_ctx,
+            clock_half_periods=(20.485,),
+        )
+        advances: list[tuple[str, object]] = []
+
+        reached = cycle_fold_until(
+            plc,
+            lambda state: state.tags.get(Soak.Done.name) is True,
+            budget=5000,
+            fold_ctx=fold_ctx,
+            advances=advances,
+        )
+
+        assert reached is True
+        assert advances == [(Soak.Acc.name, 98)]
+
     def test_off_grid_clock_fallback_exposes_runner_stats(self) -> None:
         plc = PLC(_active_hold_soak())
         self._assert_fallback_stats(
@@ -302,6 +329,25 @@ class TestCycleFoldBitEqual:
         assert stats["ordinary_folded_scans"] == stats["skipped_scans"]
         assert stats["cycle_folded_scans"] == 0
         assert stats["residual_scans"] == stats["kernel_scans"]
+
+    def test_layered_ordinary_fold_forwards_exact_visible_patches(self) -> None:
+        Soak = Counter.clone("LayeredReceipt")
+        NeverReset = Bool("LayeredReceiptNeverReset", external=True)
+        with Program() as program:
+            with Rung():
+                count_up(Soak, 100).reset(NeverReset)
+
+        plc = PLC(program)
+        advances: list[tuple[str, object]] = []
+        reached = cycle_fold_until(
+            plc,
+            lambda state: state.tags.get(Soak.Done.name) is True,
+            budget=5000,
+            advances=advances,
+        )
+
+        assert reached is True
+        assert advances == [(Soak.Acc.name, 98)]
 
     def test_landing_is_bit_equal_to_scan_by_scan(self) -> None:
         # Reference: pure scan-by-scan (fold=False), oscillation running.

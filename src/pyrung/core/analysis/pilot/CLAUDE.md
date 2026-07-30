@@ -332,9 +332,6 @@ an event stream, replay identity, or lower-level API.
 - `corrections.py::_best_forcing_holds` owns the pair-shaped forcing-hold
   projection. Remove it only after every correction consumer accepts
   `TraceAction` or another exact operation receipt.
-- `recording.py::_build_plan_journal` infers accelerator edits from the scan log
-  for ordinary runner folds whose receipts contain no exact edits. Remove that
-  fallback when ordinary-fold receipts carry authoritative edits.
 - `trace.py` retains the affine walker fallback when a registered reverse
   declines. Remove it only when registered reverse rules cover those affine
   writers.

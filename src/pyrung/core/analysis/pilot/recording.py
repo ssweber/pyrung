@@ -229,26 +229,10 @@ def _build_plan_journal(
         span = semantic_step.scan_after - first_step.scan_before
 
         if is_coast:
-            accel: list[tuple[str, Any]] = list(sc.execution.accelerators)
-            # Compatibility for ordinary runner folds, whose fold receipt does
-            # not yet carry exact edits. CycleFold receipts are authoritative
-            # and avoid mistaking program-owned accumulator resets for jumps.
-            if not accel and fork is not None:
-                snap = fork._scan_log.snapshot()
-                for scan_id in sorted(snap.patches_by_scan):
-                    if scan_id < first_step.scan_before or scan_id > semantic_step.scan_after:
-                        continue
-                    for tag, val in snap.patches_by_scan[scan_id].items():
-                        if (
-                            isinstance(val, (int, float))
-                            and not isinstance(val, bool)
-                            and tag in acc_names
-                        ):
-                            accel.append((tag, val))
-
             known_tags = getattr(fork, "_known_tags_by_name", {}) if fork is not None else {}
             display_accel = tuple(
-                (operand_name(known_tags.get(tag, tag)), value) for tag, value in accel
+                (operand_name(known_tags.get(tag, tag)), value)
+                for tag, value in sc.execution.accelerators
             )
 
             entries.append(

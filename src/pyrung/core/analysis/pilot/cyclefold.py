@@ -371,6 +371,7 @@ def cycle_fold_until(
             fold_ctx=fold_ctx,
             extra_comparisons=extra_comparisons,
             stats=stats,
+            advances=advances,
         )
         return bool(predicate(plc.state))
 
@@ -519,6 +520,8 @@ def cycle_fold_until(
                 macro_folds += 1
                 ordinary_folds += 1
                 ordinary_folded_scans += advance.logical_scans - advance.kernel_scans
+                if advances is not None:
+                    advances.extend(advance.patches)
                 ring.clear()
                 since_detect = 0
                 paused = plc._consume_pause_request()

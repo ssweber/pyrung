@@ -1248,6 +1248,31 @@ class TestSettleLandingFolds:
         assert receipt.macro_folds >= 1
         assert receipt.skipped_scans == receipt.logical_scans - receipt.kernel_scans
 
+    def test_composite_receipt_aggregates_nested_ordinary_fold_edits(self):
+        Enable = Bool("SettleAdvanceEnable", external=True)
+        Reset = Bool("SettleAdvanceReset", external=True)
+        Ctr = Counter.clone("SettleAdvance")
+        Chan = Int("SettleAdvanceChan", default=5)
+        with Program() as program:
+            with Rung():
+                copy(5, Chan)
+            with Rung(Enable):
+                count_up(Ctr, preset=1000).reset(Reset)
+
+        plc = PLC(program, dt=0.010)
+        plc.patch({Enable.name: True})
+        plc.step()
+
+        receipt = CoastSession(plc, kind="departure-settle").settle_landing(
+            Chan.name,
+            confirm_scans=200,
+        )
+
+        assert receipt.stop_reason == "quiescent"
+        assert receipt.advances
+        assert receipt.advances == tuple(sorted(receipt.advances, key=lambda edit: edit[1]))
+        assert {tag for tag, _value in receipt.advances} == {Ctr.Acc.name}
+
 
 # ---------------------------------------------------------------------------
 # 20. classify_departure refuses a non-quiescent (timeout) receipt

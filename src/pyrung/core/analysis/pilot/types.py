@@ -455,7 +455,7 @@ class _ExecutionEvidence:
 
     @property
     def accelerators(self) -> tuple[_ActionPair, ...]:
-        """Exact CycleFold writes derived from the typed coast receipt."""
+        """Exact fold writes derived from the typed coast receipt."""
         return self.coast_receipt.advances if self.coast_receipt is not None else ()
 
 

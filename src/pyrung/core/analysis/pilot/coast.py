@@ -115,8 +115,8 @@ class CoastReceipt:
     kernel_scans: int = 0
     macro_folds: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
-    # Exact accumulator destinations written by cycle folding, in execution
-    # order. These are the manual edits needed to reproduce each jump ahead.
+    # Exact visible tag destinations written by ordinary or cycle folding, in
+    # execution order. These are the manual edits needed to reproduce each jump.
     advances: tuple[tuple[str, Any], ...] = ()
     # Cheap scalar timer carry updates replayed in lieu of full kernel scans.
     timer_quanta_replayed: int = 0
@@ -557,6 +557,7 @@ class CoastSession:
         kernel_scans = 0
         macro_folds = 0
         timer_quanta_replayed = 0
+        advances: list[tuple[str, Any]] = []
         while True:
             remaining = cap - (plc.state.scan_id - start_scan)
             if remaining <= 0:
@@ -569,6 +570,7 @@ class CoastSession:
             kernel_scans += receipt.kernel_scans
             macro_folds += receipt.macro_folds
             timer_quanta_replayed += receipt.timer_quanta_replayed
+            advances.extend(receipt.advances)
             if receipt.stop_reason == "timeout":
                 # Silent through the whole confirmation window: landed.
                 stop_reason = "quiescent"
@@ -586,6 +588,7 @@ class CoastSession:
             budget=cap,
             kernel_scans=kernel_scans,
             macro_folds=macro_folds,
+            advances=tuple(advances),
             timer_quanta_replayed=timer_quanta_replayed,
         )
 

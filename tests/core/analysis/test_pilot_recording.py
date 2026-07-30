@@ -27,6 +27,7 @@ from pyrung import (
     out,
 )
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot.coast import CoastReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.recording import (
@@ -119,9 +120,19 @@ def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     assert journal[0].inputs == (("Cmd", True),)
 
 
-def test_ordinary_fold_journal_infers_accelerators_from_scan_log() -> None:
-    """Ordinary folds retain the legacy scan-log accelerator projection."""
+def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
+    """The coast receipt, not runner history, owns exact fold edits."""
     step = _Step(inputs={}, scan_before=10, scan_after=13)
+    receipt = CoastReceipt(
+        kind="bearing_coast",
+        start_scan=10,
+        end_scan=13,
+        stop_reason="reached",
+        fired=(),
+        events=(),
+        budget=3,
+        advances=(("Acc", 7),),
+    )
     context = _StepContext(
         policy=ActPolicy(
             ActSource.TRACE,
@@ -131,7 +142,7 @@ def test_ordinary_fold_journal_infers_accelerators_from_scan_log() -> None:
             before_snap={},
             after_snap={},
             channel_motion=ChannelMotion("State", 2),
-            coast_receipt=None,
+            coast_receipt=receipt,
             timeline=(),
         ),
     )
@@ -141,14 +152,11 @@ def test_ordinary_fold_journal_infers_accelerators_from_scan_log() -> None:
         hold_log=(),
         correction_receipts=(),
     )
-    scan_log = SimpleNamespace(
-        snapshot=lambda: SimpleNamespace(
-            patches_by_scan={
-                11: {"Acc": 7, "Unrelated": 99},
-                14: {"Acc": 8},
-            }
-        )
-    )
+
+    def _unusable_scan_log() -> None:
+        raise AssertionError("plan recording must not reconstruct fold edits")
+
+    scan_log = SimpleNamespace(snapshot=_unusable_scan_log)
     fork = SimpleNamespace(
         _scan_log=scan_log,
         _known_tags_by_name={"Acc": Int("Acc")},

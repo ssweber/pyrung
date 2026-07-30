@@ -1690,16 +1690,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
+  "bearing_coast_actual_value": 8,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6,
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "bearing_coast_accepted",
   "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 6,
-  "bearing_coast_actual_value": 8,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "trend": 6
  },
  {
   "applied": [],
@@ -2139,16 +2139,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": 5,
+  "bearing_coast_channel_tag": "Rotate_tmr_Acc",
+  "bearing_coast_target_value": 4,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 10,
-  "bearing_coast_actual_value": 5,
-  "bearing_coast_channel_tag": "Rotate_tmr_Acc",
-  "bearing_coast_target_value": 4
+  "trend": 10
  },
  {
   "applied": [],
@@ -2298,16 +2298,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": 3,
+  "bearing_coast_channel_tag": "Blower_tmr_Acc",
+  "bearing_coast_target_value": 2,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 4,
-  "bearing_coast_actual_value": 3,
-  "bearing_coast_channel_tag": "Blower_tmr_Acc",
-  "bearing_coast_target_value": 2
+  "trend": 4
  },
  {
   "applied": [],
@@ -2427,16 +2427,16 @@
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
+  "bearing_coast_actual_value": 6,
+  "bearing_coast_channel_tag": "Sts_StateCurrent",
+  "bearing_coast_target_value": 6,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
   "observe_label": "bearing_coast",
   "progress": "forward",
-  "trend": 2,
-  "bearing_coast_actual_value": 6,
-  "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6
+  "trend": 2
  },
  {
   "applied": [],
@@ -2931,40 +2931,7 @@
    },
    {
     "__type__": "PlanStep",
-    "accelerators": [
-     [
-      "A_ModeTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "A_StateTimeCurrent_tmr.Acc",
-      0
-     ],
-     [
-      "Blower_CurStep_tmr.Acc",
-      3
-     ],
-     [
-      "Blower_tmr.Acc",
-      3
-     ],
-     [
-      "Rotate_CurStep_tmr.Acc",
-      4
-     ],
-     [
-      "Rotate_SensorOffWD_tmr.Acc",
-      4
-     ],
-     [
-      "Rotate_tmr.Acc",
-      8
-     ],
-     [
-      "_1stScanDebounce_tmr.Acc",
-      9
-     ]
-    ],
+    "accelerators": [],
     "inputs": [],
     "kind": "coast",
     "label": "Sts_StateCurrent",

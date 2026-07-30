@@ -133,6 +133,26 @@ class TestTimerFold:
 class TestCounterFold:
     """run_until with fold=True skips counter plateaus."""
 
+    def test_fold_run_until_reports_exact_visible_patches(self) -> None:
+        prog, ctr = _counter_program(100)
+        plc = PLC(prog, dt=0.010)
+        plc.patch({"Enable": True})
+        advances: list[tuple[str, object]] = []
+
+        from pyrung.core.fold import fold_run_until
+
+        fold_ctx = plc._ensure_fold_context()
+        assert fold_ctx is not None
+        fold_run_until(
+            plc,
+            lambda state: state.tags.get(ctr.Done.name) is True,
+            max_cycles=5000,
+            fold_ctx=fold_ctx,
+            advances=advances,
+        )
+
+        assert advances == [("Ctr_Acc", 98)]
+
     def test_counter_fold_reaches_done(self) -> None:
         prog, ctr = _counter_program(100)
         from pyrung.core.runner import PLC

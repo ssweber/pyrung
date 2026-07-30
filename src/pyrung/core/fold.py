@@ -1547,7 +1547,7 @@ def _do_fold(
     ctx: _FoldContext,
     before_tot: dict[str, float],
     after_tot: dict[str, float],
-) -> None:
+) -> tuple[tuple[str, Any], ...]:
     """Fold ``skip`` pure-accumulation scans into one real step.
 
     Timers ride the dt knob (the interpreter does ``skip`` scans of dt in the
@@ -1566,6 +1566,7 @@ def _do_fold(
     runner._run_single_scan(consume_pause_request=False)
 
     runner._state = runner._state.set(scan_id=runner._state.scan_id + skip - 1)
+    return tuple(patches.items())
 
 
 @dataclass(frozen=True)
@@ -1583,6 +1584,7 @@ class _FoldAdvance:
 
     logical_scans: int
     kernel_scans: int = 1
+    patches: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1726,6 +1728,8 @@ class _OrdinaryFoldStrategy:
         state: SystemState,
         probe: _FoldProbe,
         plan: _FoldPlan,
+        *,
+        patches: tuple[tuple[str, Any], ...] = (),
     ) -> _FoldAdvance:
         """Update window-local clock evidence after an executor lands *plan*."""
         if _visible_items_match(state, probe.visible, self.exclude):
@@ -1740,7 +1744,7 @@ class _OrdinaryFoldStrategy:
         else:
             self.inert_soft.clear()
             self.inert_run.clear()
-        return _FoldAdvance(logical_scans=plan.skip)
+        return _FoldAdvance(logical_scans=plan.skip, patches=patches)
 
     def try_fold(
         self,
@@ -1761,8 +1765,8 @@ class _OrdinaryFoldStrategy:
         )
         if plan is None:
             return None
-        _do_fold(runner, plan.skip, self.ctx, probe.totals, plan.after_totals)
-        return self.finish(runner._state, probe, plan)
+        patches = _do_fold(runner, plan.skip, self.ctx, probe.totals, plan.after_totals)
+        return self.finish(runner._state, probe, plan, patches=patches)
 
 
 # ── 13. Runner integration ──────────────────────────────────────────
@@ -1776,6 +1780,7 @@ def fold_run_until(
     fold_ctx: _FoldContext,
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     stats: dict[str, int] | None = None,
+    advances: list[tuple[str, Any]] | None = None,
 ) -> SystemState:
     """Fold-aware ``run_until`` loop.
 
@@ -1811,6 +1816,8 @@ def fold_run_until(
             used += advance.logical_scans
             kernel_scans += advance.kernel_scans
             macro_folds += 1
+            if advances is not None:
+                advances.extend(advance.patches)
             pause_requested = runner._consume_pause_request()
             if predicate(runner._state) or pause_requested:
                 break
