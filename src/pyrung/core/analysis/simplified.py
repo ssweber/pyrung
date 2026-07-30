@@ -40,11 +40,6 @@ class Atom:
     operand_is_tag: bool = False
     operand_scale: int | float = 1
     operand_offset: int | float = 0
-    # A crossing may surface this atom as a verify-required steering proposal
-    # after its sound reverse has fallen through. These receipts are reporting
-    # metadata only and do not change Boolean identity/deduplication.
-    proposal_reason: str = field(default="", compare=False, hash=False, repr=False)
-    verify_required: bool = field(default=False, compare=False, hash=False, repr=False)
     # Unknown Condition subclasses historically became a synthetic
     # ``Atom(type_name, "xic")``. Keep that conservative projection for
     # existing simplified-expression consumers, but retain the raw construct so

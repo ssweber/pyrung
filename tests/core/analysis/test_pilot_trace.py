@@ -30,6 +30,7 @@ from pyrung import (
     time_drum,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
@@ -1739,15 +1740,11 @@ def test_counter_live_word_equality_resolves_without_domain_guessing():
     assert ("Sel", 3) in tree.ordered_actions()
 
 
-# -- Test 15: conjunctive compare reversal rewrites onto both source atoms -----
+# -- Test 15: conjunctive compare reversal stays grouped -----------------------
 
 
-def test_internal_compare_conjunction_rewrites_both(monkeypatch):
-    """A crossing branch of two ``Cmp``s (a conjunction) rewrites onto both atoms.
-
-    The reversal of an internal register can yield a single conjunctive branch
-    (``A > 5 ∧ B < 10``). Both conjuncts surface as levers.
-    """
+def test_internal_compare_conjunction_is_not_flattened(monkeypatch):
+    """The scalar rewrite seam declines a conjunction owned by grouped lowering."""
     from pyrung.core.analysis import crossings
     from pyrung.core.crossing import Cmp, single
 
@@ -1770,36 +1767,356 @@ def test_internal_compare_conjunction_rewrites_both(monkeypatch):
     rewritten = _rewrite_internal_compare(
         Atom(tag="Mid", form="gt", operand=0), frozenset({"A", "B"}), pdg, logic, snap
     )
-    assert {(a.tag, a.form, a.operand) for a in rewritten} == {
-        ("A", "gt", 5),
-        ("B", "lt", 10),
+    assert rewritten == [Atom(tag="Mid", form="gt", operand=0)]
+
+
+def test_sound_reverse_dnf_keeps_mixed_conjuncts_atomic(monkeypatch):
+    """Exact reverse DNF lowers every Cmp/Eq conjunct or declines its branch."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import Cmp, Eq, ReverseResult
+
+    A = Int("ReverseA", external=True)
+    B = Int("ReverseB", external=True)
+    C = Int("ReverseC", external=True)
+    D = Int("ReverseD", external=True)
+    Mid = Int("ReverseMid")
+    Other = Int("ReverseOther")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(A + B, Mid)
+            calc(C + D, Other)
+
+    monkeypatch.setattr(
+        crossings,
+        "reverse",
+        lambda *_args, **_kwargs: ReverseResult(
+            branches=(
+                (Cmp(A.name, ">", 5), Eq(B.name, frozenset({1}))),
+                (Eq(C.name, frozenset({1})), Eq(D.name, frozenset({1}))),
+            ),
+            exact=True,
+        ),
+    )
+    pdg = build_program_graph(logic)
+    snapshot = {
+        A.name: 0,
+        B.name: 0,
+        C.name: 0,
+        D.name: 0,
+        Mid.name: 0,
+        Other.name: 0,
+    }
+    tree = trace_relational(
+        Atom(Mid.name, "gt", 1),
+        snapshot,
+        pdg,
+        logic,
+        frozenset({A.name, B.name, C.name, D.name}),
+    )
+
+    branches = tree.ordered_crossing_branches()
+    assert [branch.pairs for branch in branches] == [
+        ((A.name, 6), (B.name, 1)),
+        ((C.name, 1), (D.name, 1)),
+    ]
+    assert all(branch.exact is True and not branch.proposed for branch in branches)
+    assert all(not branch.verify_required for branch in branches)
+
+
+def test_crossing_proposal_preserves_conjunctive_dnf_branches(monkeypatch):
+    """Proposal DNF remains two atomic branches, never four scalar leaves."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingProposal, Eq
+
+    A = Int("ProposalA", external=True)
+    B = Int("ProposalB", external=True)
+    C = Int("ProposalC", external=True)
+    D = Int("ProposalD", external=True)
+    Mid = Int("ProposalMid")
+    Other = Int("ProposalOther")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(A + B, Mid)
+            calc(C + D, Other)
+
+    pdg = build_program_graph(logic)
+    snap = {
+        "ProposalA": 0,
+        "ProposalB": 0,
+        "ProposalC": 0,
+        "ProposalD": 0,
+        "ProposalMid": 0,
+        "ProposalOther": 0,
     }
 
+    monkeypatch.setattr(
+        crossings,
+        "propose",
+        lambda *_args, **_kwargs: CrossingProposal(
+            branches=(
+                (Eq(A.name, frozenset({1})), Eq(B.name, frozenset({1}))),
+                (Eq(C.name, frozenset({1})), Eq(D.name, frozenset({1}))),
+            ),
+            reason="two grouped predecessor choices",
+            verify_required=True,
+        ),
+    )
+    tree = trace_relational(
+        Atom(tag=Mid.name, form="gt", operand=1),
+        snap,
+        pdg,
+        logic,
+        frozenset({A.name, B.name, C.name, D.name}),
+    )
+    branches = tree.ordered_crossing_branches()
 
-def test_two_source_compare_consumes_verified_proposal_after_reverse_fallthrough():
-    A = Real("ProposalA", external=True)
-    B = Real("ProposalB", external=True)
-    Mid = Real("ProposalMid")
+    assert [branch.pairs for branch in branches] == [
+        ((A.name, 1), (B.name, 1)),
+        ((C.name, 1), (D.name, 1)),
+    ]
+    assert tree.ordered_actions() == []
+    assert all(branch.proposed and branch.exact is None for branch in branches)
+    assert all(branch.verify_required for branch in branches)
+
+
+def test_crossing_branch_composes_direct_outer_and_action():
+    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+    from pyrung.core.crossing import Eq
+
+    crossing = TraceNode(
+        "Internal",
+        1,
+        relational=True,
+        crossing_branches=(
+            TraceCrossingBranch(
+                actions=(TraceAction("A", 1), TraceAction("B", 1)),
+                fidelity=CrossingFidelity(
+                    constraints=(Eq("A", frozenset({1})), Eq("B", frozenset({1}))),
+                    reason="grouped",
+                    verify_required=True,
+                    exact=None,
+                    proposed=True,
+                ),
+            ),
+        ),
+    )
+    tree = TraceNode(
+        "Target",
+        True,
+        children=[TraceNode("Permit", True, is_steerable=True), crossing],
+    )
+
+    assert [branch.pairs for branch in tree.ordered_crossing_branches()] == [
+        (("A", 1), ("B", 1), ("Permit", True))
+    ]
+
+
+def test_two_crossing_siblings_cartesian_compose():
+    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+
+    def branch(tag: str) -> TraceCrossingBranch:
+        return TraceCrossingBranch(
+            actions=(TraceAction(tag, True),),
+            fidelity=CrossingFidelity(
+                constraints=(),
+                reason=tag,
+                verify_required=True,
+                exact=None,
+                proposed=True,
+            ),
+        )
+
+    tree = TraceNode(
+        "Target",
+        True,
+        children=[
+            TraceNode(
+                "Left",
+                True,
+                relational=True,
+                crossing_branches=(branch("A"), branch("B")),
+            ),
+            TraceNode(
+                "Right",
+                True,
+                relational=True,
+                crossing_branches=(branch("C"), branch("D")),
+            ),
+        ],
+    )
+
+    assert [receipt.pairs for receipt in tree.ordered_crossing_branches()] == [
+        (("A", True), ("C", True)),
+        (("A", True), ("D", True)),
+        (("B", True), ("C", True)),
+        (("B", True), ("D", True)),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stage_fields", "action_fields"),
+    [
+        ({"data_flow": "enable"}, {}),
+        ({"advance": object()}, {}),
+        ({}, {"pulse": True}),
+    ],
+)
+def test_crossing_declines_staged_or_pulsed_outer_sibling(stage_fields, action_fields):
+    """A prior stage, owned lifetime, or pulse cannot masquerade as one overlay."""
+    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+
+    crossing = TraceNode(
+        "Internal",
+        1,
+        relational=True,
+        crossing_branches=(
+            TraceCrossingBranch(
+                actions=(TraceAction("A", 1),),
+                fidelity=CrossingFidelity(
+                    constraints=(),
+                    reason="grouped",
+                    verify_required=True,
+                    exact=None,
+                    proposed=True,
+                ),
+            ),
+        ),
+    )
+    staged = TraceNode(
+        "Stage",
+        True,
+        children=[
+            TraceNode("Permit", True, is_steerable=True, **action_fields),
+            crossing,
+        ],
+        **stage_fields,
+    )
+
+    assert staged.ordered_crossing_branches() == ()
+
+
+def test_crossing_declines_program_owned_conjunct(monkeypatch):
+    """A conjunct needing writer traversal is not mislabeled as one atomic act."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingProposal, Eq
+
+    Request = Bool("GroupedRequest", external=True)
+    Internal = Int("GroupedInternal")
+    Source = Int("GroupedSource", external=True)
+    Mid = Int("GroupedMid")
+    with Program(strict=False) as logic:
+        with rung(Request):
+            copy(1, Internal)
+        with rung():
+            copy(Source, Mid)
+
+    monkeypatch.setattr(
+        crossings,
+        "propose",
+        lambda *_args, **_kwargs: CrossingProposal(
+            branches=((Eq(Internal.name, frozenset({1})),),),
+            reason="requires a prior writer",
+            verify_required=True,
+        ),
+    )
+    tree = trace_relational(
+        Atom(Mid.name, "gt", 0),
+        {
+            Request.name: False,
+            Internal.name: 0,
+            Source.name: 0,
+            Mid.name: 0,
+        },
+        build_program_graph(logic),
+        logic,
+        frozenset({Request.name, Source.name}),
+    )
+
+    assert tree.ordered_crossing_branches() == ()
+
+
+def test_crossing_proposal_declines_partial_or_conflicting_branches(monkeypatch):
+    """One bad conjunct drops its branch; duplicates do not split the survivor."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingProposal, Eq, External
+
+    A = Int("StrictBranchA", external=True)
+    B = Int("StrictBranchB", external=True)
+    C = Int("StrictBranchC", external=True)
+    Mid = Int("StrictBranchMid")
     with Program(strict=False) as logic:
         with rung():
             calc(A + B, Mid)
 
-    pdg = build_program_graph(logic)
-    snap = {"ProposalA": 2.0, "ProposalB": 3.0, "ProposalMid": 5.0}
-    rewritten = _rewrite_internal_compare(
-        Atom(tag="ProposalMid", form="gt", operand=8.0),
-        frozenset({"ProposalA", "ProposalB"}),
-        pdg,
-        logic,
-        snap,
+    monkeypatch.setattr(
+        crossings,
+        "propose",
+        lambda *_args, **_kwargs: CrossingProposal(
+            branches=(
+                (Eq(A.name, frozenset({1})), Eq(A.name, frozenset({2}))),
+                (Eq(A.name, frozenset({1})), External("unavailable")),
+                (
+                    Eq(B.name, frozenset({1})),
+                    Eq(B.name, frozenset({1})),
+                    Eq(C.name, frozenset({1})),
+                ),
+            ),
+            reason="strict branch lowering",
+        ),
     )
 
-    assert {(a.tag, a.form, a.operand) for a in rewritten} == {
-        ("ProposalA", "gt", 5.0),
-        ("ProposalB", "gt", 6.0),
+    tree = trace_relational(
+        Atom(Mid.name, "gt", 1),
+        {A.name: 0, B.name: 0, C.name: 0, Mid.name: 0},
+        build_program_graph(logic),
+        logic,
+        frozenset({A.name, B.name, C.name}),
+    )
+
+    assert [branch.pairs for branch in tree.ordered_crossing_branches()] == [
+        ((B.name, 1), (C.name, 1))
+    ]
+
+
+def test_crossing_conjunct_cartesian_distributes_reactive_levers(monkeypatch):
+    """Alternative levers inside one conjunct produce complete sibling batches."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import Cmp, CrossingProposal, Eq
+
+    A = Int("CartesianA", external=True)
+    B = Int("CartesianB", external=True)
+    C = Int("CartesianC", external=True)
+    Mid = Int("CartesianMid")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(A + B, Mid)
+
+    monkeypatch.setattr(
+        crossings,
+        "propose",
+        lambda *_args, **_kwargs: CrossingProposal(
+            branches=(
+                (
+                    Cmp(A.name, ">", B.name, bound_is_tag=True),
+                    Eq(C.name, frozenset({1})),
+                ),
+            ),
+            reason="reactive conjunct",
+        ),
+    )
+
+    tree = trace_relational(
+        Atom(Mid.name, "gt", 1),
+        {A.name: 0, B.name: 0, C.name: 0, Mid.name: 0},
+        build_program_graph(logic),
+        logic,
+        frozenset({A.name, B.name, C.name}),
+    )
+
+    assert {branch.pairs for branch in tree.ordered_crossing_branches()} == {
+        ((A.name, 1), (C.name, 1)),
+        ((B.name, -1), (C.name, 1)),
     }
-    assert all(a.verify_required for a in rewritten)
-    assert all("snapshot-frozen" in a.proposal_reason for a in rewritten)
 
 
 # -- Test 16: strict-inequality step is domain/epsilon-aware ------------------

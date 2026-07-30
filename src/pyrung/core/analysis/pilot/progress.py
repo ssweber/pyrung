@@ -49,7 +49,7 @@ from pyrung.core.analysis.pilot.investigate import (
     incident_regression_witness,
     investigate_deviation,
 )
-from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
+from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, act_identity
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -1456,9 +1456,16 @@ def _investigate_and_revert(
     # remains naturally eligible in the corrected executable world.
     regression_nogoods = set(investigation_nogoods)
     regression_nogoods.update(policy.regression_nogoods)
-    if regression_nogoods:
+    observations = [
+        ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods
+    ]
+    if len(policy.applied) > 1:
+        observations.append(
+            ActionNogoodObservation(frame.key, act_identity(bearing_owner.act))
+        )
+    if observations:
         ctx.compass, _ = ctx.compass.apply(
-            tuple(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods)
+            tuple(observations)
         )
     # A regression inside pending motion returns to its local checkpoint
     # and keeps the bounded attempt open. Only an outer revert ends it.

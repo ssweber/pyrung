@@ -353,6 +353,73 @@ def test_pilot_events_stream_candidate_decisions():
     assert accepted.data["accepted_because"]["target_reached"] is True
 
 
+def test_crossing_dnf_verifies_atomic_branch_then_uses_sibling(monkeypatch):
+    """A sterile proposal conjunction is nogooded whole; its sibling can land."""
+    from pyrung.core.analysis import crossings
+    from pyrung.core.crossing import CrossingProposal, Eq
+
+    A = Int("CrossingA", external=True)
+    B = Int("CrossingB", external=True)
+    C = Int("CrossingC", external=True)
+    D = Int("CrossingD", external=True)
+    Result = Int("CrossingResult")
+    Other = Int("CrossingOther")
+    Target = Bool("CrossingTarget")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(C + D, Result)
+            calc(A + B, Other)
+        with rung(Result > 1):
+            out(Target)
+
+    monkeypatch.setattr(
+        crossings,
+        "propose",
+        lambda *_args, **_kwargs: CrossingProposal(
+            branches=(
+                (Eq(A.name, frozenset({1})), Eq(B.name, frozenset({1}))),
+                (Eq(C.name, frozenset({1})), Eq(D.name, frozenset({1}))),
+            ),
+            reason="try either complete input pair",
+            verify_required=True,
+        ),
+    )
+
+    events = list(pilot_events(PLC(logic), Target, max_scans=80))
+
+    rejected = [event for event in events if event.kind == "crossing_rejected"]
+    accepted = [event for event in events if event.kind == "crossing_accepted"]
+    assert rejected and rejected[0].data["actions"] == ((A.name, 1), (B.name, 1))
+    assert accepted and accepted[0].data["applied"] == ((C.name, 1), (D.name, 1))
+    assert rejected[0].data["crossing"]["verify_required"] is True
+    assert accepted[0].data["crossing"]["proposed"] is True
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
+
+
+def test_actual_calc_singleton_proposal_uses_scalar_verified_pulse():
+    """A native two-source calc proposal remains a scalar observed artifact."""
+    A = Int("SingletonA", external=True)
+    B = Int("SingletonB", external=True)
+    Result = Int("SingletonResult")
+    Target = Bool("SingletonTarget")
+    with Program(strict=False) as logic:
+        with rung():
+            calc(A + B, Result)
+        with rung(Result > 1):
+            out(Target)
+
+    events = list(pilot_events(PLC(logic), Target, max_scans=40))
+    tried = [event for event in events if event.kind == "crossing_try"]
+    accepted = [event for event in events if event.kind == "crossing_accepted"]
+
+    assert tried and len(tried[0].data["actions"]) == 1
+    assert accepted and len(accepted[0].data["applied"]) == 1
+    assert accepted[0].data["crossing"]["verify_required"] is True
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
+
+
 def test_bool_output_routes_report_and_avoid():
     """Burner latches via ``Or(ProdMode, MaintMode)`` — both internal coils, so
     there are two material routes.  how() never reports ambiguous: it takes a

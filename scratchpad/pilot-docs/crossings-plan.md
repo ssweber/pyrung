@@ -337,15 +337,33 @@ projected causal steps. Ordinary structural conclusions and forward-only
 verified candidates carry `None`; exactness is not copied into `Atom`, global
 state keys, or cycle admission.
 
+PILOT now retains executable crossing DNF at the trace-to-candidate boundary.
+Each conjunction is one canonical atomic overlay; the outer DNF remains a set
+of sibling alternatives. This applies to both verify-required
+`CrossingProposal` branches and non-scalar sound `ReverseResult` branches.
+Mixed `Eq`/`Cmp`/`AffineCmp` conjunctions lower all-or-nothing, per-conjunct
+lever alternatives distribute into complete sibling overlays, and duplicate or
+conflicting actions are respectively deduplicated or rejected. The generic
+`Atom` no longer carries proposal metadata.
+
+The selected overlay reuses ordinary `BatchPulse` execution and common
+verification. Its crossing receipt preserves constraints, reason,
+`verify_required`, proposal status, and nullable exactness in candidate and
+try/reject/accept recordings. World-scoped negative knowledge keys the
+canonical physical overlay independent of action order or provenance. Rejecting
+or regressing a joint overlay does not poison its members as independent scalar
+actions.
+
 ### Not yet consumed
 
 The normalizer preserves, but does not itself navigate, the remaining evidence:
 
-- PILOT still lowers only one branch made entirely from scalar `Eq`/`Cmp`;
 - projected cause still accepts only one branch containing one singleton `Eq`;
 - the recorded high-level adapter still declines multi-branch DNF and
   condition/external/frontier leaves;
-- `Mask`, `Prior`, `External`, and `Quant` still need explicit PILOT lowering;
+- grouped PILOT navigation still declines `Mask`, `Prior`, `External`, `Quant`,
+  empty-action branches, and any conjunct whose trace requires a non-atomic
+  coast or sequence;
 - `AffineCmp` now preserves dynamic counter-preset scale/offset through shared
   reverse algebra, recorded cause, projected expression evaluation, runtime
   overlay lowering, advance planning, wait headings, and trace rewriting.
@@ -400,10 +418,10 @@ boundaries.
 - **Occurrence write evidence:** replay records which exact rung occurrence
   attempted each write. Generic verification usually compares only landing
   snapshots and therefore loses producer identity and later-clobber information.
-- **Reverse branch structure:** the generic trace producer path consumes only one
-  deterministic branch made only of scalar `Eq`/`Cmp`. DNF, `Prior`,
-  `CondAttr`, `Mask`, `Quant`, and `External` receipts may be emitted but are not
-  generically chased.
+- **Reverse branch structure outside scalar navigation:** executable
+  `Eq`/`Cmp`/`AffineCmp` DNF is now preserved and navigated atomically.
+  `Prior`, `CondAttr`, `Mask`, `Quant`, `External`, and non-atomic branch
+  requirements may still be emitted but are not generically chased.
 - **Revisit identity and consumption:** `seen_keys: set` discards the source
   world, exact action artifact, channel from/requested/landed values, whether a
   departure occurrence was already investigated, and whether that
@@ -436,21 +454,35 @@ Crossings now also expose an immutable DNF `CrossingProposal` receipt with a
 reason and explicit `verify_required` flag. Calc uses it for the old
 snapshot-frozen `A ± B` inequality levers: each singleton branch freezes the
 other operand only long enough to propose a reactive move. PILOT consumes these
-branches only after sound reverse falls through, carries their proposal reason
-into heuristic reporting, and relies on interpreted execution for acceptance.
-The proposal is never normalized or consumed as a `ReverseResult`.
+branches only after sound reverse falls through, retains their conjunctions in
+a dedicated crossing branch receipt, carries their reason/fidelity through
+navigation recording, and relies on interpreted execution for acceptance. The
+proposal is never normalized or consumed as a `ReverseResult`.
 
-Still left on the table: proposal verification outcomes are not attached back
-to the originating crossing receipt, and the current inequality consumer can
-preserve DNF alternatives only when each branch is one scalar comparison.
-Conjunctive or mixed-constraint proposal branches remain an explicit frontier
-rather than being flattened into false independent levers.
+Still left on the table: ordinary verification proves whether the complete
+overlay was useful, but does not prove that the originating crossing relation
+or selected writer occurrence caused that usefulness. Exact occurrence
+attribution remains a separate oracle/recording layer. Unsupported and
+non-atomic conjuncts remain explicit frontiers rather than being flattened into
+false independent levers.
 
-Proposal reason/fidelity currently rides on trace `Atom` metadata. Removing it
-now would lose the distinction between a sound reverse conclusion and a
-try-and-verify proposal. A dedicated branch receipt belongs with the
-conjunctive-DNF consumer; that next step should move the metadata there rather
-than adding a second temporary wrapper before branch navigation exists.
+The branch composer intentionally does not chase:
+
+- grouped enable-first, pulse, or owned-lifetime staging;
+- a constraint that requires traversal through a program-owned intermediate;
+- multi-valued `Eq`, zero-action branches, nested crossing DNF inside one
+  constraint subtree, or non-scalar constraint kinds;
+- an explicit size bound for Cartesian branch composition. Current registered
+  proposals are small, but branch count can grow exponentially if future
+  producers emit many alternatives;
+- occurrence-level proof that the named crossing, rather than another writer or
+  co-effect, caused an accepted landing;
+- a dedicated compiled/interpreted parity row for the complete grouped overlay.
+  Its individual stores run through the existing dual-runtime oracle, while
+  PILOT integration currently executes on the interpreted fork.
+
+These are named frontiers, not partial support: a staged or unsupported
+conjunction is declined whole.
 
 Aggregate decomposition and self-affine earned-work classification are likewise
 proposal heuristics at clamp/wrap rails. They remain valid only because the
@@ -548,6 +580,8 @@ defects:
   ranges, and static fan-out;
 - shared reverse-result normalization and contradiction handling;
 - recorded tag-bound comparison and unresolved-prior fixes;
+- atomic `(A AND B) OR (C AND D)` navigation for sound and proposed crossing
+  DNF, with exact batch nogoods and recorded fidelity;
 - cycle/revisit audit recorded; the first replacement patch was explicitly
   discarded pending outcome-then-revisit implementation.
 

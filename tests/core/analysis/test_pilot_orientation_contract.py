@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     ChannelHeading,
     Coast,
+    CrossingFidelity,
     Dwell,
     NavigationConstraints,
     NeedProbe,
@@ -32,6 +33,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 from pyrung.core.analysis.pilot.options import (
     CandidateDiagnosis,
     CandidateRead,
+    CrossingBatchRead,
     LearnedBatchRead,
     PrerequisiteRead,
     WaitPrescription,
@@ -83,6 +85,7 @@ def _options(
     prescribed_batch=None,
     active_trace_actions=(),
     wait=None,
+    crossing_batches=(),
 ):
     return CandidateRead(
         trace=_TraceAdmission(
@@ -100,6 +103,7 @@ def _options(
         learned_batch=(
             LearnedBatchRead(prescribed_batch) if prescribed_batch is not None else None
         ),
+        crossing_batches=crossing_batches,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
     )
 
@@ -300,7 +304,112 @@ def test_learned_source_names_define_batch_identity() -> None:
 
     assert ActSource.LEARNED_ACTION.value == "learned_action"
     assert ActSource.LEARNED_BATCH.value == "learned_batch"
-    assert act_identity(act) == ("batch", "learned_batch", actions)
+    assert act_identity(act) == ("pulse", actions)
+
+
+def test_crossing_branch_materializes_one_atomic_verified_act(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    branch = CrossingBatchRead(
+        actions=(("A", 1), ("B", 1)),
+        fidelity=CrossingFidelity(
+            constraints=("A == 1", "B == 1"),
+            reason="grouped predecessor",
+            verify_required=True,
+            exact=None,
+            proposed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(crossing_batches=(branch,)),
+    )
+
+    compass = Compass()
+    result = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, BatchPulse)
+    assert result.act.actions == (("A", 1), ("B", 1))
+    assert result.act.policy.applied == result.act.actions
+    assert result.act.policy.source is ActSource.CROSSING
+    assert result.act.crossing is not None
+    assert result.act.crossing.verify_required is True
+    assert result.act.crossing.proposed is True
+
+
+def test_crossing_batch_nogood_identity_is_canonical_and_falls_back(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    first = CrossingBatchRead(
+        actions=(("B", 1), ("A", 1)),
+        fidelity=CrossingFidelity(
+            constraints=(),
+            reason="first",
+            verify_required=True,
+            exact=None,
+            proposed=True,
+        ),
+    )
+    sibling = replace(
+        first,
+        actions=(("D", 1), ("C", 1)),
+        fidelity=replace(first.fidelity, reason="sibling"),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(crossing_batches=(first, sibling)),
+    )
+
+    compass = Compass()
+    first_result = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+    assert isinstance(first_result, Bearing)
+    assert isinstance(first_result.act, BatchPulse)
+    first_identity = act_identity(first_result.act)
+    assert first_identity == ("pulse", (("A", 1), ("B", 1)))
+    assert first_result.act.policy.regression_nogoods == frozenset()
+    assert first_identity == act_identity(
+        BatchPulse(
+            ActPolicy(
+                source=ActSource.LEARNED_BATCH,
+                action_pairs=(("A", 1), ("B", 1)),
+                applied=(("A", 1), ("B", 1)),
+            )
+        )
+    )
+    joint_pulse = Pulse(
+        ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=(("A", 1),),
+            applied=(("B", 1), ("A", 1)),
+        )
+    )
+    assert act_identity(joint_pulse) == first_identity
+    assert joint_pulse.policy.regression_nogoods == frozenset()
+
+    compass, _changed = compass.apply(
+        (ActionNogoodObservation(("world",), first_identity),)
+    )
+    second_result = compass.orient(
+        _world(compass),
+        TargetSpec("Target", True),
+        NavigationConstraints(),
+    )
+
+    assert isinstance(second_result, Bearing)
+    assert isinstance(second_result.act, BatchPulse)
+    assert second_result.act.actions == sibling.actions
+    assert compass.knowledge.nogood_pairs(("world",)) == frozenset()
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:

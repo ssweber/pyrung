@@ -184,6 +184,8 @@ def _make_trial(
     regression_nogoods = over.pop("regression_nogoods", None)
     if regression_nogoods is not None:
         action_pairs = tuple(regression_nogoods)
+        if not applied:
+            applied = action_pairs
     route_prescribed = over.pop("route_prescribed", False)
     chase_regression_causes = over.pop("chase_regression_causes", True)
     observe_label = over.pop("observe_label", None)

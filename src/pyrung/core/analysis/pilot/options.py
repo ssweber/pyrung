@@ -38,6 +38,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import NavigationEviden
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
+    CrossingFidelity,
     RouteEdgeContext,
 )
 from pyrung.core.analysis.pilot.overlay import (
@@ -55,6 +56,7 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
@@ -251,6 +253,34 @@ class LearnedBatchRead:
 
 
 @dataclass(frozen=True)
+class CrossingBatchRead:
+    """One retained crossing DNF branch as an atomic executable overlay."""
+
+    actions: tuple[_ActionPair, ...]
+    fidelity: CrossingFidelity
+
+    @property
+    def constraints(self) -> tuple[Any, ...]:
+        return self.fidelity.constraints
+
+    @property
+    def reason(self) -> str:
+        return self.fidelity.reason
+
+    @property
+    def verify_required(self) -> bool:
+        return self.fidelity.verify_required
+
+    @property
+    def exact(self) -> bool | None:
+        return self.fidelity.exact
+
+    @property
+    def proposed(self) -> bool:
+        return self.fidelity.proposed
+
+
+@dataclass(frozen=True)
 class CandidateDiagnosis:
     """Terminal diagnosis owned by candidate construction."""
 
@@ -268,6 +298,7 @@ class CandidateRead:
     wait: WaitRead | None = None
     prerequisites: PrerequisiteRead = PrerequisiteRead()
     learned_batch: LearnedBatchRead | None = None
+    crossing_batches: tuple[CrossingBatchRead, ...] = ()
     diagnosis: CandidateDiagnosis | None = None
 
 
@@ -1542,6 +1573,35 @@ def _assemble_candidate_read(
         else None
     )
     program_pairs = program_step.required_pairs if program_step is not None else frozenset()
+    tree = getattr(frame, "tree", None)
+    crossing_branch_reads = (
+        tree.ordered_crossing_branches()
+        if tree is not None and hasattr(tree, "ordered_crossing_branches")
+        else ()
+    )
+    crossing_batches: tuple[CrossingBatchRead, ...] = tuple(
+        CrossingBatchRead(
+            actions=branch.pairs,
+            fidelity=branch.fidelity,
+        )
+        for branch in crossing_branch_reads
+        # Crossing conjunctions are executable artifacts in their own right.
+        # Pair nogoods project only from the identical singleton artifact; a
+        # multi-action overlay is vetoed member-wise only by explicit policy.
+        if all(_action_allowed(ctx, pair) for pair in branch.pairs)
+        and not (len(branch.pairs) == 1 and branch.pairs[0] in key_nogoods)
+        # Re-check every predecessor fact against the complete planned overlay.
+        # This catches a selected action invalidating a conjunct that happened
+        # to be true in the snapshot when the crossing was lowered.
+        and all(
+            constraint_holds(
+                constraint,
+                {**frame.snap, **dict(branch.pairs)},
+            )
+            is True
+            for constraint in branch.constraints
+        )
+    )
     candidates: list[_Candidate] = []
     seen_candidates: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
@@ -1644,7 +1704,7 @@ def _assemble_candidate_read(
         charted_completion=route_and_wait.charted_wait,
         instruction_boundary=separated.instruction_boundary,
         learned=learned,
-        has_candidates=bool(candidates),
+        has_candidates=bool(candidates or crossing_batches),
     )
     learned_batch = learned.read if isinstance(learned, _LearnedBatch) else None
     stuck_reason: str | None = None
@@ -1653,6 +1713,7 @@ def _assemble_candidate_read(
         and not separated.prerequisites.pilot_rungs
         and (wait is None or wait.prescription is None)
         and learned_batch is None
+        and not crossing_batches
     ):
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
@@ -1665,6 +1726,7 @@ def _assemble_candidate_read(
         wait=wait,
         prerequisites=separated.prerequisites,
         learned_batch=learned_batch,
+        crossing_batches=crossing_batches,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
     )
 

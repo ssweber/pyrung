@@ -18,7 +18,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
     Pulse,
-    act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
@@ -399,6 +398,17 @@ def _candidates_built_payload(
         "trace_actions": candidates.trace.actions,
         "trace_action_details": candidates.trace.details,
         "active_trace_actions": candidates.trace.active_actions,
+        "crossing_batches": tuple(
+            {
+                "actions": branch.actions,
+                "constraints": branch.constraints,
+                "reason": branch.reason,
+                "verify_required": branch.verify_required,
+                "exact": branch.exact,
+                "proposed": branch.proposed,
+            }
+            for branch in candidates.crossing_batches
+        ),
         "route_candidates": route.candidates if route is not None else (),
         "route_plan": _route_plan_payload(route.plan if route is not None else None),
         "downstream_reach_cap": candidates.downstream_reach_cap,
@@ -683,9 +693,41 @@ def _act_event(
 ) -> PilotEvent | None:
     """Render one navigation-act lifecycle event through a single kind dispatch."""
 
-    kind = act_identity(act)[0]
-    if kind == "pulse":
-        assert isinstance(act, Pulse)
+    if isinstance(act, Pulse):
+        if act.crossing is not None:
+            crossing = {
+                "constraints": act.crossing.constraints,
+                "reason": act.crossing.reason,
+                "verify_required": act.crossing.verify_required,
+                "exact": act.crossing.exact,
+                "proposed": act.crossing.proposed,
+            }
+            if phase == "try":
+                return PilotEvent(
+                    "crossing_try",
+                    scan,
+                    {"actions": act.applied, "crossing": crossing},
+                )
+            if phase == "rejected":
+                assert attempt is not None
+                return PilotEvent(
+                    "crossing_rejected",
+                    scan,
+                    {
+                        "actions": act.applied,
+                        "gates": attempt.gate_events,
+                        "crossing": crossing,
+                    },
+                )
+            assert trial is not None and frame is not None and state is not None
+            return PilotEvent(
+                "crossing_accepted",
+                scan,
+                {
+                    **_accepted_payload(act.policy, trial, frame, state),
+                    "crossing": crossing,
+                },
+            )
         if phase == "try":
             return PilotEvent(
                 "candidate_try",
@@ -718,8 +760,7 @@ def _act_event(
             _accepted_payload(act.policy, trial, frame, state),
         )
 
-    if kind in {"coast", "dwell"}:
-        assert isinstance(act, (Coast, Dwell))
+    if isinstance(act, (Coast, Dwell)):
         if phase == "try":
             channel_tag = target_tag
             if isinstance(act, Coast) and act.mode == "bearing":
@@ -747,16 +788,42 @@ def _act_event(
             _bearing_coast_accepted_payload(trial),
         )
 
-    assert kind == "batch" and isinstance(act, BatchPulse)
+    assert isinstance(act, BatchPulse)
+    crossing = (
+        {
+            "constraints": act.crossing.constraints,
+            "reason": act.crossing.reason,
+            "verify_required": act.crossing.verify_required,
+            "exact": act.crossing.exact,
+            "proposed": act.crossing.proposed,
+        }
+        if act.crossing is not None
+        else None
+    )
     if phase == "try":
-        return None
+        if act.crossing is None:
+            return None
+        return PilotEvent(
+            "crossing_try",
+            scan,
+            {
+                "actions": act.actions,
+                "crossing": crossing,
+            },
+        )
     label = "batch" if act.policy.observe_label == "batch" else "widening"
+    if act.crossing is not None:
+        label = "crossing"
     if phase == "rejected":
         assert attempt is not None
         return PilotEvent(
             f"{label}_rejected",
             scan,
-            {"actions": act.actions, "gates": attempt.gate_events},
+            {
+                "actions": act.actions,
+                "gates": attempt.gate_events,
+                "crossing": crossing,
+            },
         )
     assert trial is not None
     pulse = trial.attempt.pulse
@@ -776,5 +843,6 @@ def _act_event(
             "snapshot": dict(execution.after_snap),
             "scan_before": pulse.scan_before,
             "scan_after": pulse.fork.state.scan_id,
+            "crossing": crossing,
         },
     )

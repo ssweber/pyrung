@@ -27,6 +27,7 @@ from __future__ import annotations
 import typing
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field, replace
+from itertools import product
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from pyrung.core.analysis import steerable as _steerable
@@ -40,6 +41,7 @@ from pyrung.core.analysis.pilot.availability import (
     _writer_availability,
     _WriterAvailability,
 )
+from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.overlay import OperationReceipt
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
@@ -392,6 +394,43 @@ class TraceAction:
 
 
 @dataclass(frozen=True)
+class TraceCrossingBranch:
+    """One conjunctive predecessor branch retained through navigation.
+
+    ``actions`` is the complete atomic overlay for this DNF branch. Reverse or
+    proposal fidelity belongs here rather than on the generic Boolean ``Atom``
+    used by unrelated simplified-expression consumers.
+    """
+
+    actions: tuple[TraceAction, ...]
+    fidelity: CrossingFidelity
+
+    @property
+    def pairs(self) -> tuple[tuple[str, Any], ...]:
+        return tuple(action.pair for action in self.actions)
+
+    @property
+    def constraints(self) -> tuple[Constraint, ...]:
+        return self.fidelity.constraints
+
+    @property
+    def reason(self) -> str:
+        return self.fidelity.reason
+
+    @property
+    def verify_required(self) -> bool:
+        return self.fidelity.verify_required
+
+    @property
+    def exact(self) -> bool | None:
+        return self.fidelity.exact
+
+    @property
+    def proposed(self) -> bool:
+        return self.fidelity.proposed
+
+
+@dataclass(frozen=True)
 class _RouteDraft:
     """Accumulated OR-arm selections for one enumerated route.
 
@@ -504,6 +543,9 @@ class TraceNode:
     # Fidelity of the ReverseResult used for this selected writer conclusion.
     # ``None`` for non-crossing nodes and forward-only verified candidates.
     crossing_exact: bool | None = None
+    # Alternative proposal branches are intentionally not ordinary children:
+    # each inner conjunction must survive into navigation as one atomic act.
+    crossing_branches: tuple[TraceCrossingBranch, ...] = ()
 
     def iter_nodes(
         self,
@@ -539,7 +581,7 @@ class TraceNode:
         """Whether this is an unresolved structural requirement with children."""
 
         return (
-            bool(self.children)
+            bool(self.children or self.crossing_branches)
             and not self.satisfied
             and not self.is_steerable
             and not self.pipeline_internal
@@ -565,6 +607,19 @@ class TraceNode:
         seen: set[tuple[str, Any]] = set()
         self._collect_ordered(actions, seen)
         return actions
+
+    def ordered_crossing_branches(self) -> tuple[TraceCrossingBranch, ...]:
+        """Crossing DNF composed with safe outer ``And`` siblings.
+
+        A crossing nested under an ordinary prerequisite is executable only
+        when that prerequisite is already satisfied or is itself one direct
+        steerable leaf. Two crossing siblings are Cartesian-composed. Anything
+        requiring writer traversal, staging, a hold, or a pulse is declined
+        until navigation has an explicit grouped-staging contract.
+        """
+
+        has_crossing, branches = _compose_crossing_subtree(self)
+        return branches if has_crossing else ()
 
     def _collect_ordered(
         self,
@@ -740,6 +795,159 @@ class TraceNode:
         """Dedup key for a relational frontier: tag + (form, operand)."""
         p = self.predicate
         return (self.tag, (getattr(p, "form", None), getattr(p, "operand", self.value)))
+
+
+def _trace_node_constraint(node: TraceNode) -> Constraint | None:
+    """Concrete condition represented by one ordinary sibling trace node."""
+
+    predicate = node.predicate
+    if isinstance(predicate, Atom):
+        if predicate.form in ("xic", "rise", "truthy"):
+            return Eq(predicate.tag, frozenset((True,)))
+        if predicate.form in ("xio", "fall"):
+            return Eq(predicate.tag, frozenset((False,)))
+        if predicate.form == "eq" and not predicate.operand_is_tag:
+            return Eq(predicate.tag, frozenset((predicate.operand,)))
+        op = _FORM_TO_OP.get(predicate.form)
+        if op is not None:
+            if predicate.operand_is_tag and (
+                predicate.operand_scale != 1 or predicate.operand_offset != 0
+            ):
+                return AffineCmp(
+                    predicate.tag,
+                    op,
+                    predicate.operand,
+                    scale=predicate.operand_scale,
+                    offset=predicate.operand_offset,
+                )
+            return Cmp(
+                predicate.tag,
+                op,
+                predicate.operand,
+                bound_is_tag=predicate.operand_is_tag,
+            )
+    if node.value is not None and not isinstance(node.value, Atom):
+        return Eq(node.tag, frozenset((node.value,)))
+    return None
+
+
+def _empty_crossing_branch(
+    *,
+    constraints: tuple[Constraint, ...] = (),
+    actions: tuple[TraceAction, ...] = (),
+) -> TraceCrossingBranch:
+    """Neutral element used while composing an outer conjunction."""
+
+    return TraceCrossingBranch(
+        actions=actions,
+        fidelity=CrossingFidelity(
+            constraints=constraints,
+            reason="",
+            verify_required=False,
+            exact=True,
+            proposed=False,
+        ),
+    )
+
+
+def _merge_crossing_branches(
+    left: TraceCrossingBranch,
+    right: TraceCrossingBranch,
+) -> TraceCrossingBranch | None:
+    """Conjoin two branch receipts, rejecting contradictory action overlays."""
+
+    by_tag: dict[str, TraceAction] = {}
+    for action in (*left.actions, *right.actions):
+        existing = by_tag.get(action.tag)
+        if existing is not None and not _values_match(existing.value, action.value):
+            return None
+        by_tag.setdefault(action.tag, action)
+    actions = tuple(sorted(by_tag.values(), key=lambda action: (action.tag, repr(action.value))))
+    exact_values = (left.exact, right.exact)
+    exact = (
+        None
+        if None in exact_values
+        else bool(left.exact and right.exact)
+    )
+    return TraceCrossingBranch(
+        actions=actions,
+        fidelity=CrossingFidelity(
+            constraints=tuple(dict.fromkeys((*left.constraints, *right.constraints))),
+            reason="; ".join(
+                dict.fromkeys(part for part in (left.reason, right.reason) if part)
+            ),
+            verify_required=left.verify_required or right.verify_required,
+            exact=exact,
+            proposed=left.proposed or right.proposed,
+        ),
+    )
+
+
+def _compose_crossing_subtree(
+    node: TraceNode,
+    *,
+    under_lifetime: bool = False,
+) -> tuple[bool, tuple[TraceCrossingBranch, ...]]:
+    """Return ``(has_crossing, atomic conjunction alternatives)`` for *node*."""
+
+    if node.crossing_branches:
+        return True, node.crossing_branches
+    if node.satisfied:
+        constraint = _trace_node_constraint(node)
+        return False, (
+            _empty_crossing_branch(
+                constraints=((constraint,) if constraint is not None else ())
+            ),
+        )
+    if node.data_flow == "enable":
+        # This node owns a prior stage. Its leaves cannot be folded into the
+        # same physical overlay as a crossing branch until navigation has a
+        # grouped staging contract.
+        return False, ()
+    if node.is_steerable:
+        if node.children or node.pulse or under_lifetime:
+            return False, ()
+        constraint = _trace_node_constraint(node)
+        return False, (
+            _empty_crossing_branch(
+                constraints=((constraint,) if constraint is not None else ()),
+                actions=(
+                    TraceAction(
+                        node.tag,
+                        node.value,
+                        provenance=node.provenance,
+                        heuristic=node.heuristic,
+                        note=node.note,
+                    ),
+                ),
+            ),
+        )
+    if node.advance is not None:
+        # The crossing actions remain direct; execution's ordinary settle/coast
+        # machinery owns this instruction boundary after the atomic patch.
+        return False, (_empty_crossing_branch(),)
+    if not node.children:
+        return False, ()
+
+    has_crossing = False
+    combined: tuple[TraceCrossingBranch, ...] = (_empty_crossing_branch(),)
+    for child in node.children:
+        child_has_crossing, child_branches = _compose_crossing_subtree(
+            child,
+            under_lifetime=under_lifetime or node.advance is not None,
+        )
+        if not child_branches:
+            return False, ()
+        has_crossing = has_crossing or child_has_crossing
+        merged: list[TraceCrossingBranch] = []
+        for left, right in product(combined, child_branches):
+            receipt = _merge_crossing_branches(left, right)
+            if receipt is not None and receipt not in merged:
+                merged.append(receipt)
+        if not merged:
+            return False, ()
+        combined = tuple(merged)
+    return has_crossing, combined
 
 
 def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -956,17 +1164,11 @@ def _rewrite_internal_compare(
     - single-source affine (copy / ``scale*src + offset``): one rewritten atom on
       ``src`` with the threshold shifted (form flipped on a negative scale).
       Recurses, so copy/calc chains collapse to the steerable source.
-    - two-tag ``A ± B`` against a threshold: after sound reverse falls through,
-      the calc crossing proposal freezes each partner at its *snapshot* value
-      and returns one verify-required branch per operand
-      (``A op bound-B_now`` ∨ ``B op bound-A_now``); each becomes an alternative
-      atom whose lever re-points against the live partner next scan. The
-      subtraction-at-zero form is the ``bound == 0`` instance.
-
     Returns ``[atom]`` unchanged when the tag is steerable or the registry falls
-    through — honest: the caller dead-ends, it never fabricates a lever.  The
-    per-instruction inversion lives in ``core/analysis/crossings/``; this is the
-    consumer that drives it and recurses for multi-hop chains.
+    through. Verify-required fallthrough proposals are consumed separately as
+    branch receipts so their DNF grouping cannot be flattened here. The
+    per-instruction inversion lives in ``core/analysis/crossings/``; this
+    consumer drives sound reverse results and recurses for multi-hop chains.
     """
     if _depth > 6 or atom.tag in steerable:
         return [atom]
@@ -987,66 +1189,38 @@ def _rewrite_internal_compare(
     target = Cmp(atom.tag, op, atom.operand, bound_is_tag=atom.operand_is_tag)
     result = crossings.reverse(instr, None, target, CrossingContext(snapshot=snapshot))
     normalized = normalize_reverse_result(result)
-    proposal_reason = atom.proposal_reason
-    verify_required = atom.verify_required
-    if normalized.fallthrough:
-        proposal = crossings.propose(
-            instr,
-            None,
-            target,
-            CrossingContext(snapshot=snapshot),
-        )
-        if proposal.empty:
-            return [atom]
-        branches = proposal.branches
-        proposal_reason = "; ".join(
-            reason for reason in (proposal_reason, proposal.reason) if reason
-        )
-        verify_required = verify_required or proposal.verify_required
-        # The current consumer returns alternative scalar levers. It can
-        # preserve DNF grouping only when every proposal branch is one scalar
-        # constraint; a conjunctive proposal remains an explicit frontier.
-        if any(len(branch) != 1 for branch in branches):
-            return [atom]
-    elif normalized.contradiction or normalized.trivial:
+    if normalized.fallthrough or normalized.contradiction or normalized.trivial:
         return [atom]
-    else:
-        branches = normalized.branches
+    branches = normalized.branches
+    if (
+        len(branches) != 1
+        or len(branches[0]) != 1
+        or not isinstance(branches[0][0], Cmp)
+    ):
+        # DNF and every conjunction belong to the grouped branch consumer.
+        # Decline here rather than flattening alternatives, dissolving AND, or
+        # silently dropping a mixed-kind conjunct after grouped lowering found
+        # the branch non-executable.
+        return [atom]
 
-    rewritten: list[Atom] = []
-    for branch in branches:
-        cmps = [c for c in branch if isinstance(c, Cmp)]
-        if not cmps:
-            return [atom]  # no inequality atom (Eq / unsat) -> stay honest
-        if len(cmps) > 1 and len(cmps) != len(branch):
-            # A conjunctive branch mixed with a non-Cmp atom (an Eq we cannot
-            # represent as a lever) -> stay honest rather than drop the conjunct.
-            return [atom]
-        # A single Cmp is the affine/two-tag case unchanged; a branch of two or
-        # more Cmps is a conjunction (both source atoms must hold), so surface
-        # every conjunct as its own rewritten lever.
-        for c in cmps:
-            form = _OP_TO_FORM.get(c.op)
-            if form is None:
-                return [atom]
-            rewritten.extend(
-                _rewrite_internal_compare(
-                    Atom(
-                        tag=c.tag,
-                        form=form,
-                        operand=c.bound,
-                        operand_is_tag=c.bound_is_tag,
-                        proposal_reason=proposal_reason,
-                        verify_required=verify_required,
-                    ),
-                    steerable,
-                    pdg,
-                    program,
-                    snapshot,
-                    _depth=_depth + 1,
-                )
-            )
-    return rewritten or [atom]
+    c = branches[0][0]
+    assert isinstance(c, Cmp)
+    form = _OP_TO_FORM.get(c.op)
+    if form is None:
+        return [atom]
+    return _rewrite_internal_compare(
+        Atom(
+            tag=c.tag,
+            form=form,
+            operand=c.bound,
+            operand_is_tag=c.bound_is_tag,
+        ),
+        steerable,
+        pdg,
+        program,
+        snapshot,
+        _depth=_depth + 1,
+    )
 
 
 def _lever_note(req: Atom, orig: Atom, tag: str, value: Any, marker: str = "") -> str:
@@ -1102,12 +1276,8 @@ def _inequality_levers(
         return tag in steerable or bool(pdg.writers_of.get(tag))
 
     def _add(label: str, req: Atom) -> None:
-        heuristic = req.verify_required
-        marker = (
-            f"crossing proposal: {req.proposal_reason}; verification required"
-            if req.verify_required
-            else ""
-        )
+        heuristic = False
+        marker = ""
         target = _resolve_inequality_target(req, snapshot, prior, pdg)
         if target is None:
             hit = _heuristic_inequality_target(req, snapshot, steerable, pdg)
@@ -1116,15 +1286,6 @@ def _inequality_levers(
             value, marker = hit
             target = (req.tag, value)
             heuristic = True
-            if req.verify_required:
-                marker = "; ".join(
-                    part
-                    for part in (
-                        marker,
-                        f"crossing proposal: {req.proposal_reason}; verification required",
-                    )
-                    if part
-                )
         tag, value = target
         if tag in seen or not _actionable(tag):
             return
@@ -1256,6 +1417,264 @@ def _constraint_atom(constraint: Constraint) -> Atom | None:
             operand_offset=constraint.offset,
         )
     return None
+
+
+def _trace_crossing_branches(
+    env: _TraceEnv,
+    atom: Atom,
+    provenance: tuple[str, ...],
+    *,
+    visited: set[tuple[str, Any]],
+    ancestry: tuple[tuple[str, Any], ...],
+    relational_goal: Any,
+    depth: int,
+) -> tuple[TraceCrossingBranch, ...]:
+    """Resolve reverse/proposal branches without dissolving constraint DNF.
+
+    Each crossing branch is a conjunction. A constraint may itself expose
+    multiple reactive levers; their Cartesian choices split that conjunction
+    into concrete atomic overlays, while sibling crossing branches remain
+    independent alternatives. Unsupported or dead conjuncts invalidate only
+    their own branch.
+    """
+
+    if atom.tag in env.steerable:
+        return ()
+    if atom.operand_is_tag and (atom.operand_scale != 1 or atom.operand_offset != 0):
+        return ()
+    op = _FORM_TO_OP.get(atom.form)
+    if op is None:
+        return ()
+    instr = _sole_write_instr(atom.tag, env.pdg, env.program)
+    if instr is None:
+        return ()
+
+    from pyrung.core.analysis import crossings
+
+    target = Cmp(atom.tag, op, atom.operand, bound_is_tag=atom.operand_is_tag)
+    context = CrossingContext(snapshot=env.snapshot)
+    reverse = normalize_reverse_result(crossings.reverse(instr, None, target, context))
+    proposed = reverse.fallthrough
+    if proposed:
+        proposal = crossings.propose(instr, None, target, context)
+        if proposal.empty:
+            return ()
+        crossing_branches = proposal.branches
+        reason = proposal.reason
+        verify_required = proposal.verify_required
+        exact: bool | None = None
+    else:
+        if reverse.contradiction or reverse.trivial:
+            return ()
+        crossing_branches = reverse.branches
+        # Preserve legacy scalar reverse navigation; grouping is required when
+        # reverse presents a real DNF or any conjunctive predecessor branch.
+        if len(crossing_branches) == 1 and len(crossing_branches[0]) == 1:
+            return ()
+        reason = "sound reverse crossing"
+        exact = reverse.exact
+        verify_required = not reverse.exact
+
+    receipts: list[TraceCrossingBranch] = []
+    seen_overlays: set[tuple[tuple[str, Any], ...]] = set()
+    marker = "; ".join(
+        part
+        for part in (
+            (
+                f"crossing proposal: {reason}"
+                if proposed and reason
+                else "crossing proposal"
+                if proposed
+                else "inexact reverse crossing"
+                if not exact
+                else ""
+            ),
+            "verification required" if verify_required else "",
+        )
+        if part
+    )
+
+    for crossing_branch in crossing_branches:
+        choices_by_constraint: list[tuple[tuple[TraceNode, ...], ...]] = []
+        supported = True
+        for constraint in crossing_branch:
+            if constraint_holds(constraint, env.snapshot) is True:
+                continue
+            req = _constraint_atom(constraint)
+            if req is None:
+                supported = False
+                break
+            concrete = _atom_target(req, env.snapshot)
+            if concrete is not None:
+                tag, value = concrete
+                child = _trace_back(
+                    env,
+                    tag,
+                    value,
+                    _visited=set(visited),
+                    _ancestry=ancestry,
+                    _depth=depth + 1,
+                )
+                if not child.is_steerable or child.children or child.pulse:
+                    supported = False
+                    break
+                if not child.provenance:
+                    child.provenance = provenance
+                choices_by_constraint.append(((child,),))
+                continue
+            if req.form not in ("lt", "le", "gt", "ge", "ne"):
+                supported = False
+                break
+            levers = _inequality_levers(
+                req,
+                env.snapshot,
+                env.steerable,
+                env.pdg,
+                env.prior,
+                env.program,
+            )
+            alternatives: list[tuple[TraceNode, ...]] = []
+            for lever in levers:
+                child = _trace_back(
+                    env,
+                    lever.tag,
+                    lever.value,
+                    _visited=set(visited),
+                    _ancestry=ancestry,
+                    _preserve_predicate=relational_goal,
+                    _depth=depth + 1,
+                )
+                if not child.is_steerable or child.children or child.pulse:
+                    continue
+                if not child.provenance:
+                    child.provenance = provenance
+                child.lever = lever.label
+                child.heuristic = lever.heuristic or verify_required
+                child.note = "; ".join(part for part in (lever.note, marker) if part)
+                alternatives.append((child,))
+            if not alternatives:
+                supported = False
+                break
+            choices_by_constraint.append(tuple(alternatives))
+        if not supported:
+            continue
+
+        selections = product(*choices_by_constraint) if choices_by_constraint else ((),)
+        for selection in selections:
+            nodes = tuple(node for choice in selection for node in choice)
+            if not nodes or not _route_has_no_dead_end(list(nodes)):
+                continue
+            details: list[TraceAction] = []
+            by_tag: dict[str, Any] = {}
+            conflict = False
+            for node in nodes:
+                for detail in node.ordered_action_details():
+                    prior_value = by_tag.get(detail.tag, _UNRESOLVED)
+                    if prior_value is not _UNRESOLVED and not _values_match(
+                        prior_value, detail.value
+                    ):
+                        conflict = True
+                        break
+                    by_tag[detail.tag] = detail.value
+                    if detail.pair not in {existing.pair for existing in details}:
+                        details.append(
+                            replace(
+                                detail,
+                                heuristic=detail.heuristic or verify_required,
+                                note="; ".join(
+                                    part for part in (detail.note, marker) if part
+                                ),
+                            )
+                        )
+                if conflict:
+                    break
+            details.sort(key=lambda detail: (detail.tag, repr(detail.value)))
+            pairs = tuple(detail.pair for detail in details)
+            if conflict or not pairs or pairs in seen_overlays:
+                continue
+            seen_overlays.add(pairs)
+            receipts.append(
+                TraceCrossingBranch(
+                    actions=tuple(details),
+                    fidelity=CrossingFidelity(
+                        constraints=tuple(crossing_branch),
+                        reason=reason,
+                        verify_required=verify_required,
+                        exact=exact,
+                        proposed=proposed,
+                    ),
+                )
+            )
+    return tuple(receipts)
+
+
+def _trace_frozen_crossing_branches(
+    env: _TraceEnv,
+    atom: Atom,
+    provenance: tuple[str, ...],
+    *,
+    visited: set[tuple[str, Any]],
+    ancestry: tuple[tuple[str, Any], ...],
+    relational_goal: Any,
+    depth: int,
+) -> tuple[TraceCrossingBranch, ...]:
+    """Try grouped crossings after freezing each side of a tag-bound compare."""
+
+    if not atom.operand_is_tag or atom.form not in _FLIP_FORM or atom.operand_scale == 0:
+        return ()
+    variants: list[Atom] = []
+    raw_right = env.snapshot.get(atom.operand)
+    try:
+        right_now = (
+            atom.operand_scale * raw_right + atom.operand_offset
+            if raw_right is not None
+            else None
+        )
+    except TypeError:
+        right_now = None
+    if isinstance(right_now, (int, float)) and not isinstance(right_now, bool):
+        variants.append(Atom(atom.tag, atom.form, right_now))
+    left_now = env.snapshot.get(atom.tag)
+    if isinstance(left_now, (int, float)) and not isinstance(left_now, bool):
+        right_form = _FLIP_FORM[atom.form] if atom.operand_scale > 0 else atom.form
+        variants.append(
+            Atom(
+                atom.operand,
+                right_form,
+                (left_now - atom.operand_offset) / atom.operand_scale,
+            )
+        )
+
+    receipts: list[TraceCrossingBranch] = []
+    original = _atom_text(atom)
+    for variant in variants:
+        for branch in _trace_crossing_branches(
+            env,
+            variant,
+            provenance,
+            visited=visited,
+            ancestry=ancestry,
+            relational_goal=relational_goal,
+            depth=depth,
+        ):
+            actions = tuple(
+                replace(
+                    action,
+                    note="; ".join(
+                        part
+                        for part in (
+                            action.note,
+                            f"reactive frozen-side candidate to satisfy {original}",
+                        )
+                        if part
+                    ),
+                )
+                for action in branch.actions
+            )
+            receipt = replace(branch, actions=actions)
+            if receipt.pairs not in {existing.pairs for existing in receipts}:
+                receipts.append(receipt)
+    return tuple(receipts)
 
 
 def _mark_pulse(nodes: list[TraceNode]) -> None:
@@ -2213,6 +2632,40 @@ def _trace_expression(
                 # or counter) is a coast leaf: wait for it to cross on its own.
                 if _expr_satisfied(expr, env.snapshot):
                     return []
+                crossing_branches = _trace_crossing_branches(
+                    env,
+                    expr,
+                    provenance,
+                    visited=_visited,
+                    ancestry=_ancestry,
+                    relational_goal=(
+                        _relational_goal if _relational_goal is not None else expr
+                    ),
+                    depth=_depth,
+                )
+                if not crossing_branches:
+                    crossing_branches = _trace_frozen_crossing_branches(
+                        env,
+                        expr,
+                        provenance,
+                        visited=_visited,
+                        ancestry=_ancestry,
+                        relational_goal=(
+                            _relational_goal if _relational_goal is not None else expr
+                        ),
+                        depth=_depth,
+                    )
+                if crossing_branches:
+                    return [
+                        TraceNode(
+                            tag=expr.tag,
+                            value=expr.operand,
+                            relational=True,
+                            predicate=expr,
+                            provenance=provenance,
+                            crossing_branches=crossing_branches,
+                        )
+                    ]
                 # Carry the predicate live as a relational frontier (Stage A)
                 # and surface up-to-two reactive levers (Stage B): steer the LHS
                 # toward B, or steer the RHS toward A.  Both ride as children so

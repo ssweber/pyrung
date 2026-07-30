@@ -19,6 +19,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
+    CrossingFidelity,
     NavigationConstraints,
     OrientationWorld,
     RouteEdgeContext,
@@ -55,7 +56,7 @@ from pyrung.core.analysis.pilot.program_step import (
     ProgramStep,
     ProgramStepStatus,
 )
-from pyrung.core.analysis.pilot.trace import TraceAction, TraceNode
+from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch, TraceNode
 from pyrung.core.crossing import Eq
 
 
@@ -1060,7 +1061,10 @@ def test_candidate_assembly_consumes_awaited_action_without_rereading(
     ctx = SimpleNamespace(
         blocked_actions=frozenset(),
         edge_tags=frozenset(),
-        pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
+        pdg=SimpleNamespace(
+            downstream_slice=lambda *_args, **_kwargs: (),
+            writers_of={},
+        ),
         target=TargetSpec("State", 17),
     )
     monkeypatch.setattr(
@@ -1082,6 +1086,91 @@ def test_candidate_assembly_consumes_awaited_action_without_rereading(
     assert tuple(option.pair for option in read.options) == (("Acknowledge", True),)
     assert read.options[0].awaited_action_prescribed
     assert read.options[0].awaited_action_note == "program awaits Acknowledge"
+
+
+def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None:
+    admission = _TraceAdmission(
+        active_actions=(),
+        actions=(),
+        details=(),
+        detail_by_pair={},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(admission, None, None)
+    separated = _PrerequisiteSeparation(admission, PrerequisiteRead(), None)
+    branch = TraceCrossingBranch(
+        actions=(TraceAction("A", 1), TraceAction("B", 1)),
+        fidelity=CrossingFidelity(
+            constraints=(),
+            reason="grouped",
+            verify_required=True,
+            exact=None,
+            proposed=True,
+        ),
+    )
+    frame = SimpleNamespace(
+        snap={"A": 0, "B": 0},
+        tree=TraceNode(
+            "Target",
+            True,
+            relational=True,
+            crossing_branches=(branch,),
+        ),
+    )
+    base_ctx = SimpleNamespace(
+        blocked_actions=frozenset(),
+        edge_tags=frozenset(),
+        pdg=SimpleNamespace(
+            downstream_slice=lambda *_args, **_kwargs: (),
+            writers_of={},
+        ),
+        target=TargetSpec("Target", True),
+    )
+
+    admitted = _assemble_candidate_read(
+        route_and_wait,
+        separated,
+        None,
+        None,
+        frame,
+        base_ctx,
+        {("A", 1)},
+    )
+    blocked = _assemble_candidate_read(
+        route_and_wait,
+        separated,
+        None,
+        None,
+        frame,
+        SimpleNamespace(**{**vars(base_ctx), "blocked_actions": frozenset({("A", 1)})}),
+        set(),
+    )
+    invalidating_branch = replace(
+        branch,
+        fidelity=replace(
+            branch.fidelity,
+            constraints=(Eq("A", frozenset({0})), Eq("B", frozenset({1}))),
+        ),
+    )
+    invalidated = _assemble_candidate_read(
+        route_and_wait,
+        separated,
+        None,
+        None,
+        SimpleNamespace(
+            snap=frame.snap,
+            tree=replace(frame.tree, crossing_branches=(invalidating_branch,)),
+        ),
+        base_ctx,
+        set(),
+    )
+
+    assert [batch.actions for batch in admitted.crossing_batches] == [
+        (("A", 1), ("B", 1))
+    ]
+    assert blocked.crossing_batches == ()
+    assert invalidated.crossing_batches == ()
 
 
 def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:

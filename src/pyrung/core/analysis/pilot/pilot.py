@@ -987,6 +987,10 @@ def _pilot_loop_events(
         for action in frame.raw_trace_action_details:
             if action.note:
                 state.lever_notes[action.tag] = action.note
+        for branch in frame.tree.ordered_crossing_branches():
+            for action in branch.actions:
+                if action.note:
+                    state.lever_notes[action.tag] = action.note
         if state.best_trend is None:
             state.best_trend = frame.distance_before
             state.seen_keys.add(frame.key)

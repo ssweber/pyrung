@@ -95,6 +95,7 @@ class ActSource(StrEnum):
     AWAITED_ACTION = "awaited_action"
     PROGRAM = "program"
     LEARNED_BATCH = "learned_batch"
+    CROSSING = "crossing"
     WIDENING = "widening"
     TERMINAL = "terminal"
 
@@ -169,7 +170,10 @@ class ActPolicy:
 
     @property
     def regression_nogoods(self) -> frozenset[_ActionPair]:
-        return frozenset(self.action_pairs)
+        # A joint overlay is one executable artifact. A rejection or later
+        # regression must not poison either member as an independent scalar
+        # action; singleton artifacts retain the established pair projection.
+        return frozenset(self.applied) if len(self.applied) == 1 else frozenset()
 
     @property
     def chase_regression_causes(self) -> bool:
@@ -177,10 +181,22 @@ class ActPolicy:
 
 
 @dataclass(frozen=True)
+class CrossingFidelity:
+    """Reverse/proposal fidelity attached only to a grouped crossing act."""
+
+    constraints: tuple[Any, ...]
+    reason: str
+    verify_required: bool
+    exact: bool | None
+    proposed: bool
+
+
+@dataclass(frozen=True)
 class Pulse:
     """One pulse act whose policy owns the exact action artifact."""
 
     policy: ActPolicy
+    crossing: CrossingFidelity | None = None
 
     @property
     def action(self) -> _ActionPair:
@@ -199,6 +215,7 @@ class BatchPulse:
     """One atomic joint pulse governed by the common act policy."""
 
     policy: ActPolicy
+    crossing: CrossingFidelity | None = None
 
     @property
     def actions(self) -> tuple[_ActionPair, ...]:
@@ -293,7 +310,8 @@ OrientationResult = Bearing | NeedProbe | Stuck
 def pulse_identity(applied: tuple[_ActionPair, ...]) -> tuple[Any, ...]:
     """Exact executable identity of one Pulse action overlay."""
 
-    return ("pulse", applied)
+    canonical = tuple(sorted(applied, key=lambda pair: (pair[0], repr(pair[1]))))
+    return ("pulse", canonical)
 
 
 def act_identity(act: NavigationAct) -> tuple[Any, ...]:
@@ -302,7 +320,7 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
     if isinstance(act, Pulse):
         return pulse_identity(act.applied)
     if isinstance(act, BatchPulse):
-        return ("batch", act.policy.source.value, act.actions)
+        return pulse_identity(act.actions)
     if isinstance(act, Coast):
         heading = act.policy.heading
         route = heading.route if heading is not None else None

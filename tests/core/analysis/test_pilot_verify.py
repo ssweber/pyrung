@@ -822,7 +822,7 @@ class TestVerifyGates:
         assert result.gate_events[-1].event == "banked-work"
         assert result.gate_events[-1].evidence["effect"] == "backward"
 
-    def test_banked_batch_nogoods_every_regressive_action(self):
+    def test_banked_batch_rejects_exact_overlay_without_poisoning_members(self):
         before = {"Step": 3, "Target": False}
         after = {"Step": 0, "Target": True}
         pulse = SimpleNamespace(
@@ -855,4 +855,4 @@ class TestVerifyGates:
 
         assert result.trial is None
         assert result.gate_events[-1].event == "banked-work"
-        assert result.nogood_pairs == frozenset(actions)
+        assert result.nogood_pairs == frozenset()

@@ -540,6 +540,33 @@ def _orient_read(
                 rationale="learned joint transition",
             )
 
+    for branch in candidates.crossing_batches:
+        policy = ActPolicy(
+            source=ActSource.CROSSING,
+            action_pairs=branch.actions,
+            applied=branch.actions,
+            note=branch.reason,
+        )
+        fidelity = branch.fidelity
+        act = (
+            Pulse(policy, crossing=fidelity)
+            if len(branch.actions) == 1
+            else BatchPulse(policy, crossing=fidelity)
+        )
+        if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+            return _bearing(
+                world,
+                act,
+                candidates,
+                target=target,
+                rationale=(
+                    branch.reason
+                    or "verify crossing proposal"
+                    if branch.proposed
+                    else "follow grouped reverse crossing"
+                ),
+            )
+
     for option in candidates.options:
         applied = _candidate_applied(option, candidates, world.context)
         act = Pulse(_pulse_policy(option, applied))
