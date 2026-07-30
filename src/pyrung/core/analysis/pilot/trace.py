@@ -2516,27 +2516,6 @@ def _trace_back(
             )
         )
 
-        # Registered reverse is the producer-value authority. Forward ``Affine``
-        # remains only as a compatibility fallback for a crossing that punts.
-        if isinstance(wv, Affine) and not producer_constraints:
-            src_val = _invert_affine(wv, value)
-            # Self-referential affine (``calc(CurStep+1, CurStep)``) is a
-            # value-step: invert one hop (``CurStep==2`` <- ``CurStep==1``) and
-            # let the ``(tag, value)`` visited set + a different writer for the
-            # source value terminate the chain.  Skip only the degenerate
-            # self-map (``src_val == value``), which would not advance.
-            if src_val is not None and not (wv.source == tag and _values_match(src_val, value)):
-                child = _trace_back(
-                    env,
-                    wv.source,
-                    src_val,
-                    _visited=attempt_visited,
-                    _ancestry=_child_ancestry,
-                    _depth=_depth + 1,
-                )
-                child.data_flow = "calc"
-                attempt_node.children.append(child)
-
         if isinstance(wv, Aggregate) and wv.operation == "sum" and not attempt_node.children:
             for child_node in _decompose_sum(
                 env,

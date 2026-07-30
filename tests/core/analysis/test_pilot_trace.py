@@ -11,6 +11,7 @@ from pyrung import (
     And,
     Bool,
     Counter,
+    Dint,
     Int,
     Or,
     Program,
@@ -461,10 +462,10 @@ def test_calc_affine():
     assert "Raw" in names
 
 
-def test_affine_fallback_when_registered_reverse_declines(monkeypatch) -> None:
-    x_Go = Bool("AffineFallbackGo", external=True)
-    Raw = Int("AffineFallbackRaw", external=True)
-    Scaled = Int("AffineFallbackScaled")
+def test_registered_reverse_fallthrough_does_not_bypass_registry(monkeypatch) -> None:
+    x_Go = Bool("RegistryOnlyGo", external=True)
+    Raw = Int("RegistryOnlyRaw", external=True)
+    Scaled = Int("RegistryOnlyScaled")
     with Program() as logic:
         with rung(x_Go):
             calc(Raw + 10, Scaled)
@@ -477,6 +478,40 @@ def test_affine_fallback_when_registered_reverse_declines(monkeypatch) -> None:
     )
 
     tree = trace_back(Scaled.name, 42, {}, pdg, logic, steerable)
+
+    names = _steerable_names(tree)
+    assert x_Go.name in names
+    assert Raw.name not in names
+
+
+def test_calc_real_multiply_uses_registered_reverse() -> None:
+    x_Go = Bool("RealCalcGo", external=True)
+    Raw = Real("RealCalcRaw", external=True)
+    Scaled = Real("RealCalcScaled")
+    with Program() as logic:
+        with rung(x_Go):
+            calc(Raw * 2.5, Scaled)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    tree = trace_back(Scaled.name, 7.5, {}, pdg, logic, steerable)
+
+    names = _steerable_names(tree)
+    assert x_Go.name in names
+    assert Raw.name in names
+
+
+def test_copy_affine_clamp_rail_uses_registered_reverse() -> None:
+    x_Go = Bool("ClampCopyGo", external=True)
+    Raw = Dint("ClampCopyRaw", external=True)
+    Clamped = Int("ClampCopyDest")
+    with Program() as logic:
+        with rung(x_Go):
+            copy(Raw + 100, Clamped)
+
+    pdg = build_program_graph(logic)
+    steerable = compute_steerable(pdg, _known(logic), logic)
+    tree = trace_back(Clamped.name, 32767, {}, pdg, logic, steerable)
 
     names = _steerable_names(tree)
     assert x_Go.name in names

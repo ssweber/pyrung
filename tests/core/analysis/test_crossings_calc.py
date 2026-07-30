@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pyrung import Dint, Int
+from pyrung import Dint, Int, Real
 from pyrung.core.analysis.crossings.calc import CalcCrossing
 from pyrung.core.crossing import UNKNOWN, Affine, Aggregate, Cmp, CrossingContext, Eq, eq_target
 from pyrung.core.instruction.calc import CalcInstruction
@@ -63,9 +63,32 @@ def test_affine_mul_exact_division_is_candidate() -> None:
     assert r.exact is False
 
 
+def test_real_multiply_inverts_float_target() -> None:
+    src, dest = Real("Src"), Real("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(src * 2.5, dest),
+        None,
+        eq_target("Dest", 7.5),
+        _ctx(src, dest),
+    )
+    assert _only(r) == (Eq("Src", frozenset({3.0})),)
+    assert r.exact is False
+
+
 def test_mul_non_integer_preimage_falls_through() -> None:
     src, dest = Int("Src"), Int("Dest")
     r = _CALC.reverse(CalcInstruction(src * 3, dest), None, eq_target("Dest", 7), _ctx(src, dest))
+    assert r.fallthrough
+
+
+def test_real_zero_scale_still_falls_through() -> None:
+    src, dest = Real("Src"), Real("Dest")
+    r = _CALC.reverse(
+        CalcInstruction(src * 0.0, dest),
+        None,
+        eq_target("Dest", 0.0),
+        _ctx(src, dest),
+    )
     assert r.fallthrough
 
 

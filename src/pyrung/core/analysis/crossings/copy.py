@@ -16,14 +16,20 @@ It also inverts the two **bijective** conversions:
 - ``to_binary`` (Int->Char, ``chr(src & 0xFF)``) — exact only when the source
   range fits one byte (else ``& 0xFF`` aliasing -> fallthrough).
 
+Affine expression sources are inverted according to the destination store:
+REAL destinations are value-preserving, while INT/DINT rail targets produce
+source-side :class:`Cmp` ranges with the inequality flipped for a negative
+scale.  Non-divisible integer interiors and zero-scale expressions fall
+through.
+
 Lossy / variable-width forms (``to_value``, ``to_text``) and indirect sources
-fall through (those are filled in by the per-family work / stay in the walker).
-:class:`BlockCopyCrossing` is element-wise — its per-slot fan-out is filled in by
-the by-family work; here it is a registered fallthrough.
+fall through. :class:`BlockCopyCrossing` is element-wise and resolves aligned
+static slots; converting and indirect ranges fall through.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any, TypeGuard
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
@@ -73,14 +79,17 @@ def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _affine_of(src: Any) -> tuple[Any, int, int] | None:
+def _is_number(value: Any) -> TypeGuard[int | float]:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _affine_of(src: Any) -> tuple[Any, int | float, int | float] | None:
     """``(source_tag, scale, offset)`` when *src* is an affine map over one tag.
 
     The copy-source analogue of ``calc``'s affine forward: recognises ``+tag`` /
-    ``-tag`` and ``tag ± k`` / ``k ± tag`` / ``tag * k`` / ``k * tag`` with an
-    **integer** literal *k* and a single source tag.  A non-affine, multi-tag, or
-    non-integer-literal expression (or a plain tag / literal) yields ``None`` — it
-    stays a fallthrough, so those keep punting.
+    ``-tag`` and ``tag ± k`` / ``k ± tag`` / ``tag * k`` / ``k * tag`` with a
+    numeric literal *k* and a single source tag.  A non-affine, multi-tag, or
+    non-numeric expression (or a plain tag / literal) yields ``None``.
     """
     if isinstance(src, UnaryExpr):
         if isinstance(src.operand, TagExpr):
@@ -97,13 +106,13 @@ def _affine_of(src: Any) -> tuple[Any, int, int] | None:
     left_lit = left.value if isinstance(left, LiteralExpr) else None
     right_lit = right.value if isinstance(right, LiteralExpr) else None
 
-    if left_tag is not None and _is_int(right_lit):  # tag <op> k
+    if left_tag is not None and _is_number(right_lit):  # tag <op> k
         if src.symbol == "+":
             return left_tag, 1, right_lit
         if src.symbol == "-":
             return left_tag, 1, -right_lit
         return left_tag, right_lit, 0  # tag * k
-    if right_tag is not None and _is_int(left_lit):  # k <op> tag
+    if right_tag is not None and _is_number(left_lit):  # k <op> tag
         if src.symbol == "+":
             return right_tag, 1, left_lit
         if src.symbol == "-":
@@ -228,35 +237,63 @@ class CopyCrossing(BaseCrossing):
     ) -> ReverseResult | None:
         """Invert an affine expression-source copy ``copy(scale*S + off, D)``.
 
-        The copy-source twin of calc's affine reverse, but through copy's *clamp*
-        rails rather than calc's wrap.  In the destination's **interior** the
-        clamp is the identity, so the inverse is the exact singleton
-        ``S == (value - off) / scale`` — more precise than calc's ``exact=False``
-        because clamp (unlike wrap) never aliases an interior value.  At a **clamp
-        rail** many source values collapse to one, so the inverse is not a
-        singleton — punt (return ``None``, letting the caller fall through), the
-        sound direction.  Handled only for a clamping (INT/DINT) destination, an
-        integer target, and an exact integer preimage; everything else defers.
+        The copy-source twin of calc's affine reverse, but through copy's
+        destination store semantics.  An INT/DINT interior has the exact
+        integer preimage ``S == (value - off) / scale``.  At a clamp rail, all
+        expression values beyond the rail collapse there, so the inverse is a
+        source-side :class:`Cmp` range.  A REAL destination preserves the
+        affine value and accepts the ordinary non-zero-scale preimage.
+
+        Non-divisible integer interiors, zero scale, non-numeric targets, and
+        unsupported destination types defer.
         """
-        if not _is_int(value):
-            return None  # non-integer target: no clamp-rail reasoning -> defer
         affine = _affine_of(src)
         if affine is None:
-            return None  # non-affine / multi-tag / non-int literal -> defer
+            return None  # non-affine / multi-tag / non-numeric literal -> defer
         src_tag, scale, offset = affine
         if getattr(src_tag, "readonly", False):
             return None  # constant source: not a steerable single-tag affine
         dest_type = _dest_type(instr, dest_name, ctx)
-        if not clamps_on_store(dest_type) or scale == 0:
-            return None  # wrapping / real / char / unknown dest -> defer
-        num = value - offset
-        if num % scale != 0:
-            return None  # non-integer preimage (e.g. odd / even split) -> defer
+        if (
+            not _is_number(value)
+            or scale == 0
+            or not math.isfinite(value)
+            or not math.isfinite(scale)
+            or not math.isfinite(offset)
+        ):
+            return None
+
+        if dest_type is TagType.REAL:
+            preimage = (value - offset) / scale
+            src_type = getattr(src_tag, "type", None)
+            if src_type is TagType.REAL:
+                return single(Eq(src_tag.name, frozenset({preimage})), exact=False)
+            if (
+                src_type in (TagType.INT, TagType.DINT, TagType.WORD)
+                and float(preimage).is_integer()
+            ):
+                return single(Eq(src_tag.name, frozenset({int(preimage)})), exact=True)
+            return None
+
+        if not clamps_on_store(dest_type) or not _is_int(value):
+            return None
         bounds = type_bounds(dest_type)
         assert bounds is not None  # clamps_on_store implies INT/DINT bounds
         lo, hi = bounds
-        if value == hi or value == lo:
-            return None  # clamp rail: many sources collapse here -> not a singleton
+        if value == hi:
+            op = ">=" if scale > 0 else "<="
+            return single(Cmp(src_tag.name, op, (hi - offset) / scale), exact=True)
+        if value == lo:
+            op = "<=" if scale > 0 else ">="
+            return single(Cmp(src_tag.name, op, (lo - offset) / scale), exact=True)
+
+        # Interior clamp values have a singleton preimage only over integer
+        # arithmetic.  Preserve fallthrough for fractional/non-divisible cases.
+        if not (_is_int(scale) and _is_int(offset)):
+            return None
+        num = value - offset
+        if num % scale != 0:
+            return None
         return single(Eq(src_tag.name, frozenset({num // scale})), exact=True)
 
     def _reverse_named(

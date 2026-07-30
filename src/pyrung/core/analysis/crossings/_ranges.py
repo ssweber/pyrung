@@ -17,7 +17,7 @@ from pyrung.core.tag import TagType
 # Saturating bounds, mirroring instruction/conversions.py (INT/DINT clamp; WORD
 # is 16-bit unsigned).  REAL/CHAR/BOOL do not participate in integer clamping.
 _INT = (-32768, 32767)
-_DINT = (-2147483647, 2147483647)
+_DINT = (-2147483648, 2147483647)
 _WORD = (0, 65535)
 
 _BOUNDS: dict[TagType, tuple[int, int]] = {

@@ -323,29 +323,22 @@ Avoid extending the nautical metaphor in technical contracts. Words such as
 captain, vessel, reef, shipyard, and waters add a translation step without
 naming code abstractions.
 
-## Compatibility boundaries
+## Compact contracts
 
-The following projections are deliberate compatibility seams. Keep their owner
-and removal condition visible so an internal cleanup does not silently change
-an event stream, replay identity, or lower-level API.
+The following compact views are intentional contracts:
 
-- `corrections.py::_best_forcing_holds` owns the pair-shaped forcing-hold
-  projection. Remove it only after every correction consumer accepts
-  `TraceAction` or another exact operation receipt.
-- `trace.py` retains the affine walker fallback when a registered reverse
-  declines. Remove it only when registered reverse rules cover those affine
-  writers.
+- `corrections.py::_best_forcing_holds` owns pair-shaped forcing holds because
+  correction consumers use that exact pair contract.
 - `coast.py::CoastReceipt` owns structured stop evidence with stable string
   `stop_reason` values; `cycle_fold_until` returns the compact Boolean terminal
   contract its callers consume.
 - `Compass` pair observations and pair nogoods are intentional pair semantics,
-  not tuple compatibility wrappers.
+  not removable tuple projections.
 
-Some compact views are genuine facades rather than removal candidates:
-`Compass` exposes graphs and action tags, `Pulse` exposes `action` and
-`applied`, `_PilotState` setters preserve `_World` ownership,
-and `LearnedBatchRead` presents learned batch evidence. Keep them while callers
-need those narrower contracts.
+Other genuine facades include `Compass`'s graphs and action tags, `Pulse`'s
+`action` and `applied` views, `_PilotState` setters that preserve `_World`
+ownership, and `LearnedBatchRead`'s learned batch evidence. Keep them while
+callers need those narrower contracts.
 
 ## Testing changes
 

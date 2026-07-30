@@ -5,8 +5,9 @@
 **Equality** (``dest == value``) reuses ``calc_reverse_edge`` (the codebase's
 single affine inverter, also used by ``build_reverse_edge_map`` for prover
 seeding): ``dest = src + k`` gives ``src == value - k``, ``dest = -src`` gives
-``src == -value``, ``dest = src * k`` gives ``src == value // k`` when ``k``
-divides ``value``.
+``src == -value``, and integer multiplication accepts a clean divisible
+preimage.  A REAL destination keeps multiplication value-preserving, so its
+non-zero multiply preimage is ``src == value / k``.
 
 **Inequality** (``dest op bound``, ``op`` in ``< <= > >=``) reverses the affine
 forward relation onto its source(s) — the principled "reverse a constraint
@@ -28,7 +29,8 @@ Forms that fall through (add no constraint, defer to the caller):
 - ``SumExpr`` (aggregate over a block range) — the Phase 3 sign-oracle seam;
   attributing ``sum != 0`` to "some operand nonzero" needs sign reasoning.
 - non-affine / unrecognised expressions, multiply inequalities, ``==``/``!=``
-  comparison targets, a tag-valued bound, and non-exact equality preimages.
+  comparison targets, a tag-valued bound, and integer non-exact equality
+  preimages.
 
 Inequality results are marked ``exact=False``: the shifted bound is the *in-range
 linear preimage*, but calc **wraps** at the destination type's rails, where the
@@ -40,6 +42,7 @@ exactness (wrap-corrected when source and destination share a wrapping type).
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from pyrung.core.analysis.crossings import BaseCrossing, register
@@ -172,7 +175,28 @@ class CalcCrossing(BaseCrossing):
         except (TypeError, ValueError, ZeroDivisionError):
             return REVERSE_FALLTHROUGH  # non-numeric target -> defer
         if pre is None:
-            return REVERSE_FALLTHROUGH  # non-exact preimage (e.g. value % k != 0)
+            # The shared reverse-edge helper deliberately accepts only clean
+            # integer multiplication preimages.  A REAL destination does not
+            # wrap or truncate, so its non-zero affine multiply has the
+            # ordinary numeric preimage.
+            fwd = self.forward(instr, ctx)
+            dest_type = _type_of(getattr(getattr(instr, "dest", None), "name", None), ctx)
+            src_type = _type_of(fwd.source, ctx) if isinstance(fwd, Affine) else None
+            if (
+                isinstance(fwd, Affine)
+                and fwd.scale != 0
+                and fwd.offset == 0
+                and dest_type is TagType.REAL
+                and src_type is TagType.REAL
+                and _is_number(target_value)
+                and math.isfinite(target_value)
+                and math.isfinite(fwd.scale)
+            ):
+                return single(
+                    Eq(fwd.source, frozenset({target_value / fwd.scale})),
+                    exact=False,
+                )
+            return REVERSE_FALLTHROUGH  # integer non-exact / zero-scale preimage
 
         # Wrap-correction: an add/sub/negate is a bijection on the destination's
         # wrap ring, so when source and destination share a wrapping type the

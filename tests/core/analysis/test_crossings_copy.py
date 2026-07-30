@@ -137,8 +137,8 @@ def test_affine_expr_source_negated_partner() -> None:
     assert _only(r) == (Eq("Src", frozenset({70})),)
 
 
-def test_affine_expr_source_at_clamp_rail_punts() -> None:
-    # At the INT rails many sources collapse to one value -> not a singleton -> punt.
+def test_affine_expr_source_at_clamp_rail_inverts_to_ranges() -> None:
+    # At the INT rails many expression values collapse to one destination value.
     src, dest = Int("Src"), Int("Dest")
     hi = _COPY.reverse(
         CopyInstruction(src + 100, dest), None, eq_target("Dest", 32767), _ctx(src, dest)
@@ -146,8 +146,35 @@ def test_affine_expr_source_at_clamp_rail_punts() -> None:
     lo = _COPY.reverse(
         CopyInstruction(src + 100, dest), None, eq_target("Dest", -32768), _ctx(src, dest)
     )
-    assert hi.fallthrough is True
-    assert lo.fallthrough is True
+    assert _only(hi) == (Cmp("Src", ">=", 32667),)
+    assert _only(lo) == (Cmp("Src", "<=", -32868),)
+    assert hi.exact is True
+    assert lo.exact is True
+
+
+def test_affine_expr_negative_scale_flips_clamp_rail_ranges() -> None:
+    src, dest = Dint("Src"), Int("Dest")
+    hi = _COPY.reverse(
+        CopyInstruction(100 - src, dest), None, eq_target("Dest", 32767), _ctx(src, dest)
+    )
+    lo = _COPY.reverse(
+        CopyInstruction(100 - src, dest), None, eq_target("Dest", -32768), _ctx(src, dest)
+    )
+    assert _only(hi) == (Cmp("Src", "<=", -32667),)
+    assert _only(lo) == (Cmp("Src", ">=", 32868),)
+
+
+def test_fill_affine_expr_clamp_rail_inverts_to_range() -> None:
+    src = Dint("Src")
+    dest = Block("DS", TagType.INT, 1, 3)
+    r = _COPY.reverse(
+        FillInstruction(src * 2, dest.select(1, 3)),
+        None,
+        eq_target("DS2", 32767),
+        _ctx(src),
+    )
+    assert _only(r) == (Cmp("Src", ">=", 16383.5),)
+    assert r.exact is True
 
 
 def test_affine_expr_source_multiply_non_divisible_punts() -> None:
@@ -177,12 +204,41 @@ def test_affine_expr_readonly_source_punts() -> None:
     assert r.fallthrough is True
 
 
-def test_affine_expr_non_clamping_dest_punts() -> None:
-    # A REAL destination does not saturate-clamp; the interior-exactness argument
-    # (and rail reasoning) does not apply -> defer.
-    src, dest = Int("Src"), Real("RD")
+def test_affine_expr_real_dest_inverts_value_preserving_store() -> None:
+    src, dest = Real("Src"), Real("RD")
     r = _COPY.reverse(CopyInstruction(src + 100, dest), None, eq_target("RD", 250), _ctx(src, dest))
+    assert _only(r) == (Eq("Src", frozenset({150.0})),)
+    assert r.exact is False
+
+
+def test_fill_affine_expr_real_dest_inverts_value_preserving_store() -> None:
+    src = Real("Src")
+    dest = Block("RD", TagType.REAL, 1, 3)
+    r = _COPY.reverse(
+        FillInstruction(src * 2.5, dest.select(1, 3)),
+        None,
+        eq_target("RD2", 10.0),
+        _ctx(src),
+    )
+    assert _only(r) == (Eq("Src", frozenset({4.0})),)
+    assert r.exact is False
+
+
+def test_affine_expr_zero_scale_still_falls_through() -> None:
+    src, dest = Real("Src"), Real("RD")
+    r = _COPY.reverse(CopyInstruction(src * 0.0, dest), None, eq_target("RD", 0.0), _ctx(src, dest))
     assert r.fallthrough is True
+
+
+def test_real_source_at_dint_lower_rail_uses_runtime_bound() -> None:
+    src, dest = Real("Src"), Dint("Dest")
+    r = _COPY.reverse(
+        CopyInstruction(src, dest),
+        None,
+        eq_target("Dest", -2147483648),
+        _ctx(src, dest),
+    )
+    assert _only(r) == (Cmp("Src", "<=", -2147483648),)
 
 
 # --- bijective conversions ----------------------------------------------------
