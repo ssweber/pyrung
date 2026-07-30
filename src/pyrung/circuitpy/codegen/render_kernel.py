@@ -428,7 +428,7 @@ def _render_helpers(ctx: CodegenContext) -> list[str]:
             '    if text == "":',
             '        raise ValueError("empty text cannot be parsed")',
             '    if dest_type in {"INT", "DINT"}:',
-            '        if not re.fullmatch(r"[+-]?\\\\d+", text):',
+            '        if not re.fullmatch(r"[+-]?\\d+", text):',
             '            raise ValueError("integer parse failed")',
             "        parsed = int(text, 10)",
             '        if dest_type == "INT" and (parsed < -32768 or parsed > 32767):',
