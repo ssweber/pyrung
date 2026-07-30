@@ -933,7 +933,7 @@ def test_prescribed_wait_suppresses_stuck_reason():
         raw_trace_actions=(),
         raw_trace_action_details=(),
     )
-    state = SimpleNamespace(overlay_rules=[])
+    state = SimpleNamespace(pilot_rungs=[])
     ctx = SimpleNamespace(
         compass=compass,
         blocked_actions=frozenset(),
@@ -1096,7 +1096,7 @@ def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     frame = SimpleNamespace(
         snap={"Keep": True, "Nogood": False},
     )
-    state = SimpleNamespace(overlay_rules=())
+    state = SimpleNamespace(pilot_rungs=())
     ctx = SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset())
 
     admitted = _admit_trace_details(
@@ -1135,7 +1135,7 @@ def test_prerequisite_separation_retains_trace_action_evidence() -> None:
         snap={"Enable": False, "Target": False},
         tree=TraceNode("Target", True, satisfied=False),
     )
-    state = SimpleNamespace(overlay_rules=(), work=SimpleNamespace())
+    state = SimpleNamespace(pilot_rungs=(), work=SimpleNamespace())
     ctx = SimpleNamespace(
         compass=SimpleNamespace(action_tags=frozenset()),
         edge_tags=frozenset(),
@@ -1238,7 +1238,7 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
         program_step=step,
     )
     frame = SimpleNamespace(snap={"First": False, "Blocked": False})
-    state = SimpleNamespace(overlay_rules=())
+    state = SimpleNamespace(pilot_rungs=())
     admitted = _admit_wait_read(
         read,
         (),

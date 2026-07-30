@@ -497,7 +497,7 @@ def _saboteur_scenario():
             work=work,
             committed_acts=pvector([]),
             best_trend=2,
-            overlay_rules=pvector([]),
+            pilot_rungs=pvector([]),
             dwell_scans=0,
         ),
         key_config=None,
@@ -509,7 +509,7 @@ def _saboteur_scenario():
                     work=cp_fork,
                     committed_acts=pvector([]),
                     best_trend=2,
-                    overlay_rules=pvector([]),
+                    pilot_rungs=pvector([]),
                     dwell_scans=0,
                 ),
                 2,
@@ -672,7 +672,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
 
     tuple(_monitor_trend(trial, frame, state, ctx))
 
-    installed = next(r for r in state.overlay_rules if r.dest == "Go" and r.value is True)
+    installed = next(r for r in state.pilot_rungs if r.dest == "Go" and r.value is True)
 
     # The correction protected State=6. Leaving that context disables its guard,
     # and Boolean input-image baseline releases Go without a release registry.
@@ -682,7 +682,7 @@ def test_letrun_regression_keeps_benign_hold(monkeypatch):
     assert state.work.state.tags["Go"] is True  # guard saw the pre-scan State=6 image
     state.work.step()
     assert state.work.state.tags["Go"] is False
-    assert installed in state.overlay_rules  # benign scoped correction remains recorded
+    assert installed in state.pilot_rungs  # benign scoped correction remains recorded
 
 
 def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
@@ -715,13 +715,13 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
 
     _record_attempt(attempt, frame, state, ctx, trial.attempt.bearing.objective)
 
-    assert tuple(state.overlay_rules) == (replayed,)
+    assert tuple(state.pilot_rungs) == (replayed,)
     assert state.correction_receipts[0].correction is correction
     assert state.correction_receipts[0].rungs == (replayed,)
     assert state.correction_receipts[0].origin_key == frame.key
     assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
     assert state.hold_log[-1].source == "excursion"
-    assert state.checkpoints[-1].world.overlay_rules == state.world.overlay_rules
+    assert state.checkpoints[-1].world.pilot_rungs == state.world.pilot_rungs
 
 
 def test_correction_installer_rejects_forged_identity():
@@ -792,7 +792,7 @@ def test_prerequisite_reuses_correction_owned_rung_without_claiming_it():
 
     _install_prerequisites(state, (rung,))
 
-    assert tuple(state.overlay_rules) == (rung,)
+    assert tuple(state.pilot_rungs) == (rung,)
     assert len(state.correction_receipts) == 1
     assert [entry.source for entry in state.hold_log] == ["investigation"]
 
@@ -821,9 +821,9 @@ def test_correction_installer_banks_artifact_into_every_checkpoint():
         source="investigation",
     )
 
-    assert all(rung in checkpoint.world.overlay_rules for checkpoint in state.checkpoints)
+    assert all(rung in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     state.load_world(state.checkpoints[0].world)
-    assert rung in state.overlay_rules
+    assert rung in state.pilot_rungs
     assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
 
 
@@ -864,7 +864,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
 
     tuple(_monitor_trend(trial, frame, state, ctx))
 
-    assert harmful in state.overlay_rules
+    assert harmful in state.pilot_rungs
     assert len(state.correction_receipts) == 1
     receipt = state.correction_receipts[0]
     assert receipt.status is CorrectionStatus.PROBATIONARY
@@ -901,17 +901,17 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
         origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
-    assert harmful not in state.overlay_rules
-    assert opposite in state.overlay_rules
+    assert harmful not in state.pilot_rungs
+    assert opposite in state.pilot_rungs
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
     replacement = state.correction_receipts[1]
     assert replacement.status is CorrectionStatus.PROBATIONARY
     assert replacement.rungs == (opposite,)
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
-    assert all(harmful not in checkpoint.world.overlay_rules for checkpoint in state.checkpoints)
-    assert all(opposite in checkpoint.world.overlay_rules for checkpoint in state.checkpoints)
+    assert all(harmful not in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
+    assert all(opposite in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     assert any(entry.source == "revocation" for entry in state.hold_log)
-    assert events[-1].data["rungs"] == tuple(state.overlay_rules)
+    assert events[-1].data["rungs"] == tuple(state.pilot_rungs)
     assert events[-1].data["revoked_rungs"] == (harmful,)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
@@ -976,11 +976,11 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
         origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
-    assert harmful not in state.overlay_rules
+    assert harmful not in state.pilot_rungs
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
     assert receipt.identity in excluded
-    assert all(harmful not in checkpoint.world.overlay_rules for checkpoint in state.checkpoints)
+    assert all(harmful not in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     assert events[-1].data["revoked_corrections"] == (receipt.receipt_id,)
 
 
@@ -1017,7 +1017,7 @@ def test_causal_revocation_blames_only_effective_continuation_owner():
         _receipt(index, rung) for index, rung in enumerate((dormant, shadowed, winner), 1)
     )
     state = SimpleNamespace(
-        overlay_rules=(dormant, shadowed, winner),
+        pilot_rungs=(dormant, shadowed, winner),
         correction_receipts=list(receipts),
     )
     snapshot = {Scope.name: False, Progress.name: True, Never.name: False}
@@ -1061,7 +1061,7 @@ def test_opposite_remedy_does_not_revoke_dormant_disjoint_correction():
             justification="opposite context",
         )
     )
-    state = SimpleNamespace(overlay_rules=(old,), correction_receipts=[receipt])
+    state = SimpleNamespace(pilot_rungs=(old,), correction_receipts=[receipt])
 
     assert _contradicted_corrections(state, investigation, {Scope.name: False}) == ()
     assert _contradicted_corrections(state, investigation, {Scope.name: True}) == (receipt,)
@@ -1124,8 +1124,8 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
     )
 
-    assert high in state.overlay_rules
-    assert low in state.overlay_rules
+    assert high in state.pilot_rungs
+    assert low in state.pilot_rungs
     assert all(
         receipt.status is CorrectionStatus.PROBATIONARY for receipt in state.correction_receipts
     )

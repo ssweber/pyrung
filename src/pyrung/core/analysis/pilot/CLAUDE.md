@@ -179,7 +179,7 @@ progress". Use distinct language for those two decisions.
 `types.py` and `compass.py` separate state that a revert may undo from
 knowledge that must survive:
 
-- `_World`: PLC fork, committed steps and contexts, overlay rules, trend, and
+- `_World`: PLC fork, committed steps and contexts, pilot rungs, trend, and
   dwell accounting.
 - `_PilotState` orchestration knowledge: seen keys, checkpoints, pending-departure
   recovery, earned work, correction receipts/revocations, and diagnostic history.
@@ -283,9 +283,10 @@ plain language on first use.
 - **compass** — the `Compass` value containing static graph references and
   persistent transition knowledge.
 - **ladder rung** — a rung in the user's PLC program.
-- **overlay rule** — a scoped piece of temporary PILOT steering represented by
-  `PilotRung`. Older helper names such as `_set_rungs`, `fork_with_rungs`, and
-  `_rung_identity` refer to these overlay rules, not ladder rungs.
+- **pilot rung** — a scoped piece of temporary PILOT steering represented by
+  `PilotRung`. The `pilot_rungs` fields and helpers such as `_set_rungs`,
+  `fork_with_rungs`, and `_rung_identity` refer to these objects, not ladder
+  rungs.
 - **coast** — hold the required inputs while scans pass.
 - **coast trigger** — a named predicate that records why a coast stopped or
   what it observed.
@@ -298,7 +299,7 @@ plain language on first use.
   usually `PipelineRoles.channel_tag`. `coast_departure_tags` adds an exact
   stateful, non-earned-work target when no inferred pipeline owns it.
 - **world key** — `_pilot_state_key`'s state projection plus the ordered
-  identities of the active overlay rules. It scopes nogoods, probes, coast
+  identities of the active pilot rungs. It scopes nogoods, probes, coast
   receipts, and cycle detection.
 - **nogood** — durable evidence that one exact `act_identity` failed in one
   world key. A failed joint act does not reject its individual members.

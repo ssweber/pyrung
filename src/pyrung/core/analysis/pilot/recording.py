@@ -265,7 +265,7 @@ def _build_plan_journal(
                         waiting_for=sc.frontier_tags,
                         steady_holds=sc.steady_holds,
                         accelerators=display_accel,
-                        rungs=sc.overlay_rules,
+                        rungs=sc.pilot_rungs,
                     ),
                 )
             )
@@ -396,7 +396,7 @@ def _iteration_payload(
         "raw_trace_actions": frame.raw_trace_actions,
         "raw_trace_action_details": frame.raw_trace_action_details,
         "nogoods": ctx.compass.knowledge.nogood_pairs(frame.key),
-        "rungs": tuple(state.overlay_rules),
+        "rungs": tuple(state.pilot_rungs),
         "seen_key_count": len(state.seen_keys),
         "checkpoint_count": len(state.checkpoints),
         "steps": tuple(state.steps),

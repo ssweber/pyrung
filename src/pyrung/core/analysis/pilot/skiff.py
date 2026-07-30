@@ -266,7 +266,7 @@ def probe_live_guard_frontiers(
             context.setdefault(tag, value)
 
     observations: list[NavigationObservation] = []
-    active_rungs = tuple(state.overlay_rules)
+    active_rungs = tuple(state.pilot_rungs)
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         # Canonical key: a frontier can surface probe pairs whose values mix types

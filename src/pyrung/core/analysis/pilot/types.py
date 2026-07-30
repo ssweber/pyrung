@@ -200,7 +200,7 @@ class _World(PRecord):
 
     ``knowledge commits, the world reverts``: every field here rolls back to a
     checkpoint on regression, and every field *not* here (compass, nogoods,
-    journey, …) survives. Overlay rules belong here: they change what the next
+    journey, …) survives. Pilot rungs belong here: they change what the next
     scan means, so the same PLC tags under a different rung overlay are a
     different world.  A ``pyrsistent`` PRecord so the value is
     persistent: the ``committed_acts`` PVector is immutable, so once a checkpoint
@@ -216,7 +216,7 @@ class _World(PRecord):
     work = _precord_field()
     committed_acts = _precord_field()
     best_trend = _precord_field()
-    overlay_rules = _precord_field()
+    pilot_rungs = _precord_field()
     # Committed scan-ids spent *waiting* — accepted bearing-coast / let-run spans.
     # Timer dwell is waiting, not searching (see ``coast._COAST_BUDGET``),
     # so invocation-relative search scans subtract this credit. An accepted
@@ -466,14 +466,14 @@ class _StepContext:
     policy: ActPolicy
     execution: _ExecutionEvidence
     frontier_tags: tuple[str, ...] = ()
-    # Exact overlay rules present during this step. Kept as ``Any`` here to
+    # Exact pilot rungs present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
-    overlay_rules: tuple[Any, ...] = ()
+    pilot_rungs: tuple[Any, ...] = ()
 
     @property
     def steady_holds(self) -> tuple[str, ...]:
         """Concise view derived from the exact executable rung evidence."""
-        return tuple(dict.fromkeys(rung.dest for rung in self.overlay_rules))
+        return tuple(dict.fromkeys(rung.dest for rung in self.pilot_rungs))
 
 
 @dataclass(frozen=True)
@@ -655,12 +655,12 @@ class _PilotState:
         self.world = self.world.set(best_trend=value)
 
     @property
-    def overlay_rules(self) -> PVector[Any]:
-        return self.world.overlay_rules
+    def pilot_rungs(self) -> PVector[Any]:
+        return self.world.pilot_rungs
 
-    @overlay_rules.setter
-    def overlay_rules(self, value: Any) -> None:
-        self.world = self.world.set(overlay_rules=pvector(value))
+    @pilot_rungs.setter
+    def pilot_rungs(self, value: Any) -> None:
+        self.world = self.world.set(pilot_rungs=pvector(value))
 
     @property
     def dwell_scans(self) -> int:
@@ -696,13 +696,13 @@ class _PilotState:
         """
         from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 
-        return self.world.set(work=fork_with_rungs(self.world.work, self.overlay_rules))
+        return self.world.set(work=fork_with_rungs(self.world.work, self.pilot_rungs))
 
     def load_world(self, world: _World) -> None:
         """Revert: the checkpoint's world *is* the answer.
 
         Re-fork ``work`` so the checkpoint stays reusable for a repeat revert;
-        ``committed_acts`` / ``best_trend`` / ``overlay_rules`` restore by assignment.
+        ``committed_acts`` / ``best_trend`` / ``pilot_rungs`` restore by assignment.
         Rebuild the overlay explicitly on the fresh fork so the runner and the
         persistent world cannot disagree. No scan-cutoff reconstruction — the
         pointer already holds exactly the state that existed when the checkpoint
@@ -710,7 +710,7 @@ class _PilotState:
         """
         from pyrung.core.analysis.pilot.overlay import fork_with_rungs
 
-        self.world = world.set(work=fork_with_rungs(world.work, world.overlay_rules))
+        self.world = world.set(work=fork_with_rungs(world.work, world.pilot_rungs))
 
 
 @dataclass(frozen=True)

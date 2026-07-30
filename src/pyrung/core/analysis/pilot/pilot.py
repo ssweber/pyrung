@@ -585,7 +585,7 @@ def _step_context(
     is_coast = policy.motion.is_coast
 
     frontier_tags: tuple[str, ...] = ()
-    overlay_rules: tuple[Any, ...] = ()
+    pilot_rungs: tuple[Any, ...] = ()
 
     if is_coast:
         seen: set[str] = set()
@@ -600,13 +600,13 @@ def _step_context(
                 seen.add(n.tag)
                 frontier.append(n.tag)
         frontier_tags = tuple(frontier)
-        overlay_rules = tuple(state.overlay_rules)
+        pilot_rungs = tuple(state.pilot_rungs)
 
     return _StepContext(
         policy=policy,
         execution=trial.execution,
         frontier_tags=frontier_tags,
-        overlay_rules=overlay_rules,
+        pilot_rungs=pilot_rungs,
     )
 
 
@@ -642,7 +642,7 @@ def _commit_and_monitor(
                 new_key=_pilot_world_key(
                     dict(execution.after_snap),
                     state.key_config,
-                    state.overlay_rules,
+                    state.pilot_rungs,
                 ),
             ),
         )
@@ -843,7 +843,7 @@ def _pilot_loop_events(
             work=plc,
             committed_acts=pvector([]),
             best_trend=None,
-            overlay_rules=pvector([]),
+            pilot_rungs=pvector([]),
             dwell_scans=0,
         ),
         key_config=ctx.key_config,

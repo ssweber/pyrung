@@ -150,7 +150,7 @@ def _read_route_trees(
     key_config = world.state.key_config
     exclusions = (
         ctx.compass.knowledge.nogood_identities(
-            _pilot_world_key(world.snapshot, key_config, world.state.overlay_rules)
+            _pilot_world_key(world.snapshot, key_config, world.state.pilot_rungs)
         )
         if key_config is not None
         else frozenset()
@@ -204,7 +204,7 @@ def _assemble_world(
         context=ctx,
         root_route=selected_route,
     )
-    key = _pilot_world_key(world.snapshot, key_config, state.overlay_rules)
+    key = _pilot_world_key(world.snapshot, key_config, state.pilot_rungs)
     details = tuple(
         TraceAction(
             tag=action.tag,

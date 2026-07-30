@@ -113,7 +113,7 @@ class TestGateSpin:
                 key_config=object(),
                 earned_work=None,
                 work=plc,
-                overlay_rules=[],
+                pilot_rungs=[],
             ),
             SimpleNamespace(),
             nogood_pair=("SpinSource", False),
@@ -186,7 +186,7 @@ class TestGateSpin:
                 key_config=cfg,
                 earned_work=None,
                 work=plc,
-                overlay_rules=[],
+                pilot_rungs=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
             ),
             SimpleNamespace(
@@ -265,7 +265,7 @@ class TestGateSpin:
                 key_config=cfg,
                 earned_work=None,
                 work=plc,
-                overlay_rules=[],
+                pilot_rungs=[],
                 remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
             ),
             SimpleNamespace(

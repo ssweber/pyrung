@@ -118,7 +118,7 @@ def _world(compass: Compass) -> OrientationWorld:
         ),
         state=SimpleNamespace(
             key_config=None,
-            overlay_rules=(),
+            pilot_rungs=(),
             work=SimpleNamespace(),
         ),
         context=context,
@@ -344,7 +344,7 @@ def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> 
         ),
     )
     state = SimpleNamespace(
-        overlay_rules=(),
+        pilot_rungs=(),
         pending_departure=None,
         committed_acts=(
             SimpleNamespace(
@@ -672,7 +672,7 @@ def test_stale_bearing_cannot_execute() -> None:
             acc_indices=frozenset(),
         ),
         work=SimpleNamespace(state=SimpleNamespace(tags={"X": 1})),
-        overlay_rules=(),
+        pilot_rungs=(),
     )
     world = OrientationWorld(
         world_key=("stale",),

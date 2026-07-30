@@ -1,4 +1,4 @@
-"""Compile and install PILOT's ordered, guarded PLC overlay rules.
+"""Compile and install PILOT's ordered, guarded pilot-rung overlay.
 
 This module owns the executable overlay records, condition lowering, expansion
 and execution receipts, installation, append semantics, and overlay-aware PLC
@@ -442,7 +442,7 @@ def _append_rungs(
 
     The returned persistent vector is the new world value.  Mutating a plain
     list remains supported for the low-level public seam and older callers, but
-    PILOT itself always assigns the returned value into ``_World.overlay_rules``.
+    PILOT itself always assigns the returned value into ``_World.pilot_rungs``.
     """
     updated_list = list(rungs)
     seen = {_rung_identity(rung) for rung in updated_list}
@@ -470,7 +470,7 @@ def fork_with_rungs(
     """Fork *source* and rebuild its scoped steering overlay verbatim.
 
     Every production PILOT fork that may execute is created here, with the
-    owning ``_World.overlay_rules`` supplied explicitly (the drive bootstrap supplies
+    owning ``_World.pilot_rungs`` supplied explicitly (the drive bootstrap supplies
     an explicit empty set).  Public ``PLC.fork()`` does not implicitly inherit
     PILOT holds.  Runner-internal replay has a separate contract: a
     reconstructed fork copies its source runner's **current** synthesis plant

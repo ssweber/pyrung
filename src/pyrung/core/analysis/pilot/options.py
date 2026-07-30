@@ -154,7 +154,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             for anchor_tag, anchor_value in anchors
         )
 
-    for rung in getattr(state, "overlay_rules", ()):
+    for rung in getattr(state, "pilot_rungs", ()):
         tag = getattr(rung, "dest", None)
         value = getattr(rung, "value", None)
         if (
@@ -757,8 +757,8 @@ def _managed_boolean_rungs(
     """
     from pyrung.core.condition import AllCondition, CompareNe
 
-    managed = {rung.dest for rung in state.overlay_rules}
-    overlay = _rung_execution_receipt(state.overlay_rules, frame.snap)
+    managed = {rung.dest for rung in state.pilot_rungs}
+    overlay = _rung_execution_receipt(state.pilot_rungs, frame.snap)
     proposed: list[PilotRung] = []
     lowered: set[_ActionPair] = set()
     for detail in details:
@@ -1041,7 +1041,7 @@ def _prescribe_wait(
             world,
             producers[0],
             state.work,
-            state.overlay_rules,
+            state.pilot_rungs,
             resting=ctx.resting,
         )
         preferred_channel = (
@@ -1392,7 +1392,7 @@ def _separate_prerequisites(
         pulse_tags = {detail.tag for detail in trace_action_details if detail.pulse}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
-            if tag in seen_prereq or tag in {rung.dest for rung in state.overlay_rules}:
+            if tag in seen_prereq or tag in {rung.dest for rung in state.pilot_rungs}:
                 continue
             detail = admission.detail_by_pair.get((tag, value))
             if detail is None or detail.until is None:
@@ -1419,7 +1419,7 @@ def _separate_prerequisites(
     held_command_tags = frozenset(
         tag
         for tag in ctx.compass.action_tags
-        if tag not in {rung.dest for rung in state.overlay_rules}
+        if tag not in {rung.dest for rung in state.pilot_rungs}
         and not _values_match(frame.snap.get(tag), ctx.resting.get(tag, False))
     )
     updated_trace = replace(

@@ -197,7 +197,7 @@ def _gate_spin(
             list(action_pairs),
             cfg=key_config,
             steerable=ctx.steerable,
-            rungs=state.overlay_rules,
+            rungs=state.pilot_rungs,
             resting=ctx.resting,
             edge_tags=ctx.edge_tags,
             scan_budget=state.remaining_search_scans(ctx.max_scans),
@@ -207,7 +207,7 @@ def _gate_spin(
         )
         if result.retry_fork is not None and result.correction is not None:
             retry_snap = dict(result.retry_fork.state.tags)
-            retry_rungs = (*state.overlay_rules, *result.correction.rungs)
+            retry_rungs = (*state.pilot_rungs, *result.correction.rungs)
             if ctx.avoid_pred is not None:
                 retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
                 for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):

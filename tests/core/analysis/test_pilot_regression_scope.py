@@ -43,13 +43,13 @@ class _RecoveryState:
     def __init__(self, checkpoint) -> None:
         self.checkpoints = [checkpoint]
         self.pending_departure = None
-        self.overlay_rules = ()
+        self.pilot_rungs = ()
         self.best_trend = checkpoint.trend
         self.work = checkpoint.world.work
 
     def load_world(self, world) -> None:
         self.work = world.work
-        self.overlay_rules = world.overlay_rules
+        self.pilot_rungs = world.pilot_rungs
 
 
 def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
@@ -61,7 +61,7 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
     checkpoint = SimpleNamespace(
         owner=owner,
         key=rollback_key,
-        world=SimpleNamespace(work=checkpoint_work, overlay_rules=()),
+        world=SimpleNamespace(work=checkpoint_work, pilot_rungs=()),
         trend=3,
     )
     state = _RecoveryState(checkpoint)

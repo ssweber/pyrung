@@ -121,7 +121,7 @@ def _cp(key: Any, fork: PLC, trend: int, frontier: tuple = ()) -> _Checkpoint:
             work=fork,
             committed_acts=pvector([]),
             best_trend=trend,
-            overlay_rules=pvector([]),
+            pilot_rungs=pvector([]),
             dwell_scans=0,
         ),
         trend,
@@ -149,7 +149,7 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
         work=over.pop("work", None) or _oneshot_plc(),
         committed_acts=pvector(committed_acts),
         best_trend=best_trend,
-        overlay_rules=pvector(over.pop("overlay_rules", [])),
+        pilot_rungs=pvector(over.pop("pilot_rungs", [])),
         dwell_scans=over.pop("dwell_scans", 0),
     )
     base: dict[str, Any] = {
@@ -1281,8 +1281,8 @@ class TestRegression:
         )
         from pyrung.core.analysis.pilot.overlay import PilotRung
 
-        state.overlay_rules = (
-            *state.overlay_rules,
+        state.pilot_rungs = (
+            *state.pilot_rungs,
             PilotRung("A", True, ~state.work._known_tags_by_name["B"]),
         )
         trial = _make_trial(6, BearingEffect.SATISFIED, chase_regression_causes=False)
@@ -1296,7 +1296,7 @@ class TestRegression:
         )
 
         state.work.step()
-        assert not state.overlay_rules
+        assert not state.pilot_rungs
         assert state.work.state.tags["A"] is False
 
     def test_regression_nogoods_recorded_at_action_source(self):

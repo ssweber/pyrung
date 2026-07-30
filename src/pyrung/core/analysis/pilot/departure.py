@@ -142,7 +142,7 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastR
     receipt records the chain.  A ``"timeout"`` receipt means the cap-hit
     value may be mid-transition; the caller must not trust it as settled.
     """
-    fork = fork_with_rungs(state.work, state.overlay_rules)
+    fork = fork_with_rungs(state.work, state.pilot_rungs)
     receipt = CoastSession(fork, kind="departure-settle").settle_landing(channel_tag)
     return fork, receipt
 
@@ -551,7 +551,7 @@ def classify_departure(
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
     settled_snap = dict(fork.state.tags)
     settled_key = (
-        _pilot_world_key(settled_snap, state.key_config, state.overlay_rules)
+        _pilot_world_key(settled_snap, state.key_config, state.pilot_rungs)
         if state.key_config is not None
         else None
     )
