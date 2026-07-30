@@ -126,7 +126,11 @@ this table only locates the owner.
   `_select_wait` owns wait-source choice
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
-- Local trial gates and accepted execution evidence: `verify.py::verify_gates`
+- Local trial gates and accepted execution evidence:
+  `verify.py::verify_gates` / `verify_excursion_retry`
+- Verification-time excursion orchestration: `pilot.py::_resolve_excursion`;
+  verify reports the exact executed attempt, PILOT invokes
+  `investigate.py::investigate_excursion` once, and verify judges that replay
 - Committed operation context: `pilot.py::_step_context`
 - Physical planning versus proof: orientation's
   `TraceReadConstraints.from_context` may propose a coupling driver;
@@ -163,8 +167,12 @@ this table only locates the owner.
    `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
-4. `pilot.py::_record_attempt` applies all observations, including rejected
-   attempts, before any further orientation.
+   A spin-shaped excursion is returned with its exact execution rather than
+   investigated inside the gate.
+4. `pilot.py::_resolve_excursion` owns at most one investigation and passes its
+   replay to `verify.verify_excursion_retry`, which resumes after spin.
+   `_record_attempt` then applies all observations, including rejected
+   attempts, exactly once before any further orientation.
 5. An accepted fork is committed and `progress.py` decides retention,
    pending continuation, investigation, or revert. Trend monitoring hands a
    detected channel departure to its terminal `_handle_channel_departure`
@@ -225,7 +233,8 @@ nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
 
 Orchestration:
 
-- `pilot.py` — drive loop, world commit, public entry points
+- `pilot.py` — drive loop, verification-time excursion orchestration, world
+  commit, public entry points
 - `recording.py` — event/plan rendering; no drive decisions
 - `types.py` — cross-module records and protocols
 - `__init__.py` — package exports
@@ -262,13 +271,14 @@ Execution and observation:
 
 Judgment and recovery:
 
-- `verify.py` — trial gates
+- `verify.py` — trial gates, excursion detection, and replay judgment
 - `outcome.py` — evidence classification
 - `progress.py` — retention, recovery, corrections, reverts
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
-- `investigate.py` — hypothesis ranking, composite replay, and confirmation
+- `investigate.py` — hypothesis ranking, composite replay, excursion replay,
+  and confirmation; no drive-loop ownership
 - `corrections.py` — corrective-hold hypothesis production
 
 Module docstrings define the current local contracts. If a change moves a

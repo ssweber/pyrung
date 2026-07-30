@@ -3,7 +3,8 @@
 The `_try_*` functions prepare a fork, settle prerequisite regions, pulse an
 action or coast through a dwell, and pass the resulting trial to
 ``verify.verify_gates``. They return an ``_AttemptResult`` containing the
-verdict, receipts, and transition observations.
+verdict, receipts, transition observations, or the exact execution of a
+verification-time excursion for the drive loop to investigate.
 
 This module does not apply observations, replace the committed world, manage
 checkpoints, or install corrections.

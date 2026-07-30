@@ -9,7 +9,6 @@ Coverage targets:
 
 from __future__ import annotations
 
-from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
@@ -17,6 +16,7 @@ import pytest
 from pyrung import Bool, Int, Program, Real, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
+from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence, Unknown
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
@@ -34,7 +34,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
@@ -42,6 +42,7 @@ from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
     TargetReached,
+    _AttemptResult,
     _ConfirmedCorrection,
     _ExecutedAttempt,
     _IterationFrame,
@@ -52,6 +53,8 @@ from pyrung.core.analysis.pilot.verify import (
     _gate_dead_end,
     _gate_spin,
     _owned_channel_motion,
+    _SpinVerdict,
+    verify_excursion_retry,
     verify_gates,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
@@ -105,34 +108,16 @@ class TestGateSpin:
         key = ("same",)
         trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key)
         gates = []
-        result = _gate_spin(
+        verdict = _gate_spin(
             trial,
-            (("SpinSource", False),),
             SimpleNamespace(key=key, snap=snap),
-            SimpleNamespace(
-                key_config=object(),
-                earned_work=None,
-                work=plc,
-                pilot_rungs=[],
-            ),
-            SimpleNamespace(),
-            nogood_pair=("SpinSource", False),
+            SimpleNamespace(earned_work=None),
             gate_events=gates,
-            collected_nogoods=[],
-            avoid_names=[],
         )
-        assert result is None
-        assert gates[-1].event == "spin"
-        assert gates[-1].evidence == {
-            "frame_key": key,
-            "trial_key": key,
-            "post_pulse_key": key,
-            "pending_effects": False,
-            "ordinal_advanced": False,
-            "actions": (("SpinSource", False),),
-        }
+        assert verdict is _SpinVerdict.SPIN
+        assert gates == []
 
-    def test_excursion_retried_with_exact_correction(self, monkeypatch):
+    def test_verify_reports_excursion_without_investigating_or_nogood(self):
         source = Bool("ExcursionSource", external=True)
         dest = Bool("ExcursionDest")
         with Program() as program:
@@ -148,24 +133,16 @@ class TestGateSpin:
             acc_indices=frozenset(),
         )
         frame_key = _pilot_world_key(snap, cfg, ())
-        guard = CompareEq(dest, True)
-        rung = PilotRung(source.name, False, guard)
-        correction = _ConfirmedCorrection(
-            identity=correction_identity((rung,)),
-            rungs=(rung,),
-            sources=(dest.name, source.name),
-            justification="excursion replay",
+        policy = ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=((source.name, True),),
+            applied=((source.name, True),),
+            nogood_pair=(source.name, True),
         )
-        retry = plc.fork()
-        _set_rungs(retry, correction.rungs)
-        retry.step()
-        monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify.investigate_excursion",
-            lambda *_args, **_kwargs: ExcursionResult(
-                reverted=[dest.name],
-                correction=correction,
-                retry_fork=retry,
-            ),
+        bearing = Bearing(
+            frame_key,
+            Pulse(policy),
+            BearingObjective(TargetSpec(dest.name, True)),
         )
         trial = _PulseState(
             plc.fork(),
@@ -178,38 +155,24 @@ class TestGateSpin:
             snap,
             frame_key,
         )
-        result = _gate_spin(
-            trial,
-            ((source.name, True),),
+        executed = _ExecutedAttempt(pulse=trial, bearing=bearing)
+
+        result = verify_gates(
+            executed,
             SimpleNamespace(key=frame_key, snap=snap),
+            SimpleNamespace(key_config=cfg, earned_work=None),
             SimpleNamespace(
-                key_config=cfg,
-                earned_work=None,
-                work=plc,
-                pilot_rungs=[],
-                remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
-            ),
-            SimpleNamespace(
-                steerable=frozenset((source.name,)),
-                resting={source.name: False},
-                edge_tags=set(),
-                max_scans=50,
-                pdg=None,
-                program=program,
                 avoid_pred=None,
+                target=TargetSpec(dest.name, True),
             ),
-            nogood_pair=(source.name, True),
-            gate_events=[],
-            collected_nogoods=[],
-            avoid_names=[],
         )
 
-        assert result is not None
-        assert result.fork is retry
-        assert result.confirmed_correction is correction
-        assert result.key == _pilot_world_key(result.snap, cfg, correction.rungs)
+        assert result.trial is None
+        assert result.excursion_attempt is executed
+        assert result.nogood_pairs == frozenset()
+        assert result.confirmed_correction is None
 
-    def test_excursion_retry_is_rechecked_against_avoid(self, monkeypatch):
+    def test_excursion_retry_is_rechecked_against_avoid_history(self):
         source = Bool("AvoidRetrySource", external=True)
         hazard = Bool("AvoidRetryHazard")
         with Program() as program:
@@ -236,14 +199,9 @@ class TestGateSpin:
         retry.patch({source.name: True})
         retry.step()
         assert retry.state.tags[hazard.name] is True
-        monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify.investigate_excursion",
-            lambda *_args, **_kwargs: ExcursionResult(
-                reverted=[hazard.name],
-                correction=correction,
-                retry_fork=retry,
-            ),
-        )
+        retry.patch({source.name: False})
+        retry.step()
+        assert retry.state.tags[hazard.name] is False
         trial = _PulseState(
             plc.fork(),
             plc.state.scan_id,
@@ -255,36 +213,48 @@ class TestGateSpin:
             snap,
             frame_key,
         )
-        avoid_names: list[str] = []
+        policy = ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=((source.name, True),),
+            applied=((source.name, True),),
+            nogood_pair=(source.name, True),
+        )
+        bearing = Bearing(
+            frame_key,
+            Pulse(policy),
+            BearingObjective(TargetSpec(hazard.name, True)),
+        )
+        observation = ActionNogoodObservation(frame_key, ("pair", (source.name, True)))
+        detected = _AttemptResult(
+            trial=None,
+            excursion_attempt=_ExecutedAttempt(pulse=trial, bearing=bearing),
+            observations=(observation,),
+        )
 
-        result = _gate_spin(
-            trial,
-            ((source.name, True),),
+        result = verify_excursion_retry(
+            detected,
+            ExcursionResult(
+                reverted=[hazard.name],
+                correction=correction,
+                retry_fork=retry,
+            ),
             SimpleNamespace(key=frame_key, snap=snap),
             SimpleNamespace(
                 key_config=cfg,
                 earned_work=None,
-                work=plc,
                 pilot_rungs=[],
-                remaining_search_scans=lambda max_scans, scan_id=None: max_scans,
             ),
             SimpleNamespace(
-                steerable=frozenset((source.name,)),
-                resting={source.name: False},
-                edge_tags=set(),
-                max_scans=50,
-                pdg=None,
-                program=program,
                 avoid_pred=lambda state: bool(state.get(hazard.name)),
+                target=TargetSpec(hazard.name, True),
             ),
-            nogood_pair=(source.name, True),
-            gate_events=[],
-            collected_nogoods=[],
-            avoid_names=avoid_names,
         )
 
-        assert result is None
-        assert avoid_names == ["avoided condition"]
+        assert result.trial is None
+        assert result.avoid_names == ("avoided condition",)
+        assert result.nogood_pairs == frozenset(((source.name, True),))
+        assert result.observations == (observation,)
+        assert result.confirmed_correction is None
 
     @pytest.mark.skip(reason="stub")
     def test_pending_effects_bypass_spin(self): ...
@@ -551,20 +521,26 @@ class TestVerifyGates:
                 ),
             )
 
-    def test_spin_replacement_owns_a_new_earned_work_receipt(self, monkeypatch):
+    def test_excursion_retry_owns_correction_timeline_and_new_earned_work_receipt(self):
         source = Bool("RetryReceiptSource", external=True)
         target = Bool("RetryReceiptTarget")
+        step = Int("RetryReceiptStep", external=True)
         with Program() as program:
+            with Rung(step == -999):
+                out(target)
             with Rung(source):
                 out(target)
         plc = PLC(program, dt=0.010)
-        before = {**dict(plc.state.tags), "RetryReceiptStep": 1}
-        pre_retry = {**before, "RetryReceiptStep": 2}
-        replacement_snap = {
-            **before,
-            target.name: True,
-            "RetryReceiptStep": 3,
-        }
+        plc.patch({step.name: 1})
+        before = dict(plc.state.tags)
+        pre_retry = {**before, step.name: 2}
+        cfg = _StateKeyConfig(
+            stateful_names=(target.name,),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        frame_key = _pilot_world_key(before, cfg, ())
         pulse = _PulseState(
             fork=plc,
             scan_before=3,
@@ -574,13 +550,7 @@ class TestVerifyGates:
             post_pulse_snap=pre_retry,
             post_pulse_key=("post",),
             snap=pre_retry,
-            key=("spin",),
-        )
-        replacement = replace(
-            pulse,
-            snap=replacement_snap,
-            key=("replacement",),
-            timeline=(CoastTriggerEvent("retry", "pen", 5, ()),),
+            key=frame_key,
         )
         policy = ActPolicy(
             source=ActSource.TRACE,
@@ -588,11 +558,11 @@ class TestVerifyGates:
             applied=((source.name, True),),
         )
         bearing = Bearing(
-            ("world",),
+            frame_key,
             Pulse(policy),
             BearingObjective(TargetSpec(target.name, True)),
         )
-        earned_work = EarnedWork((EarnedWorkComponent("RetryReceiptStep", "stepper", 1),))
+        earned_work = EarnedWork((EarnedWorkComponent(step.name, "stepper", 1),))
         receipts = []
 
         class _CountingEarnedWork:
@@ -601,15 +571,38 @@ class TestVerifyGates:
                 receipts.append(receipt)
                 return receipt
 
-        monkeypatch.setattr(
-            "pyrung.core.analysis.pilot.verify._gate_spin",
-            lambda *_args, **_kwargs: replacement,
+        state = SimpleNamespace(
+            earned_work=_CountingEarnedWork(),
+            key_config=cfg,
+            pilot_rungs=[],
+        )
+        frame = SimpleNamespace(key=frame_key, snap=before)
+        detected = _AttemptResult(
+            trial=None,
+            excursion_attempt=_ExecutedAttempt(pulse=pulse, bearing=bearing),
         )
 
-        result = verify_gates(
-            _ExecutedAttempt(pulse=pulse, bearing=bearing),
-            SimpleNamespace(snap=before),
-            SimpleNamespace(earned_work=_CountingEarnedWork()),
+        retry = plc.fork()
+        retry.patch({source.name: True, step.name: 3})
+        retry.step()
+        timeline = (CoastTriggerEvent("retry", "pen", 5, ()),)
+        rung = PilotRung(source.name, True, CompareEq(target, True))
+        correction = _ConfirmedCorrection(
+            identity=correction_identity((rung,)),
+            rungs=(rung,),
+            sources=(target.name, source.name),
+            justification="excursion replay",
+        )
+        result = verify_excursion_retry(
+            detected,
+            ExcursionResult(
+                reverted=[target.name],
+                correction=correction,
+                retry_fork=retry,
+                retry_timeline=timeline,
+            ),
+            frame,
+            state,
             SimpleNamespace(
                 avoid_pred=None,
                 target=TargetSpec(target.name, True),
@@ -617,14 +610,14 @@ class TestVerifyGates:
         )
 
         assert result.trial is not None
-        assert result.trial.attempt.pulse is replacement
-        assert result.trial.execution.after_snap == replacement_snap
-        assert result.trial.execution.timeline == replacement.timeline
+        assert result.trial.attempt.pulse.fork is retry
+        assert result.trial.execution.after_snap == dict(retry.state.tags)
+        assert result.trial.execution.timeline == timeline
         assert result.trial.execution.timeline != pulse.timeline
-        assert len(receipts) == 2
-        assert receipts[0].landing_mark == (("RetryReceiptStep", 2),)
-        assert result.trial.earned_work_receipt is receipts[1]
-        assert result.trial.earned_work_receipt.landing_mark == (("RetryReceiptStep", 3),)
+        assert result.confirmed_correction is correction
+        assert len(receipts) == 1
+        assert result.trial.earned_work_receipt is receipts[0]
+        assert result.trial.earned_work_receipt.landing_mark == ((step.name, 3),)
 
     def test_intervention_cannot_erase_banked_earned_work(self):
         before = {"Step": 3, "Target": False}

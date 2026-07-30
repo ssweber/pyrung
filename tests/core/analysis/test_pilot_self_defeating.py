@@ -51,7 +51,7 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
 )
 from pyrung.core.analysis.pilot.overlay import OperationReceipt, PilotRung
-from pyrung.core.analysis.pilot.pilot import _record_attempt
+from pyrung.core.analysis.pilot.pilot import _record_attempt, _resolve_excursion
 from pyrung.core.analysis.pilot.progress import (
     _causally_harmful_corrections,
     _checkpoint_recovery_origin,
@@ -70,6 +70,7 @@ from pyrung.core.analysis.pilot.types import (
     CorrectionStatus,
     MotionKind,
     _AcceptedTrial,
+    _AttemptResult,
     _Checkpoint,
     _ConfirmedCorrection,
     _CorrectionReceipt,
@@ -79,6 +80,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
     _World,
 )
+from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import AllCondition, CompareEq, CompareNe
 from pyrung.core.context import RungId
@@ -721,6 +723,41 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
     assert state.hold_log[-1].source == "excursion"
     assert state.checkpoints[-1].world.pilot_rungs == state.world.pilot_rungs
+
+
+def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(monkeypatch):
+    """The drive loop owns exactly one runtime investigation per report."""
+    state, trial, frame, ctx = _saboteur_scenario()
+    state.key_config = _StateKeyConfig((), (), (), frozenset())
+    ctx.max_scans = 10
+    detected = _AttemptResult(trial=None, excursion_attempt=trial.attempt)
+    investigation = object()
+    resolved = _AttemptResult(trial=trial)
+    calls = []
+
+    def investigate(*args, **kwargs):
+        calls.append((args, kwargs))
+        return investigation
+
+    def judge(result, replay, got_frame, got_state, got_ctx):
+        assert result is detected
+        assert replay is investigation
+        assert got_frame is frame
+        assert got_state is state
+        assert got_ctx is ctx
+        return resolved
+
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.pilot.investigate_excursion",
+        investigate,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.pilot.verify_excursion_retry",
+        judge,
+    )
+
+    assert _resolve_excursion(detected, frame, state, ctx) is resolved
+    assert len(calls) == 1
 
 
 def test_correction_installer_rejects_forged_identity():

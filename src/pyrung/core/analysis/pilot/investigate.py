@@ -10,9 +10,10 @@ result receives an evidence-derived lifetime from
 ``_scoped_correction_rungs`` and must survive a guarded replay before the first
 confirmed composite is returned.
 
-``investigate_excursion`` is the shorter verification-time path for a trial
-that reverted. Neither path installs its correction; recovery and installation
-belong to ``progress.py``.
+``investigate_excursion`` is the shorter path for a verification-reported
+trial that reverted. The drive loop invokes it exactly once and returns its
+replay to verification for judgment. Neither path installs its correction;
+installation belongs to the orchestration/recovery owner.
 """
 
 from __future__ import annotations
@@ -1297,8 +1298,9 @@ def investigate_excursion(
 ) -> ExcursionResult:
     """Diagnose an excursion and replay-validate candidate holds.
 
-    Verify detected that the state key changed during the pulse but
-    reverted after settling.  This function finds *why* and *validates*.
+    Verify detected that the state key changed during the pulse but reverted
+    after settling; the drive loop invokes this function to find *why* and
+    validate one replay.
 
     Primary path: suppress the *antagonist* — any writer of a reverted register
     that is **causally implicated** in the deviation (``cause()`` attributes the

@@ -2,7 +2,9 @@
 
 ``verify_gates`` applies avoid and target checks, rejects spins, visited states,
 and dead ends, then delegates motion attribution and progress classification to
-``outcome.py``. A suspicious excursion may be replayed before the final verdict.
+``outcome.py``. It reports a suspicious excursion to the drive loop without
+performing runtime investigation. ``verify_excursion_retry`` judges the one
+replay returned by that owner and resumes after the spin gate.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -13,7 +15,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Any
+from enum import Enum, auto
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
 from pyrung.core.analysis.pilot.causal import chase_cause_roots
@@ -23,7 +26,6 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Reachable,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
-from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     OrientationWorld,
@@ -49,12 +51,23 @@ from pyrung.core.analysis.sp_values import _values_match
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.investigate import ExcursionResult
+
 
 @dataclass(frozen=True)
 class _DeadEndResult:
     tree: Any
     trend: int
     has_new_frontier: bool = False
+
+
+class _SpinVerdict(Enum):
+    """Local spin-gate judgment; orchestration acts on excursions elsewhere."""
+
+    PASS = auto()
+    SPIN = auto()
+    EXCURSION = auto()
 
 
 def _avoid_names_after_clear(
@@ -154,22 +167,15 @@ def _record_gate(
 
 def _gate_spin(
     trial: _PulseState,
-    action_pairs: tuple[_ActionPair, ...],
     frame: Any,
     state: Any,
-    ctx: Any,
     *,
-    nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
-    collected_nogoods: list[_ActionPair],
-    avoid_names: list[str],
     earned_work_receipt: EarnedWorkReceipt | None = None,
-) -> _PulseState | None:
-    key_config = state.key_config
-    assert key_config is not None
-
+) -> _SpinVerdict:
+    """Classify one settled execution without investigating or retrying it."""
     if trial.key != frame.key or _has_pending_effects(trial.fork):
-        return trial
+        return _SpinVerdict.PASS
 
     # The search key threshold-masks event-earned progress sources, so a trial
     # that advanced one (the knock that incremented a counter the key aliases at
@@ -185,90 +191,12 @@ def _gate_spin(
         )
     if earned_work_receipt.any_forward:
         _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
-        return trial
+        return _SpinVerdict.PASS
 
     if trial.post_pulse_key != frame.key:
-        result = investigate_excursion(
-            state.work,
-            trial.fork,
-            frame.snap,
-            trial.post_pulse_snap,
-            frame.key,
-            list(action_pairs),
-            cfg=key_config,
-            steerable=ctx.steerable,
-            rungs=state.pilot_rungs,
-            resting=ctx.resting,
-            edge_tags=ctx.edge_tags,
-            scan_budget=state.remaining_search_scans(ctx.max_scans),
-            pdg=ctx.pdg,
-            program=ctx.program,
-            ctx=ctx,
-        )
-        if result.retry_fork is not None and result.correction is not None:
-            retry_snap = dict(result.retry_fork.state.tags)
-            retry_rungs = (*state.pilot_rungs, *result.correction.rungs)
-            if ctx.avoid_pred is not None:
-                retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
-                for scan in range(trial.scan_before + 1, result.retry_fork.state.scan_id + 1):
-                    retry_violations.extend(
-                        _avoid_names_after_clear(
-                            ctx.avoid_pred,
-                            frame.snap,
-                            dict(result.retry_fork.history.at(scan).tags),
-                        )
-                    )
-                if retry_violations:
-                    names = tuple(dict.fromkeys(retry_violations))
-                    avoid_names.extend(names)
-                    if nogood_pair is not None:
-                        collected_nogoods.append(nogood_pair)
-                    _record_gate(
-                        "AVOID",
-                        f": excursion retry enters avoid: {', '.join(names)}",
-                        gate_events,
-                    )
-                    return None
-            retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
-            _record_gate(
-                "EXCURSION-RETRY-OK",
-                (
-                    f": reverted={result.reverted}, "
-                    f"rungs={tuple((r.dest, r.value) for r in result.correction.rungs)}"
-                ),
-                gate_events,
-            )
-            return replace(
-                trial,
-                fork=result.retry_fork,
-                snap=retry_snap,
-                key=retry_key,
-                # The retry fork replaced the original pulse; its recorded
-                # session is the timeline this trial carries forward.
-                timeline=result.retry_timeline,
-                confirmed_correction=result.correction,
-            )
-        if result.reverted:
-            _record_gate("EXCURSION-NO-HOLDS", gate_events=gate_events)
-        else:
-            _record_gate("EXCURSION-RETRY-FAIL", gate_events=gate_events)
-        return None
+        return _SpinVerdict.EXCURSION
 
-    if nogood_pair is not None:
-        collected_nogoods.append(nogood_pair)
-    _record_gate(
-        "SPIN",
-        gate_events=gate_events,
-        evidence={
-            "frame_key": frame.key,
-            "trial_key": trial.key,
-            "post_pulse_key": trial.post_pulse_key,
-            "pending_effects": False,
-            "ordinal_advanced": False,
-            "actions": action_pairs,
-        },
-    )
-    return None
+    return _SpinVerdict.SPIN
 
 
 def _gate_cycle(
@@ -477,6 +405,292 @@ def _gate_dead_end(
 # ---------------------------------------------------------------------------
 
 
+def _verify_after_spin(
+    attempt: _ExecutedAttempt,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    *,
+    gate_events: list[PilotGateEvent],
+    collected_nogoods: list[_ActionPair],
+    avoid_names: list[str],
+    earned_work_receipt: EarnedWorkReceipt,
+    channel_motion: ChannelMotion,
+    observations: tuple[Any, ...] = (),
+) -> _AttemptResult:
+    """Run the gates after spin judgment for an original or replayed attempt."""
+    trial = attempt.pulse
+    bearing = attempt.bearing
+    policy = bearing.act.policy
+    action_pairs = policy.action_pairs
+    nogood_pair = policy.nogood_pair
+
+    def _reject() -> _AttemptResult:
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            confirmed_correction=trial.confirmed_correction,
+            observations=observations,
+            avoid_names=tuple(avoid_names),
+        )
+
+    if target_reached(
+        trial.snap,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    ):
+        gate_events.append(PilotGateEvent("target", f"{ctx.target.tag}={ctx.target.value!r}"))
+        accepted = _accepted_trial(
+            attempt,
+            frame,
+            gate_events,
+            channel_motion,
+            earned_work_receipt,
+            TargetReached(),
+        )
+        return _AttemptResult(
+            trial=accepted,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            confirmed_correction=trial.confirmed_correction,
+            observations=observations,
+            avoid_names=tuple(avoid_names),
+        )
+
+    pending = _has_pending_effects(trial.fork)
+    if not _gate_cycle(
+        trial,
+        frame,
+        state,
+        pending=pending,
+        earned_work_receipt=earned_work_receipt,
+        learned_prescribed=policy.learned_prescribed,
+        nogood_pair=nogood_pair,
+        gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
+    ):
+        return _reject()
+
+    dead_end = _gate_dead_end(
+        trial,
+        action_pairs,
+        frame,
+        state,
+        ctx,
+        target=bearing.objective.target,
+        earned_work_receipt=earned_work_receipt,
+        learned_prescribed=policy.learned_prescribed,
+        nogood_pair=nogood_pair,
+        gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
+        channel_motion=channel_motion,
+    )
+    if dead_end is None:
+        return _reject()
+
+    assessment = assess_outcome(
+        trial,
+        action_pairs,
+        frame,
+        ctx,
+        dead_end.trend,
+        dead_end.has_new_frontier,
+        chase_cause_roots,
+        route_prescribed=policy.route_prescribed,
+        channel_motion=channel_motion,
+        earned_work_receipt=earned_work_receipt,
+    )
+
+    if not assessment.accepted:
+        if nogood_pair is not None:
+            collected_nogoods.append(nogood_pair)
+        _record_gate(
+            "BEARING-COAST-STALL" if channel_motion.active else "BAD-EDGE",
+            f": distance {frame.distance_before} -> {dead_end.trend}",
+            gate_events,
+            evidence={
+                "accepted": assessment.accepted,
+                "agency": assessment.agency.value,
+                "bearing": assessment.bearing.value,
+                "progress": assessment.progress.value,
+                "new_frontier": assessment.new_frontier,
+                "trend_before": frame.distance_before,
+                "trend_after": dead_end.trend,
+                "bearing_coast_channel_tag": channel_motion.channel_tag,
+                "bearing_coast_target_value": channel_motion.target_value,
+                "bearing_coast_actual_value": (
+                    trial.snap.get(channel_motion.channel_tag)
+                    if channel_motion.channel_tag is not None
+                    else None
+                ),
+            },
+        )
+        return _reject()
+
+    gate_events.append(
+        PilotGateEvent(
+            assessment.bearing.value,
+            f"distance {frame.distance_before} -> {dead_end.trend}",
+            evidence={
+                "accepted": assessment.accepted,
+                "agency": assessment.agency.value,
+                "bearing": assessment.bearing.value,
+                "progress": assessment.progress.value,
+                "new_frontier": assessment.new_frontier,
+            },
+        )
+    )
+
+    return _AttemptResult(
+        trial=_accepted_trial(
+            attempt,
+            frame,
+            gate_events,
+            channel_motion,
+            earned_work_receipt,
+            AssessedMotion(
+                new_key=trial.key,
+                trend=dead_end.trend,
+                assessment=assessment,
+            ),
+        ),
+        gate_events=tuple(gate_events),
+        nogood_pairs=frozenset(collected_nogoods),
+        confirmed_correction=trial.confirmed_correction,
+        observations=observations,
+        avoid_names=tuple(avoid_names),
+    )
+
+
+def verify_excursion_retry(
+    detected_result: _AttemptResult,
+    investigation_result: ExcursionResult,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> _AttemptResult:
+    """Judge one drive-loop-owned excursion replay, then resume after spin.
+
+    The original attempt's observations and partial gate history survive
+    unchanged.  The replay is checked against every retained history snapshot
+    for ``avoid=`` before its exact correction, timeline, key, and earned-work
+    receipt may proceed through the remaining gates.
+    """
+    attempt = detected_result.excursion_attempt
+    if attempt is None:
+        raise ValueError("excursion retry requires the detected executed attempt")
+
+    trial = attempt.pulse
+    policy = attempt.bearing.act.policy
+    nogood_pair = policy.nogood_pair
+    gate_events = list(detected_result.gate_events)
+    collected_nogoods = list(detected_result.nogood_pairs)
+    avoid_names = list(detected_result.avoid_names)
+    observations = detected_result.observations
+
+    if investigation_result.retry_fork is None or investigation_result.correction is None:
+        _record_gate(
+            "EXCURSION-NO-HOLDS" if investigation_result.reverted else "EXCURSION-RETRY-FAIL",
+            gate_events=gate_events,
+        )
+        return _AttemptResult(
+            trial=None,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            confirmed_correction=detected_result.confirmed_correction,
+            observations=observations,
+            avoid_names=tuple(avoid_names),
+        )
+
+    key_config = state.key_config
+    assert key_config is not None
+    retry_fork = investigation_result.retry_fork
+    correction = investigation_result.correction
+    retry_snap = dict(retry_fork.state.tags)
+    retry_rungs = (*state.pilot_rungs, *correction.rungs)
+
+    if ctx.avoid_pred is not None:
+        retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
+        for scan in range(trial.scan_before + 1, retry_fork.state.scan_id + 1):
+            retry_violations.extend(
+                _avoid_names_after_clear(
+                    ctx.avoid_pred,
+                    frame.snap,
+                    dict(retry_fork.history.at(scan).tags),
+                )
+            )
+        if retry_violations:
+            names = tuple(dict.fromkeys(retry_violations))
+            avoid_names.extend(names)
+            if nogood_pair is not None:
+                collected_nogoods.append(nogood_pair)
+            _record_gate(
+                "AVOID",
+                f": excursion retry enters avoid: {', '.join(names)}",
+                gate_events,
+            )
+            return _AttemptResult(
+                trial=None,
+                gate_events=tuple(gate_events),
+                nogood_pairs=frozenset(collected_nogoods),
+                confirmed_correction=detected_result.confirmed_correction,
+                observations=observations,
+                avoid_names=tuple(avoid_names),
+            )
+
+    retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
+    _record_gate(
+        "EXCURSION-RETRY-OK",
+        (
+            f": reverted={investigation_result.reverted}, "
+            f"rungs={tuple((r.dest, r.value) for r in correction.rungs)}"
+        ),
+        gate_events,
+    )
+    retry_trial = replace(
+        trial,
+        fork=retry_fork,
+        snap=retry_snap,
+        key=retry_key,
+        timeline=investigation_result.retry_timeline,
+        confirmed_correction=correction,
+    )
+    retry_attempt = replace(attempt, pulse=retry_trial)
+    earned_work = getattr(state, "earned_work", None)
+    earned_work_receipt = (
+        earned_work.receipt(frame.snap, retry_snap)
+        if earned_work is not None
+        else EarnedWorkReceipt()
+    )
+    declared_motion = (
+        ChannelMotion(
+            policy.heading.channel_tag,
+            policy.heading.target_value,
+            policy.heading.boundary,
+        )
+        if policy.heading is not None
+        else ChannelMotion()
+    )
+    channel_motion = _owned_channel_motion(
+        trial,
+        trial.channel_motion if trial.channel_motion.active else declared_motion,
+    )
+    return _verify_after_spin(
+        retry_attempt,
+        frame,
+        state,
+        ctx,
+        gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
+        avoid_names=avoid_names,
+        earned_work_receipt=earned_work_receipt,
+        channel_motion=channel_motion,
+        observations=observations,
+    )
+
+
 def verify_gates(
     attempt: _ExecutedAttempt,
     frame: Any,
@@ -491,9 +705,9 @@ def verify_gates(
     real snapshots retained by execution. All steering execution modes
     converge here.
 
-    Verification owns the accepted trial's earned-work receipt and replaces it only
-    when spin recovery replaces the fork; outcome and commit consume that
-    receipt intact.
+    Verification owns the accepted trial's earned-work receipt. An excursion
+    returns its exact attempt to the drive loop; the retry judge computes the
+    replacement receipt before resuming this sequence after spin.
     """
     trial = attempt.pulse
     bearing = attempt.bearing
@@ -633,137 +847,48 @@ def verify_gates(
     ):
         return _accept_target()
 
-    pre_spin_trial = trial
-    spun = _gate_spin(
+    spin_verdict = _gate_spin(
         trial,
-        action_pairs,
+        frame,
+        state,
+        gate_events=gate_events,
+        earned_work_receipt=earned_work_receipt,
+    )
+    if spin_verdict is _SpinVerdict.SPIN:
+        if nogood_pair is not None:
+            collected_nogoods.append(nogood_pair)
+        _record_gate(
+            "SPIN",
+            gate_events=gate_events,
+            evidence={
+                "frame_key": frame.key,
+                "trial_key": trial.key,
+                "post_pulse_key": trial.post_pulse_key,
+                "pending_effects": False,
+                "ordinal_advanced": False,
+                "actions": action_pairs,
+            },
+        )
+        return _reject()
+    if spin_verdict is _SpinVerdict.EXCURSION:
+        return _AttemptResult(
+            trial=None,
+            excursion_attempt=attempt,
+            gate_events=tuple(gate_events),
+            # An excursion is evidence of a real transient effect.  It is not a
+            # spin and therefore never rejects this action on detection.
+            nogood_pairs=frozenset(),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(retry_avoid_names),
+        )
+    return _verify_after_spin(
+        attempt,
         frame,
         state,
         ctx,
-        nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
         avoid_names=retry_avoid_names,
         earned_work_receipt=earned_work_receipt,
-    )
-    if spun is None:
-        return _reject()
-    trial = spun
-    if trial is not pre_spin_trial:
-        earned_work_receipt = (
-            earned_work.receipt(frame.snap, trial.snap)
-            if earned_work is not None
-            else EarnedWorkReceipt()
-        )
-    attempt = replace(attempt, pulse=trial)
-
-    if target_reached(
-        trial.snap,
-        ctx.target.tag,
-        ctx.target.value,
-        ctx.target.predicate,
-    ):
-        return _accept_target()
-
-    pending = _has_pending_effects(trial.fork)
-    if not _gate_cycle(
-        trial,
-        frame,
-        state,
-        pending=pending,
-        earned_work_receipt=earned_work_receipt,
-        learned_prescribed=policy.learned_prescribed,
-        nogood_pair=nogood_pair,
-        gate_events=gate_events,
-        collected_nogoods=collected_nogoods,
-    ):
-        return _reject()
-
-    dead_end = _gate_dead_end(
-        trial,
-        action_pairs,
-        frame,
-        state,
-        ctx,
-        target=bearing.objective.target,
-        earned_work_receipt=earned_work_receipt,
-        learned_prescribed=policy.learned_prescribed,
-        nogood_pair=nogood_pair,
-        gate_events=gate_events,
-        collected_nogoods=collected_nogoods,
         channel_motion=channel_motion,
-    )
-    if dead_end is None:
-        return _reject()
-
-    assessment = assess_outcome(
-        trial,
-        action_pairs,
-        frame,
-        ctx,
-        dead_end.trend,
-        dead_end.has_new_frontier,
-        chase_cause_roots,
-        route_prescribed=policy.route_prescribed,
-        channel_motion=channel_motion,
-        earned_work_receipt=earned_work_receipt,
-    )
-
-    if not assessment.accepted:
-        if nogood_pair is not None:
-            collected_nogoods.append(nogood_pair)
-        _record_gate(
-            "BEARING-COAST-STALL" if channel_motion.active else "BAD-EDGE",
-            f": distance {frame.distance_before} -> {dead_end.trend}",
-            gate_events,
-            evidence={
-                "accepted": assessment.accepted,
-                "agency": assessment.agency.value,
-                "bearing": assessment.bearing.value,
-                "progress": assessment.progress.value,
-                "new_frontier": assessment.new_frontier,
-                "trend_before": frame.distance_before,
-                "trend_after": dead_end.trend,
-                "bearing_coast_channel_tag": channel_motion.channel_tag,
-                "bearing_coast_target_value": channel_motion.target_value,
-                "bearing_coast_actual_value": (
-                    trial.snap.get(channel_motion.channel_tag)
-                    if channel_motion.channel_tag is not None
-                    else None
-                ),
-            },
-        )
-        return _reject()
-
-    gate_events.append(
-        PilotGateEvent(
-            assessment.bearing.value,
-            f"distance {frame.distance_before} -> {dead_end.trend}",
-            evidence={
-                "accepted": assessment.accepted,
-                "agency": assessment.agency.value,
-                "bearing": assessment.bearing.value,
-                "progress": assessment.progress.value,
-                "new_frontier": assessment.new_frontier,
-            },
-        )
-    )
-
-    return _AttemptResult(
-        trial=_accepted_trial(
-            attempt,
-            frame,
-            gate_events,
-            channel_motion,
-            earned_work_receipt,
-            AssessedMotion(
-                new_key=trial.key,
-                trend=dead_end.trend,
-                assessment=assessment,
-            ),
-        ),
-        gate_events=tuple(gate_events),
-        nogood_pairs=frozenset(collected_nogoods),
-        confirmed_correction=trial.confirmed_correction,
-        avoid_names=tuple(retry_avoid_names),
     )

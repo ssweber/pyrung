@@ -3,9 +3,10 @@
 This module builds static/runtime context, prepares the user-selected trace
 constraint, and dispatches ``Bearing | NeedProbe | Stuck`` results from
 ``Compass``.
-It invokes execution, applies observations, commits eligible forks, delegates
-post-commit recovery, and converts the event stream into public results.  It
-does not synthesize a navigation decision.
+It invokes execution, owns verification-time excursion investigation, applies
+observations, commits eligible forks, delegates post-commit recovery, and
+converts the event stream into public results. It does not synthesize a
+navigation decision.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from pyrung.core.analysis.pilot.compass import (
     ProbeExhaustedObservation,
 )
 from pyrung.core.analysis.pilot.earned_work import build_earned_work
+from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
@@ -92,6 +94,7 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _AcceptedTrial,
     _ActionPair,
+    _AttemptResult,
     _Checkpoint,
     _CommittedAct,
     _IterationFrame,
@@ -101,6 +104,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
+from pyrung.core.analysis.pilot.verify import verify_excursion_retry
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -569,6 +573,40 @@ def _record_attempt(
         state.avoid_names.update(attempt.avoid_names)
 
 
+def _resolve_excursion(
+    attempt: _AttemptResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _AttemptResult:
+    """Investigate one reported excursion and return verification's retry judgment."""
+    executed = attempt.excursion_attempt
+    if executed is None:
+        return attempt
+
+    key_config = state.key_config
+    assert key_config is not None
+    pulse = executed.pulse
+    result = investigate_excursion(
+        state.work,
+        pulse.fork,
+        frame.snap,
+        pulse.post_pulse_snap,
+        frame.key,
+        list(executed.bearing.act.policy.action_pairs),
+        cfg=key_config,
+        steerable=ctx.steerable,
+        rungs=state.pilot_rungs,
+        resting=ctx.resting,
+        edge_tags=ctx.edge_tags,
+        scan_budget=state.remaining_search_scans(ctx.max_scans),
+        pdg=ctx.pdg,
+        program=ctx.program,
+        ctx=ctx,
+    )
+    return verify_excursion_retry(attempt, result, frame, state, ctx)
+
+
 def _step_context(
     trial: _AcceptedTrial,
     frame: _IterationFrame,
@@ -1031,6 +1069,7 @@ def _pilot_loop_events(
             yield try_event
 
         attempt = execute(result, orientation_world)
+        attempt = _resolve_excursion(attempt, frame, state, ctx)
         _record_attempt(attempt, frame, state, ctx, result.objective)
 
         if isinstance(act, Coast) and act.mode == "terminal":
