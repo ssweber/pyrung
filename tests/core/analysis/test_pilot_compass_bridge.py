@@ -44,10 +44,8 @@ from pyrung import (
     rung,
 )
 from pyrung.core.analysis.pilot.causal import chase_chain_tags
-from pyrung.core.analysis.pilot.investigate import (
-    InvestigationHypothesis,
-    _rank_hypotheses,
-)
+from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
+from pyrung.core.analysis.pilot.investigate import _rank_hypotheses
 from pyrung.core.analysis.pilot.types import BearingDeparture, DeviationIncident
 
 # ---------------------------------------------------------------------------
@@ -214,13 +212,13 @@ def test_ranking_prefers_watchdog_natively():
     anchor = 1
     eject = _drive_to_eject(plc)
 
-    watchdog = InvestigationHypothesis(
+    watchdog = CorrectionHypothesis(
         kind="liveness",
         holds=(("Sensor", True),),
         sources=("OnWD_Done", "Sensor"),
         detail="watchdog starved",
     )
-    collateral = InvestigationHypothesis(
+    collateral = CorrectionHypothesis(
         kind="precise-cause",
         holds=(("Step", 0),),
         sources=("Step",),

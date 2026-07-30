@@ -1568,14 +1568,14 @@ def test_deviation_bearing_is_departed_source_not_unvisited_coast_target():
 def test_investigation_event_rejected_detail_carries_slug(monkeypatch):
     """The regression event's investigation payload surfaces the machine-readable
     ground slug beside the human detail for every rejected hypothesis."""
+    from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
     from pyrung.core.analysis.pilot.investigate import (
-        InvestigationHypothesis,
         InvestigationRejection,
         InvestigationResult,
     )
 
-    reject_a = InvestigationHypothesis("a", (("GroundA", True),))
-    reject_b = InvestigationHypothesis("b", (("GroundB", True),))
+    reject_a = CorrectionHypothesis("a", (("GroundA", True),))
+    reject_b = CorrectionHypothesis("b", (("GroundB", True),))
 
     def _stub(_plc, _incident, _ctx, _replay, **_kwargs):
         return InvestigationResult(

@@ -1,15 +1,14 @@
 """Build and replay bounded hypotheses for departures and excursions.
 
-``build_deviation_incident`` freezes the recorded window. Deviation
-investigation derives three hypothesis families (absence roots, precise
-fired-chain cuts, and ``correct_enablers`` results), orders them with
-``_rank_hypotheses``, and tests each with the exploratory replay returned by
-``build_replay_fn``. ``_resolve_replay_attempt`` either accepts, rejects, or
-extends an attempt; bounded replacement-cause closure uses
-``_compose_hypotheses`` and always replays the composite from the original
-checkpoint. A surviving exploratory result receives an evidence-derived
-lifetime from ``_scoped_correction_rungs`` and must survive a guarded replay
-before the first confirmed composite is returned.
+``build_deviation_incident`` freezes the recorded window. ``corrections.py``
+derives three hypothesis families; investigation ranks and tests them with the
+exploratory replay returned by ``build_replay_fn``.
+``_resolve_replay_attempt`` either accepts, rejects, or extends an attempt;
+bounded replacement-cause closure uses ``_compose_hypotheses`` and always
+replays the composite from the original checkpoint. A surviving exploratory
+result receives an evidence-derived lifetime from
+``_scoped_correction_rungs`` and must survive a guarded replay before the first
+confirmed composite is returned.
 
 ``investigate_excursion`` is the shorter verification-time path for a trial
 that reverted. Neither path installs its correction; recovery and installation
@@ -31,7 +30,6 @@ from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
     chase_cause_roots,
     chase_chain_tags,
-    empirical_program_writes,
 )
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
@@ -40,9 +38,9 @@ from pyrung.core.analysis.pilot.coast import (
     _settle_delayed_effects,
 )
 from pyrung.core.analysis.pilot.corrections import (
+    CorrectionHypothesis,
     break_guard_holds,
-    correct_enablers,
-    guard_correction_holds,
+    derive_correction_hypotheses,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
@@ -76,7 +74,6 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.sp_values import (
     _values_match,
-    _writer_for_tag,
     _written_value_for_tag,
 )
 from pyrung.core.context import RungId
@@ -287,16 +284,6 @@ class ReplayIncident:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class InvestigationHypothesis:
-    """A replay-testable explanation for an incident."""
-
-    kind: str
-    holds: tuple[Any, ...]
-    sources: tuple[str, ...] = ()
-    detail: str = ""
-
-
 class ReplayJustification(Enum):
     """The target-relative ground on which a replayed correction succeeded."""
 
@@ -333,7 +320,7 @@ class ReplayOutcome:
 class InvestigationRejection:
     """One rejected hypothesis and the exact ground that rejected it."""
 
-    hypothesis: InvestigationHypothesis
+    hypothesis: CorrectionHypothesis
     slug: str
     ground: str
 
@@ -349,7 +336,7 @@ class _ReplayAccepted:
 class _HypothesisExtended:
     """A replay exposed another causal cut and extended the hypothesis."""
 
-    hypothesis: InvestigationHypothesis
+    hypothesis: CorrectionHypothesis
 
 
 @dataclass(frozen=True)
@@ -368,8 +355,8 @@ class InvestigationResult:
 
     correction: _ConfirmedCorrection | None = None
     regression_nogoods: frozenset[ActionPair] = frozenset()
-    hypotheses: tuple[InvestigationHypothesis, ...] = ()
-    confirmed: tuple[InvestigationHypothesis, ...] = ()
+    hypotheses: tuple[CorrectionHypothesis, ...] = ()
+    confirmed: tuple[CorrectionHypothesis, ...] = ()
     # A rejection is one artifact: its hypothesis, stable machine-readable
     # classification, and human ground cannot become index-desynchronized.
     rejected: tuple[InvestigationRejection, ...] = ()
@@ -379,12 +366,12 @@ class InvestigationResult:
 def _resolve_replay_attempt(
     *,
     phase: Literal["exploratory", "guarded"],
-    current: InvestigationHypothesis,
+    current: CorrectionHypothesis,
     outcome: ReplayOutcome,
     seen_replacements: set[tuple[Any, ...]],
     extend: Callable[
-        [InvestigationHypothesis, ReplacementEvidence],
-        InvestigationHypothesis | None,
+        [CorrectionHypothesis, ReplacementEvidence],
+        CorrectionHypothesis | None,
     ],
 ) -> _ReplayResolution:
     """Resolve one replay without flattening acceptance, extension, or rejection.
@@ -1686,11 +1673,11 @@ def _hold_is_noop(
 
 def _rank_hypotheses(
     plc: PLC,
-    hypotheses: Sequence[InvestigationHypothesis],
+    hypotheses: Sequence[CorrectionHypothesis],
     incident: DeviationIncident,
     ctx: Any,
     primal_extra: frozenset[str] = frozenset(),
-) -> list[InvestigationHypothesis]:
+) -> list[CorrectionHypothesis]:
     """Order competing hypotheses by **causal primacy**, not generation order.
 
     The channel departure (``incident.channel_tag`` — the ejection itself)
@@ -1747,7 +1734,7 @@ def _rank_hypotheses(
                 best = min(best, chan_scan - last)
         return best
 
-    def _key(pair: tuple[int, InvestigationHypothesis]) -> tuple[int, int, int, int]:
+    def _key(pair: tuple[int, CorrectionHypothesis]) -> tuple[int, int, int, int]:
         idx, h = pair
         tags = set(h.sources) | {_proposal_pair(p)[0] for p in h.holds}
         in_chain = 0 if (primal and tags & primal) else 1
@@ -1757,41 +1744,10 @@ def _rank_hypotheses(
     return [h for _, h in sorted(enumerate(hypotheses), key=_key)]
 
 
-def _generate_deviation_hypotheses(
-    plc: PLC,
-    incident: DeviationIncident,
-    ctx: Any,
-    *,
-    installed: Mapping[str, Any] | None = None,
-) -> tuple[list[InvestigationHypothesis], frozenset[str]]:
-    """Generate and rank one incident's evidence-derived hypotheses."""
-    absence_hyps, absence_tags = _absence_root_correctives(
-        plc,
-        incident,
-        ctx,
-        exclude=frozenset(tag for tag, _value in incident.action),
-        installed=installed or {},
-    )
-    raw: list[InvestigationHypothesis] = list(absence_hyps)
-    raw.extend(_precise_causes(plc, incident, ctx))
-    raw.extend(
-        InvestigationHypothesis(kind=c.kind, holds=c.holds, sources=c.sources, detail=c.detail)
-        for c in correct_enablers(plc, incident, ctx)
-    )
-    ranked = _rank_hypotheses(
-        plc,
-        _dedupe_hypotheses(raw),
-        incident,
-        ctx,
-        primal_extra=absence_tags,
-    )
-    return ranked, absence_tags
-
-
 def _compose_hypotheses(
-    base: InvestigationHypothesis,
-    addition: InvestigationHypothesis,
-) -> InvestigationHypothesis | None:
+    base: CorrectionHypothesis,
+    addition: CorrectionHypothesis,
+) -> CorrectionHypothesis | None:
     """Create a newly replayable union, declining contradictory operations."""
     holds = list(base.holds)
     seen = {_proposal_identity(hold) for hold in holds}
@@ -1808,7 +1764,7 @@ def _compose_hypotheses(
     if len(holds) == len(base.holds):
         return None
     kind = base.kind if base.kind == addition.kind else "nested-cause"
-    return InvestigationHypothesis(
+    return CorrectionHypothesis(
         kind=kind,
         holds=tuple(holds),
         sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
@@ -1837,7 +1793,7 @@ def investigate_deviation(
        transitioned inside the incident.
     2. Precise fired-chain cuts — recorded writer/cause chains identify a
        steerable trigger or a pinned causal cut.
-    3. Enabler correction — ``correct_enablers`` asks a harmful writer for a
+    3. Enabler correction — the producer asks a harmful writer for a
        guard-breaking assignment or an owner-declared accumulator operation.
 
     No upstream cone sweep.
@@ -1869,14 +1825,21 @@ def investigate_deviation(
         for rung in overlay.effective
         if _rung_identity(rung) in correction_ids
     }
-    hypotheses, _absence_tags = _generate_deviation_hypotheses(
+    produced, absence_tags = derive_correction_hypotheses(
         plc,
         incident,
         ctx,
         installed=correction_active,
     )
+    hypotheses = _rank_hypotheses(
+        plc,
+        produced,
+        incident,
+        ctx,
+        primal_extra=absence_tags,
+    )
     observed_hypotheses = list(hypotheses)
-    confirmed: list[InvestigationHypothesis] = []
+    confirmed: list[CorrectionHypothesis] = []
     confirmed_correction: _ConfirmedCorrection | None = None
     rejected: list[InvestigationRejection] = []
     pdg = getattr(ctx, "pdg", None)
@@ -1886,18 +1849,25 @@ def investigate_deviation(
     # expiring).  Correction engines filter this factual set locally.
     recorded_incident_movers = frozenset(incident.changed_tags)
 
-    def _reject(hyp: InvestigationHypothesis, slug: str, detail: str) -> None:
+    def _reject(hyp: CorrectionHypothesis, slug: str, detail: str) -> None:
         rejected.append(InvestigationRejection(hyp, slug, detail))
 
     def _extend_from_replacement(
-        current: InvestigationHypothesis,
+        current: CorrectionHypothesis,
         evidence: ReplacementEvidence,
-    ) -> InvestigationHypothesis | None:
+    ) -> CorrectionHypothesis | None:
         """Derive the next cut from the retained fork and add it to *current*."""
-        nested, _absence = _generate_deviation_hypotheses(
+        nested_raw, nested_absence = derive_correction_hypotheses(
             evidence.plc,
             evidence.incident,
             ctx,
+        )
+        nested = _rank_hypotheses(
+            evidence.plc,
+            nested_raw,
+            evidence.incident,
+            ctx,
+            primal_extra=nested_absence,
         )
         for candidate in nested:
             identity = _hypothesis_identity(candidate.holds)
@@ -2071,7 +2041,7 @@ def investigate_deviation(
                 current = resolution.hypothesis
                 continue
             installed_outcome = resolution.outcome
-            confirmed_hypothesis = InvestigationHypothesis(
+            confirmed_hypothesis = CorrectionHypothesis(
                 kind=current.kind,
                 holds=scoped,
                 sources=current.sources,
@@ -2109,7 +2079,7 @@ def investigate_deviation(
 
 
 # ---------------------------------------------------------------------------
-# Hypothesis generation — precise pass
+# Investigation-local correction checks
 # ---------------------------------------------------------------------------
 
 
@@ -2131,548 +2101,6 @@ def _active_rungs_defeat_needed(
     overlay = _rung_execution_receipt(rungs, snapshot)
     active = [(rung.dest, rung.value) for rung in overlay.effective]
     return _holds_defeat_needed(active, needed, pdg, program)
-
-
-def _precise_causes(
-    plc: PLC,
-    incident: DeviationIncident,
-    ctx: Any,
-) -> list[InvestigationHypothesis]:
-    """Minimal controllable cuts of the exact deep fired chain.
-
-    For each departure, ``cause(deep=True)`` supplies the rungs that actually
-    fired, their exact transitions, and their steady enablers. The walk derives
-    two forms of cut from that one record:
-
-    * revert a steerable transition at its pre-incident value;
-    * force a fired rung's guard false with the cheapest steerable assignment.
-
-    Program-written condition tags are never terminal levers merely because
-    static steerability includes them; guard solving follows their
-    observed/static writers to an external lever. Cuts that oppose requested
-    progress are still hypotheses: the investigation layer proves them harmful
-    against the incident bearing/checkpoint frontier and records a
-    ``self-defeat`` rejection. Every returned hypothesis names the fired rung
-    whose conductive path it cuts.
-    """
-    steerable = getattr(ctx, "steerable", frozenset())
-    if not steerable:
-        return []
-    pdg = getattr(ctx, "pdg", None)
-    program = getattr(ctx, "program", None)
-    if pdg is None or program is None:
-        return []
-    empirical_writes = empirical_program_writes(
-        plc,
-        steerable,
-        start_scan=incident.anchor_scan,
-        end_scan=incident.end_scan,
-    )
-    hypotheses: list[InvestigationHypothesis] = []
-
-    # The channel departure is the incident's causal effect. Bearing aliases
-    # (``Sts_State_Starting`` falling because the channel already left Starting)
-    # are downstream symptoms and must not seed cuts of their observer/mapping
-    # rungs. Coast receipts retain the exact channel transition even when the
-    # requested destination was never reached and therefore has no ordinary
-    # ``BearingDeparture.scan``.
-    seeds = list(incident.departures)
-    if incident.channel_tag is not None:
-        channel_scan = next(
-            (
-                event.scan
-                for event in reversed(incident.timeline)
-                if any(
-                    tag == incident.channel_tag and not _values_match(before, after)
-                    for tag, before, after in getattr(event, "transitions", ())
-                )
-            ),
-            None,
-        )
-        if channel_scan is not None:
-            desired = next(
-                (value for tag, value in incident.bearing if tag == incident.channel_tag),
-                incident.before_snap.get(incident.channel_tag),
-            )
-            seeds = [BearingDeparture(incident.channel_tag, desired, channel_scan)]
-
-    for departure in seeds:
-        chain = _shared_cause(plc, departure.tag, departure.scan)
-        if chain is None:
-            continue
-
-        steps_by_tag: dict[str, list[Any]] = {}
-        for step in chain.steps:
-            steps_by_tag.setdefault(step.transition.tag_name, []).append(step)
-
-        # Static steerability is narrowed only by exact evidence that the user
-        # program/plant authored the transition.  A recorded synthesis writer
-        # does not by itself turn its external destination into an internal
-        # intermediate; the causal walk may still terminate at that lever.
-        effective_steerable = frozenset(steerable) - empirical_writes
-
-        origin_memo: dict[str, frozenset[str]] = {}
-
-        def _origins(
-            name: str,
-            visiting: frozenset[str] = frozenset(),
-            *,
-            _steps_by_tag: dict[str, list[Any]] = steps_by_tag,
-            _origin_memo: dict[str, frozenset[str]] = origin_memo,
-        ) -> frozenset[str]:
-            if name in _origin_memo:
-                return _origin_memo[name]
-            if name in visiting:
-                return frozenset()
-            next_visiting = visiting | {name}
-            found: set[str] = set()
-            for step in _steps_by_tag.get(name, ()):
-                links = step.triggers or step.enablers
-                for link in links:
-                    found.update(_origins(link.tag_name, next_visiting))
-            result = frozenset(found or {name})
-            _origin_memo[name] = result
-            return result
-
-        def _step_label(step: Any) -> str:
-            return f"{step.subroutine + ':' if step.subroutine else ''}R{step.rung_index + 1}"
-
-        # The undesired path is the trigger spine from the effect. Deep enabler
-        # expansion supplies origins for conditions on that spine, but those
-        # supporting writer rungs are not themselves antagonists to cut.
-        trigger_spine: set[int] = set()
-
-        def _mark_trigger_spine(
-            transition: Any,
-            visiting: frozenset[tuple[str, int]] = frozenset(),
-            *,
-            _steps_by_tag: dict[str, list[Any]] = steps_by_tag,
-            _trigger_spine: set[int] = trigger_spine,
-        ) -> None:
-            key = (transition.tag_name, transition.scan_id)
-            if key in visiting:
-                return
-            next_visiting = visiting | {key}
-            for step in _steps_by_tag.get(transition.tag_name, ()):
-                if step.transition.scan_id != transition.scan_id or not _values_match(
-                    step.transition.to_value,
-                    transition.to_value,
-                ):
-                    continue
-                _trigger_spine.add(id(step))
-                for trigger in step.triggers:
-                    _mark_trigger_spine(trigger, next_visiting)
-
-        _mark_trigger_spine(chain.effect)
-
-        # First candidate: exact transitioned leaves. This is the same causal
-        # frontier as the rung cuts below, not a separate heuristic; it is
-        # preferred because preserving the pre-transition physical value is the
-        # lightest faithful correction.
-        nogoods, mover_holds = chase_cause_roots(
-            plc,
-            departure.tag,
-            effective_steerable,
-            scan=departure.scan,
-            bridge=ctx,
-        )
-        moved_tags = {
-            tr.tag_name
-            for step in chain.steps
-            if id(step) in trigger_spine
-            for tr in step.triggers
-            if not _values_match(tr.from_value, tr.to_value)
-        }
-        mover_holds_filtered = tuple(
-            pair
-            for pair in _dedupe_pairs(mover_holds)
-            if pair[0] in moved_tags and _hold_allowed(ctx, pair)
-        )
-        if mover_holds_filtered:
-            mover_names = {tag for tag, _value in mover_holds_filtered}
-            common: list[tuple[int, Any]] = []
-            for index, step in enumerate(chain.steps):
-                if id(step) not in trigger_spine:
-                    continue
-                leaves: set[str] = set()
-                for trigger in step.triggers:
-                    leaves.update(_origins(trigger.tag_name))
-                if mover_names <= leaves:
-                    common.append((index, step))
-            frontier = common[-1][1] if common else chain.steps[0]
-            sources = tuple(sorted(nogoods | mover_names | {departure.tag}))
-            hypotheses.append(
-                InvestigationHypothesis(
-                    kind="precise-cause",
-                    holds=guard_correction_holds(
-                        plc,
-                        mover_holds_filtered,
-                        sources,
-                        incident,
-                        ctx,
-                    ),
-                    sources=sources,
-                    detail=(
-                        f"{_step_label(frontier)} fired at scan "
-                        f"{frontier.transition.scan_id}; revert exact trigger frontier"
-                    ),
-                )
-            )
-
-        if departure.scan is None:
-            frame = dict(plc.state.tags)
-        else:
-            try:
-                frame = dict(plc.history.at(departure.scan).tags)
-            except Exception:  # noqa: BLE001
-                frame = dict(plc.state.tags)
-
-        # Then enumerate minimal guard cuts for every actual fired rung. Reads
-        # are all eligible hypotheses, including cuts through requested
-        # progress. The investigation layer, not the generator, records why a
-        # progress-damaging cut is harmful.
-        from pyrung.core.analysis.pdg import resolve_rung
-
-        for step in reversed(chain.steps):
-            if id(step) not in trigger_spine:
-                continue
-            direct_values = {
-                **{tr.tag_name: tr.to_value for tr in step.triggers},
-                **{ec.tag_name: ec.value for ec in step.enablers},
-            }
-            if not direct_values:
-                continue
-            node = next(
-                (
-                    pdg.rung_nodes[node_idx]
-                    for node_idx in sorted(
-                        pdg.writers_of.get(step.transition.tag_name, frozenset())
-                    )
-                    if (
-                        pdg.rung_nodes[node_idx].rung_index,
-                        pdg.rung_nodes[node_idx].subroutine,
-                    )
-                    == (step.rung_index, step.subroutine)
-                ),
-                None,
-            )
-            if node is None:
-                continue
-            rung_obj = resolve_rung(program, node)
-            if rung_obj is None:
-                continue
-            writer = _writer_for_tag(rung_obj, step.transition.tag_name)
-            if writer is None:
-                continue
-            if not getattr(writer, "INERT_WHEN_DISABLED", True):
-                # A false rung is not necessarily a suppressed writer. OUT
-                # actively writes False when disabled; timers/counters and
-                # drums also have instruction-specific disabled behavior.
-                # Only the ordinary OUT-to-True case has the generic
-                # "make guard false" inverse. Other non-inert writers belong
-                # to their instruction-specific correction machinery.
-                from pyrung.core.instruction.coils import OutInstruction
-
-                if not (isinstance(writer, OutInstruction) and step.transition.to_value is True):
-                    continue
-            guard_reads = set(getattr(node, "condition_reads", ())) & set(direct_values)
-            fixed: dict[str, Any] = {}
-            changeable = guard_reads
-            if not changeable:
-                continue
-            fire_frame = {**frame, **direct_values}
-            holds = break_guard_holds(
-                rung_obj,
-                fire_frame,
-                ctx,
-                changeable=changeable,
-                fixed=fixed,
-                steerable=effective_steerable,
-            )
-            holds_filtered = tuple(
-                pair for pair in _dedupe_pairs(holds or ()) if _hold_allowed(ctx, pair)
-            )
-            if not holds_filtered:
-                continue
-            sources = tuple(
-                sorted(
-                    {
-                        departure.tag,
-                        step.transition.tag_name,
-                        *direct_values,
-                        *(tag for tag, _value in holds_filtered),
-                    }
-                )
-            )
-            hypotheses.append(
-                InvestigationHypothesis(
-                    kind="precise-cause",
-                    holds=guard_correction_holds(
-                        plc,
-                        holds_filtered,
-                        sources,
-                        incident,
-                        ctx,
-                    ),
-                    sources=sources,
-                    detail=(
-                        f"{_step_label(step)} fired at scan "
-                        f"{step.transition.scan_id}; minimal conductive cut"
-                    ),
-                )
-            )
-    return list(_dedupe_hypotheses(hypotheses))
-
-
-# ---------------------------------------------------------------------------
-# Hypothesis generation — absence roots (deep cause walk)
-# ---------------------------------------------------------------------------
-
-_ABSENCE_ROOT_KINDS = frozenset({"external", "never_written"})
-
-#: logical negation of an ordered-comparison form — the analog "flip".
-_NEGATE_FORM = {"lt": "ge", "le": "gt", "gt": "le", "ge": "lt"}
-
-
-def _ordered_truth(form: str, lhs: Any, rhs: Any) -> bool | None:
-    """Truth of ``lhs <form> rhs``, or ``None`` when the pair doesn't order."""
-    try:
-        return {
-            "lt": lhs < rhs,
-            "le": lhs <= rhs,
-            "gt": lhs > rhs,
-            "ge": lhs >= rhs,
-        }[form]
-    except TypeError:
-        return None
-
-
-def _analog_boundary_hold(
-    plc: PLC,
-    root: Any,
-    chain: Any,
-    ctx: Any,
-) -> tuple[tuple[str, Any], str] | None:
-    """The analog analogue of the Bool flip: ``(hold, note)`` for a wide root.
-
-    A Bool absence root flips to its complement; a wide word has none — but
-    the chain knows what the stuck value *does*: the root supports the fault
-    path through an ordered comparison on one of the chain's rungs.  So flip
-    the comparison's truth instead: solve the boundary of the flipped atom
-    against the current snapshot (the same stage-2/stage-3 resolvers as the
-    trace's relational levers) and propose that value as the corrective hold.
-    A guess is fine because it is replay-verified; a root with no ordered
-    comparison on the chain's rungs still yields nothing (fail closed), and
-    the comparison search never leaves the recorded chain — a program-wide
-    sweep would invent levers from rungs that played no part in the incident.
-    """
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.pilot.static_expressions import (
-        _atom_text,
-        _heuristic_inequality_target,
-        _resolve_inequality_target,
-    )
-    from pyrung.core.analysis.simplified import And, Atom, Or, _conditions_list_to_expr
-    from pyrung.core.analysis.sp_values import _FLIP_FORM
-
-    name = root.tag_name
-    pdg = getattr(ctx, "pdg", None)
-    program = getattr(ctx, "program", None)
-    if pdg is None or program is None:
-        return None
-    snapshot = dict(plc.state.tags)
-    steerable = getattr(ctx, "steerable", frozenset())
-    prior = getattr(ctx, "domain_prior", None)
-
-    def _iter_atoms(expr: Any) -> Any:
-        if isinstance(expr, Atom):
-            yield expr
-        elif isinstance(expr, (And, Or)):
-            for term in expr.terms:
-                yield from _iter_atoms(term)
-
-    step_keys = {(s.rung_index, s.subroutine) for s in chain.steps}
-    seen: set[tuple[str, str, Any, bool]] = set()
-    for node in pdg.rung_nodes:
-        if name not in getattr(node, "condition_reads", ()):
-            continue
-        if (node.rung_index, node.subroutine) not in step_keys:
-            continue
-        rung = resolve_rung(program, node)
-        if rung is None:
-            continue
-        for atom in _iter_atoms(_conditions_list_to_expr(getattr(rung, "_conditions", []))):
-            # Key the atom on the root (operand side flips via A>B ⟺ B<A).
-            if atom.tag == name:
-                atom_on_root = atom
-            elif atom.operand_is_tag and atom.operand == name and atom.form in _FLIP_FORM:
-                atom_on_root = Atom(
-                    tag=name,
-                    form=_FLIP_FORM[atom.form],
-                    operand=atom.tag,
-                    operand_is_tag=True,
-                )
-            else:
-                continue
-            if atom_on_root.form not in _NEGATE_FORM or atom_on_root._key() in seen:
-                continue
-            seen.add(atom_on_root._key())
-            operand = atom_on_root.operand
-            threshold = snapshot.get(operand) if atom_on_root.operand_is_tag else operand
-            truth = _ordered_truth(atom_on_root.form, root.value, threshold)
-            if truth is None:
-                continue
-            # Cross the boundary AWAY from the value's current contribution:
-            # satisfy the negation of whatever the stuck value makes true.
-            goal = (
-                Atom(
-                    tag=name,
-                    form=_NEGATE_FORM[atom_on_root.form],
-                    operand=operand,
-                    operand_is_tag=atom_on_root.operand_is_tag,
-                )
-                if truth
-                else atom_on_root
-            )
-            target = _resolve_inequality_target(goal, snapshot, prior, pdg)
-            marker = ""
-            if target is None or target[0] != name:
-                hit = _heuristic_inequality_target(goal, snapshot, steerable, pdg)
-                if hit is None:
-                    continue
-                value, marker = hit
-                target = (name, value)
-            tag, value = target
-            if _values_match(snapshot.get(tag), value):
-                continue  # not a move
-            note = f"cross {_atom_text(goal)} (e.g., {tag} = {value!r}"
-            if marker:
-                note += f"; {marker}"
-            note += ")"
-            return (tag, value), note
-    return None
-
-
-def _absence_root_correctives(
-    plc: PLC,
-    incident: DeviationIncident,
-    ctx: Any,
-    exclude: frozenset[str] = frozenset(),
-    installed: Mapping[str, Any] | None = None,
-) -> tuple[list[InvestigationHypothesis], frozenset[str]]:
-    """Corrective holds from the deep walk's never-moved roots.
-
-    The shallow chase cannot reach a cause that never transitioned — a
-    permissive held open since cold, buffered behind an intermediate error
-    register and laundered through a block sum (the sail trap).  The deep
-    recorded walk (``cause(deep=True)``) names exactly those terminals:
-    ``RootCause`` entries with ``held_since_scan=None``.  Each steerable,
-    never-moved Bool root becomes a FLIP hold hypothesis, replay-tested
-    like any other — a guess is fine because it is replay-verified.
-
-    Returns the hypotheses plus the root tag names, which the caller feeds
-    to ``_rank_hypotheses`` as ``primal_extra``: an absence root produces no
-    transition for the temporal-proximity signal, so without chain-member
-    standing it would rank behind every temporally-nearby bystander whose
-    hold merely defers the fault past the bounded replay window.
-
-    *exclude* carries the action that launched this incident: flipping that
-    input would be self-investigation.  *installed* names values owned by prior
-    confirmed corrections.  Those roots are not blindly flipped, but a wide
-    value may be recomputed from a different ordered boundary on this incident's
-    recorded chain; replay and correction revocation then verify the handoff.
-    """
-    chan = incident.channel_tag
-    dep = None
-    if chan is not None:
-        dep = next((d for d in incident.departures if d.tag == chan), None)
-    if dep is None:
-        dep = next(iter(incident.departures), None)
-    if dep is None:
-        return [], frozenset()
-    chain = _shared_cause(plc, dep.tag, dep.scan)
-    if chain is None:
-        return [], frozenset()
-
-    steerable = getattr(ctx, "steerable", frozenset())
-    installed = installed or {}
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "absence-root: %s@%s roots=%s",
-            dep.tag,
-            dep.scan,
-            [(r.tag_name, r.value, r.kind, r.held_since_scan) for r in chain.ranked_roots()],
-        )
-    keyed: list[tuple[int, InvestigationHypothesis]] = []
-    root_tags: set[str] = set()
-    for root in chain.ranked_roots():
-        if root.kind not in _ABSENCE_ROOT_KINDS:
-            continue
-        if root.tag_name in exclude:
-            continue  # the incident-launching action, not a program absence
-        if root.tag_name not in steerable:
-            continue
-        installed_owner = root.tag_name in installed and _values_match(
-            installed[root.tag_name], root.value
-        )
-        if root.held_since_scan is not None and not installed_owner:
-            continue  # it moved during the run and has no prior correction owner
-        if installed_owner:
-            # An installed value appearing on the new fault chain is evidence
-            # only when that chain computes a different ordered boundary.  In
-            # particular, never complement a prior Boolean correction merely
-            # because replay made its write visible in history.
-            analog = _analog_boundary_hold(plc, root, chain, ctx)
-            if analog is None:
-                continue
-            hold, note = analog
-            relation_note = f"; recompute installed owner: {note}"
-        elif isinstance(root.value, bool):
-            hold = (root.tag_name, not root.value)
-            relation_note = ""
-        else:
-            # A wide word offers no complement, but the chain knows what the
-            # stuck value does — flip the truth of the ordered comparison it
-            # supports and propose the boundary value (replay-verified).
-            analog = _analog_boundary_hold(plc, root, chain, ctx)
-            if analog is None:
-                continue  # no ordered comparison on the chain — still no sound value
-            hold, note = analog
-            relation_note = f"; {note}"
-        if not _hold_allowed(ctx, hold):
-            continue
-        root_tags.add(root.tag_name)
-        keyed.append(
-            (
-                len(root.via),
-                InvestigationHypothesis(
-                    kind="absence-root",
-                    holds=(hold,),
-                    sources=(root.tag_name,),
-                    detail=(
-                        f"{root.tag_name} held {root.value!r} "
-                        f"{'by PILOT' if installed_owner else 'since cold'} "
-                        f"on {dep.tag}'s deep cause chain [{root.kind}]{relation_note}"
-                    ),
-                ),
-            )
-        )
-    # Deepest terminal first: the fault-generation side (a permissive buffered
-    # behind an error register and an alarm chain) sits deeper in the chain
-    # than a response-side gate on the abort rung itself, and the bounded
-    # replay cannot distinguish them — both keep the channel in place.  The
-    # hop-provenance length is the depth proxy; ties keep ranked_roots order.
-    keyed.sort(key=lambda kv: -kv[0])
-    return [h for _, h in keyed], frozenset(root_tags)
-
-
-# ---------------------------------------------------------------------------
-# Hypothesis generation — structural
-#
-# The enabler-correction families (latch-exposure FLIP + accumulator
-# OSCILLATE/stop-hold) live in ``corrections.py`` behind ``correct_enablers``,
-# the single ``no-steerable-trigger -> corrective hold`` pass.
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -2701,28 +2129,3 @@ def _last_transition_scan(
         if not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
             last = cur.scan_id
     return last
-
-
-def _dedupe_pairs(pairs: Iterable[ActionPair]) -> list[ActionPair]:
-    out: list[ActionPair] = []
-    seen: set[ActionPair] = set()
-    for pair in pairs:
-        if pair in seen:
-            continue
-        seen.add(pair)
-        out.append(pair)
-    return out
-
-
-def _dedupe_hypotheses(
-    hypotheses: list[InvestigationHypothesis],
-) -> tuple[InvestigationHypothesis, ...]:
-    out: list[InvestigationHypothesis] = []
-    seen: set[tuple[ActionPair, ...]] = set()
-    for hypothesis in hypotheses:
-        key = hypothesis.holds
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(hypothesis)
-    return tuple(out)

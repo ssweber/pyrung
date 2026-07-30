@@ -144,9 +144,10 @@ this table only locates the owner.
 - Post-commit retention, recovery, and correction installation: `progress.py`;
   `_handle_channel_departure` is the terminal event-streaming owner after
   `_monitor_trend` detects a channel departure
-- Corrective hypothesis derivation: `corrections.py`
-- Corrective hypothesis replay, neutralization-versus-masking, and
-  confirmation: `investigate.py::build_replay_fn` and
+- Corrective hypothesis production:
+  `corrections.py::derive_correction_hypotheses`
+- Corrective hypothesis ranking, replay, neutralization-versus-masking, and
+  confirmation: `investigate.py::_rank_hypotheses`, `build_replay_fn`, and
   `_resolve_replay_attempt`
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `overlay.py::_set_rungs` only compiles that
@@ -267,8 +268,8 @@ Judgment and recovery:
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
-- `investigate.py` — hypothesis replay and confirmation
-- `corrections.py` — corrective-hold hypothesis derivation
+- `investigate.py` — hypothesis ranking, composite replay, and confirmation
+- `corrections.py` — corrective-hold hypothesis production
 
 Module docstrings define the current local contracts. If a change moves a
 decision between modules, update both affected docstrings and this navigation

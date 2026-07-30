@@ -17,11 +17,16 @@ import pytest
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
-from pyrung.core.analysis.pilot.corrections import correct_enablers
+from pyrung.core.analysis.pilot.corrections import (
+    CorrectionHypothesis,
+    _dedupe_pairs,
+    _precise_causes,
+    correct_enablers,
+    derive_correction_hypotheses,
+)
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     DeviationIncident,
-    InvestigationHypothesis,
     InvestigationRejection,
     RegressionWitness,
     ReplacementEvidence,
@@ -29,12 +34,10 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayJustification,
     ReplayOutcome,
     ReplayStep,
-    _dedupe_pairs,
     _first_timeline_departure,
     _hold_allowed,
     _hold_is_noop,
     _HypothesisExtended,
-    _precise_causes,
     _regression_cause_replayed,
     _ReplayAccepted,
     _ReplayRejected,
@@ -63,6 +66,35 @@ from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
 _DEFAULT_TARGET = TargetSpec("", None)
+
+
+def test_correction_producer_preserves_family_order_and_first_wins(monkeypatch):
+    """Absence, precise, and enabler families share one canonical stream."""
+    absence = CorrectionHypothesis("absence-root", (("A", True),))
+    duplicate = CorrectionHypothesis("precise-cause", (("A", True),))
+    precise = CorrectionHypothesis("precise-cause", (("B", True),))
+    enabler = CorrectionHypothesis("liveness", (("C", True),))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
+        lambda *_args, **_kwargs: ([absence], frozenset({"A"})),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
+        lambda *_args, **_kwargs: [duplicate, precise],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
+        lambda *_args, **_kwargs: [enabler],
+    )
+
+    hypotheses, absence_tags = derive_correction_hypotheses(
+        object(),
+        SimpleNamespace(action=(("Launch", True),)),
+        object(),
+    )
+
+    assert hypotheses == (absence, precise, enabler)
+    assert absence_tags == frozenset({"A"})
 
 
 def _make_ctx(
@@ -142,19 +174,19 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
             out(B)
     plc = PLC(prog, dt=0.010)
     ctx = _make_ctx(prog, plc)
-    raw_reject = InvestigationHypothesis("raw", (("GroundA", True),))
-    guarded_reject = InvestigationHypothesis("guarded", (("GroundB", True),))
+    raw_reject = CorrectionHypothesis("raw", (("GroundA", True),))
+    guarded_reject = CorrectionHypothesis("guarded", (("GroundB", True),))
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([raw_reject, guarded_reject], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -214,7 +246,7 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
     ),
 )
 def test_replay_resolution_keeps_phase_specific_rejection_ground(phase, slug, ground):
-    hypothesis = InvestigationHypothesis("cause", (("Input", True),))
+    hypothesis = CorrectionHypothesis("cause", (("Input", True),))
 
     resolved = _resolve_replay_attempt(
         phase=phase,
@@ -228,8 +260,8 @@ def test_replay_resolution_keeps_phase_specific_rejection_ground(phase, slug, gr
 
 
 def test_replay_resolution_distinguishes_acceptance_extension_and_shared_cycle():
-    hypothesis = InvestigationHypothesis("cause", (("A", False),))
-    extended = InvestigationHypothesis("nested-cause", (("A", False), ("B", False)))
+    hypothesis = CorrectionHypothesis("cause", (("A", False),))
+    extended = CorrectionHypothesis("nested-cause", (("A", False), ("B", False)))
     occurrence = CausalOccurrence(RungId(None, 2), "State", 8)
     witness = RegressionWitness(
         channel_tag="State",
@@ -302,18 +334,18 @@ def test_investigation_static_rejections_carry_their_grounds(monkeypatch):
             out(Bool("StaticOut"))
     plc = PLC(prog, dt=0.010)
     ctx = _make_ctx(prog, plc)
-    empty = InvestigationHypothesis("empty", ())
-    noop = InvestigationHypothesis("noop", (("StaticGround", False),))
+    empty = CorrectionHypothesis("empty", ())
+    noop = CorrectionHypothesis("noop", (("StaticGround", False),))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([empty, noop], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -355,18 +387,18 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
     )
     bad_rung = PilotRung(Bad.name, True, CompareEq(Bad, False))
     good_rung = PilotRung(Good.name, True, CompareEq(Good, False))
-    bad = InvestigationHypothesis("bad", (bad_rung,), sources=(Bad.name,))
-    good = InvestigationHypothesis("good", (good_rung,), sources=(Good.name,))
+    bad = CorrectionHypothesis("bad", (bad_rung,), sources=(Bad.name,))
+    good = CorrectionHypothesis("good", (good_rung,), sources=(Good.name,))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([bad, good], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -416,22 +448,22 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
         plc,
         target=TargetSpec(Target.name, True),
     )
-    hypothesis = InvestigationHypothesis(
+    hypothesis = CorrectionHypothesis(
         "same-write-new-scope",
         ((Held.name, True),),
         sources=(Held.name,),
     )
     broad = PilotRung(Held.name, True, CompareEq(Broad, True))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([hypothesis], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -484,22 +516,22 @@ def test_raw_hypothesis_is_rejected_after_it_acquires_revoked_scope(monkeypatch)
         plc,
         target=TargetSpec(Target.name, True),
     )
-    hypothesis = InvestigationHypothesis(
+    hypothesis = CorrectionHypothesis(
         "raw-pair",
         ((Held.name, True),),
         sources=(Held.name,),
     )
     revoked = PilotRung(Held.name, True, CompareNe(Target, True))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([hypothesis], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -552,17 +584,17 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
         ~Never,
         OperationReceipt(~Held, ConditionDemand(CompareEq(Progress, True))),
     )
-    hypothesis = InvestigationHypothesis("shadowed", ((Held.name, True),))
+    hypothesis = CorrectionHypothesis("shadowed", ((Held.name, True),))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([hypothesis], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     monkeypatch.setattr(
@@ -619,9 +651,9 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
         ~Never,
         OperationReceipt(~Held, ConditionDemand(CompareEq(Progress, True))),
     )
-    hypothesis = InvestigationHypothesis("operation-owned", (proposal,))
+    hypothesis = CorrectionHypothesis("operation-owned", (proposal,))
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._generate_deviation_hypotheses",
+        "pyrung.core.analysis.pilot.investigate.derive_correction_hypotheses",
         lambda *_args, **_kwargs: ((hypothesis,), set()),
     )
     monkeypatch.setattr(
@@ -663,8 +695,8 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
         target=TargetSpec(State.name, 17),
     )
     incident = _ground_test_incident(plc)
-    first = InvestigationHypothesis("precise-cause", ((A.name, False),), sources=(A.name,))
-    second = InvestigationHypothesis("precise-cause", ((B.name, False),), sources=(B.name,))
+    first = CorrectionHypothesis("precise-cause", ((A.name, False),), sources=(A.name,))
+    second = CorrectionHypothesis("precise-cause", ((B.name, False),), sources=(B.name,))
     occurrence_a = CausalOccurrence(RungId(None, 1), "Nested_Request", 8)
     occurrence_b = CausalOccurrence(RungId(None, 2), State.name, 8)
     replacement_witness = RegressionWitness(
@@ -684,7 +716,7 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
     )
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._generate_deviation_hypotheses",
+        "pyrung.core.analysis.pilot.investigate.derive_correction_hypotheses",
         lambda source, *_args, **_kwargs: (
             ([second] if source is replacement_plc else [first]),
             frozenset(),

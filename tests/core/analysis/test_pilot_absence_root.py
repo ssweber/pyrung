@@ -14,7 +14,7 @@ any bounded replay, so it is indistinguishable from the true fix by replay
 alone: the gate pins that the deeper terminal (the cause) outranks the
 shallower one (the response suppressor).
 
-Born with the absence-root mechanism (investigate.py::_absence_root_
+Born with the absence-root mechanism (corrections.py::_absence_root_
 correctives); the live check is the burner drive
 ``how S_StateCurrent==17 avoid C_Complete`` (machine-local,
 scratchpad/burner/repro_sail17.py).
@@ -28,10 +28,10 @@ from typing import Any
 from pyrung import Bool, Int, Program, Real, Rung, Timer, calc, copy, latch, on_delay, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
+from pyrung.core.analysis.pilot.corrections import _absence_root_correctives
 from pyrung.core.analysis.pilot.investigate import (
     ReplayIncident,
     ReplayStep,
-    _absence_root_correctives,
     build_deviation_incident,
     build_replay_fn,
     incident_regression_witness,

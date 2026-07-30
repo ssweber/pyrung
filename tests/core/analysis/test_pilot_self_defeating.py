@@ -24,15 +24,14 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     DeviationIncident,
-    InvestigationHypothesis,
     InvestigationResult,
     RegressionWitness,
     ReplayOutcome,
     _active_rungs_defeat_needed,
-    _precise_causes,
     correction_identity,
     investigate_deviation,
 )
@@ -258,11 +257,11 @@ def test_exact_progress_cut_is_generated_then_rejected(monkeypatch):
     progress_cut = next(h for h in hypotheses if (State.name, 0) in h.holds)
 
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
     replayed: list[tuple[object, ...]] = []
@@ -597,21 +596,21 @@ def _stub_investigation(confirmed_holds):
 def test_investigation_rejects_guarded_self_defeating_correction(monkeypatch):
     """The scoped form is screened before its second replay and installation."""
     state, trial, _frame, ctx = _saboteur_scenario()
-    hypothesis = InvestigationHypothesis(
+    hypothesis = CorrectionHypothesis(
         kind="saboteur",
         holds=(("InitFlag", 1),),
         sources=("InitFlag",),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._absence_root_correctives",
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
         lambda *_args, **_kwargs: ([], set()),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._precise_causes",
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
         lambda *_args, **_kwargs: [hypothesis],
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate.correct_enablers",
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
         lambda *_args, **_kwargs: (),
     )
 
@@ -870,7 +869,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     assert receipt.status is CorrectionStatus.PROBATIONARY
 
     opposite = PilotRung("Go", False, scope)
-    remedy = InvestigationHypothesis(
+    remedy = CorrectionHypothesis(
         kind="precise-cause",
         holds=(opposite,),
         sources=("Go",),
@@ -1093,7 +1092,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         AllCondition(scope, CompareNe(go, False)),
         OperationReceipt(low_boundary),
     )
-    remedy = InvestigationHypothesis(
+    remedy = CorrectionHypothesis(
         kind="liveness",
         holds=(low,),
         sources=(go.name,),
