@@ -507,14 +507,14 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     plc.step()
 
     departure_observations = []
-    classify_departure = progress_module.classify_departure
+    observe_departure = progress_module.observe_departure
 
     def _capture_departure(*args, **kwargs):
-        result = classify_departure(*args, **kwargs)
-        departure_observations.append(result.observation)
-        return result
+        observation, settled_work = observe_departure(*args, **kwargs)
+        departure_observations.append(observation)
+        return observation, settled_work
 
-    monkeypatch.setattr(progress_module, "classify_departure", _capture_departure)
+    monkeypatch.setattr(progress_module, "observe_departure", _capture_departure)
 
     events = []
     last_committed = {}

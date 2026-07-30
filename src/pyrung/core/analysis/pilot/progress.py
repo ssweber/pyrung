@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from typing import Any
+from enum import Enum
+from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
 
@@ -29,6 +30,7 @@ from pyrung.core.analysis.pilot.departure import (
     DepartureObservation,
     DepartureResult,
     classify_departure,
+    observe_departure,
 )
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
@@ -64,9 +66,6 @@ from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     CorrectionStatus,
-    DepartureAction,
-    DepartureBasis,
-    DepartureDecision,
     MotionKind,
     PilotEvent,
     TargetReached,
@@ -89,7 +88,34 @@ from pyrung.core.analysis.pilot.world_key import (
 )
 from pyrung.core.analysis.sp_values import _values_match
 
+if TYPE_CHECKING:
+    from pyrung.core.runner import PLC
+
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
+
+
+class DepartureAction(Enum):
+    """What progress policy should do with an unresolved departure."""
+
+    WAIT = "wait"
+    PROMOTE = "promote"
+    REGRESS = "regress"
+    EXPIRE = "expire"
+
+
+class DepartureBasis(Enum):
+    """Exceptional policy evidence applied without rewriting earned-work facts."""
+
+    PILOT_CAUSED_REGRESSION = "pilot_caused_regression"
+
+
+@dataclass(frozen=True)
+class DepartureDecision:
+    """One evidence-based assessment of a pending departure."""
+
+    action: DepartureAction
+    receipt: EarnedWorkReceipt
+    basis: DepartureBasis | None = None
 
 
 @dataclass(frozen=True)
@@ -460,7 +486,7 @@ def _handle_channel_departure(
     # confirm nothing. Affirmative clean-route evidence opens bounded pending
     # piloting; regression or unknown evidence follows the conservative
     # investigate-and-revert arm.
-    departure = classify_departure(
+    observation, settled_work = observe_departure(
         state,
         ctx,
         bearing.objective,
@@ -481,7 +507,7 @@ def _handle_channel_departure(
             state.work.state.scan_id,
         ),
     )
-    observation = departure.observation
+    departure = classify_departure(observation)
     if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
         prescribed_departure = (
             policy.route_prescribed and verified.assessment.agency is Agency.PILOT
@@ -518,11 +544,12 @@ def _handle_channel_departure(
                 ctx,
                 origin=origin,
                 retain_if_unresolved=departure,
+                settled_if_unresolved=settled_work,
                 occurrence_requirements=observation.reading.external_supports,
             )
             return
         if state.pending_departure is None:
-            yield from _open_pending_departure(departure, trial, state, ctx)
+            yield from _open_pending_departure(departure, settled_work, trial, state, ctx)
             return
         # A clean program-owned departure inside an existing bounded attempt
         # that earned work (or fulfilled an explicitly prescribed channel
@@ -602,6 +629,7 @@ def _anchor_bearing_receipt(
 
 def _open_pending_departure(
     departure: DepartureResult,
+    settled_work: PLC,
     trial: _AcceptedTrial,
     state: _PilotState,
     ctx: _PilotContext,
@@ -615,7 +643,7 @@ def _open_pending_departure(
     # operation belongs to that operation, not to the state it happened to land
     # in. Only work earned after PILOT can read the departed world may validate
     # staying there.
-    _adopt_settled_departure(departure, state)
+    _adopt_settled_world(settled_work, state)
     earned_work_mark = (
         earned_work.mark(dict(state.work.state.tags))
         if earned_work is not None and earned_work.components
@@ -650,27 +678,24 @@ def _open_pending_departure(
     )
 
 
-def _adopt_settled_departure(departure: DepartureResult, state: _PilotState) -> int:
-    """Adopt the classifier's settled landing without changing pending policy.
+def _adopt_settled_world(settled_work: PLC, state: _PilotState) -> None:
+    """Adopt an observed settled landing without changing pending policy.
 
     Settlement is evidence shared by both a newly-opened pending departure and
     an already-open one that retained an unresolved departure. Keeping this
     operation separate prevents ``_open_pending_departure`` from becoming the only
     way to consume the settled fork.
-    Returns the scan at which adoption began.
     """
-    settled = departure.settled_fork
     scan_before = state.work.state.scan_id
     # Rebuild the overlay from the canonical rung list before adopting the
     # settled fork as the working PLC.
-    _set_rungs(settled, state.pilot_rungs)
-    state.work = settled
-    state.dwell_scans += settled.state.scan_id - scan_before
+    _set_rungs(settled_work, state.pilot_rungs)
+    state.work = settled_work
+    state.dwell_scans += settled_work.state.scan_id - scan_before
     if state.steps:
         # The coast + settlement is one dwell: extend the recorded step's span
         # to the settled landing (mirrors the finished-arm rewrite).
-        state.extend_last_step(settled.state.scan_id)
-    return scan_before
+        state.extend_last_step(settled_work.state.scan_id)
 
 
 def _bank_pending_landing(trial: _AcceptedTrial, state: _PilotState) -> None:
@@ -1178,6 +1203,7 @@ def _investigate_and_revert(
     *,
     origin: _RecoveryOrigin,
     retain_if_unresolved: DepartureResult | None = None,
+    settled_if_unresolved: PLC | None = None,
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
 ) -> tuple[PilotEvent, ...]:
     """Build a bounded incident from ``origin`` through the current world, replay-test
@@ -1379,7 +1405,7 @@ def _investigate_and_revert(
         # independently-proven continuation therefore receives the ordinary
         # bounded pending window. If one is already open, retain its
         # original rollback boundary, budget, and the actual first observed
-        # landing. The classifier's later quiescent fork is evidence, not
+        # landing. The observer's later quiescent fork is evidence, not
         # permission to skip the next recomputation point.
         assert channel_motion.channel_tag is not None
         retained = PilotEvent(
@@ -1396,10 +1422,12 @@ def _investigate_and_revert(
         if state.pending_departure is not None:
             _bank_pending_landing(trial, state)
             return (retained,)
+        assert settled_if_unresolved is not None
         return (
             retained,
             *_open_pending_departure(
                 retain_if_unresolved,
+                settled_if_unresolved,
                 trial,
                 state,
                 ctx,

@@ -1,11 +1,10 @@
 """Observe and classify a channel departure for post-commit recovery.
 
-``classify_departure`` settles the landing under the active holds, compares
+``observe_departure`` settles the landing under the active holds, compares
 target-relative earned-work evidence, and inspects static routes for reset boundaries
 or completed channel actions that would have to be repeated. The immutable
-``DepartureObservation`` keeps those exact source receipts together; the
-short-lived ``DepartureResult`` adds the classification and the mutable fork
-that ``progress.py`` may adopt.
+``DepartureObservation`` keeps those exact source receipts together, and the
+pure ``classify_departure`` interpretation adds only a classification and reason.
 
 No route suffix is retained as a plan. ``progress.py`` owns the policy for a
 clean continuation, regression, or unknown result.
@@ -46,6 +45,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState
+    from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
 
@@ -124,15 +124,14 @@ class DepartureObservation:
 
 @dataclass(frozen=True)
 class DepartureResult:
-    """A classified observation plus the short-lived fork adoption handle."""
+    """The pure policy interpretation of one immutable observation."""
 
     observation: DepartureObservation
     classification: DepartureClassification
     reason: str
-    settled_fork: Any  # PLC — mutable adoption handle, never durable evidence
 
 
-def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[Any, CoastReceipt]:
+def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[PLC, CoastReceipt]:
     """Ride a rung-driven fork to the departure's stable landing (bounded).
 
     The departure trigger lands at the *first* departure scan — mid-transition
@@ -427,7 +426,7 @@ def _departure_reading(
     )
 
 
-def classify_departure(
+def observe_departure(
     state: _PilotState,
     ctx: _PilotContext,
     objective: BearingObjective,
@@ -436,8 +435,8 @@ def classify_departure(
     source_snap: Any,
     *,
     occurrence_scan: int | None = None,
-) -> DepartureResult:
-    """Classify the channel departure the work fork is currently paused in."""
+) -> tuple[DepartureObservation, PLC]:
+    """Settle and observe the channel departure paused in ``state.work``."""
     work = getattr(state, "work", None)
     cause_scan = (
         occurrence_scan
@@ -470,41 +469,18 @@ def classify_departure(
         earned_work,
     )
 
-    def _result(
-        classification: DepartureClassification,
-        reason: str,
-        continuation: ContinuationEvidence,
-    ) -> DepartureResult:
-        if (
-            classification is DepartureClassification.CLEAN_CONTINUATION
-            and reading.disposition is DepartureDisposition.REACTIVE
-        ):
-            classification = DepartureClassification.UNKNOWN
-            reason = f"{reading.reason}; {reason}"
-        logger.debug(
-            "departure: %s %r->%r (%d settle scans, %s): %s; %s",
-            channel_tag,
-            from_value,
-            settled_value,
-            receipt.logical_scans,
-            receipt.stop_reason,
-            classification,
-            reason,
-        )
-        observation = DepartureObservation(
-            channel_tag=channel_tag,
-            from_value=from_value,
-            settled_value=settled_value,
-            landing_receipt=receipt,
-            progress=progress,
-            reading=reading,
-            continuation=continuation,
-        )
-        return DepartureResult(
-            observation=observation,
-            classification=classification,
-            reason=reason,
-            settled_fork=fork,
+    def _observation(continuation: ContinuationEvidence) -> tuple[DepartureObservation, PLC]:
+        return (
+            DepartureObservation(
+                channel_tag=channel_tag,
+                from_value=from_value,
+                settled_value=settled_value,
+                landing_receipt=receipt,
+                progress=progress,
+                reading=reading,
+                continuation=continuation,
+            ),
+            fork,
         )
 
     def _not_inspected(reason: str) -> ContinuationEvidence:
@@ -515,19 +491,11 @@ def classify_departure(
         # landing (the receipt names the distinction the old stable-counter
         # could not — a timeout is not a settlement).
         reason = f"landing did not settle within cap ({receipt.stop_reason})"
-        return _result(
-            DepartureClassification.UNKNOWN,
-            reason,
-            _not_inspected(reason),
-        )
+        return _observation(_not_inspected(reason))
 
     if progress.movement is EarnedWorkMovement.BACKWARD:
         reason = "settled world is behind the exact source receipt"
-        return _result(
-            DepartureClassification.REGRESSION,
-            reason,
-            _not_inspected(reason),
-        )
+        return _observation(_not_inspected(reason))
 
     goals: list[Any] = [from_value]
     for value in objective.channel_goals(channel_tag):
@@ -541,11 +509,7 @@ def classify_departure(
     )
     if not all_resolved:
         reason = "cannot determine whether a route would erase earned progress"
-        return _result(
-            DepartureClassification.UNKNOWN,
-            reason,
-            _not_inspected(reason),
-        )
+        return _observation(_not_inspected(reason))
 
     completed_actions = _completed_channel_actions(state, channel_tag)
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
@@ -576,14 +540,8 @@ def classify_departure(
         tuple(goals),
         edge_allowed=_safe_continuation_edge,
     )
-    saw_graph = any(graph.role.channel_tag == channel_tag for graph in graphs)
     if isinstance(continuation, Reachable):
-        return _result(
-            DepartureClassification.CLEAN_CONTINUATION,
-            "constrained navigation evidence has a clean forward continuation "
-            "that preserves earned progress and does not reopen completed work",
-            ContinuationEvidence(continuation),
-        )
+        return _observation(ContinuationEvidence(continuation))
 
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
@@ -592,14 +550,7 @@ def classify_departure(
 
     awaited_action_context = ("pdg", "program", "steerable", "opaque_loop", "pipeline_roles")
     if not all(hasattr(ctx, name) for name in awaited_action_context):
-        qualifier = (
-            "chart has no clean route" if saw_graph else "no chart or awaited-action evidence"
-        )
-        return _result(
-            DepartureClassification.UNKNOWN,
-            qualifier,
-            ContinuationEvidence(continuation),
-        )
+        return _observation(ContinuationEvidence(continuation))
 
     def _legal_awaited_action(action: tuple[str, Any]) -> bool:
         return _awaited_action_allowed(
@@ -628,19 +579,72 @@ def classify_departure(
         ),
     )
     if awaited_action is not None:
-        return _result(
-            DepartureClassification.CLEAN_CONTINUATION,
-            awaited_action.note,
+        return _observation(
             ContinuationEvidence(
                 continuation,
                 awaited_action_inspected=True,
                 awaited_action=awaited_action,
             ),
         )
-    return _result(
-        DepartureClassification.UNKNOWN,
-        "no clean route is currently proven"
-        if saw_graph
-        else "no transition structure for the channel",
-        ContinuationEvidence(continuation, awaited_action_inspected=True),
+    return _observation(ContinuationEvidence(continuation, awaited_action_inspected=True))
+
+
+def classify_departure(observation: DepartureObservation) -> DepartureResult:
+    """Purely classify one immutable departure observation."""
+    receipt = observation.landing_receipt
+    progress = observation.progress
+    continuation = observation.continuation
+    status = continuation.channel_status
+
+    if receipt.stop_reason != "quiescent":
+        classification = DepartureClassification.UNKNOWN
+        reason = f"landing did not settle within cap ({receipt.stop_reason})"
+    elif progress.movement is EarnedWorkMovement.BACKWARD:
+        classification = DepartureClassification.REGRESSION
+        reason = "settled world is behind the exact source receipt"
+    elif isinstance(status, Reachable) or continuation.awaited_action is not None:
+        classification = DepartureClassification.CLEAN_CONTINUATION
+        reason = (
+            continuation.awaited_action.note
+            if continuation.awaited_action is not None
+            else "constrained navigation evidence has a clean forward continuation "
+            "that preserves earned progress and does not reopen completed work"
+        )
+    elif isinstance(status, Unknown) and status.reason.startswith(
+        "continuation not inspected because "
+    ):
+        classification = DepartureClassification.UNKNOWN
+        reason = status.reason.removeprefix("continuation not inspected because ")
+    elif not continuation.awaited_action_inspected:
+        classification = DepartureClassification.UNKNOWN
+        reason = (
+            "chart has no clean route"
+            if not isinstance(status, Unknown)
+            else "no chart or awaited-action evidence"
+        )
+    else:
+        classification = DepartureClassification.UNKNOWN
+        reason = (
+            "no clean route is currently proven"
+            if not isinstance(status, Unknown)
+            else "no transition structure for the channel"
+        )
+
+    if (
+        classification is DepartureClassification.CLEAN_CONTINUATION
+        and observation.reading.disposition is DepartureDisposition.REACTIVE
+    ):
+        classification = DepartureClassification.UNKNOWN
+        reason = f"{observation.reading.reason}; {reason}"
+
+    logger.debug(
+        "departure: %s %r->%r (%d settle scans, %s): %s; %s",
+        observation.channel_tag,
+        observation.from_value,
+        observation.settled_value,
+        receipt.logical_scans,
+        receipt.stop_reason,
+        classification,
+        reason,
     )
+    return DepartureResult(observation, classification, reason)

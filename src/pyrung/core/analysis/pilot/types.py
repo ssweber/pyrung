@@ -266,30 +266,6 @@ class _RecoveryOrigin:
     before_snap: Mapping[str, Any]
 
 
-class DepartureAction(Enum):
-    """What progress policy should do with an unresolved departure."""
-
-    WAIT = "wait"
-    PROMOTE = "promote"
-    REGRESS = "regress"
-    EXPIRE = "expire"
-
-
-class DepartureBasis(Enum):
-    """Exceptional policy evidence applied without rewriting earned-work facts."""
-
-    PILOT_CAUSED_REGRESSION = "pilot_caused_regression"
-
-
-@dataclass(frozen=True)
-class DepartureDecision:
-    """One evidence-based assessment of a pending departure."""
-
-    action: DepartureAction
-    receipt: EarnedWorkReceipt
-    basis: DepartureBasis | None = None
-
-
 # ---------------------------------------------------------------------------
 # Recorded step
 # ---------------------------------------------------------------------------

@@ -63,6 +63,9 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.pilot import _commit_trial
 from pyrung.core.analysis.pilot.progress import (
+    DepartureAction,
+    DepartureBasis,
+    DepartureDecision,
     PendingDeparture,
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
@@ -78,9 +81,6 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
-    DepartureAction,
-    DepartureBasis,
-    DepartureDecision,
     MotionKind,
     PilotEvent,
     TargetReached,
@@ -289,7 +289,7 @@ def _pending_departure(
 
 
 def _departure_result(
-    settled_fork: PLC,
+    settled_work: PLC,
     *,
     reason: str,
     settled_value: Any,
@@ -300,7 +300,7 @@ def _departure_result(
     settle_scans: int = 0,
 ) -> DepartureResult:
     """Build a complete departure receipt for focused progress-policy tests."""
-    start_scan = settled_fork.state.scan_id - settle_scans
+    start_scan = settled_work.state.scan_id - settle_scans
     observation = DepartureObservation(
         channel_tag=channel_tag,
         from_value=from_value,
@@ -308,7 +308,7 @@ def _departure_result(
         landing_receipt=CoastReceipt(
             kind="departure-settle",
             start_scan=start_scan,
-            end_scan=settled_fork.state.scan_id,
+            end_scan=settled_work.state.scan_id,
             stop_reason="quiescent",
             fired=(),
             events=(),
@@ -322,7 +322,7 @@ def _departure_result(
             else Unknown("focused policy fixture")
         ),
     )
-    return DepartureResult(observation, classification, reason, settled_fork)
+    return DepartureResult(observation, classification, reason)
 
 
 def test_commit_shares_verified_execution_evidence_and_policy() -> None:
@@ -649,15 +649,20 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
         progress=earned_work.receipt(trial.execution.before_snap, settled.state.tags),
         from_value=6,
     )
+    assert state.work is source
+    assert settled is not state.work
+    assert not hasattr(departure, "settled_fork")
 
     events = _open_pending_departure(
         departure,
+        settled,
         trial,
         state,
         SimpleNamespace(max_scans=10_000),
     )
 
     assert state.pending_departure is not None
+    assert state.work is settled
     assert state.pending_departure.opening is departure.observation
     assert state.pending_departure.opening.landing_receipt.logical_scans == 1
     assert state.pending_departure.earned_work_mark == (("Step", 107),)
@@ -1007,13 +1012,22 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         from_value=2,
     )
     monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.observe_departure",
+        lambda *_args, **_kwargs: (departure.observation, trial.attempt.pulse.fork),
+    )
+    monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
-        lambda *_args, **_kwargs: departure,
+        lambda _observation: departure,
     )
     investigated = []
 
-    def _investigate(*_args, retain_if_unresolved=None, **_kwargs):
-        investigated.append(retain_if_unresolved)
+    def _investigate(
+        *_args,
+        retain_if_unresolved=None,
+        settled_if_unresolved=None,
+        **_kwargs,
+    ):
+        investigated.append((retain_if_unresolved, settled_if_unresolved))
         return (PilotEvent("departure_investigated", 0, {"retained": True}),)
 
     monkeypatch.setattr(
@@ -1032,7 +1046,7 @@ def test_preserved_departure_while_pending_is_investigated(monkeypatch):
         "investigation_started",
         "departure_investigated",
     ]
-    assert investigated == [departure]
+    assert investigated == [(departure, trial.attempt.pulse.fork)]
     assert state.pending_departure is not None
     assert state.work is trial.attempt.pulse.fork
     assert len(state.checkpoints) == 1
@@ -1075,8 +1089,12 @@ def test_prescribed_departure_outranks_a_preserved_recipe_earned_work(monkeypatc
         from_value=9,
     )
     monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.observe_departure",
+        lambda *_args, **_kwargs: (departure.observation, trial.attempt.pulse.fork),
+    )
+    monkeypatch.setattr(
         "pyrung.core.analysis.pilot.progress.classify_departure",
-        lambda *_args, **_kwargs: departure,
+        lambda _observation: departure,
     )
 
     def _unexpected_investigation(*_args, **_kwargs):
@@ -1343,18 +1361,29 @@ class TestLetrunEjection:
             before_snap={"State": 6},
             fork_snap={"State": 10},
         )
+        observed = False
         classified = False
         investigated = False
 
-        def _classify(*_args, **_kwargs):
-            nonlocal classified
-            classified = True
-            return _departure_result(
+        def _observe(*_args, **_kwargs):
+            nonlocal observed
+            observed = True
+            departure = _departure_result(
                 trial.attempt.pulse.fork,
                 reason="no clean continuation",
                 settled_value=10,
                 classification=DepartureClassification.UNKNOWN,
                 from_value=6,
+            )
+            return departure.observation, trial.attempt.pulse.fork
+
+        def _classify(observation):
+            nonlocal classified
+            classified = True
+            return DepartureResult(
+                observation,
+                DepartureClassification.UNKNOWN,
+                reason="no clean continuation",
             )
 
         def _investigate(*_args, **_kwargs):
@@ -1362,6 +1391,10 @@ class TestLetrunEjection:
             investigated = True
             return ()
 
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.progress.observe_departure",
+            _observe,
+        )
         monkeypatch.setattr(
             "pyrung.core.analysis.pilot.progress.classify_departure",
             _classify,
@@ -1380,10 +1413,13 @@ class TestLetrunEjection:
             trial.verification,
         )
         assert next(events).kind == "letrun_ejection"
+        assert observed is False
         assert classified is False
         assert next(events).kind == "departure_check_started"
+        assert observed is False
         assert classified is False
         assert next(events).kind == "investigation_started"
+        assert observed is True
         assert classified is True
         assert investigated is False
 

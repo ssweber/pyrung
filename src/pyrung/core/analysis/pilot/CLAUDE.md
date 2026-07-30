@@ -134,7 +134,9 @@ this table only locates the owner.
 - Trial-coast avoid observation: `coast.py::CoastSession.seek`
 - Target-relative movement: `earned_work.py::EarnedWork.receipt`; verification owns the
   accepted trial's receipt
-- Departure observation and classification: `departure.py::classify_departure`
+- Departure observation and classification:
+  `departure.py::observe_departure` / pure `classify_departure`; `progress.py`
+  alone adopts or discards the returned settled work
 - Evidence classification: `outcome.py::assess_outcome`; consumers read the
   returned `TrialAssessment` axes directly
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop

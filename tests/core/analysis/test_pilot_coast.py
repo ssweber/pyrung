@@ -1306,7 +1306,7 @@ class TestClassifyDepartureRefusal:
             lambda state, channel_tag: (fake_fork, timeout_receipt),
         )
 
-        verdict = departure.classify_departure(
+        observation, settled_work = departure.observe_departure(
             SimpleNamespace(),  # state — consumed only by the (mocked) settle
             SimpleNamespace(),  # ctx — untouched on the refusal arm
             BearingObjective(TargetSpec("Target", True)),
@@ -1314,6 +1314,7 @@ class TestClassifyDepartureRefusal:
             from_value=1,
             source_snap={"Chan": 1},
         )
+        verdict = departure.classify_departure(observation)
 
         assert verdict.classification is departure.DepartureClassification.UNKNOWN
         assert "did not settle within cap" in verdict.reason
@@ -1322,6 +1323,7 @@ class TestClassifyDepartureRefusal:
         assert verdict.observation.settled_value == 7
         assert verdict.observation.landing_receipt is timeout_receipt
         assert verdict.observation.landing_receipt.logical_scans == 2000
+        assert settled_work is fake_fork
         assert isinstance(
             verdict.observation.continuation.channel_status,
             departure.Unknown,
