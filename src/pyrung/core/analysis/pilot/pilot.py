@@ -48,7 +48,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
@@ -309,7 +309,7 @@ def _prepare_drive(
 
     from pyrung.core.analysis.pdg import build_program_graph
 
-    work = plc if live else fork_with_rungs(plc, (), history_budget=math.inf)
+    work = plc if live else fork_with_pilot_rungs(plc, (), history_budget=math.inf)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
@@ -596,7 +596,7 @@ def _resolve_excursion(
         executed.bearing.act.policy.applied,
         cfg=key_config,
         steerable=ctx.steerable,
-        rungs=state.pilot_rungs,
+        pilot_rungs=state.pilot_rungs,
         resting=ctx.resting,
         edge_tags=ctx.edge_tags,
         scan_budget=state.remaining_search_scans(ctx.max_scans),
@@ -614,7 +614,7 @@ def _step_context(
 ) -> _StepContext:
     """Build the context owned by one committed operation.
 
-    Commit adds only unresolved frontier tags and exact executable control
+    Commit adds only unresolved frontier tags and exact executable pilot
     rungs; every other view derives from the policy and execution-evidence
     owners already inside the trial.
     """
@@ -720,7 +720,7 @@ def _commit_trial(
     # that drove the transition.  ``applied`` is the full set and is empty exactly
     # for bearing/let-run coasts, where an empty action means "coast, no input".
     # A terminal let-run animates conditional holds during its coast; record them
-    # on the step so the path is self-describing.  ``rungs`` is the live
+    # on the step so the path is self-describing.  ``pilot_rungs`` is the live
     # round-by-round accumulator — snapshot the conditional ones active now.  A
     # pulse/bearing-coast step animates nothing, so it carries no reactive holds.
     #

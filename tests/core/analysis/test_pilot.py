@@ -2261,7 +2261,7 @@ def test_skiff_scan_suppresses_non_participants():
         plc,
         role,
         pdg,
-        rungs=(),
+        pilot_rungs=(),
         actions=(("CmdStart", True),),
         extra_tags=frozenset({"JumpIdx"}),
         scans=1,
@@ -2294,7 +2294,7 @@ def test_skiff_scan_preserves_active_pilot_rungs():
         plc,
         frozenset({HeldInput.name, HoldScope.name, SawHold.name}),
         pdg,
-        rungs=active,
+        pilot_rungs=active,
     )
 
     assert result.after[HeldInput.name] is False

@@ -54,7 +54,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
-    _set_rungs,
+    _set_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
@@ -202,7 +202,7 @@ def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypat
         lambda _plc, holds, *_args: tuple(PilotRung(t, v, A == A) for t, v in holds),
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -410,7 +410,7 @@ def test_revoked_correction_is_skipped_and_runner_up_is_replayed(monkeypatch):
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -475,7 +475,7 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
 
@@ -494,7 +494,7 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
     )
 
     assert result.correction is not None
-    scoped = result.correction.rungs[0]
+    scoped = result.correction.pilot_rungs[0]
     assert scoped.dest == broad.dest and scoped.value == broad.value
     assert correction_identity((scoped,)) != correction_identity((broad,))
     assert result.rejected == ()
@@ -602,7 +602,7 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
@@ -627,8 +627,8 @@ def test_investigation_filters_corrections_after_observing_full_overlay(monkeypa
         incident,
         ctx,
         replay,
-        installed_rungs=(shadowed, winner),
-        correction_rungs=(shadowed,),
+        installed_pilot_rungs=(shadowed, winner),
+        correction_pilot_rungs=(shadowed,),
     )
 
     assert replayed, "the shadowed correction must not skip its hypothesis"
@@ -661,7 +661,7 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     replayed: list[tuple[Any, ...]] = []
@@ -673,7 +673,7 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
     result = investigate_deviation(plc, _ground_test_incident(plc), ctx, replay)
 
     assert result.correction is not None
-    assert result.correction.rungs == (proposal,)
+    assert result.correction.pilot_rungs == (proposal,)
     assert replayed == [(proposal,)]
 
 
@@ -727,7 +727,7 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.investigate._active_rungs_defeat_needed",
+        "pyrung.core.analysis.pilot.investigate._active_pilot_rungs_defeat_needed",
         lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(
@@ -763,7 +763,7 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
     result = investigate_deviation(plc, incident, ctx, replay)
 
     assert result.correction is not None
-    assert {rung.dest for rung in result.correction.rungs} == {A.name, B.name}
+    assert {rung.dest for rung in result.correction.pilot_rungs} == {A.name, B.name}
     assert attempts == [
         (A.name,),
         (A.name, B.name),
@@ -1145,7 +1145,7 @@ def test_non_timer_regression_witness_distinguishes_suppression_from_masking():
     assert "suppressed its" in suppressed.reason
 
     masked_probe = cp.fork()
-    _set_rungs(masked_probe, (PilotRung(Mask.name, True, State != 17),))
+    _set_pilot_rungs(masked_probe, (PilotRung(Mask.name, True, State != 17),))
     masked_start = masked_probe.state.scan_id
     masked_probe.patch({Trip.name: True})
     masked_probe.step()
@@ -1622,7 +1622,7 @@ class TestPreciseCauses:
                 copy(10, State)
 
         plc = PLC(prog, dt=0.010)
-        _set_rungs(
+        _set_pilot_rungs(
             plc,
             [
                 PilotRung(Door.name, True, State != 6),
@@ -2120,11 +2120,11 @@ class TestShaftRotateLiveness:
         plc.step()
         ctx = _make_ctx(prog, plc)
         incident = _coast_holding_to_trip(plc, False)
-        rungs = correct_enablers(plc, incident, ctx)[0].holds
+        pilot_rungs = correct_enablers(plc, incident, ctx)[0].holds
 
         fresh = PLC(_shaft_rotate_program(), dt=0.010)
         fresh.step()
-        _set_rungs(fresh, list(rungs))
+        _set_pilot_rungs(fresh, list(pilot_rungs))
         reached = _coast_holding_state(fresh, "Running", True, (), budget=200)
         assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
@@ -2385,12 +2385,12 @@ class TestMultiReadCorrections:
         assert "WD_Done" in incident.changed_tags
 
         ctx = _make_ctx(prog, plc)
-        rungs = correct_enablers(plc, incident, ctx)[0].holds
-        assert {r.dest for r in rungs} == {"A", "B"}
+        pilot_rungs = correct_enablers(plc, incident, ctx)[0].holds
+        assert {r.dest for r in pilot_rungs} == {"A", "B"}
 
         fresh = PLC(_conj_reset_target_program(), dt=0.010)
         fresh.step()
-        _set_rungs(fresh, list(rungs))
+        _set_pilot_rungs(fresh, list(pilot_rungs))
         reached = _coast_holding_state(fresh, "Running", True, (), budget=300)
         assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
@@ -2468,7 +2468,7 @@ class TestInvestigateExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            rungs=[],
+            pilot_rungs=[],
             resting={"Command": False},
             edge_tags={"Command"},
             scan_budget=50,
@@ -2487,7 +2487,7 @@ class TestInvestigateExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            rungs=[],
+            pilot_rungs=[],
             resting={"Command": False},
             edge_tags={"Command"},
             scan_budget=50,
@@ -2495,8 +2495,10 @@ class TestInvestigateExcursion:
         # Sealing Hold=True keeps Out latched across the edge release — the
         # retry key differs from the (reverted) pre key, so the hold is kept.
         assert result.correction is not None
-        assert ("Hold", True) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
-        guard = result.correction.rungs[0].guard
+        assert ("Hold", True) in tuple(
+            (rung.dest, rung.value) for rung in result.correction.pilot_rungs
+        )
+        guard = result.correction.pilot_rungs[0].guard
         assert guard.evaluate(_SnapshotView({"Out": True}, {}))
         assert not guard.evaluate(_SnapshotView({"Out": False}, {}))
         assert result.retry_fork is not None
@@ -2634,7 +2636,7 @@ class TestGeneralizedAntagonistExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            rungs=[],
+            pilot_rungs=[],
             resting=resting,
             edge_tags={"Command"},
             scan_budget=50,
@@ -2643,7 +2645,9 @@ class TestGeneralizedAntagonistExcursion:
         )
         assert result.reverted == ["State"]
         assert result.correction is not None
-        assert ("Mode", 1) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
+        assert ("Mode", 1) in tuple(
+            (rung.dest, rung.value) for rung in result.correction.pilot_rungs
+        )
         assert result.retry_fork is not None
         # The suppression preserved the pulse-established value across the settle.
         assert result.retry_fork.state.tags["State"] == 5
@@ -2672,7 +2676,7 @@ class TestGeneralizedAntagonistExcursion:
             [("Command", True)],
             cfg=cfg,
             steerable=steerable,
-            rungs=[],
+            pilot_rungs=[],
             resting=resting,
             edge_tags={"Command"},
             scan_budget=50,
@@ -2681,7 +2685,9 @@ class TestGeneralizedAntagonistExcursion:
         )
         assert result.reverted == ["State"]
         assert result.correction is not None
-        assert ("Sel", False) in tuple((rung.dest, rung.value) for rung in result.correction.rungs)
+        assert ("Sel", False) in tuple(
+            (rung.dest, rung.value) for rung in result.correction.pilot_rungs
+        )
         assert result.retry_fork is not None
         assert result.retry_fork.state.tags["State"] == 5
 

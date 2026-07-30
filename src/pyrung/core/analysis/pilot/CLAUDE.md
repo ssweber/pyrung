@@ -154,10 +154,11 @@ this table only locates the owner.
   confirmation: `investigate.py::_rank_hypotheses`, `build_replay_fn`, and
   `_resolve_replay_attempt`
 - Corrective operation lifetime: the instruction owner, carried through
-  `trace.py::TraceAction.operation`; `overlay.py::_set_rungs` only compiles that
+  `trace.py::TraceAction.operation`; `overlay.py::_set_pilot_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
-- Temporary-logic execution ownership: `overlay.py::_rung_execution_receipt` over
-  the same `_expand_pilot_rules` branches installed by `_set_rungs`
+- Temporary-logic execution ownership:
+  `overlay.py::_pilot_rung_execution_receipt` over the same
+  `_expand_pilot_rules` branches installed by `_set_pilot_rungs`
 
 ## Actual control flow
 
@@ -200,7 +201,7 @@ knowledge that must survive:
   `Compass` value.
 
 Every production PILOT fork that may execute is created through
-`overlay.py::fork_with_rungs`; public `PLC.fork()` does not implicitly inherit
+`overlay.py::fork_with_pilot_rungs`; public `PLC.fork()` does not implicitly inherit
 PILOT holds. `Compass.apply` is the sole knowledge write path; runtime
 instruments return `CompassObservation` values and never mutate the compass.
 Knowledge scoping (tombstone locality, static-edge overlay narrowness) is
@@ -305,9 +306,9 @@ plain language on first use.
   knowledge rather than the current static trace.
 - **ladder rung** — a rung in the user's PLC program.
 - **pilot rung** — a scoped piece of temporary PILOT steering represented by
-  `PilotRung`. The `pilot_rungs` fields and helpers such as `_set_rungs`,
-  `fork_with_rungs`, and `_rung_identity` refer to these objects, not ladder
-  rungs.
+  `PilotRung`. The `pilot_rungs` fields and helpers such as
+  `_set_pilot_rungs`, `fork_with_pilot_rungs`, and `_rung_identity` refer to
+  these objects, not ladder rungs.
 - **coast** — hold the required inputs while scans pass.
 - **coast trigger** — a named predicate that records why a coast stopped or
   what it observed.

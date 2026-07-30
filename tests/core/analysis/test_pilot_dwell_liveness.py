@@ -10,7 +10,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import _coast_holding_state
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import build_deviation_incident
-from pyrung.core.analysis.pilot.overlay import _set_rungs
+from pyrung.core.analysis.pilot.overlay import _set_pilot_rungs
 from pyrung.core.analysis.pilot.pilot import pilot_events
 from pyrung.core.analysis.steerable import compute_steerable
 
@@ -162,7 +162,7 @@ def test_pilot_watchdog_corrections_compose_into_alternating_owned_dwell() -> No
 
     replay = PLC(program, dt=0.010)
     replay.step()
-    _set_rungs(replay, corrections)
+    _set_pilot_rungs(replay, corrections)
     receipt = _coast_holding_state(
         replay,
         tags["complete"].name,

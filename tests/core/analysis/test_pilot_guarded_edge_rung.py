@@ -9,7 +9,11 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.options import _build_candidates
-from pyrung.core.analysis.pilot.overlay import PilotRung, _append_rungs, _set_rungs
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _append_pilot_rungs,
+    _set_pilot_rungs,
+)
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
     trace_back,
@@ -68,8 +72,8 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     )
     plc = PLC(logic, dt=0.010)
     earned = PilotRung(door_closed.name, True, state_tag == approach)
-    rungs = [earned]
-    _set_rungs(plc, rungs)
+    pilot_rungs = [earned]
+    _set_pilot_rungs(plc, pilot_rungs)
 
     # Approach enters HoldForOperator with DoorClosed already True, so the
     # transition requires a fresh off→on edge rather than the existing level.
@@ -100,7 +104,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         raw_trace_actions=actions,
         raw_trace_action_details=details,
     )
-    pilot_state = SimpleNamespace(work=plc, pilot_rungs=rungs)
+    pilot_state = SimpleNamespace(work=plc, pilot_rungs=pilot_rungs)
     ctx = SimpleNamespace(
         compass=Compass(),
         edge_tags=compute_edge_tags(pdg, logic),
@@ -122,7 +126,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     close_again = candidates.prerequisites.pilot_rungs[0]
     assert (close_again.dest, close_again.value) == (door_closed.name, True)
 
-    _append_rungs(plc, [close_again], rungs)
+    _append_pilot_rungs(plc, [close_again], pilot_rungs)
     plc.step()
     assert plc.state.tags[state_tag.name] == ready
     assert plc.state.tags[door_closed.name] is True
@@ -131,4 +135,4 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     plc.patch({unhold.name: True})
     plc.step()
     assert plc.state.tags[state_tag.name] == complete
-    assert all(r.dest != unhold.name for r in rungs)
+    assert all(r.dest != unhold.name for r in pilot_rungs)

@@ -43,7 +43,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _atom_condition,
-    _rung_execution_receipt,
+    _pilot_rung_execution_receipt,
     _target_unresolved_condition,
     _until_unresolved_condition,
 )
@@ -670,7 +670,7 @@ def _managed_boolean_rungs(
     from pyrung.core.condition import AllCondition, CompareNe
 
     managed = {rung.dest for rung in state.pilot_rungs}
-    overlay = _rung_execution_receipt(state.pilot_rungs, frame.snap)
+    overlay = _pilot_rung_execution_receipt(state.pilot_rungs, frame.snap)
     proposed: list[PilotRung] = []
     lowered: set[_ActionPair] = set()
     for detail in details:

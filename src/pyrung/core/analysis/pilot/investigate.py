@@ -47,12 +47,12 @@ from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _rung_execution_receipt,
-    _rungs_from_proposals,
-    _set_rungs,
+    _pilot_rung_execution_receipt,
+    _pilot_rungs_from_proposals,
+    _set_pilot_rungs,
     _target_unresolved_condition,
     _union_conditions,
-    fork_with_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
@@ -123,7 +123,7 @@ def _hypothesis_identity(proposals: Iterable[Any]) -> tuple[tuple[str, Any], ...
     return tuple(sorted(pairs, key=lambda pair: (pair[0], repr(pair[1]))))
 
 
-def correction_identity(rungs: Iterable[PilotRung]) -> CorrectionIdentity:
+def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
     """Exact identity of an executable, replay-confirmed correction.
 
     ``_rung_identity`` owns executable identity, including the guard and any
@@ -132,7 +132,7 @@ def correction_identity(rungs: Iterable[PilotRung]) -> CorrectionIdentity:
     scope and confirms that exact installed form.
     """
     identities: list[tuple[Any, ...]] = []
-    for rung in rungs:
+    for rung in pilot_rungs:
         if not isinstance(rung, PilotRung):
             raise TypeError("correction identity requires executable PilotRungs")
         identities.append(_rung_identity(rung))
@@ -528,7 +528,7 @@ def _scoped_correction_rungs(
                 raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
             coordinates.append(CompareEq(tag, value))
         scope = AllCondition(scope, *coordinates)
-    return tuple(_rungs_from_proposals(plc, list(scoped_proposals), scope))
+    return tuple(_pilot_rungs_from_proposals(plc, list(scoped_proposals), scope))
 
 
 def _discharges_occurrence_requirements(
@@ -611,7 +611,7 @@ def _exploratory_correction_rungs(
             *((source_scope,) if source_scope is not None else ()),
             *progress_coordinates,
         )
-        result.extend(_rungs_from_proposals(plc, [proposal], AllCondition(*guard_terms)))
+        result.extend(_pilot_rungs_from_proposals(plc, [proposal], AllCondition(*guard_terms)))
     return tuple(result)
 
 
@@ -908,7 +908,7 @@ def _regression_ownership(
 def build_replay_fn(
     cp_fork: PLC,
     cp_trend: int,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
     steps: Sequence[ReplayStep],
     *,
     ctx: _PilotContext,
@@ -972,11 +972,11 @@ def build_replay_fn(
     def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
         from pyrung.core.analysis.pilot.coast import CoastSession
 
-        probe = fork_with_rungs(cp_fork, rungs)
-        probe_rungs = list(rungs)
+        probe = fork_with_pilot_rungs(cp_fork, pilot_rungs)
+        probe_pilot_rungs = list(pilot_rungs)
         scope = _target_unresolved_condition(probe, target_tag, target_value)
-        probe_rungs.extend(_rungs_from_proposals(probe, list(holds), scope))
-        _set_rungs(probe, probe_rungs)
+        probe_pilot_rungs.extend(_pilot_rungs_from_proposals(probe, list(holds), scope))
+        _set_pilot_rungs(probe, probe_pilot_rungs)
         # One session spans the whole replay. The channel pen proves whether the
         # incident's source context was preserved; exact rung-firing timelines
         # independently prove whether its recorded causal branch replayed.
@@ -1288,7 +1288,7 @@ def investigate_excursion(
     *,
     cfg: Any,
     steerable: frozenset[str],
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
     resting: dict[str, Any],
     edge_tags: set[str],
     scan_budget: int,
@@ -1317,9 +1317,9 @@ def investigate_excursion(
     resolves seal-in establishment cases, where the writer *can* still produce the
     desired value so it is not a suppression antagonist).
 
-    The successful result carries the exact guarded rungs used by retry. The
-    caller may admit and install that correction, but must not reconstruct its
-    lifetime from the bare input values.
+    The successful result carries the exact guarded pilot rungs used by retry.
+    The caller may admit and install that correction, but must not reconstruct
+    its lifetime from the bare input values.
     """
     from pyrung.core.analysis.pdg import resolve_rung
 
@@ -1373,7 +1373,7 @@ def investigate_excursion(
                         applied_actions,
                         pdg,
                         steerable,
-                        rungs,
+                        pilot_rungs,
                     )
                 for hold in holds or ():
                     if hold not in seen:
@@ -1413,17 +1413,17 @@ def investigate_excursion(
     if not candidate_holds:
         return ExcursionResult(reverted=reverted)
 
-    retry = fork_with_rungs(work, rungs)
-    retry_rungs = list(rungs)
+    retry = fork_with_pilot_rungs(work, pilot_rungs)
+    retry_pilot_rungs = list(pilot_rungs)
     from pyrung.core.analysis.pilot.coast import CoastSession
     from pyrung.core.condition import CompareEq
 
     preserved_tag = reverted[0]
     preserved = retry._known_tags_by_name[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
-    confirmed_rungs = tuple(_rungs_from_proposals(retry, candidate_holds, scope))
-    retry_rungs.extend(confirmed_rungs)
-    _set_rungs(retry, retry_rungs)
+    confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(retry, candidate_holds, scope))
+    retry_pilot_rungs.extend(confirmed_pilot_rungs)
+    _set_pilot_rungs(retry, retry_pilot_rungs)
     kickoff = list(applied_actions)
     kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in applied_actions})
     session = CoastSession(retry, kind="excursion-retry")
@@ -1442,8 +1442,8 @@ def investigate_excursion(
         return ExcursionResult(
             reverted=reverted,
             correction=_ConfirmedCorrection(
-                identity=correction_identity(confirmed_rungs),
-                rungs=confirmed_rungs,
+                identity=correction_identity(confirmed_pilot_rungs),
+                pilot_rungs=confirmed_pilot_rungs,
                 sources=tuple(dict.fromkeys((*reverted, *(tag for tag, _ in candidate_holds)))),
                 justification="excursion replay preserved the pulse-established state",
             ),
@@ -1492,7 +1492,7 @@ def _skiff_suppression_nominations(
     applied_actions: Sequence[ActionPair],
     pdg: Any,
     steerable: frozenset[str],
-    rungs: Sequence[PilotRung],
+    pilot_rungs: Sequence[PilotRung],
 ) -> list[ActionPair]:
     """Bounded isolated probes for a live-word-gated antagonist — nominations only.
 
@@ -1536,7 +1536,7 @@ def _skiff_suppression_nominations(
             work,
             frozenset(allowed | {lever}),
             pdg,
-            rungs=rungs,
+            pilot_rungs=pilot_rungs,
             actions=probe_actions,
             scans=_SKIFF_SCANS,
         )
@@ -1782,8 +1782,8 @@ def investigate_deviation(
     replay: ReplayFn,
     *,
     needed: Sequence[tuple[str, Any]] = (),
-    installed_rungs: Sequence[Any] = (),
-    correction_rungs: Sequence[Any] = (),
+    installed_pilot_rungs: Sequence[Any] = (),
+    correction_pilot_rungs: Sequence[Any] = (),
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
     excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
@@ -1814,15 +1814,15 @@ def investigate_deviation(
     # and a mid-chain suppressor (the abort rung's ~Suspend enabler) both
     # survive the bounded replay, the terminal names the cause while the
     # suppressor merely mutes the response.
-    installed_rungs = tuple(installed_rungs)
+    installed_pilot_rungs = tuple(installed_pilot_rungs)
     # Ask the overlay compiler which installed rule actually owned each
     # destination at the incident anchor.  Observing the full overlay before
     # filtering correction provenance preserves start/continuation precedence
     # and prevents an eligible, shadowed, or dormant sibling from claiming the
     # write. Persistent rules are not removed merely because they are inactive.
-    overlay = _rung_execution_receipt(installed_rungs, dict(incident.before_snap))
+    overlay = _pilot_rung_execution_receipt(installed_pilot_rungs, dict(incident.before_snap))
     installed_active = {rung.dest: rung.value for rung in overlay.effective}
-    correction_ids = {_rung_identity(rung) for rung in correction_rungs}
+    correction_ids = {_rung_identity(rung) for rung in correction_pilot_rungs}
     correction_active = {
         rung.dest: rung.value
         for rung in overlay.effective
@@ -1932,7 +1932,7 @@ def investigate_deviation(
                     program,
                     recorded_incident_movers,
                     incident.after_snap,
-                    installed_rungs,
+                    installed_pilot_rungs,
                 )
                 for ht, hv in map(_proposal_pair, hypothesis.holds)
             )
@@ -2004,7 +2004,7 @@ def investigate_deviation(
             if (
                 pdg is not None
                 and program is not None
-                and _active_rungs_defeat_needed(
+                and _active_pilot_rungs_defeat_needed(
                     scoped,
                     required_progress,
                     incident.before_snap,
@@ -2053,7 +2053,7 @@ def investigate_deviation(
             confirmed.append(confirmed_hypothesis)
             confirmed_correction = _ConfirmedCorrection(
                 identity=correction_identity(scoped),
-                rungs=scoped,
+                pilot_rungs=scoped,
                 sources=confirmed_hypothesis.sources,
                 justification=(
                     installed_outcome.justification.value
@@ -2086,8 +2086,8 @@ def investigate_deviation(
 # ---------------------------------------------------------------------------
 
 
-def _active_rungs_defeat_needed(
-    rungs: Sequence[PilotRung],
+def _active_pilot_rungs_defeat_needed(
+    pilot_rungs: Sequence[PilotRung],
     needed: Sequence[tuple[str, Any]],
     snapshot: Mapping[str, Any],
     pdg: Any,
@@ -2101,7 +2101,7 @@ def _active_rungs_defeat_needed(
     that forces an ``And``-gated reset is caught even when no member defeats
     progress alone; dormant and shadowed siblings cannot manufacture a pin.
     """
-    overlay = _rung_execution_receipt(rungs, snapshot)
+    overlay = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
     active = [(rung.dest, rung.value) for rung in overlay.effective]
     return _holds_defeat_needed(active, needed, pdg, program)
 

@@ -42,8 +42,8 @@ class PilotRung:
     a permanent force wearing ladder syntax.  The proposer owns this condition;
     installation only preserves its meaning and order.
 
-    A ``PilotRung`` is executable form, not correction provenance.  Only rungs
-    named by active correction receipts may renegotiate their concrete value
+    A ``PilotRung`` is executable form, not correction provenance.  Only pilot
+    rungs named by active correction receipts may renegotiate their concrete value
     from a later incident boundary; prerequisites and route holds cannot enter
     the correction lifecycle merely because they compile to this rung type.
     """
@@ -87,12 +87,14 @@ class PilotRungExecution:
 class PilotOverlayExecution:
     """Effective-ownership receipt for one ordered overlay and snapshot."""
 
-    rungs: tuple[PilotRungExecution, ...]
+    pilot_rungs: tuple[PilotRungExecution, ...]
 
     @property
     def effective(self) -> tuple[PilotRung, ...]:
         return tuple(
-            entry.rung for entry in self.rungs if entry.state is PilotRungExecutionState.EFFECTIVE
+            entry.rung
+            for entry in self.pilot_rungs
+            if entry.state is PilotRungExecutionState.EFFECTIVE
         )
 
     def owner(self, dest: str) -> PilotRung | None:
@@ -282,7 +284,7 @@ def _target_unresolved_condition(
     return CompareNe(tag, target_value)
 
 
-def _rungs_from_proposals(
+def _pilot_rungs_from_proposals(
     plc: PLC,
     proposals: list[Any],
     scope: Any,
@@ -308,7 +310,7 @@ class _ExpandedPilotRule:
     continuation: bool
 
 
-def _expand_pilot_rules(rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule, ...]:
+def _expand_pilot_rules(pilot_rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule, ...]:
     """Lower installed rules to the exact ordered branches the runner scans."""
     from pyrung.core.condition import AllCondition, Condition, _as_condition
 
@@ -329,7 +331,7 @@ def _expand_pilot_rules(rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule,
                 for demand in self.demands
             )
 
-    materialized = list(rungs)
+    materialized = list(pilot_rungs)
     progress_by_dest: dict[str, tuple[Any, ...]] = {}
     for rung in materialized:
         progress = rung.operation.progress if rung.operation is not None else None
@@ -370,8 +372,8 @@ def _expand_pilot_rules(rungs: Iterable[PilotRung]) -> tuple[_ExpandedPilotRule,
     return tuple(rules)
 
 
-def _rung_execution_receipt(
-    rungs: Iterable[PilotRung], snapshot: Mapping[str, Any]
+def _pilot_rung_execution_receipt(
+    pilot_rungs: Iterable[PilotRung], snapshot: Mapping[str, Any]
 ) -> PilotOverlayExecution:
     """Classify every installed rule using the compiler's exact expansion.
 
@@ -384,7 +386,7 @@ def _rung_execution_receipt(
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.condition import _as_condition
 
-    materialized = tuple(rungs)
+    materialized = tuple(pilot_rungs)
     expanded = _expand_pilot_rules(materialized)
     view = _SnapshotView(dict(snapshot), {})
     active = tuple(bool(rule.guard.evaluate(view)) for rule in expanded)
@@ -418,11 +420,11 @@ def _rung_execution_receipt(
     return PilotOverlayExecution(tuple(entries))
 
 
-def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
+def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     """Replace PILOT's overlay from its ordered, guarded rung records."""
     from pyrung.core.synthesis import guarded_copy_rung
 
-    materialized = tuple(rungs)
+    materialized = tuple(pilot_rungs)
     expanded = _expand_pilot_rules(materialized)
     rules: list[tuple[Any, Any, Any]] = []
     for rule in expanded:
@@ -433,10 +435,10 @@ def _set_rungs(plc: PLC, rungs: Iterable[PilotRung]) -> None:
     _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
 
 
-def _append_rungs(
+def _append_pilot_rungs(
     plc: PLC,
     proposed: list[PilotRung],
-    rungs: Iterable[PilotRung],
+    pilot_rungs: Iterable[PilotRung],
 ) -> Any:
     """Append new evidence and install the resulting ordered overlay.
 
@@ -444,26 +446,26 @@ def _append_rungs(
     list remains supported for the low-level public seam and older callers, but
     PILOT itself always assigns the returned value into ``_World.pilot_rungs``.
     """
-    updated_list = list(rungs)
+    updated_list = list(pilot_rungs)
     seen = {_rung_identity(rung) for rung in updated_list}
     for rung in proposed:
         identity = _rung_identity(rung)
         if identity not in seen:
             updated_list.append(rung)
             seen.add(identity)
-    if isinstance(rungs, list):
-        list_rungs = cast(list[PilotRung], rungs)
-        list_rungs[:] = updated_list
-        updated = list_rungs
+    if isinstance(pilot_rungs, list):
+        list_pilot_rungs = cast(list[PilotRung], pilot_rungs)
+        list_pilot_rungs[:] = updated_list
+        updated = list_pilot_rungs
     else:
         updated = pvector(updated_list)
-    _set_rungs(plc, list(updated))
+    _set_pilot_rungs(plc, list(updated))
     return pvector(updated)
 
 
-def fork_with_rungs(
+def fork_with_pilot_rungs(
     source: PLC,
-    rungs: Iterable[PilotRung],
+    pilot_rungs: Iterable[PilotRung],
     *,
     history_budget: int | float | None = None,
 ) -> PLC:
@@ -478,7 +480,7 @@ def fork_with_rungs(
     overlay that existed then.
     """
     fork = source.fork(history_budget=history_budget)
-    _set_rungs(fork, rungs)
+    _set_pilot_rungs(fork, pilot_rungs)
     return fork
 
 

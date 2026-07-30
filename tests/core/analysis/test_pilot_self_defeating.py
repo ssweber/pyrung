@@ -31,7 +31,7 @@ from pyrung.core.analysis.pilot.investigate import (
     InvestigationResult,
     RegressionWitness,
     ReplayOutcome,
-    _active_rungs_defeat_needed,
+    _active_pilot_rungs_defeat_needed,
     correction_identity,
     investigate_deviation,
 )
@@ -329,7 +329,7 @@ def test_inactive_guard_does_not_prove_self_defeat():
 
     guarded = PilotRung(InitFlag.name, 1, CompareEq(State, 7))
     assert (
-        _active_rungs_defeat_needed(
+        _active_pilot_rungs_defeat_needed(
             (guarded,),
             ((Counter.name, 3),),
             {State.name: 6},
@@ -352,9 +352,9 @@ def test_coordinated_guarded_holds_are_checked_as_one_world():
             copy(1, Counter)
 
     scope = CompareEq(State, 6)
-    rungs = (PilotRung(InitA.name, True, scope), PilotRung(InitB.name, True, scope))
-    assert _active_rungs_defeat_needed(
-        rungs,
+    pilot_rungs = (PilotRung(InitA.name, True, scope), PilotRung(InitB.name, True, scope))
+    assert _active_pilot_rungs_defeat_needed(
+        pilot_rungs,
         ((Counter.name, 3),),
         {State.name: 6},
         _pdg(prog),
@@ -384,7 +384,7 @@ def test_shadowed_harmful_rung_does_not_prove_self_defeat():
         OperationReceipt(InitFlag, ConditionDemand(CompareEq(Never, True))),
     )
 
-    assert not _active_rungs_defeat_needed(
+    assert not _active_pilot_rungs_defeat_needed(
         (continuing, harmful_waiter),
         ((Counter.name, 3),),
         {Progress.name: True, Never.name: False},
@@ -573,16 +573,16 @@ def _saboteur_scenario():
 
 def _stub_investigation(confirmed_holds):
     def _investigate(_plc, _incident, _ctx, _replay, **_kwargs):
-        rungs = tuple(confirmed_holds)
+        pilot_rungs = tuple(confirmed_holds)
         return InvestigationResult(
             correction=(
                 _ConfirmedCorrection(
-                    identity=correction_identity(rungs),
-                    rungs=rungs,
-                    sources=tuple(dict.fromkeys(rung.dest for rung in rungs)),
+                    identity=correction_identity(pilot_rungs),
+                    pilot_rungs=pilot_rungs,
+                    sources=tuple(dict.fromkeys(rung.dest for rung in pilot_rungs)),
                     justification="test replay confirmed",
                 )
-                if rungs
+                if pilot_rungs
                 else None
             ),
             regression_nogoods=frozenset(),
@@ -693,7 +693,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     replayed = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
         identity=correction_identity((replayed,)),
-        rungs=(replayed,),
+        pilot_rungs=(replayed,),
         sources=("State", "Go"),
         justification="excursion replay preserved State=6",
     )
@@ -718,7 +718,7 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
 
     assert tuple(state.pilot_rungs) == (replayed,)
     assert state.correction_receipts[0].correction is correction
-    assert state.correction_receipts[0].rungs == (replayed,)
+    assert state.correction_receipts[0].pilot_rungs == (replayed,)
     assert state.correction_receipts[0].origin_key == frame.key
     assert state.correction_receipts[0].status is CorrectionStatus.PROBATIONARY
     assert state.hold_log[-1].source == "excursion"
@@ -780,7 +780,7 @@ def test_correction_installer_rejects_forged_identity():
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
         identity=(),
-        rungs=(rung,),
+        pilot_rungs=(rung,),
         sources=("Go",),
         justification="forged proof",
     )
@@ -804,7 +804,7 @@ def test_correction_installer_rejects_already_owned_rung():
     _install_prerequisites(state, (rung,))
     correction = _ConfirmedCorrection(
         identity=correction_identity((rung,)),
-        rungs=(rung,),
+        pilot_rungs=(rung,),
         sources=("Go",),
         justification="duplicate proof",
     )
@@ -828,7 +828,7 @@ def test_prerequisite_reuses_correction_owned_rung_without_claiming_it():
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
         identity=correction_identity((rung,)),
-        rungs=(rung,),
+        pilot_rungs=(rung,),
         sources=("Go",),
         justification="replay confirmed",
     )
@@ -858,7 +858,7 @@ def test_correction_installer_banks_artifact_into_every_checkpoint():
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
         identity=correction_identity((rung,)),
-        rungs=(rung,),
+        pilot_rungs=(rung,),
         sources=("Go",),
         justification="replay confirmed",
     )
@@ -883,7 +883,7 @@ def test_probationary_correction_promotes_only_after_banked_progress():
     rung = PilotRung("Go", True, CompareEq(state_tag, 6))
     correction = _ConfirmedCorrection(
         identity=correction_identity((rung,)),
-        rungs=(rung,),
+        pilot_rungs=(rung,),
         sources=("Go",),
         justification="bounded incident replay",
     )
@@ -931,7 +931,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
         return InvestigationResult(
             correction=_ConfirmedCorrection(
                 identity=correction_identity((opposite,)),
-                rungs=(opposite,),
+                pilot_rungs=(opposite,),
                 sources=remedy.sources,
                 justification="later regression neutralized",
             ),
@@ -956,7 +956,7 @@ def test_later_incident_revokes_harmful_probationary_correction(monkeypatch):
     assert state.correction_receipts[0].status is CorrectionStatus.REVOKED
     replacement = state.correction_receipts[1]
     assert replacement.status is CorrectionStatus.PROBATIONARY
-    assert replacement.rungs == (opposite,)
+    assert replacement.pilot_rungs == (opposite,)
     assert receipt.identity in state.correction_nogoods[receipt.origin_key]
     assert all(harmful not in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
     assert all(opposite in checkpoint.world.pilot_rungs for checkpoint in state.checkpoints)
@@ -977,7 +977,7 @@ def test_later_causal_incident_revokes_promoted_correction_without_remedy(
     harmful = PilotRung("Go", True, scope)
     correction = _ConfirmedCorrection(
         identity=correction_identity((harmful,)),
-        rungs=(harmful,),
+        pilot_rungs=(harmful,),
         sources=("Go",),
         justification="bounded incident replay",
     )
@@ -1057,7 +1057,7 @@ def test_causal_revocation_blames_only_effective_continuation_owner():
     def _receipt(receipt_id: int, owned: PilotRung) -> _CorrectionReceipt:
         correction = _ConfirmedCorrection(
             identity=correction_identity((owned,)),
-            rungs=(owned,),
+            pilot_rungs=(owned,),
             sources=(owned.dest,),
             justification="test",
         )
@@ -1096,7 +1096,7 @@ def test_opposite_remedy_does_not_revoke_dormant_disjoint_correction():
         (),
         _ConfirmedCorrection(
             identity=correction_identity((old,)),
-            rungs=(old,),
+            pilot_rungs=(old,),
             sources=(Dest.name,),
             justification="test",
         ),
@@ -1106,7 +1106,7 @@ def test_opposite_remedy_does_not_revoke_dormant_disjoint_correction():
     investigation = InvestigationResult(
         correction=_ConfirmedCorrection(
             identity=correction_identity((remedy,)),
-            rungs=(remedy,),
+            pilot_rungs=(remedy,),
             sources=(Dest.name,),
             justification="opposite context",
         )
@@ -1154,7 +1154,7 @@ def test_opposite_owner_operations_compose_as_temporal_phases(monkeypatch):
         return InvestigationResult(
             correction=_ConfirmedCorrection(
                 identity=correction_identity((low,)),
-                rungs=(low,),
+                pilot_rungs=(low,),
                 sources=remedy.sources,
                 justification="phase neutralized",
             ),

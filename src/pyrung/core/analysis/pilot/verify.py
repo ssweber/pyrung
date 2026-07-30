@@ -608,7 +608,7 @@ def verify_excursion_retry(
     retry_fork = investigation_result.retry_fork
     correction = investigation_result.correction
     retry_snap = dict(retry_fork.state.tags)
-    retry_rungs = (*state.pilot_rungs, *correction.rungs)
+    retry_pilot_rungs = (*state.pilot_rungs, *correction.pilot_rungs)
 
     if ctx.avoid_pred is not None:
         retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
@@ -639,12 +639,12 @@ def verify_excursion_retry(
                 avoid_names=tuple(avoid_names),
             )
 
-    retry_key = _pilot_world_key(retry_snap, key_config, retry_rungs)
+    retry_key = _pilot_world_key(retry_snap, key_config, retry_pilot_rungs)
     _record_gate(
         "EXCURSION-RETRY-OK",
         (
             f": reverted={investigation_result.reverted}, "
-            f"rungs={tuple((r.dest, r.value) for r in correction.rungs)}"
+            f"pilot_rungs={tuple((r.dest, r.value) for r in correction.pilot_rungs)}"
         ),
         gate_events,
     )

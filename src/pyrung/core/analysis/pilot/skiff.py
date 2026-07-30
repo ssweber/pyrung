@@ -75,7 +75,7 @@ def run_skiff_scan(
     role: PipelineRoles,
     pdg: ProgramGraph,
     *,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
     actions: tuple[ActionPair, ...] = (),
     routes: tuple[TransitionRoute, ...] = (),
     extra_tags: frozenset[str] = frozenset(),
@@ -97,7 +97,7 @@ def run_skiff_scan(
         plc,
         allowed,
         pdg,
-        rungs=rungs,
+        pilot_rungs=pilot_rungs,
         actions=actions,
         scans=scans,
     )
@@ -108,7 +108,7 @@ def run_pinned_scan(
     allowed_tags: frozenset[str],
     pdg: ProgramGraph,
     *,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
     actions: tuple[ActionPair, ...] = (),
     scans: int = 1,
 ) -> SkiffResult:
@@ -122,9 +122,9 @@ def run_pinned_scan(
     if scans < 1:
         raise ValueError("scans must be >= 1")
 
-    from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+    from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 
-    fork = fork_with_rungs(plc, rungs)
+    fork = fork_with_pilot_rungs(plc, pilot_rungs)
     before = dict(fork.state.tags)
     force_map = _skiff_force_map(fork, before, allowed_tags, pdg)
     scan_before = fork.state.scan_id
@@ -266,7 +266,7 @@ def probe_live_guard_frontiers(
             context.setdefault(tag, value)
 
     observations: list[NavigationObservation] = []
-    active_rungs = tuple(state.pilot_rungs)
+    pilot_rungs = tuple(state.pilot_rungs)
     for node in frontiers:
         cur_val = frame.snap.get(node.tag)
         # Canonical key: a frontier can surface probe pairs whose values mix types
@@ -288,7 +288,7 @@ def probe_live_guard_frontiers(
             state.work,
             allowed,
             ctx.pdg,
-            rungs=active_rungs,
+            pilot_rungs=pilot_rungs,
             actions=tuple(context.items()),
             scans=scans,
         )
@@ -316,7 +316,7 @@ def probe_live_guard_frontiers(
                 allowed,
                 state,
                 ctx,
-                active_rungs,
+                pilot_rungs,
                 scans,
                 frame.key,
             )
@@ -349,7 +349,7 @@ def probe_live_guard_frontiers(
                     allowed,
                     state,
                     ctx,
-                    active_rungs,
+                    pilot_rungs,
                     scans,
                     frame.key,
                 )
@@ -381,7 +381,7 @@ def probe_live_guard_frontiers(
                     allowed,
                     state,
                     ctx,
-                    active_rungs,
+                    pilot_rungs,
                     scans,
                     frame.key,
                 )
@@ -400,7 +400,7 @@ def _send_probe(
     allowed: frozenset[str],
     state: Any,
     ctx: Any,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
     scans: int,
     world_key: tuple[Any, ...],
 ) -> CompassObservation:
@@ -411,7 +411,7 @@ def _send_probe(
         state.work,
         allowed,
         ctx.pdg,
-        rungs=rungs,
+        pilot_rungs=pilot_rungs,
         actions=tuple(actions.items()),
         scans=scans,
     )

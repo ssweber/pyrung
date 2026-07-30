@@ -191,7 +191,7 @@ class TestGateSpin:
         rung = PilotRung(source.name, True, CompareEq(hazard, False))
         correction = _ConfirmedCorrection(
             identity=correction_identity((rung,)),
-            rungs=(rung,),
+            pilot_rungs=(rung,),
             sources=(hazard.name, source.name),
             justification="unsafe excursion replay",
         )
@@ -651,7 +651,7 @@ class TestVerifyGates:
         rung = PilotRung(source.name, True, CompareEq(target, True))
         correction = _ConfirmedCorrection(
             identity=correction_identity((rung,)),
-            rungs=(rung,),
+            pilot_rungs=(rung,),
             sources=(target.name, source.name),
             justification="excursion replay",
         )

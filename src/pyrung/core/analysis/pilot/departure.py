@@ -38,7 +38,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective
-from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
@@ -141,7 +141,7 @@ def _settle_departure(state: _PilotState, channel_tag: str) -> tuple[PLC, CoastR
     receipt records the chain.  A ``"timeout"`` receipt means the cap-hit
     value may be mid-transition; the caller must not trust it as settled.
     """
-    fork = fork_with_rungs(state.work, state.pilot_rungs)
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     receipt = CoastSession(fork, kind="departure-settle").settle_landing(channel_tag)
     return fork, receipt
 

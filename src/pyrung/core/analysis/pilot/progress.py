@@ -57,10 +57,10 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _append_rungs,
-    _rung_execution_receipt,
-    _set_rungs,
-    fork_with_rungs,
+    _append_pilot_rungs,
+    _pilot_rung_execution_receipt,
+    _set_pilot_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -689,7 +689,7 @@ def _adopt_settled_world(settled_work: PLC, state: _PilotState) -> None:
     scan_before = state.work.state.scan_id
     # Rebuild the overlay from the canonical rung list before adopting the
     # settled fork as the working PLC.
-    _set_rungs(settled_work, state.pilot_rungs)
+    _set_pilot_rungs(settled_work, state.pilot_rungs)
     state.work = settled_work
     state.dwell_scans += settled_work.state.scan_id - scan_before
     if state.steps:
@@ -947,32 +947,32 @@ def _install_confirmed_correction(
     Installation banks active corrections into every revert anchor, and
     revocation removes them symmetrically.
     """
-    if not correction.rungs:
+    if not correction.pilot_rungs:
         raise ValueError("a confirmed correction must own at least one rung")
-    if any(not isinstance(rung, PilotRung) for rung in correction.rungs):
+    if any(not isinstance(rung, PilotRung) for rung in correction.pilot_rungs):
         raise TypeError("a confirmed correction may contain only executable PilotRungs")
-    if correction.identity != correction_identity(correction.rungs):
+    if correction.identity != correction_identity(correction.pilot_rungs):
         raise ValueError("confirmed correction identity does not match its replayed rungs")
-    correction_rung_ids = tuple(_rung_identity(rung) for rung in correction.rungs)
+    correction_rung_ids = tuple(_rung_identity(rung) for rung in correction.pilot_rungs)
     if len(set(correction_rung_ids)) != len(correction_rung_ids):
         raise ValueError("a confirmed correction cannot contain duplicate rungs")
     existing = {_rung_identity(rung) for rung in state.pilot_rungs}
-    duplicate = tuple(rung for rung in correction.rungs if _rung_identity(rung) in existing)
+    duplicate = tuple(rung for rung in correction.pilot_rungs if _rung_identity(rung) in existing)
     if duplicate:
         raise ValueError(
             "confirmed correction cannot claim already-owned rung(s): "
             f"{tuple((rung.dest, rung.value) for rung in duplicate)!r}"
         )
-    state.pilot_rungs = _append_rungs(
+    state.pilot_rungs = _append_pilot_rungs(
         state.work,
-        list(correction.rungs),
+        list(correction.pilot_rungs),
         state.pilot_rungs,
     )
     state.hold_log.append(
         _HoldLogEntry(
             scan=scan,
             source=source,
-            rungs=correction.rungs,
+            pilot_rungs=correction.pilot_rungs,
         )
     )
     receipt = _CorrectionReceipt(
@@ -991,11 +991,11 @@ def _install_confirmed_correction(
     banked: list[_Checkpoint] = []
     for checkpoint in state.checkpoints:
         existing_ids = {_rung_identity(rung) for rung in checkpoint.world.pilot_rungs}
-        checkpoint_rungs = [*checkpoint.world.pilot_rungs]
-        checkpoint_rungs.extend(
-            rung for rung in correction.rungs if _rung_identity(rung) not in existing_ids
+        checkpoint_pilot_rungs = [*checkpoint.world.pilot_rungs]
+        checkpoint_pilot_rungs.extend(
+            rung for rung in correction.pilot_rungs if _rung_identity(rung) not in existing_ids
         )
-        banked.append(_checkpoint_with_rungs(checkpoint, checkpoint_rungs, key_config))
+        banked.append(_checkpoint_with_pilot_rungs(checkpoint, checkpoint_pilot_rungs, key_config))
     state.checkpoints = banked
     return receipt
 
@@ -1018,18 +1018,18 @@ def _promote_probationary_corrections(state: _PilotState) -> tuple[int, ...]:
     return promoted
 
 
-def _checkpoint_with_rungs(
+def _checkpoint_with_pilot_rungs(
     checkpoint: _Checkpoint,
-    rungs: list[PilotRung],
+    pilot_rungs: list[PilotRung],
     key_config: Any,
 ) -> _Checkpoint:
     """Return one checkpoint re-keyed around an exact executable overlay."""
-    if tuple(rungs) == tuple(checkpoint.world.pilot_rungs):
+    if tuple(pilot_rungs) == tuple(checkpoint.world.pilot_rungs):
         return checkpoint
-    work = fork_with_rungs(checkpoint.world.work, rungs)
-    world = checkpoint.world.set(work=work, pilot_rungs=pvector(rungs))
+    work = fork_with_pilot_rungs(checkpoint.world.work, pilot_rungs)
+    world = checkpoint.world.set(work=work, pilot_rungs=pvector(pilot_rungs))
     key = (
-        _pilot_world_key(dict(work.state.tags), key_config, rungs)
+        _pilot_world_key(dict(work.state.tags), key_config, pilot_rungs)
         if key_config is not None
         else checkpoint.key
     )
@@ -1053,7 +1053,7 @@ def _contradicted_corrections(
         return ()
     sources = set(correction.sources)
     remedy_rungs: dict[str, list[tuple[Any, Any]]] = {}
-    for rung in correction.rungs:
+    for rung in correction.pilot_rungs:
         remedy_rungs.setdefault(rung.dest, []).append((rung.value, rung.operation))
 
     def _compatible_phases(new_operation: Any, old: PilotRung) -> bool:
@@ -1066,14 +1066,14 @@ def _contradicted_corrections(
 
     effective_ids = {
         _rung_identity(rung)
-        for rung in _rung_execution_receipt(state.pilot_rungs, snapshot).effective
+        for rung in _pilot_rung_execution_receipt(state.pilot_rungs, snapshot).effective
     }
     contradicted: list[_CorrectionReceipt] = []
     for receipt in state.correction_receipts:
         if not receipt.status.effective:
             continue
         admitted: dict[str, list[PilotRung]] = {}
-        for rung in receipt.rungs:
+        for rung in receipt.pilot_rungs:
             if _rung_identity(rung) in effective_ids:
                 admitted.setdefault(rung.dest, []).append(rung)
         if any(
@@ -1126,7 +1126,7 @@ def _causally_harmful_corrections(
     if not causal_values:
         return ()
 
-    overlay = _rung_execution_receipt(
+    overlay = _pilot_rung_execution_receipt(
         state.pilot_rungs,
         dict(witness.owner_snapshot or snapshot),
     )
@@ -1137,7 +1137,7 @@ def _causally_harmful_corrections(
         if not receipt.status.effective:
             continue
         owns_cause = False
-        for rung in receipt.rungs:
+        for rung in receipt.pilot_rungs:
             owner = active_owner.get(rung.dest)
             if owner is None or _rung_identity(owner) != _rung_identity(rung):
                 continue
@@ -1160,7 +1160,9 @@ def _revoke_corrections(
     if not receipts:
         return ()
     receipt_ids = {receipt.receipt_id for receipt in receipts}
-    revoked_rung_ids = {_rung_identity(rung) for receipt in receipts for rung in receipt.rungs}
+    revoked_rung_ids = {
+        _rung_identity(rung) for receipt in receipts for rung in receipt.pilot_rungs
+    }
     state.correction_receipts = [
         replace(receipt, status=CorrectionStatus.REVOKED)
         if receipt.receipt_id in receipt_ids
@@ -1173,20 +1175,24 @@ def _revoke_corrections(
             _HoldLogEntry(
                 scan=state.work.state.scan_id,
                 source="revocation",
-                rungs=receipt.rungs,
+                pilot_rungs=receipt.pilot_rungs,
             )
         )
 
-    remaining = [rung for rung in state.pilot_rungs if _rung_identity(rung) not in revoked_rung_ids]
-    state.pilot_rungs = remaining
-    _set_rungs(state.work, remaining)
+    remaining_pilot_rungs = [
+        rung for rung in state.pilot_rungs if _rung_identity(rung) not in revoked_rung_ids
+    ]
+    state.pilot_rungs = remaining_pilot_rungs
+    _set_pilot_rungs(state.work, remaining_pilot_rungs)
     key_config = state.key_config
     cleaned_checkpoints: list[_Checkpoint] = []
     for saved in state.checkpoints:
-        saved_rungs = [
+        saved_pilot_rungs = [
             rung for rung in saved.world.pilot_rungs if _rung_identity(rung) not in revoked_rung_ids
         ]
-        cleaned_checkpoints.append(_checkpoint_with_rungs(saved, saved_rungs, key_config))
+        cleaned_checkpoints.append(
+            _checkpoint_with_pilot_rungs(saved, saved_pilot_rungs, key_config)
+        )
     state.checkpoints = cleaned_checkpoints
     restored_key = state.checkpoints[-1].key
     # The same machine tags now carry different correction knowledge. Permit
@@ -1349,12 +1355,12 @@ def _investigate_and_revert(
             ctx,
             replay,
             needed=needed,
-            installed_rungs=tuple(state.pilot_rungs),
-            correction_rungs=tuple(
+            installed_pilot_rungs=tuple(state.pilot_rungs),
+            correction_pilot_rungs=tuple(
                 rung
                 for receipt in state.correction_receipts
                 if receipt.status.effective
-                for rung in receipt.rungs
+                for rung in receipt.pilot_rungs
             ),
             correction_progress_mark=correction_progress_mark,
             occurrence_requirements=occurrence_requirements,
@@ -1495,7 +1501,7 @@ def _investigate_and_revert(
                 "investigation": investigation_payload,
                 "revoked_corrections": revoked_ids,
                 "revoked_pilot_rungs": tuple(
-                    rung for receipt in revoked_receipts for rung in receipt.rungs
+                    rung for receipt in revoked_receipts for rung in receipt.pilot_rungs
                 ),
             },
         ),

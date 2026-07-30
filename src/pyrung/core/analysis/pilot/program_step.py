@@ -29,7 +29,7 @@ from typing import Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
-from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceNode,
@@ -242,7 +242,7 @@ def _input_reaches_exact_producer(
     ctx: Any,
     producer: Any,
     plc: Any,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
 ) -> bool:
     """Whether one controlled scan carries *action* through its live barrier.
 
@@ -253,7 +253,7 @@ def _input_reaches_exact_producer(
     """
     if not channels:
         return True
-    fork = fork_with_rungs(plc, rungs)
+    fork = fork_with_pilot_rungs(plc, pilot_rungs)
     fork.patch({action.tag: action.value})
     fork.step()
     runs = fork._replay_rung_runs_at(fork.state.scan_id)
@@ -275,13 +275,13 @@ def _input_handoffs(
     ctx: Any,
     producer: Any,
     plc: Any,
-    rungs: Sequence[Any],
+    pilot_rungs: Sequence[Any],
 ) -> tuple[ProgramInputHandoff, ...]:
     """Project each input only to the next owned boundary, never through it."""
     index = build_advance_index(ctx.program, getattr(plc, "_harness", None))
     handoffs: list[ProgramInputHandoff] = []
     for action in required:
-        fork = fork_with_rungs(plc, rungs)
+        fork = fork_with_pilot_rungs(plc, pilot_rungs)
         patch = dict(context_actions)
         patch[action.tag] = action.value
         fork.patch(patch)
@@ -305,19 +305,20 @@ def read_program_step(
     ctx: Any,
     producer: Any,
     plc: Any,
-    rungs: Sequence[Any] = (),
+    pilot_rungs: Sequence[Any] = (),
     *,
     resting: Mapping[str, Any] | None = None,
     projection_scans: int = 4,
 ) -> ProgramStep:
     """Project an unchanged controlled world and read the exact producer.
 
-    The function never installs actions on the real PLC. ``rungs`` are rebuilt
-    on the fork so "unchanged" includes PILOT's already-established holds.
+    The function never installs actions on the real PLC. ``pilot_rungs`` are
+    rebuilt on the fork so "unchanged" includes PILOT's already-established
+    holds.
     """
 
     before = dict(ctx.snapshot)
-    fork = fork_with_rungs(plc, rungs)
+    fork = fork_with_pilot_rungs(plc, pilot_rungs)
     # One real projected scan is the observation primitive.  Its interpreted
     # replay preserves the exact view of every producer occurrence, including
     # earlier same-scan writes and installed PILOT holds.
@@ -343,7 +344,7 @@ def read_program_step(
         ctx,
         producer,
         plc,
-        rungs,
+        pilot_rungs,
     )
     barriers = _action_channel_barriers(trace, trace_snapshot, ctx)
     inputs_blocked_here = tuple(
@@ -356,7 +357,7 @@ def read_program_step(
             ctx,
             producer,
             plc,
-            rungs,
+            pilot_rungs,
         )
     )
 

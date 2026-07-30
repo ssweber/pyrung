@@ -41,9 +41,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _append_rungs,
+    _append_pilot_rungs,
     _constraint_condition,
-    fork_with_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -82,19 +82,19 @@ class StaleBearingError(RuntimeError):
 def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, ...]) -> None:
     """Install only prerequisite rungs that do not already have an owner."""
     existing = {_rung_identity(rung) for rung in state.pilot_rungs}
-    new_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
-    if not new_rungs:
+    new_pilot_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
+    if not new_pilot_rungs:
         return
-    state.pilot_rungs = _append_rungs(
+    state.pilot_rungs = _append_pilot_rungs(
         state.work,
-        list(new_rungs),
+        list(new_pilot_rungs),
         state.pilot_rungs,
     )
     state.hold_log.append(
         _HoldLogEntry(
             scan=state.work.state.scan_id,
             source="prerequisite",
-            rungs=new_rungs,
+            pilot_rungs=new_pilot_rungs,
         )
     )
 
@@ -175,7 +175,7 @@ def _apply_actions(
     key_config = state.key_config
     assert key_config is not None
 
-    fork = fork_with_rungs(state.work, state.pilot_rungs)
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     session = CoastSession(fork, kind="pulse")
     session.arm_avoid(ctx.avoid_pred)
@@ -502,12 +502,12 @@ def _try_bearing_coast(
     target_value = heading.target_value if heading is not None else None
     boundary = heading.boundary if heading is not None else None
     route_channel_tag = route.channel_tag if route is not None else None
-    fork = fork_with_rungs(state.work, state.pilot_rungs)
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 
     # Confirmed conditional holds (oscillation correctives) animate during the
-    # channel coast, same as the terminal let-run — fork_with_rungs installs
+    # channel coast, same as the terminal let-run — fork_with_pilot_rungs installs
     # only the steady half.
     session = CoastSession(fork, kind="bearing_coast")
     session.arm_avoid(ctx.avoid_pred)
@@ -606,11 +606,11 @@ def _try_terminal_letrun(
         falls back to a bounded watched-tag settle.
     """
     role_tags = coast_departure_tags(state, ctx)
-    # fork_with_rungs re-establishes the steady holds on the coast fork: force
+    # fork_with_pilot_rungs re-establishes the steady holds on the coast fork: force
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
     # been scanned onto state.work yet, so its value isn't carried either.
-    fork = fork_with_rungs(state.work, state.pilot_rungs)
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
     start_roles = {t: snap_before.get(t) for t in role_tags}
@@ -743,7 +743,7 @@ def _try_terminal_dwell(
     re-ejecting: a non-completing dwell terminates at the stuck exit rather than
     repeatedly spending the invocation's remaining search budget.
     """
-    fork = fork_with_rungs(state.work, state.pilot_rungs)
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
 

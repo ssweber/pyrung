@@ -21,7 +21,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
-from pyrung.core.analysis.pilot.overlay import _rung_execution_receipt
+from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct, frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -208,13 +208,13 @@ def _build_plan_journal(
         for entry in hold_log:
             if entry.scan > scan:
                 continue
-            for rung in entry.rungs:
+            for rung in entry.pilot_rungs:
                 key = _rung_identity(rung)
                 if entry.source == "revocation":
                     active.pop(key, None)
                 else:
                     active[key] = rung
-        owner = _rung_execution_receipt(tuple(active.values()), snapshot).owner(tag)
+        owner = _pilot_rung_execution_receipt(tuple(active.values()), snapshot).owner(tag)
         return owner is not None and _values_match(owner.value, value)
 
     entries: list[tuple[int, str, PlanStep]] = []
@@ -288,22 +288,22 @@ def _build_plan_journal(
     path_start = state.committed_acts[0].steps[0].scan_before
     path_end = state.committed_acts[-1].steps[-1].scan_after
 
-    seen_rungs: set[tuple[Any, ...]] = set()
+    seen_pilot_rungs: set[tuple[Any, ...]] = set()
     correction_receipts = getattr(state, "correction_receipts", ())
-    managed_rungs = {
-        _rung_identity(rung) for receipt in correction_receipts for rung in receipt.rungs
+    managed_pilot_rungs = {
+        _rung_identity(rung) for receipt in correction_receipts for rung in receipt.pilot_rungs
     }
-    active_managed_rungs = {
+    active_managed_pilot_rungs = {
         _rung_identity(rung)
         for receipt in correction_receipts
         if receipt.status.effective
-        for rung in receipt.rungs
+        for rung in receipt.pilot_rungs
     }
     recorded_removals = {
         _rung_identity(rung)
         for entry in state.hold_log
         if entry.source == "revocation"
-        for rung in entry.rungs
+        for rung in entry.pilot_rungs
     }
     for log_index, entry in enumerate(state.hold_log):
         if entry.scan < path_start or entry.scan > path_end:
@@ -317,29 +317,29 @@ def _build_plan_journal(
                         kind="revoke",
                         scan=entry.scan,
                         scans=0,
-                        inputs=tuple((rung.dest, rung.value) for rung in entry.rungs),
-                        label=", ".join(dict.fromkeys(rung.dest for rung in entry.rungs)),
-                        rungs=entry.rungs,
+                        inputs=tuple((rung.dest, rung.value) for rung in entry.pilot_rungs),
+                        label=", ".join(dict.fromkeys(rung.dest for rung in entry.pilot_rungs)),
+                        rungs=entry.pilot_rungs,
                         source=entry.source,
                     ),
                 )
             )
             continue
-        new_rungs: list[Any] = []
-        for rung in entry.rungs:
+        new_pilot_rungs: list[Any] = []
+        for rung in entry.pilot_rungs:
             key = _rung_identity(rung)
             if (
-                key in managed_rungs
-                and key not in active_managed_rungs
+                key in managed_pilot_rungs
+                and key not in active_managed_pilot_rungs
                 and key not in recorded_removals
             ):
                 continue
-            if key in seen_rungs:
+            if key in seen_pilot_rungs:
                 continue
-            seen_rungs.add(key)
-            new_rungs.append(rung)
+            seen_pilot_rungs.add(key)
+            new_pilot_rungs.append(rung)
 
-        hold_inputs = tuple((rung.dest, rung.value) for rung in new_rungs)
+        hold_inputs = tuple((rung.dest, rung.value) for rung in new_pilot_rungs)
 
         if hold_inputs:
             entries.append(
@@ -353,7 +353,7 @@ def _build_plan_journal(
                         inputs=hold_inputs,
                         label=", ".join(dict.fromkeys(tag for tag, _value in hold_inputs)),
                         notes=_notes_for(hold_inputs),
-                        rungs=tuple(new_rungs),
+                        rungs=tuple(new_pilot_rungs),
                         source=entry.source,
                     ),
                 )

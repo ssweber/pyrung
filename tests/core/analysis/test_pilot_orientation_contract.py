@@ -776,4 +776,4 @@ def test_production_pilot_forks_only_through_rung_aware_helper() -> None:
         visitor.visit(tree)
         direct_forks.extend(visitor.calls)
 
-    assert direct_forks == [("overlay.py", "fork_with_rungs", "source")]
+    assert direct_forks == [("overlay.py", "fork_with_pilot_rungs", "source")]

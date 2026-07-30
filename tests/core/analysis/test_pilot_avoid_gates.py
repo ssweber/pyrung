@@ -310,7 +310,11 @@ def test_terminal_dwell_preserves_its_settle_trajectory(monkeypatch) -> None:
     )
     captured: dict[str, tuple[dict[str, object], ...]] = {}
 
-    monkeypatch.setattr(steer, "fork_with_rungs", lambda plc, _rungs: plc.fork())
+    monkeypatch.setattr(
+        steer,
+        "fork_with_pilot_rungs",
+        lambda plc, _pilot_rungs: plc.fork(),
+    )
     monkeypatch.setattr(steer, "_watched_tags", lambda _frame, _ctx: frozenset({"Step"}))
     monkeypatch.setattr(steer, "_pen_tags", lambda _state, _ctx: frozenset())
     monkeypatch.setattr(steer, "_compass_observations", lambda *args, **kwargs: ())

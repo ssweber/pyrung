@@ -475,12 +475,12 @@ class _HoldLogEntry:
 
     scan: int
     source: str
-    rungs: tuple[PilotRung, ...]
+    pilot_rungs: tuple[PilotRung, ...]
 
     @property
     def tags(self) -> tuple[_ActionPair, ...]:
         """Concise recording view derived from the installed executable form."""
-        return tuple((rung.dest, rung.value) for rung in self.rungs)
+        return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
 
 
 class CorrectionStatus(Enum):
@@ -510,8 +510,8 @@ class _CorrectionReceipt:
         return self.correction.identity
 
     @property
-    def rungs(self) -> tuple[PilotRung, ...]:
-        return self.correction.rungs
+    def pilot_rungs(self) -> tuple[PilotRung, ...]:
+        return self.correction.pilot_rungs
 
     @property
     def sources(self) -> tuple[str, ...]:
@@ -527,7 +527,7 @@ class _ConfirmedCorrection:
     """One replay-proven correction, including its exact executable lifetime."""
 
     identity: tuple[tuple[Any, ...], ...]
-    rungs: tuple[PilotRung, ...]
+    pilot_rungs: tuple[PilotRung, ...]
     sources: tuple[str, ...]
     justification: str
 
@@ -670,9 +670,9 @@ class _PilotState:
         step vectors and ``best_trend`` are already immutable, so the returned
         value is a stable snapshot even as the live world keeps advancing.
         """
-        from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+        from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 
-        return self.world.set(work=fork_with_rungs(self.world.work, self.pilot_rungs))
+        return self.world.set(work=fork_with_pilot_rungs(self.world.work, self.pilot_rungs))
 
     def load_world(self, world: _World) -> None:
         """Revert: the checkpoint's world *is* the answer.
@@ -684,9 +684,9 @@ class _PilotState:
         pointer already holds exactly the state that existed when the checkpoint
         was taken.
         """
-        from pyrung.core.analysis.pilot.overlay import fork_with_rungs
+        from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 
-        self.world = world.set(work=fork_with_rungs(world.work, world.pilot_rungs))
+        self.world = world.set(work=fork_with_pilot_rungs(world.work, world.pilot_rungs))
 
 
 @dataclass(frozen=True)

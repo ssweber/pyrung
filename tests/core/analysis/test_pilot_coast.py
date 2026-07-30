@@ -41,7 +41,7 @@ from pyrung.core.analysis.pilot.coast import (
     predicate_trigger,
     value_trigger,
 )
-from pyrung.core.analysis.pilot.overlay import PilotRung, _set_rungs
+from pyrung.core.analysis.pilot.overlay import PilotRung, _set_pilot_rungs
 from pyrung.core.analysis.pilot.steer import _settle_watched_tags
 from pyrung.core.condition import (
     AllCondition,
@@ -838,7 +838,7 @@ class TestCyclefoldDispatch:
 
         def install(plc: PLC) -> None:
             timer = plc._known_tags_by_name[Tmr.Acc.name]
-            _set_rungs(
+            _set_pilot_rungs(
                 plc,
                 [
                     PilotRung(Input.name, True, timer < 500),
@@ -873,7 +873,7 @@ class TestCyclefoldDispatch:
         Input = plc._known_tags_by_name["Input"]
         Target = plc._known_tags_by_name["Target"]
         # Toggle Input every scan while the (independent) target still runs.
-        _set_rungs(
+        _set_pilot_rungs(
             plc,
             [
                 PilotRung("Input", True, AllCondition(~Target, ~Input)),

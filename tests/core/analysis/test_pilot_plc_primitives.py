@@ -7,7 +7,7 @@ Coverage targets:
 - _coast_holding_state: role-tag ejection, conditional-hold animation
 - _threshold_crossed_snap: up/down/tag-name/form/non-numeric
 - _pilot_state_key: projection, done-bit abstraction, threshold vectors, masking
-- _append_rungs: steady vs conditional hold semantics
+- _append_pilot_rungs: steady vs conditional hold semantics
 - _apply_pulse: rising-edge vs plain scan count
 - _settle_delayed_effects: harness feedback, timer accumulation
 - _has_pending_effects: harness presence / pending count
@@ -29,12 +29,12 @@ from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
     PilotRungExecutionState,
-    _append_rungs,
+    _append_pilot_rungs,
     _constraint_condition,
-    _rung_execution_receipt,
-    _set_rungs,
+    _pilot_rung_execution_receipt,
+    _set_pilot_rungs,
     _until_unresolved_condition,
-    fork_with_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.world_key import (
@@ -223,7 +223,7 @@ class TestCoastHoldingState:
         start_scan = plc.state.scan_id
         Input = plc._known_tags_by_name["Input"]
         Target = plc._known_tags_by_name["Target"]
-        _set_rungs(
+        _set_pilot_rungs(
             plc,
             [
                 PilotRung("Input", True, AllCondition(~Target, ~Input)),
@@ -416,7 +416,7 @@ class TestPilotRungs:
     def test_all_guards_read_one_pre_overlay_snapshot(self):
         prog, In, _Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        _set_rungs(
+        _set_pilot_rungs(
             plc,
             [PilotRung("In", True, ~In), PilotRung("In", False, In)],
         )
@@ -428,9 +428,9 @@ class TestPilotRungs:
     def test_last_active_rung_wins(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        rungs: list[PilotRung] = []
-        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
-        _append_rungs(plc, [PilotRung("In", False, ~Scope)], rungs)
+        pilot_rungs: list[PilotRung] = []
+        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
+        _append_pilot_rungs(plc, [PilotRung("In", False, ~Scope)], pilot_rungs)
         plc.step()
         assert plc.state.tags["In"] is False
 
@@ -467,24 +467,24 @@ class TestPilotRungs:
             OperationReceipt(In, ConditionDemand(CompareEq(Never, True))),
         )
         dormant = PilotRung(In.name, True, Scope)
-        rungs = (continuing, eligible, effective, shadowed, dormant)
+        pilot_rungs = (continuing, eligible, effective, shadowed, dormant)
         snapshot = dict(plc.state.tags)
         snapshot.update({ProgressA.name: True, ProgressB.name: True, Never.name: False})
 
-        receipt = _rung_execution_receipt(rungs, snapshot)
+        receipt = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
 
-        assert tuple(entry.state for entry in receipt.rungs) == (
+        assert tuple(entry.state for entry in receipt.pilot_rungs) == (
             PilotRungExecutionState.CONTINUING,
             PilotRungExecutionState.ELIGIBLE,
             PilotRungExecutionState.EFFECTIVE,
             PilotRungExecutionState.SHADOWED,
             PilotRungExecutionState.DORMANT,
         )
-        assert receipt.rungs[0].continuation
-        assert receipt.rungs[2].continuation
+        assert receipt.pilot_rungs[0].continuation
+        assert receipt.pilot_rungs[2].continuation
         assert receipt.owner(In.name) is effective
 
-        _set_rungs(plc, rungs)
+        _set_pilot_rungs(plc, pilot_rungs)
         plc.patch({ProgressA.name: True, ProgressB.name: True, Never.name: False})
         plc.step()
         plc.step()
@@ -507,7 +507,7 @@ class TestPilotRungs:
                 ConditionDemand(CompareEq(Progress, True)),
             ),
         )
-        _set_rungs(plc, (operation,))
+        _set_pilot_rungs(plc, (operation,))
 
         # The operation has left the context that started it, but its owner
         # still reports affirmative in-flight progress.
@@ -515,24 +515,24 @@ class TestPilotRungs:
         plc.step()
         plc.step()
 
-        receipt = _rung_execution_receipt((operation,), dict(plc.state.tags))
+        receipt = _pilot_rung_execution_receipt((operation,), dict(plc.state.tags))
         assert plc.state.tags[In.name] is True
-        assert receipt.rungs[0].continuation
+        assert receipt.pilot_rungs[0].continuation
         assert receipt.owner(In.name) is operation
 
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        rungs: list[PilotRung] = []
-        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
-        _append_rungs(plc, [PilotRung("In", True, ~Scope)], rungs)
+        pilot_rungs: list[PilotRung] = []
+        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
+        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
 
-        assert len(rungs) == 1
+        assert len(pilot_rungs) == 1
 
     def test_inactive_specialization_preserves_active_general_rung(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        _set_rungs(
+        _set_pilot_rungs(
             plc,
             [PilotRung("In", True, ~Scope), PilotRung("In", False, Scope)],
         )
@@ -542,7 +542,7 @@ class TestPilotRungs:
     def test_no_active_rung_returns_input_to_default(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        _set_rungs(plc, [PilotRung("In", True, Scope)])
+        _set_pilot_rungs(plc, [PilotRung("In", True, Scope)])
         plc.patch({"In": True})
         plc.step()
         assert plc.state.tags["In"] is True
@@ -552,7 +552,7 @@ class TestPilotRungs:
     def test_patch_overrides_rung_for_one_scan(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        _set_rungs(plc, [PilotRung("In", True, ~Scope)])
+        _set_pilot_rungs(plc, [PilotRung("In", True, ~Scope)])
         plc.patch({"In": False})
         plc.step()
         assert plc.state.tags["In"] is False
@@ -562,7 +562,7 @@ class TestPilotRungs:
     def test_fork_rebuilds_ordered_rungs(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        fork = fork_with_rungs(plc, [PilotRung("In", True, ~Scope)])
+        fork = fork_with_pilot_rungs(plc, [PilotRung("In", True, ~Scope)])
         fork.step()
         assert fork.state.tags["In"] is True
 

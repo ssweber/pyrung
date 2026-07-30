@@ -98,7 +98,7 @@ def test_shared_gate_journal_retains_hold_values_and_guards() -> None:
             _HoldLogEntry(
                 scan=2,
                 source="investigation",
-                rungs=(hold,),
+                pilot_rungs=(hold,),
             )
         ],
     )
@@ -131,7 +131,7 @@ def test_journal_distinguishes_correction_operation_ownership() -> None:
     def _receipt(receipt_id: int, hold: PilotRung, status: CorrectionStatus) -> _CorrectionReceipt:
         correction = _ConfirmedCorrection(
             identity=((hold.dest, hold.value),),
-            rungs=(hold,),
+            pilot_rungs=(hold,),
             sources=(hold.dest,),
             justification="test",
         )
@@ -141,8 +141,8 @@ def test_journal_distinguishes_correction_operation_ownership() -> None:
         committed_acts=(_committed_test_act(),),
         lever_notes={},
         hold_log=[
-            _HoldLogEntry(scan=2, source="investigation", rungs=(revoked,)),
-            _HoldLogEntry(scan=3, source="investigation", rungs=(active,)),
+            _HoldLogEntry(scan=2, source="investigation", pilot_rungs=(revoked,)),
+            _HoldLogEntry(scan=3, source="investigation", pilot_rungs=(active,)),
         ],
         correction_receipts=[
             _receipt(1, revoked, CorrectionStatus.REVOKED),

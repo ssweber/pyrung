@@ -154,7 +154,7 @@ class TestPlanDisplay:
     def test_guarded_pair_renders_as_oscillator(self):
         State = Int("Sts_StateCurrent")
         RotateSensor = Bool("RotateSensor", external=True)
-        rungs = (
+        pilot_rungs = (
             PilotRung(
                 "RotateSensor",
                 True,
@@ -181,7 +181,7 @@ class TestPlanDisplay:
                     scans=0,
                     inputs=(("RotateSensor", True), ("RotateSensor", False)),
                     label="RotateSensor",
-                    rungs=rungs,
+                    rungs=pilot_rungs,
                     source="investigation",
                 ),
                 PlanStep(
@@ -190,7 +190,7 @@ class TestPlanDisplay:
                     scans=5,
                     inputs=(),
                     label="",
-                    rungs=rungs,
+                    rungs=pilot_rungs,
                 ),
             ),
         )

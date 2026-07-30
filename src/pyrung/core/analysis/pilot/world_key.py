@@ -144,8 +144,8 @@ def _rung_identity(rung: Any) -> tuple[Any, ...]:
 def _pilot_world_key(
     snap: dict[str, Any],
     cfg: _StateKeyConfig,
-    rungs: Any,
+    pilot_rungs: Any,
 ) -> tuple[Any, ...]:
     """Identity of an executable PILOT world: PLC projection plus PilotRungs."""
-    rung_key = tuple(_rung_identity(rung) for rung in rungs)
+    rung_key = tuple(_rung_identity(rung) for rung in pilot_rungs)
     return (_pilot_state_key(snap, cfg), rung_key)
