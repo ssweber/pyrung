@@ -894,17 +894,17 @@ def test_or_steerable_threshold_arm_collapses():
     assert _replay(logic, path).state.tags["Cmd"] is True
 
 
-def test_high_wake_lever_deprioritized_not_dropped():
-    """A needed lever with a large wake is tried last, never dropped.
+def test_broad_downstream_reach_lever_deprioritized_not_dropped():
+    """A needed lever with broad downstream reach is tried last, never dropped.
 
     ``x_Master`` gates a subroutine that writes ``Mode`` plus two dozen broad
     tags, so its downstream write cone dwarfs the median of the tight gates and
-    lands over ``wake_cap``.  The old hard filter removed it from the candidate
-    list outright, which made ``Target`` (needs ``Mode==1``) silently
-    unreachable.  Wake is now an *ordering* effect only: the master
-    enable is split off the batch-facing ``trace_actions`` (so it can't poison a
-    widening/co-pulse batch) but is still a candidate — sorted to the tail so it
-    is tried after every tighter lever, never excluded."""
+    lands over the downstream-reach cap. The old hard filter removed it from
+    the candidate list outright, which made ``Target`` (needs ``Mode==1``)
+    silently unreachable. Downstream reach is now an ordering effect only: the
+    master enable is split off the batch-facing ``trace_actions`` (so it can't
+    poison a widening/co-pulse batch) but is still a candidate — sorted to the
+    tail so it is tried after every tighter lever, never excluded."""
     x_G1 = Bool("x_G1", external=True)
     x_G2 = Bool("x_G2", external=True)
     x_G3 = Bool("x_G3", external=True)
@@ -934,7 +934,7 @@ def test_high_wake_lever_deprioritized_not_dropped():
         on_event=lambda ev: built.append(ev) if ev.kind == "candidates_built" else None,
     )
 
-    # First iteration batches all five levers; the high-wake one exceeds the cap.
+    # First iteration batches all five levers; the broad-reach one exceeds the cap.
     first = built[0].data
     assert first["wake_cap"] == 20
     cand_tags = [c["tag"] for c in first["candidates"]]

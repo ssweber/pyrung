@@ -340,7 +340,7 @@ class TraceAction:
     tag: str
     value: Any
     provenance: tuple[str, ...] = ()
-    wake: int | None = None
+    downstream_reach: int | None = None
     # The nearest self-advancing frontier this action serves.  A prerequisite
     # becomes a PilotRung only while this predicate remains unresolved; None
     # means the trace supplied no honest rung lifetime, so the action stays a
@@ -1589,8 +1589,8 @@ def _route_has_no_dead_end(nodes: list[TraceNode]) -> bool:
     A route is an AND of prerequisites; one dead-end leaf (see
     :func:`_is_dead_end_leaf`) means the route has a dead end. This is the
     filter to apply *before* :func:`_trace_score`, which only ranks: a dead route
-    has no steerable leaves and therefore the *cheapest* (zero) wake, so
-    scoring alone would always prefer it over a live one.
+    has no steerable leaves and therefore the cheapest (zero) downstream
+    reach, so scoring alone would always prefer it over a live one.
     """
     return not any(_is_dead_end_leaf(leaf) for node in nodes for leaf in node.leaves())
 
@@ -1613,11 +1613,13 @@ def _route_actions_rejected(nodes: list[TraceNode], env: _TraceEnv) -> bool:
 
 
 def _trace_score(nodes: list[TraceNode], pdg: ProgramGraph) -> tuple[int, int, int]:
-    """Rank alternative trace routes: low wake, few pivots, few leaves."""
+    """Rank alternative trace routes: low downstream reach, few pivots, few leaves."""
     steerable = [leaf for node in nodes for leaf in node.leaves() if leaf.is_steerable]
-    wake = sum(len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable)
+    downstream_reach = sum(
+        len(pdg.downstream_slice(leaf.tag, follow_calls=True)) for leaf in steerable
+    )
     pivots = sum(node.unsatisfied_count() for node in nodes)
-    return wake, pivots, len(steerable)
+    return downstream_reach, pivots, len(steerable)
 
 
 @dataclass(frozen=True)

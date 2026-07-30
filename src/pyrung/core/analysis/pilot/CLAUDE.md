@@ -293,8 +293,8 @@ plain language on first use.
 - **pen** — a nonterminal, re-arming `CoastSession` transition recorder. Each
   firing records an exact event but never ends the coast; watch semantic
   transitions, not raw accumulator churn.
-- **wake** — the size of an action tag's downstream PDG slice. It demotes broad
-  actions in ranking but never rejects them.
+- **downstream reach** — the size of an action tag's downstream PDG slice. It
+  demotes broad actions in ranking but never rejects them.
 - **channel** — the observable state-like boundary of an operation or coast,
   usually `PipelineRoles.channel_tag`. `coast_departure_tags` adds an exact
   stateful, non-earned-work target when no inferred pipeline owns it.
@@ -352,6 +352,8 @@ an event stream, replay identity, or lower-level API.
   vocabulary. Change these only through an event schema migration.
 - `recording.py` and `progress.py` serialize `rungs` and `revoked_rungs`.
   Renaming those payload keys requires an event schema migration.
+- `recording.py` serializes internal downstream reach as `wake` and
+  `wake_cap`. Renaming those payload keys requires an event schema migration.
 - `coast.py::CoastReceipt` owns structured stop evidence with stable string
   `stop_reason` values; `cycle_fold_until` retains its Boolean return API.
   PILOT filters lower-runner `real_scans` and `folds` cycle-fold details.

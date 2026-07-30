@@ -210,7 +210,7 @@ def _assemble_world(
             tag=action.tag,
             value=action.value,
             provenance=action.provenance,
-            wake=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
+            downstream_reach=len(ctx.pdg.downstream_slice(action.tag, follow_calls=True)),
             until=action.until,
             pulse=action.pulse,
             establish=action.establish,
@@ -372,7 +372,7 @@ def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolic
         nogood_pair=option.pair,
         heading=heading,
         provenance=option.provenance,
-        wake=option.wake,
+        downstream_reach=option.downstream_reach,
         note=option.awaited_action_note or option.program_note,
         context_actions=option.program_context_actions,
     )

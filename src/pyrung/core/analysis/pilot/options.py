@@ -74,7 +74,7 @@ class _Candidate:
     value: Any
     source: ActSource
     provenance: tuple[str, ...] = ()
-    wake: int | None = None
+    downstream_reach: int | None = None
     # The first compass edge's executable promise. Trial verification uses this for every
     # route-prescribed action, not only a bearing coast: landing elsewhere means
     # the program displaced the route and must be investigated.
@@ -351,7 +351,7 @@ class CandidateRead:
 
     trace: _TraceAdmission
     options: tuple[_Candidate, ...]
-    wake_cap: int
+    downstream_reach_cap: int
     route: RouteRead | None = None
     wait: WaitRead | None = None
     prerequisites: PrerequisiteRead = PrerequisiteRead()
@@ -1608,20 +1608,24 @@ def _assemble_candidate_read(
     route_plan = route.plan if route is not None else None
     route_candidates = route.candidates if route is not None else ()
     trace_actions = trace.actions
-    wake_cap = 20
-    over_wake_actions: tuple[_ActionPair, ...] = ()
+    downstream_reach_cap = 20
+    broad_reach_actions: tuple[_ActionPair, ...] = ()
     if len(trace_actions) > 1:
-        radii = {
+        reach_by_tag = {
             tag: len(ctx.pdg.downstream_slice(tag, follow_calls=True))
             for tag, _value in trace_actions
         }
-        median_radius = sorted(radii.values())[len(radii) // 2] if radii else 0
-        wake_cap = max(median_radius * 3, 20)
-        over_wake_actions = tuple(
-            (tag, value) for tag, value in trace_actions if radii.get(tag, 0) > wake_cap
+        median_reach = sorted(reach_by_tag.values())[len(reach_by_tag) // 2] if reach_by_tag else 0
+        downstream_reach_cap = max(median_reach * 3, 20)
+        broad_reach_actions = tuple(
+            (tag, value)
+            for tag, value in trace_actions
+            if reach_by_tag.get(tag, 0) > downstream_reach_cap
         )
         trace_actions = tuple(
-            (tag, value) for tag, value in trace_actions if radii.get(tag, 0) <= wake_cap
+            (tag, value)
+            for tag, value in trace_actions
+            if reach_by_tag.get(tag, 0) <= downstream_reach_cap
         )
 
     learned_action = learned.action if isinstance(learned, _LearnedAction) else None
@@ -1655,9 +1659,9 @@ def _assemble_candidate_read(
                 else ActSource.TRACE
             ),
             provenance=detail.provenance if detail is not None else (),
-            wake=(
-                detail.wake
-                if detail is not None and detail.wake is not None
+            downstream_reach=(
+                detail.downstream_reach
+                if detail is not None and detail.downstream_reach is not None
                 else len(ctx.pdg.downstream_slice(pair[0], follow_calls=True))
             ),
             bearing_channel_tag=(
@@ -1706,7 +1710,7 @@ def _assemble_candidate_read(
     ):
         seen_candidates.add(learned_action)
         candidates.append(_candidate_for(learned_action))
-    for pair in over_wake_actions:
+    for pair in broad_reach_actions:
         if pair not in seen_candidates:
             seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
@@ -1749,7 +1753,7 @@ def _assemble_candidate_read(
     return CandidateRead(
         trace=final_trace,
         options=tuple(candidates),
-        wake_cap=wake_cap,
+        downstream_reach_cap=downstream_reach_cap,
         route=route,
         wait=wait,
         prerequisites=separated.prerequisites,

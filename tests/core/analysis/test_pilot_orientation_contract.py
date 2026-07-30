@@ -72,7 +72,7 @@ def _candidate(tag: str) -> SimpleNamespace:
         bearing_channel_tag=None,
         bearing_channel_value=None,
         provenance=(),
-        wake=None,
+        downstream_reach=None,
         program_context_actions=(),
     )
 
@@ -94,7 +94,7 @@ def _options(
             establish_pending=False,
         ),
         options=tuple(candidates),
-        wake_cap=20,
+        downstream_reach_cap=20,
         wait=wait,
         prerequisites=PrerequisiteRead(),
         learned_batch=(

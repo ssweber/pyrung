@@ -418,7 +418,7 @@ def _candidates_built_payload(
         "active_trace_actions": candidates.trace.active_actions,
         "route_candidates": route.candidates if route is not None else (),
         "route_plan": _route_plan_payload(route.plan if route is not None else None),
-        "wake_cap": candidates.wake_cap,
+        "wake_cap": candidates.downstream_reach_cap,
         "wait_prescribed": prescription is not None,
         "wait_reason": wait.reason if wait is not None else None,
         "prerequisite_rungs": prerequisites,
@@ -498,7 +498,7 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "program_note": policy.note if policy.source is ActSource.PROGRAM else "",
         "program_context_actions": policy.context_actions,
         "provenance": policy.provenance,
-        "wake": policy.wake,
+        "wake": policy.downstream_reach,
         "prescribed": policy.source is not ActSource.TRACE,
     }
 
@@ -520,7 +520,7 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "program_note": candidate.program_note,
         "program_context_actions": candidate.program_context_actions,
         "provenance": candidate.provenance,
-        "wake": candidate.wake,
+        "wake": candidate.downstream_reach,
         "prescribed": candidate.source is not ActSource.TRACE,
     }
 

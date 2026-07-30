@@ -135,7 +135,7 @@ class ActPolicy:
     heading: ChannelHeading | None = None
     motion: MotionKind = MotionKind.INTERVENTION
     provenance: tuple[str, ...] = ()
-    wake: int | None = None
+    downstream_reach: int | None = None
     note: str = ""
     context_actions: tuple[_ActionPair, ...] = ()
 

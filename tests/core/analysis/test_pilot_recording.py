@@ -222,7 +222,7 @@ def test_candidates_built_payload_carries_provenance_without_policy_scores() -> 
         for cand in ev.data["candidates"]:
             seen_candidate = True
             assert set(("provenance", "wake", "prescribed")) <= set(cand)
-            assert not {"avail_tier", "over_wake", "compass_score", "scored"} & set(cand)
+            assert not {"avail_tier", "downstream_reach", "compass_score", "scored"} & set(cand)
     assert seen_candidate
 
 
