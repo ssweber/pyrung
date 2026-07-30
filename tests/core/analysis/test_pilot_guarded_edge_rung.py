@@ -72,8 +72,8 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     )
     plc = PLC(logic, dt=0.010)
     earned = PilotRung(door_closed.name, True, state_tag == approach)
-    pilot_rungs = [earned]
-    _set_pilot_rungs(plc, pilot_rungs)
+    starting_pilot_rungs = [earned]
+    _set_pilot_rungs(plc, starting_pilot_rungs)
 
     # Approach enters HoldForOperator with DoorClosed already True, so the
     # transition requires a fresh off→on edge rather than the existing level.
@@ -104,7 +104,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
         raw_trace_actions=actions,
         raw_trace_action_details=details,
     )
-    pilot_state = SimpleNamespace(work=plc, pilot_rungs=pilot_rungs)
+    pilot_state = SimpleNamespace(work=plc, pilot_rungs=starting_pilot_rungs)
     ctx = SimpleNamespace(
         compass=Compass(),
         edge_tags=compute_edge_tags(pdg, logic),
@@ -126,7 +126,7 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     close_again = candidates.prerequisites.pilot_rungs[0]
     assert (close_again.dest, close_again.value) == (door_closed.name, True)
 
-    _append_pilot_rungs(plc, [close_again], pilot_rungs)
+    pilot_rungs = _append_pilot_rungs(plc, [close_again], starting_pilot_rungs)
     plc.step()
     assert plc.state.tags[state_tag.name] == ready
     assert plc.state.tags[door_closed.name] is True

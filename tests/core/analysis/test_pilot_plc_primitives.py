@@ -428,9 +428,8 @@ class TestPilotRungs:
     def test_last_active_rung_wins(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        pilot_rungs: list[PilotRung] = []
-        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
-        _append_pilot_rungs(plc, [PilotRung("In", False, ~Scope)], pilot_rungs)
+        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], [])
+        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", False, ~Scope)], pilot_rungs)
         plc.step()
         assert plc.state.tags["In"] is False
 
@@ -523,9 +522,8 @@ class TestPilotRungs:
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        pilot_rungs: list[PilotRung] = []
-        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
-        _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
+        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], [])
+        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
 
         assert len(pilot_rungs) == 1
 

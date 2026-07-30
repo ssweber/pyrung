@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, cast
 
-from pyrsistent import pvector
+from pyrsistent import PVector, pvector
 
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 
@@ -439,12 +439,10 @@ def _append_pilot_rungs(
     plc: PLC,
     proposed: list[PilotRung],
     pilot_rungs: Iterable[PilotRung],
-) -> Any:
+) -> PVector[PilotRung]:
     """Append new evidence and install the resulting ordered overlay.
 
-    The returned persistent vector is the new world value.  Mutating a plain
-    list remains supported for the low-level public seam and older callers, but
-    PILOT itself always assigns the returned value into ``_World.pilot_rungs``.
+    The returned persistent vector is the new world value.
     """
     updated_list = list(pilot_rungs)
     seen = {_rung_identity(rung) for rung in updated_list}
@@ -453,14 +451,9 @@ def _append_pilot_rungs(
         if identity not in seen:
             updated_list.append(rung)
             seen.add(identity)
-    if isinstance(pilot_rungs, list):
-        list_pilot_rungs = cast(list[PilotRung], pilot_rungs)
-        list_pilot_rungs[:] = updated_list
-        updated = list_pilot_rungs
-    else:
-        updated = pvector(updated_list)
-    _set_pilot_rungs(plc, list(updated))
-    return pvector(updated)
+    updated = pvector(updated_list)
+    _set_pilot_rungs(plc, updated)
+    return updated
 
 
 def fork_with_pilot_rungs(
