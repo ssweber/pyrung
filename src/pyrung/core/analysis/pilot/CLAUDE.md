@@ -228,6 +228,10 @@ nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
   artifact that failed; a sibling edge carrying the same primary action under
   different co-actions remains untested. Pair-level consumers see only
   explicit pair rejections and singleton Pulses.
+- Attribution, dead-end frontier filtering, and excursion replay consume the
+  complete physical `ActPolicy.applied` artifact. Requested `action_pairs`
+  remain policy and nogood identity; a non-empty physical artifact is never
+  called program-owned without positive causal evidence.
 
 ## Navigation
 

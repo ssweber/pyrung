@@ -730,7 +730,20 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(mon
     state, trial, frame, ctx = _saboteur_scenario()
     state.key_config = _StateKeyConfig((), (), (), frozenset())
     ctx.max_scans = 10
-    detected = _AttemptResult(trial=None, excursion_attempt=trial.attempt)
+    policy = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=(("Primary", True),),
+        applied=(("Primary", True), ("CoAction", False)),
+    )
+    executed = _ExecutedAttempt(
+        pulse=trial.attempt.pulse,
+        bearing=Bearing(
+            trial.attempt.bearing.world_key,
+            BatchPulse(policy),
+            trial.attempt.bearing.objective,
+        ),
+    )
+    detected = _AttemptResult(trial=None, excursion_attempt=executed)
     investigation = object()
     resolved = _AttemptResult(trial=trial)
     calls = []
@@ -758,6 +771,7 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(mon
 
     assert _resolve_excursion(detected, frame, state, ctx) is resolved
     assert len(calls) == 1
+    assert calls[0][0][5] == policy.applied
 
 
 def test_correction_installer_rejects_forged_identity():

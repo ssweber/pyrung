@@ -88,28 +88,30 @@ def confirmed_entry(
 # ---------------------------------------------------------------------------
 
 
-def _action_caused_regression(
+def _motion_agency(
     trial: Any,
-    action_pairs: tuple[_ActionPair, ...],
+    applied_actions: tuple[_ActionPair, ...],
     frame: Any,
     ctx: Any,
     chase_cause_roots: Any,
-) -> bool:
-    """True if a pulsed action causally drove an opaque-loop register backward.
+) -> Agency:
+    """Attribute relevant motion only from positive causal evidence.
 
-    A trend regression the pilot's own control input produced (C_Abort driving
-    S_StateCurrent to Aborted) is a self-inflicted misstep — distinct from an
-    ambient regression (an alarm firing on its own).  The pilot should not
-    commit to its own bad control input; ambient drift is handled elsewhere.
+    An empty physical artifact is program motion. Once PILOT applied anything,
+    however, absence of a matching causal root is uncertainty rather than proof
+    that the program owned the motion.
     """
-    action_tags = {t for t, _ in action_pairs}
+    if not applied_actions:
+        return Agency.PROGRAM
+
+    action_tags = {tag for tag, _ in applied_actions}
     for tag in ctx.opaque_loop:
         if _values_match(frame.snap.get(tag), trial.snap.get(tag)):
             continue
         roots, _holds = chase_cause_roots(trial.fork, tag, ctx.steerable, scan=trial.action_scan)
         if roots & action_tags:
-            return True
-    return False
+            return Agency.PILOT
+    return Agency.UNKNOWN
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +121,7 @@ def _action_caused_regression(
 
 def assess_outcome(
     trial: Any,
-    action_pairs: tuple[_ActionPair, ...],
+    applied_actions: tuple[_ActionPair, ...],
     frame: Any,
     ctx: Any,
     new_trend: int,
@@ -133,7 +135,8 @@ def assess_outcome(
     """Judge a post-gate trial on independent evidence axes.
 
     Called after SPIN, CYCLE, and DEAD-END gates have passed — the trial
-    produced a real state change with a non-empty frontier.
+    produced a real state change, a non-empty frontier, or an owned channel
+    landing that must reach post-commit handling.
 
     Only the *immediate* requested channel value can satisfy a bearing.  A
     stored route suffix is intent, not evidence: landing on a later or earlier
@@ -149,6 +152,14 @@ def assess_outcome(
     else:
         progress = ProgressEffect.BACKWARD
 
+    agency = _motion_agency(
+        trial,
+        applied_actions,
+        frame,
+        ctx,
+        chase_cause_roots,
+    )
+
     if channel_motion.active:
         if channel_motion.reached:
             # The bearing coast achieved its channel subgoal (e.g. State 3->6).
@@ -157,7 +168,7 @@ def assess_outcome(
             # that trace_back cannot surface yet.  Do not fall through to the
             # trend/BAD_EDGE logic, which would discard a correct 800-scan coast.
             return TrialAssessment(
-                Agency.PILOT if action_pairs else Agency.PROGRAM,
+                agency,
                 BearingEffect.SATISFIED,
                 progress,
                 has_new_frontier,
@@ -167,11 +178,8 @@ def assess_outcome(
             # The channel moved, but not to the requested value.  Attribute the
             # move independently from its usefulness; post-commit handling may later prove the
             # resulting world advanced, regressed, or remains incomparable.
-            pilot_caused = bool(action_pairs) and _action_caused_regression(
-                trial, action_pairs, frame, ctx, chase_cause_roots
-            )
             return TrialAssessment(
-                Agency.PILOT if pilot_caused else Agency.PROGRAM,
+                agency,
                 BearingEffect.DEPARTED,
                 progress,
                 has_new_frontier,
@@ -193,7 +201,7 @@ def assess_outcome(
         # skiff) to earn the holds this coast actually needs.
         if earned_work_receipt.any_forward:
             return TrialAssessment(
-                Agency.PROGRAM,
+                agency,
                 BearingEffect.UNCHANGED,
                 progress,
                 has_new_frontier,
@@ -201,36 +209,33 @@ def assess_outcome(
             )
         if has_new_frontier:
             return TrialAssessment(
-                Agency.PROGRAM,
+                agency,
                 BearingEffect.EXPOSED,
                 progress,
                 True,
                 True,
             )
         return TrialAssessment(
-            Agency.PROGRAM,
+            agency,
             BearingEffect.UNCHANGED,
             progress,
             False,
             False,
         )
 
-    # Trend improved or flat → the action helped
+    # Trend improved or flat is useful even when its agency remains unknown.
     if new_trend <= frame.distance_before:
         return TrialAssessment(
-            Agency.PILOT if action_pairs else Agency.PROGRAM,
+            agency,
             BearingEffect.SATISFIED,
             progress,
             has_new_frontier,
             True,
         )
 
-    # Trend increased — who caused it?
-    pilot_caused = _action_caused_regression(trial, action_pairs, frame, ctx, chase_cause_roots)
-
-    if not pilot_caused:
-        # The PLC caused the regression — the command was a no-op, the program
-        # has its own current.  (Stub: for now we accept; full "learn both" is future work.)
+    # Empty applied work establishes ambient program motion. A non-empty
+    # artifact without a matching causal root is unresolved and fails closed.
+    if agency is Agency.PROGRAM:
         return TrialAssessment(
             Agency.PROGRAM,
             BearingEffect.DEPARTED,
@@ -239,8 +244,9 @@ def assess_outcome(
             True,
         )
 
-    # Pilot caused regression — but is it productive?
-    if route_prescribed and has_new_frontier:
+    # A causally attributed PILOT regression may still be productive when the
+    # prescribed route exposed genuinely new work.
+    if agency is Agency.PILOT and route_prescribed and has_new_frontier:
         # The route says go here, and the move opened genuinely new actions.
         # This is "revealed new prerequisites" — accept the forward step.
         return TrialAssessment(
@@ -251,9 +257,10 @@ def assess_outcome(
             True,
         )
 
-    # Pilot-caused regression with no new frontier → destructive self-move
+    # PILOT-caused regression without the route exception, or unresolved
+    # non-empty work, is not safe to commit.
     return TrialAssessment(
-        Agency.PILOT,
+        agency,
         BearingEffect.DEPARTED,
         progress,
         has_new_frontier,

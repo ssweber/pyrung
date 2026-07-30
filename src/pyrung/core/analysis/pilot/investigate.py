@@ -1284,7 +1284,7 @@ def investigate_excursion(
     pre_snap: dict[str, Any],
     post_pulse_snap: dict[str, Any],
     pre_key: tuple[Any, ...],
-    action: list[ActionPair],
+    applied_actions: Sequence[ActionPair],
     *,
     cfg: Any,
     steerable: frozenset[str],
@@ -1300,7 +1300,8 @@ def investigate_excursion(
 
     Verify detected that the state key changed during the pulse but reverted
     after settling; the drive loop invokes this function to find *why* and
-    validate one replay.
+    validate one replay. ``applied_actions`` is the complete physical artifact:
+    every member is replayed and excluded from corrective nominations.
 
     Primary path: suppress the *antagonist* — any writer of a reverted register
     that is **causally implicated** in the deviation (``cause()`` attributes the
@@ -1369,7 +1370,7 @@ def investigate_excursion(
                         tag,
                         desired,
                         node,
-                        action,
+                        applied_actions,
                         pdg,
                         steerable,
                         rungs,
@@ -1405,7 +1406,7 @@ def investigate_excursion(
                         seen.add(hold)
                         candidate_holds.append(hold)
 
-    action_tags = {t for t, _ in action}
+    action_tags = {t for t, _ in applied_actions}
     candidate_holds = [(t, v) for t, v in candidate_holds if t not in action_tags]
     if ctx is not None:
         candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
@@ -1423,8 +1424,8 @@ def investigate_excursion(
     confirmed_rungs = tuple(_rungs_from_proposals(retry, candidate_holds, scope))
     retry_rungs.extend(confirmed_rungs)
     _set_rungs(retry, retry_rungs)
-    kickoff = list(action)
-    kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in action})
+    kickoff = list(applied_actions)
+    kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in applied_actions})
     session = CoastSession(retry, kind="excursion-retry")
     if program is not None:
         session.arm_pens(
@@ -1488,7 +1489,7 @@ def _skiff_suppression_nominations(
     tag: str,
     desired: Any,
     node: Any,
-    action: list[ActionPair],
+    applied_actions: Sequence[ActionPair],
     pdg: Any,
     steerable: frozenset[str],
     rungs: Sequence[PilotRung],
@@ -1507,7 +1508,7 @@ def _skiff_suppression_nominations(
     guesses).  The returned holds are nominations: they ride the same retry gate
     as any static hold and are never applied unconfirmed.
     """
-    action_tags = {t for t, _ in action}
+    action_tags = {t for t, _ in applied_actions}
     condition_read = {t for n in pdg.rung_nodes for t in getattr(n, "condition_reads", ())}
     cone: set[str] = set()
     for guard_tag in node.condition_reads:
@@ -1530,7 +1531,7 @@ def _skiff_suppression_nominations(
             continue  # only Bool levers — never guess a word value
         budget -= 1
         val = not cur  # flip off the polarity under which the antagonist fires
-        probe_actions = tuple({**dict(action), lever: val}.items())
+        probe_actions = tuple({**dict(applied_actions), lever: val}.items())
         result = run_pinned_scan(
             work,
             frozenset(allowed | {lever}),

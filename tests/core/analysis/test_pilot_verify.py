@@ -312,6 +312,68 @@ class TestGateCycle:
 class TestGateDeadEnd:
     """Dead-end gate — frontier must be non-empty or async pending."""
 
+    def test_applied_co_actions_are_not_reported_as_new_frontier(self, monkeypatch):
+        """The full physical act, not only its requested primary, is lateral."""
+        support = ("Support", True)
+        old_tree = SimpleNamespace(
+            ordered_actions=lambda: (),
+            unsatisfied_conditions=lambda: set(),
+        )
+        new_tree = SimpleNamespace(
+            unsatisfied_count=lambda: 2,
+            ordered_actions=lambda: (support,),
+            unsatisfied_conditions=lambda: set(),
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify.trace_back",
+            lambda *_args, **_kwargs: new_tree,
+        )
+        monkeypatch.setattr(
+            NavigationEvidence,
+            "frontier_status",
+            staticmethod(lambda *_args, **_kwargs: Unknown("no continuation")),
+        )
+
+        result = _gate_dead_end(
+            SimpleNamespace(
+                fork=SimpleNamespace(),
+                snap={"Primary": True, "Support": True},
+                key=("after",),
+            ),
+            (("Primary", True), support),
+            _IterationFrame(
+                snap={"Primary": False, "Support": False},
+                tree=old_tree,
+                key=("before",),
+                distance_before=2,
+                raw_trace_actions=(),
+                raw_trace_action_details=(),
+            ),
+            SimpleNamespace(),
+            SimpleNamespace(
+                pdg=object(),
+                program=object(),
+                steerable=frozenset({"Primary", "Support"}),
+                clear_only=frozenset(),
+                opaque_loop=frozenset(),
+                pipeline_internal_tags=frozenset(),
+                route=None,
+                blocked_actions=frozenset(),
+                domain_prior=None,
+                avoid_pred=None,
+                compass=SimpleNamespace(knowledge=object()),
+            ),
+            target=TargetSpec("Target", True),
+            earned_work_receipt=EarnedWorkReceipt(),
+            learned_prescribed=False,
+            nogood_pair=("Primary", True),
+            gate_events=[],
+            collected_nogoods=[],
+            channel_motion=ChannelMotion(),
+        )
+
+        assert result is None
+
     def test_harness_model_is_not_post_trial_proof(self, monkeypatch):
         """VERIFY requires the executed fork's live ramp, not its planning model."""
         enable = Bool("VerifyHarness_Enable", external=True)

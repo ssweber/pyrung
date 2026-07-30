@@ -244,7 +244,7 @@ def _gate_cycle(
 
 def _gate_dead_end(
     trial: _PulseState,
-    action_pairs: tuple[_ActionPair, ...],
+    applied_actions: tuple[_ActionPair, ...],
     frame: Any,
     state: Any,
     ctx: Any,
@@ -266,12 +266,12 @@ def _gate_dead_end(
     # A bearing coast that drove its channel register to the target value (e.g.
     # S_StateCurrent 3->6) is a confirmed advance, even if the global target's
     # onward leg is another dwell that trace_back can't surface. A bearing coast
-    # whose channel register *moved away* on its own (an ejection,
-    # S_StateCurrent 6->8) is an AMBIENT_DRIFT the investigation must own — not a
-    # stall.  Either way the trial must reach outcome classification, not be
-    # discarded here; only a true stall (channel unchanged, no frontier) is a
-    # dead end. (For command candidates the channel receipt is inactive, so this gate
-    # is unchanged for them.)
+    # whose channel register *moved away* (an ejection, S_StateCurrent 6->8)
+    # likewise belongs to post-commit handling, whether attribution proves
+    # program, PILOT, or unknown agency. Either landing must reach outcome
+    # classification; only a true stall (channel unchanged, no frontier) is a
+    # dead end. (For command candidates the channel receipt is inactive, so
+    # this gate is unchanged for them.)
     channel_reached = channel_motion.reached
     channel_moved = channel_motion.departed
     accept_override = learned_prescribed or channel_reached or channel_moved
@@ -299,7 +299,7 @@ def _gate_dead_end(
     new_trend = new_tree.unsatisfied_count()
     new_actions = set(new_tree.ordered_actions())
     old_actions = set(frame.tree.ordered_actions())
-    action_inputs = set(action_pairs)
+    applied_inputs = set(applied_actions)
     post_frame = replace(frame, snap=trial.snap, tree=new_tree, key=trial.key)
     frontier_status = NavigationEvidence.frontier_status(
         OrientationWorld(
@@ -352,7 +352,7 @@ def _gate_dead_end(
         )
     elif (
         new_actions
-        and not (new_actions - action_inputs - old_actions)
+        and not (new_actions - applied_inputs - old_actions)
         and new_trend >= frame.distance_before
     ):
         # An event-earned ordinal advance is trend improvement the tree can't
@@ -370,7 +370,7 @@ def _gate_dead_end(
                 evidence={
                     "new_actions": tuple(sorted(new_actions, key=repr)),
                     "old_actions": tuple(sorted(old_actions, key=repr)),
-                    "action_inputs": tuple(sorted(action_inputs, key=repr)),
+                    "action_inputs": tuple(sorted(applied_inputs, key=repr)),
                     "trend_before": frame.distance_before,
                     "trend_after": new_trend,
                     "learned_prescribed": learned_prescribed,
@@ -392,7 +392,7 @@ def _gate_dead_end(
                 gate_events,
             )
 
-    genuinely_new_actions = bool(new_actions - action_inputs - old_actions)
+    genuinely_new_actions = bool(new_actions - applied_inputs - old_actions)
     old_unsat = frame.tree.unsatisfied_conditions()
     new_unsat = new_tree.unsatisfied_conditions()
     genuinely_new_conditions = bool(new_unsat - old_unsat)
@@ -422,7 +422,6 @@ def _verify_after_spin(
     trial = attempt.pulse
     bearing = attempt.bearing
     policy = bearing.act.policy
-    action_pairs = policy.action_pairs
     nogood_pair = policy.nogood_pair
 
     def _reject() -> _AttemptResult:
@@ -475,7 +474,7 @@ def _verify_after_spin(
 
     dead_end = _gate_dead_end(
         trial,
-        action_pairs,
+        policy.applied,
         frame,
         state,
         ctx,
@@ -492,7 +491,7 @@ def _verify_after_spin(
 
     assessment = assess_outcome(
         trial,
-        action_pairs,
+        policy.applied,
         frame,
         ctx,
         dead_end.trend,
@@ -712,7 +711,7 @@ def verify_gates(
     trial = attempt.pulse
     bearing = attempt.bearing
     policy = bearing.act.policy
-    action_pairs = policy.action_pairs
+    applied_actions = policy.applied
     nogood_pair = policy.nogood_pair
     declared_motion = (
         ChannelMotion(
@@ -816,7 +815,7 @@ def verify_gates(
     # backward move during a coast is program motion owned by post-commit
     # investigation/recovery, not a destructive operator choice.
     if (
-        action_pairs
+        applied_actions
         and policy.motion is MotionKind.INTERVENTION
         and earned_work_receipt.movement is EarnedWorkMovement.BACKWARD
     ):
@@ -866,7 +865,7 @@ def verify_gates(
                 "post_pulse_key": trial.post_pulse_key,
                 "pending_effects": False,
                 "ordinal_advanced": False,
-                "actions": action_pairs,
+                "actions": applied_actions,
             },
         )
         return _reject()

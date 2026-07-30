@@ -593,7 +593,7 @@ def _resolve_excursion(
         frame.snap,
         pulse.post_pulse_snap,
         frame.key,
-        list(executed.bearing.act.policy.action_pairs),
+        executed.bearing.act.policy.applied,
         cfg=key_config,
         steerable=ctx.steerable,
         rungs=state.pilot_rungs,
