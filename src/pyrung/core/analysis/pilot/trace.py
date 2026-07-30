@@ -864,18 +864,12 @@ def _merge_crossing_branches(
         by_tag.setdefault(action.tag, action)
     actions = tuple(sorted(by_tag.values(), key=lambda action: (action.tag, repr(action.value))))
     exact_values = (left.exact, right.exact)
-    exact = (
-        None
-        if None in exact_values
-        else bool(left.exact and right.exact)
-    )
+    exact = None if None in exact_values else bool(left.exact and right.exact)
     return TraceCrossingBranch(
         actions=actions,
         fidelity=CrossingFidelity(
             constraints=tuple(dict.fromkeys((*left.constraints, *right.constraints))),
-            reason="; ".join(
-                dict.fromkeys(part for part in (left.reason, right.reason) if part)
-            ),
+            reason="; ".join(dict.fromkeys(part for part in (left.reason, right.reason) if part)),
             verify_required=left.verify_required or right.verify_required,
             exact=exact,
             proposed=left.proposed or right.proposed,
@@ -895,9 +889,7 @@ def _compose_crossing_subtree(
     if node.satisfied:
         constraint = _trace_node_constraint(node)
         return False, (
-            _empty_crossing_branch(
-                constraints=((constraint,) if constraint is not None else ())
-            ),
+            _empty_crossing_branch(constraints=((constraint,) if constraint is not None else ())),
         )
     if node.data_flow == "enable":
         # This node owns a prior stage. Its leaves cannot be folded into the
@@ -1192,11 +1184,7 @@ def _rewrite_internal_compare(
     if normalized.fallthrough or normalized.contradiction or normalized.trivial:
         return [atom]
     branches = normalized.branches
-    if (
-        len(branches) != 1
-        or len(branches[0]) != 1
-        or not isinstance(branches[0][0], Cmp)
-    ):
+    if len(branches) != 1 or len(branches[0]) != 1 or not isinstance(branches[0][0], Cmp):
         # DNF and every conjunction belong to the grouped branch consumer.
         # Decline here rather than flattening alternatives, dissolving AND, or
         # silently dropping a mixed-kind conjunct after grouped lowering found
@@ -1581,9 +1569,7 @@ def _trace_crossing_branches(
                             replace(
                                 detail,
                                 heuristic=detail.heuristic or verify_required,
-                                note="; ".join(
-                                    part for part in (detail.note, marker) if part
-                                ),
+                                note="; ".join(part for part in (detail.note, marker) if part),
                             )
                         )
                 if conflict:
@@ -1626,9 +1612,7 @@ def _trace_frozen_crossing_branches(
     raw_right = env.snapshot.get(atom.operand)
     try:
         right_now = (
-            atom.operand_scale * raw_right + atom.operand_offset
-            if raw_right is not None
-            else None
+            atom.operand_scale * raw_right + atom.operand_offset if raw_right is not None else None
         )
     except TypeError:
         right_now = None
@@ -1977,11 +1961,7 @@ def _advance_frontier(
             for node in establish_nodes
             for leaf in node.leaves()
         )
-        if (
-            scalar_coast
-            and not requires_action
-            and _route_has_no_dead_end(establish_nodes)
-        ):
+        if scalar_coast and not requires_action and _route_has_no_dead_end(establish_nodes):
             # The instruction is not active yet, but its owned program stage
             # will establish itself without an external act. Keep the future
             # scalar boundary: scanning/coasting is the only useful operation.
@@ -2638,9 +2618,7 @@ def _trace_expression(
                     provenance,
                     visited=_visited,
                     ancestry=_ancestry,
-                    relational_goal=(
-                        _relational_goal if _relational_goal is not None else expr
-                    ),
+                    relational_goal=(_relational_goal if _relational_goal is not None else expr),
                     depth=_depth,
                 )
                 if not crossing_branches:

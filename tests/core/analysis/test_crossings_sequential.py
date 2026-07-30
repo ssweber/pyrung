@@ -116,9 +116,7 @@ def _receive() -> ModbusReceiveInstruction:
 
 
 def test_modbus_receive_target_is_external() -> None:
-    r = ModbusReceiveCrossing().reverse(
-        _receive(), None, eq_target("RemoteValue", 72), _ctx()
-    )
+    r = ModbusReceiveCrossing().reverse(_receive(), None, eq_target("RemoteValue", 72), _ctx())
     assert r.branches == ((External("RemoteValue"),),)
     assert r.exact is True
 

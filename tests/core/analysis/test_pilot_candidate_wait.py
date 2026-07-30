@@ -1166,9 +1166,7 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
         set(),
     )
 
-    assert [batch.actions for batch in admitted.crossing_batches] == [
-        (("A", 1), ("B", 1))
-    ]
+    assert [batch.actions for batch in admitted.crossing_batches] == [(("A", 1), ("B", 1))]
     assert blocked.crossing_batches == ()
     assert invalidated.crossing_batches == ()
 

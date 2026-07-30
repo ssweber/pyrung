@@ -34,6 +34,7 @@ class _CrossedReads:
     enablers: tuple[EnablingCondition, ...]
     crossing_exact: bool | None = None
 
+
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.condition import Condition
