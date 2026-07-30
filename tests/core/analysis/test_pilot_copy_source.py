@@ -60,7 +60,7 @@ def _jump_state_program():
     return prog, Target
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     return path.replay()
 
 
@@ -88,7 +88,7 @@ def test_jump_state_solves() -> None:
     path = pilot_how(plc, Target)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Target"] is True
 
 

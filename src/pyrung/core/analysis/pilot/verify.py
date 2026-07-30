@@ -201,7 +201,6 @@ def _gate_spin(
 
 def _gate_cycle(
     trial: _PulseState,
-    frame: Any,
     state: Any,
     *,
     pending: bool,
@@ -461,7 +460,6 @@ def _verify_after_spin(
     pending = _has_pending_effects(trial.fork)
     if not _gate_cycle(
         trial,
-        frame,
         state,
         pending=pending,
         earned_work_receipt=earned_work_receipt,

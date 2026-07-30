@@ -299,7 +299,7 @@ def _tag_coupled(read: str, tag: str, pdg: ProgramGraph, depth: int = 0) -> bool
     return True
 
 
-def _self_limiting_advance(rn: Any, ro: Any, tag: str, pdg: ProgramGraph) -> bool:
+def _self_limiting_advance(rn: Any, tag: str, pdg: ProgramGraph) -> bool:
     """A stepper advance whose guard reads a derivation of the tag itself.
 
     The write invalidates its own guard context (the parity scratch, the
@@ -308,7 +308,6 @@ def _self_limiting_advance(rn: Any, ro: Any, tag: str, pdg: ProgramGraph) -> boo
     A free-running ``count + 1`` gated by a clock or a sensor level has no
     tag-coupled conjunct and stays rejected.
     """
-    del ro
     return any(_tag_coupled(read, tag, pdg) for read in sorted(rn.condition_reads))
 
 
@@ -557,7 +556,7 @@ def _classify_stride_tag(
         if kind == "affine" and (val > 0) == (direction > 0):
             if not _writer_discrete(
                 ro, done_names, clear_only, edge_tags, pdg, program
-            ) and not _self_limiting_advance(rn, ro, tag, pdg):
+            ) and not _self_limiting_advance(rn, tag, pdg):
                 return None  # level-driven advance — not event-earned
             saw_advance = True
             continue

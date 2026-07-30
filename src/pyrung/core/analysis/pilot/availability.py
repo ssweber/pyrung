@@ -293,7 +293,6 @@ def _caller_guard_ctx(program: Any) -> Any:
 
 def _caller_availability(
     rung_node: Any,
-    tag: str,
     snapshot: dict[str, Any],
     steerable: frozenset[str],
     current_tags: frozenset[str],
@@ -353,9 +352,7 @@ def _writer_availability(
         return _WriterAvailability.UNAVAILABLE_FROM_HERE
 
     current_tags = frozenset((tag,)) | opaque_loop | ancestry_tags
-    availability = _caller_availability(
-        rung_node, tag, snapshot, steerable, current_tags, pdg, program
-    )
+    availability = _caller_availability(rung_node, snapshot, steerable, current_tags, pdg, program)
     if isinstance(wv, Affine) and wv.source == tag:
         src_val = _invert_affine(wv, value)
         if src_val is None:

@@ -1440,12 +1440,6 @@ def _read_learned_fallback(
     return None
 
 
-def _read_awaited_action_fallback(frame: Any, ctx: Any) -> AwaitedAction | None:
-    """Read the unique program-awaited action without deciding its precedence."""
-
-    return _awaited_action_bearing(frame, ctx)
-
-
 def _select_wait(
     *,
     charted_completion: WaitRead | None,
@@ -1692,7 +1686,7 @@ def _build_candidates(
         ctx,
         key_nogoods,
     )
-    awaited_action = _read_awaited_action_fallback(frame, ctx)
+    awaited_action = _awaited_action_bearing(frame, ctx)
     return _assemble_candidate_read(
         route_and_wait,
         separated,

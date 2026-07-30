@@ -269,7 +269,6 @@ class TestGateCycle:
         gates = []
         accepted = _gate_cycle(
             trial,
-            SimpleNamespace(snap={}),
             SimpleNamespace(seen_keys={key}, earned_work=None),
             pending=False,
             earned_work_receipt=EarnedWorkReceipt(),
@@ -292,7 +291,6 @@ class TestGateCycle:
 
         accepted = _gate_cycle(
             trial,
-            SimpleNamespace(snap={}),
             SimpleNamespace(seen_keys={key}, earned_work=None),
             pending=False,
             earned_work_receipt=EarnedWorkReceipt(),

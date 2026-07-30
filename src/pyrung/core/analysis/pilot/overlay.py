@@ -285,7 +285,6 @@ def _target_unresolved_condition(
 
 
 def _pilot_rungs_from_proposals(
-    plc: PLC,
     proposals: list[Any],
     scope: Any,
 ) -> list[PilotRung]:

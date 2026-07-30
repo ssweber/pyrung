@@ -277,7 +277,6 @@ def _read_route_trees(
 
 def _assemble_world(
     world: OrientationWorld,
-    target: TargetSpec,
     selected_route: TraceChoice | None,
     tree: TraceNode,
     key_config: _StateKeyConfig,
@@ -351,9 +350,7 @@ def _read_worlds(
             threshold_vector_specs=(),
             acc_indices=frozenset(),
         )
-    return tuple(
-        _assemble_world(seed, target, route, tree, key_config) for route, tree in route_trees
-    )
+    return tuple(_assemble_world(seed, route, tree, key_config) for route, tree in route_trees)
 
 
 def _frontier(
@@ -375,7 +372,6 @@ def _probe_or_stuck(
     world: OrientationWorld,
     candidates: CandidateRead,
     reason: str,
-    _constraints: NavigationConstraints,
 ) -> NeedProbe | Stuck:
     frontier = _frontier(world, candidates)
     count = compass.knowledge.probe_count(world.world_key)
@@ -592,7 +588,6 @@ def _orient_read(
             world,
             candidates,
             candidates.diagnosis.reason,
-            constraints,
         )
 
     terminal: Coast | Dwell
@@ -622,7 +617,7 @@ def _orient_read(
             rationale=rationale,
         )
 
-    return _probe_or_stuck(compass, world, candidates, "all_rejected", constraints)
+    return _probe_or_stuck(compass, world, candidates, "all_rejected")
 
 
 def _is_maintenance(result: OrientationResult) -> bool:

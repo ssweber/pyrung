@@ -41,7 +41,7 @@ from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     """Replay a path on a fresh PLC and return it."""
     return path.replay()
 
@@ -870,7 +870,7 @@ def test_or_mixed_steerable_conjunction_arm_collapses():
     assert final.get("Manual") is True
     assert final.get("Btn") is True
     assert "Flag" not in final and "State" not in final  # internal arm untouched
-    assert _replay(logic, path).state.tags["Cmd"] is True
+    assert _replay(path).state.tags["Cmd"] is True
 
 
 def test_or_steerable_threshold_arm_collapses():
@@ -891,7 +891,7 @@ def test_or_steerable_threshold_arm_collapses():
     path = pilot_how(PLC(logic), Cmd)
     assert path.reachable
     assert path.route is None  # collapsed onto the steerable arm — no surfaced fork
-    assert _replay(logic, path).state.tags["Cmd"] is True
+    assert _replay(path).state.tags["Cmd"] is True
 
 
 def test_broad_downstream_reach_lever_deprioritized_not_dropped():
@@ -948,7 +948,7 @@ def test_broad_downstream_reach_lever_deprioritized_not_dropped():
     # And the target is still reachable — the whole point of not dropping it.
     assert path.reachable
     assert path.changes.get("x_Master") is True
-    assert _replay(logic, path).state.tags["Target"] is True
+    assert _replay(path).state.tags["Target"] is True
 
 
 def test_preserve_holds_latch_against_active_reset():
@@ -974,7 +974,7 @@ def test_preserve_holds_latch_against_active_reset():
     assert final.get("Start") is True  # establish
     assert final.get("Healthy") is True  # preserve — suppress the active reset
 
-    replay = _replay(logic, path)
+    replay = _replay(path)
     assert replay.state.tags["Run"] is True
 
 
@@ -1184,7 +1184,7 @@ def test_engine_replay_validates():
     path = plc.how(Done)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Done"] is True
 
 
@@ -1229,7 +1229,7 @@ def test_engine_independent_and_dependent():
     path = plc.how(C)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["C"] is True
 
 

@@ -147,7 +147,7 @@ def _transition_fires(
     return True
 
 
-def _request_tags_for(ctx: WalkContext, channel_tag: str, pipeline_roles: Any) -> frozenset[str]:
+def _request_tags_for(channel_tag: str, pipeline_roles: Any) -> frozenset[str]:
     tags: set[str] = set()
     for role in pipeline_roles or ():
         if role.channel_tag == channel_tag:
@@ -166,7 +166,7 @@ def awaited_actions(
     if state_value is None:
         return ()
 
-    request_tags = _request_tags_for(ctx, channel_tag, pipeline_roles)
+    request_tags = _request_tags_for(channel_tag, pipeline_roles)
     transitions = _state_transitions(ctx, channel_tag, state_value, request_tags)
     if not transitions:
         return ()

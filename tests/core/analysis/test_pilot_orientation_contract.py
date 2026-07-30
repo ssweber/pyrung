@@ -188,7 +188,6 @@ def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
     route = TraceChoice(id="route-a", label="A", route=("A",))
     assembled = _assemble_world(
         _world(Compass()),
-        TargetSpec("Target", True),
         route,
         TraceNode("Target", True, satisfied=False),
         _StateKeyConfig(

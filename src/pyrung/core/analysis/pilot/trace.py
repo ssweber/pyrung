@@ -2520,7 +2520,6 @@ def _trace_back(
             for child_node in _decompose_sum(
                 env,
                 wv,
-                tag,
                 value,
                 _visited=attempt_visited,
                 _ancestry=_child_ancestry,
@@ -3469,7 +3468,6 @@ def compute_resting_values(
 def _decompose_sum(
     env: _TraceEnv,
     wv: Aggregate,
-    tag: str,
     value: Any,
     *,
     _visited: Any,
@@ -3577,7 +3575,6 @@ def _flag_gate_comparisons(
 
 def _transition_fire_pins(
     env: _TraceEnv,
-    ro: Any,
     tag: str,
     value: Any,
     reverse_result: ReverseResult,
@@ -3644,7 +3641,7 @@ def _writer_guard_verdict(
     """
     from pyrung.core.analysis.pilot.tide_tables import guard_verdict
 
-    pins = _transition_fire_pins(env, ro, tag, value, reverse_result)
+    pins = _transition_fire_pins(env, tag, value, reverse_result)
     key = (ri, tuple(sorted(pins.items(), key=lambda kv: kv[0])), _expr_route_key(guard_expr))
     cached = env.guard_memo.get(key)
     if cached is not None:
@@ -3718,7 +3715,7 @@ def _table_enablement_prereqs(
     sp = ro.sp_tree()
     if sp is None:
         return []
-    pins = _transition_fire_pins(env, ro, tag, value, reverse_result)
+    pins = _transition_fire_pins(env, tag, value, reverse_result)
 
     from pyrung.core.analysis.pilot.tide_tables import solve_table_predicate
 
@@ -4014,12 +4011,10 @@ def _scan_transient_rest(
     tag: str,
     pdg: ProgramGraph,
     program: Any,
-    known: dict[str, Any] | None = None,
 ) -> tuple[bool, Any]:
     """Whether *tag* provably rests at one value at every scan boundary."""
     from pyrung.core.analysis.simplified import Atom, Or
 
-    del known
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
         return False, None
 

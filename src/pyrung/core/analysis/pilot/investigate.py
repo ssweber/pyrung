@@ -528,7 +528,7 @@ def _scoped_correction_rungs(
                 raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
             coordinates.append(CompareEq(tag, value))
         scope = AllCondition(scope, *coordinates)
-    return tuple(_pilot_rungs_from_proposals(plc, list(scoped_proposals), scope))
+    return tuple(_pilot_rungs_from_proposals(list(scoped_proposals), scope))
 
 
 def _discharges_occurrence_requirements(
@@ -611,7 +611,7 @@ def _exploratory_correction_rungs(
             *((source_scope,) if source_scope is not None else ()),
             *progress_coordinates,
         )
-        result.extend(_pilot_rungs_from_proposals(plc, [proposal], AllCondition(*guard_terms)))
+        result.extend(_pilot_rungs_from_proposals([proposal], AllCondition(*guard_terms)))
     return tuple(result)
 
 
@@ -846,7 +846,6 @@ def _regression_ownership(
     start_scan: int,
     end_scan: int,
     replacement_witness: RegressionWitness | None = None,
-    prior_neutralized: bool = False,
 ) -> _RegressionOwnership:
     """Judge the recorded branch and any replacement inside its bounded replay.
 
@@ -892,7 +891,6 @@ def _regression_ownership(
     )
     cause_silenced = changed_writes_silenced or branch_replaced
     unrelated_departure = unrelated_departure and not shared_suffix
-    del prior_neutralized
     return _RegressionOwnership(
         source_preserved=source_preserved,
         cause_silenced=cause_silenced,
@@ -975,7 +973,7 @@ def build_replay_fn(
         probe = fork_with_pilot_rungs(cp_fork, pilot_rungs)
         probe_pilot_rungs = list(pilot_rungs)
         scope = _target_unresolved_condition(probe, target_tag, target_value)
-        probe_pilot_rungs.extend(_pilot_rungs_from_proposals(probe, list(holds), scope))
+        probe_pilot_rungs.extend(_pilot_rungs_from_proposals(list(holds), scope))
         _set_pilot_rungs(probe, probe_pilot_rungs)
         # One session spans the whole replay. The channel pen proves whether the
         # incident's source context was preserved; exact rung-firing timelines
@@ -1351,7 +1349,7 @@ def investigate_excursion(
         )
         for tag in reverted:
             desired = post_pulse_snap.get(tag)
-            for ni in _implicated_writers(fork, tag, pdg, program):
+            for ni in _implicated_writers(fork, tag, pdg):
                 node = pdg.rung_nodes[ni]
                 ro = resolve_rung(program, node)
                 if ro is None:
@@ -1421,7 +1419,7 @@ def investigate_excursion(
     preserved_tag = reverted[0]
     preserved = retry._known_tags_by_name[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
-    confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(retry, candidate_holds, scope))
+    confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(candidate_holds, scope))
     retry_pilot_rungs.extend(confirmed_pilot_rungs)
     _set_pilot_rungs(retry, retry_pilot_rungs)
     kickoff = list(applied_actions)
@@ -1453,7 +1451,7 @@ def investigate_excursion(
     return ExcursionResult(reverted=reverted)
 
 
-def _implicated_writers(plc: PLC, tag: str, pdg: Any, program: Any) -> list[int]:
+def _implicated_writers(plc: PLC, tag: str, pdg: Any) -> list[int]:
     """PDG writer-node indices of *tag* causally implicated in its deviation.
 
     Dispatch by causal implication, never by instruction class: ``cause()``

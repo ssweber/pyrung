@@ -69,7 +69,7 @@ def _clobber_program() -> tuple[Program, Bool]:
     return prog, Target
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     return path.replay()
 
 
@@ -109,7 +109,7 @@ def test_nogood_solves() -> None:
     path = pilot_how(plc, Target, max_scans=200)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Target"] is True
 
 

@@ -31,13 +31,12 @@ from pyrung.core.runner import PLC
 # ---------------------------------------------------------------------------
 
 
-def _replays_to(plc_factory, path, tag: str, expected) -> bool:
+def _replays_to(path, tag: str, expected) -> bool:
     """Replay the plan's recording and report whether ``tag`` lands on ``expected``.
 
     The reached fork's ``scan_log`` + synthesis holds are the recording, so
     ``Plan.replay`` reconstructs the drive (holds and all) with no re-derivation —
-    the concrete oracle behind every ``how()`` result.  ``plc_factory`` is unused
-    now that the recording carries its own program and initial state."""
+    the concrete oracle behind every ``how()`` result."""
     return path.replay().state.tags.get(tag) == expected
 
 
@@ -145,7 +144,7 @@ def test_conveyor_motor_reachable():
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.ConveyorMotor, max_scans=300)
     assert path.reachable
-    assert _replays_to(lambda: _cv_plc(cv), path, "ConveyorMotor", True)
+    assert _replays_to(path, "ConveyorMotor", True)
 
 
 def test_running_route_ambiguous_resolves():
@@ -165,7 +164,7 @@ def test_conveyor_status_light_reachable():
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.StatusLight, max_scans=300)
     assert path.reachable
-    assert _replays_to(lambda: _cv_plc(cv), path, "StatusLight", True)
+    assert _replays_to(path, "StatusLight", True)
 
 
 def test_conveyor_is_large_reachable():
@@ -176,7 +175,7 @@ def test_conveyor_is_large_reachable():
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.IsLarge, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: _cv_plc(cv), path, "IsLarge", True)
+    assert _replays_to(path, "IsLarge", True)
 
 
 def test_conveyor_state_sorting_reachable():
@@ -187,7 +186,7 @@ def test_conveyor_state_sorting_reachable():
     target_value = 2  # SortState.SORTING
     path = pilot_how(_cv_plc(cv), cv.State == target_value, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: _cv_plc(cv), path, "State", target_value)
+    assert _replays_to(path, "State", target_value)
 
 
 def test_conveyor_diverter_reachable():
@@ -199,7 +198,7 @@ def test_conveyor_diverter_reachable():
     cv = _conveyor()
     path = pilot_how(_cv_plc(cv), cv.DiverterCmd, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: _cv_plc(cv), path, "DiverterCmd", True)
+    assert _replays_to(path, "DiverterCmd", True)
 
 
 # NOTE: a transient entry-state like ``State == DETECTING`` is deliberately *not*
@@ -231,7 +230,7 @@ def test_fill_enable_reachable():
     fs = _fill()
     path = pilot_how(_fs_plc(fs), fs.FillEnable, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: _fs_plc(fs), path, "FillEnable", True)
+    assert _replays_to(path, "FillEnable", True)
 
 
 def test_fill_valve_reachable():
@@ -240,7 +239,7 @@ def test_fill_valve_reachable():
     fs = _fill()
     path = pilot_how(_fs_plc(fs), fs.FillValve, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: _fs_plc(fs), path, "FillValve", True)
+    assert _replays_to(path, "FillValve", True)
 
 
 def test_fill_flow_alarm_reachable():
@@ -252,7 +251,7 @@ def test_fill_flow_alarm_reachable():
     fs = _fill()
     path = pilot_how(_fs_plc(fs), fs.FlowAlarm, max_scans=2000, unlink=["FlowSensor"])
     assert path.reachable
-    assert _replays_to(lambda: _fs_plc(fs), path, "FlowAlarm", True)
+    assert _replays_to(path, "FlowAlarm", True)
 
 
 def test_fill_flow_alarm_blocked_without_unlink():
@@ -294,7 +293,7 @@ def test_traffic_light_yellow_reachable():
     tl, plc = _green()
     path = pilot_how(plc, tl.State == "y", max_scans=2000)
     assert path.reachable
-    assert _replays_to(lambda: _green()[1], path, "State", "y")
+    assert _replays_to(path, "State", "y")
 
 
 def test_traffic_light_red_reachable():
@@ -304,7 +303,7 @@ def test_traffic_light_red_reachable():
     tl, plc = _green()
     path = pilot_how(plc, tl.State == "r", max_scans=2000)
     assert path.reachable
-    assert _replays_to(lambda: _green()[1], path, "State", "r")
+    assert _replays_to(path, "State", "r")
 
 
 # ===========================================================================
@@ -323,7 +322,7 @@ def test_counter_done_reachable():
 
     path = pilot_how(PLC(ct.logic, dt=0.010), ct.BinACounter.Done, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: PLC(ct.logic, dt=0.010), path, "BinACounter_Done", True)
+    assert _replays_to(path, "BinACounter_Done", True)
 
 
 # ===========================================================================
@@ -341,7 +340,7 @@ def test_structured_tags_shift_register_reachable():
 
     path = pilot_how(PLC(st.logic, dt=0.010), st.SortLog[2] == 7, max_scans=500)
     assert path.reachable
-    assert _replays_to(lambda: PLC(st.logic, dt=0.010), path, "SortLog2", 7)
+    assert _replays_to(path, "SortLog2", 7)
 
 
 # ===========================================================================
@@ -367,4 +366,4 @@ def test_lesson_state_machine_classifies_large_box():
         sm.RESETTING.name,
     }
     assert state_constants.isdisjoint(path.changes)
-    assert _replays_to(lambda: PLC(sm.logic, dt=0.010), path, "IsLarge", True)
+    assert _replays_to(path, "IsLarge", True)

@@ -19,7 +19,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.pipeline_graph import (
     ANY_FROM,
-    Action,
     ActionPair,
     PipelineSlice,
     StaticTransitionGraph,
@@ -31,7 +30,6 @@ from pyrung.core.analysis.sp_values import _values_match
 
 __all__ = [
     "WAIT",
-    "Action",
     "ActionPair",
     "ActionNogoodObservation",
     "Compass",
@@ -103,10 +101,10 @@ class WaitCause:
 
 
 WAIT = WaitCause()
-TransitionCause = Action | WaitCause
+TransitionCause = ActionPair | WaitCause
 
 
-def is_action(cause: TransitionCause) -> TypeGuard[Action]:
+def is_action(cause: TransitionCause) -> TypeGuard[ActionPair]:
     return isinstance(cause, tuple)
 
 
@@ -310,7 +308,7 @@ def is_composite_action(cause: Any) -> bool:
 def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
     """Total order key for one *action* — flat or skiff-learned composite.
 
-    ``unprobed_actions`` sorts a set that can mix a flat ``Action`` ``(tag,
+    ``unprobed_actions`` sorts a set that can mix a flat action pair ``(tag,
     value)`` with a composite pair-probe cause ``((tag, value), (tag, value))``
     (:func:`is_composite_action`) — the skiff learns the latter as a joint
     cause.  Sorting the two shapes directly with the default tuple order
@@ -321,10 +319,10 @@ def _action_sort_key(action: Any) -> tuple[tuple[str, str], ...]:
     value types (bool/int/str/float) can never reintroduce an unorderable
     comparison.
 
-    Typed ``Any`` (like :func:`is_composite_action`) rather than ``Action``:
-    a composite cause is not structurally an ``Action`` (``tuple[str, Any]``)
+    Typed ``Any`` (like :func:`is_composite_action`) rather than ``ActionPair``:
+    a composite cause is not structurally an ``ActionPair`` (``tuple[str, Any]``)
     — its first element is a tuple, not a ``str`` — even though it flows
-    through call sites typed as ``Action``/``TransitionCause``.
+    through call sites typed as ``ActionPair``/``TransitionCause``.
     """
     pairs: tuple[ActionPair, ...] = action if is_composite_action(action) else (action,)
     return tuple((str(t), repr(v)) for t, v in pairs)
@@ -656,7 +654,7 @@ class CompassKnowledge:
         world_key: tuple[Any, ...] | None = None,
         snapshot: dict[str, Any] | None = None,
         applied: tuple[ActionPair, ...] | None = None,
-    ) -> set[Action]:
+    ) -> set[ActionPair]:
         return {
             cause
             for candidate_from, cause, _entry in self.tag_entries(
@@ -672,18 +670,18 @@ class CompassKnowledge:
         self,
         tag: str,
         from_value: Any,
-        available_actions: set[Action] | frozenset[Action],
+        available_actions: set[ActionPair] | frozenset[ActionPair],
         *,
         world_key: tuple[Any, ...] | None = None,
         snapshot: dict[str, Any] | None = None,
         applied_context: tuple[ActionPair, ...] | None = None,
-    ) -> list[Action]:
+    ) -> list[ActionPair]:
         ordered = sorted(available_actions, key=_action_sort_key)
         if applied_context is None:
             probed = self.probed_actions(tag, from_value, world_key=world_key, snapshot=snapshot)
             return [action for action in ordered if action not in probed]
         base = dict(applied_context)
-        result: list[Action] = []
+        result: list[ActionPair] = []
         for action in ordered:
             applied = dict(base)
             members = action if is_composite_action(action) else (action,)
@@ -723,7 +721,7 @@ class CompassKnowledge:
         *,
         world_key: tuple[Any, ...] | None = None,
         snapshot: dict[str, Any] | None = None,
-    ) -> set[Action]:
+    ) -> set[ActionPair]:
         path = self.find_path(tag, from_value, to_value, world_key=world_key, snapshot=snapshot)
         if not path:
             return set()

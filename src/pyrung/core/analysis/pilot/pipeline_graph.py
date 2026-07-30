@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ActionPair = tuple[str, Any]
-Action = ActionPair
 ActionLookup = dict[tuple[str, str], tuple[ActionPair, ...]]
 ANY_FROM = object()
 

@@ -49,7 +49,7 @@ def _rendezvous_program() -> tuple[Program, Bool]:
     return prog, Output
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     return path.replay()
 
 
@@ -73,5 +73,5 @@ def test_rendezvous_solves() -> None:
     path = pilot_how(plc, Output, max_scans=5000)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Output"] is True

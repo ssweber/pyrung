@@ -46,7 +46,7 @@ def _shared_gate_program() -> tuple[Program, Bool]:
     return prog, Target
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     return path.replay()
 
 
@@ -83,7 +83,7 @@ def test_shared_gate_solves() -> None:
     path = pilot_how(plc, Target)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Target"] is True
 
 

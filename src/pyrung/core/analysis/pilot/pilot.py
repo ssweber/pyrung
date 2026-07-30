@@ -476,7 +476,7 @@ def _with_avoid_reason(
     )
 
 
-def _stopped_reason(_reason_code: str) -> str:
+def _stopped_reason() -> str:
     """Translate internal orientation taxonomy into an honest public stop."""
     return "No productive next action was found"
 
@@ -1038,7 +1038,7 @@ def _pilot_loop_events(
 
         if isinstance(result, Stuck):
             terminal_reason = _with_avoid_reason(
-                _stopped_reason(result.reason_code),
+                _stopped_reason(),
                 state,
                 ctx,
                 frame,

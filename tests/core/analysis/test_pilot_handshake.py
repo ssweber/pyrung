@@ -11,7 +11,7 @@ from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.runner import PLC
 
 
-def _replay(prog: Program, path) -> PLC:
+def _replay(path) -> PLC:
     return path.replay()
 
 
@@ -59,7 +59,7 @@ def test_handshake_solves() -> None:
     path = pilot_how(plc, Target)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Target"] is True
 
 
@@ -118,5 +118,5 @@ def test_packml_chain_solves() -> None:
     path = pilot_how(plc, Target)
     assert path.reachable
 
-    replay = _replay(prog, path)
+    replay = _replay(path)
     assert replay.state.tags["Target"] is True

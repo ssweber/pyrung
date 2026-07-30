@@ -30,7 +30,7 @@ from pyrung.core.analysis.pilot.coast import (
     _settle_delayed_effects,
     coast_departure_tags,
 )
-from pyrung.core.analysis.pilot.compass import WAIT, Action, CompassObservation, is_action
+from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
@@ -345,7 +345,7 @@ def _try_action_batch(
     state: _PilotState,
     ctx: _PilotContext,
     *,
-    record_influence_action: Action | None = None,
+    record_influence_action: ActionPair | None = None,
 ) -> _AttemptResult:
     policy = bearing.act.policy
     # ── Action gate (avoid=) ──────────────────────────────────────────────
