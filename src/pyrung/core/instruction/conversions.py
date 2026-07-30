@@ -7,6 +7,7 @@ import re
 import struct
 from typing import Any
 
+from pyrung.core.storage import StoreTransform, store_value
 from pyrung.core.tag import Tag
 
 _DINT_MIN = -2147483648
@@ -19,6 +20,46 @@ _INT_MIN = -32768
 
 
 _INT_MAX = 32767
+
+
+def copy_store_transform(tag_type: Any) -> StoreTransform | None:
+    """Destination conversion used by copy, blockcopy, and fill."""
+    from pyrung.core.tag import TagType
+
+    if tag_type is TagType.INT:
+        return StoreTransform("clamp", _INT_MIN, _INT_MAX)
+    if tag_type is TagType.DINT:
+        return StoreTransform("clamp", _DINT_MIN, _DINT_MAX)
+    if tag_type is TagType.WORD:
+        return StoreTransform("wrap", 0, 0xFFFF)
+    if tag_type is TagType.REAL:
+        return StoreTransform("real")
+    if tag_type is TagType.BOOL:
+        return StoreTransform("bool")
+    if tag_type is TagType.CHAR:
+        return StoreTransform("char")
+    return None
+
+
+def calc_store_transform(tag_type: Any, mode: str = "decimal") -> StoreTransform | None:
+    """Destination conversion used by calc and packing result stores."""
+    from pyrung.core.tag import TagType
+
+    if mode == "hex" and tag_type in {TagType.INT, TagType.DINT, TagType.WORD}:
+        return StoreTransform("wrap", 0, 0xFFFF)
+    if tag_type is TagType.INT:
+        return StoreTransform("wrap", _INT_MIN, _INT_MAX)
+    if tag_type is TagType.DINT:
+        return StoreTransform("wrap", _DINT_MIN, _DINT_MAX)
+    if tag_type is TagType.WORD:
+        return StoreTransform("wrap", 0, 0xFFFF)
+    if tag_type is TagType.REAL:
+        return StoreTransform("real")
+    if tag_type is TagType.BOOL:
+        return StoreTransform("bool")
+    if tag_type is TagType.CHAR:
+        return StoreTransform("char")
+    return None
 
 
 def _clamp_dint(value: int) -> int:
@@ -172,21 +213,8 @@ def _store_copy_value_to_tag_type(value: Any, tag: Tag) -> Any:
     - INT and DINT use saturating clamp.
     - Other destination types preserve current conversion behavior.
     """
-    from pyrung.core.tag import TagType
-
-    # Match existing conversion behavior for non-finite float sentinels.
-    if isinstance(value, float) and (
-        value != value or value == float("inf") or value == float("-inf")
-    ):
-        return 0
-
-    if tag.type == TagType.INT:
-        return _clamp_int(int(value))
-
-    if tag.type == TagType.DINT:
-        return _clamp_dint(int(value))
-
-    return _truncate_to_tag_type(value, tag)
+    storage = copy_store_transform(tag.type)
+    return value if storage is None else store_value(value, storage)
 
 
 def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
@@ -210,46 +238,8 @@ def _truncate_to_tag_type(value: Any, tag: Tag, mode: str = "decimal") -> Any:
     Returns:
         Value truncated to the tag's type range.
     """
-    from pyrung.core.tag import TagType
-
-    # Handle division-by-zero sentinels (inf, nan)
-    if isinstance(value, float) and (
-        value != value or value == float("inf") or value == float("-inf")
-    ):
-        return 0
-
-    if mode == "hex":
-        # Hex mode: unsigned 16-bit wrap for all integer types
-        return int(value) & 0xFFFF
-
-    tag_type = tag.type
-
-    if tag_type == TagType.BOOL:
-        return bool(value)
-
-    if tag_type == TagType.REAL:
-        return float(value)
-
-    if tag_type == TagType.CHAR:
-        return "\x00" if value == "" else value
-
-    # Integer truncation with signed wrapping
-    int_val = int(value)
-
-    if tag_type == TagType.INT:
-        # 16-bit signed: wrap to -32768..32767
-        return ((int_val + 0x8000) & 0xFFFF) - 0x8000
-
-    if tag_type == TagType.DINT:
-        # 32-bit signed: wrap to -2147483648..2147483647
-        return ((int_val + 0x80000000) & 0xFFFFFFFF) - 0x80000000
-
-    if tag_type == TagType.WORD:
-        # 16-bit unsigned: wrap to 0..65535
-        return int_val & 0xFFFF
-
-    # Fallback: no truncation
-    return value
+    storage = calc_store_transform(tag.type, mode)
+    return value if storage is None else store_value(value, storage)
 
 
 def _math_out_of_range_for_dest(value: Any, dest: Tag, mode: str) -> bool:
