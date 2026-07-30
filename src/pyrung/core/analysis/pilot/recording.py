@@ -156,16 +156,15 @@ def _fmt_need(tag: str, value: Any, snap: dict[str, Any]) -> str:
     return f"{tag}={value!r} (have {snap.get(tag)!r})"
 
 
-def _frontier_clause(frame: _IterationFrame | None) -> str:
-    """Render the terminal suffix naming a frame's outstanding frontier."""
-    if frame is None:
+def _frontier_clause(
+    frontier: tuple[tuple[str, Any], ...],
+    snapshot: dict[str, Any] | None,
+) -> str:
+    """Render one already-assembled terminal frontier."""
+    if not frontier or snapshot is None:
         return ""
-    extra = getattr(frame, "completion_frontier", ())
-    needs = extra + tuple(n for n in frontier_pairs(frame.tree, frame.snap) if n not in extra)
-    if not needs:
-        return ""
-    head = ", ".join(_fmt_need(t, v, frame.snap) for t, v in needs[:3])
-    more = f" (+{len(needs) - 3} more)" if len(needs) > 3 else ""
+    head = ", ".join(_fmt_need(t, v, snapshot) for t, v in frontier[:3])
+    more = f" (+{len(frontier) - 3} more)" if len(frontier) > 3 else ""
     return f"; still waiting on {head}{more}"
 
 

@@ -115,10 +115,10 @@ this table only locates the owner.
   by `recording.py`
 - Instruction-owned channel lookup: `advance.py::AdvanceIndex`
 - One exact producer's counterfactual proof: `program_step.py::read_program_step`
-- Current-world navigation result: `orientation.py::orient`, entered via the
-  `compass.py::Compass.orient` facade
-- Current-world continuation evidence: `options.py::_current_work_evidence`;
-  orientation groups live-work alternatives ahead of fresh alternatives
+- Current-world navigation result and continuation evidence:
+  `orientation.py::orient` / `_current_work_evidence`, entered via the
+  `compass.py::Compass.orient` facade; orientation groups live-work
+  alternatives ahead of fresh alternatives
 - Target-relative Bearing objective: `orientation.py::_bearing`
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it

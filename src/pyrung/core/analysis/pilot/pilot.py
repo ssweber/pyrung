@@ -904,6 +904,7 @@ def _pilot_loop_events(
     # timer the coast rides — is the machine doing its own work, not the pilot
     # spending effort.
     last_frame: _IterationFrame | None = None
+    last_frontier: tuple[_ActionPair, ...] = ()
     while state.search_scans < ctx.max_scans:
         snap = dict(state.work.state.tags)
         if target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate):
@@ -942,6 +943,8 @@ def _pilot_loop_events(
         candidates = orientation_read.candidates
         frame = orientation_world.frame
         last_frame = frame
+        frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
+        last_frontier = frontier
         if state.key_config is None:
             state.key_config = orientation_world.key_config
         state.watch_tags.extend(sorted(frame.tree.pivot_tags() - set(state.watch_tags)))
@@ -1001,7 +1004,7 @@ def _pilot_loop_events(
                 state,
                 ctx,
                 frame,
-            ) + _frontier_clause(frame)
+            ) + _frontier_clause(frontier, frame.snap)
             yield from _stopped_events(
                 state,
                 ctx,
@@ -1090,7 +1093,7 @@ def _pilot_loop_events(
             state,
             ctx,
             frame,
-        ) + _frontier_clause(frame)
+        ) + _frontier_clause(last_frontier, frame.snap if frame is not None else None)
         yield from _stopped_events(
             state,
             ctx,

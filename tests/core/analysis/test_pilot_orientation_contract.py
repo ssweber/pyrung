@@ -114,7 +114,6 @@ def _world(compass: Compass) -> OrientationWorld:
         frame=SimpleNamespace(
             key=("world",),
             tree=TraceNode("Target", True, satisfied=False),
-            completion_frontier=(),
         ),
         state=SimpleNamespace(
             key_config=None,
@@ -318,7 +317,7 @@ def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() ->
 
 
 def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
-    from pyrung.core.analysis.pilot.options import _current_work_evidence
+    from pyrung.core.analysis.pilot.orientation import _current_work_evidence
     from pyrung.core.analysis.pilot.trace import TraceNode
 
     frame = SimpleNamespace(
@@ -476,7 +475,13 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
 
     route = RouteEdgeContext("OuterState", 6, 16)
     heading = ChannelHeading("InnerAcc", 5, boundary=object(), route=route)
-    read = WaitRead(WaitPrescription(heading, "owned wait"))
+    read = WaitRead(
+        WaitPrescription(
+            heading,
+            "owned wait",
+            frontier=(("PressableLever", True),),
+        )
+    )
     monkeypatch.setattr(
         orientation,
         "_build_candidates",
@@ -484,8 +489,9 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     )
 
     compass = Compass()
+    world = _world(compass)
     result = compass.orient(
-        _world(compass),
+        world,
         TargetSpec("Target", True),
         NavigationConstraints(),
     )
@@ -498,6 +504,30 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     assert result.act.policy.heading.route.channel_tag == "OuterState"
     assert result.act.policy.heading.route.from_value == 6
     assert result.act.policy.heading.route.target_value == 16
+    assert result.objective.frontier == (("PressableLever", True),)
+    assert result.orientation is not None
+    assert result.orientation.world.frame is world.frame
+    assert not hasattr(world.frame, "completion_frontier")
+
+
+def test_combined_nonbearing_assembles_every_alternative_frontier() -> None:
+    from pyrung.core.analysis.pilot.orientation import _combined_nonbearing
+
+    first = Stuck(
+        world_key=("world",),
+        reason_code="trace_empty",
+        frontier=(("FirstLever", True),),
+    )
+    second = Stuck(
+        world_key=("world",),
+        reason_code="trace_empty",
+        frontier=(("SecondLever", 2), ("FirstLever", True)),
+    )
+
+    result = _combined_nonbearing((first, second))
+
+    assert isinstance(result, Stuck)
+    assert result.frontier == (("FirstLever", True), ("SecondLever", 2))
 
 
 def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:

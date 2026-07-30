@@ -113,98 +113,10 @@ class _Candidate:
         return self.source is ActSource.PROGRAM
 
 
-def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
-    """Concrete current-trace facts that can identify live work."""
-
-    anchors: list[_ActionPair] = []
-    route_condition = getattr(route, "route_condition", None)
-    if route_condition is not None:
-        anchors.append(route_condition)
-        return tuple(anchors)
-    for node in tree.iter_nodes():
-        if node.relational or node.value is None:
-            continue
-        pair = (node.tag, node.value)
-        if pair not in anchors:
-            anchors.append(pair)
-    return tuple(anchors)
-
-
 def _action_allowed(ctx: Any, pair: _ActionPair) -> bool:
     """Whether the current orientation constraints admit this exact action."""
 
     return pair not in ctx.blocked_actions
-
-
-def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...]:
-    """Recognize work a technician can point to in the current world.
-
-    Reverted journey history and mere tenure are intentionally absent.  Every
-    reason is backed by a fact in the live revertible world and disappears as
-    soon as that fact is clobbered or the trace no longer depends on it.
-    """
-
-    anchors = _tree_work_anchors(frame.tree, route)
-    anchor_tags = {tag for tag, _value in anchors}
-    reasons: list[str] = []
-
-    def _matches_anchor(tag: str, value: Any) -> bool:
-        return any(
-            anchor_tag == tag and _values_match(anchor_value, value)
-            for anchor_tag, anchor_value in anchors
-        )
-
-    for rung in getattr(state, "pilot_rungs", ()):
-        tag = getattr(rung, "dest", None)
-        value = getattr(rung, "value", None)
-        if (
-            tag is not None
-            and _matches_anchor(tag, value)
-            and _values_match(frame.snap.get(tag), value)
-        ):
-            reasons.append(f"held:{tag}={value!r}")
-
-    pending = getattr(state, "pending_departure", None)
-    if pending is not None and pending.opening.channel_tag in anchor_tags:
-        current = frame.snap.get(pending.opening.channel_tag)
-        if not _values_match(current, pending.opening.from_value):
-            reasons.append(f"pending:{pending.opening.channel_tag}={current!r}")
-
-    committed = tuple(getattr(state, "committed_acts", ()))
-    if committed:
-        context = committed[-1].context
-        before = context.execution.before_snap
-        after = context.execution.after_snap
-        if getattr(context.policy.motion, "is_coast", False):
-            tree_tags = {node.tag for node in frame.tree.iter_nodes()}
-            for tag, value in after.items():
-                if (
-                    tag in tree_tags
-                    and not _values_match(before.get(tag), value)
-                    and _values_match(frame.snap.get(tag), value)
-                ):
-                    reasons.append(f"operation:{tag}")
-
-        for tag, desired in anchors:
-            if (
-                tag in after
-                and not _values_match(before.get(tag), after.get(tag))
-                and _values_match(after.get(tag), desired)
-                and _values_match(frame.snap.get(tag), desired)
-            ):
-                reasons.append(f"established:{tag}={desired!r}")
-
-        earned_work = getattr(state, "earned_work", None)
-        components = getattr(earned_work, "components", ()) if earned_work is not None else ()
-        if (
-            earned_work is not None
-            and components
-            and any(component.tag in anchor_tags for component in components)
-            and earned_work.receipt(before, after).any_forward
-        ):
-            reasons.append("earned-work:forward")
-
-    return tuple(dict.fromkeys(reasons))
 
 
 @dataclass(frozen=True)

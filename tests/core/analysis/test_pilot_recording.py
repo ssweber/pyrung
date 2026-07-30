@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.recording import (
     _build_plan_journal,
+    _frontier_clause,
     render_unsupported_construct,
 )
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
@@ -52,6 +53,28 @@ class _UnsupportedRecordingGate(Condition):
     def evaluate(self, ctx: ScanContext | ConditionView) -> bool:
         del ctx
         return False
+
+
+def test_frontier_clause_renders_explicit_combined_frontier() -> None:
+    frontier = (
+        ("FirstLever", True),
+        ("SecondLever", 2),
+        ("ThirdLever", False),
+        ("FourthLever", 4),
+    )
+
+    assert _frontier_clause(
+        frontier,
+        {
+            "FirstLever": False,
+            "SecondLever": 1,
+            "ThirdLever": True,
+            "FourthLever": 0,
+        },
+    ) == (
+        "; still waiting on FirstLever=True (have False), "
+        "SecondLever=2 (have 1), ThirdLever=False (have True) (+1 more)"
+    )
 
 
 def test_unsupported_construct_renderer_names_source_and_carets_condition() -> None:
