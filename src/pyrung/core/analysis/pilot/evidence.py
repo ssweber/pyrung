@@ -1,6 +1,7 @@
 """Infer transition-pipeline roles and expand static transition routes.
 
-This module combines exploration classifications with PDG writer analysis. It
+This module combines PDG writer analysis with the functional dependencies,
+elided tags, and stepping tags already established by ``ExploreContext``. It
 canonicalizes pipeline aliases, identifies channel, action, stepping, and
 internal tags, and expands ingress paths into ``TransitionRoute`` values with
 separate source constraints and enablers.
@@ -635,29 +636,23 @@ def _pipeline_scratch_tags(
 
 
 class TransitionEvidence:
-    """Adapter bridging ExploreContext classifications into PILOT's compass.
+    """ExploreContext facts consumed by PILOT's compass.
 
-    Constructed from prover context when available.  Provides tag-level
-    canonicalization and classification that complement the route-level
-    analysis in :func:`expand_routes`.
+    Functional dependencies support tag canonicalization and affine projection
+    lookup. Elided tags identify scan-local/internal facts, while stepping tags
+    identify dimensions known to visit multiple values.
     """
 
     def __init__(
         self,
         *,
         functional_deps: dict[str, tuple[str, int, int | float]],
-        elided: dict[str, str],
+        elided: frozenset[str],
         stepping: frozenset[str],
-        free_inputs: frozenset[str],
-        combinational: frozenset[str],
-        init_constants: frozenset[str],
     ) -> None:
         self._functional_deps = functional_deps
         self._elided = elided
         self._stepping = stepping
-        self._free_inputs = free_inputs
-        self._combinational = combinational
-        self._init_constants = init_constants
 
     def canonicalize(self, tag: str) -> CanonicalForm | None:
         """If *tag* is a functional dep projection, return its canonical form."""
@@ -666,11 +661,6 @@ class TransitionEvidence:
             return None
         rep, scale, offset = entry
         return CanonicalForm(representative=rep, scale=scale, offset=offset)
-
-    def representative(self, tag: str) -> str:
-        """Canonical representative for a tag (itself if not a projection)."""
-        entry = self._functional_deps.get(tag)
-        return entry[0] if entry is not None else tag
 
     def functional_dependencies(self) -> dict[str, CanonicalForm]:
         """Canonical forms for functional-dep projection tags."""
@@ -690,33 +680,11 @@ class TransitionEvidence:
 
     def elided_tags(self) -> frozenset[str]:
         """Tags proven scan-local/internal by ExploreContext."""
-        return frozenset(self._elided)
-
-    def is_internal(self, tag: str) -> bool:
-        """True for scan-local scratch or functional dep projections."""
-        return tag in self._elided
+        return self._elided
 
     def is_stepping(self, tag: str) -> bool:
         """True for tags known to visit multiple values (real state dims)."""
         return tag in self._stepping
-
-    def classify(self, tag: str) -> str:
-        """Classify a tag into a compass bucket.
-
-        Returns one of: ``"internal"``, ``"free"``, ``"stepping"``,
-        ``"combinational"``, ``"init_constant"``, ``"unknown"``.
-        """
-        if tag in self._elided:
-            return "internal"
-        if tag in self._free_inputs:
-            return "free"
-        if tag in self._stepping:
-            return "stepping"
-        if tag in self._combinational:
-            return "combinational"
-        if tag in self._init_constants:
-            return "init_constant"
-        return "unknown"
 
 
 def build_transition_evidence(explore_ctx: Any) -> TransitionEvidence | None:
@@ -726,11 +694,8 @@ def build_transition_evidence(explore_ctx: Any) -> TransitionEvidence | None:
     try:
         return TransitionEvidence(
             functional_deps=dict(explore_ctx.functional_dep_projections),
-            elided=dict(explore_ctx.elided_tags),
+            elided=frozenset(explore_ctx.elided_tags),
             stepping=frozenset(explore_ctx.stepping_tags),
-            free_inputs=frozenset(explore_ctx.free_input_names),
-            combinational=frozenset(explore_ctx.combinational_tags),
-            init_constants=frozenset(explore_ctx.init_constant_projections),
         )
     except Exception:  # noqa: BLE001
         logger.debug("evidence: build failed", exc_info=True)
