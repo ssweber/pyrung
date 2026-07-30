@@ -3,16 +3,33 @@
 Coverage targets:
 - _settle_watched_tags: dwell control, fixpoint detection
 - _coast_to_bearing: channel-register coast, ejection guard, settle fallback
-- _try_bearing_coast / _try_terminal_letrun: full-context wrappers (stubbed — exercised
-  through the pilot_how integration path rather than direct unit calls)
+- _try_terminal_letrun: terminal stall evidence
+- _compass_observations: transition, contradiction, and causal filtering
 """
 
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
-from pyrung.core.analysis.pilot.steer import _coast_to_bearing, _settle_watched_tags
+from pyrung.core.analysis.pilot.navigation_contracts import (
+    ActPolicy,
+    ActSource,
+    Bearing,
+    BearingObjective,
+    Coast,
+    TargetSpec,
+)
+from pyrung.core.analysis.pilot.steer import (
+    _action_caused_change,
+    _coast_to_bearing,
+    _compass_observations,
+    _settle_watched_tags,
+    _try_terminal_letrun,
+)
+from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.types import MotionKind, _IterationFrame
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
@@ -121,89 +138,181 @@ class TestBearingCoast:
         assert len(snaps) >= 2
 
 
-# ---------------------------------------------------------------------------
-# Terminal let-run — needs full _PilotContext/_PilotState/_IterationFrame
-# fixtures; best exercised through the pilot_how integration path.
-# ---------------------------------------------------------------------------
-
-
 class TestTerminalLetrun:
     """_try_terminal_letrun: generalized bottom-of-loop fallback."""
 
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_target_reached_is_confirmed(self): ...
+    def test_stall_is_dead_end(self):
+        program = _follow_program()
+        plc = PLC(program, dt=0.010)
+        snap = dict(plc.state.tags)
+        config = _StateKeyConfig(
+            stateful_names=("Out",),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        key = _pilot_world_key(snap, config, ())
+        target = TargetSpec("Out", True)
+        frame = _IterationFrame(
+            snap=snap,
+            tree=TraceNode("Out", True),
+            key=key,
+            distance_before=1,
+            raw_trace_actions=(),
+            raw_trace_action_details=(),
+        )
+        state = SimpleNamespace(
+            work=plc,
+            pilot_rungs=(),
+            key_config=config,
+            earned_work=None,
+            watch_tags=[],
+            remaining_search_scans=lambda *_args, **_kwargs: 2,
+        )
+        ctx = SimpleNamespace(
+            target=target,
+            program=program,
+            pipeline_roles=(),
+            avoid_pred=None,
+            max_scans=2,
+            steerable=frozenset({"In"}),
+        )
+        bearing = Bearing(
+            key,
+            Coast(
+                "terminal",
+                ActPolicy(
+                    ActSource.TERMINAL,
+                    motion=MotionKind.COAST_HOLDING_WORLD,
+                ),
+            ),
+            BearingObjective(target),
+        )
 
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_role_ejection_is_ambient_drift(self): ...
+        result = _try_terminal_letrun(bearing, frame, state, ctx)
 
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_stall_is_dead_end(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_liveness_holds_animated_during_coast(self): ...
-
-
-# ---------------------------------------------------------------------------
-# Pulse execution & try-verify wrappers — full-context behaviors not yet
-# covered by any stub.  These need _PilotContext/_PilotState/_IterationFrame
-# fixtures; best driven through the pilot_how integration path.
-# ---------------------------------------------------------------------------
-
-
-class TestPulseActions:
-    """_apply_actions: rising-edge release, settle watched tags, delayed effects."""
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_rising_edge_release_then_apply(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_wait_settle_watched_tags_recorded(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_delayed_effects_settled(self): ...
-
-
-class TestTryCandidate:
-    """_try_candidate: single candidate plus its trace-context pulse."""
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_candidate_with_influence_context(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_single_candidate_no_context(self): ...
-
-
-class TestTryWidening:
-    """_try_widening: progressively widen the trace-action batch."""
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_progressive_width_increase(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_first_success_stops_loop(self): ...
-
-    @pytest.mark.skip(reason="stub — needs full pilot context; cover via integration")
-    def test_all_widths_fail_accumulates_nogoods(self): ...
-
-
-class TestActionCausedChange:
-    """_action_caused_change: separate control-driven from ambient changes."""
-
-    @pytest.mark.skip(reason="stub — needs causal history fixture")
-    def test_control_change_accepted(self): ...
-
-    @pytest.mark.skip(reason="stub — needs causal history fixture")
-    def test_ambient_change_filtered(self): ...
+        assert result.trial is None
+        assert result.gate_events[0].event == "dead-end"
+        assert result.gate_events[0].detail == "terminal stall, no ejection"
+        assert result.stall_receipt is not None
+        assert result.stall_receipt.stop_reason == "timeout"
+        assert result.stall_pending is False
 
 
 class TestCompassObservations:
     """_compass_observations: transitions, no-change, ambient filtering."""
 
-    @pytest.mark.skip(reason="stub — needs compass + frame fixture")
-    def test_observes_transitions(self): ...
+    def test_observes_transitions(self):
+        action = ("CompassAction", True)
+        world_key = ("world",)
+        before = {"CompassState": 0}
+        after = {"CompassState": 1}
 
-    @pytest.mark.skip(reason="stub — needs compass + frame fixture")
-    def test_no_change_contradicts_when_enabled(self): ...
+        observations = _compass_observations(
+            action,
+            SimpleNamespace(tree=TraceNode("CompassState", 1)),
+            before,
+            after,
+            SimpleNamespace(steerable=frozenset({action[0]})),
+            contradict_no_change=False,
+            world_key=world_key,
+            applied=(action,),
+        )
 
-    @pytest.mark.skip(reason="stub — needs compass + frame fixture")
-    def test_ambient_changes_filtered_with_fork(self): ...
+        assert len(observations) == 1
+        observation = observations[0]
+        assert observation.kind == "edge"
+        assert observation.tag == "CompassState"
+        assert observation.cause == action
+        assert observation.from_val == 0
+        assert observation.to_val == 1
+        assert observation.world_key == world_key
+        assert observation.context == (("CompassState", 0),)
+        assert observation.applied == (action,)
+
+    def test_no_change_contradicts_when_enabled(self):
+        action = ("CompassNoChange", True)
+        world_key = ("world", "unchanged")
+        snap = {"CompassState": 0}
+
+        observations = _compass_observations(
+            action,
+            SimpleNamespace(tree=TraceNode("CompassState", 1)),
+            snap,
+            snap,
+            SimpleNamespace(steerable=frozenset({action[0]})),
+            contradict_no_change=True,
+            world_key=world_key,
+            applied=(action,),
+        )
+
+        assert len(observations) == 1
+        observation = observations[0]
+        assert observation.kind == "contradict"
+        assert observation.tag == "CompassState"
+        assert observation.cause == action
+        assert observation.from_val == 0
+        assert observation.to_val is None
+        assert observation.world_key == world_key
+        assert observation.applied == (action,)
+
+    def test_ambient_changes_filtered_with_fork(self):
+        action = Bool("CompassControl", external=True)
+        ambient_source = Bool("CompassAmbientSource", external=True)
+        action_effect = Bool("CompassActionEffect")
+        ambient_effect = Bool("CompassAmbientEffect")
+        with Program() as program:
+            with Rung(action):
+                out(action_effect)
+            with Rung(ambient_source):
+                out(ambient_effect)
+
+        plc = PLC(program, dt=0.010)
+        before = dict(plc.state.tags)
+        plc.patch({action.name: True, ambient_source.name: True})
+        plc.step()
+        after = dict(plc.state.tags)
+        action_pair = (action.name, True)
+        tree = TraceNode(
+            "CompassGoal",
+            True,
+            children=[
+                TraceNode(action_effect.name, True),
+                TraceNode(ambient_effect.name, True),
+            ],
+        )
+
+        assert _action_caused_change(
+            plc,
+            action.name,
+            action_effect.name,
+            frozenset({action.name, ambient_source.name}),
+            scan=plc.state.scan_id,
+        )
+        assert not _action_caused_change(
+            plc,
+            action.name,
+            ambient_effect.name,
+            frozenset({action.name, ambient_source.name}),
+            scan=plc.state.scan_id,
+        )
+
+        observations = _compass_observations(
+            action_pair,
+            SimpleNamespace(tree=tree),
+            before,
+            after,
+            SimpleNamespace(
+                steerable=frozenset({action.name, ambient_source.name}),
+            ),
+            contradict_no_change=False,
+            world_key=("causal-world",),
+            applied=(action_pair,),
+            fork=plc,
+            scan=plc.state.scan_id,
+        )
+
+        assert [
+            (observation.tag, observation.from_val, observation.to_val)
+            for observation in observations
+        ] == [(action_effect.name, False, True)]

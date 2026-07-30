@@ -256,8 +256,45 @@ class TestGateSpin:
         assert result.observations == (observation,)
         assert result.confirmed_correction is None
 
-    @pytest.mark.skip(reason="stub")
-    def test_pending_effects_bypass_spin(self): ...
+    def test_pending_effects_bypass_spin(self):
+        source = Bool("SpinPendingSource", external=True)
+        feedback = Bool(
+            "SpinPendingFeedback",
+            physical=Physical("SpinPendingPlant", on_delay="200ms"),
+            link=source.name,
+        )
+        dest = Bool("SpinPendingDest")
+        with Program() as program:
+            with Rung(source, feedback):
+                out(dest)
+        plc = PLC(program, dt=0.010)
+        install_harness(plc)
+        plc.patch({source.name: True})
+        plc.step()
+        assert plc._harness.pending_count > 0
+
+        snap = dict(plc.state.tags)
+        key = ("same",)
+        trial = _PulseState(
+            plc,
+            plc.state.scan_id,
+            plc.state.scan_id,
+            snap,
+            (),
+            snap,
+            key,
+            snap,
+            key,
+        )
+
+        verdict = _gate_spin(
+            trial,
+            SimpleNamespace(key=key, snap=snap),
+            SimpleNamespace(earned_work=None),
+            gate_events=[],
+        )
+
+        assert verdict is _SpinVerdict.PASS
 
 
 class TestGateCycle:
@@ -305,6 +342,62 @@ class TestGateCycle:
         assert len(gates) == 1
         assert gates[0].event == "learned-override-cycle"
         assert gates[0].detail == "learned-prescribed"
+
+
+def _empty_frontier_with_channel_motion(monkeypatch, motion):
+    old_tree = TraceNode("Target", True)
+    new_tree = TraceNode("Target", True)
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.verify.trace_back",
+        lambda *_args, **_kwargs: new_tree,
+    )
+    monkeypatch.setattr(
+        NavigationEvidence,
+        "frontier_status",
+        staticmethod(lambda *_args, **_kwargs: Unknown("no continuation")),
+    )
+    gates = []
+    nogoods = []
+    landing = motion.target_value if motion.reached else 8
+
+    result = _gate_dead_end(
+        SimpleNamespace(
+            fork=SimpleNamespace(),
+            snap={"State": landing},
+            key=("after",),
+        ),
+        (),
+        _IterationFrame(
+            snap={"State": 3},
+            tree=old_tree,
+            key=("before",),
+            distance_before=1,
+            raw_trace_actions=(),
+            raw_trace_action_details=(),
+        ),
+        SimpleNamespace(),
+        SimpleNamespace(
+            pdg=object(),
+            program=object(),
+            steerable=frozenset(),
+            clear_only=frozenset(),
+            opaque_loop=frozenset(),
+            pipeline_internal_tags=frozenset(),
+            route=None,
+            blocked_actions=frozenset(),
+            domain_prior=None,
+            avoid_pred=None,
+            compass=SimpleNamespace(knowledge=object()),
+        ),
+        target=TargetSpec("Target", True),
+        earned_work_receipt=EarnedWorkReceipt(),
+        learned_prescribed=False,
+        nogood_pair=("Advance", True),
+        gate_events=gates,
+        collected_nogoods=nogoods,
+        channel_motion=motion,
+    )
+    return result, gates, nogoods
 
 
 class TestGateDeadEnd:
@@ -453,17 +546,29 @@ class TestGateDeadEnd:
         assert len(captured_reads) == 2
         assert all(read.harness is None for read in captured_reads)
 
-    @pytest.mark.skip(reason="stub")
-    def test_empty_frontier_is_dead_end(self): ...
+    def test_channel_reached_overrides_dead_end(self, monkeypatch):
+        result, gates, nogoods = _empty_frontier_with_channel_motion(
+            monkeypatch,
+            ChannelMotion("State", 6, stop_reason="reached"),
+        )
 
-    @pytest.mark.skip(reason="stub")
-    def test_channel_reached_overrides_dead_end(self): ...
+        assert result is not None
+        assert nogoods == []
+        assert len(gates) == 1
+        assert gates[0].event == "channel-override-dead-end"
+        assert gates[0].detail == "channel target reached"
 
-    @pytest.mark.skip(reason="stub")
-    def test_channel_ejected_overrides_dead_end(self): ...
+    def test_channel_ejected_overrides_dead_end(self, monkeypatch):
+        result, gates, nogoods = _empty_frontier_with_channel_motion(
+            monkeypatch,
+            ChannelMotion("State", 6, stop_reason="departed"),
+        )
 
-    @pytest.mark.skip(reason="stub")
-    def test_lateral_no_new_frontier_rejected(self): ...
+        assert result is not None
+        assert nogoods == []
+        assert len(gates) == 1
+        assert gates[0].event == "channel-override-dead-end"
+        assert gates[0].detail == "channel ejected"
 
 
 class TestVerifyGates:
@@ -751,9 +856,3 @@ class TestVerifyGates:
         assert result.trial is None
         assert result.gate_events[-1].event == "banked-work"
         assert result.nogood_pairs == frozenset(actions)
-
-    @pytest.mark.skip(reason="stub")
-    def test_avoid_predicate_rejects(self): ...
-
-    @pytest.mark.skip(reason="stub")
-    def test_bearing_coast_result_routes_through_gates(self): ...
