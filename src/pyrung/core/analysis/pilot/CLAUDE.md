@@ -343,9 +343,6 @@ an event stream, replay identity, or lower-level API.
   PILOT filters lower-runner `real_scans` and `folds` cycle-fold details.
   Remove that filter only after the lower runner normalizes those fields;
   migrate the other APIs explicitly.
-- `world_key.py::_semantic_key` preserves the old
-  `pyrung.core.analysis.pilot._ops` module token for `OperationReceipt`.
-  Remove it only as an explicit world-key identity version.
 - `Compass` pair observations and pair nogoods are intentional pair semantics,
   not tuple compatibility wrappers.
 

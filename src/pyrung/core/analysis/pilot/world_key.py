@@ -89,12 +89,7 @@ def wait_edge_nogood(channel_tag: str, from_value: Any, to_value: Any) -> tuple[
 
 
 def _semantic_key(value: Any) -> Any:
-    """A stable, hashable identity for a rung operand or guard.
-
-    ``OperationReceipt`` moved to ``overlay``. Its encoded module token remains
-    the old value so already-recorded world identities do not change merely
-    because the class gained a truthful module home.
-    """
+    """A stable, hashable identity for a rung operand or guard."""
     from enum import Enum
 
     from pyrung.core.tag import ImmediateRef, Tag
@@ -125,11 +120,7 @@ def _semantic_key(value: Any) -> Any:
             for name, member in sorted(attrs.items())
             if not name.startswith("_") and name not in {"source_file", "source_line"}
         )
-        module = type(value).__module__
-        qualname = type(value).__qualname__
-        if module == "pyrung.core.analysis.pilot.overlay" and qualname == "OperationReceipt":
-            module = "pyrung.core.analysis.pilot._ops"
-        return (module, qualname, semantic)
+        return (type(value).__module__, type(value).__qualname__, semantic)
     return (type(value).__module__, type(value).__qualname__, str(value))
 
 

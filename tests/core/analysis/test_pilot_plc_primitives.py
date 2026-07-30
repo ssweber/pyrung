@@ -394,23 +394,23 @@ class TestPilotRungs:
         with pytest.raises(ValueError, match="guard is required"):
             PilotRung("In", True, None)
 
-    def test_operation_receipt_move_preserves_semantic_rung_identity(self):
+    def test_operation_receipt_has_overlay_semantic_rung_identity(self):
         _prog, _In, Scope = _scoped_input_program()
         receipt = OperationReceipt(Scope)
-        old_receipt_key = (
-            "pyrung.core.analysis.pilot._ops",
+        receipt_key = (
+            "pyrung.core.analysis.pilot.overlay",
             "OperationReceipt",
             (("progress", None), ("until", ("tag", Scope.name))),
         )
         rung = PilotRung("In", True, ~Scope, receipt)
 
         assert OperationReceipt.__module__ == "pyrung.core.analysis.pilot.overlay"
-        assert _semantic_key(receipt) == old_receipt_key
+        assert _semantic_key(receipt) == receipt_key
         assert _rung_identity(rung) == (
             "In",
             True,
             _semantic_key(~Scope),
-            old_receipt_key,
+            receipt_key,
         )
 
     def test_all_guards_read_one_pre_overlay_snapshot(self):
