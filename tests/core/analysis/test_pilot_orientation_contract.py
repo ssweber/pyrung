@@ -396,14 +396,13 @@ def test_open_operation_maintenance_owns_before_a_sibling_intervention(
     monkeypatch.setattr(
         orientation,
         "_orient_read",
-        lambda _compass, world, _target, _constraints: maintain if world is first else destroy,
+        lambda _compass, world, _target: maintain if world is first else destroy,
     )
 
     selected, results = orientation._read_group(
         compass,
         (first, second),
         target,
-        NavigationConstraints(),
         maintenance_owns=True,
     )
 

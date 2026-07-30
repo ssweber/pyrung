@@ -919,7 +919,7 @@ def _settle_delayed_effects(
                 predicate_trigger(
                     "harness_quiescent",
                     QUIESCENT,
-                    lambda state: harness.pending_count == 0,
+                    lambda _state: harness.pending_count == 0,
                 )
             ],
             budget=budget,

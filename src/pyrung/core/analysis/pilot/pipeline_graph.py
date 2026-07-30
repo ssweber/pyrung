@@ -582,7 +582,7 @@ def _rank_edges_for_state(
 
 
 # ===========================================================================
-# Opaque-pipeline detection (folded in from influence.py)
+# Opaque-pipeline detection
 # ===========================================================================
 
 

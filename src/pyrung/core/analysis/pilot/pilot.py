@@ -231,7 +231,7 @@ def _make_pilot_context(
     stateful_domains: dict[str, tuple[Any, ...]] | None,
     evidence: TransitionEvidence | None,
     key_config: _StateKeyConfig | None,
-    influence: Compass | None,
+    compass: Compass | None,
     opaque_loop: frozenset[str],
     route: TraceChoice | None,
     max_scans: int,
@@ -249,7 +249,7 @@ def _make_pilot_context(
     pipeline_internal_tags = frozenset(
         tag for role in pipeline_roles for tag in role.trace_internal_tags
     )
-    prior_compass = influence or Compass()
+    prior_compass = compass or Compass()
     compass = Compass(
         catalog=NavigationCatalog(
             slices=prior_compass.catalog.slices,
@@ -350,7 +350,7 @@ def _prepare_target_context(
     *,
     max_scans: int,
     avoid_pred: Any,
-    influence: Compass | None = None,
+    compass: Compass | None = None,
     work: PLC | None = None,
 ) -> tuple[_PilotContext, RouteTaken | None]:
     """Bind one target and its initial route report to a prepared drive."""
@@ -380,7 +380,7 @@ def _prepare_target_context(
         stateful_domains=setup.stateful_domains,
         evidence=setup.evidence,
         key_config=setup.key_config,
-        influence=influence or setup.compass,
+        compass=compass or setup.compass,
         opaque_loop=setup.opaque_loop,
         route=None,
         max_scans=max_scans,
@@ -1789,7 +1789,7 @@ def _pilot_how_multi(
         )
 
     work = setup.work
-    inf = setup.compass
+    compass = setup.compass
     last_knowledge: dict[str, Any] = {}
     last_journey: tuple[Any, ...] = ()
     # The per-target drives run sequentially on ONE fork, so their journals are already
@@ -1806,7 +1806,7 @@ def _pilot_how_multi(
             t_tag,
             t_val,
             t_pred,
-            influence=inf,
+            compass=compass,
             max_scans=max_scans,
             avoid_pred=avoid_pred,
             work=work,
@@ -1814,7 +1814,7 @@ def _pilot_how_multi(
         outcome = _pilot_loop(work, ctx, on_event=on_event)
         work = outcome.work
         last_knowledge = outcome.knowledge
-        inf = outcome.knowledge.get("compass", inf)
+        compass = outcome.knowledge.get("compass", compass)
         last_journey = outcome.journey
         journal_steps.extend(outcome.journal)
         if not outcome.reached:

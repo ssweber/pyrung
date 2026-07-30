@@ -787,7 +787,7 @@ def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, An
 # state machines are never cut.  Budget 1 keeps the direct prerequisite chain
 # (StateCurrent=6 <- StateRequested=6 <- command) but cuts the cross-state
 # wandering (StateCurrent=6 -> ... -> StateCurrent=7 -> ...), emitting a leaf
-# so Layer 6 owns the transition by observation.
+# so Compass can learn the transition from action observations.
 _SAME_TAG_VALUE_BUDGET = 1
 
 
@@ -2263,7 +2263,8 @@ def _trace_back(
     # Feedback-loop guard: a jump-table state register (``opaque_loop``) that
     # already appears at another value along the ancestor path means we are
     # inverting the state-machine feedback cycle, not a finite prerequisite
-    # chain.  Stop and emit a dead-end leaf so Layer 6 owns the transition.
+    # chain. Stop and emit a dead-end leaf so Compass can learn the transition
+    # from action observations.
     if tag in env.opaque_loop and tag not in env.steerable:
         # Key values via _visit_key so an unhashable expression value (a
         # relational sub-goal on a state register) is counted without crashing
@@ -2394,7 +2395,7 @@ def _trace_back(
         if guard_expr is not None:
             from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_PUNT
 
-            verdict = _writer_guard_verdict(env, ri, ro, tag, value, reverse_result, guard_expr)
+            verdict = _writer_guard_verdict(env, ri, tag, value, reverse_result, guard_expr)
             if verdict == GUARD_DEAD:
                 writer_skips.append((ri, "guard_dead"))
                 continue
@@ -3613,7 +3614,6 @@ def _transition_fire_pins(
 def _writer_guard_verdict(
     env: _TraceEnv,
     ri: int,
-    ro: Any,
     tag: str,
     value: Any,
     reverse_result: ReverseResult,

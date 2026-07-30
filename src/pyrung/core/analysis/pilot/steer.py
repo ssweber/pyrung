@@ -345,7 +345,7 @@ def _try_action_batch(
     state: _PilotState,
     ctx: _PilotContext,
     *,
-    record_influence_action: ActionPair | None = None,
+    observation_action: ActionPair | None = None,
 ) -> _AttemptResult:
     policy = bearing.act.policy
     # ── Action gate (avoid=) ──────────────────────────────────────────────
@@ -374,10 +374,10 @@ def _try_action_batch(
     assert key_config is not None
 
     observations: list[CompassObservation] = []
-    if record_influence_action is not None:
+    if observation_action is not None:
         observations.extend(
             _compass_observations(
-                record_influence_action,
+                observation_action,
                 frame,
                 frame.snap,
                 trial.action_snap,
@@ -448,7 +448,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
             frame,
             state,
             ctx,
-            record_influence_action=act.action,
+            observation_action=act.action,
         )
     if isinstance(act, BatchPulse):
         return _try_action_batch(

@@ -3,7 +3,7 @@
 Coverage targets:
 - verify_gates: the full gate sequence (avoid → target → spin → cycle → dead-end → outcome)
 - _gate_spin: state-key change detection, excursion retry
-- _gate_cycle: visited-key rejection, influence override
+- _gate_cycle: visited-key rejection, Compass learned-action override
 - _gate_dead_end: empty frontier, lateral detection, channel override
 """
 

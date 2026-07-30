@@ -465,7 +465,6 @@ def _orient_read(
     compass: Any,
     world: OrientationWorld,
     target: TargetSpec,
-    constraints: NavigationConstraints,
 ) -> OrientationResult:
     """Materialize one alternative in act-precedence order.
 
@@ -634,7 +633,6 @@ def _read_group(
     compass: Any,
     worlds: tuple[OrientationWorld, ...],
     target: TargetSpec,
-    constraints: NavigationConstraints,
     *,
     maintenance_owns: bool = False,
 ) -> tuple[OrientationResult | None, tuple[OrientationResult, ...]]:
@@ -651,7 +649,7 @@ def _read_group(
     results: list[OrientationResult] = []
     maintenance: OrientationResult | None = None
     for world in worlds:
-        result = _orient_read(compass, world, target, constraints)
+        result = _orient_read(compass, world, target)
         results.append(result)
         if isinstance(result, Bearing):
             if maintenance_owns or not _is_maintenance(result):
@@ -723,7 +721,6 @@ def orient(
             compass,
             tuple(open_worlds),
             target,
-            constraints,
             maintenance_owns=True,
         )
         if selected is not None:
@@ -733,7 +730,6 @@ def orient(
         compass,
         tuple(fresh_worlds),
         target,
-        constraints,
     )
     if selected is not None:
         return selected

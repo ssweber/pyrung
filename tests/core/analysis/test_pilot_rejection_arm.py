@@ -83,7 +83,7 @@ def test_calc_fire_pin_contradiction_verdict_is_dead():
     ro = resolve_rung(logic, pdg.rung_nodes[0])
     guard = _sp_to_expr(ro.sp_tree())
     reverse_result = _reverse_writer(ro, "State", 7, snap, pdg)
-    assert _writer_guard_verdict(env, 0, ro, "State", 7, reverse_result, guard) == GUARD_DEAD
+    assert _writer_guard_verdict(env, 0, "State", 7, reverse_result, guard) == GUARD_DEAD
 
 
 def test_calc_fire_pin_contradiction_writer_skipped():
@@ -235,4 +235,4 @@ def test_satisfiable_guard_verdict_is_sat():
     ro = resolve_rung(logic, pdg.rung_nodes[1])  # the viable Mode==1 writer
     guard = _sp_to_expr(ro.sp_tree())
     reverse_result = _reverse_writer(ro, "State", 2, snap, pdg)
-    assert _writer_guard_verdict(env, 1, ro, "State", 2, reverse_result, guard) == GUARD_SAT
+    assert _writer_guard_verdict(env, 1, "State", 2, reverse_result, guard) == GUARD_SAT

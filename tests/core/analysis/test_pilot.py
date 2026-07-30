@@ -1591,7 +1591,7 @@ def test_harness_feedback_excluded_from_steerable():
 
 
 # ===================================================================
-# Section 6: Influence mapping (Layer 6)
+# Section 6: Compass observations and learned actions
 # ===================================================================
 
 
@@ -1619,13 +1619,13 @@ def test_compass_bfs_shortest_path():
     """BFS finds the shortest action sequence through a transition table."""
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
-    inf = Compass()
+    compass = Compass()
     tag = "State"
     action_a = ("Cmd", 1)
     action_b = ("Cmd", 2)
     action_c = ("Cmd", 3)
     action_d = ("Recipe", 7)
-    inf, changed = inf.apply(
+    compass, changed = compass.apply(
         (
             CompassObservation("edge", tag, action_a, 0, 1, applied=(action_a,)),
             CompassObservation("edge", tag, action_b, 1, 2, applied=(action_b,)),
@@ -1635,25 +1635,25 @@ def test_compass_bfs_shortest_path():
     )
     assert changed
 
-    path = inf.knowledge.find_path(tag, 0, 3)
+    path = compass.knowledge.find_path(tag, 0, 3)
     assert path == [action_d], f"BFS should find direct path, got {path}"
 
-    path_long = inf.knowledge.find_path(tag, 0, 2)
+    path_long = compass.knowledge.find_path(tag, 0, 2)
     assert path_long == [action_a, action_b], f"Should find 2-step path, got {path_long}"
 
-    assert inf.knowledge.find_path(tag, 0, 99) is None
+    assert compass.knowledge.find_path(tag, 0, 99) is None
 
 
 def test_compass_paths_include_wait_transitions():
     """WAIT is a transition cause, but not a candidate action."""
     from pyrung.core.analysis.pilot.compass import WAIT, Compass, CompassObservation
 
-    inf = Compass()
+    compass = Compass()
     tag = "State"
     action_a = ("Cmd", "clear")
     action_b = ("Cmd", "start")
     action_bad = ("Cmd", "abort")
-    inf, _ = inf.apply(
+    compass, _ = compass.apply(
         (
             CompassObservation("edge", tag, action_a, 9, 1, applied=(action_a,)),
             CompassObservation("edge", tag, WAIT, 1, 2),
@@ -1662,9 +1662,9 @@ def test_compass_paths_include_wait_transitions():
         )
     )
 
-    assert inf.knowledge.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
-    assert inf.knowledge.find_path(tag, 1, 6) == [WAIT, action_b]
-    assert inf.knowledge.off_path_actions(tag, 1, 6) == {action_bad}
+    assert compass.knowledge.find_path(tag, 9, 6) == [action_a, WAIT, action_b]
+    assert compass.knowledge.find_path(tag, 1, 6) == [WAIT, action_b]
+    assert compass.knowledge.off_path_actions(tag, 1, 6) == {action_bad}
 
 
 def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
@@ -1676,13 +1676,13 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     """
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
 
-    inf = Compass()
+    compass = Compass()
     tag = "State"
     from_val = 0
 
     flat_probed = ("Cmd", 1)
     composite_probed = (("C_Start", True), ("InterlockAck", True))
-    inf, _ = inf.apply(
+    compass, _ = compass.apply(
         (
             CompassObservation(
                 "edge",
@@ -1708,7 +1708,7 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
 
     available = {flat_probed, composite_probed, flat_unprobed, composite_unprobed}
 
-    result = inf.knowledge.unprobed_actions(tag, from_val, available)
+    result = compass.knowledge.unprobed_actions(tag, from_val, available)
 
     # No exception, and the already-probed causes (flat or composite) are
     # excluded regardless of shape.
@@ -1720,7 +1720,7 @@ def test_unprobed_actions_sorts_mixed_flat_and_composite_causes():
     assert result == [composite_unprobed, flat_unprobed]
 
     # Repeating the call is byte-for-byte the same — no ordering flakiness.
-    assert inf.knowledge.unprobed_actions(tag, from_val, available) == result
+    assert compass.knowledge.unprobed_actions(tag, from_val, available) == result
 
 
 # upstream_candidates unit tests removed — function deleted with BFS search cut.
@@ -1966,15 +1966,15 @@ def test_expand_routes_punts_on_aggregate_writer():
     assert routes == [], f"aggregate writer should yield no value-nav route, got {routes}"
 
 
-def test_l6_probe_with_trace_context():
-    """L6 probes include trace-known inputs as context for opaque pipelines.
+def test_learned_action_probe_with_trace_context():
+    """Learned-action probes include trace-known inputs for opaque pipelines.
 
     The mode pipeline uses a two-tag pointer calc (CmdReg + Base), so the
     backward trace cannot invert the IndirectRef — CmdProd is only
-    discoverable through L6 convergent steer detection. The command rungs
+    discoverable through convergent action detection. The command rungs
     require both CmdProd AND rise(Enable). Enable is in the trace's
     ordered_actions (needed for the output rung), but probing CmdProd
-    alone never triggers rise(Enable). The L6 probe must apply trace
+    alone never triggers rise(Enable). The probe must apply trace
     context to discover the Mode transition.
     """
     from pyrung.click import ClickBlocks
@@ -2019,17 +2019,18 @@ def test_l6_probe_with_trace_context():
     plc = PLC(prog)
     path = pilot_how(plc, Output, max_scans=3000)
     assert path.reachable, (
-        f"L6 should discover Mode transition with trace context: {getattr(path, 'reason', '')}"
+        "Learned-action probing should discover the Mode transition with "
+        f"trace context: {getattr(path, 'reason', '')}"
     )
 
 
-def test_influence_driven_opaque_state_machine():
-    """PILOT reaches a target through an opaque pipeline via influence mapping.
+def test_compass_learns_opaque_state_machine_actions():
+    """PILOT reaches a target through Compass learned-action observations.
 
     State is written through an indirect copy (ds[pointer] -> Scratch -> State).
-    The backward trace dead-ends at Scratch (opaque writer). Influence mapping
-    detects the pipeline upfront, probes command buttons systematically, and
-    BFS finds the path.
+    The backward trace dead-ends at Scratch (opaque writer). The static pipeline
+    catalog identifies command buttons, probes them systematically, and records
+    transitions in Compass so path search can find the route.
     """
     from pyrung.click import ClickBlocks
 
@@ -2075,7 +2076,7 @@ def test_influence_driven_opaque_state_machine():
     plc = PLC(prog)
     path = pilot_how(plc, Output, max_scans=3000)
     assert path.reachable, (
-        f"Should reach Output via influence mapping: {getattr(path, 'reason', '')}"
+        f"Should reach Output via Compass learned actions: {getattr(path, 'reason', '')}"
     )
 
 
