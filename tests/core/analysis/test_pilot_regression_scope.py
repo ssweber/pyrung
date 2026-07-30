@@ -100,7 +100,7 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
             assessment=TrialAssessment(
                 agency=Agency.PILOT,
                 bearing=BearingEffect.DEPARTED,
-                progress=ProgressEffect.BEHIND,
+                progress=ProgressEffect.BACKWARD,
                 new_frontier=False,
                 accepted=True,
             ),

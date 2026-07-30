@@ -135,8 +135,8 @@ this table only locates the owner.
 - Target-relative movement: `earned_work.py::EarnedWork.receipt`; verification owns the
   accepted trial's receipt
 - Departure observation and classification: `departure.py::classify_departure`
-- Evidence classification: `outcome.py::assess_outcome`;
-  `classify_outcome` stays as the small ergonomic compatibility projection
+- Evidence classification: `outcome.py::assess_outcome`; consumers read the
+  returned `TrialAssessment` axes directly
 - Transition-knowledge update: `Compass.apply`, invoked by the drive loop
 - Coast-departure channel ownership: `coast.py::coast_departure_tags`
 - Post-commit retention, recovery, and correction installation: `progress.py`;
@@ -335,13 +335,9 @@ an event stream, replay identity, or lower-level API.
   declines. Remove it only when registered reverse rules cover those affine
   writers.
 - `progress.py::PendingDeparture` owns the stable `provisional_*` events and
-  their legacy `route`, `gauge_at_source`, and earned-work movement words
-  (`advanced`, `behind`, `preserved`, `unknown`), including the legacy
+  their legacy `route` and `gauge_at_source`, including the legacy
   gauge/earned-work reason prose produced by `departure.py`. Change them only
   with an event schema version and downstream migration.
-- `outcome.py::TrialAssessment.legacy_outcome` and
-  `outcome.py::classify_outcome` are the legacy outcome projection boundary.
-  Remove them only with the corresponding API and event migration.
 - `navigation_contracts.py::ActSource` keeps serialized values `influence` and
   `learned`; recording keeps the `influence_prescribed` payload, and VERIFY
   keeps the public `influence-override-cycle` gate event. Version and migrate

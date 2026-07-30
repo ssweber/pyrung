@@ -136,16 +136,6 @@ class EarnedWorkReceipt:
         return any(reading.movement is EarnedWorkMovement.FORWARD for reading in self.readings)
 
 
-def legacy_earned_work_movement(movement: EarnedWorkMovement) -> str:
-    """Project plain movement names onto stable event-payload vocabulary."""
-    return {
-        EarnedWorkMovement.FORWARD: "advanced",
-        EarnedWorkMovement.BACKWARD: "behind",
-        EarnedWorkMovement.UNCHANGED: "preserved",
-        EarnedWorkMovement.UNKNOWN: "unknown",
-    }[movement]
-
-
 @dataclass(frozen=True)
 class EarnedWork:
     components: tuple[EarnedWorkComponent, ...]

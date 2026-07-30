@@ -70,6 +70,7 @@ from pyrung.core.analysis.pilot.progress import (
     _apply_departure_decision,
     _assess_pending_departure,
     _channel_recovery_origin,
+    _departure_event_outcome,
     _handle_channel_departure,
     _investigate_and_revert,
     _monitor_trend,
@@ -226,7 +227,7 @@ def _make_trial(
         assessment = TrialAssessment(
             agency=Agency.PROGRAM,
             bearing=bearing,
-            progress=ProgressEffect.PRESERVED,
+            progress=ProgressEffect.UNCHANGED,
             new_frontier=bearing is BearingEffect.EXPOSED,
             accepted=True,
         )
@@ -787,7 +788,7 @@ def test_pilot_caused_regression_does_not_rewrite_forward_earned_work_evidence()
         assessment=TrialAssessment(
             agency=Agency.PILOT,
             bearing=BearingEffect.DEPARTED,
-            progress=ProgressEffect.BEHIND,
+            progress=ProgressEffect.BACKWARD,
             new_frontier=False,
             accepted=True,
         ),
@@ -804,6 +805,26 @@ def test_pilot_caused_regression_does_not_rewrite_forward_earned_work_evidence()
     assert decision.receipt.movement is EarnedWorkMovement.FORWARD
     assert decision.receipt.source_mark == (("Step", 3),)
     assert decision.receipt.landing_mark == (("Step", 4),)
+
+
+def test_departure_event_uses_earned_work_movement_vocabulary():
+    receipts = {
+        EarnedWorkMovement.FORWARD: EarnedWorkReceipt((EarnedWorkReading("Step", 1, 2, 1),)),
+        EarnedWorkMovement.BACKWARD: EarnedWorkReceipt((EarnedWorkReading("Step", 2, 1, 1),)),
+        EarnedWorkMovement.UNCHANGED: EarnedWorkReceipt((EarnedWorkReading("Step", 1, 1, 1),)),
+        EarnedWorkMovement.UNKNOWN: EarnedWorkReceipt(),
+    }
+
+    for movement, receipt in receipts.items():
+        decision = DepartureDecision(DepartureAction.WAIT, receipt)
+        assert _departure_event_outcome(decision) == movement.value
+
+    pilot_regression = DepartureDecision(
+        DepartureAction.REGRESS,
+        receipts[EarnedWorkMovement.FORWARD],
+        DepartureBasis.PILOT_CAUSED_REGRESSION,
+    )
+    assert _departure_event_outcome(pilot_regression) == EarnedWorkMovement.BACKWARD.value
 
 
 def test_pending_expiry_restores_the_current_checkpoint_artifact():
@@ -1090,7 +1111,7 @@ def test_prescribed_departure_outranks_a_preserved_recipe_earned_work(monkeypatc
         assessment=TrialAssessment(
             agency=Agency.PILOT,
             bearing=BearingEffect.DEPARTED,
-            progress=ProgressEffect.PRESERVED,
+            progress=ProgressEffect.UNCHANGED,
             new_frontier=True,
             accepted=True,
         ),
@@ -1509,7 +1530,11 @@ def test_bearing_coast_accepted_payload_records_requested_and_landed():
 
     assert payload["zoom_target_value"] == 6  # requested bearing
     assert payload["zoom_actual_value"] == 8  # where the world actually landed
-    assert payload["outcome"] == "ambient"
+    assert payload["accepted"] is True
+    assert payload["agency"] == "program"
+    assert payload["bearing"] == "departed"
+    assert payload["progress"] == "unchanged"
+    assert payload["new_frontier"] is False
     assert payload["ejected"] is True
 
 
@@ -1526,7 +1551,11 @@ def test_bearing_coast_accepted_payload_records_owned_bearing_receipt():
     payload = _bearing_coast_accepted_payload(trial)
 
     assert payload["bearing_stop_reason"] == "reached"
-    assert payload["outcome"] == "confirmed"
+    assert payload["accepted"] is True
+    assert payload["agency"] == "program"
+    assert payload["bearing"] == "satisfied"
+    assert payload["progress"] == "unchanged"
+    assert payload["new_frontier"] is False
     assert payload["ejected"] is False
 
 

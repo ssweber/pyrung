@@ -8,10 +8,9 @@ from pyrung.core.analysis.pilot.earned_work import EarnedWorkReading, EarnedWork
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
-    Outcome,
     ProgressEffect,
+    TrialAssessment,
     assess_outcome,
-    classify_outcome,
 )
 from pyrung.core.analysis.pilot.types import ChannelMotion
 
@@ -23,11 +22,11 @@ def _bearing_coast(
     trend_after: int = 2,
     frontier: bool = False,
     credential: bool = False,
-) -> Outcome:
+) -> TrialAssessment:
     trial = SimpleNamespace(snap={"State": after})
     frame = SimpleNamespace(snap={"State": 11}, distance_before=trend_before)
     ctx = SimpleNamespace(opaque_loop=frozenset())
-    return classify_outcome(
+    return assess_outcome(
         trial,
         (),
         frame,
@@ -47,8 +46,10 @@ def _bearing_coast(
     )
 
 
-def test_bearing_coast_that_reaches_requested_channel_is_confirmed() -> None:
-    assert _bearing_coast(16) is Outcome.CONFIRMED
+def test_bearing_coast_that_reaches_requested_channel_is_accepted() -> None:
+    assessment = _bearing_coast(16)
+    assert assessment.bearing is BearingEffect.SATISFIED
+    assert assessment.accepted is True
 
 
 def test_action_receipt_survives_later_program_departure() -> None:
@@ -101,8 +102,11 @@ def test_action_receipt_does_not_hide_a_different_landing() -> None:
     assert assessment.bearing is BearingEffect.DEPARTED
 
 
-def test_bearing_coast_that_really_departs_elsewhere_is_ambient_drift() -> None:
-    assert _bearing_coast(10) is Outcome.AMBIENT_DRIFT
+def test_bearing_coast_that_really_departs_elsewhere_is_program_motion() -> None:
+    assessment = _bearing_coast(10)
+    assert assessment.agency is Agency.PROGRAM
+    assert assessment.bearing is BearingEffect.DEPARTED
+    assert assessment.accepted is True
 
 
 def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
@@ -125,18 +129,26 @@ def test_only_the_immediate_requested_value_satisfies_the_bearing() -> None:
 
     assert assessment.agency is Agency.PROGRAM
     assert assessment.bearing is BearingEffect.DEPARTED
-    assert assessment.progress is ProgressEffect.BEHIND
+    assert assessment.progress is ProgressEffect.BACKWARD
     assert assessment.new_frontier is True
-    assert assessment.legacy_outcome is Outcome.AMBIENT_DRIFT
+    assert assessment.accepted is True
 
 
 def test_bearing_coast_timeout_with_unchanged_channel_is_rejected() -> None:
-    assert _bearing_coast(11) is Outcome.BAD_EDGE
+    assessment = _bearing_coast(11)
+    assert assessment.bearing is BearingEffect.UNCHANGED
+    assert assessment.accepted is False
 
 
 def test_unchanged_channel_can_still_earn_progress_inside_corridor() -> None:
-    assert _bearing_coast(11, credential=True) is Outcome.CONFIRMED
-    assert _bearing_coast(11, frontier=True) is Outcome.FRONTIER
+    earned = _bearing_coast(11, credential=True)
+    assert earned.bearing is BearingEffect.UNCHANGED
+    assert earned.accepted is True
+
+    exposed = _bearing_coast(11, frontier=True)
+    assert exposed.bearing is BearingEffect.EXPOSED
+    assert exposed.new_frontier is True
+    assert exposed.accepted is True
 
 
 def test_unchanged_channel_trend_drop_alone_is_rejected() -> None:
@@ -144,4 +156,7 @@ def test_unchanged_channel_trend_drop_alone_is_rejected() -> None:
     frozen channel (incidental sub-registers can drop the tree count while
     the channel sits stuck at its start value — the tumbler bearing-coast
     false-confirm).  Only earned work or a genuinely new frontier confirms."""
-    assert _bearing_coast(11, trend_after=1) is Outcome.BAD_EDGE
+    assessment = _bearing_coast(11, trend_after=1)
+    assert assessment.bearing is BearingEffect.UNCHANGED
+    assert assessment.progress is ProgressEffect.FORWARD
+    assert assessment.accepted is False

@@ -22,7 +22,6 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     build_earned_work,
-    legacy_earned_work_movement,
 )
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -98,15 +97,6 @@ def test_earned_work_receipt_keeps_source_landing_and_progress_order() -> None:
         EarnedWorkMovement.FORWARD,
         EarnedWorkMovement.BACKWARD,
     )
-
-
-def test_legacy_earned_work_movement_keeps_event_vocabulary() -> None:
-    assert {movement: legacy_earned_work_movement(movement) for movement in EarnedWorkMovement} == {
-        EarnedWorkMovement.FORWARD: "advanced",
-        EarnedWorkMovement.BACKWARD: "behind",
-        EarnedWorkMovement.UNCHANGED: "preserved",
-        EarnedWorkMovement.UNKNOWN: "unknown",
-    }
 
 
 def _step_chain_program():
@@ -234,7 +224,7 @@ def test_loop_nogoods_a_destructive_candidate_then_uses_its_sibling() -> None:
         if event.kind == "candidate_rejected" and event.data["candidate"]["tag"] == ResetTarget.name
     )
     assert rejection.data["gates"][-1].event == "banked-work"
-    assert rejection.data["gates"][-1].evidence["effect"] == "behind"
+    assert rejection.data["gates"][-1].evidence["effect"] == "backward"
 
     accepted = next(
         event

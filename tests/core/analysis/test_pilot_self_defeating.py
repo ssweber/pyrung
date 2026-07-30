@@ -561,7 +561,7 @@ def _saboteur_scenario():
             assessment=TrialAssessment(
                 agency=Agency.PROGRAM,
                 bearing=BearingEffect.DEPARTED,
-                progress=ProgressEffect.PRESERVED,
+                progress=ProgressEffect.UNCHANGED,
                 new_frontier=False,
                 accepted=True,
             ),

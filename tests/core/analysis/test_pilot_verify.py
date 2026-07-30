@@ -543,7 +543,7 @@ class TestVerifyGates:
                 assessment=TrialAssessment(
                     agency=Agency.PILOT,
                     bearing=BearingEffect.DEPARTED,
-                    progress=ProgressEffect.BEHIND,
+                    progress=ProgressEffect.BACKWARD,
                     new_frontier=False,
                     accepted=False,
                 ),
@@ -660,7 +660,7 @@ class TestVerifyGates:
         assert result.trial is None
         assert result.nogood_pairs == frozenset({("Reset", True)})
         assert result.gate_events[-1].event == "banked-work"
-        assert result.gate_events[-1].evidence["effect"] == "behind"
+        assert result.gate_events[-1].evidence["effect"] == "backward"
 
     def test_banked_batch_nogoods_every_regressive_action(self):
         before = {"Step": 3, "Target": False}

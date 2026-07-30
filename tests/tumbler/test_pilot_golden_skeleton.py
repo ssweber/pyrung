@@ -121,10 +121,10 @@ def _assert_zoom_tripwire(skeleton: list[dict]) -> None:
     """The state-6 tripwire, independent of the golden (survives regeneration).
 
     Historical bug: a coast requested 3->6 landed at 8 and was accepted as
-    'ambient'.  Every ``zoom_accepted`` must either land exactly on the
-    requested bearing value, carry a receipt proving its relational boundary
-    was reached, or be explicitly classified as a departure (``ejected`` — an
-    AMBIENT_DRIFT committed under the ejection guard).
+    a program-attributed departure. Every ``zoom_accepted`` must either land
+    exactly on the requested bearing value, carry a receipt proving its
+    relational boundary was reached, or be explicitly classified as a
+    departure (``ejected`` under the departure guard).
     """
     for index, entry in enumerate(skeleton):
         if entry["kind"] != "zoom_accepted":
@@ -177,7 +177,7 @@ def test_pilot_golden_skeleton_execute(tumbler_logic) -> None:
     events = _drive_state_target(tumbler_logic, 6, EXECUTE_MAX_SCANS)
     skeleton = extract_skeleton(events)
 
-    # Outcome assertions independent of the golden (survive regeneration).
+    # Behavioral assertions independent of the golden (survive regeneration).
     finished = _finished(skeleton)
     assert finished["reached"] is True, f"Execute drive did not reach: {finished}"
     _assert_zoom_tripwire(skeleton)

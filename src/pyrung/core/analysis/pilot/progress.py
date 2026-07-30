@@ -33,7 +33,6 @@ from pyrung.core.analysis.pilot.departure import (
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
-    legacy_earned_work_movement,
 )
 from pyrung.core.analysis.pilot.investigate import (
     InvestigationRejection,
@@ -768,7 +767,7 @@ def _assess_pending_departure(
 ) -> DepartureDecision:
     """Decide a pending departure from current progress evidence.
 
-    Advanced promotes immediately. Behind is a proven regression and enters
+    Forward promotes immediately. Backward is a proven regression and enters
     the ordinary investigation/revert arm. A same-mark return to the departed
     channel's source is recovery evidence: investigate the round trip before
     later progress can retroactively promote it. Other preserved or
@@ -798,7 +797,7 @@ def _assess_pending_departure(
         isinstance(verified, AssessedMotion)
         and verified.assessment.agency is Agency.PILOT
         and verified.assessment.bearing is BearingEffect.DEPARTED
-        and verified.assessment.progress is ProgressEffect.BEHIND
+        and verified.assessment.progress is ProgressEffect.BACKWARD
     ):
         caused_regression = True
     else:
@@ -821,10 +820,10 @@ def _assess_pending_departure(
 
 
 def _departure_event_outcome(decision: DepartureDecision) -> str:
-    """Keep public transcript vocabulary while policy carries typed evidence."""
+    """Render the decision's target-relative movement evidence."""
     if decision.basis is DepartureBasis.PILOT_CAUSED_REGRESSION:
-        return "behind"
-    return legacy_earned_work_movement(decision.receipt.movement)
+        return EarnedWorkMovement.BACKWARD.value
+    return decision.receipt.movement.value
 
 
 def _apply_departure_decision(

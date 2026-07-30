@@ -146,10 +146,10 @@
   ],
   "candidates": [
    {
-    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
-    "bearing_channel_value": 1,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+    "bearing_channel_value": 1,
     "influence_prescribed": false,
     "pair": [
      "Cmd_UnitModeChgRequest",
@@ -164,10 +164,10 @@
     "value": true
    },
    {
-    "bearing_channel_tag": "Cmd_UnitMode",
-    "bearing_channel_value": 1,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "influence_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
@@ -308,10 +308,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
@@ -338,10 +338,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_UnitModeChgRequest",
@@ -413,10 +413,10 @@
   ],
   "candidates": [
    {
-    "bearing_channel_tag": "Cmd_UnitMode",
-    "bearing_channel_value": 1,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Cmd_UnitMode",
+    "bearing_channel_value": 1,
     "influence_prescribed": false,
     "pair": [
      "Cmd_Mode_Production",
@@ -553,10 +553,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Cmd_UnitMode",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
@@ -583,10 +583,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Cmd_UnitMode",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_Mode_Production",
@@ -666,10 +666,10 @@
   ],
   "candidates": [
    {
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
     "bearing_channel_tag": "Sts_StateCurrent",
     "bearing_channel_value": 1,
-    "awaited_action_note": "",
-    "awaited_action_prescribed": false,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Clear",
@@ -812,10 +812,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
@@ -847,7 +847,7 @@
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 5 -> 2",
-     "event": "ambient"
+     "event": "departed"
     }
    ],
    "novel_key": true,
@@ -871,10 +871,10 @@
    ]
   ],
   "candidate_detail": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 1,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 1,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Clear",
@@ -900,7 +900,7 @@
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 5 -> 2",
-    "event": "ambient"
+    "event": "departed"
    }
   ],
   "index": 0,
@@ -997,10 +997,10 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "bearing_channel_tag": "Sts_StateCurrent",
-    "bearing_channel_value": 15,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 15,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Reset",
@@ -1112,10 +1112,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 15,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 15,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
@@ -1138,7 +1138,7 @@
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 2 -> 2",
-     "event": "ambient"
+     "event": "departed"
     }
    ],
    "novel_key": true,
@@ -1154,10 +1154,10 @@
    ]
   ],
   "candidate_detail": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 15,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 15,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Reset",
@@ -1174,7 +1174,7 @@
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 2 -> 2",
-    "event": "ambient"
+    "event": "departed"
    }
   ],
   "index": 0,
@@ -1241,10 +1241,10 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "bearing_channel_tag": "Sts_StateCurrent",
-    "bearing_channel_value": 3,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 3,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Start",
@@ -1333,10 +1333,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 3,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -1359,7 +1359,7 @@
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 2 -> 15",
-     "event": "confirmed"
+     "event": "satisfied"
     }
    ],
    "novel_key": true,
@@ -1375,10 +1375,10 @@
    ]
   ],
   "candidate_detail": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 3,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -1395,7 +1395,7 @@
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 2 -> 15",
-    "event": "confirmed"
+    "event": "satisfied"
    }
   ],
   "index": 0,
@@ -1688,11 +1688,15 @@
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "accepted": true,
+  "agency": "program",
+  "bearing": "departed",
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "zoom_accepted",
+  "new_frontier": true,
   "observe_label": "zoom",
-  "outcome": "ambient",
+  "progress": "forward",
   "trend": 6,
   "zoom_actual_value": 8,
   "zoom_channel_tag": "Sts_StateCurrent",
@@ -1866,10 +1870,10 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "bearing_channel_tag": "Sts_StateCurrent",
-    "bearing_channel_value": 3,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 3,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Start",
@@ -1958,10 +1962,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 3,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -1984,7 +1988,7 @@
     {
      "__type__": "PilotGateEvent",
      "detail": "distance 2 -> 15",
-     "event": "confirmed"
+     "event": "satisfied"
     }
    ],
    "novel_key": true,
@@ -2000,10 +2004,10 @@
    ]
   ],
   "candidate_detail": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 3,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 3,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Start",
@@ -2020,7 +2024,7 @@
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 2 -> 15",
-    "event": "confirmed"
+    "event": "satisfied"
    }
   ],
   "index": 0,
@@ -2133,11 +2137,15 @@
   "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
+  "accepted": true,
+  "agency": "program",
+  "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "zoom_accepted",
+  "new_frontier": false,
   "observe_label": "zoom",
-  "outcome": "confirmed",
+  "progress": "forward",
   "trend": 10,
   "zoom_actual_value": 5,
   "zoom_channel_tag": "Rotate_tmr_Acc",
@@ -2288,11 +2296,15 @@
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "accepted": true,
+  "agency": "program",
+  "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "zoom_accepted",
+  "new_frontier": false,
   "observe_label": "zoom",
-  "outcome": "confirmed",
+  "progress": "forward",
   "trend": 4,
   "zoom_actual_value": 3,
   "zoom_channel_tag": "Blower_tmr_Acc",
@@ -2413,11 +2425,15 @@
   "reason": "let-run Sts_StateCurrent: 3->6"
  },
  {
+  "accepted": true,
+  "agency": "program",
+  "bearing": "satisfied",
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "zoom_accepted",
+  "new_frontier": false,
   "observe_label": "zoom",
-  "outcome": "confirmed",
+  "progress": "forward",
   "trend": 2,
   "zoom_actual_value": 6,
   "zoom_channel_tag": "Sts_StateCurrent",
@@ -2470,10 +2486,10 @@
   "active_trace_actions": [],
   "candidates": [
    {
-    "bearing_channel_tag": "Sts_StateCurrent",
-    "bearing_channel_value": 16,
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 16,
     "influence_prescribed": false,
     "pair": [
      "Cmd_State_Complete",
@@ -2539,10 +2555,10 @@
    ]
   ],
   "candidate": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 16,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 16,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Complete",
@@ -2581,10 +2597,10 @@
    ]
   ],
   "candidate_detail": {
-   "bearing_channel_tag": "Sts_StateCurrent",
-   "bearing_channel_value": 16,
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
+   "bearing_channel_tag": "Sts_StateCurrent",
+   "bearing_channel_value": 16,
    "influence_prescribed": false,
    "pair": [
     "Cmd_State_Complete",

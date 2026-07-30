@@ -613,7 +613,7 @@ def verify_gates(
                 evidence={
                     "source_mark": earned_work_receipt.source_mark,
                     "landing_mark": earned_work_receipt.landing_mark,
-                    "effect": "behind",
+                    "effect": EarnedWorkMovement.BACKWARD.value,
                 },
             )
         )
@@ -709,7 +709,6 @@ def verify_gates(
         earned_work_receipt=earned_work_receipt,
     )
 
-    outcome = assessment.legacy_outcome
     if not assessment.accepted:
         if nogood_pair is not None:
             collected_nogoods.append(nogood_pair)
@@ -737,7 +736,17 @@ def verify_gates(
         return _reject()
 
     gate_events.append(
-        PilotGateEvent(outcome.value, f"distance {frame.distance_before} -> {dead_end.trend}")
+        PilotGateEvent(
+            assessment.bearing.value,
+            f"distance {frame.distance_before} -> {dead_end.trend}",
+            evidence={
+                "accepted": assessment.accepted,
+                "agency": assessment.agency.value,
+                "bearing": assessment.bearing.value,
+                "progress": assessment.progress.value,
+                "new_frontier": assessment.new_frontier,
+            },
+        )
     )
 
     return _AttemptResult(

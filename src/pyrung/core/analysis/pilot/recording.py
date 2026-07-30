@@ -597,7 +597,11 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
     return {
         "new_key": assessed.new_key if assessed is not None else None,
         "trend": assessed.trend if assessed is not None else None,
-        "outcome": assessed.assessment.legacy_outcome.value if assessed is not None else None,
+        "accepted": assessed.assessment.accepted if assessed is not None else None,
+        "agency": assessed.assessment.agency.value if assessed is not None else None,
+        "bearing": assessed.assessment.bearing.value if assessed is not None else None,
+        "progress": assessed.assessment.progress.value if assessed is not None else None,
+        "new_frontier": assessed.assessment.new_frontier if assessed is not None else None,
         "observe_label": observe_label,
         "zoom_channel_tag": motion.channel_tag,
         "zoom_before_value": (

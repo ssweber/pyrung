@@ -22,15 +22,6 @@ from pyrung.core.analysis.pilot.types import ChannelMotion, _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
 
-class Outcome(Enum):
-    """Which of the four verify outcomes occurred after a pilot action."""
-
-    CONFIRMED = "confirmed"
-    BAD_EDGE = "bad_edge"
-    AMBIENT_DRIFT = "ambient"
-    FRONTIER = "frontier"
-
-
 class Agency(Enum):
     """Best observed attribution for the trial's relevant motion."""
 
@@ -56,34 +47,20 @@ class ProgressEffect(Enum):
     earned-work receipt establish for this trial.
     """
 
-    ADVANCED = "advanced"
-    PRESERVED = "preserved"
-    BEHIND = "behind"
+    FORWARD = "forward"
+    UNCHANGED = "unchanged"
+    BACKWARD = "backward"
 
 
 @dataclass(frozen=True)
 class TrialAssessment:
-    """Orthogonal evidence returned by trial verification.
-
-    ``Outcome`` is a compatibility projection. Policy should read these axes
-    rather than infer semantics from the execution mode's label.
-    """
+    """Orthogonal evidence returned by trial verification."""
 
     agency: Agency
     bearing: BearingEffect
     progress: ProgressEffect
     new_frontier: bool
     accepted: bool
-
-    @property
-    def legacy_outcome(self) -> Outcome:
-        if not self.accepted:
-            return Outcome.BAD_EDGE
-        if self.bearing is BearingEffect.DEPARTED:
-            return Outcome.AMBIENT_DRIFT
-        if self.bearing is BearingEffect.EXPOSED:
-            return Outcome.FRONTIER
-        return Outcome.CONFIRMED
 
 
 def confirmed_entry(
@@ -136,7 +113,7 @@ def _action_caused_regression(
 
 
 # ---------------------------------------------------------------------------
-# Outcome classifier
+# Trial assessment
 # ---------------------------------------------------------------------------
 
 
@@ -166,11 +143,11 @@ def assess_outcome(
     if (
         channel_motion.active and earned_work_receipt.any_forward
     ) or new_trend < frame.distance_before:
-        progress = ProgressEffect.ADVANCED
+        progress = ProgressEffect.FORWARD
     elif new_trend == frame.distance_before:
-        progress = ProgressEffect.PRESERVED
+        progress = ProgressEffect.UNCHANGED
     else:
-        progress = ProgressEffect.BEHIND
+        progress = ProgressEffect.BACKWARD
 
     if channel_motion.active:
         if channel_motion.reached:
@@ -282,8 +259,3 @@ def assess_outcome(
         has_new_frontier,
         False,
     )
-
-
-def classify_outcome(*args: Any, **kwargs: Any) -> Outcome:
-    """Compatibility projection for focused callers and external probes."""
-    return assess_outcome(*args, **kwargs).legacy_outcome
