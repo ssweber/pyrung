@@ -341,7 +341,6 @@ def guard_verdict(
     pdg: ProgramGraph,
     program: Any,
     domains: dict[str, tuple[Any, ...]] | None = None,
-    require_complete_domains: bool = True,
 ) -> str:
     """Whether a writer guard can fire under the pins the writer imposes.
 
@@ -363,16 +362,10 @@ def guard_verdict(
       guard (the skiff's escalation signal).
 
     ``fixed`` pins what the writer *forces* — its copy/calc source and any
-    context. By default, every free tag must pass :func:`_is_complete_domain`
-    before enumeration: a Bool supplies ``(False, True)`` and ``domains`` carries
+    context. Every free tag must pass :func:`_is_complete_domain` before
+    enumeration: a Bool supplies ``(False, True)`` and ``domains`` carries
     prover-owned complete domains. Missing completeness returns
     :data:`GUARD_PUNT` even when a softer plausible domain can be inferred.
-
-    ``require_complete_domains=False`` is an explicit escape for a caller that
-    independently owns the completeness proof or needs a model-relative
-    diagnostic. It preserves enumeration over plausible domains, but a
-    :data:`GUARD_DEAD` result in that mode must not drive permanent rejection.
-    Unknown domains, undecidable terms, and exceeded guardrails still punt.
     """
     from pyrung.core.analysis.pilot.static_expressions import simplified_expr_tags
     from pyrung.core.analysis.prove.expr import _eval_expr_from_state
@@ -393,7 +386,7 @@ def guard_verdict(
 
     free_domains: list[tuple[Any, ...]] = []
     for tag in free:
-        if require_complete_domains and not _is_complete_domain(tag, pdg, domains):
+        if not _is_complete_domain(tag, pdg, domains):
             return GUARD_PUNT
         dom = _guard_operand_domain(tag, snapshot, pdg, program, domains)
         if dom is None:

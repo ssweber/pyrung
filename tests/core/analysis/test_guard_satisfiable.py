@@ -53,7 +53,6 @@ def _verdict(
     *,
     domains=None,
     snapshot=None,
-    require_complete_domains=True,
 ):
     prog, pdg = ctx
     return guard_verdict(
@@ -63,7 +62,6 @@ def _verdict(
         pdg=pdg,
         program=prog,
         domains=domains or {},
-        require_complete_domains=require_complete_domains,
     )
 
 
@@ -156,20 +154,6 @@ def test_explicit_complete_domain_can_prove_dead(incomplete_domain_ctx):
         pdg=pdg,
         program=prog,
         domains={"SoftMode": (1, 2)},
-    )
-    assert verdict == GUARD_DEAD
-
-
-def test_incomplete_domain_opt_out_is_explicitly_model_relative(incomplete_domain_ctx):
-    """The compatibility escape preserves old soft-domain enumeration."""
-    prog, pdg, snapshot = incomplete_domain_ctx
-    verdict = guard_verdict(
-        Atom("SoftMode", "eq", 9),
-        fixed={},
-        snapshot=snapshot,
-        pdg=pdg,
-        program=prog,
-        require_complete_domains=False,
     )
     assert verdict == GUARD_DEAD
 
