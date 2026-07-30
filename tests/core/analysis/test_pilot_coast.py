@@ -886,7 +886,7 @@ class TestCyclefoldDispatch:
 
         assert receipt.stop_reason == "reached"
         assert plc.state.tags["Target"] is True
-        # cyclefold ran real scans (it can't dt-jump past the pet oscillation).
+        # Cyclefold ran kernel scans (it can't dt-jump past the pet oscillation).
         assert receipt.kernel_scans > 0
         # The held input actually oscillated during the coast.
         seen = {

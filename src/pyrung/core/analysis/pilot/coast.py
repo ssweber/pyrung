@@ -508,7 +508,7 @@ class CoastSession:
         return receipt
 
     def dwell(self, scans: int) -> CoastReceipt:
-        """Run exactly *scans* real scans — a fixed dwell, not a seek.
+        """Run exactly *scans* kernel scans — a fixed dwell, not a seek.
 
         The one waiting shape with no predicate (a pulse's fixed settle
         window): explicit by design, never disguised as a trigger.
@@ -602,7 +602,7 @@ class CoastSession:
         Quiescence, not silence-for-N: stop the first scan (after *floor*)
         that no watched tag changed since the previous scan — a watched-tag
         fixpoint.  Deliberately step-mode: the fixpoint compares consecutive
-        real scans, which a fold would compress away; the ceiling keeps the
+        kernel scans, which a fold would compress away; the ceiling keeps the
         window small (the fold handles long dwells via :meth:`seek`).
 
         ``reached_fn`` (over the tags dict) short-circuits the dwell so a

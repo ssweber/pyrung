@@ -81,7 +81,7 @@ def run_skiff_scan(
     extra_tags: frozenset[str] = frozenset(),
     scans: int = 1,
 ) -> SkiffResult:
-    """Run a real scan window while pinning non-participating tags.
+    """Run a kernel scan window while pinning non-participating tags.
 
     The scan uses a fork and does not mutate the caller's PLC. The program still
     executes normally; isolation is achieved by forcing every mutable tag outside

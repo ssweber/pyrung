@@ -66,17 +66,17 @@ target, rather than cycle detection.
 `CoastReceipt` exposes:
 
 - `end_scan - start_scan`, which is a usable logical/advanced scan count;
-- `real_scans`;
-- `folds`.
+- `kernel_scans`;
+- `macro_folds`.
 
-However, `real_scans` and `folds` are incremented only by the cyclefold branch
+However, those fields are incremented only by the cyclefold branch
 of `CoastSession.seek`. The ordinary `fold_run_until` branch does not report its
 probe scans or macro folds.
 
 As a result, built-in debug output reported lines such as:
 
 ```text
-10000 scan-ids, 2 real scans, 0 folds
+10000 scan-ids, 2 kernel scans, 0 macro folds
 ```
 
 for coasts where the profile showed thousands of runner probes and fold
@@ -90,8 +90,8 @@ Tumbler decision skeletons intentionally remove scan IDs, durations, and fold
 counters, so the golden skeleton is not a performance diagnostic.
 
 The only trustworthy general mechanism currently in-tree is the test helper
-`tests/core/test_fold.py::_count_real_scans`, which wraps
-`PLC._run_single_scan`. It counts both ordinary probes and the real execution
+`tests/core/test_fold.py::_count_kernel_scans`, which wraps
+`PLC._run_single_scan`. It counts both ordinary probes and the kernel execution
 inside every macro fold, but it is test-only instrumentation.
 
 ## Cyclefold value
@@ -101,14 +101,14 @@ receipt reported:
 
 ```text
 31,014 logical scans
-914 real scans
+914 kernel scans
 3 cyclefold jumps
 ```
 
 That means:
 
 - 30,100 scan executions avoided;
-- 97.1% fewer real scans;
+- 97.1% fewer kernel scans;
 - about 33.9x fewer kernel executions than scan-by-scan.
 
 The profiled prefix contained two equivalent replay coasts. Across all seven
@@ -164,9 +164,8 @@ without monkeypatches or cProfile.
 - [x] Give both fold engines the same core diagnostic keys:
   `logical_scans`, `kernel_scans`, `macro_folds`, and `skipped_scans`.
 - [x] Retain cyclefold's scan-by-scan counterfactual and saved-kernel-scan
-  counts alongside its compatibility keys.
-- [x] Expose correctly named `CoastReceipt` properties while retaining
-  `real_scans` and `folds` for compatibility.
+  counts alongside its core work metrics.
+- [x] Expose correctly named `CoastReceipt` work properties.
 - [x] Aggregate inner ordinary-fold work through composite landing receipts.
 - [x] Correct coast debug output to report logical scans, kernel scans, skipped
   scans, and macro folds.
@@ -178,8 +177,6 @@ without monkeypatches or cProfile.
 - [ ] Aggregate runner-fold and cyclefold breakdowns separately across every
   composite coast operation.
 - [ ] Add an opt-in final `how()` work summary using the receipt totals.
-- [ ] Decide when the compatibility names `real_scans` and `folds` can be
-  deprecated in favor of the precise names.
 
 ### Follow-up performance
 
@@ -392,7 +389,7 @@ scans and `cause()`:
 | Empirical program-write discovery, three calls | 1.391 s |
 | Remaining analysis/control | approximately 1.6 s |
 
-The cycle-fold control cost is not cycle detection. Across 5,016 real scans:
+The cycle-fold control cost is not cycle detection. Across 5,016 kernel scans:
 
 - the armed predicates took 0.359 seconds;
 - 613 `detect_cycle` calls took 0.188 seconds;

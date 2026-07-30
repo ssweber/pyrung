@@ -461,13 +461,13 @@ class TestSystemClockFold:
 # ---------------------------------------------------------------------------
 
 
-def _count_real_scans(plc: PLC) -> dict[str, int]:
-    """Wrap ``_run_single_scan`` to count real interpreter passes.
+def _count_kernel_scans(plc: PLC) -> dict[str, int]:
+    """Wrap ``_run_single_scan`` to count kernel executions.
 
     Every probe scan and every ``_do_fold`` step routes through
     ``_run_single_scan`` — the single choke point — so the count is the true
-    "real work" done, independent of how far ``scan_id`` (equivalent elapsed
-    time) advances.  Call after ``step()`` so only the run-loop work is counted.
+    kernel work done, independent of how far ``scan_id`` (equivalent elapsed
+    time) advances. Call after ``step()`` so only the run-loop work is counted.
     """
     counter = {"n": 0}
     original = plc._run_single_scan
@@ -513,7 +513,7 @@ class TestInertSignalFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
-        counter = _count_real_scans(plc_fold)
+        counter = _count_kernel_scans(plc_fold)
         plc_fold.run_for(30.0, fold=True)
 
         prog2 = self._clock_heartbeat_program()
@@ -526,7 +526,7 @@ class TestInertSignalFold:
         assert plc_fold.state.tags["Extent"] == 7
         assert plc_fold.state.tags["Extent"] == plc_nofold.state.tags["Extent"]
         # Efficiency (fails today): the clock cap currently lands on every
-        # 0.5 s half-period edge (~60 over 30 s, ~2 real scans each).  An inert
+        # 0.5 s half-period edge (~60 over 30 s, ~2 kernel scans each). An inert
         # heartbeat should collapse the whole span into a handful of passes.
         assert counter["n"] <= 12
 
@@ -611,13 +611,13 @@ class TestInertSignalFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
-        counter = _count_real_scans(plc_fold)
+        counter = _count_kernel_scans(plc_fold)
         plc_fold.run_for(5.0, fold=True)  # 500 scans
 
         # Correctness (holds today): scan-by-scan still settles Extent.
         assert plc_fold.state.tags["Extent"] == 7
         # Efficiency (fails today): reading scan_clock_toggle disables the fold
-        # entirely → ~500 real scans.  Inert recompute should collapse it.
+        # entirely → ~500 kernel scans. Inert recompute should collapse it.
         assert counter["n"] <= 12
 
     # ── Phase 3: scan_counter as a virtual monotonic crossing ────────────
@@ -643,7 +643,7 @@ class TestInertSignalFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        counter = _count_real_scans(plc_fold)
+        counter = _count_kernel_scans(plc_fold)
         plc_fold.run_for(5.0, fold=True)  # 500 scans; crosses scan_counter == 250
 
         prog2 = self._scan_counter_tick_program(threshold=250)
@@ -655,7 +655,7 @@ class TestInertSignalFold:
         # Correctness (holds today): the crossing fires exactly once.
         assert plc_fold.state.tags["Ticks"] == plc_nofold.state.tags["Ticks"] == 1
         # Efficiency (fails today): reading scan_counter disables the fold →
-        # ~500 real scans.  The crossing arithmetic should land near scan 250.
+        # ~500 kernel scans. The crossing arithmetic should land near scan 250.
         assert counter["n"] <= 12
 
 
@@ -839,7 +839,7 @@ class TestClockSaturationFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True, "A": 3, "B": 4})
         plc_fold.step()
-        counter = _count_real_scans(plc_fold)
+        counter = _count_kernel_scans(plc_fold)
         plc_fold.run_for(30.0, fold=True)
 
         prog2 = self._stable_saturated_program()
@@ -989,7 +989,7 @@ class TestUnreadAccumulatorFold:
         plc_fold = PLC(prog, dt=0.010)
         plc_fold.patch({"Enable": True})
         plc_fold.step()
-        counter = _count_real_scans(plc_fold)
+        counter = _count_kernel_scans(plc_fold)
         plc_fold.run_for(5.0, fold=True)  # 500 scans; timer never completes (100 s)
 
         prog2, _ = self._unread_timer_program(preset_ms=100_000)
@@ -1210,7 +1210,7 @@ class TestFrozenRungWrites:
 
         plc.patch({"Enable": True, "Sensor": True})
         plc.step()
-        counter = _count_real_scans(plc)
+        counter = _count_kernel_scans(plc)
         plc.run_until(Tmr.Done, max_cycles=20_000, fold=True)
 
         assert plc.state.tags["Done"] is True

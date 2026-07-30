@@ -194,7 +194,7 @@ def _install_oscillator(plc: PLC, tag: str):
 
 class TestCycleFoldBitEqual:
     @staticmethod
-    def _assert_normalized_fallback_stats(
+    def _assert_fallback_stats(
         plc: PLC,
         *,
         fold_context_updates: dict[str, object],
@@ -215,27 +215,25 @@ class TestCycleFoldBitEqual:
         assert stats["logical_scans"] == 4
         assert stats["kernel_scans"] <= stats["logical_scans"]
         assert stats["macro_folds"] >= 0
-        assert "real_scans" not in stats
-        assert "folds" not in stats
 
-    def test_scan_derived_fallback_exposes_only_normalized_stats(self) -> None:
+    def test_scan_derived_fallback_exposes_runner_stats(self) -> None:
         plc = PLC(_active_hold_soak())
-        self._assert_normalized_fallback_stats(
+        self._assert_fallback_stats(
             plc,
             fold_context_updates={"scan_derived_names": frozenset({"scan_counter"})},
         )
 
-    def test_off_grid_clock_fallback_exposes_only_normalized_stats(self) -> None:
+    def test_off_grid_clock_fallback_exposes_runner_stats(self) -> None:
         plc = PLC(_active_hold_soak())
-        self._assert_normalized_fallback_stats(
+        self._assert_fallback_stats(
             plc,
             # dt=0.01, so this clock's 2.5-scan full period cannot align.
             fold_context_updates={"clock_half_periods": (0.0125,)},
         )
 
-    def test_pathological_clock_lcm_fallback_exposes_only_normalized_stats(self) -> None:
+    def test_pathological_clock_lcm_fallback_exposes_runner_stats(self) -> None:
         plc = PLC(_active_hold_soak())
-        self._assert_normalized_fallback_stats(
+        self._assert_fallback_stats(
             plc,
             # dt=0.01 gives a 4097-scan full period, beyond the cycle bound.
             fold_context_updates={"clock_half_periods": (20.485,)},
@@ -332,7 +330,7 @@ class TestCycleFoldBitEqual:
         assert cf.state.tags == ref.state.tags
         assert cf.state.scan_id == ref.state.scan_id
         assert cf.state.timestamp == pytest.approx(ref.state.timestamp)
-        # And it got there by folding, in a tiny fraction of the real scans.
+        # And it got there by folding, in a tiny fraction of the kernel scans.
         assert stats["macro_folds"] >= 1
         assert stats["kernel_scans"] < ref.state.scan_id // 10
         assert stats["logical_scans"] == cf.state.scan_id - 1
@@ -535,7 +533,7 @@ class TestCycleFoldAcrossClocks:
 
     def test_value_scales_with_soak_length(self) -> None:
         # Observation cost is ~fixed (period-bound); the fold absorbs the rest, so
-        # a 10x longer soak costs roughly the same real scans.
+        # a 10x longer soak costs roughly the same kernel scans.
         def run(soak_counts: int) -> int:
             cf = PLC(_clocked_active_hold_soak(soak_counts=soak_counts))
             cf.step()
@@ -547,6 +545,6 @@ class TestCycleFoldAcrossClocks:
 
         short = run(3_000)  # 3_000-scan soak
         long = run(30_000)  # 30_000-scan soak (10x)
-        # Real scans stay observation-bound: a 10x longer soak is nearly free.
+        # Kernel scans stay observation-bound: a 10x longer soak is nearly free.
         assert long < short * 2
         assert long < 3_000  # 10x more soak, an order of magnitude under its length

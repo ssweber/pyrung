@@ -347,10 +347,9 @@ def cycle_fold_until(
     trusting the cycle, bound every jump at the nearest comparison/preset crossing,
     and re-detect after each landing (the ring is cleared, so a regime change forces
     fresh observation). Fails closed everywhere it cannot certify a jump. The
-    public work metrics are ``kernel_scans`` and ``macro_folds`` (with
+    public work metrics are ``kernel_scans`` and ``macro_folds``, with
     ``logical_scans`` and ``skipped_scans`` derived alongside the diagnostic
-    breakdown); the ordinary-fold fallback deliberately filters its older
-    ``real_scans`` and ``folds`` keys.
+    breakdown.
     """
     from pyrung.core.fold import (
         _acc_totals,
@@ -365,22 +364,14 @@ def cycle_fold_until(
     dt = fold_ctx.normal_dt
 
     def _fall_back_to_runner_fold() -> bool:
-        fallback_stats: dict[str, int] | None = {} if stats is not None else None
         fold_run_until(
             plc,
             predicate,
             max_cycles=budget,
             fold_ctx=fold_ctx,
             extra_comparisons=extra_comparisons,
-            stats=fallback_stats,
+            stats=stats,
         )
-        if stats is not None:
-            assert fallback_stats is not None
-            stats.update(
-                (key, value)
-                for key, value in fallback_stats.items()
-                if key not in {"real_scans", "folds"}
-            )
         return bool(predicate(plc.state))
 
     # Scan-id-derived signals (scan_clock_toggle / scan_counter) change *every*

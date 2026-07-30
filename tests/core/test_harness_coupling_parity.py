@@ -153,7 +153,7 @@ def test_bool_glitch_is_suppressed_under_dwell() -> None:
 
 # ── bool dwell folds like a program timer ─────────────────────────────────────
 #    The on/off-delay timers are registered as ordinary fold sources, so a long
-#    dwell collapses to a handful of real scans (dt-knob) and lands *bit-equal*
+#    dwell collapses to a handful of kernel scans (dt-knob) and lands *bit-equal*
 #    to stepping scan-by-scan — not stepped one scan at a time.
 
 
@@ -170,13 +170,13 @@ def _bool_fold_plc(dt: float = 0.010):
     return plc
 
 
-def test_bool_dwell_folds_to_few_real_scans() -> None:
+def test_bool_dwell_folds_to_few_kernel_scans() -> None:
     plc = _bool_fold_plc()
-    real = [0]
+    kernel_scans = [0]
     orig = plc._run_single_scan
 
     def _counted(*a, **k):
-        real[0] += 1
+        kernel_scans[0] += 1
         return orig(*a, **k)
 
     plc._run_single_scan = _counted  # type: ignore[method-assign]
@@ -185,7 +185,7 @@ def test_bool_dwell_folds_to_few_real_scans() -> None:
 
     assert plc.state.tags["Fb"] is True
     assert plc.state.scan_id >= 200  # the dwell really was ~200 scans long
-    assert real[0] < 20  # …yet folded into a handful of real scans (not stepped)
+    assert kernel_scans[0] < 20  # …yet folded into a handful of kernel scans
 
 
 def test_bool_dwell_fold_matches_stepping() -> None:

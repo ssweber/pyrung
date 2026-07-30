@@ -1827,9 +1827,6 @@ def fold_run_until(
         stats["ordinary_folded_scans"] = ordinary_folded_scans
         stats["cycle_folded_scans"] = 0
         stats["residual_scans"] = kernel_scans
-        # Compatibility with cyclefold's original private stats vocabulary.
-        stats["real_scans"] = kernel_scans
-        stats["folds"] = macro_folds
     return runner._state
 
 

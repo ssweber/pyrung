@@ -339,10 +339,8 @@ an event stream, replay identity, or lower-level API.
   declines. Remove it only when registered reverse rules cover those affine
   writers.
 - `coast.py::CoastReceipt` owns structured stop evidence with stable string
-  `stop_reason` values; `cycle_fold_until` retains its Boolean return API.
-  PILOT filters lower-runner `real_scans` and `folds` cycle-fold details.
-  Remove that filter only after the lower runner normalizes those fields;
-  migrate the other APIs explicitly.
+  `stop_reason` values; `cycle_fold_until` returns the compact Boolean terminal
+  contract its callers consume.
 - `Compass` pair observations and pair nogoods are intentional pair semantics,
   not tuple compatibility wrappers.
 

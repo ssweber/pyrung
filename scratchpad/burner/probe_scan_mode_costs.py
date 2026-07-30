@@ -89,7 +89,7 @@ class ProbeStats:
     cycle_detection: Timing = field(default_factory=Timing)
     cycle_surface: Timing = field(default_factory=Timing)
     cycle_snapshot_samples: list[CycleSnapshotSample] = field(default_factory=list)
-    cycle_real_scans: int = 0
+    cycle_kernel_scans: int = 0
     trace_trees: Timing = field(default_factory=Timing)
     trace_roots: Counter[tuple[str, str]] = field(default_factory=Counter)
     trace_contexts: Counter[tuple[int, str, str]] = field(default_factory=Counter)
@@ -347,7 +347,7 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
             stats.cycle_fold.add(started)
             stats.cycle_fold_scan_ns += committed_scan_ns() - scans_before
             if isinstance(call_stats, dict):
-                stats.cycle_real_scans += call_stats.get("real_scans", 0)
+                stats.cycle_kernel_scans += call_stats.get("kernel_scans", 0)
             if fold_ctx is not None:
                 ignore = (
                     fold_ctx.frozen_writes
@@ -549,7 +549,7 @@ def run_probe(max_scans: int, wall_seconds: float) -> None:
     print(
         f"  remaining loop/snapshot control: "
         f"{cycle_fold_exclusive - known_cycle_control:.3f}s over "
-        f"{stats.cycle_real_scans:,} real scans"
+        f"{stats.cycle_kernel_scans:,} kernel scans"
     )
 
     if stats.program_write_calls:

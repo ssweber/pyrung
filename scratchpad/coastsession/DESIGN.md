@@ -125,9 +125,10 @@ receipt = session.seek(bumps, budget)      # arm a vector, run, land, record
 
 v1 proposed "silence-for-N is `run_until(changed)` with `max_cycles=N`". That is unsound:
 under fold `max_cycles` counts virtual scan-ids, so it answers "changed within N virtual
-scans", not "silent for N real scans" — and no existing mechanism expresses an N-real-scan
-window (Q8 of the core investigation). More fundamentally, silence is what the fold
-*compresses*; a silence-counter bump is anti-aligned with the engine.
+scans", not "silent for N kernel scans" — and no existing mechanism expresses an
+N-kernel-scan window (Q8 of the core investigation). More fundamentally,
+silence is what the fold *compresses*; a silence-counter bump is anti-aligned
+with the engine.
 
 The replacement is already in v1's own "event-driven landings" section, now made total:
 **quiescence, not silence**. A landing is quiescent when (a) the 2-scan propagation floor
