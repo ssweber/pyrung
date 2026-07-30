@@ -1194,10 +1194,6 @@ def _revoke_corrections(
             _checkpoint_with_pilot_rungs(saved, saved_pilot_rungs, key_config)
         )
     state.checkpoints = cleaned_checkpoints
-    restored_key = state.checkpoints[-1].key
-    # The same machine tags now carry different correction knowledge. Permit
-    # the retry; the revoked correction identity will be excluded explicitly.
-    state.seen_keys.discard(restored_key)
     return tuple(sorted(receipt_ids))
 
 
@@ -1460,13 +1456,9 @@ def _investigate_and_revert(
         ActionNogoodObservation(frame.key, ("pair", pair)) for pair in regression_nogoods
     ]
     if len(policy.applied) > 1:
-        observations.append(
-            ActionNogoodObservation(frame.key, act_identity(bearing_owner.act))
-        )
+        observations.append(ActionNogoodObservation(frame.key, act_identity(bearing_owner.act)))
     if observations:
-        ctx.compass, _ = ctx.compass.apply(
-            tuple(observations)
-        )
+        ctx.compass, _ = ctx.compass.apply(tuple(observations))
     # A regression inside pending motion returns to its local checkpoint
     # and keeps the bounded attempt open. Only an outer revert ends it.
     if state.pending_departure is not None:

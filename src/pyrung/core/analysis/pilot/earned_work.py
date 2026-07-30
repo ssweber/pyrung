@@ -136,6 +136,22 @@ class EarnedWorkReceipt:
         return any(reading.movement is EarnedWorkMovement.FORWARD for reading in self.readings)
 
 
+def earned_work_is_useful_motion(receipt: EarnedWorkReceipt) -> bool:
+    """Technician-tunable policy for treating earned work as useful motion.
+
+    The current policy intentionally accepts a mixed receipt when any proved
+    coordinate moved toward the target, even if another coordinate moved
+    backward and aggregate ``movement`` is therefore ``BACKWARD``. This mirrors
+    the useful local-motion signal used during messy machine departures.
+
+    Revisit callers must still apply credential novelty. This predicate says the
+    receipt contains admissible evidence; it does not authorize the same
+    source/action/landing transition more than once.
+    """
+
+    return receipt.any_forward
+
+
 @dataclass(frozen=True)
 class EarnedWork:
     components: tuple[EarnedWorkComponent, ...]

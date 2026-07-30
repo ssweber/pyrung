@@ -397,9 +397,7 @@ def test_crossing_batch_nogood_identity_is_canonical_and_falls_back(monkeypatch)
     assert act_identity(joint_pulse) == first_identity
     assert joint_pulse.policy.regression_nogoods == frozenset()
 
-    compass, _changed = compass.apply(
-        (ActionNogoodObservation(("world",), first_identity),)
-    )
+    compass, _changed = compass.apply((ActionNogoodObservation(("world",), first_identity),))
     second_result = compass.orient(
         _world(compass),
         TargetSpec("Target", True),
@@ -410,6 +408,33 @@ def test_crossing_batch_nogood_identity_is_canonical_and_falls_back(monkeypatch)
     assert isinstance(second_result.act, BatchPulse)
     assert second_result.act.actions == sibling.actions
     assert compass.knowledge.nogood_pairs(("world",)) == frozenset()
+
+
+def test_coast_identity_is_operational_and_order_insensitive() -> None:
+    def _coast(from_value, target_value, applied):
+        return Coast(
+            "bearing",
+            ActPolicy(
+                source=ActSource.ROUTE,
+                applied=applied,
+                heading=ChannelHeading(
+                    "Inner",
+                    4,
+                    route=RouteEdgeContext("Outer", from_value, target_value),
+                ),
+            ),
+        )
+
+    baseline = act_identity(_coast(1, 7, (("B", 2), ("A", 1))))
+    assert baseline == act_identity(_coast(99, 7, (("A", 1), ("B", 2))))
+    assert baseline != act_identity(_coast(1, 8, (("A", 1), ("B", 2))))
+
+
+def test_dwell_identity_normalizes_applied_overlay_order() -> None:
+    first = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("B", 2), ("A", 1))))
+    second = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("A", 1), ("B", 2))))
+
+    assert act_identity(first) == act_identity(second)
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:

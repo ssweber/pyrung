@@ -20,8 +20,11 @@ from pyrung import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWork,
+    EarnedWorkComponent,
     EarnedWorkMovement,
     build_earned_work,
+    earned_work_is_useful_motion,
 )
 from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -68,8 +71,6 @@ def test_knock_count_is_an_ordinal_component() -> None:
 
 def test_earned_work_receipt_keeps_source_landing_and_progress_order() -> None:
     """A consumer receives the evidence, not only a transient comparison."""
-    from pyrung.core.analysis.pilot.earned_work import EarnedWork, EarnedWorkComponent
-
     earned_work = EarnedWork((EarnedWorkComponent("Step", "stepper", 1),))
 
     advanced = earned_work.receipt({"Step": 101}, {"Step": 103})
@@ -97,6 +98,9 @@ def test_earned_work_receipt_keeps_source_landing_and_progress_order() -> None:
         EarnedWorkMovement.FORWARD,
         EarnedWorkMovement.BACKWARD,
     )
+    # The navigation heuristic intentionally retains the local forward signal;
+    # occurrence novelty, not aggregate movement, limits replay.
+    assert earned_work_is_useful_motion(mixed)
 
 
 def _step_chain_program():

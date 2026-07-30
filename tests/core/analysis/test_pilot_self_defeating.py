@@ -69,6 +69,7 @@ from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     CorrectionStatus,
     MotionKind,
+    RevisitCredential,
     _AcceptedTrial,
     _AttemptResult,
     _Checkpoint,
@@ -565,6 +566,19 @@ def _saboteur_scenario():
                 progress=ProgressEffect.UNCHANGED,
                 new_frontier=False,
                 accepted=True,
+            ),
+            revisit_credentials=(
+                RevisitCredential(
+                    kind="departure",
+                    source_world=("source",),
+                    act=("test-act",),
+                    transition=(
+                        "State",
+                        source_snapshot["State"],
+                        6,
+                        landing_snapshot["State"],
+                    ),
+                ),
             ),
         ),
     )

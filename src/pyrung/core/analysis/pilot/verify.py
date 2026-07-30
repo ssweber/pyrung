@@ -1,8 +1,9 @@
 """Judge an executed fork before it may replace the current world.
 
-``verify_gates`` applies avoid and target checks, rejects spins, visited states,
-and dead ends, then delegates motion attribution and progress classification to
-``outcome.py``. It reports a suspicious excursion to the drive loop without
+``verify_gates`` applies avoid and target checks, rejects spins and structural
+dead ends, delegates motion attribution and progress classification to
+``outcome.py``, then decides whether that classified landing may revisit an
+executable world. It reports a suspicious excursion to the drive loop without
 performing runtime investigation. ``verify_excursion_retry`` judges the one
 replay returned by that owner and resumes after the spin gate.
 
@@ -25,11 +26,16 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     NavigationEvidence,
     Reachable,
 )
-from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement, EarnedWorkReceipt
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWorkMovement,
+    EarnedWorkReceipt,
+    earned_work_is_useful_motion,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
+    act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import assess_outcome
 from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
@@ -38,6 +44,7 @@ from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
     PilotGateEvent,
+    RevisitCredential,
     TargetReached,
     _AcceptedTrial,
     _ActionPair,
@@ -46,8 +53,9 @@ from pyrung.core.analysis.pilot.types import (
     _ExecutionEvidence,
     _PulseState,
 )
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.instruction.advance import constraint_holds
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +123,33 @@ def _owned_channel_motion(
         else "timeout"
     )
     return replace(motion, stop_reason=stop_reason)
+
+
+def _replayed_channel_motion(
+    retry_snap: dict[str, Any],
+    source_snap: dict[str, Any],
+    motion: ChannelMotion,
+) -> ChannelMotion:
+    """Classify a correction replay without reusing the original coast receipt."""
+    if not motion.active:
+        return motion
+    channel_tag = motion.channel_tag
+    assert channel_tag is not None
+    if motion.boundary is not None and constraint_holds(motion.boundary, retry_snap) is True:
+        return replace(motion, stop_reason="reached")
+    if _values_match(retry_snap.get(channel_tag), motion.target_value):
+        return replace(motion, stop_reason="reached")
+    if not _values_match(retry_snap.get(channel_tag), source_snap.get(channel_tag)):
+        return replace(motion, stop_reason="departed")
+    return replace(motion, stop_reason="timeout")
+
+
+def _executed_source_world_key(frame: Any, state: Any) -> tuple[Any, ...]:
+    """Source identity after execution installed bearing prerequisites."""
+    key_config = state.key_config
+    if key_config is None:
+        return frame.key
+    return _pilot_world_key(frame.snap, key_config, state.pilot_rungs)
 
 
 def _accepted_trial(
@@ -189,7 +224,7 @@ def _gate_spin(
             if earned_work is not None
             else EarnedWorkReceipt()
         )
-    if earned_work_receipt.any_forward:
+    if earned_work_is_useful_motion(earned_work_receipt):
         _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         return _SpinVerdict.PASS
 
@@ -199,46 +234,71 @@ def _gate_spin(
     return _SpinVerdict.SPIN
 
 
-def _gate_cycle(
+def _gate_revisit(
     trial: _PulseState,
     state: Any,
     *,
-    pending: bool,
     earned_work_receipt: EarnedWorkReceipt,
-    learned_prescribed: bool,
+    earned_credential: RevisitCredential | None,
+    departure_credential: RevisitCredential | None,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
 ) -> bool:
-    if trial.key not in state.seen_keys or pending:
+    """Admit a classified landing or reject a repeated executable world.
+
+    Pending transport work and navigation provenance are intentionally absent:
+    neither proves target-relative progress. A departure is incident authority
+    only once, using its exact source/action/channel occurrence.
+    """
+    if trial.key not in state.seen_keys:
         return True
-    # A revisit by the key's lights that advanced an event-earned ordinal is a
-    # NEW visit — ``(AtDoor, count=2)`` aliases ``(AtDoor, count=1)`` only in
-    # the threshold-masked projection (see _gate_spin's twin check).
-    if earned_work_receipt.any_forward:
+    if (
+        earned_work_is_useful_motion(earned_work_receipt)
+        and earned_credential is not None
+        and earned_credential.kind == "earned-work"
+        and earned_credential not in state.consumed_revisits
+    ):
         _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         return True
-    if not learned_prescribed:
-        if nogood_pair is not None:
-            collected_nogoods.append(nogood_pair)
+    if (
+        departure_credential is not None
+        and departure_credential.kind == "departure"
+        and departure_credential not in state.consumed_revisits
+    ):
         _record_gate(
-            "CYCLE",
+            "DEPARTURE-REVISIT",
+            ": novel departure occurrence",
             gate_events=gate_events,
             evidence={
                 "trial_key": trial.key,
                 "seen": True,
-                "pending_effects": pending,
                 "ordinal_advanced": False,
-                "learned_prescribed": learned_prescribed,
+                "departure_credential": departure_credential,
+                "consumed": False,
             },
         )
-        return False
+        return True
+    if nogood_pair is not None:
+        collected_nogoods.append(nogood_pair)
     _record_gate(
-        "LEARNED-OVERRIDE-CYCLE",
-        ": learned-prescribed",
-        gate_events,
+        "CYCLE",
+        gate_events=gate_events,
+        evidence={
+            "trial_key": trial.key,
+            "seen": True,
+            "ordinal_advanced": False,
+            "earned_credential": earned_credential,
+            "earned_work_consumed": (
+                earned_credential is not None and earned_credential in state.consumed_revisits
+            ),
+            "departure_credential": departure_credential,
+            "departure_consumed": (
+                departure_credential is not None and departure_credential in state.consumed_revisits
+            ),
+        },
     )
-    return True
+    return False
 
 
 def _gate_dead_end(
@@ -250,7 +310,6 @@ def _gate_dead_end(
     *,
     target: TargetSpec,
     earned_work_receipt: EarnedWorkReceipt,
-    learned_prescribed: bool,
     nogood_pair: _ActionPair | None,
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
@@ -273,7 +332,7 @@ def _gate_dead_end(
     # this gate is unchanged for them.)
     channel_reached = channel_motion.reached
     channel_moved = channel_motion.departed
-    accept_override = learned_prescribed or channel_reached or channel_moved
+    accept_override = channel_reached or channel_moved
     new_tree = trace_back(
         target.tag,
         target.value,
@@ -330,7 +389,6 @@ def _gate_dead_end(
                     "new_actions": tuple(sorted(new_actions, key=repr)),
                     "reachable_frontier": reachable_frontier,
                     "pending_effects": pending,
-                    "learned_prescribed": learned_prescribed,
                     "channel_reached": channel_reached,
                     "channel_moved": channel_moved,
                     "trend_before": frame.distance_before,
@@ -339,14 +397,8 @@ def _gate_dead_end(
             )
             return None
         _record_gate(
-            "CHANNEL-OVERRIDE-DEAD-END"
-            if (channel_reached or channel_moved)
-            else "LEARNED-OVERRIDE-DEAD-END",
-            ": channel target reached"
-            if channel_reached
-            else ": channel ejected"
-            if channel_moved
-            else ": learned-prescribed",
+            "CHANNEL-OVERRIDE-DEAD-END",
+            ": channel target reached" if channel_reached else ": channel ejected",
             gate_events,
         )
     elif (
@@ -357,7 +409,7 @@ def _gate_dead_end(
         # An event-earned ordinal advance is trend improvement the tree can't
         # see: ``count 1 -> 2`` leaves the ``count >= 3`` leaf unsatisfied and
         # the action set unchanged, yet the trial did a third of the work.
-        if earned_work_receipt.any_forward:
+        if earned_work_is_useful_motion(earned_work_receipt):
             _record_gate("ORDINAL-ADVANCE", ": earned work advanced", gate_events)
         elif not accept_override:
             if nogood_pair is not None:
@@ -372,7 +424,6 @@ def _gate_dead_end(
                     "action_inputs": tuple(sorted(applied_inputs, key=repr)),
                     "trend_before": frame.distance_before,
                     "trend_after": new_trend,
-                    "learned_prescribed": learned_prescribed,
                     "channel_reached": channel_reached,
                     "channel_moved": channel_moved,
                 },
@@ -380,14 +431,8 @@ def _gate_dead_end(
             return None
         else:
             _record_gate(
-                "CHANNEL-OVERRIDE-LATERAL"
-                if (channel_reached or channel_moved)
-                else "LEARNED-OVERRIDE-LATERAL",
-                ": channel target reached"
-                if channel_reached
-                else ": channel ejected"
-                if channel_moved
-                else ": learned-prescribed",
+                "CHANNEL-OVERRIDE-LATERAL",
+                ": channel target reached" if channel_reached else ": channel ejected",
                 gate_events,
             )
 
@@ -415,6 +460,7 @@ def _verify_after_spin(
     avoid_names: list[str],
     earned_work_receipt: EarnedWorkReceipt,
     channel_motion: ChannelMotion,
+    source_world_key: tuple[Any, ...],
     observations: tuple[Any, ...] = (),
 ) -> _AttemptResult:
     """Run the gates after spin judgment for an original or replayed attempt."""
@@ -457,19 +503,6 @@ def _verify_after_spin(
             avoid_names=tuple(avoid_names),
         )
 
-    pending = _has_pending_effects(trial.fork)
-    if not _gate_cycle(
-        trial,
-        state,
-        pending=pending,
-        earned_work_receipt=earned_work_receipt,
-        learned_prescribed=policy.learned_prescribed,
-        nogood_pair=nogood_pair,
-        gate_events=gate_events,
-        collected_nogoods=collected_nogoods,
-    ):
-        return _reject()
-
     dead_end = _gate_dead_end(
         trial,
         policy.applied,
@@ -478,7 +511,6 @@ def _verify_after_spin(
         ctx,
         target=bearing.objective.target,
         earned_work_receipt=earned_work_receipt,
-        learned_prescribed=policy.learned_prescribed,
         nogood_pair=nogood_pair,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
@@ -526,6 +558,46 @@ def _verify_after_spin(
         )
         return _reject()
 
+    departure_credential = (
+        RevisitCredential(
+            kind="departure",
+            source_world=source_world_key,
+            act=act_identity(bearing.act),
+            transition=(
+                channel_motion.channel_tag,
+                _semantic_key(frame.snap.get(channel_motion.channel_tag)),
+                _semantic_key(channel_motion.target_value),
+                _semantic_key(trial.snap.get(channel_motion.channel_tag)),
+            ),
+        )
+        if channel_motion.departed and channel_motion.channel_tag is not None
+        else None
+    )
+    earned_credential = (
+        RevisitCredential(
+            kind="earned-work",
+            source_world=source_world_key,
+            act=act_identity(bearing.act),
+            transition=(
+                _semantic_key(earned_work_receipt.source_mark),
+                _semantic_key(earned_work_receipt.landing_mark),
+            ),
+        )
+        if earned_work_is_useful_motion(earned_work_receipt)
+        else None
+    )
+    if not _gate_revisit(
+        trial,
+        state,
+        earned_work_receipt=earned_work_receipt,
+        earned_credential=earned_credential,
+        departure_credential=departure_credential,
+        nogood_pair=nogood_pair,
+        gate_events=gate_events,
+        collected_nogoods=collected_nogoods,
+    ):
+        return _reject()
+
     gate_events.append(
         PilotGateEvent(
             assessment.bearing.value,
@@ -551,6 +623,11 @@ def _verify_after_spin(
                 new_key=trial.key,
                 trend=dead_end.trend,
                 assessment=assessment,
+                revisit_credentials=tuple(
+                    credential
+                    for credential in (departure_credential, earned_credential)
+                    if credential is not None
+                ),
             ),
         ),
         gate_events=tuple(gate_events),
@@ -651,10 +728,10 @@ def verify_excursion_retry(
         fork=retry_fork,
         snap=retry_snap,
         key=retry_key,
+        coast_receipt=None,
         timeline=investigation_result.retry_timeline,
         confirmed_correction=correction,
     )
-    retry_attempt = replace(attempt, pulse=retry_trial)
     earned_work = getattr(state, "earned_work", None)
     earned_work_receipt = (
         earned_work.receipt(frame.snap, retry_snap)
@@ -670,10 +747,13 @@ def verify_excursion_retry(
         if policy.heading is not None
         else ChannelMotion()
     )
-    channel_motion = _owned_channel_motion(
-        trial,
+    channel_motion = _replayed_channel_motion(
+        retry_snap,
+        frame.snap,
         trial.channel_motion if trial.channel_motion.active else declared_motion,
     )
+    retry_trial = replace(retry_trial, channel_motion=channel_motion)
+    retry_attempt = replace(attempt, pulse=retry_trial)
     return _verify_after_spin(
         retry_attempt,
         frame,
@@ -684,6 +764,11 @@ def verify_excursion_retry(
         avoid_names=avoid_names,
         earned_work_receipt=earned_work_receipt,
         channel_motion=channel_motion,
+        source_world_key=_pilot_world_key(
+            frame.snap,
+            key_config,
+            retry_pilot_rungs,
+        ),
         observations=observations,
     )
 
@@ -696,8 +781,8 @@ def verify_gates(
 ) -> _AttemptResult:
     """Apply the shared trial gates to an executed pulse or coast.
 
-    Runs avoid and target checks, then spin, cycle, and dead-end gates followed
-    by outcome classification. Condition-like avoids fired by a folded coast
+    Runs avoid and target checks, then spin and dead-end gates, outcome
+    classification, and finally revisit admission. Condition-like avoids fired by a folded coast
     arrive on its receipt; opaque callables are checked only at endpoints and
     real snapshots retained by execution. All steering execution modes
     converge here.
@@ -888,4 +973,5 @@ def verify_gates(
         avoid_names=retry_avoid_names,
         earned_work_receipt=earned_work_receipt,
         channel_motion=channel_motion,
+        source_world_key=_executed_source_world_key(frame, state),
     )

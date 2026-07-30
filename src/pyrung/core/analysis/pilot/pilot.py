@@ -35,7 +35,10 @@ from pyrung.core.analysis.pilot.compass import (
     NavigationCatalog,
     ProbeExhaustedObservation,
 )
-from pyrung.core.analysis.pilot.earned_work import build_earned_work
+from pyrung.core.analysis.pilot.earned_work import (
+    build_earned_work,
+    earned_work_is_useful_motion,
+)
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
@@ -745,6 +748,11 @@ def _commit_trial(
         work=work,
         committed_acts=state.committed_acts.append(act),
     )
+    if isinstance(verified, AssessedMotion):
+        # Revisit novelty is invocation knowledge. Consume every credential
+        # only after adopting the accepted execution, and never roll it back
+        # with _World.
+        state.consumed_revisits.update(verified.revisit_credentials)
     # The world record reverts; the flattened journey is the append-only public
     # history of every physical step, including later-reverted operations.
     state.journey.extend(steps)
@@ -759,7 +767,7 @@ def _commit_trial(
         productive = (
             not key_was_seen
             or execution.channel_motion.reached
-            or trial.earned_work_receipt.any_forward
+            or earned_work_is_useful_motion(trial.earned_work_receipt)
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - pulse.scan_before

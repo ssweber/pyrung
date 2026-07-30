@@ -11,7 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
@@ -76,6 +76,21 @@ class ChannelMotion:
     @property
     def departed(self) -> bool:
         return self.stop_reason == "departed"
+
+
+@dataclass(frozen=True)
+class RevisitCredential:
+    """Consumable identity of one policy-admissible revisit transition.
+
+    ``kind`` keeps different evidence protocols disjoint. ``transition`` holds
+    only canonical semantic identities, and ``source_world`` includes the
+    effective PILOT rung overlay.
+    """
+
+    kind: Literal["departure", "earned-work"]
+    source_world: _StateKey
+    act: tuple[Any, ...]
+    transition: tuple[Any, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +561,9 @@ class _PilotState:
     seen_keys: set[_StateKey]
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
+    # Invocation-local knowledge: reverting a handled transition must not
+    # authorize the same source/action/evidence occurrence for another lap.
+    consumed_revisits: set[RevisitCredential] = field(default_factory=set)
     # Physical scan where this PILOT invocation began. Search budgets are
     # relative to this anchor; accepted productive dwell is removed separately
     # by ``dwell_scans`` as the world advances and reverts.
@@ -760,6 +778,7 @@ class AssessedMotion:
     new_key: _StateKey
     trend: int
     assessment: TrialAssessment
+    revisit_credentials: tuple[RevisitCredential, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.assessment.accepted:

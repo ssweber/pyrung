@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _StateKey
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
@@ -307,36 +308,45 @@ class Stuck:
 OrientationResult = Bearing | NeedProbe | Stuck
 
 
+def _applied_identity(applied: tuple[_ActionPair, ...]) -> tuple[_ActionPair, ...]:
+    """Canonical identity of one atomic applied overlay."""
+    return tuple(
+        sorted(
+            ((tag, _semantic_key(value)) for tag, value in applied),
+            key=lambda pair: (pair[0], repr(pair[1])),
+        )
+    )
+
+
 def pulse_identity(applied: tuple[_ActionPair, ...]) -> tuple[Any, ...]:
     """Exact executable identity of one Pulse action overlay."""
 
-    canonical = tuple(sorted(applied, key=lambda pair: (pair[0], repr(pair[1]))))
-    return ("pulse", canonical)
+    return ("pulse", _applied_identity(applied))
 
 
 def act_identity(act: NavigationAct) -> tuple[Any, ...]:
-    """Stable identity used for world-scoped empirical nogoods."""
+    """Canonical executable identity used for empirical receipts."""
 
     if isinstance(act, Pulse):
         return pulse_identity(act.applied)
     if isinstance(act, BatchPulse):
-        return pulse_identity(act.actions)
+        return pulse_identity(act.policy.applied)
     if isinstance(act, Coast):
         heading = act.policy.heading
         route = heading.route if heading is not None else None
         identity = (
             "coast",
             act.mode,
+            _applied_identity(act.policy.applied),
             heading.channel_tag if heading is not None else None,
-            repr(heading.target_value if heading is not None else None),
-            repr(heading.boundary if heading is not None else None),
+            _semantic_key(heading.target_value if heading is not None else None),
+            _semantic_key(heading.boundary if heading is not None else None),
         )
         if route is not None:
             return (
                 *identity,
                 route.channel_tag,
-                repr(route.from_value),
-                repr(route.target_value),
+                _semantic_key(route.target_value),
             )
         return identity
-    return ("dwell",)
+    return ("dwell", _applied_identity(act.policy.applied))

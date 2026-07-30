@@ -83,6 +83,7 @@ from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     MotionKind,
     PilotEvent,
+    RevisitCredential,
     TargetReached,
     _AcceptedTrial,
     _Checkpoint,
@@ -95,6 +96,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
+from pyrung.core.analysis.pilot.verify import _gate_revisit
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
@@ -250,7 +252,29 @@ def _make_trial(
         ),
         earned_work_receipt=over.pop("earned_work_receipt", EarnedWorkReceipt()),
         gate_events=over.pop("gate_events", ()),
-        verification=AssessedMotion(pulse.key, trend, assessment),
+        verification=AssessedMotion(
+            pulse.key,
+            trend,
+            assessment,
+            revisit_credentials=over.pop(
+                "revisit_credentials",
+                (
+                    RevisitCredential(
+                        kind="departure",
+                        source_world=("source",),
+                        act=("test-act", action_pairs, applied),
+                        transition=(
+                            channel_motion.channel_tag or "Phase",
+                            before_snap.get(channel_motion.channel_tag or "Phase"),
+                            channel_motion.target_value,
+                            fork_snap.get(channel_motion.channel_tag or "Phase"),
+                        ),
+                    ),
+                )
+                if bearing is BearingEffect.DEPARTED
+                else (),
+            ),
+        ),
     )
     assert not over, f"unsupported trial overrides: {sorted(over)}"
     return trial
@@ -327,6 +351,62 @@ def _departure_result(
     return DepartureResult(observation, classification, reason)
 
 
+def test_exact_earned_work_replay_is_rejected_after_world_revert():
+    work = _oneshot_plc()
+    checkpoint = _cp(("source",), work.fork(), 2)
+    state = _make_state(best_trend=3, checkpoints=[checkpoint], work=work)
+    departure_credential = RevisitCredential(
+        kind="departure",
+        source_world=("source",),
+        act=("pulse", (("Advance", True),)),
+        transition=("Phase", 1, 2, 3),
+    )
+    earned_credential = RevisitCredential(
+        kind="earned-work",
+        source_world=("source",),
+        act=("pulse", (("Advance", True),)),
+        transition=((("Phase", 1),), (("Phase", 2),)),
+    )
+    landing_key = ("landing",)
+    fork = work.fork()
+    fork.step()
+    trial = _make_trial(
+        1,
+        BearingEffect.SATISFIED,
+        fork=fork,
+        scan_before=work.state.scan_id,
+        before_snap=dict(work.state.tags),
+        fork_snap=dict(fork.state.tags),
+        applied=(("Advance", True),),
+        new_key=landing_key,
+        earned_work_receipt=EarnedWorkReceipt((EarnedWorkReading("Phase", 1, 2, 1),)),
+        revisit_credentials=(departure_credential, earned_credential),
+    )
+
+    _commit_trial(
+        trial,
+        SimpleNamespace(),
+        state,
+        SimpleNamespace(resting={}, edge_tags=set(), live=False),
+    )
+
+    state.load_world(checkpoint.world)
+
+    assert state.consumed_revisits == {departure_credential, earned_credential}
+    gates = []
+    assert not _gate_revisit(
+        SimpleNamespace(key=landing_key),
+        state,
+        earned_work_receipt=EarnedWorkReceipt((EarnedWorkReading("Phase", 1, 2, 1),)),
+        earned_credential=earned_credential,
+        departure_credential=None,
+        nogood_pair=None,
+        gate_events=gates,
+        collected_nogoods=[],
+    )
+    assert gates[-1].event == "cycle"
+
+
 def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     """Commit composes ownership without rebuilding accepted evidence."""
     work = _oneshot_plc()
@@ -345,6 +425,12 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
         budget=1,
         advances=(("Acc", 7),),
     )
+    earned_occurrence = RevisitCredential(
+        kind="earned-work",
+        source_world=("source",),
+        act=("pulse", (("A", True),)),
+        transition=((("Phase", 1),), (("Phase", 2),)),
+    )
     trial = _make_trial(
         1,
         BearingEffect.SATISFIED,
@@ -355,6 +441,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
         candidate={"A": True},
         applied=(("A", True),),
         coast_receipt=receipt,
+        revisit_credentials=(earned_occurrence,),
     )
     state = _make_state(2, [], work=work)
     frame = SimpleNamespace()
@@ -366,6 +453,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     assert context.execution is trial.execution
     assert context.policy is trial.attempt.bearing.act.policy
     assert context.execution.accelerators == (("Acc", 7),)
+    assert state.consumed_revisits == {earned_occurrence}
 
     state.extend_last_step(fork.state.scan_id + 3)
     assert state.committed_acts[-1].context.execution is trial.execution

@@ -422,12 +422,6 @@ boundaries.
   `Eq`/`Cmp`/`AffineCmp` DNF is now preserved and navigated atomically.
   `Prior`, `CondAttr`, `Mask`, `Quant`, `External`, and non-atomic branch
   requirements may still be emitted but are not generically chased.
-- **Revisit identity and consumption:** `seen_keys: set` discards the source
-  world, exact action artifact, channel from/requested/landed values, whether a
-  departure occurrence was already investigated, and whether that
-  investigation changed executable knowledge. A fork-wide pending effect is
-  only observation liveness. Channel ownership is necessary incident evidence,
-  but neither a reached nor departed channel is by itself proof of progress.
 - **Uncertainty provenance:** `UNKNOWN` currently records no reason, so ranking
   cannot distinguish an unsupported destination shape from genuinely opaque
   runtime data.
@@ -511,20 +505,51 @@ The first cycle patch was discarded before landing. Replacing the old global
 - the cycle gate ran before outcome classification, so it could not make the
   decision from the evidence that actually judges usefulness.
 
-The intended boundary is outcome classification followed by revisit admission.
-A seen landing may proceed only when:
+The replacement now classifies the outcome before revisit admission. A seen
+landing may proceed only when:
 
 - the user target is reached;
-- target-relative earned work advanced; or
-- this is a novel, unconsumed departure occurrence that must enter post-commit
-  investigation exactly once.
+- the target-relative earned-work policy recognizes useful motion and its
+  source/action/source-mark/landing-mark credential is novel; or
+- a novel source/action/channel/from/requested/landed departure credential must
+  enter post-commit investigation.
 
-The departure credential should identify at least the source world, exact
-applied action artifact, and channel from/requested/landed values. Consuming it
-must prevent the same occurrence from authorizing another lap. A
-replay-confirmed correction changes the executable overlay and therefore the
-world key; it needs no `learned_prescribed` cycle override. Global pending
-effects remain spin/observation liveness only.
+The existing `ChannelMotion`, `DepartureObservation`, `EarnedWorkReceipt`, and
+pending-departure policy remain the factual and policy records. They are not
+duplicated into another domain model. Verification derives one small canonical
+`RevisitCredential(kind, source_world, act, transition)` as an idempotency key.
+Accepted credentials are consumed at commit in one invocation-local knowledge
+set, outside the revertible world, so rollback cannot manufacture another lap.
+The source world includes the effective PILOT rung overlay, and the act identity
+contains only operational distinctions.
+
+`earned_work_is_useful_motion()` is the single, named technician-tunable policy
+seam used by spin, dead-end, outcome, orientation, revisit, and dwell-credit
+decisions. Its current rule intentionally accepts a mixed receipt when any
+proved coordinate moves forward. Credential novelty, rather than a stricter
+aggregate movement rule, prevents an identical locally-forward rollback/replay
+from authorizing every lap.
+
+A replay-confirmed correction reclassifies channel motion from the retry's own
+landing, including relational boundary overshoot, and keys both source and
+landing with the corrected executable overlay. It therefore needs no
+`learned_prescribed` override. Global pending effects remain
+spin/observation liveness only.
+
+Information deliberately left on the table:
+
+- `channel reached` does not itself receive a credential when its executable
+  landing world is already known. This may discard a newly observed edge into
+  an old vertex, but it avoids granting every local ping-pong edge one extra
+  lap without hidden progress or an incident to handle.
+- Earned-work coverage remains conservative. Legitimate progress in an
+  unrecognized writer shape is rejected rather than guessed; extend
+  `build_earned_work()` instead of weakening revisit admission.
+- Scan number, retry counters, target identity, incidental raw snapshot
+  differences, and opaque timeline/producer IDs are excluded from credential
+  identity because they would make an identical replay appear novel.
+- A changed correction overlay, physical act, channel transition, or earned-work
+  mark is intentionally new evidence.
 
 An intentional frontier must return `UNKNOWN`, `REVERSE_FALLTHROUGH`, or an
 explicit opaque/external result. It must not inherit a representative crossing
@@ -582,8 +607,12 @@ defects:
 - recorded tag-bound comparison and unresolved-prior fixes;
 - atomic `(A AND B) OR (C AND D)` navigation for sound and proposed crossing
   DNF, with exact batch nogoods and recorded fidelity;
-- cycle/revisit audit recorded; the first replacement patch was explicitly
-  discarded pending outcome-then-revisit implementation.
+- outcome-classified revisit admission with canonical, consumable credentials
+  for departures and earned-work transitions;
+- one explicit technician-tunable useful-motion policy shared by every
+  earned-work navigation consumer;
+- correction-aware source identities and retry-owned channel-motion
+  classification.
 
 ### Phase 1: Stop the observed false route
 
@@ -637,17 +666,19 @@ defects:
 
 After the crossing fixes, independently repair cycle containment:
 
-- classify the executed outcome before deciding whether a seen landing may be
-  admitted;
-- remove global pending and static learned provenance as revisit authority;
-- admit a novel departure occurrence only once for post-commit investigation;
-- an unrelated pending timer must not permit repeated A↔B input churn;
-- a repeated source/action/channel landing becomes a no-good after its incident
-  credential is consumed;
-- a reached-to-seen landing without earned work is a cycle, not progress;
-- a replay-confirmed correction must re-key the executable world and permit the
-  corrected retry without an override;
-- crossing uncertainty must never be used as evidence of progress.
+- [x] classify the executed outcome before deciding whether a seen landing may
+  be admitted;
+- [x] remove global pending and static learned provenance as revisit authority;
+- [x] admit a novel departure credential only once for post-commit
+  investigation;
+- [x] prevent an unrelated pending effect from authorizing a revisit;
+- [x] reject a repeated source/action/channel landing after its credential is
+  consumed;
+- [x] treat a reached-to-seen landing without earned work as a cycle;
+- [x] re-key a replay-confirmed correction without a provenance override;
+- [x] keep crossing uncertainty out of progress evidence;
+- [x] consume a useful earned-work transition once per canonical
+  source/action/mark credential, preserving the tunable mixed-motion heuristic.
 
 ## Acceptance criteria
 

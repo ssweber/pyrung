@@ -17,7 +17,10 @@ from enum import Enum
 from typing import Any
 
 from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
-from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
+from pyrung.core.analysis.pilot.earned_work import (
+    EarnedWorkReceipt,
+    earned_work_is_useful_motion,
+)
 from pyrung.core.analysis.pilot.types import ChannelMotion, _ActionPair
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -134,9 +137,10 @@ def assess_outcome(
 ) -> TrialAssessment:
     """Judge a post-gate trial on independent evidence axes.
 
-    Called after SPIN, CYCLE, and DEAD-END gates have passed — the trial
+    Called after SPIN and DEAD-END gates have passed — the trial
     produced a real state change, a non-empty frontier, or an owned channel
-    landing that must reach post-commit handling.
+    landing that must reach post-commit handling. Revisit admission consumes
+    this classification afterward.
 
     Only the *immediate* requested channel value can satisfy a bearing.  A
     stored route suffix is intent, not evidence: landing on a later or earlier
@@ -144,7 +148,7 @@ def assess_outcome(
     that observed world means for target-relative progress.
     """
     if (
-        channel_motion.active and earned_work_receipt.any_forward
+        channel_motion.active and earned_work_is_useful_motion(earned_work_receipt)
     ) or new_trend < frame.distance_before:
         progress = ProgressEffect.FORWARD
     elif new_trend == frame.distance_before:
@@ -198,7 +202,7 @@ def assess_outcome(
         # the earned-work receipt proves earned work here. The honest
         # rejection is what frees the escalation ladder (terminal let-run,
         # skiff) to earn the holds this coast actually needs.
-        if earned_work_receipt.any_forward:
+        if earned_work_is_useful_motion(earned_work_receipt):
             return TrialAssessment(
                 agency,
                 BearingEffect.UNCHANGED,

@@ -1,14 +1,15 @@
 """Tests for pilot verify — gate pipeline for trial acceptance.
 
 Coverage targets:
-- verify_gates: the full gate sequence (avoid → target → spin → cycle → dead-end → outcome)
+- verify_gates: avoid → target → spin → dead-end → outcome → revisit
 - _gate_spin: state-key change detection, excursion retry
-- _gate_cycle: visited-key rejection, Compass learned-action override
+- _gate_revisit: ordinary, earned-work, and departure revisit admission
 - _gate_dead_end: empty frontier, lateral detection, channel override
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import MappingProxyType, SimpleNamespace
 
 import pytest
@@ -21,6 +22,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import NavigationEviden
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
     EarnedWorkComponent,
+    EarnedWorkReading,
     EarnedWorkReceipt,
 )
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
@@ -31,6 +33,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     BearingObjective,
     ChannelHeading,
+    Coast,
     Pulse,
     TargetSpec,
 )
@@ -41,6 +44,7 @@ from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
     MotionKind,
+    RevisitCredential,
     TargetReached,
     _AttemptResult,
     _ConfirmedCorrection,
@@ -49,16 +53,19 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import (
-    _gate_cycle,
+    _executed_source_world_key,
     _gate_dead_end,
+    _gate_revisit,
     _gate_spin,
     _owned_channel_motion,
+    _replayed_channel_motion,
     _SpinVerdict,
     verify_excursion_retry,
     verify_gates,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.condition import CompareEq
+from pyrung.core.crossing import Cmp
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
@@ -92,6 +99,49 @@ def test_wrong_outer_landing_retains_departure_receipt():
     )
 
     assert _owned_channel_motion(trial, ChannelMotion("State", 6)).departed
+
+
+def test_replay_reclassifies_stale_departure_from_corrected_landing():
+    stale = ChannelMotion("Phase", 2, stop_reason="departed")
+
+    assert _replayed_channel_motion({"Phase": 2}, {"Phase": 1}, stale).reached
+    assert _replayed_channel_motion({"Phase": 1}, {"Phase": 1}, stale).stop_reason == "timeout"
+    assert _replayed_channel_motion({"Phase": 3}, {"Phase": 1}, stale).departed
+
+
+def test_replay_relational_overshoot_reaches_owned_boundary():
+    stale = ChannelMotion(
+        "Accumulator",
+        4,
+        boundary=Cmp("Accumulator", ">=", 4),
+        stop_reason="departed",
+    )
+
+    assert _replayed_channel_motion(
+        {"Accumulator": 5},
+        {"Accumulator": 1},
+        stale,
+    ).reached
+
+
+def test_executed_source_world_includes_normal_bearing_prerequisite():
+    target = Bool("SourceWorldTarget")
+    guard = Bool("SourceWorldGuard")
+    snap = {target.name: False, guard.name: False}
+    cfg = _StateKeyConfig(
+        stateful_names=(target.name, guard.name),
+        done_specs=(),
+        threshold_vector_specs=(),
+        acc_indices=frozenset(),
+    )
+    frame = SimpleNamespace(key=_pilot_world_key(snap, cfg, ()), snap=snap)
+    prerequisite = PilotRung(target.name, True, CompareEq(guard, False))
+    state = SimpleNamespace(key_config=cfg, pilot_rungs=[prerequisite])
+
+    source_key = _executed_source_world_key(frame, state)
+
+    assert source_key == _pilot_world_key(snap, cfg, (prerequisite,))
+    assert source_key != frame.key
 
 
 class TestGateSpin:
@@ -297,19 +347,22 @@ class TestGateSpin:
         assert verdict is _SpinVerdict.PASS
 
 
-class TestGateCycle:
-    """Cycle gate — new key must not have been visited."""
+class TestGateRevisit:
+    """Revisit admission follows classified, target-relative evidence."""
 
     def test_visited_key_rejected(self):
         key = ("visited",)
         trial = SimpleNamespace(key=key, snap={})
         gates = []
-        accepted = _gate_cycle(
+        accepted = _gate_revisit(
             trial,
-            SimpleNamespace(seen_keys={key}, earned_work=None),
-            pending=False,
+            SimpleNamespace(
+                seen_keys={key},
+                consumed_revisits=set(),
+            ),
             earned_work_receipt=EarnedWorkReceipt(),
-            learned_prescribed=False,
+            earned_credential=None,
+            departure_credential=None,
             nogood_pair=("Cmd", True),
             gate_events=gates,
             collected_nogoods=[],
@@ -318,30 +371,141 @@ class TestGateCycle:
         assert gates[-1].event == "cycle"
         assert gates[-1].evidence["trial_key"] == key
         assert gates[-1].evidence["seen"] is True
-        assert gates[-1].evidence["learned_prescribed"] is False
 
-    def test_learned_prescribed_overrides_cycle(self):
+    def test_earned_work_occurrence_is_admitted_once_per_landing_mark(self):
         key = ("visited",)
         trial = SimpleNamespace(key=key, snap={})
         gates = []
-        collected_nogoods = []
-
-        accepted = _gate_cycle(
+        receipt = EarnedWorkReceipt((EarnedWorkReading("Phase", 1, 2, 1),))
+        occurrence = RevisitCredential(
+            kind="earned-work",
+            source_world=("source",),
+            act=("pulse", (("Advance", True),)),
+            transition=((("Phase", 1),), (("Phase", 2),)),
+        )
+        state = SimpleNamespace(
+            seen_keys={key},
+            consumed_revisits=set(),
+        )
+        accepted = _gate_revisit(
             trial,
-            SimpleNamespace(seen_keys={key}, earned_work=None),
-            pending=False,
-            earned_work_receipt=EarnedWorkReceipt(),
-            learned_prescribed=True,
-            nogood_pair=("Cmd", True),
+            state,
+            earned_work_receipt=receipt,
+            earned_credential=occurrence,
+            departure_credential=None,
+            nogood_pair=None,
             gate_events=gates,
-            collected_nogoods=collected_nogoods,
+            collected_nogoods=[],
         )
 
         assert accepted is True
-        assert collected_nogoods == []
-        assert len(gates) == 1
-        assert gates[0].event == "learned-override-cycle"
-        assert gates[0].detail == "learned-prescribed"
+        assert gates[-1].event == "ordinal-advance"
+
+        state.consumed_revisits.add(occurrence)
+        replay_gates = []
+        assert not _gate_revisit(
+            trial,
+            state,
+            earned_work_receipt=receipt,
+            earned_credential=occurrence,
+            departure_credential=None,
+            nogood_pair=None,
+            gate_events=replay_gates,
+            collected_nogoods=[],
+        )
+        assert replay_gates[-1].event == "cycle"
+        assert replay_gates[-1].evidence["earned_work_consumed"] is True
+
+        changed_landing = RevisitCredential(
+            kind="earned-work",
+            source_world=occurrence.source_world,
+            act=occurrence.act,
+            transition=(occurrence.transition[0], (("Phase", 3),)),
+        )
+        changed_gates = []
+        assert _gate_revisit(
+            trial,
+            state,
+            earned_work_receipt=receipt,
+            earned_credential=changed_landing,
+            departure_credential=None,
+            nogood_pair=None,
+            gate_events=changed_gates,
+            collected_nogoods=[],
+        )
+        assert changed_gates[-1].event == "ordinal-advance"
+
+    def test_departure_occurrence_is_admitted_once(self):
+        key = ("visited",)
+        occurrence = RevisitCredential(
+            kind="departure",
+            source_world=("source",),
+            act=("coast", "bearing"),
+            transition=("Phase", 1, 2, 3),
+        )
+        state = SimpleNamespace(
+            seen_keys={key},
+            consumed_revisits=set(),
+        )
+
+        first_gates = []
+        assert _gate_revisit(
+            SimpleNamespace(key=key),
+            state,
+            earned_work_receipt=EarnedWorkReceipt(),
+            earned_credential=None,
+            departure_credential=occurrence,
+            nogood_pair=None,
+            gate_events=first_gates,
+            collected_nogoods=[],
+        )
+        assert first_gates[-1].event == "departure-revisit"
+
+        state.consumed_revisits.add(occurrence)
+        repeat_gates = []
+        assert not _gate_revisit(
+            SimpleNamespace(key=key),
+            state,
+            earned_work_receipt=EarnedWorkReceipt(),
+            earned_credential=None,
+            departure_credential=occurrence,
+            nogood_pair=None,
+            gate_events=repeat_gates,
+            collected_nogoods=[],
+        )
+        assert repeat_gates[-1].event == "cycle"
+        assert repeat_gates[-1].evidence["departure_consumed"] is True
+
+    @pytest.mark.parametrize(
+        "irrelevant_knowledge",
+        (
+            {"pending_effects": True},
+            {"learned_prescribed": True},
+            {"channel_reached": True},
+        ),
+        ids=("unrelated-pending", "learned-provenance", "reached-channel"),
+    )
+    def test_non_progress_context_does_not_authorize_revisit(
+        self,
+        irrelevant_knowledge,
+    ):
+        key = ("visited",)
+        gates = []
+        assert not _gate_revisit(
+            SimpleNamespace(key=key),
+            SimpleNamespace(
+                seen_keys={key},
+                consumed_revisits=set(),
+                **irrelevant_knowledge,
+            ),
+            earned_work_receipt=EarnedWorkReceipt(),
+            earned_credential=None,
+            departure_credential=None,
+            nogood_pair=None,
+            gate_events=gates,
+            collected_nogoods=[],
+        )
+        assert gates[-1].event == "cycle"
 
 
 def _empty_frontier_with_channel_motion(monkeypatch, motion):
@@ -391,7 +555,6 @@ def _empty_frontier_with_channel_motion(monkeypatch, motion):
         ),
         target=TargetSpec("Target", True),
         earned_work_receipt=EarnedWorkReceipt(),
-        learned_prescribed=False,
         nogood_pair=("Advance", True),
         gate_events=gates,
         collected_nogoods=nogoods,
@@ -456,7 +619,6 @@ class TestGateDeadEnd:
             ),
             target=TargetSpec("Target", True),
             earned_work_receipt=EarnedWorkReceipt(),
-            learned_prescribed=False,
             nogood_pair=("Primary", True),
             gate_events=[],
             collected_nogoods=[],
@@ -531,7 +693,6 @@ class TestGateDeadEnd:
                 ctx,
                 target=TargetSpec(target.name, 1),
                 earned_work_receipt=EarnedWorkReceipt(),
-                learned_prescribed=False,
                 nogood_pair=None,
                 gate_events=[],
                 collected_nogoods=[],
@@ -572,7 +733,120 @@ class TestGateDeadEnd:
 
 
 class TestVerifyGates:
-    """Full pipeline: target check -> spin -> cycle -> dead-end -> outcome."""
+    """Full pipeline: target -> spin -> dead-end -> outcome -> revisit."""
+
+    def test_verify_gates_credential_source_includes_installed_prerequisite(
+        self,
+        monkeypatch,
+    ):
+        from pyrung.core.analysis.pilot.outcome import (
+            Agency,
+            BearingEffect,
+            ProgressEffect,
+            TrialAssessment,
+        )
+
+        phase = Int("CredentialPhase", external=True)
+        target = Bool("CredentialTarget")
+        with Program() as program:
+            with Rung(phase == -1):
+                out(target)
+        plc = PLC(program, dt=0.010)
+        before = {**dict(plc.state.tags), phase.name: 1, target.name: False}
+        after = {**before, phase.name: 3}
+        cfg = _StateKeyConfig(
+            stateful_names=(phase.name, target.name),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        prerequisite = PilotRung(target.name, True, CompareEq(phase, 9))
+        source_key = _pilot_world_key(before, cfg, ())
+        landing_key = _pilot_world_key(after, cfg, (prerequisite,))
+        policy = ActPolicy(
+            source=ActSource.ROUTE,
+            heading=ChannelHeading(phase.name, 2),
+            motion=MotionKind.COAST_TO_BEARING,
+        )
+        pulse = _PulseState(
+            fork=plc,
+            scan_before=1,
+            action_scan=1,
+            action_snap=before,
+            wait_snaps=(),
+            post_pulse_snap=before,
+            post_pulse_key=source_key,
+            snap=after,
+            key=landing_key,
+            channel_motion=ChannelMotion(phase.name, 2, stop_reason="departed"),
+        )
+        frame = _IterationFrame(
+            snap=before,
+            tree=TraceNode(target.name, True),
+            key=source_key,
+            distance_before=2,
+            raw_trace_actions=(),
+            raw_trace_action_details=(),
+        )
+        state = SimpleNamespace(
+            earned_work=None,
+            key_config=cfg,
+            pilot_rungs=[prerequisite],
+            seen_keys=set(),
+            consumed_revisits=set(),
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify._gate_spin",
+            lambda *_args, **_kwargs: _SpinVerdict.PASS,
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify._gate_dead_end",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                trend=1,
+                has_new_frontier=True,
+            ),
+        )
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify.assess_outcome",
+            lambda *_args, **_kwargs: TrialAssessment(
+                Agency.PROGRAM,
+                BearingEffect.DEPARTED,
+                ProgressEffect.UNCHANGED,
+                True,
+                True,
+            ),
+        )
+
+        result = verify_gates(
+            _ExecutedAttempt(
+                pulse,
+                Bearing(
+                    source_key,
+                    Coast("bearing", policy),
+                    BearingObjective(TargetSpec(target.name, True)),
+                    prerequisites=(prerequisite,),
+                ),
+            ),
+            frame,
+            state,
+            SimpleNamespace(avoid_pred=None, target=TargetSpec(target.name, True)),
+        )
+
+        assert result.trial is not None
+        assert isinstance(result.trial.verification, AssessedMotion)
+        credential = result.trial.verification.revisit_credentials[0]
+        assert credential.source_world == _pilot_world_key(
+            before,
+            cfg,
+            (prerequisite,),
+        )
+        corrected = PilotRung(target.name, False, CompareEq(phase, 9))
+        corrected_credential = replace(
+            credential,
+            source_world=_pilot_world_key(before, cfg, (corrected,)),
+        )
+        state.consumed_revisits.add(credential)
+        assert corrected_credential not in state.consumed_revisits
 
     def test_target_reached_records_bearing_target_from_owned_evidence(self):
         from pyrung.core.analysis.pilot.recording import _bearing_coast_accepted_payload
@@ -780,6 +1054,16 @@ class TestVerifyGates:
         assert result.trial.execution.timeline == timeline
         assert result.trial.execution.timeline != pulse.timeline
         assert result.confirmed_correction is correction
+        assert result.trial.attempt.pulse.key == _pilot_world_key(
+            dict(retry.state.tags),
+            cfg,
+            (rung,),
+        )
+        assert result.trial.attempt.pulse.key != _pilot_world_key(
+            dict(retry.state.tags),
+            cfg,
+            (),
+        )
         assert len(receipts) == 1
         assert result.trial.earned_work_receipt is receipts[0]
         assert result.trial.earned_work_receipt.landing_mark == ((step.name, 3),)

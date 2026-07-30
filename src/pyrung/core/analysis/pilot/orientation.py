@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -132,7 +133,7 @@ def _current_work_evidence(frame: Any, state: Any, route: Any) -> tuple[str, ...
             earned_work is not None
             and components
             and any(component.tag in anchor_tags for component in components)
-            and earned_work.receipt(before, after).any_forward
+            and earned_work_is_useful_motion(earned_work.receipt(before, after))
         ):
             reasons.append("earned-work:forward")
 
@@ -560,8 +561,7 @@ def _orient_read(
                 candidates,
                 target=target,
                 rationale=(
-                    branch.reason
-                    or "verify crossing proposal"
+                    branch.reason or "verify crossing proposal"
                     if branch.proposed
                     else "follow grouped reverse crossing"
                 ),
