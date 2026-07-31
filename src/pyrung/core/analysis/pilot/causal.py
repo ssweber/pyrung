@@ -334,7 +334,7 @@ def occurrence_external_supports(
 
     supports: list[tuple[str, Any]] = []
     seen_supports: set[tuple[str, str]] = set()
-    visited: set[str] = set()
+    visited: set[tuple[str, str, int, int | None]] = set()
 
     def _add(tag: str, value: Any) -> None:
         key = (tag, repr(value))
@@ -342,28 +342,50 @@ def occurrence_external_supports(
             seen_supports.add(key)
             supports.append((tag, value))
 
-    def _walk(tag: str, value: Any) -> None:
+    def _precedes(candidate: Any, consumer: Any) -> bool:
+        """Whether a supplying transition was visible to the consumer."""
+        if candidate.scan_id != consumer.scan_id:
+            return candidate.scan_id < consumer.scan_id
+        candidate_ordinal = getattr(candidate, "occurrence_ordinal", None)
+        consumer_ordinal = getattr(consumer, "occurrence_ordinal", None)
+        return (
+            True
+            if candidate_ordinal is None or consumer_ordinal is None
+            else candidate_ordinal < consumer_ordinal
+        )
+
+    def _walk(tag: str, value: Any, consumer: Any) -> None:
         if tag in accomplishments:
             return
         if tag in steerable:
             _add(tag, value)
             return
-        if tag in visited:
+        visit_key = (
+            tag,
+            repr(value),
+            consumer.scan_id,
+            getattr(consumer, "occurrence_ordinal", None),
+        )
+        if visit_key in visited:
             return
-        visited.add(tag)
+        visited.add(visit_key)
         for step in steps_by_tag.get(tag, ()):
+            if not _values_match(step.transition.to_value, value) or not _precedes(
+                step.transition, consumer
+            ):
+                continue
             for trigger in step.triggers:
-                _walk(trigger.tag_name, trigger.to_value)
+                _walk(trigger.tag_name, trigger.to_value, step.transition)
             for enabler in step.enablers:
-                _walk(enabler.tag_name, enabler.value)
+                _walk(enabler.tag_name, enabler.value, step.transition)
 
     for step in chain.steps:
         if step.rung_index not in producer_rungs:
             continue
         for trigger in step.triggers:
-            _walk(trigger.tag_name, trigger.to_value)
+            _walk(trigger.tag_name, trigger.to_value, step.transition)
         for enabler in step.enablers:
-            _walk(enabler.tag_name, enabler.value)
+            _walk(enabler.tag_name, enabler.value, step.transition)
     return tuple(supports)
 
 

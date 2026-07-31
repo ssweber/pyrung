@@ -13,14 +13,22 @@ class Transition:
     scan_id: int
     from_value: Any
     to_value: Any
+    # Replayed rung-write identity within ``scan_id`` when compact capture is
+    # unambiguous. ``None`` denotes boundary/projected evidence or a recorder
+    # shape that cannot identify one retained rung write. Kept optional for
+    # projected and legacy callers.
+    occurrence_ordinal: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "tag": self.tag_name,
             "scan": self.scan_id,
             "from": self.from_value,
             "to": self.to_value,
         }
+        if self.occurrence_ordinal is not None:
+            result["occurrence"] = self.occurrence_ordinal
+        return result
 
 
 @dataclass(frozen=True)

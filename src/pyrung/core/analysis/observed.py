@@ -46,8 +46,12 @@ def writer_runs_for_node(
     """Occurrences of one exact node that attempted ``tag_name=value``."""
     result: list[RungRun] = []
     for run in runs_for_node(pdg, program, node_index, runs):
-        written = dict(run.writes)
-        if tag_name in written and _values_match(written[tag_name], value):
+        if any(
+            occurrence.domain == "tag"
+            and occurrence.name == tag_name
+            and _values_match(occurrence.after, value)
+            for occurrence in run.direct_write_occurrences
+        ):
             result.append(run)
     return tuple(result)
 
@@ -62,7 +66,11 @@ def latest_writer_run(
     for run in reversed(tuple(runs)):
         if run.rung is not rung:
             continue
-        written = dict(run.writes)
-        if tag_name in written and _values_match(written[tag_name], value):
+        if any(
+            occurrence.domain == "tag"
+            and occurrence.name == tag_name
+            and _values_match(occurrence.after, value)
+            for occurrence in reversed(run.direct_write_occurrences)
+        ):
             return run
     return None

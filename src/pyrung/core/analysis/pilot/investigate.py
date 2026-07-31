@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
@@ -38,10 +38,17 @@ from pyrung.core.analysis.pilot.coast import (
     _coast_to_value,
     _settle_delayed_effects,
 )
+from pyrung.core.analysis.pilot.constrained_reachability import (
+    FrontierStatus,
+    NoRoute,
+    Reachable,
+    Unknown,
+)
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     break_guard_holds,
     derive_correction_hypotheses,
+    refine_relational_hypothesis,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.options import _holds_defeat_needed
@@ -56,7 +63,14 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
-from pyrung.core.analysis.pilot.trace import _can_produce, trace_back
+from pyrung.core.analysis.pilot.trace import (
+    UnsupportedConstruct,
+    _can_produce,
+    _route_has_no_dead_end,
+    enumerate_trace_choices,
+    target_reached,
+    trace_back,
+)
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
@@ -89,9 +103,30 @@ logger = logging.getLogger(__name__)
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
 _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
 _NESTED_MAX_BRANCHES = 8
+_RELATIONAL_REFINEMENT_BUDGET = 32
 
 ActionPair = tuple[str, Any]
 CorrectionIdentity = tuple[tuple[Any, ...], ...]
+
+
+@dataclass
+class _RelationalRefinementReceipt:
+    """Bounded counterexample refinements, independent of causal closure."""
+
+    budget: int = _RELATIONAL_REFINEMENT_BUDGET
+    refinements: int = 0
+    seen: set[tuple[Any, ...]] = field(default_factory=set)
+
+    def admit(self, identity: tuple[Any, ...]) -> bool:
+        if identity in self.seen or self.refinements >= self.budget:
+            return False
+        self.seen.add(identity)
+        self.refinements += 1
+        return True
+
+    @property
+    def exhausted(self) -> bool:
+        return self.refinements >= self.budget
 
 
 def _proposal_pair(proposal: Any) -> ActionPair:
@@ -303,6 +338,8 @@ class ReplayOutcome:
     snapshot: Mapping[str, Any]
     reason: str = ""
     justification: ReplayJustification | None = None
+    continuation: FrontierStatus = Unknown("target continuation was not inspected")
+    continuation_snapshot: Mapping[str, Any] | None = None
     # Whether ``snapshot`` is a real LANDING (target reached, or the coast
     # departed and settled somewhere) rather than a mid-journey timeout.  A
     # departure-silenced acceptance times out with the channel intact — its
@@ -315,6 +352,44 @@ class ReplayOutcome:
     # proposal set.
     replacement_cause: frozenset[str] = frozenset()
     replacement: ReplacementEvidence | None = None
+
+
+def _continuation_ground(status: FrontierStatus) -> str:
+    if isinstance(status, Reachable):
+        return ", ".join(status.provenance)
+    if isinstance(status, NoRoute):
+        return status.proof
+    return status.reason
+
+
+def _refine_unknown_continuation(
+    candidate: CorrectionHypothesis,
+    replay_outcome: ReplayOutcome,
+    ctx: Any,
+    receipt: _RelationalRefinementReceipt,
+) -> tuple[CorrectionHypothesis | None, str]:
+    """Produce one new relational candidate or an honest terminal ground."""
+
+    refinement_snap = replay_outcome.continuation_snapshot or replay_outcome.snapshot
+    refined = refine_relational_hypothesis(candidate, refinement_snap, ctx)
+    if refined is None:
+        return (
+            None,
+            "relational continuation remains Unknown and yielded no new authoritative operand",
+        )
+    fingerprint = _hypothesis_identity(refined.holds)
+    if receipt.admit(fingerprint):
+        return refined, ""
+    if receipt.exhausted:
+        return (
+            None,
+            "relational continuation remains Unknown after exhausting "
+            f"{receipt.budget} counterexample refinements",
+        )
+    return (
+        None,
+        "relational continuation remains Unknown and repeated a prior counterexample refinement",
+    )
 
 
 @dataclass(frozen=True)
@@ -1086,6 +1161,56 @@ def build_replay_fn(
         # neutralization. Check the floor at the bounded incident horizon.
         neutralized = ownership is not None and ownership.neutralized and not progress_erased
         source_preserved = ownership is not None and ownership.source_preserved
+        continuation_snapshot = snap
+        continuation: FrontierStatus = Unknown(
+            "bounded replay did not witness the target",
+            ((target_tag, target_value),),
+        )
+        if target_reached(
+            snap,
+            target_tag,
+            target_value,
+            ctx.target.predicate,
+        ):
+            continuation = Reachable(("actual-target-witness",))
+        elif neutralized:
+            continuation_receipt = _coast_holding_state(
+                probe,
+                target_tag,
+                target_value,
+                ((bearing_channel_tag,) if bearing_channel_tag is not None else ()),
+                budget=min(
+                    _COAST_BUDGET,
+                    max(1, int(getattr(ctx, "max_scans", _COAST_BUDGET))),
+                ),
+                reached_fn=(
+                    (
+                        lambda state: target_reached(
+                            state.tags,
+                            target_tag,
+                            target_value,
+                            ctx.target.predicate,
+                        )
+                    )
+                    if ctx.target.predicate is not None
+                    else None
+                ),
+                session=session,
+            )
+            continuation_snapshot = dict(probe.state.tags)
+            if target_reached(
+                continuation_snapshot,
+                target_tag,
+                target_value,
+                ctx.target.predicate,
+            ):
+                continuation = Reachable(("actual-target-witness", "coast"))
+            else:
+                continuation = Unknown(
+                    "coast-only continuation did not reach the target"
+                    f" ({continuation_receipt.stop_reason})",
+                    ((target_tag, target_value),),
+                )
         if logger.isEnabledFor(logging.DEBUG):
             roles = terminal_letrun_role_tags or ()
             logger.debug(
@@ -1160,6 +1285,8 @@ def build_replay_fn(
                 trend=None,
                 snapshot=snap,
                 reason=(progressed if accepted else rejection_reason) or rejection_reason,
+                continuation=continuation,
+                continuation_snapshot=continuation_snapshot,
                 # A coast that timed out mid-journey landed nowhere — its end
                 # snapshot must not seed a channel scope.
                 landed=(
@@ -1178,7 +1305,7 @@ def build_replay_fn(
                 justification=(
                     (
                         ReplayJustification.REACHED
-                        if reached
+                        if isinstance(continuation, Reachable)
                         else (
                             ReplayJustification.NEUTRALIZED
                             if neutralized_reason is not None
@@ -1219,6 +1346,15 @@ def build_replay_fn(
                 snapshot=snap,
                 reason=f"{target_tag} -> {target_value!r} reached={reached}",
                 justification=ReplayJustification.REACHED if reached else None,
+                continuation=(
+                    Reachable(("actual-target-witness",))
+                    if reached
+                    else Unknown(
+                        "bounded terminal replay did not reach the target",
+                        ((target_tag, target_value),),
+                    )
+                ),
+                continuation_snapshot=snap,
             )
 
         # Command incident: no register to coast toward — judge the bounded
@@ -1231,6 +1367,8 @@ def build_replay_fn(
                 snapshot=snap,
                 reason=f"bearing {'held' if held else 'departed'} at bounded replay",
                 justification=ReplayJustification.BEARING_HELD if held else None,
+                continuation=continuation,
+                continuation_snapshot=continuation_snapshot,
             )
 
         tree = trace_back(
@@ -1253,6 +1391,8 @@ def build_replay_fn(
             snapshot=snap,
             reason=f"trend {trend} <= checkpoint {cp_trend}",
             justification=ReplayJustification.ADVANCED if trend < cp_trend else None,
+            continuation=continuation,
+            continuation_snapshot=continuation_snapshot,
         )
 
     return _replay
@@ -1763,6 +1903,7 @@ def _compose_hypotheses(
         holds=tuple(holds),
         sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
         detail=f"nested causal closure: {base.detail}; then {addition.detail}",
+        constraint=base.constraint or addition.constraint,
     )
 
 
@@ -1938,14 +2079,45 @@ def investigate_deviation(
             continue
         current = hypothesis
         seen_replacements: set[tuple[Any, ...]] = set()
-        for _nested_depth in range(_NESTED_MAX_BRANCHES + 1):
+        refinement_receipt = _RelationalRefinementReceipt()
+        replacement_branches = 0
+
+        while replacement_branches <= _NESTED_MAX_BRANCHES:
             exploratory = _exploratory_correction_rungs(
                 plc,
                 current.holds,
                 incident,
                 correction_progress_mark,
             )
+            preflight = _continuation_with_active_correction(
+                exploratory,
+                incident.before_snap,
+                ctx,
+            )
+            if isinstance(preflight, NoRoute):
+                _reject(
+                    current,
+                    "target-cut",
+                    preflight.proof,
+                )
+                break
             outcome = replay(exploratory)
+            if current.constraint is not None and not isinstance(
+                outcome.continuation,
+                Reachable,
+            ):
+                refined, ground = _refine_unknown_continuation(
+                    current,
+                    outcome,
+                    ctx,
+                    refinement_receipt,
+                )
+                if refined is not None:
+                    current = refined
+                    observed_hypotheses.append(refined)
+                    continue
+                _reject(current, "relational-continuation-unknown", ground)
+                break
             resolution = _resolve_replay_attempt(
                 phase="exploratory",
                 current=current,
@@ -1958,6 +2130,7 @@ def investigate_deviation(
                 break
             if isinstance(resolution, _HypothesisExtended):
                 current = resolution.hypothesis
+                replacement_branches += 1
                 continue
             outcome = resolution.outcome
 
@@ -1989,6 +2162,14 @@ def investigate_deviation(
                     "correction was previously revoked after causing a later regression",
                 )
                 break
+            scoped_preflight = _continuation_with_active_correction(
+                scoped,
+                incident.before_snap,
+                ctx,
+            )
+            if isinstance(scoped_preflight, NoRoute):
+                _reject(current, "target-cut", scoped_preflight.proof)
+                break
             required_progress = (*incident.bearing, *needed)
             if (
                 pdg is not None
@@ -2019,6 +2200,22 @@ def investigate_deviation(
             # incident checkpoint, so an identical executable correction has
             # already proved its installed form in the exploratory pass.
             installed_outcome = outcome if scoped == exploratory else replay(scoped)
+            if current.constraint is not None and not isinstance(
+                installed_outcome.continuation,
+                Reachable,
+            ):
+                refined, ground = _refine_unknown_continuation(
+                    current,
+                    installed_outcome,
+                    ctx,
+                    refinement_receipt,
+                )
+                if refined is not None:
+                    current = refined
+                    observed_hypotheses.append(refined)
+                    continue
+                _reject(current, "relational-continuation-unknown", ground)
+                break
             resolution = _resolve_replay_attempt(
                 phase="guarded",
                 current=current,
@@ -2031,6 +2228,7 @@ def investigate_deviation(
                 break
             if isinstance(resolution, _HypothesisExtended):
                 current = resolution.hypothesis
+                replacement_branches += 1
                 continue
             installed_outcome = resolution.outcome
             confirmed_hypothesis = CorrectionHypothesis(
@@ -2045,9 +2243,21 @@ def investigate_deviation(
                 pilot_rungs=scoped,
                 sources=confirmed_hypothesis.sources,
                 justification=(
-                    installed_outcome.justification.value
-                    if installed_outcome.justification is not None
-                    else installed_outcome.reason or "replay-confirmed"
+                    (
+                        installed_outcome.justification.value
+                        if installed_outcome.justification is not None
+                        else installed_outcome.reason or "replay-confirmed"
+                    )
+                    if isinstance(installed_outcome.continuation, Reachable)
+                    else (
+                        "legacy-local-replay; target continuation unknown: "
+                        f"{_continuation_ground(installed_outcome.continuation)}; "
+                        + (
+                            installed_outcome.justification.value
+                            if installed_outcome.justification is not None
+                            else installed_outcome.reason or "replay-confirmed"
+                        )
+                    )
                 ),
             )
             break
@@ -2093,6 +2303,98 @@ def _active_pilot_rungs_defeat_needed(
     overlay = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
     active = [(rung.dest, rung.value) for rung in overlay.effective]
     return _holds_defeat_needed(active, needed, pdg, program)
+
+
+def _continuation_with_active_correction(
+    pilot_rungs: Sequence[Any],
+    snapshot: Mapping[str, Any],
+    ctx: Any,
+) -> FrontierStatus:
+    """Classify static target continuation under one executable correction.
+
+    This is the negative-write counterpart of
+    :func:`_active_pilot_rungs_defeat_needed`: a pin can defeat progress by
+    making every producer guard false, even though no conflicting write fires.
+    Only an explicit action contradiction on every enumerated route proves the
+    cut. A viable static trace is still ``Unknown`` because only execution can
+    witness the target; an opaque or incomplete trace stays ``Unknown`` too.
+    """
+
+    if not all(isinstance(rung, PilotRung) for rung in pilot_rungs):
+        return Unknown("correction has no executable scope for continuation analysis")
+    if getattr(ctx.target, "predicate", None) is not None:
+        return Unknown("predicate target continuation requires execution")
+    overlay = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
+    active = {rung.dest: rung.value for rung in overlay.effective}
+    if not active:
+        return Unknown("correction is inactive at the incident anchor")
+    projected = {**dict(snapshot), **active}
+    choices = enumerate_trace_choices(
+        ctx.target.tag,
+        ctx.target.value,
+        projected,
+        ctx.pdg,
+        ctx.program,
+        steerable=ctx.steerable,
+        clear_only=getattr(ctx, "clear_only", frozenset()),
+    )
+    routes: tuple[Any, ...] = tuple(choices) if choices else (None,)
+    saw_complete = False
+    for route in routes:
+        rejected_actions: frozenset[tuple[str, Any]] = frozenset()
+        route_blocked = False
+        for _ in range(16):
+            try:
+                tree = trace_back(
+                    ctx.target.tag,
+                    ctx.target.value,
+                    projected,
+                    ctx.pdg,
+                    ctx.program,
+                    ctx.steerable,
+                    clear_only=getattr(ctx, "clear_only", frozenset()),
+                    opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
+                    pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
+                    route=route,
+                    prior=getattr(ctx, "domain_prior", None),
+                    rejected_actions=rejected_actions,
+                )
+            except UnsupportedConstruct:
+                return Unknown("target trace contains an unsupported construct")
+            # A dead-end leaf is incomplete evidence, not proof that the active
+            # correction cut a route.  Keep Unknown distinct from NoRoute by
+            # declining the static rejection and allowing bounded replay to judge.
+            if not _route_has_no_dead_end([tree]):
+                frontier = tuple(
+                    (leaf.tag, leaf.value) for leaf in tree.leaves() if not leaf.satisfied
+                )
+                return Unknown("target trace has an unreadable frontier", frontier)
+            actions = tree.ordered_action_details()
+            if not actions:
+                return Unknown("target trace has no executable continuation")
+            conflicts = frozenset(
+                action.pair
+                for action in actions
+                if action.tag in active and not _values_match(active[action.tag], action.value)
+            )
+            if not conflicts:
+                return Unknown(
+                    "a target continuation remains compatible with the correction",
+                    tuple(action.pair for action in actions),
+                )
+            novel = conflicts - rejected_actions
+            if not novel:
+                route_blocked = True
+                saw_complete = True
+                break
+            rejected_actions |= novel
+        if not route_blocked:
+            # Alternative enumeration is bounded.  Exhaustion is Unknown, not
+            # proof that the route is absent.
+            return Unknown("target alternative enumeration exhausted its bound")
+    if saw_complete:
+        return NoRoute("active correction conflicts with every complete target trace")
+    return Unknown("target continuation could not be classified")
 
 
 # ---------------------------------------------------------------------------

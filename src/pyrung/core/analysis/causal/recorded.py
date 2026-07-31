@@ -9,6 +9,7 @@ from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_tree import attribute, evaluate_sp
 from pyrung.core.context import RungId
 
+from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_write_projection
 from .crossings_recorded import recorded_read_changes, resolve_recorded_branches
 from .history import (
     _find_last_transition_scan,
@@ -124,17 +125,32 @@ def recorded_cause(
     steps: list[ChainStep] = []
     conjunctive_roots: list[Transition] = []
     ambiguous_roots: list[Transition] = []
-    visited: set[tuple[str, int]] = set()
+    visited: set[tuple[str, int, int | None]] = set()
     # Per-cause() memoization of the on-demand replay views, keyed by
     # scan.  The backward walk revisits the same scan for each writer at
     # a transition, and across recursion may revisit a scan repeatedly;
     # one replay per distinct scan is enough.
     node_views_cache: dict[int, dict[RungId, Any]] = {}
     node_runs_cache: dict[int, tuple[Any, ...]] = {}
+    rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] = {}
     # Companion cache for the Tier-2 per-node data reads — same replay, same
     # per-scan memoization as ``node_views_cache``.
     node_reads_cache: dict[int, dict[RungId, Any]] = {}
     deep_state = _DeepSupport() if deep else None
+
+    # Public recorded cause explains the committed scan boundary. When compact
+    # rung journals are unambiguous, the write ordinal selects its final writer.
+    rung_writes = _rung_write_projection_at(
+        history,
+        transition.scan_id,
+        node_runs_fn,
+        node_runs_cache,
+        rung_write_projection_cache,
+    )
+    if rung_writes is not None:
+        boundary = rung_writes.boundary_transition(tag_name)
+        if boundary is not None:
+            transition = boundary
 
     _walk_backward(
         logic=logic,
@@ -158,6 +174,7 @@ def recorded_cause(
         node_views_cache=node_views_cache,
         node_runs_fn=node_runs_fn,
         node_runs_cache=node_runs_cache,
+        rung_write_projection_cache=rung_write_projection_cache,
         node_reads_fn=node_reads_fn,
         node_reads_cache=node_reads_cache,
         deep=deep_state,
@@ -246,6 +263,28 @@ def _node_runs_at(
     return runs
 
 
+def _rung_write_projection_at(
+    history: History,
+    scan_id: int,
+    node_runs_fn: Any,
+    node_runs_cache: dict[int, tuple[Any, ...]] | None,
+    projection_cache: dict[int, ScanRungWriteProjection | None] | None,
+) -> ScanRungWriteProjection | None:
+    """Reconstruct and memoize one scan's compact rung-write projection."""
+    if node_runs_fn is None:
+        return None
+    if projection_cache is not None and scan_id in projection_cache:
+        return projection_cache[scan_id]
+    projection = build_scan_rung_write_projection(
+        history,
+        scan_id,
+        _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+    )
+    if projection_cache is not None:
+        projection_cache[scan_id] = projection
+    return projection
+
+
 def _cross_opaque_data_reads(
     *,
     pdg: ProgramGraph | None,
@@ -259,6 +298,9 @@ def _cross_opaque_data_reads(
     initial_tags: Any,
     rung: Any = None,
     fire_view: Any = None,
+    fire_run: Any = None,
+    selected_write: RungWrite | None = None,
+    rung_writes: ScanRungWriteProjection | None = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> _CrossedReads | None:
@@ -282,6 +324,9 @@ def _cross_opaque_data_reads(
         scan_log=scan_log,
         initial_tags=initial_tags,
         fire_view=fire_view,
+        fire_run=fire_run,
+        selected_write=selected_write,
+        rung_writes=rung_writes,
         node_reads_fn=node_reads_fn,
         node_reads_cache=node_reads_cache,
     )
@@ -311,6 +356,9 @@ def _cross_via_footprint(
     scan_log: Any,
     initial_tags: Any,
     fire_view: Any = None,
+    fire_run: Any = None,
+    selected_write: RungWrite | None = None,
+    rung_writes: ScanRungWriteProjection | None = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
 ) -> _CrossedReads | None:
@@ -332,9 +380,21 @@ def _cross_via_footprint(
         # one statically-known operand (always true for an indirect ref — the
         # pointer itself is a static read).
         return None
+    exact_reads = (
+        rung_writes.reads_observed_by_write(selected_write)
+        if rung_writes is not None and selected_write is not None
+        else ()
+    )
+    exact_values: dict[str, Any] = {}
+    exact_read_by_tag = {}
+    for read in exact_reads:
+        exact_values[read.occurrence.name] = read.occurrence.value
+        exact_read_by_tag[read.occurrence.name] = read
+
     captured = _node_reads_at(scan_id, node_reads_fn, node_reads_cache)
     node_reads = captured.get(RungId(sub_name, rung_idx)) if captured is not None else None
-    if node_reads:
+    observed_reads = frozenset(exact_values) if exact_reads else node_reads
+    if observed_reads:
         # Tier 2: scope the operands the writer *actually* read at fire time to
         # this tag.  Keep the fired reads the static analysis attributes to this
         # writer (``& static_footprint`` — drops a non-firing branch's operands,
@@ -344,7 +404,7 @@ def _cross_via_footprint(
         # writer never read is introduced; never less precise than the static
         # footprint alone.
         rung_static = _rung_static_reads(pdg, rung_idx, sub_name)
-        footprint = frozenset((node_reads & static_footprint) | (node_reads - rung_static))
+        footprint = frozenset((observed_reads & static_footprint) | (observed_reads - rung_static))
     else:
         # Tier 1 fallback: no interpreted replay (no Program / out of replay
         # range / nothing captured for this writer node — e.g. literal source).
@@ -357,18 +417,41 @@ def _cross_via_footprint(
     # at-fire-time view (see _writer_fire_view); fall back to end-of-scan only
     # when no replay produced a view.
     read_values = (
-        {tag: fire_view.get_tag(tag) for tag in footprint} if fire_view is not None else None
+        {tag: exact_values[tag] for tag in footprint}
+        if exact_reads
+        else ({tag: fire_view.get_tag(tag) for tag in footprint} if fire_view is not None else None)
     )
     diff = recorded_read_changes(history, footprint, scan_id, read_values=read_values)
+    rung_transitions: dict[str, Transition] = {}
+    if rung_writes is not None and fire_run is not None and read_values is not None:
+        observed_changes: list[tuple[str, Any, Any]] = []
+        for read_tag in sorted(footprint):
+            exact_read = exact_read_by_tag.get(read_tag)
+            observed = (
+                rung_writes.transition_observed_by_read(exact_read)
+                if exact_read is not None
+                else rung_writes.transition_observed_by(
+                    read_tag,
+                    fire_run,
+                    observed_value=read_values[read_tag],
+                )
+            )
+            if observed is not None:
+                rung_transitions[read_tag] = observed
+                observed_changes.append((read_tag, observed.from_value, observed.to_value))
+        if observed_changes:
+            diff = replace(diff, changed=observed_changes)
     if diff.empty:
         return None
     changed_tags = {t for t, _before, _after in diff.changed}
-    triggers = tuple(Transition(t, scan_id, before, after) for (t, before, after) in diff.changed)
-    state = history.at(scan_id)
+    triggers = tuple(
+        rung_transitions.get(t, Transition(t, scan_id, before, after))
+        for (t, before, after) in diff.changed
+    )
     enablers = tuple(
         EnablingCondition(
             tag_name=t,
-            value=state.tags.get(t),
+            value=read_values[t] if read_values is not None else history.at(scan_id).tags.get(t),
             held_since_scan=_find_last_transition_scan(
                 history,
                 t,
@@ -512,7 +595,7 @@ def _walk_backward(
     steps: list[ChainStep],
     conjunctive_roots: list[Transition],
     ambiguous_roots: list[Transition],
-    visited: set[tuple[str, int]],
+    visited: set[tuple[str, int, int | None]],
     pdg: ProgramGraph | None = None,
     timelines: RungFiringTimelines | None = None,
     state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
@@ -526,6 +609,7 @@ def _walk_backward(
     node_views_cache: dict[int, dict[RungId, Any]] | None = None,
     node_runs_fn: Any = None,
     node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
+    rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] | None = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
     deep: _DeepSupport | None = None,
@@ -545,10 +629,18 @@ def _walk_backward(
     tag_name = transition.tag_name
     scan_id = transition.scan_id
 
-    visit_key = (tag_name, scan_id)
+    visit_key = (tag_name, scan_id, transition.occurrence_ordinal)
     if visit_key in visited:
         return  # cycle guard
     visited.add(visit_key)
+
+    rung_writes = _rung_write_projection_at(
+        history,
+        scan_id,
+        node_runs_fn,
+        node_runs_cache,
+        rung_write_projection_cache,
+    )
 
     trail = (*trail, f"{tag_name}@{scan_id}")
 
@@ -793,6 +885,24 @@ def _walk_backward(
             node_runs_cache=node_runs_cache,
         )
 
+    selected_write = (
+        rung_writes.write_at_ordinal(transition.occurrence_ordinal)
+        if rung_writes is not None and transition.occurrence_ordinal is not None
+        else None
+    )
+    if selected_write is not None:
+        selected_resolved_writers = [
+            writer
+            for writer in resolved_writers
+            if writer[1] is selected_write.run.rung
+            and writer[2] == selected_write.run.rung_id.subroutine
+        ]
+        # PDG branch writers can resolve to an enclosing semantic rung while
+        # replay ownership belongs to the nested branch run. Keep the proven
+        # structural writer when dynamic object identity cannot refine it.
+        if selected_resolved_writers:
+            resolved_writers = selected_resolved_writers
+
     indirect_crossings: dict[
         tuple[int, str | None],
         tuple[tuple[Transition, ...], tuple[EnablingCondition, ...]],
@@ -825,11 +935,15 @@ def _walk_backward(
         # downstream).  Reconstruct the writer rung's entry-time
         # ConditionView via on-demand replay so triggers/enablers reflect
         # what the rung *actually read* — not end-of-scan state.
-        fire_run = latest_writer_run(
-            rung,
-            tag_name,
-            transition.to_value,
-            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+        fire_run = (
+            selected_write.run
+            if selected_write is not None and selected_write.run.rung is rung
+            else latest_writer_run(
+                rung,
+                tag_name,
+                transition.to_value,
+                _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+            )
         )
         fire_view = (
             fire_run.view
@@ -913,6 +1027,9 @@ def _walk_backward(
                 initial_tags=initial_tags,
                 rung=rung,
                 fire_view=fire_view,
+                fire_run=fire_run,
+                selected_write=selected_write,
+                rung_writes=rung_writes,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
             )
@@ -1030,6 +1147,15 @@ def _walk_backward(
                 name: Transition(name, scan_id, before, after)
                 for name, before, after in fire_diff.changed
             }
+            if rung_writes is not None and fire_run is not None:
+                for name, value in attributed_tags.items():
+                    observed = rung_writes.transition_observed_by(
+                        name,
+                        fire_run,
+                        observed_value=value,
+                    )
+                    if observed is not None:
+                        changed_at_fire[name] = observed
 
             for cond_tag, at_fire_value in attributed_tags.items():
                 cond_transition = changed_at_fire.get(cond_tag)
@@ -1203,11 +1329,18 @@ def _walk_backward(
                 initial_tags=initial_tags,
                 rung=rung,
                 fire_view=fire_view,
+                fire_run=fire_run,
+                selected_write=selected_write,
+                rung_writes=rung_writes,
                 node_reads_fn=node_reads_fn,
                 node_reads_cache=node_reads_cache,
             )
             if crossed is not None:
-                dr_triggers = crossed.triggers
+                dr_triggers = tuple(
+                    trigger
+                    for trigger in crossed.triggers
+                    if trigger not in steps[step_idx].triggers
+                )
                 dr_enablers = crossed.enablers
                 steps[step_idx] = replace(
                     steps[step_idx],
@@ -1829,6 +1962,7 @@ def recorded_effect(
     pdg: ProgramGraph | None = None,
     timelines: RungFiringTimelines | None = None,
     program: Program | None = None,
+    node_runs_fn: Any = None,
 ) -> CausalChain | None:
     """Build a retrospective forward chain from a tag transition.
 
@@ -1864,6 +1998,31 @@ def recorded_effect(
     )
     if transition is None:
         return None
+
+    node_runs_cache: dict[int, tuple[Any, ...]] = {}
+    projection_cache: dict[int, ScanRungWriteProjection | None] = {}
+    first_projection = _rung_write_projection_at(
+        history,
+        transition.scan_id,
+        node_runs_fn,
+        node_runs_cache,
+        projection_cache,
+    )
+    if first_projection is not None:
+        boundary = first_projection.boundary_transition(tag_name)
+        if boundary is not None:
+            transition = boundary
+        return _recorded_effect_from_rung_writes(
+            history=history,
+            transition=transition,
+            node_runs_fn=node_runs_fn,
+            node_runs_cache=node_runs_cache,
+            projection_cache=projection_cache,
+            timelines=timelines,
+            pdg=pdg,
+            steady_state_k=steady_state_k,
+            max_scans=max_scans,
+        )
 
     # Frontier: tags whose downstream effects we're still tracing.
     # Maps tag_name → Transition.
@@ -2014,6 +2173,297 @@ def recorded_effect(
         mode="recorded",
         steps=steps,
     )
+
+
+class _RungWriteCounterfactualView:
+    """One-tag overlay over a replayed rung-entry ConditionView."""
+
+    __slots__ = ("_base", "_name", "_value")
+
+    def __init__(self, base: Any, name: str, value: Any) -> None:
+        self._base = base
+        self._name = name
+        self._value = value
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        if name == self._name:
+            return self._value
+        return self._base.get_tag(name, default)
+
+    def get_memory(self, name: str, default: Any = None) -> Any:
+        return self._base.get_memory(name, default)
+
+
+def _rung_write_changes_outcome(
+    sp_tree: Any,
+    view: Any,
+    tag_name: str,
+    from_value: Any,
+) -> bool:
+    """Whether reverting one observed rung read changes conductivity."""
+
+    def _actual(cond: Condition, _view: Any = view) -> bool:
+        return cond.evaluate(_view)  # type: ignore[arg-type]
+
+    counterfactual = _RungWriteCounterfactualView(view, tag_name, from_value)
+
+    def _counterfactual(cond: Condition, _view: Any = counterfactual) -> bool:
+        return cond.evaluate(_view)  # type: ignore[arg-type]
+
+    return evaluate_sp(sp_tree, _actual) != evaluate_sp(sp_tree, _counterfactual)
+
+
+def _same_transition(left: Transition, right: Transition) -> bool:
+    """Identity/equality for boundary evidence without a dynamic ordinal."""
+    return (
+        left.tag_name == right.tag_name
+        and left.scan_id == right.scan_id
+        and left.from_value == right.from_value
+        and left.to_value == right.to_value
+        and left.occurrence_ordinal == right.occurrence_ordinal
+    )
+
+
+def _causal_source_for_exact_read(
+    *,
+    rung_writes: ScanRungWriteProjection,
+    read: Any,
+    frontier: dict[str, Transition],
+    causal_writes: set[tuple[int, int]],
+) -> Transition | None:
+    """Causal definition visible to one exact observed read occurrence."""
+    observed = rung_writes.transition_observed_by_read(read)
+    candidate = frontier.get(read.occurrence.name)
+    if observed is not None:
+        if observed.occurrence_ordinal is not None:
+            if (observed.scan_id, observed.occurrence_ordinal) in causal_writes:
+                return observed
+            # Root scan writes (patches/forces/synthesis) have exact occurrence
+            # identity but no rung-owned projection entry. Match the public
+            # boundary seed once, then carry their exact ordinal forward.
+            if (
+                candidate is not None
+                and candidate.occurrence_ordinal is None
+                and candidate.tag_name == observed.tag_name
+                and candidate.scan_id == observed.scan_id
+                and candidate.from_value == observed.from_value
+                and candidate.to_value == observed.to_value
+            ):
+                return observed
+            return None
+        return (
+            candidate if candidate is not None and _same_transition(observed, candidate) else None
+        )
+
+    # An entry read can carry a frontier definition only across a later scan
+    # boundary. It can never observe a write from its own scan, even when that
+    # write happens to reassert the same value.
+    if (
+        read.occurrence.source == "entry"
+        and candidate is not None
+        and candidate.scan_id < rung_writes.scan_id
+        and candidate.to_value == read.occurrence.value
+    ):
+        return candidate
+    return None
+
+
+def _recorded_effect_from_rung_writes(
+    *,
+    history: History,
+    transition: Transition,
+    node_runs_fn: Any,
+    node_runs_cache: dict[int, tuple[Any, ...]],
+    projection_cache: dict[int, ScanRungWriteProjection | None],
+    timelines: RungFiringTimelines | None,
+    pdg: ProgramGraph | None,
+    steady_state_k: int,
+    max_scans: int,
+) -> CausalChain:
+    """Forward-slice the exact accesses retained by interpreted replay."""
+    ids = list(history.scan_ids())
+    try:
+        start_index = ids.index(transition.scan_id)
+    except ValueError:
+        return CausalChain(effect=transition, mode="recorded")
+
+    frontier: dict[str, Transition] = {transition.tag_name: transition}
+    causal_writes: set[tuple[int, int]] = set()
+    if transition.occurrence_ordinal is not None:
+        causal_writes.add((transition.scan_id, transition.occurrence_ordinal))
+
+    steps: list[ChainStep] = []
+    consecutive_empty = 0
+
+    for offset, current_scan in enumerate(ids[start_index:]):
+        if offset >= max_scans:
+            break
+        projection = _rung_write_projection_at(
+            history,
+            current_scan,
+            node_runs_fn,
+            node_runs_cache,
+            projection_cache,
+        )
+        if projection is None:
+            break
+
+        # A causal value can cross a scan boundary only while its committed
+        # value remains the one produced by the frontier rung write.
+        if current_scan != transition.scan_id:
+            for name, source in tuple(frontier.items()):
+                if projection.entry_tags.get(name) != source.to_value:
+                    del frontier[name]
+
+        new_effects = False
+        control_sources: dict[int, Transition] = {}
+        enablers_by_run: dict[int, tuple[EnablingCondition, ...]] = {}
+        for run in projection.runs:
+            sp_tree = run.rung.sp_tree()
+            attributed_names: list[str] = []
+
+            def _eval(cond: Condition, _view: Any = run.view) -> bool:
+                return cond.evaluate(_view)  # type: ignore[arg-type]
+
+            if sp_tree is not None:
+                for attr in attribute(sp_tree, _eval):
+                    name = _condition_tag_name(attr.condition)
+                    if name is not None and name not in attributed_names:
+                        attributed_names.append(name)
+            enablers_by_run[id(run)] = tuple(
+                EnablingCondition(
+                    tag_name=name,
+                    value=run.view.get_tag(name),
+                    held_since_scan=_find_last_transition_scan(
+                        history,
+                        name,
+                        current_scan,
+                        timelines=timelines,
+                        pdg=pdg,
+                    ),
+                )
+                for name in attributed_names
+            )
+
+        def _control_source(
+            run: Any,
+            *,
+            projection: ScanRungWriteProjection = projection,
+            control_sources: dict[int, Transition] = control_sources,
+        ) -> Transition | None:
+            cached = control_sources.get(id(run))
+            if cached is not None:
+                return cached
+            sp_tree = run.rung.sp_tree()
+            if sp_tree is not None:
+                condition_tags: list[str] = []
+                for leaf in _collect_sp_leaves(sp_tree):
+                    name = _condition_tag_name(leaf.condition)
+                    if name is not None and name not in condition_tags:
+                        condition_tags.append(name)
+                for read in projection.reads_for_run(run):
+                    name = read.occurrence.name
+                    if read.instruction is not None or name not in condition_tags:
+                        continue
+                    source = _causal_source_for_exact_read(
+                        rung_writes=projection,
+                        read=read,
+                        frontier=frontier,
+                        causal_writes=causal_writes,
+                    )
+                    if source is not None and _rung_write_changes_outcome(
+                        sp_tree,
+                        run.view,
+                        name,
+                        source.from_value,
+                    ):
+                        control_sources[id(run)] = source
+                        return source
+            parent = projection.parent_run(run)
+            if parent is not None:
+                inherited = _control_source(parent)
+                if inherited is not None:
+                    control_sources[id(run)] = inherited
+                    return inherited
+            return None
+
+        # Writes are consumed in their literal execution order. Grouping by
+        # owner rung would reorder ``parent write -> called rung -> parent
+        # write`` and recreate the information loss this journal removes.
+        for write in projection.writes:
+            written = write.transition
+            if (
+                current_scan == transition.scan_id
+                and transition.occurrence_ordinal is not None
+                and write.ordinal <= transition.occurrence_ordinal
+            ):
+                continue
+            if written.from_value == written.to_value:
+                continue
+
+            run = write.run
+            write_trigger = _control_source(run)
+            if write_trigger is None and pdg is not None and write.instruction is not None:
+                footprint = _writer_footprint(
+                    pdg,
+                    written.tag_name,
+                    run.rung_id.rung_index,
+                    run.rung_id.subroutine,
+                )
+                rung_static = _rung_static_reads(
+                    pdg,
+                    run.rung_id.rung_index,
+                    run.rung_id.subroutine,
+                )
+                exact_reads = tuple(
+                    read
+                    for read in projection.reads_for_run(run)
+                    if read.instruction is write.instruction
+                    and read.ordinal < write.ordinal
+                    and (
+                        read.occurrence.name in footprint or read.occurrence.name not in rung_static
+                    )
+                )
+                for read in reversed(exact_reads):
+                    source = _causal_source_for_exact_read(
+                        rung_writes=projection,
+                        read=read,
+                        frontier=frontier,
+                        causal_writes=causal_writes,
+                    )
+                    if source is not None:
+                        write_trigger = source
+                        break
+            if write_trigger is None:
+                # A later unrelated definition severs forward provenance.
+                frontier.pop(written.tag_name, None)
+                continue
+            steps.append(
+                ChainStep(
+                    transition=written,
+                    rung_index=run.rung_id.rung_index,
+                    triggers=(write_trigger,),
+                    enablers=tuple(
+                        enabler
+                        for enabler in enablers_by_run.get(id(run), ())
+                        if enabler.tag_name != write_trigger.tag_name
+                    ),
+                    subroutine=run.rung_id.subroutine,
+                    caller_rung_index=(run.caller_rung if run.kind == "subroutine" else None),
+                )
+            )
+            causal_writes.add((written.scan_id, write.ordinal))
+            frontier[written.tag_name] = written
+            new_effects = True
+
+        if new_effects:
+            consecutive_empty = 0
+        else:
+            consecutive_empty += 1
+            if consecutive_empty >= steady_state_k:
+                break
+
+    return CausalChain(effect=transition, mode="recorded", steps=steps)
 
 
 # ---------------------------------------------------------------------------

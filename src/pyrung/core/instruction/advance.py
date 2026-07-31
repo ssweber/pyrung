@@ -67,6 +67,11 @@ class AdvanceProfile:
     accumulator: Tag | None = None
     done: Tag | None = None
     linear: LinearProgress | None = None
+    # The scalar relation whose crossing completes the owner's current
+    # operation.  ``plan`` may legitimately return an Eq on the visible result
+    # after this relation already holds, so consumers that reason about
+    # preventing/reversing completion need the underlying relation directly.
+    completion_boundary: Callable[[Snapshot], Cmp | AffineCmp | None] | None = None
 
 
 def resolve_snapshot_value(value: Any, snapshot: Snapshot) -> Any:
@@ -350,4 +355,5 @@ def monotone_profile(
             distance=distance,
             estimate_scans=estimate_scans,
         ),
+        completion_boundary=_done_boundary,
     )

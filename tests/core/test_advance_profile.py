@@ -96,6 +96,10 @@ def test_done_settlement_uses_the_visible_done_boundary() -> None:
 
     assert step is not None
     assert step.until == target
+    assert profile.completion_boundary is not None
+    assert profile.completion_boundary({timer.Done.name: False, timer.Acc.name: 20}) == Cmp(
+        timer.Acc.name, ">=", 20
+    )
 
 
 def test_edge_counter_requests_a_pulse_and_keeps_one_bounded_frontier() -> None:

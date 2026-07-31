@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 from pyrsistent import PMap, pmap
 
@@ -18,6 +18,17 @@ if TYPE_CHECKING:
     from pyrung.core.state import SystemState
 
 TagResolver = Callable[[str, Any], tuple[bool, Any]]
+OccurrenceDomain = Literal["tag", "memory"]
+ReadOccurrenceOrigin = Literal["entry", "resolved", "default", "pending"]
+OccurrenceSourceToken = object
+ReadOccurrenceSink = Callable[
+    [OccurrenceDomain, str, Any, ReadOccurrenceOrigin, OccurrenceSourceToken | None],
+    None,
+]
+WriteOccurrenceSink = Callable[
+    [OccurrenceDomain, str, Any, Any],
+    OccurrenceSourceToken,
+]
 
 # Read-path sentinel: hot lookups cache the ``state.tags``/``state.memory``
 # pmaps once (each ``state.<field>`` access is itself a PRecord bucket walk)
@@ -66,6 +77,9 @@ class ConditionView:
         "_memory_snapshot",
         "_resolver",
         "_scope_token",
+        "_read_sink",
+        "_tag_source_snapshot",
+        "_memory_source_snapshot",
     )
 
     def __init__(self, ctx: ScanContext) -> None:
@@ -76,31 +90,61 @@ class ConditionView:
         self._memory_snapshot: dict[str, Any] = ctx._memory_pending.copy()
         self._resolver = ctx._resolver
         self._scope_token = ctx._condition_scope_token
+        self._read_sink = ctx._read_sink
+        self._tag_source_snapshot = (
+            ctx._tag_write_sources.copy() if ctx._tag_write_sources is not None else None
+        )
+        self._memory_source_snapshot = (
+            ctx._memory_write_sources.copy() if ctx._memory_write_sources is not None else None
+        )
 
     def get_tag(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
         value = snap.get(name, _MISSING)
+        source = None
         if value is not _MISSING:
-            return value
-        try:
-            return self._tags[name]
-        except KeyError:
-            pass
-        if self._resolver is not None:
-            resolved, value = self._resolver(name, self)
-            if resolved:
-                return value
-        return default
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._tag_source_snapshot is not None:
+                source = self._tag_source_snapshot.get(name)
+        else:
+            try:
+                value = self._tags[name]
+                origin = "entry"
+            except KeyError:
+                if self._resolver is not None:
+                    resolved, value = self._resolver(name, self)
+                    if not resolved:
+                        value = default
+                        origin = "default"
+                    else:
+                        origin = "resolved"
+                else:
+                    value = default
+                    origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("tag", name, value, origin, source)
+        return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         snap = self._memory_snapshot
         value = snap.get(key, _MISSING)
+        source = None
         if value is not _MISSING:
-            return value
-        try:
-            return self._memory[key]
-        except KeyError:
-            return default
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._memory_source_snapshot is not None:
+                source = self._memory_source_snapshot.get(key)
+        else:
+            try:
+                value = self._memory[key]
+                origin = "entry"
+            except KeyError:
+                value = default
+                origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("memory", key, value, origin, source)
+        return value
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:
         snap = self._tags_snapshot
@@ -168,6 +212,9 @@ class ScanContext:
         "_capture_stack",
         "_current_node_id",
         "_read_sink",
+        "_write_sink",
+        "_tag_write_sources",
+        "_memory_write_sources",
         "_resolver",
         "_read_only_tags",
         "_condition_snapshot",
@@ -222,13 +269,23 @@ class ScanContext:
         # (ConditionViewCapture) so they key subroutine rungs by the same
         # ``RungId`` as the node firing timeline — one source of truth.
         self._current_node_id: RungId | None = None
-        # Optional data-read sink (Crossings Tier 2).  When non-None, every
-        # ``get_tag`` read appends its tag name here — an observer points this
-        # at a per-node bucket during the on-demand interpreted replay so the
-        # recorded read-diff sees the operands the writer actually read
-        # (resolved indirect addresses, only the firing branch).  ``None`` on
-        # every normal scan, so the hot path pays a single attribute check.
-        self._read_sink: set[str] | None = None
+        # Optional exact read sink. During one selected interpreted replay it
+        # receives the observed value, origin, and pending-definition token;
+        # compatibility read-footprint projections are derived from that same
+        # event stream. ``None`` on normal scans, so the hot path pays only a
+        # nullable callback check.
+        self._read_sink: ReadOccurrenceSink | None = None
+        # Optional immediate write sink paired with ``_read_sink`` during one
+        # selected interpreted replay. Normal scans pay only this nullable
+        # callback check; no ordered journal is allocated unless an observer
+        # installs the sink.
+        self._write_sink: WriteOccurrenceSink | None = None
+        # Definition tokens for pending values during an observed replay.
+        # The write sink creates each token; ConditionView freezes these maps
+        # beside its pending values so a later read names the definition it
+        # actually observed, even if execution subsequently rewrites the tag.
+        self._tag_write_sources: dict[str, OccurrenceSourceToken] | None = None
+        self._memory_write_sources: dict[str, OccurrenceSourceToken] | None = None
         self._resolver = resolver
         self._read_only_tags = read_only_tags
         self._condition_snapshot: ConditionView | None = None
@@ -262,21 +319,32 @@ class ScanContext:
         Returns:
             The tag value from pending writes, original state, or default.
         """
-        if self._read_sink is not None:
-            self._read_sink.add(name)
         pending = self._tags_pending
         value = pending.get(name, _MISSING)
+        source = None
         if value is not _MISSING:
-            return value
-        try:
-            return self._state_tags_read[name]
-        except KeyError:
-            pass
-        if self._resolver is not None:
-            resolved, value = self._resolver(name, self)
-            if resolved:
-                return value
-        return default
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._tag_write_sources is not None:
+                source = self._tag_write_sources.get(name)
+        else:
+            try:
+                value = self._state_tags_read[name]
+                origin = "entry"
+            except KeyError:
+                if self._resolver is not None:
+                    resolved, value = self._resolver(name, self)
+                    if not resolved:
+                        value = default
+                        origin = "default"
+                    else:
+                        origin = "resolved"
+                else:
+                    value = default
+                    origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("tag", name, value, origin, source)
+        return value
 
     def get_memory(self, key: str, default: Any = None) -> Any:
         """Get a memory value, checking pending writes first.
@@ -292,12 +360,22 @@ class ScanContext:
         """
         pending = self._memory_pending
         value = pending.get(key, _MISSING)
+        source = None
         if value is not _MISSING:
-            return value
-        try:
-            return self._state_memory[key]
-        except KeyError:
-            return default
+            origin: ReadOccurrenceOrigin = "pending"
+            if self._memory_write_sources is not None:
+                source = self._memory_write_sources.get(key)
+        else:
+            try:
+                value = self._state_memory[key]
+                origin = "entry"
+            except KeyError:
+                value = default
+                origin = "default"
+        sink = self._read_sink
+        if sink is not None:
+            sink("memory", key, value, origin, source)
+        return value
 
     # =========================================================================
     # Write operations (batched)
@@ -335,6 +413,11 @@ class ScanContext:
         """
         if name in self._read_only_tags:
             raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("tag", name, self._get_tag_internal(name), value)
+            if self._tag_write_sources is not None:
+                self._tag_write_sources[name] = source
         self._journal_capture(name)
         self._tags_pending[name] = value
 
@@ -347,6 +430,12 @@ class ScanContext:
         for name in updates:
             if name in self._read_only_tags:
                 raise ValueError(f"Tag '{name}' is read-only system point and cannot be written")
+        sink = self._write_sink
+        if sink is not None:
+            for name, value in updates.items():
+                source = sink("tag", name, self._get_tag_internal(name), value)
+                if self._tag_write_sources is not None:
+                    self._tag_write_sources[name] = source
         if self._capture_stack:
             for name in updates:
                 self._journal_capture(name)
@@ -354,11 +443,22 @@ class ScanContext:
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
         """Set a tag while bypassing read-only guards (runtime-only use)."""
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("tag", name, self._get_tag_internal(name), value)
+            if self._tag_write_sources is not None:
+                self._tag_write_sources[name] = source
         self._journal_capture(name)
         self._tags_pending[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
         """Set multiple tags while bypassing read-only guards (runtime-only use)."""
+        sink = self._write_sink
+        if sink is not None:
+            for name, value in updates.items():
+                source = sink("tag", name, self._get_tag_internal(name), value)
+                if self._tag_write_sources is not None:
+                    self._tag_write_sources[name] = source
         if self._capture_stack:
             for name in updates:
                 self._journal_capture(name)
@@ -371,6 +471,11 @@ class ScanContext:
             key: The memory key to set.
             value: The value to set.
         """
+        sink = self._write_sink
+        if sink is not None:
+            source = sink("memory", key, self._get_memory_internal(key), value)
+            if self._memory_write_sources is not None:
+                self._memory_write_sources[key] = source
         self._memory_pending[key] = value
 
     def set_memory_bulk(self, updates: dict[str, Any]) -> None:
@@ -379,6 +484,12 @@ class ScanContext:
         Args:
             updates: Dict of memory keys to values.
         """
+        sink = self._write_sink
+        if sink is not None:
+            for key, value in updates.items():
+                source = sink("memory", key, self._get_memory_internal(key), value)
+                if self._memory_write_sources is not None:
+                    self._memory_write_sources[key] = source
         self._memory_pending.update(updates)
 
     def _get_tag_internal(self, name: str, default: Any = None) -> Any:

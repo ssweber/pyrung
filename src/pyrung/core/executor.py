@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, cast
 
-from pyrung.core.context import ConditionView, RungId
+from pyrung.core.context import (
+    ConditionView,
+    OccurrenceDomain,
+    ReadOccurrenceOrigin,
+    RungId,
+)
 from pyrung.core.instruction import (
     CallInstruction,
     ForLoopInstruction,
@@ -31,8 +36,117 @@ ExecutionKind = Literal["rung", "branch", "subroutine", "synthetic"]
 
 
 @dataclass(frozen=True)
+class WriteOccurrence:
+    """One immediate observed context write in scan execution order."""
+
+    ordinal: int
+    domain: OccurrenceDomain
+    name: str
+    before: object
+    after: object
+
+
+@dataclass(frozen=True)
+class ReadOccurrence:
+    """One read and the exact definition observed in scan execution order.
+
+    ``source`` is the actual :class:`WriteOccurrence` object when the read saw
+    a pending same-scan definition. Otherwise it records why no dynamic write
+    owns the value: scan ``entry``, a dynamic ``resolved`` value, ``default``,
+    or an unjournaled ``pending`` definition.
+    """
+
+    ordinal: int
+    domain: OccurrenceDomain
+    name: str
+    value: object
+    source: WriteOccurrence | ReadOccurrenceOrigin
+
+    @property
+    def source_ordinal(self) -> int | None:
+        """The observed same-scan write identity, if one owns this read."""
+        return self.source.ordinal if isinstance(self.source, WriteOccurrence) else None
+
+
+def _direct_occurrences(
+    body: tuple[ExecutionBodyItem, ...],
+    occurrence_type: type[ReadOccurrence] | type[WriteOccurrence],
+) -> tuple[Any, ...]:
+    return tuple(item for item in body if isinstance(item, occurrence_type))
+
+
+def _recursive_occurrences(
+    body: tuple[ExecutionBodyItem, ...],
+    occurrence_type: type[ReadOccurrence] | type[WriteOccurrence],
+) -> tuple[Any, ...]:
+    result: list[ReadOccurrence | WriteOccurrence] = []
+
+    def _walk(items: tuple[ExecutionBodyItem, ...]) -> None:
+        for item in items:
+            if isinstance(item, occurrence_type):
+                result.append(item)
+            elif isinstance(item, (InstructionRun, LoopIterationRun, RungRun)):
+                _walk(item.body)
+
+    _walk(body)
+    return tuple(result)
+
+
+@dataclass(frozen=True)
+class InstructionRun:
+    """One instruction execution and its recursively ordered body."""
+
+    instruction: Instruction
+    enabled: bool
+    depth: int
+    body: tuple[ExecutionBodyItem, ...]
+
+    @property
+    def direct_read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        return _direct_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def direct_write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        return _direct_occurrences(self.body, WriteOccurrence)
+
+    @property
+    def read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        return _recursive_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        return _recursive_occurrences(self.body, WriteOccurrence)
+
+
+@dataclass(frozen=True)
+class LoopIterationRun:
+    """One enabled loop iteration, including its index write and children."""
+
+    instruction: ForLoopInstruction
+    iteration: int
+    depth: int
+    body: tuple[ExecutionBodyItem, ...]
+
+    @property
+    def direct_read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        return _direct_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def direct_write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        return _direct_occurrences(self.body, WriteOccurrence)
+
+    @property
+    def read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        return _recursive_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        return _recursive_occurrences(self.body, WriteOccurrence)
+
+
+@dataclass(frozen=True)
 class RungRun:
-    """One exact rung occurrence from an observed scan."""
+    """One rung execution with its authoritative recursive body journal."""
 
     rung_id: RungId
     rung: Rung
@@ -42,7 +156,88 @@ class RungRun:
     call_stack: tuple[str, ...]
     view: ConditionView
     enabled: bool
-    writes: tuple[tuple[str, object], ...]
+    body: tuple[ExecutionBodyItem, ...]
+
+    @property
+    def direct_read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        """Reads owned by this rung, excluding nested branch/call rungs."""
+        return _rung_direct_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def direct_write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        """Writes owned by this rung, excluding nested branch/call rungs."""
+        return _rung_direct_occurrences(self.body, WriteOccurrence)
+
+    @property
+    def read_occurrences(self) -> tuple[ReadOccurrence, ...]:
+        """All reads in this rung subtree, in scan order."""
+        return _recursive_occurrences(self.body, ReadOccurrence)
+
+    @property
+    def write_occurrences(self) -> tuple[WriteOccurrence, ...]:
+        """All writes in this rung subtree, in scan order."""
+        return _recursive_occurrences(self.body, WriteOccurrence)
+
+    @property
+    def direct_writes(self) -> tuple[tuple[str, object], ...]:
+        """Final attempted tag value per direct rung-owned write."""
+        return _summarize_tag_writes(self.direct_write_occurrences)
+
+    @property
+    def writes(self) -> tuple[tuple[str, object], ...]:
+        """Compatibility final-per-tag summary including descendants."""
+        return _summarize_tag_writes(self.write_occurrences)
+
+    @property
+    def rung_occurrences(self) -> tuple[RungRun, ...]:
+        """This rung and nested rungs in execution-entry order."""
+        result: list[RungRun] = [self]
+        _append_nested_rungs(self.body, result)
+        return tuple(result)
+
+
+ExecutionBodyItem: TypeAlias = (
+    ReadOccurrence | WriteOccurrence | InstructionRun | LoopIterationRun | RungRun
+)
+
+
+def _rung_direct_occurrences(
+    body: tuple[ExecutionBodyItem, ...],
+    occurrence_type: type[ReadOccurrence] | type[WriteOccurrence],
+) -> tuple[Any, ...]:
+    """Walk structural instruction/loop nodes but stop at nested rungs."""
+    result: list[ReadOccurrence | WriteOccurrence] = []
+
+    def _walk(items: tuple[ExecutionBodyItem, ...]) -> None:
+        for item in items:
+            if isinstance(item, occurrence_type):
+                result.append(item)
+            elif isinstance(item, RungRun):
+                continue
+            elif isinstance(item, (InstructionRun, LoopIterationRun)):
+                _walk(item.body)
+
+    _walk(body)
+    return tuple(result)
+
+
+def _summarize_tag_writes(
+    occurrences: tuple[WriteOccurrence, ...],
+) -> tuple[tuple[str, object], ...]:
+    summary: dict[str, object] = {}
+    for occurrence in occurrences:
+        if occurrence.domain == "tag":
+            summary[occurrence.name] = occurrence.after
+    return tuple(summary.items())
+
+
+def _append_nested_rungs(body: tuple[ExecutionBodyItem, ...], result: list[RungRun]) -> None:
+    for item in body:
+        if isinstance(item, RungRun):
+            result.append(item)
+            _append_nested_rungs(item.body, result)
+        elif isinstance(item, (InstructionRun, LoopIterationRun)):
+            _append_nested_rungs(item.body, result)
 
 
 @dataclass
@@ -54,8 +249,31 @@ class _RungRunBuilder:
     caller_rung: int
     depth: int
     call_stack: tuple[str, ...]
-    journal: dict[str, object]
+    body: list[object | None]
+    parent_body: list[object | None]
+    parent_slot: int
     view: ConditionView | None = None
+
+
+@dataclass
+class _InstructionRunBuilder:
+    instruction: Instruction
+    enabled: bool
+    depth: int
+    body: list[object | None]
+    parent_body: list[object | None]
+    parent_slot: int
+    rung_id: RungId
+
+
+@dataclass
+class _LoopIterationRunBuilder:
+    instruction: ForLoopInstruction
+    iteration: int
+    depth: int
+    body: list[object | None]
+    parent_body: list[object | None]
+    parent_slot: int
 
 
 class ExecutionObserver(Protocol):
@@ -121,6 +339,18 @@ class ExecutionObserver(Protocol):
     ) -> None:
         """Called before executing an instruction."""
 
+    def end_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        """Called after an instruction and all nested execution finish."""
+
     def begin_subroutine_call(
         self,
         ctx: ScanContext,
@@ -141,6 +371,17 @@ class ExecutionObserver(Protocol):
         call_stack: tuple[str, ...],
     ) -> None:
         """Called before writing the loop index for one iteration."""
+
+    def end_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        """Called after one loop iteration and all child instructions finish."""
 
 
 class _NoopExecutionObserver:
@@ -204,6 +445,18 @@ class _NoopExecutionObserver:
     ) -> None:
         pass
 
+    def end_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        pass
+
     def begin_subroutine_call(
         self,
         ctx: ScanContext,
@@ -225,53 +478,122 @@ class _NoopExecutionObserver:
     ) -> None:
         pass
 
+    def end_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        pass
+
 
 NOOP_OBSERVER: ExecutionObserver = _NoopExecutionObserver()
 
 
 class ConditionViewCapture(_NoopExecutionObserver):
-    """Observer that records each rung occurrence, at-entry view, and reads.
+    """Selected-replay observer for a faithful recursive execution journal.
 
     Used by an on-demand replay (``PLC._replay_node_views_at`` /
-    ``_replay_node_reads_at``) to reconstruct the exact intra-scan state each
-    rung read.  ``begin_condition`` fires right after the executor resolves the
-    rung's condition view onto ``ctx._condition_snapshot`` (see
-    :func:`_execute_rung`), so reading it there captures the at-fire-time
-    snapshot — including writes from rungs that ran earlier in the same scan,
-    and *before* any rung that runs later consumes a gate the writer depended on.
+    ``_replay_node_reads_at``) to reconstruct the exact interpreted execution
+    selected by a historical query. ``body`` is authoritative: reads, writes,
+    instructions, branch/call rungs, and loop iterations retain their recursive
+    execution order. Event ordinals are global within this captured scan.
 
-    The key comes from ``ctx._current_node_id`` — the same ``RungId`` the
-    node firing timeline uses for a subroutine rung — falling back to
-    ``RungId(None, rung_index)`` at main scope.  Sharing that one source
-    means the captured view and the recorded write can never key apart.
-    Branches reuse their parent rung's view and are skipped.  Multiple
-    calls of one subroutine in a scan keep the last call's view (matching
-    the firing timeline's last-write semantics).
-
-    **Data-read footprint (Crossings Tier 2).**  ``reads`` maps each node to the
-    set of operand tags it actually read during ``execute``.  ``begin_instruction``
-    points ``ctx._read_sink`` at the node's bucket; ``get_tag`` appends to it
-    while the instruction runs (direct tags, block-sum elements, *resolved*
-    indirect addresses all flow through ``get_tag``).  ``begin_rung`` closes the
-    sink so condition-contact reads (resolved before ``begin_condition``) and
-    inter-rung reads aren't attributed to the previous instruction.  A disabled
-    branch's instruction short-circuits in ``guard_oneshot_execution`` before any
-    read, so the bucket holds only the operands of the branch that fired —
-    recorded ``cause()`` prefers this over the static (union) PDG footprint.
+    ``views`` and ``reads`` remain compact compatibility projections. ``runs``
+    remains a flat entry-order view over the recursive rung nodes. No ordered
+    structures are allocated on ordinary scans; context callbacks are installed
+    only while this observer drives the selected interpreted replay.
     """
 
-    __slots__ = ("views", "reads", "_runs", "_active_runs")
+    __slots__ = (
+        "views",
+        "reads",
+        "_body",
+        "_body_stack",
+        "_runs",
+        "_active_runs",
+        "_active_instructions",
+        "_active_iterations",
+        "_ordinal",
+    )
 
     def __init__(self) -> None:
         self.views: dict[RungId, ConditionView] = {}
         self.reads: dict[RungId, set[str]] = {}
+        self._body: list[object | None] = []
+        self._body_stack: list[list[object | None]] = []
         self._runs: list[RungRun | None] = []
         self._active_runs: list[_RungRunBuilder] = []
+        self._active_instructions: list[_InstructionRunBuilder] = []
+        self._active_iterations: list[_LoopIterationRunBuilder] = []
+        self._ordinal = 0
+
+    @property
+    def body(self) -> tuple[ExecutionBodyItem, ...]:
+        """Root scan journal, including events outside rung scopes."""
+        return _freeze_body(self._body)
 
     @property
     def runs(self) -> tuple[RungRun, ...]:
         """Rung occurrences in scan-entry order."""
         return tuple(run for run in self._runs if run is not None)
+
+    def attach(self, ctx: ScanContext) -> None:
+        """Attach this selected-scan journal before any observable scan phase."""
+        ctx._read_sink = self._record_read
+        ctx._write_sink = self._record_write
+        if ctx._tag_write_sources is None:
+            ctx._tag_write_sources = {}
+        if ctx._memory_write_sources is None:
+            ctx._memory_write_sources = {}
+
+    def _install_sinks(self, ctx: ScanContext) -> None:
+        self.attach(ctx)
+
+    def _event_body(self) -> list[object | None]:
+        return self._body_stack[-1] if self._body_stack else self._body
+
+    def _record_read(
+        self,
+        domain: OccurrenceDomain,
+        name: str,
+        value: object,
+        origin: ReadOccurrenceOrigin,
+        source: object | None,
+    ) -> None:
+        if source is not None and not isinstance(source, WriteOccurrence):
+            raise RuntimeError("observed read received an unknown definition token")
+        occurrence = ReadOccurrence(
+            self._ordinal,
+            domain,
+            name,
+            value,
+            source if source is not None else origin,
+        )
+        self._ordinal += 1
+        body = self._event_body()
+        body.append(occurrence)
+        if (
+            domain == "tag"
+            and self._active_instructions
+            and body is self._active_instructions[-1].body
+        ):
+            self.reads.setdefault(self._active_instructions[-1].rung_id, set()).add(name)
+
+    def _record_write(
+        self,
+        domain: OccurrenceDomain,
+        name: str,
+        before: object,
+        after: object,
+    ) -> WriteOccurrence:
+        occurrence = WriteOccurrence(self._ordinal, domain, name, before, after)
+        self._event_body().append(occurrence)
+        self._ordinal += 1
+        return occurrence
 
     def begin_rung(
         self,
@@ -283,25 +605,29 @@ class ConditionViewCapture(_NoopExecutionObserver):
         subroutine_name: str | None,
         call_stack: tuple[str, ...],
     ) -> None:
-        # Close any open read bucket: the condition view is resolved next (before
-        # begin_condition), and those contact reads — plus any inter-rung reads —
-        # must not land in the previous rung's last instruction's bucket.
-        ctx._read_sink = None
+        self._install_sinks(ctx)
         rung_id = ctx._current_node_id or RungId(None, rung_index)
-        slot = len(self._runs)
+        flat_slot = len(self._runs)
         self._runs.append(None)
+        parent_body = self._event_body()
+        parent_slot = len(parent_body)
+        parent_body.append(None)
+        body: list[object | None] = []
         self._active_runs.append(
             _RungRunBuilder(
-                slot=slot,
+                slot=flat_slot,
                 rung_id=rung_id,
                 rung=rung,
                 kind=kind,
                 caller_rung=rung_index,
                 depth=depth,
                 call_stack=call_stack,
-                journal=ctx._begin_capture(),
+                body=body,
+                parent_body=parent_body,
+                parent_slot=parent_slot,
             )
         )
+        self._body_stack.append(body)
 
     def end_rung(
         self,
@@ -314,14 +640,14 @@ class ConditionViewCapture(_NoopExecutionObserver):
         call_stack: tuple[str, ...],
         enabled: bool,
     ) -> None:
-        ctx._read_sink = None
+        body = self._body_stack.pop()
         active = self._active_runs.pop()
-        if active.rung is not rung:
+        if active.rung is not rung or body is not active.body:
             raise RuntimeError("observed rung scopes closed out of order")
-        writes = ctx._finish_observed_capture(active.journal)
         if active.view is None:
             raise RuntimeError("observed rung finished without a condition view")
-        self._runs[active.slot] = RungRun(
+        active.view._read_sink = None
+        run = RungRun(
             rung_id=active.rung_id,
             rung=active.rung,
             kind=active.kind,
@@ -330,8 +656,10 @@ class ConditionViewCapture(_NoopExecutionObserver):
             call_stack=active.call_stack,
             view=active.view,
             enabled=enabled,
-            writes=tuple(writes.items()),
+            body=_freeze_body(active.body),
         )
+        self._runs[active.slot] = run
+        active.parent_body[active.parent_slot] = run
 
     def begin_condition(
         self,
@@ -346,6 +674,7 @@ class ConditionViewCapture(_NoopExecutionObserver):
         view = ctx._condition_snapshot
         if view is not None:
             self._active_runs[-1].view = view
+            view._read_sink = self._record_read
         if kind == "branch":
             return
         if view is not None:
@@ -362,13 +691,106 @@ class ConditionViewCapture(_NoopExecutionObserver):
         enabled: bool,
         call_stack: tuple[str, ...],
     ) -> None:
-        # Point the read sink at this node's bucket for the duration of
-        # ``instruction.execute``.  Reuses the bucket (setdefault) so multiple
-        # instructions — and multiple branches — of one rung accumulate under the
-        # same key, matching ``_writer_footprint``'s ``(rung_index, subroutine)``
-        # identity.
         key = ctx._current_node_id or RungId(None, rung_index)
-        ctx._read_sink = self.reads.setdefault(key, set())
+        self.reads.setdefault(key, set())
+        parent_body = self._event_body()
+        parent_slot = len(parent_body)
+        parent_body.append(None)
+        body: list[object | None] = []
+        self._active_instructions.append(
+            _InstructionRunBuilder(
+                instruction=instruction,
+                enabled=enabled,
+                depth=depth,
+                body=body,
+                parent_body=parent_body,
+                parent_slot=parent_slot,
+                rung_id=key,
+            )
+        )
+        self._body_stack.append(body)
+        self._install_sinks(ctx)
+
+    def end_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        body = self._body_stack.pop()
+        active = self._active_instructions.pop()
+        if active.instruction is not instruction or body is not active.body:
+            raise RuntimeError("observed instruction scopes closed out of order")
+        run = InstructionRun(
+            instruction=instruction,
+            enabled=enabled,
+            depth=depth,
+            body=_freeze_body(active.body),
+        )
+        active.parent_body[active.parent_slot] = run
+        self._install_sinks(ctx)
+
+    def begin_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        parent_body = self._event_body()
+        parent_slot = len(parent_body)
+        parent_body.append(None)
+        body: list[object | None] = []
+        self._active_iterations.append(
+            _LoopIterationRunBuilder(
+                instruction=instruction,
+                iteration=iteration,
+                depth=depth,
+                body=body,
+                parent_body=parent_body,
+                parent_slot=parent_slot,
+            )
+        )
+        self._body_stack.append(body)
+        self._install_sinks(ctx)
+
+    def end_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        body = self._body_stack.pop()
+        active = self._active_iterations.pop()
+        if (
+            active.instruction is not instruction
+            or active.iteration != iteration
+            or body is not active.body
+        ):
+            raise RuntimeError("observed loop scopes closed out of order")
+        run = LoopIterationRun(
+            instruction=instruction,
+            iteration=iteration,
+            depth=depth,
+            body=_freeze_body(active.body),
+        )
+        active.parent_body[active.parent_slot] = run
+        self._install_sinks(ctx)
+
+
+def _freeze_body(body: list[object | None]) -> tuple[ExecutionBodyItem, ...]:
+    if any(item is None for item in body):
+        raise RuntimeError("observed execution body contains an unclosed scope")
+    return cast(tuple[ExecutionBodyItem, ...], tuple(body))
 
 
 def execute_program(
@@ -782,42 +1204,52 @@ def _execute_instruction(
     item_kind: int | None = None,
 ) -> None:
     observer.begin_instruction(ctx, rung_index, rung, instruction, depth, enabled, call_stack)
+    try:
+        if item_kind is None:
+            item_kind = instruction._executor_kind
+        if item_kind == _EXECUTOR_CALL:
+            _execute_call_instruction(
+                ctx,
+                rung_index,
+                instruction,  # ty: ignore[invalid-argument-type]
+                enabled,
+                mode=mode,
+                observer=observer,
+                depth=depth,
+                call_stack=call_stack,
+            )
+            return
 
-    if item_kind is None:
-        item_kind = instruction._executor_kind
-    if item_kind == _EXECUTOR_CALL:
-        _execute_call_instruction(
-            ctx,
-            rung_index,
-            instruction,  # ty: ignore[invalid-argument-type]
-            enabled,
-            mode=mode,
-            observer=observer,
-            depth=depth,
-            call_stack=call_stack,
-        )
-        return
+        if item_kind == _EXECUTOR_FOR_LOOP:
+            _execute_for_loop_instruction(
+                program,
+                ctx,
+                rung_index,
+                rung,
+                instruction,  # ty: ignore[invalid-argument-type]
+                enabled,
+                mode=mode,
+                observer=observer,
+                depth=depth,
+                call_stack=call_stack,
+            )
+            return
 
-    if item_kind == _EXECUTOR_FOR_LOOP:
-        _execute_for_loop_instruction(
-            program,
+        if mode == "forced_on" and item_kind == _EXECUTOR_RETURN:
+            instruction.execute(ctx, False)
+            return
+
+        instruction.execute(ctx, enabled)
+    finally:
+        observer.end_instruction(
             ctx,
             rung_index,
             rung,
-            instruction,  # ty: ignore[invalid-argument-type]
+            instruction,
+            depth,
             enabled,
-            mode=mode,
-            observer=observer,
-            depth=depth,
-            call_stack=call_stack,
+            call_stack,
         )
-        return
-
-    if mode == "forced_on" and item_kind == _EXECUTOR_RETURN:
-        instruction.execute(ctx, False)
-        return
-
-    instruction.execute(ctx, enabled)
 
 
 def _execute_call_instruction(
@@ -916,18 +1348,28 @@ def _execute_for_loop_instruction(
 
     for i in range(iterations):
         observer.begin_loop_iteration(ctx, rung_index, instruction, i, depth, call_stack)
-        ctx.set_tag(instruction.idx_tag.name, i)
-        for child in instruction.instructions:
-            _execute_instruction(
-                program,
+        try:
+            ctx.set_tag(instruction.idx_tag.name, i)
+            for child in instruction.instructions:
+                _execute_instruction(
+                    program,
+                    ctx,
+                    rung_index,
+                    rung,
+                    child,
+                    True,
+                    mode=mode,
+                    observer=observer,
+                    depth=depth + 1,
+                    call_stack=call_stack,
+                    item_kind=child._executor_kind,
+                )
+        finally:
+            observer.end_loop_iteration(
                 ctx,
                 rung_index,
-                rung,
-                child,
-                True,
-                mode=mode,
-                observer=observer,
-                depth=depth + 1,
-                call_stack=call_stack,
-                item_kind=child._executor_kind,
+                instruction,
+                i,
+                depth,
+                call_stack,
             )

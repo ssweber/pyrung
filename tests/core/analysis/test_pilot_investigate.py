@@ -17,6 +17,7 @@ import pytest
 from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
+from pyrung.core.analysis.pilot.constrained_reachability import NoRoute, Unknown
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     _dedupe_pairs,
@@ -34,11 +35,13 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayJustification,
     ReplayOutcome,
     ReplayStep,
+    _continuation_with_active_correction,
     _first_timeline_departure,
     _hold_allowed,
     _hold_is_noop,
     _HypothesisExtended,
     _regression_cause_replayed,
+    _RelationalRefinementReceipt,
     _ReplayAccepted,
     _ReplayRejected,
     _resolve_replay_attempt,
@@ -62,6 +65,7 @@ from pyrung.core.analysis.sp_values import _SnapshotView
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import CompareEq, CompareNe
 from pyrung.core.context import RungId
+from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
@@ -163,6 +167,154 @@ def _ground_test_incident(plc: PLC) -> DeviationIncident:
         changed_tags=(),
         departures=(),
     )
+
+
+def test_continuation_status_exhausts_correction_blocked_or_alternatives() -> None:
+    """NoRoute requires every target alternative to conflict with the pin."""
+
+    first = Bool("ContinuationFirst", external=True)
+    second = Bool("ContinuationSecond", external=True)
+    target = Bool("ContinuationTarget")
+    with Program() as prog:
+        with Rung(Or(first, second)):
+            out(target)
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc, target=TargetSpec(target.name, True))
+    guard = CompareEq(target, False)
+
+    one_pin = _continuation_with_active_correction(
+        (PilotRung(first.name, False, guard),),
+        plc.state.tags,
+        ctx,
+    )
+    both_pins = _continuation_with_active_correction(
+        (
+            PilotRung(first.name, False, guard),
+            PilotRung(second.name, False, guard),
+        ),
+        plc.state.tags,
+        ctx,
+    )
+
+    assert isinstance(one_pin, Unknown)
+    assert isinstance(both_pins, NoRoute)
+
+
+def test_continuation_status_keeps_unreadable_frontier_unknown() -> None:
+    """An incomplete trace is not promoted to proof that no route exists."""
+
+    enable = Bool("ContinuationUnknownEnable", external=True)
+    unrelated = Bool("ContinuationUnknownPin", external=True)
+    target = Int("ContinuationUnknownTarget")
+    with Program() as prog:
+        with Rung(enable):
+            copy(1, target)
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc, target=TargetSpec(target.name, 2))
+
+    status = _continuation_with_active_correction(
+        (PilotRung(unrelated.name, False, CompareEq(target, 0)),),
+        plc.state.tags,
+        ctx,
+    )
+
+    assert isinstance(status, Unknown)
+
+
+def test_unrefinable_relational_unknown_is_not_legacy_confirmed(monkeypatch) -> None:
+    """Relational uncertainty cannot fall through local replay acceptance."""
+
+    command = Bool("UnrefinableCommand", external=True)
+    target = Bool("UnrefinableTarget")
+    internal = Int("UnrefinableInternal")
+    with Program() as prog:
+        with Rung(command):
+            out(target)
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc, target=TargetSpec(target.name, True))
+    hypothesis = CorrectionHypothesis(
+        "relational",
+        ((command.name, False),),
+        constraint=Cmp(internal.name, "<", 5),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.derive_correction_hypotheses",
+        lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        lambda _holds: ReplayOutcome(True, None, dict(plc.state.tags), "locally solved"),
+    )
+
+    assert result.correction is None
+    assert result.rejected[-1].slug == "relational-continuation-unknown"
+    assert "no new authoritative operand" in result.rejected[-1].ground
+
+
+def test_relational_refinement_budget_exhaustion_stays_unknown(monkeypatch) -> None:
+    """A finite CEGAR budget cannot turn uncertainty into confirmation."""
+
+    command = Int("BudgetedRefinement", external=True)
+    target = Bool("BudgetedRefinementTarget")
+    with Program(strict=False) as prog:
+        with Rung(command == 99):
+            out(target)
+    plc = PLC(prog)
+    ctx = _make_ctx(prog, plc, target=TargetSpec(target.name, True))
+    hypothesis = CorrectionHypothesis(
+        "relational",
+        ((command.name, 0),),
+        constraint=Cmp(command.name, "<", 99),
+    )
+    sequence = iter((1, 2, 3))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.derive_correction_hypotheses",
+        lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._rank_hypotheses",
+        lambda _plc, hypotheses, *_args, **_kwargs: hypotheses,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._RelationalRefinementReceipt",
+        lambda: _RelationalRefinementReceipt(budget=2),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.refine_relational_hypothesis",
+        lambda current, *_args, **_kwargs: CorrectionHypothesis(
+            current.kind,
+            ((command.name, next(sequence)),),
+            current.sources,
+            current.detail,
+            current.constraint,
+        ),
+    )
+
+    result = investigate_deviation(
+        plc,
+        _ground_test_incident(plc),
+        ctx,
+        lambda _holds: ReplayOutcome(True, None, dict(plc.state.tags), "locally solved"),
+    )
+
+    assert result.correction is None
+    assert result.rejected[-1].slug == "relational-continuation-unknown"
+    assert "exhausting 2 counterexample refinements" in result.rejected[-1].ground
 
 
 def test_investigation_rejections_carry_raw_and_guarded_replay_grounds(monkeypatch):
@@ -498,6 +650,9 @@ def test_revoked_broad_correction_does_not_exclude_new_safe_scope(monkeypatch):
     assert scoped.dest == broad.dest and scoped.value == broad.value
     assert correction_identity((scoped,)) != correction_identity((broad,))
     assert result.rejected == ()
+    assert result.correction.justification.startswith(
+        "legacy-local-replay; target continuation unknown:"
+    )
     assert len(replayed) == 2
     assert replayed[0] == hypothesis.holds
     assert replayed[1] == (scoped,)

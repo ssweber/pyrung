@@ -2160,7 +2160,7 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
+     "detail": "sm_CtrlCmd2StateRequest:R3 fired at scan <N>; revert exact trigger frontier",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -2186,7 +2186,7 @@
    "hypotheses": 2,
    "hypothesis_detail": [
     {
-     "detail": "ProductionStates:R5 fired at scan <N>; revert exact trigger frontier",
+     "detail": "sm_CtrlCmd2StateRequest:R3 fired at scan <N>; revert exact trigger frontier",
      "holds": [
       [
        "x_DoorClosed",

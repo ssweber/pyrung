@@ -45,12 +45,14 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     UnsupportedConstruct,
+    _constraint_atom,
+    _inequality_levers,
     trace_back,
 )
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match, _writer_for_tag
-from pyrung.core.crossing import Eq
+from pyrung.core.crossing import AffineCmp, Cmp, Eq
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import DeviationIncident
@@ -76,6 +78,103 @@ class CorrectionHypothesis:
     holds: tuple[Any, ...]
     sources: tuple[str, ...] = ()
     detail: str = ""
+    # Relational condition this correction keeps false/true.  Unlike ``kind``,
+    # this is executable analysis evidence: investigation can re-solve it
+    # against a later counterexample snapshot without knowing which instruction
+    # produced it.
+    constraint: Any = None
+
+
+def _complement_constraint(constraint: Any) -> Any | None:
+    """Logical complement of one scalar owner boundary."""
+
+    complements = {
+        "==": "!=",
+        "!=": "==",
+        "<": ">=",
+        "<=": ">",
+        ">": "<=",
+        ">=": "<",
+    }
+    if isinstance(constraint, Cmp):
+        op = complements.get(constraint.op)
+        return (
+            None
+            if op is None
+            else Cmp(
+                constraint.tag,
+                op,
+                constraint.bound,
+                bound_is_tag=constraint.bound_is_tag,
+            )
+        )
+    if isinstance(constraint, AffineCmp):
+        op = complements.get(constraint.op)
+        return (
+            None
+            if op is None
+            else AffineCmp(
+                constraint.tag,
+                op,
+                constraint.bound_tag,
+                scale=constraint.scale,
+                offset=constraint.offset,
+            )
+        )
+    return None
+
+
+def _authoritative_relational_holds(
+    constraint: Any,
+    snapshot: Mapping[str, Any],
+    ctx: Any,
+) -> tuple[ActionPair, ...]:
+    """Direct authoritative operands that satisfy a relational constraint."""
+
+    atom = _constraint_atom(constraint)
+    if atom is None:
+        return ()
+    levers = _inequality_levers(
+        atom,
+        dict(snapshot),
+        getattr(ctx, "steerable", frozenset()),
+        ctx.pdg,
+        getattr(ctx, "domain_prior", None),
+        ctx.program,
+    )
+    return tuple(
+        (lever.tag, lever.value)
+        for lever in levers
+        if lever.tag in getattr(ctx, "steerable", frozenset())
+    )
+
+
+def refine_relational_hypothesis(
+    hypothesis: CorrectionHypothesis,
+    snapshot: Mapping[str, Any],
+    ctx: Any,
+) -> CorrectionHypothesis | None:
+    """Re-solve one relational correction at a counterexample snapshot."""
+
+    if hypothesis.constraint is None:
+        return None
+    candidates = _authoritative_relational_holds(hypothesis.constraint, snapshot, ctx)
+    if not candidates:
+        return None
+    prior = (
+        dict(map(lambda hold: (hold.dest, hold.value), hypothesis.holds))
+        if all(isinstance(hold, PilotRung) for hold in hypothesis.holds)
+        else dict(hypothesis.holds)
+    )
+    for pair in candidates:
+        if pair[0] not in prior or not _values_match(prior[pair[0]], pair[1]):
+            return replace(
+                hypothesis,
+                holds=(pair,),
+                sources=tuple(dict.fromkeys((*hypothesis.sources, pair[0]))),
+                detail=f"{hypothesis.detail}; refined at {pair[0]}={pair[1]!r}",
+            )
+    return None
 
 
 def correct_enablers(
@@ -649,6 +748,43 @@ def _accumulator_corrections(
             Eq(profile.done.name, frozenset((desired,))),
             why=f"drives {profile.done.name} to done",
         )
+        # The owner's completion boundary is a relation, not an instruction
+        # category.  Its complement may have another authoritative operand:
+        # ``Acc >= Limit`` can be prevented by driving Acc down *or* Limit up.
+        # Surface every direct external operand and let replay decide how far it
+        # must move; this applies equally to counters, analog limits, and any
+        # future owner exposing a tag-bound scalar boundary.
+        boundary = (
+            profile.completion_boundary(incident.before_snap)
+            if profile.completion_boundary is not None
+            else None
+        )
+        if boundary is None:
+            step = owner.profile.plan(
+                Eq(profile.done.name, frozenset((desired,))),
+                incident.before_snap,
+            )
+            boundary = step.until if step is not None else None
+        complement = _complement_constraint(boundary)
+        if complement is not None:
+            for hold in _authoritative_relational_holds(
+                complement,
+                incident.before_snap,
+                ctx,
+            ):
+                if not _hold_allowed(ctx, hold):
+                    continue
+                corrections.append(
+                    CorrectionHypothesis(
+                        kind="boundary-complement",
+                        holds=(hold,),
+                        sources=(profile.done.name, hold[0]),
+                        detail=(
+                            f"keep {profile.done.name} from completing by satisfying {complement!r}"
+                        ),
+                        constraint=complement,
+                    )
+                )
 
     # --- Sub-case C: Acc > Target threshold ejection ---
     # A bearing fact departed because an accumulator crossed a comparison

@@ -1276,6 +1276,7 @@ class PLC:
             pdg=self._ensure_pdg() if self._logic else None,
             timelines=self._rung_firing_timelines,
             program=self._program,
+            node_runs_fn=self._replay_rung_runs_at,
         )
 
     def why(self, *tags: Tag | str) -> CausalChain:
@@ -2370,10 +2371,12 @@ class PLC:
         capture = ConditionViewCapture()
         ctx, _dt = replay._prepare_scan(synthesis_observer=capture)
         execute_program(replay._program, ctx, capture_rungs=True, observer=capture)
-        # Every ConditionView and RungRun is complete when execute_program
-        # returns. The reconstructed runner is disposable, so publishing its
-        # pending state, firing timelines, history cache, and scan log would do
-        # work that no caller can observe.
+        # Finish observable scan phases without committing the disposable
+        # replay. Post-logic forces and scan-end runtime writes remain part of
+        # the same root journal, while timelines/history/monitors stay untouched.
+        replay._input_overrides.apply_post_logic(ctx)
+        replay._capture_previous_states(ctx, _dt)
+        replay._system_runtime.on_scan_end(ctx)
 
         self._cached_replay_capture = (target_scan_id, capture)
         return capture
@@ -3177,6 +3180,11 @@ class PLC:
             replay_io=replay_io,
             state_tags_read=state_tags_read,
         )
+        if synthesis_observer is not None:
+            # Start the selected historical journal before scan-start runtime,
+            # patches, and pre-logic forces. Later synthesis and user runs nest
+            # into this same root execution body.
+            synthesis_observer.attach(ctx)
 
         self._system_runtime.on_scan_start(ctx)
 
