@@ -31,17 +31,17 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     RetainedOccurrence,
     RetainedReplay,
-    act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.retained import (
+    _MAX_RETAINED_COMPOSITIONS,
     _occurrence_repeated,
     _scan_projection,
     _write_address,
     _writer_occurrence,
     replay_retained_prefix,
 )
-from pyrung.core.condition import AllCondition, AnyCondition
+from pyrung.core.condition import AnyCondition
 
 
 def _single_departure_program() -> tuple[Program, Bool, Bool, Bool, Bool, Bool]:
@@ -96,18 +96,86 @@ def _successive_overwrite_program() -> tuple[Program, Int, Bool, Bool, Bool, Boo
     return program, heel_step, guard_10, guard_94, start, target
 
 
-def _capture_retained_bearings(monkeypatch) -> list[tuple[tuple, RetainedReplay]]:
-    retained: list[tuple[tuple, RetainedReplay]] = []
-    original = Compass.orient
+def _shifted_identical_blocker_program(
+    *,
+    correctable_replacement: bool = True,
+) -> tuple[Program, Int, Bool, Bool | None]:
+    """A correction moves one identical write instead of fixing the endpoint.
 
-    def recording_orient(self, world, target, constraints):
-        result = original(self, world, target, constraints)
-        if isinstance(result, Bearing) and isinstance(result.act, RetainedReplay):
-            retained.append((result.world_key, result.act))
+    The second write is a no-op in the recorded scan but owns the selected
+    retained writer site. Suppressing it leaves the first writer to perform the
+    same ``81 -> 98`` transition. When the first writer's guard is an
+    external tag it supplies correction B; with only ``first_scan`` it has no
+    defensible replacement Bearing.
+    """
+
+    heel_step = Int("ContractShiftedHeelStep", default=81)
+    guard_a = Bool("ContractShiftedGuardA", external=True)
+    guard_b = Bool("ContractShiftedGuardB", external=True) if correctable_replacement else None
+    with Program(strict=False) as program:
+        replacement_condition = (
+            (system.sys.first_scan, ~guard_b) if guard_b is not None else (system.sys.first_scan,)
+        )
+        with rung(*replacement_condition):
+            copy(98, heel_step)
+        with rung(system.sys.first_scan, ~guard_a):
+            copy(98, heel_step)
+    return program, heel_step, guard_a, guard_b
+
+
+def _shifted_blocker_chain_program(
+    length: int,
+) -> tuple[Program, Int, tuple[Bool, ...]]:
+    """A long succession of latent identical retained blockers."""
+
+    heel_step = Int("ContractBoundedHeelStep", default=81)
+    guards = tuple(Bool(f"ContractBoundedGuard{index}", external=True) for index in range(length))
+    with Program(strict=False) as program:
+        for guard in guards:
+            with rung(system.sys.first_scan, ~guard):
+                copy(98, heel_step)
+    return program, heel_step, guards
+
+
+def _capture_retained_bearings(monkeypatch) -> list[tuple[tuple, RetainedReplay]]:
+    from pyrung.core.analysis.pilot import retained as retained_module
+
+    retained: list[tuple[tuple, RetainedReplay]] = []
+    original = retained_module.compose_retained_bearing
+
+    def recording_compose(compass, bearing, target, constraints):
+        result = original(compass, bearing, target, constraints)
+        retained.append((result.world_key, result.act))
         return result
 
-    monkeypatch.setattr(Compass, "orient", recording_orient)
+    monkeypatch.setattr(retained_module, "compose_retained_bearing", recording_compose)
     return retained
+
+
+def _capture_retained_verifications(monkeypatch) -> list[tuple[tuple[str, ...], bool]]:
+    """Record retained acts after their shared VERIFY and occurrence gate."""
+
+    from pyrung.core.analysis.pilot import retained as retained_module
+
+    verified: list[tuple[tuple[str, ...], bool]] = []
+    original = retained_module.execute_retained_replay
+
+    def recording_execute(bearing, frame, state, ctx):
+        result = original(bearing, frame, state, ctx)
+        # Both disposable and outer retained trials preserve the ordinary
+        # execution receipt even when their final occurrence gate rejects.
+        assert result.executed is not None
+        assert result.executed.bearing is bearing
+        verified.append(
+            (
+                tuple(rung.dest for rung in bearing.act.correction.pilot_rungs),
+                result.trial is not None,
+            )
+        )
+        return result
+
+    monkeypatch.setattr(retained_module, "execute_retained_replay", recording_execute)
+    return verified
 
 
 def test_retained_guard_is_the_writer_condition_minus_the_corrected_lever(monkeypatch) -> None:
@@ -123,27 +191,18 @@ def test_retained_guard_is_the_writer_condition_minus_the_corrected_lever(monkey
     assert len(correction.pilot_rungs) == 1
     installed = correction.pilot_rungs[0]
     assert installed.dest == guard.name
-    # first_scan is present because this exact harmful writer read it. Enable is
-    # retained for the same reason; the corrected Guard conjunct is projected.
+    # The exact occurrence scope and continuation lifetime remain separate OR
+    # arms. first_scan and Enable belong only to the former; unresolved Target
+    # and the correction's self-continuation belong only to the latter.
     assert installed.operation is None
-    assert isinstance(installed.guard, AllCondition)
-    outer = installed.guard.conditions
-    continuation = next(branch for branch in outer if isinstance(branch, AnyCondition))
-    target_bound = next(branch for branch in outer if branch is not continuation)
-    assert frozenset(_extract_reads_from_condition(target_bound, {})) == frozenset(
-        {target.name}
-    )
-    continuation_reads = {
+    assert isinstance(installed.guard, AnyCondition)
+    branch_reads = {
         frozenset(_extract_reads_from_condition(branch, {}))
-        for branch in continuation.conditions
+        for branch in installed.guard.conditions
     }
-    # The start branch is copied exactly from the harmful writer after its
-    # corrected lever is projected out. first_scan appears only because that
-    # writer read it. Guard may continue its own established value, but the
-    # enclosing target-unresolved condition bounds that continuation.
-    assert continuation_reads == {
+    assert branch_reads == {
         frozenset({system.sys.first_scan.name, enable.name}),
-        frozenset({guard.name}),
+        frozenset({target.name, guard.name}),
     }
 
     # This is an ordinary verified landing: the accepted event reports that the
@@ -167,7 +226,7 @@ def test_retained_guard_is_the_writer_condition_minus_the_corrected_lever(monkey
     assert plan.fork.state.tags[guard.name] is False
 
 
-def test_successive_rebases_are_distinct_bearings_without_fake_steps(monkeypatch) -> None:
+def test_successive_rebases_compose_one_bearing_without_fake_steps(monkeypatch) -> None:
     program, guard_a, guard_b, start, _fault_a, _fault_b, target = (
         _composed_departure_program()
     )
@@ -176,11 +235,10 @@ def test_successive_rebases_are_distinct_bearings_without_fake_steps(monkeypatch
     plan = pilot_how(PLC(program), target, max_scans=60)
 
     assert plan.reachable, plan.reason
-    assert len(retained) == 2
-    assert len({world_key for world_key, _act in retained}) == 2
-    assert len({act_identity(act) for _world_key, act in retained}) == 2
-    assert all(len(act.correction.pilot_rungs) == 1 for _key, act in retained)
-    assert {act.correction.pilot_rungs[0].dest for _key, act in retained} == {
+    assert len(retained) == 1
+    correction = retained[0][1].correction
+    assert len(correction.pilot_rungs) == 2
+    assert {rung.dest for rung in correction.pilot_rungs} == {
         guard_a.name,
         guard_b.name,
     }
@@ -190,6 +248,142 @@ def test_successive_rebases_are_distinct_bearings_without_fake_steps(monkeypatch
     assert plan.journey[0].inputs == {start.name: True}
     assert plan.journey[0].scan_before == 1
     assert plan.journey[0].scan_after > plan.journey[0].scan_before
+
+
+def test_retained_inner_orientation_composes_unchanged_candidate_and_reuses_verify(
+    monkeypatch,
+) -> None:
+    """A shifted identical blocker is solved only as one verified A+B act."""
+
+    program, heel_step, guard_a, guard_b = _shifted_identical_blocker_program()
+    assert guard_b is not None
+    retained = _capture_retained_bearings(monkeypatch)
+    verified = _capture_retained_verifications(monkeypatch)
+    isolation_receipts: list[tuple[object, object, tuple[object, ...], tuple[object, ...]]] = []
+    original_orient = Compass.orient
+
+    def isolation_orient(self, world, target_spec, constraints):
+        state = world.state
+        ctx = world.context
+        before = (
+            state.work,
+            state.work.state.scan_id,
+            dict(state.work.state.tags),
+            tuple(state.pilot_rungs),
+            tuple(state.correction_receipts),
+            tuple(state.committed_acts),
+            tuple(state.checkpoints),
+            tuple(state.steps),
+            tuple(state.journey),
+            {key: frozenset(value) for key, value in state.correction_nogoods.items()},
+        )
+        compass_before = ctx.compass
+        knowledge_before = ctx.compass.knowledge
+        result = original_orient(self, world, target_spec, constraints)
+        after = (
+            state.work,
+            state.work.state.scan_id,
+            dict(state.work.state.tags),
+            tuple(state.pilot_rungs),
+            tuple(state.correction_receipts),
+            tuple(state.committed_acts),
+            tuple(state.checkpoints),
+            tuple(state.steps),
+            tuple(state.journey),
+            {key: frozenset(value) for key, value in state.correction_nogoods.items()},
+        )
+        if isinstance(result, Bearing) and isinstance(result.act, RetainedReplay):
+            isolation_receipts.append((compass_before, knowledge_before, before, after))
+            assert ctx.compass is compass_before
+            assert ctx.compass.knowledge is knowledge_before
+        return result
+
+    monkeypatch.setattr(Compass, "orient", isolation_orient)
+
+    source = PLC(program)
+    source.step()
+    assert source.state.tags[heel_step.name] == 98
+    plan = pilot_how(source, heel_step == 81, max_scans=40)
+
+    assert plan.reachable, (
+        plan.reason,
+        verified,
+        [tuple(rung.dest for rung in act.correction.pilot_rungs) for _key, act in retained],
+    )
+    assert plan.tags[heel_step.name] == 81
+    assert plan.replay().state.tags[heel_step.name] == 81
+
+    composite_dests = frozenset({guard_a.name, guard_b.name})
+    # The exact ordinary verifier accepts A as a novel correction-overlay
+    # world. Because its physical channel endpoint is nevertheless unchanged,
+    # the local orient phase continues to B instead of leaking A as an outer
+    # commit.
+    assert verified[0] == ((guard_a.name,), True)
+    assert any(frozenset(dests) == composite_dests and accepted for dests, accepted in verified)
+    assert len(retained) == 1
+    assert frozenset(rung.dest for rung in retained[0][1].correction.pilot_rungs) == composite_dests
+
+    # Inner orientation and attempts are disposable.  Their observations and
+    # nogoods are returned as receipts to the local composer; they do not apply
+    # Compass knowledge or mutate any outer/global execution owner.
+    assert isolation_receipts
+    for compass_before, knowledge_before, before, after in isolation_receipts:
+        assert before == after
+        assert compass_before.knowledge is knowledge_before
+
+
+def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress(
+    monkeypatch,
+) -> None:
+    """An accepted singleton cannot fabricate a target or a composite."""
+
+    program, heel_step, guard_a, guard_b = _shifted_identical_blocker_program(
+        correctable_replacement=False
+    )
+    assert guard_b is None
+    retained = _capture_retained_bearings(monkeypatch)
+    verified = _capture_retained_verifications(monkeypatch)
+
+    source = PLC(program)
+    source.step()
+    assert source.state.tags[heel_step.name] == 98
+    plan = pilot_how(source, heel_step == 81, max_scans=20)
+
+    assert not plan.reachable
+    assert verified
+    assert all(dests == (guard_a.name,) and accepted for dests, accepted in verified)
+    assert len(retained) == 1
+    assert tuple(
+        rung.dest for rung in retained[0][1].correction.pilot_rungs
+    ) == (guard_a.name,)
+
+
+def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
+    """A long latent-writer chain stops at the inner composition budget."""
+
+    program, heel_step, guards = _shifted_blocker_chain_program(_MAX_RETAINED_COMPOSITIONS + 4)
+    retained = _capture_retained_bearings(monkeypatch)
+    verified = _capture_retained_verifications(monkeypatch)
+
+    source = PLC(program)
+    source.step()
+    assert source.state.tags[heel_step.name] == 98
+    plan = pilot_how(source, heel_step == 81, max_scans=20)
+
+    assert plan.reachable, plan.reason
+    assert plan.tags[heel_step.name] == 81
+    # The outer loop may legitimately accept several bounded prefixes. No one
+    # inner composition may exhaust the full latent chain, and the finite set of
+    # outer prefixes must terminate instead of reconstructing one in a cycle.
+    attempted_widths = [len(dests) for dests, _accepted in verified]
+    returned_widths = [len(act.correction.pilot_rungs) for _key, act in retained]
+    assert attempted_widths
+    assert max(attempted_widths) < len(guards)
+    assert returned_widths
+    assert max(returned_widths) <= _MAX_RETAINED_COMPOSITIONS + 2
+    assert max(returned_widths) < len(guards)
+    assert sum(returned_widths) == len(guards)
+    assert len(verified) <= len(guards) + len(retained)
 
 
 def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
@@ -212,7 +406,21 @@ def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
     assert [
         act.correction.pilot_rungs[0].dest for _key, act in retained
     ] == [guard_94.name, guard_10.name]
-    assert len({act.occurrence.ordinal for _key, act in retained}) == 2
+    causal_identities = {
+        (
+            act.occurrence.writer,
+            act.occurrence.address,
+            (
+                act.occurrence.tag,
+                act.occurrence.from_value,
+                act.occurrence.to_value,
+            ),
+        )
+        for _key, act in retained
+    }
+    # Rebased replay-local ordinals may coincide. Writer site, dynamic address,
+    # and exact transition together retain the two causal identities.
+    assert len(causal_identities) == 2
     assert len(plan.journey) == 1
     assert plan.journey[0].inputs == {start.name: True}
 

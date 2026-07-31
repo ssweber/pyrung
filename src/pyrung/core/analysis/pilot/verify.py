@@ -773,7 +773,7 @@ def verify_excursion_replay(
     )
 
 
-def verify_gates(
+def _verify_gates(
     attempt: _ExecutedAttempt,
     frame: Any,
     state: Any,
@@ -974,4 +974,23 @@ def verify_gates(
         earned_work_receipt=earned_work_receipt,
         channel_motion=channel_motion,
         source_world_key=_executed_source_world_key(frame, state),
+    )
+
+
+def verify_gates(
+    attempt: _ExecutedAttempt,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> _AttemptResult:
+    """Verify one execution while preserving its disposable landing.
+
+    Rejection is a judgment, not destruction of evidence.  Keeping the exact
+    executed attempt lets a bounded orient-phase composer inspect or re-orient
+    the counterfactual fork without authorizing a commit or a global nogood.
+    """
+
+    return replace(
+        _verify_gates(attempt, frame, state, ctx),
+        executed=attempt,
     )

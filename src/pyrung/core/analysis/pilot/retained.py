@@ -5,57 +5,67 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Iterable
+from copy import copy
 from dataclasses import replace
 from typing import Any
+
+from pyrsistent import pvector
 
 from pyrung.core.analysis.causal._rung_writes import (
     ScanRungWriteProjection,
     build_scan_rung_write_projection,
 )
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
-from pyrung.core.analysis.pilot.constrained_reachability import Reachable, Unknown
+from pyrung.core.analysis.pilot.constrained_reachability import NoRoute
+from pyrung.core.analysis.pilot.corrections import derive_correction_hypotheses
 from pyrung.core.analysis.pilot.investigate import (
-    ReplayJustification,
-    ReplayOutcome,
     UnsupportedOccurrenceScope,
+    _active_pilot_rungs_defeat_needed,
+    _continuation_with_active_correction,
+    _exploratory_correction_rungs,
+    _rank_hypotheses,
     build_deviation_incident,
-    investigate_deviation,
+    correction_identity,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
+    Bearing,
+    NavigationConstraints,
+    NeedProbe,
+    OrientationWorld,
     RetainedOccurrence,
     RetainedReplay,
+    Stuck,
+    act_identity,
 )
-from pyrung.core.analysis.pilot.overlay import PilotRung, fork_with_pilot_rungs
-from pyrung.core.analysis.pilot.trace import target_reached, trace_back
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _merged_pilot_rungs,
+    _pilot_rung_execution_receipt,
+    fork_with_pilot_rungs,
+)
+from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
+    PilotGateEvent,
+    _ConfirmedCorrection,
     _ExecutedAttempt,
     _PilotContext,
     _PilotState,
     _PulseState,
 )
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.context import RungId
 
 logger = logging.getLogger(__name__)
 
+_MAX_RETAINED_COMPOSITIONS = 8
+
 
 def _correction_pairs(pilot_rungs: Iterable[PilotRung]) -> tuple[tuple[str, Any], ...]:
     return tuple((rung.dest, rung.value) for rung in pilot_rungs)
-
-
-def _unresolved_blockers(tree: Any) -> frozenset[tuple[str, Any]]:
-    """Retain the complete demand frontier hidden by its coarse count."""
-
-    return frozenset(
-        (node.tag, _semantic_key(node.value))
-        for node in tree.iter_nodes(order="depth_first")
-        if not node.satisfied
-        and node.value is not None
-    )
 
 
 def _scan_projection(work: Any, scan: int) -> ScanRungWriteProjection | None:
@@ -209,81 +219,82 @@ def replay_retained_prefix(
     return replay
 
 
-def _retained_replay_outcome(
+def _retained_correction_candidates(
     work: Any,
-    floor_scan: int,
-    through_scan: int,
-    installed: tuple[PilotRung, ...],
-    holds: tuple[Any, ...],
-    occurrence: RetainedOccurrence,
-    frame: Any,
+    incident: Any,
     ctx: _PilotContext,
-) -> ReplayOutcome:
-    # Retained investigation must supply the occurrence-scoped executable form;
-    # a raw pair has no defensible lifetime and fails closed.
-    if not all(isinstance(hold, PilotRung) for hold in holds):
-        return ReplayOutcome(False, None, frame.snap, reason="unscoped retained hold")
-    proposed = tuple(holds)
-    replay = replay_retained_prefix(
+    *,
+    installed: tuple[PilotRung, ...],
+    excluded: frozenset[tuple[tuple[Any, ...], ...]],
+    needed: tuple[tuple[str, Any], ...],
+) -> tuple[_ConfirmedCorrection, ...]:
+    """Materialize one occurrence-scoped hypothesis without judging its replay.
+
+    The ordinary attempt/verification primitive owns that judgment.  This
+    reader only turns recorded causal evidence into the next executable
+    correction, so an unchanged counterfactual landing can be oriented again
+    instead of being mislabeled as locally successful.
+    """
+
+    overlay = _pilot_rung_execution_receipt(installed, dict(incident.before_snap))
+    installed_active = {rung.dest: rung.value for rung in overlay.effective}
+    produced, absence = derive_correction_hypotheses(
         work,
-        floor_scan,
-        through_scan,
-        (*installed, *proposed),
+        incident,
+        ctx,
+        installed=installed_active,
     )
-    snap = dict(replay.state.tags)
-    occurrence_suppressed = not _occurrence_repeated(replay, occurrence)
-    tree = trace_back(
-        ctx.target.tag,
-        ctx.target.value,
-        snap,
-        ctx.pdg,
-        ctx.program,
-        ctx.steerable,
-        clear_only=ctx.clear_only,
-        opaque_loop=ctx.opaque_loop,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        route=ctx.route,
-        prior=ctx.domain_prior,
-    )
-    trend = tree.unsatisfied_count()
-    reached = target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate)
-    old_blockers = _unresolved_blockers(frame.tree)
-    new_blockers = _unresolved_blockers(tree)
-    blocker_frontier_preserved = bool(old_blockers) and new_blockers <= old_blockers
-    accepted = occurrence_suppressed and (
-        reached or trend < frame.distance_before or blocker_frontier_preserved
-    )
+    candidates: list[_ConfirmedCorrection] = []
+    for hypothesis in _rank_hypotheses(
+        work,
+        produced,
+        incident,
+        primal_extra=absence,
+    ):
+        if not hypothesis.holds:
+            continue
+        scoped = _exploratory_correction_rungs(
+            work,
+            hypothesis.holds,
+            incident,
+            (),
+            ctx,
+        )
+        if not scoped or not all(isinstance(rung, PilotRung) for rung in scoped):
+            continue
+        if isinstance(
+            _continuation_with_active_correction(
+                scoped,
+                incident.before_snap,
+                ctx,
+            ),
+            NoRoute,
+        ):
+            continue
+        if _active_pilot_rungs_defeat_needed(
+            scoped,
+            (*incident.bearing, *needed),
+            incident.before_snap,
+            ctx.pdg,
+            ctx.program,
+        ):
+            continue
+        identity = correction_identity(scoped)
+        if identity in excluded:
+            continue
+        candidates.append(
+            _ConfirmedCorrection(
+                identity=identity,
+                pilot_rungs=tuple(scoped),
+                sources=hypothesis.sources,
+                justification=hypothesis.detail or hypothesis.kind,
+            )
+        )
     logger.debug(
-        "retained replay holds=%r occurrence_suppressed=%s trend=%s->%s "
-        "blockers=%r->%r accepted=%s",
-        _correction_pairs(proposed),
-        occurrence_suppressed,
-        frame.distance_before,
-        trend,
-        old_blockers,
-        new_blockers,
-        accepted,
+        "retained correction candidates=%r",
+        tuple(_correction_pairs(item.pilot_rungs) for item in candidates),
     )
-    return ReplayOutcome(
-        accepted=accepted,
-        trend=trend,
-        snapshot=snap,
-        reason=(
-            "retained occurrence suppressed without introducing a blocker"
-            if accepted
-            else "retained replay did not suppress the exact occurrence with forward progress"
-        ),
-        justification=(ReplayJustification.REACHED if reached else ReplayJustification.ADVANCED)
-        if accepted
-        else None,
-        continuation=(
-            Reachable(("actual-target-witness",))
-            if reached
-            else Unknown("retained replay advanced but did not yet reach the target")
-        ),
-        continuation_snapshot=snap,
-        landed=True,
-    )
+    return tuple(candidates)
 
 
 def read_retained_replay(world: Any) -> RetainedReplay | None:
@@ -299,11 +310,6 @@ def read_retained_replay(world: Any) -> RetainedReplay | None:
     floor_scan = history.oldest_scan_id
     through_scan = work.state.scan_id
     installed = tuple(getattr(state, "pilot_rungs", ()))
-    correction_rungs = tuple(
-        rung
-        for receipt in getattr(state, "correction_receipts", ())
-        for rung in receipt.pilot_rungs
-    )
     excluded = frozenset(
         getattr(state, "correction_nogoods", {}).get(frame.key, set())
     )
@@ -311,6 +317,11 @@ def read_retained_replay(world: Any) -> RetainedReplay | None:
     blockers: list[tuple[str, Any]] = []
     seen_blockers: set[tuple[str, str]] = set()
     nodes = tuple(frame.tree.iter_nodes(order="depth_first"))
+    frontier_needs = tuple(
+        (node.tag, node.value)
+        for node in nodes
+        if not node.satisfied and node.value is not None
+    )
     for node in reversed(nodes):
         if (
             node.satisfied
@@ -390,30 +401,14 @@ def read_retained_replay(world: Any) -> RetainedReplay | None:
             occurrence_writer=writer_identity,
         )
 
-        def replay(
-            holds: tuple[Any, ...],
-            occurrence: RetainedOccurrence = occurrence,
-        ) -> ReplayOutcome:
-            return _retained_replay_outcome(
-                work,
-                floor_scan,
-                through_scan,
-                installed,
-                holds,
-                occurrence,
-                frame,
-                ctx,
-            )
-
         try:
-            investigation = investigate_deviation(
+            corrections = _retained_correction_candidates(
                 work,
                 incident,
                 ctx,
-                replay,
-                installed_pilot_rungs=installed,
-                correction_pilot_rungs=correction_rungs,
-                excluded_corrections=excluded,
+                installed=installed,
+                excluded=excluded,
+                needed=frontier_needs,
             )
         except (KeyError, UnsupportedOccurrenceScope, ValueError):
             logger.debug(
@@ -423,32 +418,361 @@ def read_retained_replay(world: Any) -> RetainedReplay | None:
                 exc_info=True,
             )
             continue
-        correction = investigation.correction
-        if correction is None:
+        if not corrections:
             logger.debug(
-                "retained occurrence %s@%s rejected hypotheses: %s",
+                "retained occurrence %s@%s yielded no correction candidate",
                 occurrence.tag,
                 occurrence.scan,
-                tuple((item.slug, item.ground) for item in investigation.rejected),
             )
             continue
-        pairs = _correction_pairs(correction.pilot_rungs)
-        return RetainedReplay(
-            policy=ActPolicy(
-                source=ActSource.RETAINED,
-                action_pairs=pairs,
-                applied=(),
-                provenance=(
-                    "retained-history",
-                    f"{occurrence.tag}@{occurrence.scan}",
-                    f"writer={occurrence.writer!r}",
+        for correction in corrections:
+            pairs = _correction_pairs(correction.pilot_rungs)
+            act = RetainedReplay(
+                policy=ActPolicy(
+                    source=ActSource.RETAINED,
+                    action_pairs=pairs,
+                    applied=(),
+                    provenance=(
+                        "retained-history",
+                        f"{occurrence.tag}@{occurrence.scan}",
+                        f"writer={occurrence.writer!r}",
+                    ),
+                    note=correction.justification,
                 ),
-                note=correction.justification,
-            ),
-            occurrence=occurrence,
-            correction=correction,
-        )
+                occurrence=occurrence,
+                correction=correction,
+            )
+            if not ctx.compass.knowledge.act_is_nogood(frame.key, act_identity(act)):
+                return act
     return None
+
+
+def _disposable_state(
+    source: _PilotState,
+    work: Any,
+    pilot_rungs: tuple[PilotRung, ...],
+    *,
+    rebased: bool,
+) -> _PilotState:
+    """Clone orchestration handles around one throwaway executable world."""
+
+    state = copy(source)
+    state.world = source.world.set(
+        work=work,
+        pilot_rungs=pvector(pilot_rungs),
+        committed_acts=(pvector([]) if rebased else source.committed_acts),
+    )
+    state.seen_keys = set(source.seen_keys)
+    state.checkpoints = [] if rebased else list(source.checkpoints)
+    state.watch_tags = list(source.watch_tags)
+    state.consumed_revisits = set(source.consumed_revisits)
+    state.journey = list(source.journey)
+    state.hold_log = list(source.hold_log)
+    state.correction_receipts = list(source.correction_receipts)
+    state.correction_nogoods = {
+        key: set(values) for key, values in source.correction_nogoods.items()
+    }
+    state.avoid_names = set(source.avoid_names)
+    state.lever_notes = dict(source.lever_notes)
+    return state
+
+
+def _merge_retained_bearings(base: Bearing, addition: Bearing) -> Bearing | None:
+    """Compose two retained corrections while preserving the original replay."""
+
+    base_act = base.act
+    addition_act = addition.act
+    if not isinstance(base_act, RetainedReplay) or not isinstance(
+        addition_act,
+        RetainedReplay,
+    ):
+        return None
+    rungs = tuple(
+        _merged_pilot_rungs(
+            addition_act.correction.pilot_rungs,
+            base_act.correction.pilot_rungs,
+        )
+    )
+    if len(rungs) == len(base_act.correction.pilot_rungs):
+        return None
+    correction = _ConfirmedCorrection(
+        identity=correction_identity(rungs),
+        pilot_rungs=rungs,
+        sources=tuple(
+            dict.fromkeys(
+                (*base_act.correction.sources, *addition_act.correction.sources)
+            )
+        ),
+        justification=(
+            f"{base_act.correction.justification}; then "
+            f"{addition_act.correction.justification}"
+        ),
+    )
+    pairs = _correction_pairs(rungs)
+    act = replace(
+        base_act,
+        policy=replace(
+            base_act.policy,
+            action_pairs=pairs,
+            note=correction.justification,
+            provenance=(
+                *base_act.policy.provenance,
+                f"replacement={addition_act.occurrence.tag}@{addition_act.occurrence.scan}",
+            ),
+        ),
+        correction=correction,
+    )
+    return replace(
+        base,
+        act=act,
+        rationale=(
+            f"{base.rationale}; compose retained replacement "
+            f"{addition_act.occurrence.tag}@{addition_act.occurrence.scan}"
+        ),
+    )
+
+
+def compose_retained_bearing(
+    compass: Any,
+    bearing: Bearing,
+    target: Any,
+    constraints: NavigationConstraints,
+) -> Bearing:
+    """Boundedly compose retained corrections using ordinary orient/attempt.
+
+    Every attempt starts from the original observed world.  A rejected
+    counterfactual landing is wrapped in isolated orchestration state and fed
+    through the same one-Bearing Compass orientation.  Only retained replay
+    Bearings compose; observations and nogoods remain local, and this function
+    never installs, commits, or advances PILOT's outer world.
+    """
+
+    if not isinstance(bearing.act, RetainedReplay) or bearing.orientation is None:
+        return bearing
+
+    from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
+    from pyrung.core.analysis.pilot.pilot import _transition_once
+
+    source_world = bearing.orientation.world
+    source_state: _PilotState = source_world.state
+    source_rungs = tuple(source_state.pilot_rungs)
+    current = bearing
+    local_compass = compass
+    seen = {act_identity(current.act)}
+    remaining = _MAX_RETAINED_COMPOSITIONS + 1
+
+    while remaining > 0:
+        current_act = current.act
+        if not isinstance(current_act, RetainedReplay):
+            return current
+        branch_base_compass = local_compass
+        attempt_state = _disposable_state(
+            source_state,
+            source_state.work,
+            source_rungs,
+            rebased=False,
+        )
+        attempt_state.key_config = source_world.key_config
+        attempt_ctx = replace(source_world.context, compass=local_compass)
+        remaining -= 1
+        transition = _transition_once(
+            attempt_state,
+            attempt_ctx,
+            target,
+            constraints,
+            oriented=current,
+        )
+        attempt = transition.attempt
+        assert attempt is not None
+        logger.debug(
+            "retained composition attempt=%r accepted=%s executed=%s",
+            _correction_pairs(current_act.correction.pilot_rungs),
+            transition.trial is not None,
+            attempt.executed is not None,
+        )
+        if attempt.executed is None:
+            return current
+        landing = attempt.executed.pulse.fork
+        accepted = transition.trial is not None
+        if accepted and target_reached(
+            dict(landing.state.tags),
+            source_world.context.target.tag,
+            source_world.context.target.value,
+            source_world.context.target.predicate,
+        ):
+            return current
+
+        # `_transition_once` applied the ordinary observations/nogood to the
+        # transaction-local Compass and, on acceptance, adopted the replay fork
+        # with its correction. A rejected replay still exposes its exact
+        # counterfactual landing, so orient it with the attempted overlay.
+        local_compass = attempt_ctx.compass
+        if accepted:
+            local_state = attempt_state
+        else:
+            combined = tuple(
+                _merged_pilot_rungs(
+                    current_act.correction.pilot_rungs,
+                    source_rungs,
+                )
+            )
+            local_state = _disposable_state(
+                source_state,
+                landing,
+                combined,
+                rebased=True,
+            )
+            local_state.key_config = source_world.key_config
+        local_ctx = replace(source_world.context, compass=local_compass)
+        local_world = OrientationWorld(
+            world_key=(),
+            snapshot=dict(landing.state.tags),
+            frame=None,
+            state=local_state,
+            context=local_ctx,
+            key_config=local_state.key_config,
+        )
+        failed = False
+        merged_successor = False
+        while True:
+            replacement = local_compass.orient(local_world, target, constraints)
+            if isinstance(replacement, Bearing) and isinstance(
+                replacement.act,
+                RetainedReplay,
+            ):
+                merged = _merge_retained_bearings(current, replacement)
+                if merged is None or act_identity(merged.act) in seen:
+                    return current
+                current = merged
+                seen.add(act_identity(current.act))
+                merged_successor = True
+                break
+
+            # A probe request is unresolved evidence, not proof that the root
+            # correction is dead.  The bounded composer never runs skiff.
+            if isinstance(replacement, NeedProbe):
+                return current
+            if isinstance(replacement, Stuck):
+                failed = True
+                break
+            if not isinstance(replacement, Bearing):
+                return current
+
+            # A rejected retained replay may still expose the shifted causal
+            # occurrence needed for composition, but it cannot justify driving
+            # an unrelated continuation from that rejected landing.
+            if not accepted:
+                failed = True
+                break
+            if remaining <= 0:
+                return current
+
+            remaining -= 1
+            continuation = _transition_once(
+                local_state,
+                local_ctx,
+                target,
+                constraints,
+                oriented=replacement,
+            )
+            local_compass = local_ctx.compass
+            logger.debug(
+                "retained continuation act=%s accepted=%s remaining=%d",
+                type(replacement.act).__name__,
+                continuation.trial is not None,
+                remaining,
+            )
+            if continuation.trial is None:
+                failed = True
+                break
+            if target_reached(
+                dict(local_state.work.state.tags),
+                source_world.context.target.tag,
+                source_world.context.target.value,
+                source_world.context.target.predicate,
+            ):
+                return current
+
+            # Local commit produced the next ordinary current world. Re-read it
+            # through the same Compass facade; no route suffix survives.
+            local_world = OrientationWorld(
+                world_key=(),
+                snapshot=dict(local_state.work.state.tags),
+                frame=None,
+                state=local_state,
+                context=local_ctx,
+                key_config=local_state.key_config,
+            )
+
+        if merged_successor:
+            continue
+        if not failed:
+            return current
+
+        # Roll back the disposable branch and its derived knowledge.  Only the
+        # root-scoped rejection survives into sibling selection; landing-local
+        # action/coast receipts must not poison another source transaction.
+        local_compass, _ = branch_base_compass.apply(
+            (
+                ActionNogoodObservation(
+                    current.world_key,
+                    act_identity(current.act),
+                ),
+            )
+        )
+        sibling_state = _disposable_state(
+            source_state,
+            source_state.work,
+            source_rungs,
+            rebased=False,
+        )
+        sibling_state.key_config = source_world.key_config
+        sibling_ctx = replace(source_world.context, compass=local_compass)
+        sibling_world = replace(
+            source_world,
+            state=sibling_state,
+            context=sibling_ctx,
+        )
+        while remaining > 0:
+            sibling = local_compass.orient(sibling_world, target, constraints)
+            if isinstance(sibling, NeedProbe | Stuck):
+                return current
+            if not isinstance(sibling, Bearing):
+                return current
+            if isinstance(sibling.act, RetainedReplay):
+                sibling_identity = act_identity(sibling.act)
+                if sibling_identity in seen:
+                    return current
+                current = sibling
+                seen.add(sibling_identity)
+                break
+
+            # Rollback may expose an ordinary source alternative before the
+            # next retained sibling. Exercise it with the same transition
+            # kernel: rejection adds a local nogood and re-orients this source;
+            # acceptance makes that ordinary Bearing the honest outer choice.
+            remaining -= 1
+            source_transition = _transition_once(
+                sibling_state,
+                sibling_ctx,
+                target,
+                constraints,
+                oriented=sibling,
+            )
+            local_compass = sibling_ctx.compass
+            if source_transition.trial is not None:
+                return sibling
+            sibling_world = OrientationWorld(
+                world_key=(),
+                snapshot=dict(sibling_state.work.state.tags),
+                frame=None,
+                state=sibling_state,
+                context=sibling_ctx,
+                key_config=sibling_state.key_config,
+            )
+        else:
+            return current
+    return current
 
 
 def execute_retained_replay(
@@ -459,7 +783,6 @@ def execute_retained_replay(
 ) -> Any:
     """Execute a retained replay bearing through the ordinary verify gates."""
 
-    from pyrung.core.analysis.pilot.overlay import _merged_pilot_rungs
     from pyrung.core.analysis.pilot.verify import verify_gates
 
     act = bearing.act
@@ -493,4 +816,18 @@ def execute_retained_replay(
         ),
         confirmed_correction=act.correction,
     )
-    return verify_gates(_ExecutedAttempt(pulse=pulse, bearing=bearing), frame, state, ctx)
+    executed = _ExecutedAttempt(pulse=pulse, bearing=bearing)
+    result = verify_gates(executed, frame, state, ctx)
+    if _occurrence_repeated(replay, act.occurrence):
+        return replace(
+            result,
+            trial=None,
+            gate_events=(
+                *result.gate_events,
+                PilotGateEvent(
+                    "retained-occurrence",
+                    "recorded retained occurrence repeated under the correction",
+                ),
+            ),
+        )
+    return result

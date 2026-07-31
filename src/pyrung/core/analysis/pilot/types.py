@@ -826,6 +826,11 @@ class _AcceptedTrial:
 @dataclass(frozen=True)
 class _AttemptResult:
     trial: _AcceptedTrial | None
+    # Exact disposable execution produced by the attempt, retained even when
+    # verification rejects it.  The outer loop alone decides whether to apply
+    # its observations/nogoods or commit its fork; bounded candidate composers
+    # may instead orient that fork locally and discard it.
+    executed: _ExecutedAttempt | None = None
     # A verification-time excursion is reported to the drive loop with the
     # exact execution that exhibited it.  PILOT owns the one investigation and
     # hands the result back to verification for the remaining gates.

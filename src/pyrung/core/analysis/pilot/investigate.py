@@ -691,9 +691,14 @@ def _retained_scoped_rungs(
         if dest is None:
             raise KeyError(f"retained correction tag {tag!r} is not a program tag")
         continuation = CompareEq(dest, value)
-        guard = AllCondition(
-            unresolved,
-            AnyCondition(occurrence_scope, continuation),
+        # The historical occurrence owns the start even when the replay-floor
+        # snapshot already satisfies the eventual target.  Requiring
+        # ``unresolved`` on that same scan would prevent the intervention that
+        # preserves the target from ever starting.  After the occurrence, the
+        # corrected value self-continues only while the target is unresolved.
+        guard = AnyCondition(
+            occurrence_scope,
+            AllCondition(unresolved, continuation),
         )
         result.append(PilotRung(tag, value, guard))
     return tuple(result)

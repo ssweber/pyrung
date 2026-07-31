@@ -473,13 +473,12 @@ def _program_step_payload(step: ProgramStep | None) -> dict[str, Any] | None:
 
 def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
     pair = policy.primary_action
-    if pair is None:
-        raise ValueError("candidate recording requires one primary action")
-    tag, value = pair
+    tag, value = pair if pair is not None else (None, None)
     return {
         "tag": tag,
         "value": value,
         "pair": pair,
+        "pairs": policy.action_pairs,
         "learned_prescribed": policy.learned_prescribed,
         "route_prescribed": policy.source is ActSource.ROUTE,
         "bearing_channel_tag": (policy.heading.channel_tag if policy.heading is not None else None),

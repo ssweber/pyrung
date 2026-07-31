@@ -46,6 +46,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     NavigationConstraints,
     NeedProbe,
+    OrientationResult,
     OrientationWorld,
     RetainedReplay,
     Stuck,
@@ -151,6 +152,22 @@ class _DriveOutcome:
     reason: str | None
     knowledge: dict[str, Any]
     root_route: TraceChoice | None
+
+
+@dataclass(frozen=True)
+class _IterationTransition:
+    """One current-world orientation and its locally adopted trial result.
+
+    The supplied state/context are the transaction boundary: a live caller
+    keeps the effects, while a bounded investigation passes disposable clones.
+    Post-commit progress policy, probing, event emission, and repetition remain
+    outside this non-looping seam.
+    """
+
+    result: OrientationResult
+    frame: _IterationFrame
+    attempt: _AttemptResult | None = None
+    trial: _AcceptedTrial | None = None
 
 
 @dataclass(frozen=True)
@@ -643,18 +660,18 @@ def _step_context(
     )
 
 
-def _commit_and_monitor(
+def _adopt_trial(
     trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-) -> Iterator[PilotEvent]:
-    """Commit a gate-approved trial, then run post-commit progress handling.
+) -> _AcceptedTrial:
+    """Adopt one gate-approved trial without applying post-commit policy.
 
     Verification already ran inside the steering wrapper and
-    ``_record_attempt`` already committed its knowledge. Here the world advances
-    and ``_monitor_trend`` decides checkpoint, pending continuation, or
-    recovery and revert.
+    ``_record_attempt`` already committed its knowledge.  This is the shared
+    local commit used by the live loop and disposable composition; only the
+    live caller may subsequently invoke ``_monitor_trend``.
     """
     # Capture a satisfied bearing's launch world before commit. Its landing
     # remains pending until ordinary progress is banked; an Alarm ejection must
@@ -680,6 +697,17 @@ def _commit_and_monitor(
             ),
         )
     _commit_trial(trial, frame, state, ctx)
+    return trial
+
+
+def _monitor_committed_trial(
+    trial: _AcceptedTrial,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> Iterator[PilotEvent]:
+    """Emit one adopted trial and apply outer-loop progress policy."""
+
     policy = trial.attempt.bearing.act.policy
     yield PilotEvent(
         "trial_committed",
@@ -776,6 +804,113 @@ def _commit_trial(
         )
         if productive:
             state.dwell_scans += state.work.state.scan_id - pulse.scan_before
+
+
+def _prepare_oriented_result(
+    state: _PilotState,
+    result: OrientationResult,
+    world: OrientationWorld,
+    frame: _IterationFrame,
+) -> None:
+    """Install the minimal current-world bookkeeping needed before execution."""
+
+    if state.key_config is None:
+        state.key_config = world.key_config
+    if state.best_trend is None:
+        state.best_trend = frame.distance_before
+        state.seen_keys.add(frame.key)
+    if not state.checkpoints and isinstance(result, Bearing):
+        state.checkpoints.append(
+            _Checkpoint(
+                key=frame.key,
+                world=state.snapshot_world(),
+                trend=frame.distance_before,
+                objective=result.objective,
+            )
+        )
+    if isinstance(result, Bearing):
+        state.recorded_root_route = world.root_route
+
+
+def _transition_once(
+    state: _PilotState,
+    ctx: _PilotContext,
+    target: TargetSpec,
+    constraints: NavigationConstraints,
+    *,
+    oriented: OrientationResult | None = None,
+) -> _IterationTransition:
+    """Orient and locally settle exactly one current-world result.
+
+    A Bearing passes through the ordinary executor, excursion resolver,
+    observation/nogood application, verification, and local commit.  A
+    NeedProbe or Stuck result is returned without acting.  The function never
+    probes, monitors post-commit progress, emits events, or repeats.
+
+    Mutations are scoped entirely by ``state`` and ``ctx``.  The outer loop
+    passes its live objects; bounded investigation passes disposable clones and
+    may roll them back without leaking Compass knowledge.
+    """
+
+    result = oriented
+    if result is None:
+        raw_world = OrientationWorld(
+            world_key=(),
+            snapshot=dict(state.work.state.tags),
+            frame=None,
+            state=state,
+            context=ctx,
+            key_config=state.key_config,
+        )
+        result = ctx.compass.orient(raw_world, target, constraints)
+
+    orientation_read = result.orientation
+    if orientation_read is None:
+        raise RuntimeError("Compass orientation omitted its current-world reading")
+    orientation_world = replace(
+        orientation_read.world,
+        state=state,
+        context=ctx,
+        key_config=state.key_config or orientation_read.world.key_config,
+    )
+    frame = orientation_world.frame
+    _prepare_oriented_result(state, result, orientation_world, frame)
+    if not isinstance(result, Bearing):
+        return _IterationTransition(result=result, frame=frame)
+
+    act = result.act
+    attempt = execute(result, orientation_world)
+    attempt = _resolve_excursion(attempt, frame, state, ctx)
+    _record_attempt(attempt, frame, state, ctx, result.objective, act)
+
+    if isinstance(act, Coast) and act.mode == "terminal":
+        stop_reason = (
+            attempt.stall_receipt.stop_reason
+            if attempt.stall_receipt is not None
+            else (
+                attempt.trial.execution.coast_receipt.stop_reason
+                if (
+                    attempt.trial is not None
+                    and attempt.trial.execution.coast_receipt is not None
+                )
+                else "terminal-coast"
+            )
+        )
+        ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
+
+    if attempt.trial is None:
+        ctx.compass, _ = ctx.compass.apply(
+            (ActionNogoodObservation(frame.key, act_identity(act)),)
+        )
+        return _IterationTransition(result=result, frame=frame, attempt=attempt)
+
+    trial = _adopt_trial(attempt.trial, frame, state, ctx)
+    return _IterationTransition(
+        result=result,
+        frame=frame,
+        attempt=attempt,
+        trial=trial,
+    )
 
 
 def _finished_event(
@@ -985,6 +1120,15 @@ def _pilot_loop_events(
         target = ctx.target
         constraints = NavigationConstraints(avoid_predicate=ctx.avoid_pred)
         result = ctx.compass.orient(raw_world, target, constraints)
+        if isinstance(result, Bearing) and isinstance(result.act, RetainedReplay):
+            from pyrung.core.analysis.pilot.retained import compose_retained_bearing
+
+            composed = compose_retained_bearing(ctx.compass, result, target, constraints)
+            if not ctx.compass.knowledge.act_is_nogood(
+                composed.world_key,
+                act_identity(composed.act),
+            ):
+                result = composed
         orientation_read = result.orientation
         if orientation_read is None:
             raise RuntimeError("Compass orientation omitted its current-world reading")
@@ -994,8 +1138,7 @@ def _pilot_loop_events(
         last_frame = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
-        if state.key_config is None:
-            state.key_config = orientation_world.key_config
+        _prepare_oriented_result(state, result, orientation_world, frame)
         state.watch_tags.extend(sorted(frame.tree.pivot_tags() - set(state.watch_tags)))
         for action in frame.raw_trace_action_details:
             if action.note:
@@ -1004,22 +1147,6 @@ def _pilot_loop_events(
             for action in branch.actions:
                 if action.note:
                     state.lever_notes[action.tag] = action.note
-        if state.best_trend is None:
-            state.best_trend = frame.distance_before
-            state.seen_keys.add(frame.key)
-        if not state.checkpoints and isinstance(result, Bearing):
-            # Seed an entry checkpoint so the first regression — or a terminal
-            # let-run ejection from a pre-positioned start (e.g. dropped straight
-            # into Execute) — has somewhere to revert to.  "No checkpoint" should
-            # mean "go back to the beginning", not "let the ejected state stand".
-            state.checkpoints.append(
-                _Checkpoint(
-                    key=frame.key,
-                    world=state.snapshot_world(),
-                    trend=frame.distance_before,
-                    objective=result.objective,
-                )
-            )
         yield from _record_pending_landing(frame, state)
         yield PilotEvent(
             "iteration", state.work.state.scan_id, _iteration_payload(frame, state, ctx)
@@ -1029,9 +1156,6 @@ def _pilot_loop_events(
             state.work.state.scan_id,
             _candidates_built_payload(candidates, state.lever_notes),
         )
-
-        if isinstance(result, Bearing):
-            state.recorded_root_route = orientation_world.root_route
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)
@@ -1083,31 +1207,17 @@ def _pilot_loop_events(
         if try_event is not None:
             yield try_event
 
-        attempt = execute(result, orientation_world)
-        attempt = _resolve_excursion(attempt, frame, state, ctx)
-        _record_attempt(attempt, frame, state, ctx, result.objective, act)
-
-        if isinstance(act, Coast) and act.mode == "terminal":
-            stop_reason = (
-                attempt.stall_receipt.stop_reason
-                if attempt.stall_receipt is not None
-                else (
-                    attempt.trial.execution.coast_receipt.stop_reason
-                    if (
-                        attempt.trial is not None
-                        and attempt.trial.execution.coast_receipt is not None
-                    )
-                    else "terminal-coast"
-                )
-            )
-            ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
+        transition = _transition_once(
+            state,
+            ctx,
+            target,
+            constraints,
+            oriented=result,
+        )
+        attempt = transition.attempt
+        assert attempt is not None
 
         if attempt.trial is None:
-            # A rejected act is durable empirical evidence scoped to this exact
-            # world.  The next loop turn recomputes before selecting anything.
-            ctx.compass, _ = ctx.compass.apply(
-                (ActionNogoodObservation(frame.key, act_identity(act)),)
-            )
             rejected_event = _act_event(
                 "rejected",
                 act,
@@ -1118,7 +1228,8 @@ def _pilot_loop_events(
             yield rejected_event
             continue
 
-        trial = attempt.trial
+        trial = transition.trial
+        assert trial is not None
         accepted_event = _act_event(
             "accepted",
             act,
@@ -1129,7 +1240,7 @@ def _pilot_loop_events(
         )
         assert accepted_event is not None
         yield accepted_event
-        yield from _commit_and_monitor(trial, frame, state, ctx)
+        yield from _monitor_committed_trial(trial, frame, state, ctx)
         state.last_wait_log = None
         continue
 
