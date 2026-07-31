@@ -2,7 +2,7 @@
 
 Tests that PILOT detects transient state-key changes (excursions) where the
 key changes after the pulse but reverts during settle, and either derives
-holds to retry or correctly avoids nogooding the action.
+replay-confirmed holds or correctly avoids nogooding the action.
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 Coverage targets:
 - verify_gates: avoid → target → spin → dead-end → outcome → revisit
-- _gate_spin: state-key change detection, excursion retry
+- _gate_spin: state-key change detection, excursion replay
 - _gate_revisit: ordinary, earned-work, and departure revisit admission
 - _gate_dead_end: empty frontier, lateral detection, channel override
 """
@@ -60,7 +60,7 @@ from pyrung.core.analysis.pilot.verify import (
     _owned_channel_motion,
     _replayed_channel_motion,
     _SpinVerdict,
-    verify_excursion_retry,
+    verify_excursion_replay,
     verify_gates,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
@@ -222,9 +222,9 @@ class TestGateSpin:
         assert result.nogood_pairs == frozenset()
         assert result.confirmed_correction is None
 
-    def test_excursion_retry_is_rechecked_against_avoid_history(self):
-        source = Bool("AvoidRetrySource", external=True)
-        hazard = Bool("AvoidRetryHazard")
+    def test_excursion_replay_is_rechecked_against_avoid_history(self):
+        source = Bool("AvoidReplaySource", external=True)
+        hazard = Bool("AvoidReplayHazard")
         with Program() as program:
             with Rung(source):
                 out(hazard)
@@ -245,13 +245,13 @@ class TestGateSpin:
             sources=(hazard.name, source.name),
             justification="unsafe excursion replay",
         )
-        retry = plc.fork()
-        retry.patch({source.name: True})
-        retry.step()
-        assert retry.state.tags[hazard.name] is True
-        retry.patch({source.name: False})
-        retry.step()
-        assert retry.state.tags[hazard.name] is False
+        replay = plc.fork()
+        replay.patch({source.name: True})
+        replay.step()
+        assert replay.state.tags[hazard.name] is True
+        replay.patch({source.name: False})
+        replay.step()
+        assert replay.state.tags[hazard.name] is False
         trial = _PulseState(
             plc.fork(),
             plc.state.scan_id,
@@ -281,12 +281,12 @@ class TestGateSpin:
             observations=(observation,),
         )
 
-        result = verify_excursion_retry(
+        result = verify_excursion_replay(
             detected,
             ExcursionResult(
                 reverted=[hazard.name],
                 correction=correction,
-                retry_fork=retry,
+                replay_fork=replay,
             ),
             SimpleNamespace(key=frame_key, snap=snap),
             SimpleNamespace(
@@ -960,10 +960,10 @@ class TestVerifyGates:
                 ),
             )
 
-    def test_excursion_retry_owns_correction_timeline_and_new_earned_work_receipt(self):
-        source = Bool("RetryReceiptSource", external=True)
-        target = Bool("RetryReceiptTarget")
-        step = Int("RetryReceiptStep", external=True)
+    def test_excursion_replay_owns_correction_timeline_and_new_earned_work_receipt(self):
+        source = Bool("ReplayReceiptSource", external=True)
+        target = Bool("ReplayReceiptTarget")
+        step = Int("ReplayReceiptStep", external=True)
         with Program() as program:
             with Rung(step == -999):
                 out(target)
@@ -972,7 +972,7 @@ class TestVerifyGates:
         plc = PLC(program, dt=0.010)
         plc.patch({step.name: 1})
         before = dict(plc.state.tags)
-        pre_retry = {**before, step.name: 2}
+        pre_replay = {**before, step.name: 2}
         cfg = _StateKeyConfig(
             stateful_names=(target.name,),
             done_specs=(),
@@ -984,11 +984,11 @@ class TestVerifyGates:
             fork=plc,
             scan_before=3,
             action_scan=4,
-            action_snap=pre_retry,
+            action_snap=pre_replay,
             wait_snaps=(),
-            post_pulse_snap=pre_retry,
+            post_pulse_snap=pre_replay,
             post_pulse_key=("post",),
-            snap=pre_retry,
+            snap=pre_replay,
             key=frame_key,
         )
         policy = ActPolicy(
@@ -1021,10 +1021,10 @@ class TestVerifyGates:
             excursion_attempt=_ExecutedAttempt(pulse=pulse, bearing=bearing),
         )
 
-        retry = plc.fork()
-        retry.patch({source.name: True, step.name: 3})
-        retry.step()
-        timeline = (CoastTriggerEvent("retry", "pen", 5, ()),)
+        replay = plc.fork()
+        replay.patch({source.name: True, step.name: 3})
+        replay.step()
+        timeline = (CoastTriggerEvent("replay", "pen", 5, ()),)
         rung = PilotRung(source.name, True, CompareEq(target, True))
         correction = _ConfirmedCorrection(
             identity=correction_identity((rung,)),
@@ -1032,13 +1032,13 @@ class TestVerifyGates:
             sources=(target.name, source.name),
             justification="excursion replay",
         )
-        result = verify_excursion_retry(
+        result = verify_excursion_replay(
             detected,
             ExcursionResult(
                 reverted=[target.name],
                 correction=correction,
-                retry_fork=retry,
-                retry_timeline=timeline,
+                replay_fork=replay,
+                replay_timeline=timeline,
             ),
             frame,
             state,
@@ -1049,18 +1049,18 @@ class TestVerifyGates:
         )
 
         assert result.trial is not None
-        assert result.trial.attempt.pulse.fork is retry
-        assert result.trial.execution.after_snap == dict(retry.state.tags)
+        assert result.trial.attempt.pulse.fork is replay
+        assert result.trial.execution.after_snap == dict(replay.state.tags)
         assert result.trial.execution.timeline == timeline
         assert result.trial.execution.timeline != pulse.timeline
         assert result.confirmed_correction is correction
         assert result.trial.attempt.pulse.key == _pilot_world_key(
-            dict(retry.state.tags),
+            dict(replay.state.tags),
             cfg,
             (rung,),
         )
         assert result.trial.attempt.pulse.key != _pilot_world_key(
-            dict(retry.state.tags),
+            dict(replay.state.tags),
             cfg,
             (),
         )

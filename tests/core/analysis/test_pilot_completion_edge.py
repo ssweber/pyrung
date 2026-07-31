@@ -30,7 +30,7 @@ from pyrung.core.analysis.steerable import compute_steerable
 
 
 def _compass_graphs(logic, plc):
-    """Build the tumbler's compass value-graphs the way ``pilot_drive`` does."""
+    """Build the tumbler's compass value-graphs the way PILOT setup does."""
     pdg = build_program_graph(logic)
     harness_fb = install_harness(plc)
     ref = compute_reference_constants(pdg, logic, plc._known_tags_by_name)

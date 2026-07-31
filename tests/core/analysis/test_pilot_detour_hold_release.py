@@ -12,11 +12,12 @@ The shape (a miniature of the real tumbler's HoldForSheet handshake):
 * the clean route supplies ``C_Unhold``. Trying it with the door open enters
   Unholding, latches ``DoorAlarm``, and regresses to Aborted;
 * ordinary investigation from the pending HELD checkpoint learns the
-  corrective closed-door rung, reverts locally, and retries the same route;
+  corrective closed-door rung; the outer loop installs it and reorients from
+  the local checkpoint;
 * with the door closed through Unholding, the detour rejoins Execute and works.
 
 The gate proves there is no second detour controller: normal candidate,
-VERIFY, regression, investigation, PilotRung, checkpoint, and retry mechanics
+VERIFY, regression, investigation, PilotRung, checkpoint, and replay mechanics
 remain active while the program departure is pending.
 
 The fixture reuses the armed opaque-loop / constant-mask-table skeleton of

@@ -779,7 +779,7 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(mon
         investigate,
     )
     monkeypatch.setattr(
-        "pyrung.core.analysis.pilot.pilot.verify_excursion_retry",
+        "pyrung.core.analysis.pilot.pilot.verify_excursion_replay",
         judge,
     )
 

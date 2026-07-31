@@ -841,6 +841,20 @@ def test_trim_preserves_fired_only_sentinel() -> None:
     assert set(timelines._fired_only_writes[0].keys()) == pre_sentinel_keys
 
 
+def test_snapshot_clips_future_and_preserves_fired_only_sentinel_identity() -> None:
+    timelines = RungFiringTimelines()
+    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
+        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
+    timelines.append(0, _FIRED_ONLY_THRESHOLD + 1, pmap({"N": 999_999}))
+    timelines.append(0, _FIRED_ONLY_THRESHOLD + 2, pmap({"N": 888_888}))
+    sentinel_writes = timelines._fired_only_writes[0]
+
+    snapshot = timelines.snapshot(up_to=_FIRED_ONLY_THRESHOLD + 1)
+
+    assert snapshot._fired_only_writes[0] is sentinel_writes
+    assert snapshot.rung_writes_at(0, _FIRED_ONLY_THRESHOLD + 2) is None
+
+
 # ---------------------------------------------------------------------------
 # Observed-writer reverse index
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ Coverage targets:
 - _coast_holding_state: role-tag ejection, conditional-hold animation
 - _threshold_crossed_snap: up/down/tag-name/form/non-numeric
 - _pilot_state_key: projection, done-bit abstraction, threshold vectors, masking
-- _append_pilot_rungs: steady vs conditional hold semantics
+- _merged_pilot_rungs + fork installation: steady vs conditional hold semantics
 - _apply_pulse: rising-edge vs plain scan count
 - _settle_delayed_effects: harness feedback, timer accumulation
 - _has_pending_effects: harness presence / pending count
@@ -29,8 +29,8 @@ from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
     PilotRungExecutionState,
-    _append_pilot_rungs,
     _constraint_condition,
+    _merged_pilot_rungs,
     _pilot_rung_execution_receipt,
     _set_pilot_rungs,
     _until_unresolved_condition,
@@ -223,7 +223,7 @@ class TestCoastHoldingState:
         start_scan = plc.state.scan_id
         Input = plc._known_tags_by_name["Input"]
         Target = plc._known_tags_by_name["Target"]
-        _set_pilot_rungs(
+        plc = fork_with_pilot_rungs(
             plc,
             [
                 PilotRung("Input", True, AllCondition(~Target, ~Input)),
@@ -428,8 +428,11 @@ class TestPilotRungs:
     def test_last_active_rung_wins(self):
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
-        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], [])
-        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", False, ~Scope)], pilot_rungs)
+        pilot_rungs = _merged_pilot_rungs([PilotRung("In", True, ~Scope)], [])
+        pilot_rungs = _merged_pilot_rungs(
+            [PilotRung("In", False, ~Scope)], pilot_rungs
+        )
+        plc = fork_with_pilot_rungs(plc, pilot_rungs)
         plc.step()
         assert plc.state.tags["In"] is False
 
@@ -520,10 +523,11 @@ class TestPilotRungs:
         assert receipt.owner(In.name) is operation
 
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
-        prog, _In, Scope = _scoped_input_program()
-        plc = PLC(prog, dt=0.010)
-        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], [])
-        pilot_rungs = _append_pilot_rungs(plc, [PilotRung("In", True, ~Scope)], pilot_rungs)
+        _prog, _In, Scope = _scoped_input_program()
+        pilot_rungs = _merged_pilot_rungs([PilotRung("In", True, ~Scope)], [])
+        pilot_rungs = _merged_pilot_rungs(
+            [PilotRung("In", True, ~Scope)], pilot_rungs
+        )
 
         assert len(pilot_rungs) == 1
 

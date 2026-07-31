@@ -38,11 +38,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     OrientationWorld,
     Pulse,
+    RetainedReplay,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _append_pilot_rungs,
     _constraint_condition,
+    _merged_pilot_rungs,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -85,11 +86,7 @@ def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, .
     new_pilot_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
     if not new_pilot_rungs:
         return
-    state.pilot_rungs = _append_pilot_rungs(
-        state.work,
-        list(new_pilot_rungs),
-        state.pilot_rungs,
-    )
+    state.pilot_rungs = _merged_pilot_rungs(new_pilot_rungs, state.pilot_rungs)
     state.hold_log.append(
         _HoldLogEntry(
             scan=state.work.state.scan_id,
@@ -468,6 +465,10 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         return _try_terminal_letrun(bearing, frame, state, ctx)
     if isinstance(act, Dwell):
         return _try_terminal_dwell(bearing, frame, state, ctx)
+    if isinstance(act, RetainedReplay):
+        from pyrung.core.analysis.pilot.retained import execute_retained_replay
+
+        return execute_retained_replay(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 

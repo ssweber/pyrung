@@ -608,6 +608,27 @@ def _orient_read(
                 rationale=f"widen trace context to {width} atomic actions",
             )
 
+    # A retained causal occurrence is one more current-world candidate. Its
+    # bounded investigation returns exactly one replay act; execution and the
+    # ordinary verification/commit loop still decide whether it advances.
+    from pyrung.core.analysis.pilot.retained import read_retained_replay
+
+    retained = read_retained_replay(world)
+    if retained is not None and not compass.knowledge.act_is_nogood(
+        world.world_key,
+        act_identity(retained),
+    ):
+        return _bearing(
+            world,
+            retained,
+            candidates,
+            target=target,
+            rationale=(
+                f"replay retained {retained.occurrence.tag} occurrence at "
+                f"scan {retained.occurrence.scan}"
+            ),
+        )
+
     if candidates.diagnosis is not None:
         return _probe_or_stuck(
             compass,

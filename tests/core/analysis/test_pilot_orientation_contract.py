@@ -24,6 +24,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedProbe,
     OrientationWorld,
     Pulse,
+    RetainedOccurrence,
+    RetainedReplay,
     RouteEdgeContext,
     Stuck,
     TargetSpec,
@@ -41,6 +43,7 @@ from pyrung.core.analysis.pilot.options import (
     _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.recording import _candidate_payload
+from pyrung.core.analysis.pilot.types import _ConfirmedCorrection
 
 
 @dataclass
@@ -435,6 +438,57 @@ def test_dwell_identity_normalizes_applied_overlay_order() -> None:
     second = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("A", 1), ("B", 2))))
 
     assert act_identity(first) == act_identity(second)
+
+
+def test_retained_replay_identity_names_exact_occurrence_and_correction() -> None:
+    """A nogood for one retained corrective replay cannot poison another."""
+
+    policy = ActPolicy(
+        ActSource.RETAINED,
+        action_pairs=(("StartupGuard", True),),
+    )
+    occurrence = RetainedOccurrence(
+        floor_scan=0,
+        scan=1,
+        ordinal=7,
+        tag="TripLatched",
+        from_value=False,
+        to_value=True,
+        writer=(None, 2),
+        address=(("main",), 2, 0, 0),
+    )
+    correction = _ConfirmedCorrection(
+        identity=(("StartupGuard", True, "first-scan"),),
+        pilot_rungs=(),
+        sources=("StartupGuard",),
+        justification="preserve the retained predecessor",
+    )
+    baseline = RetainedReplay(policy, occurrence, correction)
+
+    assert act_identity(baseline) == (
+        "retained-replay",
+        0,
+        1,
+        7,
+        "TripLatched",
+        False,
+        True,
+        (None, 2),
+        (("main",), 2, 0, 0),
+        correction.identity,
+    )
+    assert act_identity(baseline) != act_identity(
+        replace(baseline, occurrence=replace(occurrence, ordinal=8))
+    )
+    assert act_identity(baseline) != act_identity(
+        replace(
+            baseline,
+            correction=replace(
+                correction,
+                identity=(("OtherGuard", True, "first-scan"),),
+            ),
+        )
+    )
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:

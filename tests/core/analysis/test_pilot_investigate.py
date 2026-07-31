@@ -4,7 +4,7 @@ Coverage targets:
 - build_replay_fn: bounded vs unbounded judgment
 - investigate_deviation: hypothesis generation pipeline
 - _precise_causes, _latch_exposure_hypotheses, _done_boundary_hypotheses
-- investigate_excursion: excursion diagnosis and retry
+- investigate_excursion: excursion diagnosis and exact replay
 """
 
 from __future__ import annotations
@@ -35,12 +35,13 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayJustification,
     ReplayOutcome,
     ReplayStep,
+    _CandidateComposed,
     _continuation_with_active_correction,
     _first_timeline_departure,
     _hold_allowed,
     _hold_is_noop,
-    _HypothesisExtended,
     _regression_cause_replayed,
+    _regression_ownership,
     _RelationalRefinementReceipt,
     _ReplayAccepted,
     _ReplayRejected,
@@ -58,6 +59,7 @@ from pyrung.core.analysis.pilot.overlay import (
     OperationReceipt,
     PilotRung,
     _set_pilot_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key, _StateKeyConfig
@@ -464,7 +466,7 @@ def test_replay_resolution_distinguishes_acceptance_extension_and_shared_cycle()
         outcome=replaced,
         seen_replacements=seen,
         extend=_extend,
-    ) == _HypothesisExtended(extended)
+    ) == _CandidateComposed(extended)
     cycled = _resolve_replay_attempt(
         phase="guarded",
         current=extended,
@@ -832,8 +834,8 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
     assert replayed == [(proposal,)]
 
 
-def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypatch):
-    """A retained replay fork supplies B; only A and then A+B are replayed."""
+def test_investigation_composes_cuts_before_returning_one_candidate(monkeypatch):
+    """A retained replay supplies B; investigation returns A+B without installing it."""
     A = Bool("Nested_A", external=True)
     B = Bool("Nested_B", external=True)
     State = Int("Nested_State", default=3)
@@ -892,6 +894,12 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
             for hold in holds
         ),
     )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._set_pilot_rungs",
+        lambda *_args, **_kwargs: pytest.fail(
+            "candidate composition must not install or commit its result"
+        ),
+    )
 
     attempts: list[tuple[str, ...]] = []
 
@@ -919,6 +927,8 @@ def test_investigation_nests_a_replacement_cut_without_proving_it_alone(monkeypa
 
     assert result.correction is not None
     assert {rung.dest for rung in result.correction.pilot_rungs} == {A.name, B.name}
+    assert len(result.confirmed) == 1
+    assert {rung.dest for rung in result.confirmed[0].holds} == {A.name, B.name}
     assert attempts == [
         (A.name,),
         (A.name, B.name),
@@ -953,6 +963,49 @@ def test_shared_pipeline_does_not_group_a_different_bounded_landing():
     )
 
     assert _shared_causal_suffix(recorded, healthy_detour) == ()
+
+
+def test_proposal_owned_different_landing_neutralizes_only_the_recorded_incident(
+    monkeypatch,
+):
+    """Exact ancestry may prove that the correction caused a healthy detour."""
+    recorded = RegressionWitness(
+        channel_tag="State",
+        source=11,
+        departed=12,
+        landing=9,
+        departure_scan=4,
+        cause=(CausalOccurrence(RungId(None, 2), "State", 12),),
+        causal_spine=frozenset({"State", "DoorClosed"}),
+    )
+    healthy_detour = RegressionWitness(
+        channel_tag="State",
+        source=11,
+        departed=12,
+        landing=6,
+        departure_scan=4,
+        cause=recorded.cause,
+        causal_spine=recorded.causal_spine,
+    )
+    replay = SimpleNamespace(state=SimpleNamespace(tags={"State": 6}))
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._regression_cause_replayed",
+        lambda *_args, **_kwargs: True,
+    )
+
+    ownership = _regression_ownership(
+        replay,
+        recorded,
+        (),
+        {"DoorClosed"},
+        start_scan=3,
+        end_scan=5,
+        replacement_witness=healthy_detour,
+    )
+
+    assert ownership.replacement_owned is True
+    assert ownership.replacement_replays_recorded is False
+    assert ownership.neutralized is True
 
 
 def test_noop_check_uses_recorded_incident_motion_not_pilot_ownership():
@@ -2278,7 +2331,7 @@ class TestShaftRotateLiveness:
 
         fresh = PLC(_shaft_rotate_program(), dt=0.010)
         fresh.step()
-        _set_pilot_rungs(fresh, list(pilot_rungs))
+        fresh = fork_with_pilot_rungs(fresh, pilot_rungs)
         reached = _coast_holding_state(fresh, "Running", True, (), budget=200)
         assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
@@ -2543,7 +2596,7 @@ class TestMultiReadCorrections:
 
         fresh = PLC(_conj_reset_target_program(), dt=0.010)
         fresh.step()
-        _set_pilot_rungs(fresh, list(pilot_rungs))
+        fresh = fork_with_pilot_rungs(fresh, pilot_rungs)
         reached = _coast_holding_state(fresh, "Running", True, (), budget=300)
         assert reached.stop_reason == "reached"
         assert fresh.state.tags["Running"] is True
@@ -2604,7 +2657,7 @@ def _excursion_inputs():
 
 
 class TestInvestigateExcursion:
-    """investigate_excursion: state-key excursion diagnosis and hold-based retry."""
+    """investigate_excursion: state-key diagnosis and hold-based replay."""
 
     def test_reverted_tags_diagnosed(self):
         work, fork, pre_snap, post_pulse_snap, pre_key, cfg, steerable = _excursion_inputs()
@@ -2646,7 +2699,7 @@ class TestInvestigateExcursion:
             scan_budget=50,
         )
         # Sealing Hold=True keeps Out latched across the edge release — the
-        # retry key differs from the (reverted) pre key, so the hold is kept.
+        # replay key differs from the (reverted) pre key, so the hold is kept.
         assert result.correction is not None
         assert ("Hold", True) in tuple(
             (rung.dest, rung.value) for rung in result.correction.pilot_rungs
@@ -2654,7 +2707,7 @@ class TestInvestigateExcursion:
         guard = result.correction.pilot_rungs[0].guard
         assert guard.evaluate(_SnapshotView({"Out": True}, {}))
         assert not guard.evaluate(_SnapshotView({"Out": False}, {}))
-        assert result.retry_fork is not None
+        assert result.replay_fork is not None
 
 
 # ---------------------------------------------------------------------------
@@ -2662,7 +2715,7 @@ class TestInvestigateExcursion:
 #
 # Dispatch is by causal implication (``cause()``) + producibility, so a plain
 # clobbering ``copy`` is suppressed by forcing its guard FALSE — and a live-word
-# guard escalates to the skiff.  Both flow through the same replay-retry gate.
+# guard escalates to the skiff. Both flow through the same replay verification.
 # ---------------------------------------------------------------------------
 
 
@@ -2739,7 +2792,7 @@ def _liveword_clobber_program() -> Program:
     **punts**.  The clobber ``copy(0, State)`` fires while ``Mask != 0``.  Only the
     skiff can find the suppressing lever: a bounded isolated probe holding the
     condition-read Bool ``Sel`` False clears the mask, so the antagonist stops
-    firing — a nomination the replay-retry gate then confirms.
+    firing — a nomination replay verification then confirms.
     """
     Command = Bool("Command", external=True)
     Sel = Bool("Sel", external=True)
@@ -2763,7 +2816,7 @@ def _liveword_clobber_program() -> Program:
 class TestGeneralizedAntagonistExcursion:
     """investigate_excursion suppresses any causally-implicated clobbering writer,
     not just ``ResetInstruction`` — via guard-force enumeration, with a skiff
-    escalation for a live-word guard.  Every hold rides the existing retry gate."""
+    escalation for a live-word guard. Every hold passes replay verification."""
 
     def test_non_reset_copy_clobber_is_corrected(self):
         # The compound int guard is suppressed by forcing the copy's guard false.
@@ -2798,14 +2851,14 @@ class TestGeneralizedAntagonistExcursion:
         assert ("Mode", 1) in tuple(
             (rung.dest, rung.value) for rung in result.correction.pilot_rungs
         )
-        assert result.retry_fork is not None
+        assert result.replay_fork is not None
         # The suppression preserved the pulse-established value across the settle.
-        assert result.retry_fork.state.tags["State"] == 5
+        assert result.replay_fork.state.tags["State"] == 5
 
     def test_live_word_guard_uses_skiff_probe(self):
         # The clobber's guard reads a calc-computed word: guard-force enumeration
         # punts, and the skiff's isolated probe nominates the condition-read Bool
-        # Sel=False, which the retry gate confirms.
+        # Sel=False, which replay verification confirms.
         prog = _liveword_clobber_program()
         (work, fork, pre, post, pre_key, cfg, steerable, pdg, resting) = _run_excursion(
             prog,
@@ -2838,8 +2891,8 @@ class TestGeneralizedAntagonistExcursion:
         assert ("Sel", False) in tuple(
             (rung.dest, rung.value) for rung in result.correction.pilot_rungs
         )
-        assert result.retry_fork is not None
-        assert result.retry_fork.state.tags["State"] == 5
+        assert result.replay_fork is not None
+        assert result.replay_fork.state.tags["State"] == 5
 
 
 # ---------------------------------------------------------------------------

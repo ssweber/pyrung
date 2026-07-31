@@ -11,8 +11,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
 from pyrung.core.analysis.pilot.options import _build_candidates
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _append_pilot_rungs,
     _set_pilot_rungs,
+    fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.trace import (
     compute_edge_tags,
@@ -126,7 +126,8 @@ def test_rung_managed_input_cycles_during_hold_for_operator() -> None:
     close_again = candidates.prerequisites.pilot_rungs[0]
     assert (close_again.dest, close_again.value) == (door_closed.name, True)
 
-    pilot_rungs = _append_pilot_rungs(plc, [close_again], starting_pilot_rungs)
+    pilot_rungs = (*starting_pilot_rungs, close_again)
+    plc = fork_with_pilot_rungs(plc, pilot_rungs)
     plc.step()
     assert plc.state.tags[state_tag.name] == ready
     assert plc.state.tags[door_closed.name] is True

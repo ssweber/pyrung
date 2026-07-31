@@ -268,7 +268,7 @@ def test_fork_defaults_to_current_tip_even_if_playhead_is_in_the_past() -> None:
 
     assert fork.current_state.scan_id == 3
     assert fork.current_state.timestamp == pytest.approx(runner.current_state.timestamp)
-    assert _scan_ids(fork) == [3]
+    assert _scan_ids(fork) == [0, 1, 2, 3]
     assert fork.playhead == 3
 
 
@@ -286,7 +286,7 @@ def test_fork_with_scan_id_starts_from_exact_snapshot_and_preserves_time_config(
     assert fork.current_state.timestamp == pytest.approx(0.25)
     assert dict(fork.current_state.tags) == dict(snapshot.tags)
     assert dict(fork.current_state.memory) == dict(snapshot.memory)
-    assert [state.scan_id for state in fork.history.latest(10)] == [1]
+    assert [state.scan_id for state in fork.history.latest(10)] == [0, 1]
     assert fork.time_mode == TimeMode.FIXED_STEP
 
     fork.step()
@@ -326,7 +326,7 @@ def test_fork_starts_clean_and_parent_fork_evolve_independently() -> None:
     assert runner.current_state.tags["X"] == 2
     assert fork.current_state.tags["X"] == 99
     assert _scan_ids(runner) == [0, 1, 2]
-    assert _scan_ids(fork) == [1, 2]
+    assert _scan_ids(fork) == [0, 1, 2]
 
 
 def test_fork_raises_for_unknown_scan() -> None:
@@ -397,7 +397,7 @@ def test_fork_from_starts_from_exact_snapshot_and_preserves_time_config() -> Non
     assert fork.current_state.timestamp == pytest.approx(0.25)
     assert dict(fork.current_state.tags) == dict(snapshot.tags)
     assert dict(fork.current_state.memory) == dict(snapshot.memory)
-    assert [state.scan_id for state in fork.history.latest(10)] == [1]
+    assert [state.scan_id for state in fork.history.latest(10)] == [0, 1]
     assert fork.time_mode == TimeMode.FIXED_STEP
 
     fork.step()
@@ -425,14 +425,14 @@ def test_fork_from_inherits_history_budget() -> None:
 
     fork = runner.fork_from(4)
     assert fork._recent_state_cache_budget == budget
-    assert _scan_ids(fork) == [4]
+    assert _scan_ids(fork) == [0, 1, 2, 3, 4]
 
     fork.step()
     fork.step()
     fork.step()
 
-    # Fork starts at scan 4; subsequent scans 5, 6, 7 stay addressable.
-    assert _scan_ids(fork) == [4, 5, 6, 7]
+    # The inherited prefix and subsequent branch scans stay addressable.
+    assert _scan_ids(fork) == list(range(8))
     assert fork.history.at(4).scan_id == 4
 
 
@@ -457,7 +457,7 @@ def test_fork_from_starts_clean_and_parent_fork_evolve_independently() -> None:
     assert runner.current_state.tags["X"] == 2
     assert fork.current_state.tags["X"] == 99
     assert _scan_ids(runner) == [0, 1, 2]
-    assert _scan_ids(fork) == [1, 2]
+    assert _scan_ids(fork) == [0, 1, 2]
 
 
 def test_fork_from_raises_for_unknown_scan() -> None:
@@ -672,13 +672,13 @@ def test_fork_inf_budget_inherited_by_subfork() -> None:
     assert child._cache_retention_scans is None
 
 
-def test_causal_history_range_stitches_fork_ancestry_without_widening_history() -> None:
+def test_history_stitches_fork_ancestry_on_the_retained_branch() -> None:
     plc = PLC(logic=[], dt=0.01)
     plc.run(cycles=2)
     child = plc.fork()
     child.run(cycles=2)
 
-    assert [state.scan_id for state in child.history.latest(10)] == [2, 3, 4]
+    assert [state.scan_id for state in child.history.latest(10)] == [0, 1, 2, 3, 4]
     assert [state.scan_id for state in child._causal_history_range(0, 5)] == [0, 1, 2, 3, 4]
 
 

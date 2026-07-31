@@ -77,7 +77,7 @@ def recorded_cause(
     initial_tags: Any = None,  # Mapping[str, Any] for timeline-resolved attribution
     node_firings_fn: Any = None,  # Callable[[int], PMap[RungId, PMap]] | None
     node_previous_firing_fn: Any = None,  # Callable[[frozenset[RungId], str, Any, int], int | None]
-    node_rung_fn: Any = None,  # Callable[[RungId], Rung | None] | None
+    node_rung_fn: Any = None,  # Callable[[RungId, int], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
     node_runs_fn: Any = None,  # Callable[[int], tuple[RungRun, ...]] | None
     node_reads_fn: Any = None,  # Callable[[int], dict[RungId, set[str]]] | None
@@ -1624,7 +1624,7 @@ def _recorded_writers_from_firings(
                 synthetic_matches.append(rung_id)
                 continue
             rung = (
-                node_rung_fn(rung_id)
+                node_rung_fn(rung_id, scan_id)
                 if node_rung_fn is not None
                 else _resolve_subroutine_rung(program, rung_id.subroutine, rung_id.rung_index)
             )
@@ -1642,7 +1642,7 @@ def _recorded_writers_from_firings(
         if not main_matching and synthetic_matches:
             holds = [r for r in synthetic_matches if r.subroutine == PILOT_RUNG_NAMESPACE]
             winner = max(holds or synthetic_matches, key=lambda r: r.rung_index)
-            rung = node_rung_fn(winner) if node_rung_fn is not None else None
+            rung = node_rung_fn(winner, scan_id) if node_rung_fn is not None else None
             if rung is not None:
                 key = (winner.subroutine, winner.rung_index)
                 seen.add(key)

@@ -10,7 +10,7 @@ from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import _coast_holding_state
 from pyrung.core.analysis.pilot.corrections import correct_enablers
 from pyrung.core.analysis.pilot.investigate import build_deviation_incident
-from pyrung.core.analysis.pilot.overlay import _set_pilot_rungs
+from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
 from pyrung.core.analysis.pilot.pilot import pilot_events
 from pyrung.core.analysis.steerable import compute_steerable
 
@@ -162,7 +162,7 @@ def test_pilot_watchdog_corrections_compose_into_alternating_owned_dwell() -> No
 
     replay = PLC(program, dt=0.010)
     replay.step()
-    _set_pilot_rungs(replay, corrections)
+    replay = fork_with_pilot_rungs(replay, corrections)
     receipt = _coast_holding_state(
         replay,
         tags["complete"].name,
@@ -175,7 +175,7 @@ def test_pilot_watchdog_corrections_compose_into_alternating_owned_dwell() -> No
 
 
 def test_full_pilot_learns_complementary_dwell_as_separate_local_incidents() -> None:
-    """One bounded correction per watchdog composes on the live retry path."""
+    """One bounded correction per watchdog composes through outer-loop replays."""
     program, tags = _delayed_rotate_sensor_state_program()
     plc = PLC(program, dt=0.010)
     plc.step()

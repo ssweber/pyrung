@@ -65,7 +65,12 @@ The following modules extend that read:
 4. Compass knowledge may supply one empirically learned wait, action, or joint
    action when the current static read has no local bearing. Learned evidence
    still passes the ordinary live-trial gates.
-5. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
+5. `retained.py` may recognize that an exact writer occurrence already present
+   in public `PLC.history` created the current blocker. It asks the existing
+   deviation investigator for one occurrence-scoped correction, proves that
+   correction by replaying from `history.oldest_scan_id`, and returns one
+   ordinary `RetainedReplay` Bearing. It never drives or commits a world.
+6. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
    unrelated state, probes a finite action domain on isolated forks, and
    returns observations without committing or choosing an action. Probe rounds
    are bounded per world key; exhaustion makes the next complete orientation
@@ -81,8 +86,8 @@ the current world.
 
 ### 2. Did the attempted action produce a trustworthy result?
 
-`steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, or `Dwell` on a
-fork. All four modes converge on `verify.py`:
+`steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, `Dwell`, or
+`RetainedReplay` on a fork. All modes converge on `verify.py`:
 
 1. Avoid and banked-work gates run before target acceptance.
 2. Spin, cycle, and dead-end gates reject locally provable failures.
@@ -91,7 +96,7 @@ fork. All four modes converge on `verify.py`:
    prove durable progress.
 4. A suspicious excursion is the exceptional branch.
    `pilot.py::_resolve_excursion` invokes `investigate.py` at most once and
-   passes the exact replay to `verify.verify_excursion_retry`, which resumes
+   passes the exact replay to `verify.verify_excursion_replay`, which continues
    the remaining gates.
 5. A rejected act records its observations and exact world-scoped nogood, then
    returns to orientation. PILOT never advances to a sibling from a retained
@@ -135,7 +140,8 @@ named frontier rather than silent churn.
    A spin-shaped excursion is returned with its exact execution rather than
    investigated inside the gate.
 4. `pilot.py::_resolve_excursion` owns at most one investigation and passes its
-   replay to `verify.verify_excursion_retry`, which resumes after spin.
+   replay to `verify.verify_excursion_replay`, which continues the remaining
+   gates after spin.
    `_record_attempt` then applies all observations, including rejected
    attempts, exactly once before any further orientation.
 5. An accepted fork is committed and `progress.py` decides retention,
@@ -146,6 +152,14 @@ named frontier rather than silent churn.
    exhaustion mark are applied before orientation runs again.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
+
+A retained replay is still one pass through steps 2--5: orientation returns
+one Bearing, execution reconstructs its retained prefix with the correction,
+verification judges the landing, and the outer loop alone accepts or rejects
+it. Successive retained corrections therefore compose through successive
+outer iterations. The bounded composition loop inside `investigate.py` is only
+an optimization for constructing one candidate Bearing; it cannot install,
+commit, or recursively drive PILOT.
 
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
@@ -253,12 +267,14 @@ this table only locates the owner.
 - Target-relative Bearing objective: `orientation.py::_bearing`
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
+- Retained occurrence reading and prefix replay: `retained.py`; it adapts
+  recorded cause evidence into one `RetainedReplay` act and owns no loop
 - Option materialization and ranking: `options.py::_build_candidates`;
   `_select_wait` owns wait-source choice
 - Static chart-edge admission:
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence:
-  `verify.py::verify_gates` / `verify_excursion_retry`
+  `verify.py::verify_gates` / `verify_excursion_replay`
 - Verification-time excursion orchestration: `pilot.py::_resolve_excursion`;
   verify reports the exact executed attempt, PILOT invokes
   `investigate.py::investigate_excursion` once, and verify judges that replay
@@ -314,6 +330,17 @@ Knowledge scoping (tombstone locality, static-edge overlay narrowness) is
 documented on `CompassEntry` and `StaticEdgeObservation`; recovery-floor and
 nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
 
+Public `PLC.history` is the sole historical query surface and spans the
+retained execution branch. Each fork boundary freezes the epoch that actually
+executed the inherited prefix, including its synthesis overlay, clipped scan
+log, checkpoints, state cache, and firing timelines. Cache residency is only a
+performance detail: a retained state may be returned directly or reconstructed
+under its owning epoch. Never reconstruct an inherited scan under the current
+overlay; that changes writer and occurrence identity. The recorded absolute
+occurrence ordinal remains historical identity, while retained counterfactual
+matching uses an overlay-independent dynamic writer address and fails closed
+when correspondence is ambiguous.
+
 ## Soundness and behavior invariants
 
 - Writer availability is only a sort key in `_rank_writers`, never a
@@ -339,6 +366,9 @@ nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
   complete physical `ActPolicy.applied` artifact. Requested `action_pairs`
   remain policy and nogood identity; a non-empty physical artifact is never
   called program-owned without positive causal evidence.
+- Recorded occurrence identity belongs to the immutable history epoch that
+  executed it. Counterfactual replay may test whether that occurrence remains,
+  but may not reinterpret the source scan under a later overlay.
 
 ## Navigation
 
@@ -368,6 +398,7 @@ Static reading and orientation:
 - `advance.py` — instruction-owned channels and boundaries
 - `program_step.py` — one-producer counterfactual proof
 - `navigation_contracts.py` — immutable navigation contracts
+- `retained.py` — retained occurrence evidence and one-Bearing prefix replay
 
 Execution and observation:
 
@@ -442,6 +473,11 @@ plain language on first use.
   tree.
 - **cone** — a region of tags upstream of a requirement.
 - **earned work** — conservative target-relative evidence of completed target work.
+- **retained occurrence** — an exact recorded writer transition whose
+  predecessor and execution epoch remain addressable through `PLC.history`.
+- **retained replay** — one counterfactual Bearing that re-executes the public
+  retained prefix under an occurrence-scoped correction. It is a replay, not a
+  retry or resume: its causal past is deliberately reconstructed and replaced.
 
 Avoid extending the nautical metaphor in technical contracts. Words such as
 captain, vessel, reef, shipyard, and waters add a translation step without

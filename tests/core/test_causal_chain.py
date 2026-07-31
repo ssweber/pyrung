@@ -416,9 +416,9 @@ class TestEdgeCases:
         """A child fork can inherit a true program-owned enabler.
 
         When that enabler becomes newly relevant on the child's first scan,
-        its establishing transition belongs to the parent and is outside the
-        child's state history. ``deep=True`` must still explain the conductive
-        enabler through the writer observed maintaining it on the firing scan.
+        its establishing transition belongs to the parent. ``deep=True`` must
+        explain the conductive enabler through the writer observed maintaining
+        it on the firing scan and the inherited transition that enabled it.
         """
         State = Int("State", external=True)
         Starting = Bool("Starting")
@@ -447,7 +447,10 @@ class TestEdgeCases:
         assert chain is not None
         assert any(step.transition.tag_name == "Starting" for step in chain.steps)
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
+            ("State", 3)
+        }
+        assert starting_step.enablers == ()
 
     def test_deep_enabler_uses_observed_subroutine_writer_on_first_fork_scan(
         self,
@@ -479,7 +482,10 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_state"
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
+            ("State", 3)
+        }
+        assert starting_step.enablers == ()
 
     def test_deep_enabler_resolves_block_slot_writer_when_firing_log_omits_it(
         self,
@@ -521,7 +527,10 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_block_state"
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
+            ("State", 3)
+        }
+        assert starting_step.enablers == ()
 
     def test_deep_enabler_does_not_infer_an_uncalled_static_writer(self) -> None:
         """A true guard is not evidence that its subroutine executed."""
@@ -602,7 +611,10 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.transition.scan_id == child.state.scan_id - 1
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {("State", 3)}
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
+            ("State", 3)
+        }
+        assert starting_step.enablers == ()
 
     def test_deep_enabler_jumps_to_sparse_prior_writer(
         self,
@@ -656,9 +668,11 @@ class TestEdgeCases:
             step for step in chain.steps if step.transition.tag_name == Starting.name
         )
         assert starting_step.transition.scan_id == 1
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
             (Seed.name, True),
-            (CallMap.name, True),
+        }
+        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {
+            (CallMap.name, True)
         }
         assert len(set(capture_scans)) < 20
 

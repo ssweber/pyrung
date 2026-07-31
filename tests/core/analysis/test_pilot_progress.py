@@ -387,7 +387,7 @@ def test_exact_earned_work_replay_is_rejected_after_world_revert():
         trial,
         SimpleNamespace(),
         state,
-        SimpleNamespace(resting={}, edge_tags=set(), live=False),
+        SimpleNamespace(resting={}, edge_tags=set()),
     )
 
     state.load_world(checkpoint.world)
@@ -445,7 +445,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     )
     state = _make_state(2, [], work=work)
     frame = SimpleNamespace()
-    ctx = SimpleNamespace(resting={}, edge_tags=set(), live=False)
+    ctx = SimpleNamespace(resting={}, edge_tags=set())
 
     _commit_trial(trial, frame, state, ctx)
 
@@ -753,6 +753,7 @@ def test_pending_departure_marks_the_settled_landing_not_inflight_motion():
 
     assert state.pending_departure is not None
     assert state.work is settled
+    assert state.work.state == settled.state
     assert state.pending_departure.opening is departure.observation
     assert state.pending_departure.opening.landing_receipt.logical_scans == 1
     assert state.pending_departure.earned_work_mark == (("Step", 107),)

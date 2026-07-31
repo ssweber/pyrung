@@ -3,10 +3,12 @@
 ``build_deviation_incident`` freezes the recorded window. ``corrections.py``
 derives three hypothesis families; investigation ranks and tests them with the
 exploratory replay returned by ``build_replay_fn``.
-``_resolve_replay_attempt`` either accepts, rejects, or extends an attempt;
-bounded replacement-cause closure uses ``_compose_hypotheses`` and always
-replays the composite from the original checkpoint. A surviving exploratory
-result receives an evidence-derived lifetime from
+``_resolve_replay_attempt`` either accepts, rejects, or composes a candidate;
+bounded candidate composition uses ``_compose_hypotheses`` and always replays
+the composite from the original checkpoint.  This is an orient-phase
+optimization, not another PILOT iteration: it neither commits a world nor
+installs a correction. A surviving exploratory result receives an
+evidence-derived lifetime from
 ``_scoped_correction_rungs`` and must survive a guarded replay before the first
 confirmed composite is returned.
 
@@ -102,11 +104,15 @@ logger = logging.getLogger(__name__)
 # Skiff escalation for a live-word-gated antagonist (excursion suppression).
 _SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
 _SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
-_NESTED_MAX_BRANCHES = 8
+_MAX_CANDIDATE_COMPOSITIONS = 8
 _RELATIONAL_REFINEMENT_BUDGET = 32
 
 ActionPair = tuple[str, Any]
 CorrectionIdentity = tuple[tuple[Any, ...], ...]
+
+
+class UnsupportedOccurrenceScope(RuntimeError):
+    """A retained writer condition cannot be projected without widening it."""
 
 
 @dataclass
@@ -409,8 +415,8 @@ class _ReplayAccepted:
 
 
 @dataclass(frozen=True)
-class _HypothesisExtended:
-    """A replay exposed another causal cut and extended the hypothesis."""
+class _CandidateComposed:
+    """A replay exposed another causal cut and composed one candidate."""
 
     hypothesis: CorrectionHypothesis
 
@@ -422,7 +428,7 @@ class _ReplayRejected:
     rejection: InvestigationRejection
 
 
-_ReplayResolution = _ReplayAccepted | _HypothesisExtended | _ReplayRejected
+_ReplayResolution = _ReplayAccepted | _CandidateComposed | _ReplayRejected
 
 
 @dataclass(frozen=True)
@@ -492,7 +498,7 @@ def _resolve_replay_attempt(
                 "but yielded no additional corrective cut",
             )
         )
-    return _HypothesisExtended(extended)
+    return _CandidateComposed(extended)
 
 
 def _scoped_correction_rungs(
@@ -528,6 +534,15 @@ def _scoped_correction_rungs(
     time. The replay-derived source scope replaces that exposure guard so
     prerequisite inputs can settle before the harmful state begins.
     """
+    if incident.occurrence_conditions:
+        occurrence_scope = _retained_occurrence_scope(proposals, incident)
+        return _retained_scoped_rungs(
+            plc,
+            proposals,
+            occurrence_scope,
+            ctx,
+        )
+
     if all(
         isinstance(proposal, PilotRung) and proposal.operation is not None for proposal in proposals
     ):
@@ -606,6 +621,84 @@ def _scoped_correction_rungs(
     return tuple(_pilot_rungs_from_proposals(list(scoped_proposals), scope))
 
 
+def _retained_occurrence_scope(
+    proposals: tuple[Any, ...],
+    incident: DeviationIncident,
+) -> Any:
+    """Project corrected direct conjuncts out of one observed writer guard.
+
+    Rung-level conditions are an implicit conjunction. A conjunct that reads
+    only a corrected destination is the lever term the correction deliberately
+    falsifies; the remaining original condition objects name the exact writer
+    opportunity. Mixed/nested dependencies are declined because dropping one
+    would widen the occurrence beyond recorded evidence.
+    """
+
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition
+    from pyrung.core.condition import AllCondition
+
+    corrected = {_proposal_pair(proposal)[0] for proposal in proposals}
+    retained: list[Any] = []
+    for condition in incident.occurrence_conditions:
+        reads = set(_extract_reads_from_condition(condition, {}))
+        overlap = reads & corrected
+        if not overlap:
+            retained.append(condition)
+            continue
+        if not reads <= corrected:
+            raise UnsupportedOccurrenceScope(
+                "retained writer has a mixed condition containing both the "
+                f"corrected lever and occurrence context: {condition!r}"
+            )
+    if not retained:
+        raise UnsupportedOccurrenceScope(
+            "retained writer has no independent condition left after projecting "
+            "the corrected lever"
+        )
+    return retained[0] if len(retained) == 1 else AllCondition(*retained)
+
+
+def _retained_scoped_rungs(
+    plc: PLC,
+    proposals: tuple[Any, ...],
+    occurrence_scope: Any,
+    ctx: Any,
+) -> tuple[PilotRung, ...]:
+    """Start at the exact occurrence and self-continue only to the target.
+
+    The corrected value is an executable receipt that this guard-only rule
+    already fired. Combining it with the target's unresolved condition keeps
+    the correction through the target-establishing scan, then releases it on
+    the following scan. This is deliberately not an ``OperationReceipt``:
+    retained causal evidence does not own a program operation contract.
+    """
+
+    from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
+
+    unresolved = _target_unresolved_condition(
+        plc,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    )
+    result: list[PilotRung] = []
+    for proposal in proposals:
+        if isinstance(proposal, PilotRung) and proposal.operation is not None:
+            result.append(proposal)
+            continue
+        tag, value = _proposal_pair(proposal)
+        dest = plc._known_tags_by_name.get(tag)
+        if dest is None:
+            raise KeyError(f"retained correction tag {tag!r} is not a program tag")
+        continuation = CompareEq(dest, value)
+        guard = AllCondition(
+            unresolved,
+            AnyCondition(occurrence_scope, continuation),
+        )
+        result.append(PilotRung(tag, value, guard))
+    return tuple(result)
+
+
 def _discharges_occurrence_requirements(
     proposals: tuple[Any, ...],
     requirements: tuple[tuple[str, Any], ...],
@@ -634,6 +727,7 @@ def _exploratory_correction_rungs(
     proposals: tuple[Any, ...],
     incident: DeviationIncident,
     progress_mark: tuple[tuple[str, Any], ...],
+    ctx: Any,
 ) -> tuple[Any, ...]:
     """Test a raw correction only where the incident was observed.
 
@@ -645,6 +739,10 @@ def _exploratory_correction_rungs(
     """
 
     from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
+
+    if incident.occurrence_conditions:
+        occurrence_scope = _retained_occurrence_scope(proposals, incident)
+        return _retained_scoped_rungs(plc, proposals, occurrence_scope, ctx)
 
     progress_coordinates = []
     source_scope = None
@@ -889,6 +987,18 @@ def _same_bounded_channel_outcome(
     )
 
 
+def _same_bounded_channel_departure(
+    recorded: RegressionWitness,
+    replacement: RegressionWitness,
+) -> bool:
+    """Whether replay preserved the incident's first channel transition."""
+    return (
+        recorded.channel_tag == replacement.channel_tag
+        and _values_match(recorded.source, replacement.source)
+        and _values_match(recorded.departed, replacement.departed)
+    )
+
+
 def _shared_causal_suffix(
     recorded: RegressionWitness,
     replacement: RegressionWitness | None,
@@ -925,9 +1035,11 @@ def _regression_ownership(
     """Judge the recorded branch and any replacement inside its bounded replay.
 
     Replay does not chase a future stable landing. It does own departures
-    already visible inside the recorded horizon: a proposal that replaces one
-    departure with a departure on its own causal spine has disproved itself.
-    A distinct sibling cause remains probationary evidence for the live loop.
+    already visible inside the recorded horizon. Reproducing the same bounded
+    outcome on the proposal's causal spine disproves the proposal. A
+    proposal-owned replacement with a different landing has instead changed
+    this recorded incident; that landing remains probationary evidence for a
+    later live-loop iteration.
     """
     bounded_events = tuple(event for event in events if event.scan <= end_scan)
     source_preserved = _values_match(
@@ -964,7 +1076,14 @@ def _regression_ownership(
     branch_replaced = (
         bool(shared_suffix) and replacement_replays_recorded is False and replacement_owned is False
     )
-    cause_silenced = changed_writes_silenced or branch_replaced
+    proposal_owned_detour = (
+        replacement_witness is not None
+        and replacement_owned is True
+        and replacement_replays_recorded is False
+        and _same_bounded_channel_departure(witness, replacement_witness)
+        and not _same_bounded_channel_outcome(witness, replacement_witness)
+    )
+    cause_silenced = changed_writes_silenced or branch_replaced or proposal_owned_detour
     unrelated_departure = unrelated_departure and not shared_suffix
     return _RegressionOwnership(
         source_preserved=source_preserved,
@@ -973,7 +1092,12 @@ def _regression_ownership(
         replacement_owned=replacement_owned,
         replacement_replays_recorded=replacement_replays_recorded,
         unrelated_departure=unrelated_departure,
-        neutralized=(source_preserved and cause_silenced) or branch_replaced or unrelated_departure,
+        neutralized=(
+            (source_preserved and cause_silenced)
+            or branch_replaced
+            or proposal_owned_detour
+            or unrelated_departure
+        ),
         shared_suffix=shared_suffix,
     )
 
@@ -1409,11 +1533,11 @@ class ExcursionResult:
 
     reverted: list[str]
     correction: _ConfirmedCorrection | None = None
-    retry_fork: Any = None
-    # The retry pulse's recorded session events — the timeline the retry trial
-    # carries forward (its Done-bit pen marks must stay visible to a later
-    # incident window).
-    retry_timeline: tuple[Any, ...] = ()
+    replay_fork: Any = None
+    # The replayed pulse's recorded session events — the timeline the replayed
+    # trial carries forward (its Done-bit pen marks must stay visible to a
+    # later incident window).
+    replay_timeline: tuple[Any, ...] = ()
 
 
 def investigate_excursion(
@@ -1455,7 +1579,7 @@ def investigate_excursion(
     establishment cases, where the writer *can* still produce the desired value
     and therefore is not a suppression antagonist.
 
-    The successful result carries the exact guarded pilot rungs used by retry.
+    The successful result carries the exact guarded pilot rungs used by replay.
     The caller may admit and install that correction, but must not reconstruct
     its lifetime from the bare input values.
     """
@@ -1474,7 +1598,7 @@ def investigate_excursion(
     # Antagonist suppression path: for each reverted register, suppress any writer
     # that is causally implicated in the deviation and provably clobbers the value
     # the pulse established.  Guard-force enumeration first; skiff on a live-word
-    # punt.  Every hold is confirmed by the retry gate below — nothing unverified.
+    # punt.  Every hold is confirmed by the replay gate below — nothing unverified.
     if pdg is not None and program is not None:
         settled_snap = dict(fork.state.tags)
         mini_ctx = SimpleNamespace(
@@ -1551,32 +1675,32 @@ def investigate_excursion(
     if not candidate_holds:
         return ExcursionResult(reverted=reverted)
 
-    retry = fork_with_pilot_rungs(work, pilot_rungs)
-    retry_pilot_rungs = list(pilot_rungs)
+    replay_fork = fork_with_pilot_rungs(work, pilot_rungs)
+    replay_pilot_rungs = list(pilot_rungs)
     from pyrung.core.analysis.pilot.coast import CoastSession
     from pyrung.core.condition import CompareEq
 
     preserved_tag = reverted[0]
-    preserved = retry._known_tags_by_name[preserved_tag]
+    preserved = replay_fork._known_tags_by_name[preserved_tag]
     scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
     confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(candidate_holds, scope))
-    retry_pilot_rungs.extend(confirmed_pilot_rungs)
-    _set_pilot_rungs(retry, retry_pilot_rungs)
+    replay_pilot_rungs.extend(confirmed_pilot_rungs)
+    _set_pilot_rungs(replay_fork, replay_pilot_rungs)
     kickoff = list(applied_actions)
     kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in applied_actions})
-    session = CoastSession(retry, kind="excursion-retry")
+    session = CoastSession(replay_fork, kind="excursion-replay")
     if program is not None:
         session.arm_pens(
             owner.profile.done.name
             for owner in iter_advance_owners(program)
             if owner.profile.done is not None
         )
-    _apply_pulse(retry, kickoff, resting, edge_tags, session=session)
-    _settle_delayed_effects(retry, scan_budget=scan_budget, session=session)
-    retry_snap = dict(retry.state.tags)
-    retry_key = _pilot_state_key(retry_snap, cfg)
+    _apply_pulse(replay_fork, kickoff, resting, edge_tags, session=session)
+    _settle_delayed_effects(replay_fork, scan_budget=scan_budget, session=session)
+    replay_snap = dict(replay_fork.state.tags)
+    replay_key = _pilot_state_key(replay_snap, cfg)
 
-    if retry_key != pre_key:
+    if replay_key != pre_key:
         return ExcursionResult(
             reverted=reverted,
             correction=_ConfirmedCorrection(
@@ -1585,8 +1709,8 @@ def investigate_excursion(
                 sources=tuple(dict.fromkeys((*reverted, *(tag for tag, _ in candidate_holds)))),
                 justification="excursion replay preserved the pulse-established state",
             ),
-            retry_fork=retry,
-            retry_timeline=session.events,
+            replay_fork=replay_fork,
+            replay_timeline=session.events,
         )
     return ExcursionResult(reverted=reverted)
 
@@ -1643,8 +1767,8 @@ def _skiff_suppression_nominations(
 
     Only Bool levers are probed (flipped off their current antagonist-firing
     value); a wide/unknown word offers no sound probe value (the skiff never
-    guesses).  The returned holds are nominations: they ride the same retry gate
-    as any static hold and are never applied unconfirmed.
+    guesses).  The returned holds are nominations: they pass the same replay
+    verification as any static hold and are never applied unconfirmed.
     """
     action_tags = {t for t, _ in applied_actions}
     condition_read = {t for n in pdg.rung_nodes for t in getattr(n, "condition_reads", ())}
@@ -1902,7 +2026,7 @@ def _compose_hypotheses(
         kind=kind,
         holds=tuple(holds),
         sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
-        detail=f"nested causal closure: {base.detail}; then {addition.detail}",
+        detail=f"composed causal candidate: {base.detail}; then {addition.detail}",
         constraint=base.constraint or addition.constraint,
     )
 
@@ -1934,9 +2058,12 @@ def investigate_deviation(
     No upstream cone sweep.
 
     Hypotheses are ranked by causal primacy. A counterfactual replacement with
-    the same bounded channel outcome and exact participating pipeline extends
-    the current hypothesis inside this investigation; the composite is then
-    replayed from the original checkpoint. Hypotheses whose holds are *already installed*
+    the same bounded channel outcome and exact participating pipeline composes
+    another cut into the current candidate; the composite is then replayed
+    from the original checkpoint. This bounded inner loop is an orientation
+    optimization: it returns one candidate to the ordinary orchestration loop
+    and never commits a world or installs a correction itself. Hypotheses whose
+    holds are *already installed*
     (*installed*) are skipped, not re-confirmed: they were active when the
     incident happened, so a repeat regression at the same key escalates to the
     runner-up instead of re-anointing the incumbent.
@@ -1986,7 +2113,7 @@ def investigate_deviation(
     def _reject(hyp: CorrectionHypothesis, slug: str, detail: str) -> None:
         rejected.append(InvestigationRejection(hyp, slug, detail))
 
-    def _extend_from_replacement(
+    def _compose_replacement_candidate(
         current: CorrectionHypothesis,
         evidence: ReplacementEvidence,
     ) -> CorrectionHypothesis | None:
@@ -2080,14 +2207,15 @@ def investigate_deviation(
         current = hypothesis
         seen_replacements: set[tuple[Any, ...]] = set()
         refinement_receipt = _RelationalRefinementReceipt()
-        replacement_branches = 0
+        candidate_compositions = 0
 
-        while replacement_branches <= _NESTED_MAX_BRANCHES:
+        while candidate_compositions <= _MAX_CANDIDATE_COMPOSITIONS:
             exploratory = _exploratory_correction_rungs(
                 plc,
                 current.holds,
                 incident,
                 correction_progress_mark,
+                ctx,
             )
             preflight = _continuation_with_active_correction(
                 exploratory,
@@ -2123,14 +2251,14 @@ def investigate_deviation(
                 current=current,
                 outcome=outcome,
                 seen_replacements=seen_replacements,
-                extend=_extend_from_replacement,
+                extend=_compose_replacement_candidate,
             )
             if isinstance(resolution, _ReplayRejected):
                 rejected.append(resolution.rejection)
                 break
-            if isinstance(resolution, _HypothesisExtended):
+            if isinstance(resolution, _CandidateComposed):
                 current = resolution.hypothesis
-                replacement_branches += 1
+                candidate_compositions += 1
                 continue
             outcome = resolution.outcome
 
@@ -2221,14 +2349,14 @@ def investigate_deviation(
                 current=current,
                 outcome=installed_outcome,
                 seen_replacements=seen_replacements,
-                extend=_extend_from_replacement,
+                extend=_compose_replacement_candidate,
             )
             if isinstance(resolution, _ReplayRejected):
                 rejected.append(resolution.rejection)
                 break
-            if isinstance(resolution, _HypothesisExtended):
+            if isinstance(resolution, _CandidateComposed):
                 current = resolution.hypothesis
-                replacement_branches += 1
+                candidate_compositions += 1
                 continue
             installed_outcome = resolution.outcome
             confirmed_hypothesis = CorrectionHypothesis(
@@ -2265,10 +2393,11 @@ def investigate_deviation(
             _reject(
                 current,
                 "nested-cause-budget",
-                f"nested causal closure exceeded {_NESTED_MAX_BRANCHES} replacement branches",
+                "candidate composition exceeded "
+                f"{_MAX_CANDIDATE_COMPOSITIONS} replacement branches",
             )
         if confirmed:
-            break  # first confirmed composite wins — one intervention per incident
+            break  # return one confirmed composite candidate to the outer loop
 
     return InvestigationResult(
         correction=confirmed_correction,

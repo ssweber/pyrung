@@ -47,6 +47,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     NeedProbe,
     OrientationWorld,
+    RetainedReplay,
     Stuck,
     TargetSpec,
     act_identity,
@@ -65,7 +66,6 @@ from pyrung.core.analysis.pilot.progress import (
     _promote_probationary_corrections,
     _record_pending_landing,
 )
-from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.recording import (
     _act_event,
     _build_plan_journal,
@@ -73,7 +73,6 @@ from pyrung.core.analysis.pilot.recording import (
     _frontier_clause,
     _iteration_payload,
     _knowledge_payload,
-    render_unsupported_construct,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
@@ -107,7 +106,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
-from pyrung.core.analysis.pilot.verify import verify_excursion_retry
+from pyrung.core.analysis.pilot.verify import verify_excursion_replay
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -139,7 +138,6 @@ class _DriveSetup:
     evidence: TransitionEvidence | None
     compass: Compass
     opaque_loop: frozenset[str]
-    live: bool
 
 
 @dataclass(frozen=True)
@@ -171,13 +169,11 @@ class _ProverContext:
 
 
 def _commit_step(
-    work: PLC,
     fork: PLC,
     inputs: dict[str, Any],
     scan_before: int,
     resting: dict[str, Any],
     edge_tags: set[str],
-    live: bool,
 ) -> tuple[PLC, tuple[_Step, ...]]:
     """Record a step (or release+pulse pair) and swap the work fork.
 
@@ -214,9 +210,6 @@ def _commit_step(
                 scan_after=fork.state.scan_id,
             ),
         )
-    if live:
-        _apply_pulse(work, list(inputs.items()), resting, edge_tags)
-        return work, steps
     return fork, steps
 
 
@@ -238,7 +231,6 @@ def _make_pilot_context(
     opaque_loop: frozenset[str],
     route: TraceChoice | None,
     max_scans: int,
-    live: bool,
     avoid_pred: Any = None,
     target_predicate: Any = None,
 ) -> _PilotContext:
@@ -297,7 +289,6 @@ def _make_pilot_context(
         route=route,
         blocked_actions=frozenset(),
         max_scans=max_scans,
-        live=live,
         avoid_pred=avoid_pred,
     )
 
@@ -305,14 +296,13 @@ def _make_pilot_context(
 def _prepare_drive(
     plc: PLC,
     *,
-    live: bool,
     unlink: list[str] | None,
 ) -> _DriveSetup:
     """Build the shared program/runtime analysis for one public drive."""
 
     from pyrung.core.analysis.pdg import build_program_graph
 
-    work = plc if live else fork_with_pilot_rungs(plc, (), history_budget=math.inf)
+    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
     program = plc._program
     pdg = build_program_graph(program)
     harness_fb = install_harness(work, unlink=unlink)
@@ -341,7 +331,6 @@ def _prepare_drive(
         evidence=prover.evidence,
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
         opaque_loop=detect_opaque_loop(pdg, program),
-        live=live,
     )
 
 
@@ -387,7 +376,6 @@ def _prepare_target_context(
         opaque_loop=setup.opaque_loop,
         route=None,
         max_scans=max_scans,
-        live=setup.live,
         avoid_pred=avoid_pred,
         target_predicate=target_predicate,
     )
@@ -547,6 +535,7 @@ def _record_attempt(
     state: _PilotState,
     ctx: _PilotContext,
     objective: BearingObjective,
+    act: Any = None,
 ) -> None:
     """Commit knowledge from an attempt, whether accepted or rejected.
 
@@ -562,14 +551,17 @@ def _record_attempt(
         *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
-    if attempt.confirmed_correction is not None:
+    retained = isinstance(act, RetainedReplay)
+    if attempt.confirmed_correction is not None and (
+        not retained or attempt.trial is not None
+    ):
         _anchor_frame_receipt(frame, state, objective)
         _install_confirmed_correction(
             state,
             attempt.confirmed_correction,
             origin_key=frame.key,
             scan=state.work.state.scan_id,
-            source="excursion",
+            source="retained" if retained else "excursion",
         )
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.
@@ -582,7 +574,7 @@ def _resolve_excursion(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> _AttemptResult:
-    """Investigate one reported excursion and return verification's retry judgment."""
+    """Investigate one reported excursion and continue verification on its replay."""
     executed = attempt.excursion_attempt
     if executed is None:
         return attempt
@@ -607,7 +599,7 @@ def _resolve_excursion(
         program=ctx.program,
         ctx=ctx,
     )
-    return verify_excursion_retry(attempt, result, frame, state, ctx)
+    return verify_excursion_replay(attempt, result, frame, state, ctx)
 
 
 def _step_context(
@@ -717,6 +709,21 @@ def _commit_trial(
     key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
     if isinstance(verified, AssessedMotion):
         state.seen_keys.add(verified.new_key)
+    if isinstance(bearing.act, RetainedReplay):
+        # This act replaced the retained prefix; appending a step whose
+        # scan-before equals the old tip would fabricate an overlapping
+        # operation. The replay fork's scan log is the complete recording.
+        # The replacement replays the complete public scan log, so inputs from
+        # earlier accepted acts remain physical history. Their semantic
+        # contexts described the old causal past, however, and cannot survive
+        # the rebase. Old rollback anchors have the same problem; trend
+        # monitoring will bank the corrected world as the next anchor.
+        state.checkpoints.clear()
+        state.world = state.world.set(
+            work=pulse.fork,
+            committed_acts=pvector([]),
+        )
+        return
     # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
     # policy's narrow primary candidate. Replay and live apply must reproduce every input
@@ -733,13 +740,11 @@ def _commit_trial(
     # is empty for a let-run, so this is the only place the driver is recorded.
     step_inputs = dict(policy.applied)
     work, steps = _commit_step(
-        state.work,
         pulse.fork,
         step_inputs,
         pulse.scan_before,
         ctx.resting,
         ctx.edge_tags,
-        ctx.live,
     )
     act = _CommittedAct(steps=steps, context=_step_context(trial, frame, state))
     # Adopt the physical fork and its replay evidence in one persistent-world
@@ -1080,7 +1085,7 @@ def _pilot_loop_events(
 
         attempt = execute(result, orientation_world)
         attempt = _resolve_excursion(attempt, frame, state, ctx)
-        _record_attempt(attempt, frame, state, ctx, result.objective)
+        _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
         if isinstance(act, Coast) and act.mode == "terminal":
             stop_reason = (
@@ -1671,7 +1676,7 @@ def pilot_events(
     states the same way ``how(avoid=...)`` does.
     """
     target_tag, target_value, target_predicate = _parse_target(*conditions)
-    setup = _prepare_drive(plc, live=False, unlink=unlink)
+    setup = _prepare_drive(plc, unlink=unlink)
     ctx, _route_taken = _prepare_target_context(
         setup,
         target_tag,
@@ -1714,7 +1719,7 @@ def pilot_how(
             on_event=on_event,
         )
     target_tag, target_value, target_predicate = targets[0]
-    setup = _prepare_drive(plc, live=False, unlink=unlink)
+    setup = _prepare_drive(plc, unlink=unlink)
     ctx, route_taken = _prepare_target_context(
         setup,
         target_tag,
@@ -1780,7 +1785,7 @@ def _pilot_how_multi(
     from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
 
     label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
-    setup = _prepare_drive(plc, live=False, unlink=unlink)
+    setup = _prepare_drive(plc, unlink=unlink)
 
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
 
@@ -1869,48 +1874,3 @@ def _pilot_how_multi(
         lever_notes=last_knowledge.get("lever_notes", {}),
         avoid_names=last_knowledge.get("avoid_names", ()),
     )
-
-
-def pilot_drive(
-    plc: PLC,
-    *conditions: Any,
-    max_scans: int = 3000,
-    avoid_pred: Any = None,
-    unlink: list[str] | None = None,
-) -> Plan:
-    """PILOT on the live PLC — drive the state there.
-
-    ``unlink`` frees the named harness-feedback tags for fault injection (see
-    :func:`pilot_how`).
-    """
-    target_tag, target_value, target_predicate = _parse_target(*conditions)
-    anchor_scan = plc.state.scan_id
-    try:
-        setup = _prepare_drive(plc, live=True, unlink=unlink)
-        ctx, route_taken = _prepare_target_context(
-            setup,
-            target_tag,
-            target_value,
-            target_predicate,
-            max_scans=max_scans,
-            avoid_pred=avoid_pred,
-        )
-        outcome = _pilot_loop(setup.work, ctx)
-
-        return _single_target_plan(
-            setup,
-            outcome,
-            target_tag,
-            target_value,
-            route_taken,
-            include_journal=False,
-        )
-    except UnsupportedConstruct as failure:
-        return Plan(
-            reachable=False,
-            target_tag=target_tag,
-            target_value=target_value,
-            reason=render_unsupported_construct(failure),
-            status=PlanStatus.STOPPED,
-            anchor_scan=anchor_scan,
-        )

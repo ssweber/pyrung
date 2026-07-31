@@ -339,6 +339,11 @@ class DeviationIncident:
     # same-scan groups preserved).  This is the incident's evidence: a
     # fire-then-reset pulse is two transitions here, never a net no-op.
     timeline: tuple[Any, ...] = ()
+    # Exact conditions on the retained writer occurrence.  Retained-prefix
+    # recovery projects only the corrected direct conjuncts out of this tuple;
+    # the remaining terms are the correction's executable lifetime.
+    occurrence_conditions: tuple[Any, ...] = ()
+    occurrence_writer: tuple[str | None, int] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +420,6 @@ class _PilotContext:
     # Relative count of new PILOT search scans allowed for this invocation.
     # Accepted productive dwell does not consume it.
     max_scans: int
-    live: bool
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
@@ -430,7 +434,7 @@ class _ExecutionEvidence:
 
     Navigation's policy remains a declaration. This record contains only the
     final observed operation window, copied away from the mutable execution
-    fork after any retry has selected the pulse that will be committed.
+    fork after excursion replay has selected the pulse that will be committed.
     """
 
     before_snap: Mapping[str, Any]
@@ -654,7 +658,22 @@ class _PilotState:
 
     @pilot_rungs.setter
     def pilot_rungs(self, value: Any) -> None:
-        self.world = self.world.set(pilot_rungs=pvector(value))
+        """Enter a new executable overlay world at the current scan boundary.
+
+        Retained scans belong to the runner that actually executed them.  A
+        changed PILOT overlay therefore gets a child runner whose causal parent
+        is the old world; mutating the old runner would make on-demand causal
+        reconstruction replay its history under the new overlay.
+        """
+        from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
+
+        materialized = pvector(value)
+        if materialized == self.world.pilot_rungs:
+            return
+        self.world = self.world.set(
+            work=fork_with_pilot_rungs(self.world.work, materialized),
+            pilot_rungs=materialized,
+        )
 
     @property
     def dwell_scans(self) -> int:

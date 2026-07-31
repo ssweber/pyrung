@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
     Pulse,
+    RetainedReplay,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
@@ -692,6 +693,51 @@ def _act_event(
     state: _PilotState | None = None,
 ) -> PilotEvent | None:
     """Render one navigation-act lifecycle event through a single kind dispatch."""
+
+    if isinstance(act, RetainedReplay):
+        occurrence = act.occurrence
+        correction = act.correction
+        retained = {
+            "candidate": _candidate_payload(act.policy),
+            "occurrence": {
+                "floor_scan": occurrence.floor_scan,
+                "scan": occurrence.scan,
+                "ordinal": occurrence.ordinal,
+                "tag": occurrence.tag,
+                "from": occurrence.from_value,
+                "to": occurrence.to_value,
+                "writer": occurrence.writer,
+                "address": occurrence.address,
+            },
+            "correction": {
+                "identity": correction.identity,
+                "pilot_rungs": correction.pilot_rungs,
+                "sources": correction.sources,
+                "justification": correction.justification,
+            },
+        }
+        if phase == "try":
+            return PilotEvent(
+                "retained_replay_try",
+                scan,
+                {**retained, "reason": rationale},
+            )
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent(
+                "retained_replay_rejected",
+                scan,
+                {**retained, "gates": attempt.gate_events},
+            )
+        assert trial is not None and frame is not None and state is not None
+        return PilotEvent(
+            "retained_replay_accepted",
+            scan,
+            {
+                **retained,
+                **_accepted_payload(act.policy, trial, frame, state),
+            },
+        )
 
     if isinstance(act, Pulse):
         if act.crossing is not None:

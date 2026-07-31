@@ -1,10 +1,12 @@
 """Historical SystemState query facade for PLC debug APIs.
 
-``History`` is a stateless facade over the owning PLC.  State storage
-lives in the PLC's byte-bounded recent-state cache (``_recent_state_cache``,
-an ``OrderedDict[int, tuple[SystemState, int]]`` keyed by scan_id) for
-recent scans and in ``replay_to`` (reconstructs older scans on demand
-from the ``ScanLog`` plus checkpoints) for the rest.
+``History`` is a stateless facade over one PLC's retained execution branch.
+Each execution epoch owns its byte-bounded recent-state cache
+(``_recent_state_cache``, an ``OrderedDict[int, tuple[SystemState, int]]``
+keyed by scan_id), scan log, checkpoints, and synthesis overlay. Recent states
+are cache hits; older states are reconstructed on demand by the frozen epoch
+that actually executed them. Cache residency is therefore an optimization,
+not historical authority.
 
 This class no longer holds ``SystemState`` objects directly except
 through its back-reference to the owning ``PLC``.  Labels remain on
@@ -41,8 +43,9 @@ class LabeledSnapshot:
 class History:
     """Read-only query surface for historical ``SystemState``.
 
-    Backed by the owning PLC's byte-bounded recent-state cache (cheap,
-    recent scans) and ``replay_to`` (older scans, reconstructed on demand).
+    Backed by the retained branch's immutable execution epochs. Each epoch
+    serves recent scans from its local cache and reconstructs older scans from
+    its own scan log and checkpoints under its original overlay.
     """
 
     def __init__(self, plc: PLC) -> None:
@@ -58,55 +61,43 @@ class History:
     def at(self, scan_id: int) -> SystemState:
         """Return the ``SystemState`` for ``scan_id``.
 
-        Recent scans (within the PLC's byte-bounded recent-state cache)
-        and scan-log checkpoints return live snapshots.  Older scans
-        are reconstructed via ``plc.replay_to(scan_id).current_state``;
-        each reconstruction forks from the nearest checkpoint and
-        walks the scan log forward.
+        Recent scans in the owning execution epoch's byte-bounded cache and
+        scan-log checkpoints return immutable snapshots. Older scans are
+        reconstructed by that same epoch from its nearest checkpoint and scan
+        log; a later fork's overlay never reinterprets the inherited scan.
 
         Raises:
             KeyError: ``scan_id`` falls outside the addressable range
-            ``[plc._initial_scan_id, plc._state.scan_id]``.
+            ``[history.oldest_scan_id, plc._state.scan_id]`` on the retained
+            inherited branch.
         """
         if not isinstance(scan_id, int):
             raise KeyError(scan_id)
-        return self._plc._state_at(scan_id)
+        return self._plc._causal_state_at(scan_id)
 
     def range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
         """Return states where ``start <= scan_id < end`` (oldest -> newest)."""
         if end_scan_id <= start_scan_id:
             return []
         tip = self._plc._state.scan_id
-        lo = max(self._plc._initial_scan_id, start_scan_id)
+        lo = max(self.oldest_scan_id, start_scan_id)
         hi = min(tip, end_scan_id - 1)
         if lo > hi:
             return []
-
-        cache = self._plc._recent_state_cache
-        cache_lo = self._plc._cache_oldest_scan_id()
-        window_lo = cache_lo if cache_lo is not None else tip + 1
-        if lo >= window_lo:
-            return [state for sid, (state, _) in cache.items() if lo <= sid <= hi]
-        if hi < window_lo:
-            return self._plc._replay_range(lo, hi)
-        # Range straddles the cache boundary: replay the older slice,
-        # serve the rest from the cache.
-        replayed = self._plc._replay_range(lo, window_lo - 1)
-        cached = [state for sid, (state, _) in cache.items() if window_lo <= sid <= hi]
-        return replayed + cached
+        return self._plc._causal_history_range(lo, hi + 1)
 
     def latest(self, n: int) -> list[SystemState]:
         """Return up to the latest ``n`` states (oldest -> newest)."""
         if n <= 0:
             return []
         tip = self._plc._state.scan_id
-        oldest_target = max(self._plc._initial_scan_id, tip - n + 1)
+        oldest_target = max(self.oldest_scan_id, tip - n + 1)
         return self.range(oldest_target, tip + 1)
 
     @property
     def oldest_scan_id(self) -> int:
-        """Oldest addressable scan id (the PLC's initial scan_id)."""
-        return self._plc._initial_scan_id
+        """Oldest retained scan on this runner's inherited branch."""
+        return self._plc._causal_oldest_scan_id()
 
     @property
     def newest_scan_id(self) -> int:
@@ -117,11 +108,11 @@ class History:
         """Return True if ``scan_id`` is addressable."""
         if not isinstance(scan_id, int):
             return False
-        return self._plc._initial_scan_id <= scan_id <= self._plc._state.scan_id
+        return self._plc._causal_history_contains(scan_id)
 
     def scan_ids(self) -> Sequence[int]:
         """Return the addressable scan ids as a ``range`` (oldest -> newest)."""
-        return range(self._plc._initial_scan_id, self._plc._state.scan_id + 1)
+        return range(self.oldest_scan_id, self._plc._state.scan_id + 1)
 
     def previous_transition(
         self,
@@ -163,10 +154,10 @@ class History:
                 self,
                 name,
                 cursor,
-                timelines=plc._rung_firing_timelines,
+                timelines=plc._causal_rung_firing_timelines,
                 pdg=pdg,
                 scan_log=plc._scan_log,
-                initial_tags=plc._initial_state.tags,
+                initial_tags=self.at(self.oldest_scan_id).tags,
             )
             if scan_id is None:
                 return None
@@ -174,10 +165,10 @@ class History:
                 self,
                 name,
                 scan_id,
-                timelines=plc._rung_firing_timelines,
+                timelines=plc._causal_rung_firing_timelines,
                 pdg=pdg,
                 scan_log=plc._scan_log,
-                initial_tags=plc._initial_state.tags,
+                initial_tags=self.at(self.oldest_scan_id).tags,
             )
             if transition is not None and (
                 to is _ANY_TRANSITION_VALUE or transition.to_value == to
@@ -198,7 +189,7 @@ class History:
         from pyrung.core.time_mode import TimeMode
 
         tip = self._plc._state.scan_id
-        oldest = self._plc._initial_scan_id
+        oldest = self.oldest_scan_id
 
         if self._plc._time_mode == TimeMode.FIXED_STEP:
             dt = self._plc._dt
@@ -208,7 +199,7 @@ class History:
             if target < oldest:
                 # No scan satisfies ``timestamp(scan) <= target_ts``;
                 # caller (e.g. ``rewind``) will fall back to oldest.
-                oldest_state = self._plc._state_at(oldest)
+                oldest_state = self.at(oldest)
                 return oldest_state if oldest_state.timestamp <= timestamp else None
             target = min(target, tip)
             return self.at(target)

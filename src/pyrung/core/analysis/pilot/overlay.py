@@ -433,9 +433,20 @@ def _pilot_rung_execution_receipt(
 
 
 def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
-    """Replace PILOT's overlay from its ordered, guarded rung records."""
+    """Replace the overlay only before this runner has executed a local scan.
+
+    A runner's retained suffix and synthesis overlay are one causal epoch.
+    Callers changing an executable world's rungs must first cross
+    :func:`fork_with_pilot_rungs`; direct installation is reserved for a fresh
+    runner or disposable fork still parked at its initial boundary.
+    """
     from pyrung.core.synthesis import guarded_copy_rung
 
+    if plc.state.scan_id != plc._initial_scan_id:
+        raise RuntimeError(
+            "cannot change PILOT rungs after this runner has executed; "
+            "fork_with_pilot_rungs() at the current boundary instead"
+        )
     materialized = tuple(pilot_rungs)
     expanded = _expand_pilot_rules(materialized)
     rules: list[tuple[Any, Any, Any]] = []
@@ -447,14 +458,15 @@ def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     _set_synth_holds(plc, [guarded_copy_rung(rules)] if rules else [])
 
 
-def _append_pilot_rungs(
-    plc: PLC,
-    proposed: list[PilotRung],
+def _merged_pilot_rungs(
+    proposed: Iterable[PilotRung],
     pilot_rungs: Iterable[PilotRung],
 ) -> PVector[PilotRung]:
-    """Append new evidence and install the resulting ordered overlay.
+    """Return the ordered semantic union without changing an executable world.
 
-    The returned persistent vector is the new world value.
+    PILOT merges its world value first, then crosses an overlay fork boundary.
+    Keeping the merge pure prevents an old runner's retained scans from being
+    reinterpreted under newly installed hold rungs.
     """
     updated_list = list(pilot_rungs)
     seen = {_rung_identity(rung) for rung in updated_list}
@@ -463,28 +475,32 @@ def _append_pilot_rungs(
         if identity not in seen:
             updated_list.append(rung)
             seen.add(identity)
-    updated = pvector(updated_list)
-    _set_pilot_rungs(plc, updated)
-    return updated
+    return pvector(updated_list)
 
 
 def fork_with_pilot_rungs(
     source: PLC,
     pilot_rungs: Iterable[PilotRung],
     *,
+    scan_id: int | None = None,
     history_budget: int | float | None = None,
+    inherit_log: bool = True,
 ) -> PLC:
     """Fork *source* and rebuild its scoped steering overlay verbatim.
 
     Every production PILOT fork that may execute is created here, with the
     owning ``_World.pilot_rungs`` supplied explicitly (the drive bootstrap supplies
     an explicit empty set).  Public ``PLC.fork()`` does not implicitly inherit
-    PILOT holds.  Runner-internal replay has a separate contract: a
-    reconstructed fork copies its source runner's **current** synthesis plant
-    and holds, making no claim that an older interval replays under the
-    overlay that existed then.
+    PILOT holds. Historical causal queries delegate scans at and before this
+    boundary to ``source``, including synthetic rung resolution. Internal
+    replay of the child's suffix may therefore use its current synthesis
+    without redefining the retained prefix.
     """
-    fork = source.fork(history_budget=history_budget)
+    fork = source.fork(
+        scan_id=scan_id,
+        history_budget=history_budget,
+        inherit_log=inherit_log,
+    )
     _set_pilot_rungs(fork, pilot_rungs)
     return fork
 
@@ -529,6 +545,7 @@ def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     plc._fold_context_cache = None
     plc._compiled_replay_kernel = None
     plc._soft_exec_program_cache = None
+    plc._causal_epoch_snapshots.clear()
     # Historical causal replay includes the synthesis brackets. A new hold
     # world must not reuse a chain or root classification observed under the
     # previous brackets.

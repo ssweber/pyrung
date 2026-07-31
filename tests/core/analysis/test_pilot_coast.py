@@ -41,7 +41,11 @@ from pyrung.core.analysis.pilot.coast import (
     predicate_trigger,
     value_trigger,
 )
-from pyrung.core.analysis.pilot.overlay import PilotRung, _set_pilot_rungs
+from pyrung.core.analysis.pilot.overlay import (
+    PilotRung,
+    _set_pilot_rungs,
+    fork_with_pilot_rungs,
+)
 from pyrung.core.analysis.pilot.steer import _settle_watched_tags
 from pyrung.core.condition import (
     AllCondition,
@@ -873,7 +877,7 @@ class TestCyclefoldDispatch:
         Input = plc._known_tags_by_name["Input"]
         Target = plc._known_tags_by_name["Target"]
         # Toggle Input every scan while the (independent) target still runs.
-        _set_pilot_rungs(
+        plc = fork_with_pilot_rungs(
             plc,
             [
                 PilotRung("Input", True, AllCondition(~Target, ~Input)),

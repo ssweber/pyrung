@@ -4,8 +4,8 @@
 dead ends, delegates motion attribution and progress classification to
 ``outcome.py``, then decides whether that classified landing may revisit an
 executable world. It reports a suspicious excursion to the drive loop without
-performing runtime investigation. ``verify_excursion_retry`` judges the one
-replay returned by that owner and resumes after the spin gate.
+performing runtime investigation. ``verify_excursion_replay`` judges the one
+replay returned by that owner and continues the remaining gates after spin.
 
 Passing these gates makes a trial eligible for commit and progress monitoring;
 it does not guarantee that later assessment will retain the committed world.
@@ -126,7 +126,7 @@ def _owned_channel_motion(
 
 
 def _replayed_channel_motion(
-    retry_snap: dict[str, Any],
+    replay_snap: dict[str, Any],
     source_snap: dict[str, Any],
     motion: ChannelMotion,
 ) -> ChannelMotion:
@@ -135,11 +135,11 @@ def _replayed_channel_motion(
         return motion
     channel_tag = motion.channel_tag
     assert channel_tag is not None
-    if motion.boundary is not None and constraint_holds(motion.boundary, retry_snap) is True:
+    if motion.boundary is not None and constraint_holds(motion.boundary, replay_snap) is True:
         return replace(motion, stop_reason="reached")
-    if _values_match(retry_snap.get(channel_tag), motion.target_value):
+    if _values_match(replay_snap.get(channel_tag), motion.target_value):
         return replace(motion, stop_reason="reached")
-    if not _values_match(retry_snap.get(channel_tag), source_snap.get(channel_tag)):
+    if not _values_match(replay_snap.get(channel_tag), source_snap.get(channel_tag)):
         return replace(motion, stop_reason="departed")
     return replace(motion, stop_reason="timeout")
 
@@ -208,7 +208,7 @@ def _gate_spin(
     gate_events: list[PilotGateEvent],
     earned_work_receipt: EarnedWorkReceipt | None = None,
 ) -> _SpinVerdict:
-    """Classify one settled execution without investigating or retrying it."""
+    """Classify one settled execution without investigating or replaying it."""
     if trial.key != frame.key or _has_pending_effects(trial.fork):
         return _SpinVerdict.PASS
 
@@ -638,14 +638,14 @@ def _verify_after_spin(
     )
 
 
-def verify_excursion_retry(
+def verify_excursion_replay(
     detected_result: _AttemptResult,
     investigation_result: ExcursionResult,
     frame: Any,
     state: Any,
     ctx: Any,
 ) -> _AttemptResult:
-    """Judge one drive-loop-owned excursion replay, then resume after spin.
+    """Judge one drive-loop-owned excursion replay after the spin gate.
 
     The original attempt's observations and partial gate history survive
     unchanged.  The replay is checked against every retained history snapshot
@@ -654,7 +654,7 @@ def verify_excursion_retry(
     """
     attempt = detected_result.excursion_attempt
     if attempt is None:
-        raise ValueError("excursion retry requires the detected executed attempt")
+        raise ValueError("excursion replay requires the detected executed attempt")
 
     trial = attempt.pulse
     policy = attempt.bearing.act.policy
@@ -664,9 +664,9 @@ def verify_excursion_retry(
     avoid_names = list(detected_result.avoid_names)
     observations = detected_result.observations
 
-    if investigation_result.retry_fork is None or investigation_result.correction is None:
+    if investigation_result.replay_fork is None or investigation_result.correction is None:
         _record_gate(
-            "EXCURSION-NO-HOLDS" if investigation_result.reverted else "EXCURSION-RETRY-FAIL",
+            "EXCURSION-NO-HOLDS" if investigation_result.reverted else "EXCURSION-REPLAY-FAIL",
             gate_events=gate_events,
         )
         return _AttemptResult(
@@ -680,29 +680,29 @@ def verify_excursion_retry(
 
     key_config = state.key_config
     assert key_config is not None
-    retry_fork = investigation_result.retry_fork
+    replay_fork = investigation_result.replay_fork
     correction = investigation_result.correction
-    retry_snap = dict(retry_fork.state.tags)
-    retry_pilot_rungs = (*state.pilot_rungs, *correction.pilot_rungs)
+    replay_snap = dict(replay_fork.state.tags)
+    replay_pilot_rungs = (*state.pilot_rungs, *correction.pilot_rungs)
 
     if ctx.avoid_pred is not None:
-        retry_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, retry_snap))
-        for scan in range(trial.scan_before + 1, retry_fork.state.scan_id + 1):
-            retry_violations.extend(
+        replay_violations: list[str] = list(_avoid_snap_names(ctx.avoid_pred, replay_snap))
+        for scan in range(trial.scan_before + 1, replay_fork.state.scan_id + 1):
+            replay_violations.extend(
                 _avoid_names_after_clear(
                     ctx.avoid_pred,
                     frame.snap,
-                    dict(retry_fork.history.at(scan).tags),
+                    dict(replay_fork.history.at(scan).tags),
                 )
             )
-        if retry_violations:
-            names = tuple(dict.fromkeys(retry_violations))
+        if replay_violations:
+            names = tuple(dict.fromkeys(replay_violations))
             avoid_names.extend(names)
             if nogood_pair is not None:
                 collected_nogoods.append(nogood_pair)
             _record_gate(
                 "AVOID",
-                f": excursion retry enters avoid: {', '.join(names)}",
+                f": excursion replay enters avoid: {', '.join(names)}",
                 gate_events,
             )
             return _AttemptResult(
@@ -714,27 +714,27 @@ def verify_excursion_retry(
                 avoid_names=tuple(avoid_names),
             )
 
-    retry_key = _pilot_world_key(retry_snap, key_config, retry_pilot_rungs)
+    replay_key = _pilot_world_key(replay_snap, key_config, replay_pilot_rungs)
     _record_gate(
-        "EXCURSION-RETRY-OK",
+        "EXCURSION-REPLAY-OK",
         (
             f": reverted={investigation_result.reverted}, "
             f"pilot_rungs={tuple((r.dest, r.value) for r in correction.pilot_rungs)}"
         ),
         gate_events,
     )
-    retry_trial = replace(
+    replay_trial = replace(
         trial,
-        fork=retry_fork,
-        snap=retry_snap,
-        key=retry_key,
+        fork=replay_fork,
+        snap=replay_snap,
+        key=replay_key,
         coast_receipt=None,
-        timeline=investigation_result.retry_timeline,
+        timeline=investigation_result.replay_timeline,
         confirmed_correction=correction,
     )
     earned_work = getattr(state, "earned_work", None)
     earned_work_receipt = (
-        earned_work.receipt(frame.snap, retry_snap)
+        earned_work.receipt(frame.snap, replay_snap)
         if earned_work is not None
         else EarnedWorkReceipt()
     )
@@ -748,14 +748,14 @@ def verify_excursion_retry(
         else ChannelMotion()
     )
     channel_motion = _replayed_channel_motion(
-        retry_snap,
+        replay_snap,
         frame.snap,
         trial.channel_motion if trial.channel_motion.active else declared_motion,
     )
-    retry_trial = replace(retry_trial, channel_motion=channel_motion)
-    retry_attempt = replace(attempt, pulse=retry_trial)
+    replay_trial = replace(replay_trial, channel_motion=channel_motion)
+    replay_attempt = replace(attempt, pulse=replay_trial)
     return _verify_after_spin(
-        retry_attempt,
+        replay_attempt,
         frame,
         state,
         ctx,
@@ -767,7 +767,7 @@ def verify_excursion_retry(
         source_world_key=_pilot_world_key(
             frame.snap,
             key_config,
-            retry_pilot_rungs,
+            replay_pilot_rungs,
         ),
         observations=observations,
     )
@@ -788,8 +788,8 @@ def verify_gates(
     converge here.
 
     Verification owns the accepted trial's earned-work receipt. An excursion
-    returns its exact attempt to the drive loop; the retry judge computes the
-    replacement receipt before resuming this sequence after spin.
+    returns its exact attempt to the drive loop; the replay judge computes the
+    replacement receipt before continuing the remaining gates after spin.
     """
     trial = attempt.pulse
     bearing = attempt.bearing
@@ -811,7 +811,7 @@ def verify_gates(
     )
     gate_events: list[PilotGateEvent] = []
     collected_nogoods: list[_ActionPair] = []
-    retry_avoid_names: list[str] = []
+    avoid_violations: list[str] = []
     earned_work = getattr(state, "earned_work", None)
     earned_work_receipt = (
         earned_work.receipt(frame.snap, trial.snap)
@@ -829,7 +829,7 @@ def verify_gates(
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods if nogoods is None else nogoods),
             confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names if avoid_names is None else avoid_names),
+            avoid_names=tuple(avoid_violations if avoid_names is None else avoid_names),
         )
 
     def _accept_target() -> _AttemptResult:
@@ -846,7 +846,7 @@ def verify_gates(
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
             confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
+            avoid_names=tuple(avoid_violations),
         )
 
     # ── Scan gate (avoid=) ────────────────────────────────────────────────
@@ -961,7 +961,7 @@ def verify_gates(
             # spin and therefore never rejects this action on detection.
             nogood_pairs=frozenset(),
             confirmed_correction=trial.confirmed_correction,
-            avoid_names=tuple(retry_avoid_names),
+            avoid_names=tuple(avoid_violations),
         )
     return _verify_after_spin(
         attempt,
@@ -970,7 +970,7 @@ def verify_gates(
         ctx,
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
-        avoid_names=retry_avoid_names,
+        avoid_names=avoid_violations,
         earned_work_receipt=earned_work_receipt,
         channel_motion=channel_motion,
         source_world_key=_executed_source_world_key(frame, state),

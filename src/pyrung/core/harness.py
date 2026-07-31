@@ -541,6 +541,7 @@ class Harness:
         self._plc._fold_context_cache = None
         self._plc._compiled_replay_kernel = None
         self._plc._soft_exec_program_cache = None
+        self._plc._causal_epoch_snapshots.clear()
 
     def _seed_bool_state(self) -> None:
         """Seed each bool timer to the steady state implied by its current enable.

@@ -57,9 +57,8 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
-    _append_pilot_rungs,
+    _merged_pilot_rungs,
     _pilot_rung_execution_receipt,
-    _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -274,8 +273,8 @@ def _monitor_trend(
     execution = trial.execution
     channel_ejection = execution.channel_motion.departed
     # A pending departure changes only the rollback boundary. Every trial inside
-    # it still passes through the ordinary trend,
-    # regression, investigation, and retry machinery below. In particular, an
+    # it still passes through ordinary trend, regression, investigation, and
+    # candidate composition below. In particular, an
     # exact coast-departure receipt outranks the corridor's fallback expiry:
     # investigation owns that observed operation before pending lifetime
     # policy may discard it.
@@ -338,7 +337,7 @@ def _monitor_trend(
     # as the outer rollback receipt. The landing remains pending until ordinary
     # progress banks a checkpoint; if later motion ejects into Alarm,
     # investigation must replay the action itself so it can discover the
-    # missing hold and retry from the corrected PilotRungs world.
+    # missing hold and return a corrected candidate to the outer loop.
     if _bearing_satisfied(trial) and verified.trend > state.best_trend:
         assert execution.channel_motion.channel_tag is not None
         channel_tag = execution.channel_motion.channel_tag
@@ -687,9 +686,9 @@ def _adopt_settled_world(settled_work: PLC, state: _PilotState) -> None:
     way to consume the settled fork.
     """
     scan_before = state.work.state.scan_id
-    # Rebuild the overlay from the canonical rung list before adopting the
-    # settled fork as the working PLC.
-    _set_pilot_rungs(settled_work, state.pilot_rungs)
+    # ``_settle_departure`` already created this fork with the current overlay;
+    # it owns the settlement suffix and is the next executable world. A later
+    # overlay change crosses its own boundary through ``state.pilot_rungs``.
     state.work = settled_work
     state.dwell_scans += settled_work.state.scan_id - scan_before
     if state.steps:
@@ -963,11 +962,7 @@ def _install_confirmed_correction(
             "confirmed correction cannot claim already-owned rung(s): "
             f"{tuple((rung.dest, rung.value) for rung in duplicate)!r}"
         )
-    state.pilot_rungs = _append_pilot_rungs(
-        state.work,
-        list(correction.pilot_rungs),
-        state.pilot_rungs,
-    )
+    state.pilot_rungs = _merged_pilot_rungs(correction.pilot_rungs, state.pilot_rungs)
     state.hold_log.append(
         _HoldLogEntry(
             scan=scan,
@@ -1183,7 +1178,6 @@ def _revoke_corrections(
         rung for rung in state.pilot_rungs if _rung_identity(rung) not in revoked_rung_ids
     ]
     state.pilot_rungs = remaining_pilot_rungs
-    _set_pilot_rungs(state.work, remaining_pilot_rungs)
     key_config = state.key_config
     cleaned_checkpoints: list[_Checkpoint] = []
     for saved in state.checkpoints:

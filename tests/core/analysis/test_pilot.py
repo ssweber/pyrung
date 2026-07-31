@@ -1,7 +1,7 @@
-"""Integration tests for PILOT loop (pilot_how / pilot_drive).
+"""Integration tests for the fork-only PILOT loop.
 
 Tests are organized in three sections:
-1. Core PILOT tests (direct pilot_how/pilot_drive calls)
+1. Core PILOT tests (direct pilot_how calls)
 2. engine="pilot" parity tests (same programs as test_walk_how_e2e)
 3. Real-pattern parity tests (same programs as test_walk_real_patterns)
 """
@@ -34,8 +34,7 @@ from pyrung import (
     rung,
     subroutine,
 )
-from pyrung.core.analysis.graph import PlanStatus
-from pyrung.core.analysis.pilot import pilot_drive, pilot_events, pilot_how
+from pyrung.core.analysis.pilot import pilot_events, pilot_how
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
@@ -72,24 +71,6 @@ def test_pilot_events_propagates_unsupported_construct() -> None:
 
     with pytest.raises(UnsupportedConstruct):
         list(pilot_events(PLC(logic), target))
-
-
-def test_live_drive_stops_with_unsupported_diagnostic_without_steering() -> None:
-    logic, target = _unsupported_condition_program()
-    plc = PLC(logic)
-
-    result = pilot_drive(plc, target)
-
-    assert result.reachable is False
-    assert result.status is PlanStatus.STOPPED
-    assert result.reason is not None
-    assert result.reason.startswith("PILOT cannot read condition _UnsupportedPilotGate.")
-    assert " --> Main:R0 (" in result.reason
-    assert "unsupported condition" in result.reason
-    scan_log = plc._scan_log.snapshot()
-    assert scan_log.patches_by_scan == {}
-    assert scan_log.force_changes_by_scan == {}
-    assert plc.state.tags[target.name] is False
 
 
 # ===================================================================
@@ -1157,22 +1138,6 @@ def test_timer_wait():
     plc = PLC(logic)
     path = pilot_how(plc, y_Complete, max_scans=3000)
     assert path.reachable
-
-
-def test_pilot_drive_live():
-    x_Go = Bool("x_Go", external=True)
-    y_Out = Bool("y_Out")
-
-    with Program() as logic:
-        with rung(x_Go):
-            out(y_Out)
-
-    plc = PLC(logic)
-    assert plc.state.tags.get("y_Out") is not True
-
-    path = pilot_drive(plc, y_Out)
-    assert path.reachable
-    assert plc.state.tags.get("y_Out") is True
 
 
 # ===================================================================

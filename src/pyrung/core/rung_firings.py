@@ -722,6 +722,82 @@ class RungFiringTimelines(Generic[K]):
                 pattern: canonical for pattern, canonical in intern.items() if id(canonical) in live
             }
 
+    def trim_after(self, max_scan_id: int) -> None:
+        """Drop firing evidence after an immutable branch boundary."""
+        for rung_index, ranges in list(self._timelines.items()):
+            kept: list[RungFiringRange] = []
+            for range_ in ranges:
+                if range_.start_scan_id > max_scan_id:
+                    break
+                kept.append(
+                    range_
+                    if range_.end_scan_id <= max_scan_id
+                    else RungFiringRange(
+                        range_.start_scan_id,
+                        max_scan_id,
+                        range_.payload,
+                    )
+                )
+            if kept:
+                self._timelines[rung_index] = kept
+            else:
+                self._timelines.pop(rung_index, None)
+                self._intern.pop(rung_index, None)
+                self._mode.pop(rung_index, None)
+                self._fired_only_writes.pop(rung_index, None)
+        self._writer_index = None
+        self._writer_index_gen = -1
+
+    def snapshot(self, *, up_to: int | None = None) -> RungFiringTimelines[K]:
+        """Independent timeline snapshot, optionally clipped at a boundary."""
+        frozen: RungFiringTimelines[K] = RungFiringTimelines()
+        for rung_index, ranges in self._timelines.items():
+            kept: list[RungFiringRange] = []
+            for range_ in ranges:
+                if up_to is not None and range_.start_scan_id > up_to:
+                    break
+                kept.append(
+                    range_
+                    if up_to is None or range_.end_scan_id <= up_to
+                    else RungFiringRange(
+                        range_.start_scan_id,
+                        up_to,
+                        range_.payload,
+                    )
+                )
+            if not kept:
+                continue
+            frozen._timelines[rung_index] = kept
+            retained_fired_only = any(
+                isinstance(range_.payload, FiredOnly) for range_ in kept
+            )
+            frozen._mode[rung_index] = "fired_only" if retained_fired_only else "cycle"
+            if retained_fired_only and rung_index in self._fired_only_writes:
+                # Share the immutable PMap so its sentinel values retain exact
+                # identity; deepcopy would silently corrupt FiredOnly meaning.
+                frozen._fired_only_writes[rung_index] = self._fired_only_writes[rung_index]
+            intern = self._intern.get(rung_index)
+            if intern:
+                live_patterns: set[int] = set()
+                for range_ in kept:
+                    payload = range_.payload
+                    if isinstance(payload, PatternRef):
+                        live_patterns.add(id(payload.pattern))
+                    elif isinstance(payload, AlternatingRun):
+                        live_patterns.add(id(payload.pattern_on_even))
+                        live_patterns.add(id(payload.pattern_on_odd))
+                    elif isinstance(payload, ArithmeticRun):
+                        live_patterns.add(id(payload.base_pattern))
+                frozen._intern[rung_index] = {
+                    pattern: canonical
+                    for pattern, canonical in intern.items()
+                    if id(canonical) in live_patterns
+                }
+        frozen._gen = self._gen
+        frozen._writer_index = None
+        frozen._writer_index_gen = -1
+        return frozen
+
 
 def _advance_range_start(range_: RungFiringRange, delta: int) -> RungFiringRange:
     """Advance a range's ``start_scan_id`` by ``delta``, preserving semantics.
