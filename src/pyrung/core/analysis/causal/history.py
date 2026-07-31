@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from .models import Transition
@@ -28,31 +28,59 @@ def _scan_index(ids: Sequence[int], scan_id: int) -> int | None:
         return None
 
 
-def _scan_log_transition(
+def _boundary_transition_at_scan(
+    history: History,
+    tag_name: str,
+    scan_id: int,
+    ids: Sequence[int],
+) -> Transition | None:
+    """Resolve one committed scan-boundary transition.
+
+    Firing timelines identify scans worth checking, but their per-rung write
+    payloads are intentionally lossy: multiple occurrences may write the same
+    tag during one scan.  Adjacent committed states are therefore the sole
+    authority for the transition endpoints.
+    """
+    idx = _scan_index(ids, scan_id)
+    if idx is None:
+        return None
+    to_value = history.at(scan_id).tags.get(tag_name)
+    from_value = history.at(ids[idx - 1]).tags.get(tag_name) if idx > 0 else None
+    if from_value == to_value:
+        return None
+    return Transition(tag_name, scan_id, from_value, to_value)
+
+
+def _scan_log_transition_before(
+    history: History,
     scan_log: ScanLog | None,
     tag_name: str,
-    scan_id: int | None,
+    before_scan_id: int,
     initial_tags: Mapping[str, Any] | None,
+    ids: Sequence[int],
 ) -> Transition | None:
-    """Resolve a writerless input transition from ``ScanLog``'s event index."""
+    """Find the latest committed transition proposed by ``ScanLog``.
+
+    The event index identifies candidate scans only. A program write later in
+    the same scan may overwrite an input event, so adjacent committed states
+    validate the boundary before it becomes causal history.
+    """
     if scan_log is None or initial_tags is None:
         return None
     initial_value = initial_tags.get(tag_name)
-    if scan_id is None:
-        change = scan_log.latest_effective_input_transition(
+    cursor = before_scan_id
+    while True:
+        scan_id = scan_log.last_effective_input_change_before(
             tag_name,
+            cursor,
             initial_value=initial_value,
         )
-    else:
-        change = scan_log.effective_input_transition_at(
-            tag_name,
-            scan_id,
-            initial_value=initial_value,
-        )
-    if change is None:
-        return None
-    change_scan, from_value, to_value = change
-    return Transition(tag_name, change_scan, from_value, to_value)
+        if scan_id is None:
+            return None
+        transition = _boundary_transition_at_scan(history, tag_name, scan_id, ids)
+        if transition is not None:
+            return transition
+        cursor = scan_id
 
 
 def _find_transition(
@@ -70,9 +98,9 @@ def _find_transition(
     If *scan_id* is given, check whether the tag changed at that exact scan.
     Otherwise find the most recent transition.
 
-    When *timelines* and *pdg* are provided, uses the firing timeline
-    instead of per-scan state reads — O(W × log S) where W is the
-    number of writer rungs for the tag.
+    When *timelines* and *pdg* are provided, the compressed firing timeline
+    proposes candidate scans.  Adjacent committed states validate each
+    candidate and supply its endpoints.
     """
     ids = history.scan_ids()
 
@@ -96,7 +124,14 @@ def _find_transition(
     # observed-writer index recovers the latter so they take the timeline
     # branch instead of the state walk.
     if writers is not None and not writers:
-        scan_log_t = _scan_log_transition(scan_log, tag_name, None, initial_tags)
+        scan_log_t = _scan_log_transition_before(
+            history,
+            scan_log,
+            tag_name,
+            ids[-1] + 1 if ids else 0,
+            initial_tags,
+            ids,
+        )
         observed = timelines.observed_writers_of(tag_name) if timelines is not None else frozenset()
         if observed and timelines is not None:
             timeline_t = _find_transition_via_timeline(history, timelines, observed, tag_name, ids)
@@ -111,21 +146,11 @@ def _find_transition(
             return scan_log_t
 
     if timelines is not None and writers is not None and writers:
-        # Walk backward through scans using the timeline for value checks.
-        for i in range(n - 1, 0, -1):
-            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
-            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
-            if cur_val is not _NO_WRITE and prev_val is not _NO_WRITE and cur_val != prev_val:
-                return Transition(tag_name, ids[i], prev_val, cur_val)
-            if cur_val is not _NO_WRITE and prev_val is _NO_WRITE:
-                # No rung wrote the tag at the previous scan — fall
-                # back to state to get the prior value (could be a
-                # default or an external input).
-                prev_state_val = history.at(ids[i - 1]).tags.get(tag_name)
-                if cur_val != prev_state_val:
-                    return Transition(tag_name, ids[i], prev_state_val, cur_val)
-        # Timeline didn't find a write — may be PDG-filtered.
-        # Fall through to state reads.
+        transition = _find_transition_via_timeline(history, timelines, writers, tag_name, ids)
+        if transition is not None:
+            return transition
+        # A PDG-known writer can be absent from the consumed-tag firing
+        # payload. Preserve the guarded state walk for that filtered case.
 
     # State-based fallback: external inputs (no writers), PDG-filtered
     # writes, or no timeline available.
@@ -149,51 +174,13 @@ def _find_transition_at_scan(
     scan_log: ScanLog | None = None,
     initial_tags: Mapping[str, Any] | None = None,
 ) -> Transition | None:
-    """Check if *tag_name* transitioned at exactly *scan_id*.
+    """Check the committed boundary at exactly *scan_id* for a transition.
 
-    Timeline path avoids state reads by checking writer firings.
+    Timeline and scan-log parameters are accepted for the shared lookup API,
+    but exact endpoint validation always comes from adjacent history states.
     """
     ids = history.scan_ids()
-    idx = _scan_index(ids, scan_id)
-    if idx is None:
-        return None
-
-    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
-
-    # ScanLog + observed-writer path for statically writerless tags.
-    if writers is not None and not writers:
-        t = _scan_log_transition(scan_log, tag_name, scan_id, initial_tags)
-        if t is not None:
-            return t
-        observed = timelines.observed_writers_of(tag_name) if timelines is not None else frozenset()
-        if observed and timelines is not None:
-            result = _transition_at_scan_via_timeline(
-                history, timelines, observed, tag_name, scan_id, idx, ids
-            )
-            if result is not _NO_WRITE:
-                return result  # Transition or None (definitive)
-            # _NO_WRITE — fall through to state reads.
-
-    if timelines is not None and writers is not None and writers:
-        result = _transition_at_scan_via_timeline(
-            history, timelines, writers, tag_name, scan_id, idx, ids
-        )
-        if result is not _NO_WRITE:
-            return result  # Transition or None (definitive)
-        # _NO_WRITE — fall through to state reads (PDG-filtered or
-        # external input).
-
-    # State-based fallback
-    state = history.at(scan_id)
-    to_value = state.tags.get(tag_name)
-    if idx > 0:
-        prev_state = history.at(ids[idx - 1])
-        from_value = prev_state.tags.get(tag_name)
-    else:
-        from_value = None
-    if from_value != to_value:
-        return Transition(tag_name, scan_id, from_value, to_value)
-    return None
+    return _boundary_transition_at_scan(history, tag_name, scan_id, ids)
 
 
 def _find_last_transition_scan(
@@ -234,13 +221,17 @@ def _find_last_transition_scan(
     # observed-writer index recovers those runtime writers so they take
     # the same fast branch instead of a full-history state walk.
     elif writers is not None:
-        scan_log_scan: int | None = None
-        if scan_log is not None and initial_tags is not None:
-            scan_log_scan = scan_log.last_effective_input_change_before(
-                tag_name,
-                before_scan_id,
-                initial_value=initial_tags.get(tag_name),
-            )
+        scan_log_transition = _scan_log_transition_before(
+            history,
+            scan_log,
+            tag_name,
+            before_scan_id,
+            initial_tags,
+            ids,
+        )
+        scan_log_scan = (
+            scan_log_transition.scan_id if scan_log_transition is not None else None
+        )
         observed = timelines.observed_writers_of(tag_name) if timelines is not None else frozenset()
         if observed and timelines is not None:
             timeline_scan = _last_transition_scan_via_timeline(
@@ -288,34 +279,47 @@ def _last_transition_scan_via_timeline(
 
     Walks the compressed transition candidates (one entry per stable /
     arithmetic / alternating range) rather than every committed scan.  The
-    prior value is read from committed state (``history.at``) only when a
-    writer didn't fire on the candidate's preceding scan — the same
-    resolution the original branch used, preserved deliberately: a
-    non-writer mutation source (an unattributed system-runtime write, or a
-    rung write dropped by the consumed-tags firing filter) can change a tag
-    during a firing gap, and only committed state reflects it.  Taking the
-    prior value from the writers' timeline instead would silently miss
-    those changes.
+    timeline is only a candidate index; adjacent committed states determine
+    whether the boundary changed.
     """
-    for candidate_scan in timelines.tag_transition_candidate_scans_before(
-        writers,
-        tag_name,
-        before_scan_id,
+    for candidate_scan in _timeline_candidate_scans_before(
+        timelines, writers, tag_name, before_scan_id
     ):
         if candidate_scan >= before_scan_id:
             continue
         idx = _scan_index(ids, candidate_scan)
         if idx is None or idx <= 0:
             continue
-        cur_val = _tag_value_at_scan(timelines, writers, tag_name, candidate_scan)
-        if cur_val is _NO_WRITE:
-            continue
-        prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[idx - 1])
-        if prev_val is _NO_WRITE:
-            prev_val = history.at(ids[idx - 1]).tags.get(tag_name)
-        if cur_val != prev_val:
+        if _boundary_transition_at_scan(history, tag_name, candidate_scan, ids) is not None:
             return candidate_scan
     return None
+
+
+def _timeline_candidate_scans_before(
+    timelines: RungFiringTimelines,
+    writers: frozenset[int],
+    tag_name: str,
+    before_scan_id: int,
+) -> Iterator[int]:
+    """Yield compressed candidates newest-first, advancing after rejections.
+
+    Arithmetic and alternating ranges name only their latest candidate before
+    a cursor.  Asking again below that newest candidate exposes the
+    preceding candidate without expanding the range into per-scan storage.
+    """
+    cursor = before_scan_id
+    while True:
+        candidates = timelines.tag_transition_candidate_scans_before(
+            writers,
+            tag_name,
+            cursor,
+        )
+        eligible = tuple(scan_id for scan_id in candidates if scan_id < cursor)
+        if not eligible:
+            return
+        candidate = max(eligible)
+        yield candidate
+        cursor = candidate
 
 
 def _find_transition_via_timeline(
@@ -331,32 +335,22 @@ def _find_transition_via_timeline(
     :func:`_last_transition_scan_via_timeline`.  It replaces
     :func:`_find_transition`'s per-scan backward loop with the compressed
     candidate enumeration, jumping straight to the range boundaries where
-    the value can change instead of probing every committed scan.  Prior
-    values come from committed state on a firing gap — identical semantics
-    to the loop it replaces, so it still detects changes made by
-    non-writer sources during a gap; it simply reaches far fewer scans, so
-    it reconstructs state (and triggers replay slab fills) at only the
-    candidate boundaries rather than at every gap it walks past.
+    the value can change instead of probing every committed scan.  Adjacent
+    committed states validate each candidate and supply the endpoints, so
+    per-rung projections never stand in for the end-of-scan value.
     """
     if not ids:
         return None
     before_scan_id = ids[-1] + 1
-    for candidate_scan in timelines.tag_transition_candidate_scans_before(
-        writers,
-        tag_name,
-        before_scan_id,
+    for candidate_scan in _timeline_candidate_scans_before(
+        timelines, writers, tag_name, before_scan_id
     ):
         idx = _scan_index(ids, candidate_scan)
         if idx is None or idx <= 0:
             continue
-        cur_val = _tag_value_at_scan(timelines, writers, tag_name, candidate_scan)
-        if cur_val is _NO_WRITE:
-            continue
-        prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[idx - 1])
-        if prev_val is _NO_WRITE:
-            prev_val = history.at(ids[idx - 1]).tags.get(tag_name)
-        if cur_val != prev_val:
-            return Transition(tag_name, candidate_scan, prev_val, cur_val)
+        transition = _boundary_transition_at_scan(history, tag_name, candidate_scan, ids)
+        if transition is not None:
+            return transition
     return None
 
 
@@ -367,41 +361,6 @@ def _later_transition(a: Transition | None, b: Transition | None) -> Transition 
     if b is None:
         return a
     return a if a.scan_id >= b.scan_id else b
-
-
-def _transition_at_scan_via_timeline(
-    history: History,
-    timelines: RungFiringTimelines,
-    writers: frozenset[int],
-    tag_name: str,
-    scan_id: int,
-    idx: int,
-    ids: Sequence[int],
-) -> Any:
-    """Resolve a transition of *tag_name* at exactly *scan_id* from *writers*.
-
-    Returns the :class:`Transition` (a change happened), ``None`` (a writer
-    wrote the tag at *scan_id* but the value was unchanged), or the
-    :data:`_NO_WRITE` sentinel (no writer wrote it at *scan_id*, so the
-    caller should fall through to state reads).  The prior value comes from
-    ``last_tag_write_before`` — matching the long-standing static-writer
-    resolution this factors out — reading committed state only for a
-    first-ever write.
-    """
-    to_value = _tag_value_at_scan(timelines, writers, tag_name, scan_id)
-    if to_value is _NO_WRITE:
-        return _NO_WRITE
-    if idx > 0:
-        prev_result = timelines.last_tag_write_before(writers, tag_name, scan_id)
-        if prev_result is not None:
-            from_value = prev_result[1]
-        else:
-            from_value = history.at(ids[idx - 1]).tags.get(tag_name)
-    else:
-        from_value = None
-    if from_value != to_value:
-        return Transition(tag_name, scan_id, from_value, to_value)
-    return None
 
 
 def _find_recent_transition(
@@ -454,10 +413,6 @@ def _find_recent_transition(
     return None
 
 
-# Sentinel for "no rung wrote this tag at this scan".
-_NO_WRITE: Any = object()
-
-
 def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:
     """Return the set of main-rung indices whose capture scope writes *tag_name*.
 
@@ -465,89 +420,6 @@ def _writer_indices(pdg: ProgramGraph, tag_name: str) -> frozenset[int]:
     call-site main-rung indices — matching the keys in ``RungFiringTimelines``.
     """
     return pdg.timeline_writers_of(tag_name)
-
-
-def _tag_value_at_scan(
-    timelines: RungFiringTimelines,
-    writers: frozenset[int],
-    tag_name: str,
-    scan_id: int,
-) -> Any:
-    """Return the value written to *tag_name* at *scan_id*, or ``_NO_WRITE``.
-
-    Checks each writer rung's timeline for a firing at ``scan_id``
-    that includes ``tag_name`` in its writes.
-    """
-    for rung_index in writers:
-        writes = timelines.rung_writes_at(rung_index, scan_id)
-        if writes is not None and tag_name in writes:
-            return writes[tag_name]
-    return _NO_WRITE
-
-
-def _end_of_scan_value(
-    timelines: RungFiringTimelines,
-    writers: frozenset[int],
-    tag_name: str,
-    scan_id: int,
-) -> Any:
-    """Return the end-of-scan value of *tag_name* at *scan_id*, or ``_NO_WRITE``.
-
-    When multiple writer rungs fire at the same scan, the highest rung
-    index (last in program execution order) determines the end-of-scan
-    value.  Used by :func:`resolve_tag_at_scan` for condition evaluation.
-    """
-    best_value: Any = _NO_WRITE
-    best_rung: int = -1
-    for rung_index in writers:
-        writes = timelines.rung_writes_at(rung_index, scan_id)
-        if writes is not None and tag_name in writes:
-            if rung_index > best_rung:
-                best_rung = rung_index
-                best_value = writes[tag_name]
-    return best_value
-
-
-def resolve_tag_at_scan(
-    tag_name: str,
-    scan_id: int,
-    *,
-    timelines: RungFiringTimelines,
-    pdg: ProgramGraph,
-    scan_log: ScanLog | None,
-    initial_tags: Mapping[str, Any],
-) -> Any:
-    """Resolve a tag's value at *scan_id* without state replay.
-
-    Uses rung firing timelines for writer tags and ``ScanLog``'s derived
-    effective-input index for writerless tags. Falls back to the initial
-    state when neither source has a record.
-    """
-    from pyrung.core.rung_firings import _FIRED_ONLY_SENTINEL
-
-    writers = pdg.timeline_writers_of(tag_name)
-
-    if writers:
-        val = _tag_value_at_scan(timelines, writers, tag_name, scan_id)
-        if val is not _NO_WRITE and val is not _FIRED_ONLY_SENTINEL:
-            return val
-        result = timelines.last_tag_write_before(writers, tag_name, scan_id + 1)
-        if result is not None:
-            best_scan, v = result
-            if v is not _FIRED_ONLY_SENTINEL:
-                exact = _tag_value_at_scan(timelines, writers, tag_name, best_scan)
-                if exact is not _NO_WRITE and exact is not _FIRED_ONLY_SENTINEL:
-                    return exact
-                return v
-
-    if not writers and scan_log is not None:
-        return scan_log.effective_input_value_at(
-            tag_name,
-            scan_id,
-            initial_value=initial_tags.get(tag_name),
-        )
-
-    return initial_tags.get(tag_name)
 
 
 # ---------------------------------------------------------------------------

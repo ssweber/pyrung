@@ -536,8 +536,9 @@ class RungFiringTimelines(Generic[K]):
         This is a compressed companion to per-scan transition searches:
         constant ranges only need their first scan checked, arithmetic
         and alternating ranges can name their latest in-range transition
-        directly, and fired-only ranges preserve the old sentinel boundary
-        behavior by checking the range start.
+        directly. Fired-only ranges yield their latest possible scan; callers
+        can lower the cursor after a rejected boundary and inspect the opaque
+        range lazily without expanding it in retained storage.
         """
         candidates: set[int] = set()
         for rung_index in writer_indices:
@@ -986,7 +987,7 @@ def _tag_transition_candidates_in_range(
             return (effective_end,)
         return (start,)
     if fired_only_writes is not None and tag_name in fired_only_writes:
-        return (start,)
+        return (effective_end,)
     return ()
 
 

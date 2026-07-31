@@ -83,6 +83,34 @@ def test_cause_of_reader_uses_previous_in_scan_occurrence() -> None:
     assert (state_step.transition.from_value, state_step.transition.to_value) == (1, 2)
 
 
+def test_aged_cause_reconstructs_exact_fire_time_occurrence() -> None:
+    """Evicting scan state must not make timeline summaries causal authority."""
+    program, tags = _multiple_writer_program()
+    plc = PLC(program, dt=0.01, cache="20ms", checkpoint_interval=5)
+    plc.step()
+    plc.patch({tags["trigger"].name: True})
+    plc.step()
+    causal_scan = plc.state.scan_id
+    plc.patch({tags["trigger"].name: False})
+    plc.run(40)
+
+    assert not plc._state_in_cache(causal_scan)
+    cause = plc.cause(tags["last"], scan=causal_scan, deep=True)
+    assert cause is not None
+    state_step = next(
+        step for step in cause.steps if step.transition.tag_name == tags["state"].name
+    )
+    # The old reader saw the second write immediately after the first write.
+    # Reconstructing the aged scan must recover that fire-time 1 -> 2 identity,
+    # not derive 0 -> 2 from compressed scan-boundary summaries.
+    assert (
+        state_step.transition.scan_id,
+        state_step.transition.from_value,
+        state_step.transition.to_value,
+    ) == (causal_scan, 1, 2)
+    assert state_step.transition.occurrence_ordinal is not None
+
+
 def test_recorded_effect_preserves_all_ordered_occurrences() -> None:
     program, tags = _multiple_writer_program()
     plc = _run(program, tags)

@@ -17,12 +17,7 @@ from pyrung.core.analysis.sp_values import (
 from pyrung.core.context import ScanContext
 from pyrung.core.crossing import CrossingContext, Eq, eq_target
 
-from .history import (
-    _NO_WRITE,
-    _find_last_transition_scan,
-    _tag_value_at_scan,
-    _writer_indices,
-)
+from .history import _find_last_transition_scan
 from .models import (
     BlockerReason,
     BlockingCondition,
@@ -416,27 +411,10 @@ def _has_observed_transition(
     pdg: ProgramGraph | None = None,
 ) -> bool:
     """Check whether *tag_name* has ever transitioned to *to_value* in history."""
-    ids = list(history.scan_ids())
-    writers = _writer_indices(pdg, tag_name) if pdg is not None else None
-    if timelines is not None and writers is not None and writers:
-        for i in range(1, len(ids)):
-            cur_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i])
-            if cur_val is _NO_WRITE:
-                continue
-            prev_val = _tag_value_at_scan(timelines, writers, tag_name, ids[i - 1])
-            if prev_val is _NO_WRITE:
-                prev_val = history.at(ids[i - 1]).tags.get(tag_name)
-            if cur_val != prev_val and cur_val == to_value:
-                return True
-        return False
-
-    # State-based fallback (also used for external-input tags with no writers)
-    for i in range(1, len(ids)):
-        cur_val = history.at(ids[i]).tags.get(tag_name)
-        prev_val = history.at(ids[i - 1]).tags.get(tag_name)
-        if cur_val != prev_val and cur_val == to_value:
-            return True
-    return False
+    # ``History`` owns representation-independent transition lookup.  Its
+    # compressed indexes propose scans, and committed boundary states validate
+    # them; projected analysis must not reinterpret per-rung payload values.
+    return history.previous_transition(tag_name, to=to_value) is not None
 
 
 def _classify_sp_needs(

@@ -13,7 +13,6 @@ from ._rung_writes import RungWrite, ScanRungWriteProjection, build_scan_rung_wr
 from .crossings_recorded import recorded_read_changes, resolve_recorded_branches
 from .history import (
     _find_last_transition_scan,
-    _find_recent_transition,
     _find_transition,
     _find_transition_at_scan,
 )
@@ -23,7 +22,6 @@ from .support import (
     _condition_tag_name,
     _counterfactual_changes_outcome,
     _HistoricalView,
-    _TimelineView,
 )
 
 
@@ -1104,206 +1102,98 @@ def _walk_backward(
             _chase_supports(wrapped.enablers, trail)
             continue
 
-        # Check if state is cached for full-fidelity SP-tree attribution.
-        cached = state_in_cache_fn is None or state_in_cache_fn(scan_id)
+        # Attribute from the exact entry-time view when replay captured one.
+        # Otherwise reconstruct the committed historical state. Cache
+        # residency affects cost only; it never selects a causal model.
+        view: Any = (
+            fire_view
+            if fire_view is not None
+            else _HistoricalView(history.at(scan_id))
+        )
 
-        if cached:
-            # Full fidelity: SP-tree attribution classifies contacts as
-            # proximate (transitioned) vs enabling (held steady).  Read
-            # against the writer's at-fire-time view when available, else
-            # fall back to end-of-scan state.
-            state = history.at(scan_id)
-            view: Any = fire_view if fire_view is not None else _HistoricalView(state)
+        def _eval(cond: Condition, _v: Any = view) -> bool:
+            return cond.evaluate(_v)  # type: ignore[arg-type]
 
-            def _eval(cond: Condition, _v: Any = view) -> bool:
-                return cond.evaluate(_v)  # type: ignore[arg-type]
+        attributions = attribute(sp_tree, _eval)
 
-            attributions = attribute(sp_tree, _eval)
+        proximate: list[Transition] = []
+        enabling: list[EnablingCondition] = []
+        attributed_tags: dict[str, Any] = {}
 
-            proximate: list[Transition] = []
-            enabling: list[EnablingCondition] = []
-            attributed_tags: dict[str, Any] = {}
+        for attr in attributions:
+            cond_tag = _condition_tag_name(attr.condition)
+            if cond_tag is None:
+                continue
+            attributed_tags.setdefault(cond_tag, view.get_tag(cond_tag))
 
-            for attr in attributions:
-                cond_tag = _condition_tag_name(attr.condition)
-                if cond_tag is None:
-                    continue
-                attributed_tags.setdefault(cond_tag, view.get_tag(cond_tag))
+        # Classify contacts against the value the writer actually read,
+        # not the end-of-scan value. Commands are commonly written,
+        # consumed, and cleared within one scan; the committed history then
+        # shows no transition even though the command is precisely what
+        # made this rung newly conductive. A value established in the prior
+        # scan stays an enabler here; deep recursion follows that separate
+        # establishing transition.
+        fire_diff = recorded_read_changes(
+            history,
+            frozenset(attributed_tags),
+            scan_id,
+            read_values=attributed_tags,
+        )
+        changed_at_fire = {
+            name: Transition(name, scan_id, before, after)
+            for name, before, after in fire_diff.changed
+        }
+        if rung_writes is not None and fire_run is not None:
+            for name, value in attributed_tags.items():
+                observed = rung_writes.transition_observed_by(
+                    name,
+                    fire_run,
+                    observed_value=value,
+                )
+                if observed is not None:
+                    changed_at_fire[name] = observed
 
-            # Classify contacts against the value the writer actually read,
-            # not the end-of-scan value.  Commands are commonly written,
-            # consumed, and cleared within one scan; the committed history then
-            # shows no transition even though the command is precisely what
-            # made this rung newly conductive. A value established in the prior
-            # scan stays an enabler here; deep recursion follows that separate
-            # establishing transition.
-            fire_diff = recorded_read_changes(
+        for cond_tag, at_fire_value in attributed_tags.items():
+            cond_transition = changed_at_fire.get(cond_tag)
+            if cond_transition is not None:
+                proximate.append(cond_transition)
+                continue
+
+            held_since = _find_last_transition_scan(
                 history,
-                frozenset(attributed_tags),
-                scan_id,
-                read_values=attributed_tags,
-            )
-            changed_at_fire = {
-                name: Transition(name, scan_id, before, after)
-                for name, before, after in fire_diff.changed
-            }
-            if rung_writes is not None and fire_run is not None:
-                for name, value in attributed_tags.items():
-                    observed = rung_writes.transition_observed_by(
-                        name,
-                        fire_run,
-                        observed_value=value,
-                    )
-                    if observed is not None:
-                        changed_at_fire[name] = observed
-
-            for cond_tag, at_fire_value in attributed_tags.items():
-                cond_transition = changed_at_fire.get(cond_tag)
-                if cond_transition is not None:
-                    proximate.append(cond_transition)
-                    continue
-
-                held_since = _find_last_transition_scan(
-                    history,
-                    cond_tag,
-                    scan_id,
-                    timelines=timelines,
-                    pdg=pdg,
-                    scan_log=scan_log,
-                    initial_tags=initial_tags,
-                )
-                enabling.append(
-                    EnablingCondition(
-                        tag_name=cond_tag,
-                        value=at_fire_value,
-                        held_since_scan=held_since,
-                    )
-                )
-
-            step = ChainStep(
-                transition=transition,
-                rung_index=rung_idx,
-                triggers=tuple(proximate),
-                enablers=tuple(enabling),
-                subroutine=sub_name,
-            )
-            steps.append(
-                _with_caller_gate(
-                    step,
-                    sub_name,
-                    fire_view,
-                    pdg,
-                    program,
-                    caller_rung_index=caller_rung_index,
-                )
-            )
-            step_idx = len(steps) - 1
-        elif initial_tags is not None and timelines is not None and pdg is not None:
-            # Timeline-resolved attribution: reconstruct tag values from
-            # timelines + ScanLog without expensive state replay.
-            from .history import resolve_tag_at_scan
-
-            view = _TimelineView(
+                cond_tag,
                 scan_id,
                 timelines=timelines,
                 pdg=pdg,
                 scan_log=scan_log,
                 initial_tags=initial_tags,
             )
-
-            def _eval(cond: Condition, _v: Any = view) -> bool:
-                return cond.evaluate(_v)  # type: ignore[arg-type]
-
-            attributions = attribute(sp_tree, _eval)
-
-            proximate_tl: list[Transition] = []
-            enabling_tl: list[EnablingCondition] = []
-
-            for attr in attributions:
-                cond_tag = _condition_tag_name(attr.condition)
-                if cond_tag is None:
-                    continue
-
-                cond_transition = _find_recent_transition(
-                    history,
-                    cond_tag,
-                    scan_id,
-                    timelines=timelines,
-                    pdg=pdg,
-                    scan_log=scan_log,
-                    initial_tags=initial_tags,
-                )
-                if cond_transition is not None:
-                    proximate_tl.append(cond_transition)
-                else:
-                    held_since = _find_last_transition_scan(
-                        history,
-                        cond_tag,
-                        scan_id,
-                        timelines=timelines,
-                        pdg=pdg,
-                        scan_log=scan_log,
-                        initial_tags=initial_tags,
-                    )
-                    enabling_tl.append(
-                        EnablingCondition(
-                            tag_name=cond_tag,
-                            value=resolve_tag_at_scan(
-                                cond_tag,
-                                scan_id,
-                                timelines=timelines,
-                                pdg=pdg,
-                                scan_log=scan_log,
-                                initial_tags=initial_tags,
-                            ),
-                            held_since_scan=held_since,
-                        )
-                    )
-
-            steps.append(
-                ChainStep(
-                    transition=transition,
-                    rung_index=rung_idx,
-                    triggers=tuple(proximate_tl),
-                    enablers=tuple(enabling_tl),
-                    subroutine=sub_name,
+            enabling.append(
+                EnablingCondition(
+                    tag_name=cond_tag,
+                    value=at_fire_value,
+                    held_since_scan=held_since,
                 )
             )
-            step_idx = len(steps) - 1
-            proximate = proximate_tl
-        else:
-            # Structural-only fallback: no state or timeline data for
-            # full attribution.
-            proximate_st: list[Transition] = []
-            leaves = _collect_sp_leaves(sp_tree)
-            for leaf in leaves:
-                cond_tag = _condition_tag_name(leaf.condition)
-                if cond_tag is None:
-                    continue
-                cond_transition = _find_recent_transition(
-                    history,
-                    cond_tag,
-                    scan_id,
-                    timelines=timelines,
-                    pdg=pdg,
-                    scan_log=scan_log,
-                    initial_tags=initial_tags,
-                )
-                if cond_transition is not None:
-                    proximate_st.append(cond_transition)
 
-            steps.append(
-                ChainStep(
-                    transition=transition,
-                    rung_index=rung_idx,
-                    triggers=tuple(proximate_st),
-                    enablers=(),
-                    fidelity="timeline",
-                    subroutine=sub_name,
-                )
+        step = ChainStep(
+            transition=transition,
+            rung_index=rung_idx,
+            triggers=tuple(proximate),
+            enablers=tuple(enabling),
+            subroutine=sub_name,
+        )
+        steps.append(
+            _with_caller_gate(
+                step,
+                sub_name,
+                view,
+                pdg,
+                program,
+                caller_rung_index=caller_rung_index,
             )
-            step_idx = len(steps) - 1
-            proximate = proximate_st
+        )
+        step_idx = len(steps) - 1
 
         if not proximate or deep is not None:
             # Conditioned writer with no proximate cause — explained only by

@@ -13,7 +13,8 @@ from datetime import datetime
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, TimeMode, out
+from pyrung.core import PLC, Bool, Int, Program, Rung, TimeMode, copy, out
+from pyrung.core.analysis.causal._rung_writes import build_scan_rung_write_projection
 from pyrung.core.state import SystemState
 
 
@@ -101,6 +102,86 @@ def test_previous_transition_queries_value_and_scan_boundary() -> None:
     assert bounded_true is not None
     assert (bounded_true.scan_id, bounded_true.to_value) == (1, True)
     assert runner.history.previous_transition(Light, to=None) is None
+
+
+def test_previous_transition_validates_compressed_candidate_against_committed_boundary() -> None:
+    """Multiple same-scan writers must not make a timeline payload authoritative."""
+    Seed = Bool("HistoryBoundarySeed", external=True)
+    MainWrite = Bool("HistoryBoundaryMainWrite", external=True)
+    ErrorWrite = Bool("HistoryBoundaryErrorWrite", external=True)
+    HeelStep = Int("HistoryBoundaryHeelStep")
+    Observed = Bool("HistoryBoundaryObserved")
+
+    with Program() as program:
+        with Rung(Seed):
+            copy(99, HeelStep)
+        with Rung(MainWrite):
+            copy(10, HeelStep)
+        with Rung(ErrorWrite):
+            copy(98, HeelStep)
+        with Rung(HeelStep == 98):
+            out(Observed)
+
+    runner = PLC(program)
+    runner.patch({Seed.name: True})
+    runner.step()
+    runner.patch(
+        {
+            Seed.name: False,
+            MainWrite.name: True,
+            ErrorWrite.name: True,
+        }
+    )
+    runner.step()
+
+    assert runner.history.at(1).tags[HeelStep.name] == 99
+    assert runner.history.at(2).tags[HeelStep.name] == 98
+
+    writers = runner._ensure_pdg().timeline_writers_of(HeelStep.name)
+    candidates = runner._causal_rung_firing_timelines.tag_transition_candidate_scans_before(
+        writers,
+        HeelStep.name,
+        3,
+    )
+    assert candidates[0] == 2
+
+    boundary = runner.history.previous_transition(HeelStep)
+    assert boundary is not None
+    assert boundary.scan_id == 2
+    assert boundary.occurrence_ordinal is None
+    assert (boundary.from_value, boundary.to_value) == (99, 98)
+    assert runner.history.previous_transition(HeelStep, to=98) == boundary
+    # The first writer's 99 -> 10 occurrence is real execution evidence, but
+    # it was overwritten before commit and is not an observed History boundary.
+    assert runner.history.previous_transition(HeelStep, to=10) is None
+
+    # Public cause preserves the committed boundary while attributing it to the
+    # final writer. Exact immediate values live only in the ephemeral replay
+    # projection built after the compressed query has selected scan 2.
+    exact = runner.cause(HeelStep, scan=boundary.scan_id, deep=True)
+    assert exact is not None
+    assert (
+        exact.effect.scan_id,
+        exact.effect.from_value,
+        exact.effect.to_value,
+    ) == (2, 99, 98)
+    assert exact.effect.occurrence_ordinal is not None
+    assert exact.steps[0].rung_index == 2
+
+    runs = runner._replay_rung_runs_at(boundary.scan_id)
+    projection = build_scan_rung_write_projection(
+        runner.history,
+        boundary.scan_id,
+        runs,
+    )
+    assert projection is not None
+    occurrence = projection.write_at_ordinal(exact.effect.occurrence_ordinal)
+    assert occurrence is not None
+    assert (
+        occurrence.transition.from_value,
+        occurrence.transition.to_value,
+        occurrence.rung_id.rung_index,
+    ) == (10, 98, 2)
 
 
 def test_previous_transition_uses_recorded_external_input_changes() -> None:
