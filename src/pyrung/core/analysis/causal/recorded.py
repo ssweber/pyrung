@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.observed import latest_writer_run, writer_runs_for_node
@@ -60,6 +60,88 @@ class _DeepSupport:
         self.absence_visited: set[tuple[str, int, str]] = set()
 
 
+@dataclass
+class _RecordedCauseContext:
+    """Inputs, results, and per-query caches for one backward walk."""
+
+    logic: list[Rung]
+    history: History
+    rung_firings_fn: Any
+    pdg: ProgramGraph | None = None
+    timelines: RungFiringTimelines | None = None
+    program: Program | None = None
+    scan_log: Any = None
+    initial_tags: Any = None
+    node_firings_fn: Any = None
+    node_previous_firing_fn: Any = None
+    node_rung_fn: Any = None
+    node_views_fn: Any = None
+    node_runs_fn: Any = None
+    rung_write_projection_fn: Any = None
+    node_reads_fn: Any = None
+    deep: _DeepSupport | None = None
+    steps: list[ChainStep] = field(default_factory=list, init=False)
+    conjunctive_roots: list[Transition] = field(default_factory=list, init=False)
+    visited: set[tuple[str, int, int | None]] = field(default_factory=set, init=False)
+    node_views_cache: dict[int, dict[RungId, Any]] = field(default_factory=dict, init=False)
+    node_runs_cache: dict[int, tuple[Any, ...]] = field(default_factory=dict, init=False)
+    rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] = field(
+        default_factory=dict, init=False
+    )
+    node_reads_cache: dict[int, dict[RungId, Any]] = field(default_factory=dict, init=False)
+    writer_footprint_cache: dict[tuple[str, int, str | None], frozenset[str]] = field(
+        default_factory=dict, init=False
+    )
+    rung_static_reads_cache: dict[tuple[int, str | None], frozenset[str]] = field(
+        default_factory=dict, init=False
+    )
+
+    def rung_write_projection(self, scan_id: int) -> ScanRungWriteProjection | None:
+        return _rung_write_projection_at(
+            self.history,
+            scan_id,
+            self.node_runs_fn,
+            self.node_runs_cache,
+            self.rung_write_projection_cache,
+            self.rung_write_projection_fn,
+        )
+
+    def writer_footprint(
+        self, tag_name: str, rung_idx: int, sub_name: str | None
+    ) -> frozenset[str]:
+        if self.pdg is None:
+            return frozenset()
+        key = (tag_name, rung_idx, sub_name)
+        if key not in self.writer_footprint_cache:
+            self.writer_footprint_cache[key] = _writer_footprint(
+                self.pdg, tag_name, rung_idx, sub_name
+            )
+        return self.writer_footprint_cache[key]
+
+    def rung_static_reads(self, rung_idx: int, sub_name: str | None) -> frozenset[str]:
+        if self.pdg is None:
+            return frozenset()
+        key = (rung_idx, sub_name)
+        if key not in self.rung_static_reads_cache:
+            self.rung_static_reads_cache[key] = _rung_static_reads(self.pdg, rung_idx, sub_name)
+        return self.rung_static_reads_cache[key]
+
+
+@dataclass(frozen=True)
+class _RecordedWriter:
+    """Dynamic writer evidence consumed by the recorded crossing layers."""
+
+    tag_name: str
+    rung_idx: int
+    sub_name: str | None
+    scan_id: int
+    rung: Any = None
+    fire_view: Any = None
+    fire_run: Any = None
+    selected_write: RungWrite | None = None
+    rung_writes: ScanRungWriteProjection | None = None
+
+
 def recorded_cause(
     logic: list[Rung],
     history: History,
@@ -91,11 +173,9 @@ def recorded_cause(
             for a given scan_id.
         tag: The tag (or tag name) whose transition to explain.
         scan_id: Specific scan to examine, or ``None`` for most recent.
-        pdg: Static program graph used as a fallback when the firing
-            log has been PDG-filtered.  Terminal outputs (tags no rung
-            reads) have their rung-firing writes dropped from the log;
-            this fallback recovers the writing rung by evaluating each
-            candidate from ``writers_of`` against the historical state.
+        pdg: Static program graph used to narrow writer and reader candidates
+            when compact firing evidence was filtered or discarded its exact
+            value. Interpreted replay proves which candidate actually ran.
         timelines: Per-rung firing timelines for O(log S) transition
             detection without state reads.
         program: Full Program for subroutine rung resolution.
@@ -121,49 +201,13 @@ def recorded_cause(
     if transition is None:
         return None
 
-    steps: list[ChainStep] = []
-    conjunctive_roots: list[Transition] = []
-    ambiguous_roots: list[Transition] = []
-    visited: set[tuple[str, int, int | None]] = set()
-    # Per-cause() memoization of the on-demand replay views, keyed by
-    # scan.  The backward walk revisits the same scan for each writer at
-    # a transition, and across recursion may revisit a scan repeatedly;
-    # one replay per distinct scan is enough.
-    node_views_cache: dict[int, dict[RungId, Any]] = {}
-    node_runs_cache: dict[int, tuple[Any, ...]] = {}
-    rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] = {}
-    # Companion cache for the Tier-2 per-node data reads — same replay, same
-    # per-scan memoization as ``node_views_cache``.
-    node_reads_cache: dict[int, dict[RungId, Any]] = {}
     deep_state = _DeepSupport() if deep else None
-
-    # Public recorded cause explains the committed scan boundary. When compact
-    # rung journals are unambiguous, the write ordinal selects its final writer.
-    rung_writes = _rung_write_projection_at(
-        history,
-        transition.scan_id,
-        node_runs_fn,
-        node_runs_cache,
-        rung_write_projection_cache,
-        rung_write_projection_fn,
-    )
-    if rung_writes is not None:
-        boundary = rung_writes.boundary_transition(tag_name)
-        if boundary is not None:
-            transition = boundary
-
-    _walk_backward(
+    context = _RecordedCauseContext(
         logic=logic,
         history=history,
         rung_firings_fn=rung_firings_fn,
-        transition=transition,
-        steps=steps,
-        conjunctive_roots=conjunctive_roots,
-        ambiguous_roots=ambiguous_roots,
-        visited=visited,
         pdg=pdg,
         timelines=timelines,
-        state_in_cache_fn=state_in_cache_fn,
         program=program,
         scan_log=scan_log,
         initial_tags=initial_tags,
@@ -171,22 +215,27 @@ def recorded_cause(
         node_previous_firing_fn=node_previous_firing_fn,
         node_rung_fn=node_rung_fn,
         node_views_fn=node_views_fn,
-        node_views_cache=node_views_cache,
         node_runs_fn=node_runs_fn,
-        node_runs_cache=node_runs_cache,
-        rung_write_projection_cache=rung_write_projection_cache,
         rung_write_projection_fn=rung_write_projection_fn,
         node_reads_fn=node_reads_fn,
-        node_reads_cache=node_reads_cache,
         deep=deep_state,
     )
+
+    # Public recorded cause explains the committed scan boundary. When compact
+    # rung journals are unambiguous, the write ordinal selects its final writer.
+    rung_writes = context.rung_write_projection(transition.scan_id)
+    if rung_writes is not None:
+        boundary = rung_writes.boundary_transition(tag_name)
+        if boundary is not None:
+            transition = boundary
+
+    _walk_backward(context, transition)
 
     return CausalChain(
         effect=transition,
         mode="recorded",
-        steps=steps,
-        conjunctive_roots=conjunctive_roots,
-        ambiguous_roots=ambiguous_roots,
+        steps=context.steps,
+        conjunctive_roots=context.conjunctive_roots,
         roots=deep_state.roots if deep_state is not None else [],
     )
 
@@ -292,23 +341,8 @@ def _rung_write_projection_at(
 
 
 def _cross_opaque_data_reads(
-    *,
-    pdg: ProgramGraph | None,
-    history: History,
-    tag_name: str,
-    rung_idx: int,
-    sub_name: str | None,
-    scan_id: int,
-    timelines: RungFiringTimelines | None,
-    scan_log: Any,
-    initial_tags: Any,
-    rung: Any = None,
-    fire_view: Any = None,
-    fire_run: Any = None,
-    selected_write: RungWrite | None = None,
-    rung_writes: ScanRungWriteProjection | None = None,
-    node_reads_fn: Any = None,
-    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
+    context: _RecordedCauseContext,
+    writer: _RecordedWriter,
 ) -> _CrossedReads | None:
     """Cross an opaque writer: the recorded read-diff, then the crossings registry.
 
@@ -319,54 +353,24 @@ def _cross_opaque_data_reads(
     accumulator inequality.  Additive: it only fires where the footprint diff
     already dead-ended.
     """
-    footprint = _cross_via_footprint(
-        pdg=pdg,
-        history=history,
-        tag_name=tag_name,
-        rung_idx=rung_idx,
-        sub_name=sub_name,
-        scan_id=scan_id,
-        timelines=timelines,
-        scan_log=scan_log,
-        initial_tags=initial_tags,
-        fire_view=fire_view,
-        fire_run=fire_run,
-        selected_write=selected_write,
-        rung_writes=rung_writes,
-        node_reads_fn=node_reads_fn,
-        node_reads_cache=node_reads_cache,
-    )
+    footprint = _cross_via_footprint(context, writer)
     if footprint is not None:
         return footprint
     return _cross_via_registry(
-        rung=rung,
-        tag_name=tag_name,
-        scan_id=scan_id,
-        history=history,
-        timelines=timelines,
-        pdg=pdg,
-        scan_log=scan_log,
-        initial_tags=initial_tags,
+        rung=writer.rung,
+        tag_name=writer.tag_name,
+        scan_id=writer.scan_id,
+        history=context.history,
+        timelines=context.timelines,
+        pdg=context.pdg,
+        scan_log=context.scan_log,
+        initial_tags=context.initial_tags,
     )
 
 
 def _cross_via_footprint(
-    *,
-    pdg: ProgramGraph | None,
-    history: History,
-    tag_name: str,
-    rung_idx: int,
-    sub_name: str | None,
-    scan_id: int,
-    timelines: RungFiringTimelines | None,
-    scan_log: Any,
-    initial_tags: Any,
-    fire_view: Any = None,
-    fire_run: Any = None,
-    selected_write: RungWrite | None = None,
-    rung_writes: ScanRungWriteProjection | None = None,
-    node_reads_fn: Any = None,
-    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
+    context: _RecordedCauseContext,
+    writer: _RecordedWriter,
 ) -> _CrossedReads | None:
     """The instruction-agnostic read-diff crossing (Crossings Phase 1/Tier 2).
 
@@ -375,9 +379,10 @@ def _cross_via_footprint(
     merely *non-zero now* are enablers — or ``None`` when the writer has no
     crossable data reads or nothing in the footprint changed or is non-zero.
     """
+    pdg = context.pdg
     if pdg is None:
         return None
-    static_footprint = _writer_footprint(pdg, tag_name, rung_idx, sub_name)
+    static_footprint = context.writer_footprint(writer.tag_name, writer.rung_idx, writer.sub_name)
     if not static_footprint:
         # Not a data writer with crossable operands (e.g. a timer/counter, or a
         # literal-source copy).  Tier 1 returns here; the captured reads of such
@@ -387,8 +392,8 @@ def _cross_via_footprint(
         # pointer itself is a static read).
         return None
     exact_reads = (
-        rung_writes.reads_observed_by_write(selected_write)
-        if rung_writes is not None and selected_write is not None
+        writer.rung_writes.reads_observed_by_write(writer.selected_write)
+        if writer.rung_writes is not None and writer.selected_write is not None
         else ()
     )
     exact_values: dict[str, Any] = {}
@@ -397,8 +402,14 @@ def _cross_via_footprint(
         exact_values[read.occurrence.name] = read.occurrence.value
         exact_read_by_tag[read.occurrence.name] = read
 
-    captured = _node_reads_at(scan_id, node_reads_fn, node_reads_cache)
-    node_reads = captured.get(RungId(sub_name, rung_idx)) if captured is not None else None
+    captured = _node_reads_at(
+        writer.scan_id,
+        context.node_reads_fn,
+        context.node_reads_cache,
+    )
+    node_reads = (
+        captured.get(RungId(writer.sub_name, writer.rung_idx)) if captured is not None else None
+    )
     observed_reads = frozenset(exact_values) if exact_reads else node_reads
     if observed_reads:
         # Tier 2: scope the operands the writer *actually* read at fire time to
@@ -409,7 +420,7 @@ def _cross_via_footprint(
         # Sound: every true read of the writer is retained, and nothing the
         # writer never read is introduced; never less precise than the static
         # footprint alone.
-        rung_static = _rung_static_reads(pdg, rung_idx, sub_name)
+        rung_static = context.rung_static_reads(writer.rung_idx, writer.sub_name)
         footprint = frozenset((observed_reads & static_footprint) | (observed_reads - rung_static))
     else:
         # Tier 1 fallback: no interpreted replay (no Program / out of replay
@@ -425,20 +436,29 @@ def _cross_via_footprint(
     read_values = (
         {tag: exact_values[tag] for tag in footprint}
         if exact_reads
-        else ({tag: fire_view.get_tag(tag) for tag in footprint} if fire_view is not None else None)
+        else (
+            {tag: writer.fire_view.get_tag(tag) for tag in footprint}
+            if writer.fire_view is not None
+            else None
+        )
     )
-    diff = recorded_read_changes(history, footprint, scan_id, read_values=read_values)
+    diff = recorded_read_changes(
+        context.history,
+        footprint,
+        writer.scan_id,
+        read_values=read_values,
+    )
     rung_transitions: dict[str, Transition] = {}
-    if rung_writes is not None and fire_run is not None and read_values is not None:
+    if writer.rung_writes is not None and writer.fire_run is not None and read_values is not None:
         observed_changes: list[tuple[str, Any, Any]] = []
         for read_tag in sorted(footprint):
             exact_read = exact_read_by_tag.get(read_tag)
             observed = (
-                rung_writes.transition_observed_by_read(exact_read)
+                writer.rung_writes.transition_observed_by_read(exact_read)
                 if exact_read is not None
-                else rung_writes.transition_observed_by(
+                else writer.rung_writes.transition_observed_by(
                     read_tag,
-                    fire_run,
+                    writer.fire_run,
                     observed_value=read_values[read_tag],
                 )
             )
@@ -451,21 +471,25 @@ def _cross_via_footprint(
         return None
     changed_tags = {t for t, _before, _after in diff.changed}
     triggers = tuple(
-        rung_transitions.get(t, Transition(t, scan_id, before, after))
+        rung_transitions.get(t, Transition(t, writer.scan_id, before, after))
         for (t, before, after) in diff.changed
     )
     enablers = tuple(
         EnablingCondition(
             tag_name=t,
-            value=read_values[t] if read_values is not None else history.at(scan_id).tags.get(t),
+            value=(
+                read_values[t]
+                if read_values is not None
+                else context.history.at(writer.scan_id).tags.get(t)
+            ),
             held_since_scan=_find_last_transition_scan(
-                history,
+                context.history,
                 t,
-                scan_id,
-                timelines=timelines,
+                writer.scan_id,
+                timelines=context.timelines,
                 pdg=pdg,
-                scan_log=scan_log,
-                initial_tags=initial_tags,
+                scan_log=context.scan_log,
+                initial_tags=context.initial_tags,
             ),
         )
         for t in diff.nonzero_now
@@ -593,33 +617,8 @@ def _indexed_value_transition_scans(
 
 
 def _walk_backward(
-    *,
-    logic: list[Rung],
-    history: History,
-    rung_firings_fn: Any,
+    context: _RecordedCauseContext,
     transition: Transition,
-    steps: list[ChainStep],
-    conjunctive_roots: list[Transition],
-    ambiguous_roots: list[Transition],
-    visited: set[tuple[str, int, int | None]],
-    pdg: ProgramGraph | None = None,
-    timelines: RungFiringTimelines | None = None,
-    state_in_cache_fn: Any = None,  # Callable[[int], bool] | None
-    program: Program | None = None,
-    scan_log: Any = None,
-    initial_tags: Any = None,
-    node_firings_fn: Any = None,
-    node_previous_firing_fn: Any = None,
-    node_rung_fn: Any = None,
-    node_views_fn: Any = None,
-    node_views_cache: dict[int, dict[RungId, Any]] | None = None,
-    node_runs_fn: Any = None,
-    node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
-    rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] | None = None,
-    rung_write_projection_fn: Any = None,
-    node_reads_fn: Any = None,
-    node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
-    deep: _DeepSupport | None = None,
     trail: tuple[str, ...] = (),
 ) -> None:
     """Recursive backward walk from a single transition.
@@ -633,6 +632,26 @@ def _walk_backward(
     Terminals are classified into ``deep.roots`` (external / never-written /
     system / unattributed).
     """
+    logic = context.logic
+    history = context.history
+    rung_firings_fn = context.rung_firings_fn
+    pdg = context.pdg
+    timelines = context.timelines
+    program = context.program
+    scan_log = context.scan_log
+    initial_tags = context.initial_tags
+    node_firings_fn = context.node_firings_fn
+    node_previous_firing_fn = context.node_previous_firing_fn
+    node_rung_fn = context.node_rung_fn
+    node_views_fn = context.node_views_fn
+    node_runs_fn = context.node_runs_fn
+    deep = context.deep
+    steps = context.steps
+    conjunctive_roots = context.conjunctive_roots
+    visited = context.visited
+    node_views_cache = context.node_views_cache
+    node_runs_cache = context.node_runs_cache
+
     tag_name = transition.tag_name
     scan_id = transition.scan_id
 
@@ -641,14 +660,7 @@ def _walk_backward(
         return  # cycle guard
     visited.add(visit_key)
 
-    rung_writes = _rung_write_projection_at(
-        history,
-        scan_id,
-        node_runs_fn,
-        node_runs_cache,
-        rung_write_projection_cache,
-        rung_write_projection_fn,
-    )
+    rung_writes = context.rung_write_projection(scan_id)
 
     trail = (*trail, f"{tag_name}@{scan_id}")
 
@@ -722,35 +734,7 @@ def _walk_backward(
                     initial_tags=initial_tags,
                 )
                 if t is not None:
-                    _walk_backward(
-                        logic=logic,
-                        history=history,
-                        rung_firings_fn=rung_firings_fn,
-                        transition=t,
-                        steps=steps,
-                        conjunctive_roots=conjunctive_roots,
-                        ambiguous_roots=ambiguous_roots,
-                        visited=visited,
-                        pdg=pdg,
-                        timelines=timelines,
-                        state_in_cache_fn=state_in_cache_fn,
-                        program=program,
-                        scan_log=scan_log,
-                        initial_tags=initial_tags,
-                        node_firings_fn=node_firings_fn,
-                        node_previous_firing_fn=node_previous_firing_fn,
-                        node_rung_fn=node_rung_fn,
-                        node_views_fn=node_views_fn,
-                        node_views_cache=node_views_cache,
-                        node_runs_fn=node_runs_fn,
-                        node_runs_cache=node_runs_cache,
-                        rung_write_projection_cache=rung_write_projection_cache,
-                        rung_write_projection_fn=rung_write_projection_fn,
-                        node_reads_fn=node_reads_fn,
-                        node_reads_cache=node_reads_cache,
-                        deep=deep,
-                        trail=base_trail,
-                    )
+                    _walk_backward(context, t, trail=base_trail)
                     continue
             _absence_hop(name, ec.value, base_trail)
 
@@ -835,32 +819,8 @@ def _walk_backward(
             return
 
         _walk_backward(
-            logic=logic,
-            history=history,
-            rung_firings_fn=rung_firings_fn,
-            transition=Transition(name, writer_scan, value, value),
-            steps=steps,
-            conjunctive_roots=conjunctive_roots,
-            ambiguous_roots=ambiguous_roots,
-            visited=visited,
-            pdg=pdg,
-            timelines=timelines,
-            state_in_cache_fn=state_in_cache_fn,
-            program=program,
-            scan_log=scan_log,
-            initial_tags=initial_tags,
-            node_firings_fn=node_firings_fn,
-            node_previous_firing_fn=node_previous_firing_fn,
-            node_rung_fn=node_rung_fn,
-            node_views_fn=node_views_fn,
-            node_views_cache=node_views_cache,
-            node_runs_fn=node_runs_fn,
-            node_runs_cache=node_runs_cache,
-            rung_write_projection_cache=rung_write_projection_cache,
-            rung_write_projection_fn=rung_write_projection_fn,
-            node_reads_fn=node_reads_fn,
-            node_reads_cache=node_reads_cache,
-            deep=deep,
+            context,
+            Transition(name, writer_scan, value, value),
             trail=hop_trail,
         )
 
@@ -992,35 +952,7 @@ def _walk_backward(
             )
             steps.append(wrapped)
             for p in triggers:
-                _walk_backward(
-                    logic=logic,
-                    history=history,
-                    rung_firings_fn=rung_firings_fn,
-                    transition=p,
-                    steps=steps,
-                    conjunctive_roots=conjunctive_roots,
-                    ambiguous_roots=ambiguous_roots,
-                    visited=visited,
-                    pdg=pdg,
-                    timelines=timelines,
-                    state_in_cache_fn=state_in_cache_fn,
-                    program=program,
-                    scan_log=scan_log,
-                    initial_tags=initial_tags,
-                    node_firings_fn=node_firings_fn,
-                    node_previous_firing_fn=node_previous_firing_fn,
-                    node_rung_fn=node_rung_fn,
-                    node_views_fn=node_views_fn,
-                    node_views_cache=node_views_cache,
-                    node_runs_fn=node_runs_fn,
-                    node_runs_cache=node_runs_cache,
-                    rung_write_projection_cache=rung_write_projection_cache,
-                    rung_write_projection_fn=rung_write_projection_fn,
-                    node_reads_fn=node_reads_fn,
-                    node_reads_cache=node_reads_cache,
-                    deep=deep,
-                    trail=trail,
-                )
+                _walk_backward(context, p, trail=trail)
             _chase_supports(wrapped.enablers, trail)
             continue
 
@@ -1030,22 +962,18 @@ def _walk_backward(
             # continues from the changed/non-zero operands instead of stopping
             # at the opaque written tag.
             crossed = _cross_opaque_data_reads(
-                pdg=pdg,
-                history=history,
-                tag_name=tag_name,
-                rung_idx=rung_idx,
-                sub_name=sub_name,
-                scan_id=scan_id,
-                timelines=timelines,
-                scan_log=scan_log,
-                initial_tags=initial_tags,
-                rung=rung,
-                fire_view=fire_view,
-                fire_run=fire_run,
-                selected_write=selected_write,
-                rung_writes=rung_writes,
-                node_reads_fn=node_reads_fn,
-                node_reads_cache=node_reads_cache,
+                context,
+                _RecordedWriter(
+                    tag_name=tag_name,
+                    rung_idx=rung_idx,
+                    sub_name=sub_name,
+                    scan_id=scan_id,
+                    rung=rung,
+                    fire_view=fire_view,
+                    fire_run=fire_run,
+                    selected_write=selected_write,
+                    rung_writes=rung_writes,
+                ),
             )
             if crossed is not None:
                 triggers = crossed.triggers
@@ -1068,35 +996,7 @@ def _walk_backward(
                 )
                 steps.append(wrapped)
                 for p in triggers:
-                    _walk_backward(
-                        logic=logic,
-                        history=history,
-                        rung_firings_fn=rung_firings_fn,
-                        transition=p,
-                        steps=steps,
-                        conjunctive_roots=conjunctive_roots,
-                        ambiguous_roots=ambiguous_roots,
-                        visited=visited,
-                        pdg=pdg,
-                        timelines=timelines,
-                        state_in_cache_fn=state_in_cache_fn,
-                        program=program,
-                        scan_log=scan_log,
-                        initial_tags=initial_tags,
-                        node_firings_fn=node_firings_fn,
-                        node_previous_firing_fn=node_previous_firing_fn,
-                        node_rung_fn=node_rung_fn,
-                        node_views_fn=node_views_fn,
-                        node_views_cache=node_views_cache,
-                        node_runs_fn=node_runs_fn,
-                        node_runs_cache=node_runs_cache,
-                        rung_write_projection_cache=rung_write_projection_cache,
-                        rung_write_projection_fn=rung_write_projection_fn,
-                        node_reads_fn=node_reads_fn,
-                        node_reads_cache=node_reads_cache,
-                        deep=deep,
-                        trail=trail,
-                    )
+                    _walk_backward(context, p, trail=trail)
                 _chase_supports(wrapped.enablers, trail)
                 continue
             step = ChainStep(
@@ -1123,11 +1023,7 @@ def _walk_backward(
         # Attribute from the exact entry-time view when replay captured one.
         # Otherwise reconstruct the committed historical state. Cache
         # residency affects cost only; it never selects a causal model.
-        view: Any = (
-            fire_view
-            if fire_view is not None
-            else _HistoricalView(history.at(scan_id))
-        )
+        view: Any = fire_view if fire_view is not None else _HistoricalView(history.at(scan_id))
 
         def _eval(cond: Condition, _v: Any = view) -> bool:
             return cond.evaluate(_v)  # type: ignore[arg-type]
@@ -1226,22 +1122,18 @@ def _walk_backward(
             # operands (the guard trigger explains the *firing*, the data
             # reads explain the *value*).
             crossed = _cross_opaque_data_reads(
-                pdg=pdg,
-                history=history,
-                tag_name=tag_name,
-                rung_idx=rung_idx,
-                sub_name=sub_name,
-                scan_id=scan_id,
-                timelines=timelines,
-                scan_log=scan_log,
-                initial_tags=initial_tags,
-                rung=rung,
-                fire_view=fire_view,
-                fire_run=fire_run,
-                selected_write=selected_write,
-                rung_writes=rung_writes,
-                node_reads_fn=node_reads_fn,
-                node_reads_cache=node_reads_cache,
+                context,
+                _RecordedWriter(
+                    tag_name=tag_name,
+                    rung_idx=rung_idx,
+                    sub_name=sub_name,
+                    scan_id=scan_id,
+                    rung=rung,
+                    fire_view=fire_view,
+                    fire_run=fire_run,
+                    selected_write=selected_write,
+                    rung_writes=rung_writes,
+                ),
             )
             if crossed is not None:
                 dr_triggers = tuple(
@@ -1257,35 +1149,7 @@ def _walk_backward(
                     crossing_exact=crossed.crossing_exact,
                 )
                 for p in dr_triggers:
-                    _walk_backward(
-                        logic=logic,
-                        history=history,
-                        rung_firings_fn=rung_firings_fn,
-                        transition=p,
-                        steps=steps,
-                        conjunctive_roots=conjunctive_roots,
-                        ambiguous_roots=ambiguous_roots,
-                        visited=visited,
-                        pdg=pdg,
-                        timelines=timelines,
-                        state_in_cache_fn=state_in_cache_fn,
-                        program=program,
-                        scan_log=scan_log,
-                        initial_tags=initial_tags,
-                        node_firings_fn=node_firings_fn,
-                        node_previous_firing_fn=node_previous_firing_fn,
-                        node_rung_fn=node_rung_fn,
-                        node_views_fn=node_views_fn,
-                        node_views_cache=node_views_cache,
-                        node_runs_fn=node_runs_fn,
-                        node_runs_cache=node_runs_cache,
-                        rung_write_projection_cache=rung_write_projection_cache,
-                        rung_write_projection_fn=rung_write_projection_fn,
-                        node_reads_fn=node_reads_fn,
-                        node_reads_cache=node_reads_cache,
-                        deep=deep,
-                        trail=trail,
-                    )
+                    _walk_backward(context, p, trail=trail)
             # If a rung was explained only by held enablers, do not
             # invent the written tag as its own root; callers can fall
             # through to the enabler set as the remaining choices.
@@ -1295,35 +1159,7 @@ def _walk_backward(
         if proximate:
             # Recurse on each proximate cause
             for p in proximate:
-                _walk_backward(
-                    logic=logic,
-                    history=history,
-                    rung_firings_fn=rung_firings_fn,
-                    transition=p,
-                    steps=steps,
-                    conjunctive_roots=conjunctive_roots,
-                    ambiguous_roots=ambiguous_roots,
-                    visited=visited,
-                    pdg=pdg,
-                    timelines=timelines,
-                    state_in_cache_fn=state_in_cache_fn,
-                    program=program,
-                    scan_log=scan_log,
-                    initial_tags=initial_tags,
-                    node_firings_fn=node_firings_fn,
-                    node_previous_firing_fn=node_previous_firing_fn,
-                    node_rung_fn=node_rung_fn,
-                    node_views_fn=node_views_fn,
-                    node_views_cache=node_views_cache,
-                    node_runs_fn=node_runs_fn,
-                    node_runs_cache=node_runs_cache,
-                    rung_write_projection_cache=rung_write_projection_cache,
-                    rung_write_projection_fn=rung_write_projection_fn,
-                    node_reads_fn=node_reads_fn,
-                    node_reads_cache=node_reads_cache,
-                    deep=deep,
-                    trail=trail,
-                )
+                _walk_backward(context, p, trail=trail)
         # Deep walk: explain this fired rung's enablers through their
         # establishing transitions or observed value writers.
         _chase_supports(steps[step_idx].enablers, trail)

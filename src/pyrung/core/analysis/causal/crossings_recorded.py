@@ -12,9 +12,10 @@ This is **Tier 1**: the footprint is the PDG's pre-expanded ``data_reads``
 execution).  The *after* value of each operand is what the writer read at fire
 time (the rung's entry-time view), and *before* is the committed value entering
 the scan (``history.at(N-1)``) — never end-of-scan N, which would mis-name an
-operand reset later the same scan as the trigger.  Tier 2 (dynamic/unbounded
-indirect whose footprint the PDG could not enumerate) and Tier 3 (truly opaque →
-counterfactual fallback) are layered on top by the caller.
+operand reset later the same scan as the trigger.  Tier 2 narrows this with
+exact captured reads and retains runtime-resolved indirect addresses.  Writers
+without a crossable footprint fall through to the instruction crossing
+registry, resolved against the recorded scan.
 
 The burner acceptance — chase ``A_AlmExtent != 0`` to the truthy door/lint
 operands — is met here with no sign oracle: ``nonzero_now`` names exactly the

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pyrung import Bool, Int, Program, Rung, calc, copy, out
 from pyrung.core import call, subroutine
+from pyrung.core.analysis.causal import recorded as recorded_module
 from pyrung.core.analysis.causal.crossings_recorded import (
     ReadDiff,
     recorded_read_changes,
@@ -43,6 +44,37 @@ def _writer_node(prog: Program):
 def test_footprint_is_block_expanded() -> None:
     node = _writer_node(_sum_program())
     assert node.data_reads == frozenset({"DS1", "DS2", "DS3"})
+
+
+def test_recorded_context_caches_pdg_read_sets(monkeypatch) -> None:
+    prog = _sum_program()
+    pdg = build_program_graph(prog)
+    context = recorded_module._RecordedCauseContext(
+        logic=prog.rungs,
+        history=object(),
+        rung_firings_fn=lambda _scan_id: {},
+        pdg=pdg,
+    )
+    calls = {"footprint": 0, "rung_reads": 0}
+    original_footprint = recorded_module._writer_footprint
+    original_rung_reads = recorded_module._rung_static_reads
+
+    def counted_footprint(*args):
+        calls["footprint"] += 1
+        return original_footprint(*args)
+
+    def counted_rung_reads(*args):
+        calls["rung_reads"] += 1
+        return original_rung_reads(*args)
+
+    monkeypatch.setattr(recorded_module, "_writer_footprint", counted_footprint)
+    monkeypatch.setattr(recorded_module, "_rung_static_reads", counted_rung_reads)
+
+    assert context.writer_footprint("Total", 1, None) == frozenset({"DS1", "DS2", "DS3"})
+    assert context.writer_footprint("Total", 1, None) == frozenset({"DS1", "DS2", "DS3"})
+    assert context.rung_static_reads(1, None) == frozenset({"DS1", "DS2", "DS3"})
+    assert context.rung_static_reads(1, None) == frozenset({"DS1", "DS2", "DS3"})
+    assert calls == {"footprint": 1, "rung_reads": 1}
 
 
 def test_read_diff_names_changed_and_nonzero_operand() -> None:
@@ -427,8 +459,6 @@ def test_cause_crosses_unbounded_indirect_to_resolved_address() -> None:
 def test_cross_falls_back_to_static_without_replay() -> None:
     """Without a ``node_reads_fn`` (no interpreted replay wired) the cross uses
     the static footprint — Tier 1 behaviour, unchanged."""
-    from pyrung.core.analysis.causal.recorded import _cross_opaque_data_reads
-
     prog = _sum_program()
     runner = PLC(prog, dt=0.010)
     runner.step()
@@ -438,17 +468,22 @@ def test_cross_falls_back_to_static_without_replay() -> None:
     pdg = build_program_graph(prog)
     writer_rung = next(i for i, _ in enumerate(prog.rungs) if "Total" in pdg.rung_nodes[i].writes)
 
-    crossed = _cross_opaque_data_reads(
-        pdg=pdg,
+    context = recorded_module._RecordedCauseContext(
+        logic=prog.rungs,
         history=runner.history,
-        tag_name="Total",
-        rung_idx=writer_rung,
-        sub_name=None,
-        scan_id=scan,
-        timelines=None,
-        scan_log=None,
-        initial_tags=None,
+        rung_firings_fn=lambda _scan_id: {},
+        pdg=pdg,
         node_reads_fn=None,  # no replay -> static fallback
+    )
+    crossed = recorded_module._cross_opaque_data_reads(
+        context,
+        recorded_module._RecordedWriter(
+            tag_name="Total",
+            rung_idx=writer_rung,
+            sub_name=None,
+            scan_id=scan,
+            rung=prog.rungs[writer_rung],
+        ),
     )
 
     assert crossed is not None

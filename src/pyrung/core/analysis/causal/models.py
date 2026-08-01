@@ -179,10 +179,11 @@ class ChainStep:
     ``transition`` is the tag change produced by this rung.
     ``triggers`` are inputs that transitioned (what flipped the rung).
     ``enablers`` are inputs that held steady (required but didn't change).
-    ``fidelity`` is ``"full"`` when SP-tree attribution was used (state
-    was cached), or ``"timeline"`` when only structural + timeline
-    data was available (cache miss — ``enablers`` will be empty and
-    ``triggers`` is a superset of the true set).
+    ``fidelity`` is ``"full"`` for recorded or state-backed projected
+    attribution and ``"structural"`` for snapshot-only structural steps.
+    ``"timeline"`` is retained for serialized compatibility with older
+    timeline-only chains; current recorded walks reconstruct historical state
+    instead of changing fidelity on a cache miss.
     ``kind`` is set for why mode to indicate step semantics:
     ``"attributed"`` (definitive), ``"trigger_cleared"`` (latch held,
     trigger gone), ``"reset_blocked"`` (reset not firing),
