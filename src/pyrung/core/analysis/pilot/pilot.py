@@ -747,10 +747,24 @@ def _commit_trial(
         # the rebase. Old rollback anchors have the same problem; trend
         # monitoring will bank the corrected world as the next anchor.
         state.checkpoints.clear()
-        state.world = state.world.set(
-            work=pulse.fork,
-            committed_acts=pvector([]),
-        )
+        # Pending departure policy owns rollback receipts from the replaced
+        # prefix. A retained replay is a new causal past, so those receipts and
+        # their policy cannot be carried across the rebase.
+        state.pending_departure = None
+        prepared_world = bearing.act.prepared_world
+        if prepared_world is not None:
+            # Composition already passed this exact corrected epoch through
+            # ordinary execution and verification.  Promote its complete
+            # physical world record; executing or rebuilding it again would
+            # turn a local proof into another route search.
+            state.world = prepared_world
+            if bearing.act.prepared_journey is not None:
+                state.journey = list(bearing.act.prepared_journey)
+        else:
+            state.world = state.world.set(
+                work=pulse.fork,
+                committed_acts=pvector([]),
+            )
         return
     # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
@@ -1207,6 +1221,7 @@ def _pilot_loop_events(
         if try_event is not None:
             yield try_event
 
+        seen_keys_before_commit = frozenset(state.seen_keys)
         transition = _transition_once(
             state,
             ctx,
@@ -1237,6 +1252,7 @@ def _pilot_loop_events(
             trial=trial,
             frame=frame,
             state=state,
+            seen_keys=seen_keys_before_commit,
         )
         assert accepted_event is not None
         yield accepted_event

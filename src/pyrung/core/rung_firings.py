@@ -915,9 +915,8 @@ def _last_tag_write_in_timeline(
         effective_end = min(range_.end_scan_id, before_scan_id - 1)
         payload = range_.payload
         if isinstance(payload, PatternRef):
-            val = payload.pattern.get(tag_name)
-            if val is not None:
-                return (effective_end, val)
+            if tag_name in payload.pattern:
+                return (effective_end, payload.pattern[tag_name])
         elif isinstance(payload, AlternatingRun):
             # Check effective_end and effective_end-1 (covers both parities)
             for scan in (effective_end, effective_end - 1):
@@ -925,9 +924,8 @@ def _last_tag_write_in_timeline(
                     continue
                 parity = (scan - range_.start_scan_id) % 2
                 pat = payload.pattern_on_even if parity == 0 else payload.pattern_on_odd
-                val = pat.get(tag_name)
-                if val is not None:
-                    return (scan, val)
+                if tag_name in pat:
+                    return (scan, pat[tag_name])
         elif isinstance(payload, ArithmeticRun):
             if tag_name in payload.deltas:
                 offset = effective_end - range_.start_scan_id
@@ -936,9 +934,8 @@ def _last_tag_write_in_timeline(
                     payload.base_pattern[tag_name] + payload.deltas[tag_name] * offset,
                 )
             else:
-                val = payload.base_pattern.get(tag_name)
-                if val is not None:
-                    return (effective_end, val)
+                if tag_name in payload.base_pattern:
+                    return (effective_end, payload.base_pattern[tag_name])
         else:
             # FiredOnly — return sentinel value
             if fired_only_writes is not None and tag_name in fired_only_writes:

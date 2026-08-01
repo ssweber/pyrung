@@ -7,7 +7,7 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -261,6 +261,18 @@ class RetainedReplay:
     policy: ActPolicy
     occurrence: RetainedOccurrence
     correction: _ConfirmedCorrection
+    # A composition probe that passed the ordinary execution and verification
+    # gates is already the exact corrected world this act would produce.  Keep
+    # it as execution evidence so the outer loop can promote that tip instead
+    # of replaying the same retained suffix a second time.  It is deliberately
+    # excluded from equality/identity: navigation knowledge is about the act,
+    # not the disposable object that happened to prove it.
+    prepared_world: Any = field(default=None, compare=False, repr=False)
+    prepared_journey: tuple[Any, ...] | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
 
 
 NavigationAct = Pulse | BatchPulse | Coast | Dwell | RetainedReplay

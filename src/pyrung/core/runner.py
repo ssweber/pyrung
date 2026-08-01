@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeGuard
 
 from pyrsistent import PMap
 
+from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.bounds import BoundsViolation, TagConstraint, build_constraint_index, check_bounds
 from pyrung.core.compiled_plc import CompiledPLC
 from pyrung.core.condition_trace import ConditionTraceEngine
@@ -74,6 +75,11 @@ _CHECKPOINT_INTERVAL_DEFAULT = 200
 # not a license to materialize the entire gap into memory.
 _REPLAY_SLAB_SCANS = 1600
 _REPLAY_SLAB_MAX_ANCHORS = 1
+# Exact causal walks commonly revisit a small set of historical scans while
+# explaining several changed tags.  Keep that immutable interpreted evidence
+# by execution epoch; one slot thrashes when a counterfactual investigation
+# alternates among the same source/action/landing scans.
+_REPLAY_CAPTURE_CACHE_SCANS = 16
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
@@ -731,6 +737,12 @@ class PLC:
         # regardless of how long it fires, and a period-2 alternator
         # collapses into a single ``AlternatingRun``.
         self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines()
+        # Authoritative committed tag boundaries. Unlike rung write payloads,
+        # these are captured after the complete scan, so same-scan overwrites
+        # are already resolved. The range encoder compresses arithmetic churn
+        # while sparse tags contribute only when their committed value changes.
+        self._committed_tag_timelines: RungFiringTimelines[str] = RungFiringTimelines()
+        self._causal_initial_tags = dict(self._state.tags)
         self._causal_rung_firing_timelines = _CausalRungFiringTimelines(self)
         # Node-level firing log, keyed by ``RungId`` (subroutine, rung_index).
         # Holds subroutine-rung firings the main-rung log can't represent;
@@ -793,13 +805,13 @@ class PLC:
         # that work.  Cleared on tip advance (``_run_single_scan``) and
         # on any reset that invalidates the log (reboot, stop→run).
         self._cached_replay_trace: tuple[int, dict[int, RungTrace]] | None = None
-        # One-slot cache for the on-demand interpreted replay
+        # Bounded epoch-local cache for on-demand interpreted replays
         # (``_replay_capture_at``) — the at-fire-time ConditionView per rung plus
         # each rung's data-read footprint for a historical scan, used by recorded
         # ``cause()`` to classify subroutine-writer contacts and to cross opaque
         # data-writers (Crossings Tier 2).  Same lifecycle as
         # ``_cached_replay_trace``.
-        self._cached_replay_capture: tuple[int, ConditionViewCapture] | None = None
+        self._cached_replay_captures: OrderedDict[int, ConditionViewCapture] = OrderedDict()
         # Read-only causal ancestry for fork-boundary evidence. A child starts
         # executing *after* its initial state, so the exact scan it forked from
         # belongs to the parent that ran it (including that scan's synthesis
@@ -863,6 +875,9 @@ class PLC:
             )
             self._reset_cache(self._state)
             self._initial_state = self._state
+        # Causal endpoint reconstruction uses the fully seeded scan-zero image,
+        # not the pre-inventory SystemState created near the top of __init__.
+        self._causal_initial_tags = dict(self._state.tags)
 
     @property
     def program(self) -> Any:
@@ -938,14 +953,13 @@ class PLC:
         """Runner that executed *scan_id* on this retained branch."""
         if not self._causal_history_contains(scan_id):
             return None
-        return next(
-            (
-                epoch
-                for epoch, first_scan, last_scan in self._causal_epoch_intervals()
-                if first_scan <= scan_id <= last_scan
-            ),
-            None,
-        )
+        # A child starts executing on the scan *after* its fork boundary; the
+        # boundary itself remains owned by the frozen parent.  Walk that spine
+        # directly instead of rebuilding the complete epoch interval tuple for
+        # every causal lookup.
+        if self._causal_parent is not None and scan_id <= self._initial_scan_id:
+            return self._causal_parent._causal_owner_at(scan_id)
+        return self
 
     def _causal_state_at(self, scan_id: int) -> SystemState:
         """Read a state from the overlay epoch that executed its scan."""
@@ -957,6 +971,65 @@ class PLC:
     def _causal_state_in_cache(self, scan_id: int) -> bool:
         owner = self._causal_owner_at(scan_id)
         return owner._state_in_cache(scan_id) if owner is not None else False
+
+    def _causal_raw_committed_transition_before(
+        self,
+        tag_name: str,
+        before_scan_id: int,
+    ) -> tuple[int, Any] | None:
+        """Latest authoritative committed change across the epoch lineage."""
+        parent = self._causal_parent
+        first_owned_scan = self._initial_scan_id + (1 if parent is not None else 0)
+        first_owned_scan = max(first_owned_scan, self._causal_floor_scan_id)
+        local_before = min(before_scan_id, self._state.scan_id + 1)
+        if local_before > first_owned_scan:
+            candidate = self._committed_tag_timelines.last_tag_write_before(
+                frozenset({tag_name}),
+                tag_name,
+                local_before,
+            )
+            if candidate is not None and candidate[0] >= first_owned_scan:
+                # Epochs are contiguous and chronological, so any local hit is
+                # necessarily newer than every possible ancestral hit.
+                return candidate
+        if parent is None:
+            return None
+        # The parent owns the fork boundary.  Clamp there so a frozen parent's
+        # future can never leak into this branch.
+        return parent._causal_raw_committed_transition_before(
+            tag_name,
+            min(before_scan_id, self._initial_scan_id + 1),
+        )
+
+    def _causal_committed_transition_at(
+        self,
+        tag_name: str,
+        scan_id: int,
+    ) -> Transition | None:
+        """Exact post-precedence boundary transition, without state replay."""
+        owner = self._causal_owner_at(scan_id)
+        if owner is None:
+            return None
+        writes = owner._committed_tag_timelines.rung_writes_at(tag_name, scan_id)
+        if writes is None or tag_name not in writes:
+            return None
+        prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
+        before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
+        return Transition(tag_name, scan_id, before, writes[tag_name])
+
+    def _causal_last_committed_transition_before(
+        self,
+        tag_name: str,
+        before_scan_id: int,
+    ) -> Transition | None:
+        """Latest exact committed transition before a scan, across epochs."""
+        latest = self._causal_raw_committed_transition_before(tag_name, before_scan_id)
+        if latest is None:
+            return None
+        scan_id, after = latest
+        prior = self._causal_raw_committed_transition_before(tag_name, scan_id)
+        before = prior[1] if prior is not None else self._causal_initial_tags.get(tag_name)
+        return Transition(tag_name, scan_id, before, after)
 
     @property
     def playhead(self) -> int:
@@ -1262,6 +1335,7 @@ class PLC:
         to: Any = _SENTINEL,
         assume: dict[str, Any] | None = None,
         deep: bool = True,
+        since: int | None = None,
     ) -> CausalChain | None:
         """Explain what caused a tag to transition.
 
@@ -1291,6 +1365,10 @@ class PLC:
                 any key is a ``readonly`` tag.
             deep: Recorded mode only. ``False`` restores the shallow
                 trigger-only walk (no recursive enabler explanation).
+            since: Recorded mode only. Inclusive earliest transition scan for
+                an incident-local explanation. The state immediately before
+                this scan is boundary context, not a cause to chase. Omit it
+                to traverse the runner's complete inherited epoch lineage.
 
         Returns:
             A :class:`~pyrung.core.analysis.causal.CausalChain`, or ``None``
@@ -1298,6 +1376,12 @@ class PLC:
         """
         if assume and to is _SENTINEL:
             raise ValueError("assume= requires projected mode (provide to=)")
+        if since is not None and to is not _SENTINEL:
+            raise ValueError("since= is only supported in recorded mode")
+        if since is not None and not isinstance(since, int):
+            raise TypeError("since must be an int or None")
+        if since is not None and scan is not None and since > scan:
+            return None
 
         if to is not _SENTINEL:
             if assume:
@@ -1319,11 +1403,17 @@ class PLC:
 
         owner = self._causal_owner_at(scan) if scan is not None else None
         if owner is not None and owner is not self:
-            return owner.cause(tag, scan=scan, deep=deep)
+            return owner.cause(tag, scan=scan, deep=deep, since=since)
+
+        cause_history = (
+            self._history._causal_window(since, scan)
+            if since is not None
+            else self._history
+        )
 
         return recorded_cause(
             logic=self._logic,
-            history=self._history,
+            history=cause_history,
             rung_firings_fn=self.rung_firings,
             tag=tag,
             scan_id=scan,
@@ -1332,12 +1422,17 @@ class PLC:
             state_in_cache_fn=self._causal_state_in_cache,
             program=self._program,
             scan_log=self._scan_log,
-            initial_tags=self.history.at(self.history.oldest_scan_id).tags,
+            # A bounded incident accepts its entrance snapshot as established
+            # context.  Seeding input attribution from the lineage's cold
+            # origin would both violate that contract and rematerialize an
+            # unrelated ancient slab before the local walk even begins.
+            initial_tags=cause_history.at(cause_history.oldest_scan_id).tags,
             node_firings_fn=self._node_firings_at,
             node_previous_firing_fn=self._node_latest_value_transition_at_or_before,
             node_rung_fn=self._resolve_node_rung,
             node_views_fn=self._replay_node_views_at,
             node_runs_fn=self._replay_rung_runs_at,
+            rung_write_projection_fn=self._replay_rung_write_projection_at,
             node_reads_fn=self._replay_node_reads_at,
             deep=deep,
         )
@@ -1702,6 +1797,7 @@ class PLC:
             fork._scan_log = self._scan_log.clone(up_to=target_scan_id)
             fork._causal_parent = self._snapshot_causal_owner_at(target_scan_id)
             fork._causal_floor_scan_id = self._causal_floor_scan_id
+            fork._causal_initial_tags = dict(self._causal_initial_tags)
         return fork
 
     def _snapshot_causal_owner_at(self, target_scan_id: int) -> PLC:
@@ -1748,12 +1844,15 @@ class PLC:
         frozen._rung_firing_timelines = self._rung_firing_timelines.snapshot(
             up_to=target_scan_id
         )
+        frozen._committed_tag_timelines = self._committed_tag_timelines.snapshot(
+            up_to=target_scan_id
+        )
         frozen._node_firing_timelines = self._node_firing_timelines.snapshot(
             up_to=target_scan_id
         )
         frozen._replay_slabs = {}
         frozen._cached_replay_trace = None
-        frozen._cached_replay_capture = None
+        frozen._cached_replay_captures = OrderedDict()
         frozen._history = History(frozen)
         frozen._causal_rung_firing_timelines = _CausalRungFiringTimelines(frozen)
         frozen._causal_epoch_snapshots = {}
@@ -1902,18 +2001,18 @@ class PLC:
 
         positioned_with_fold = False
         kernel = self._compiled_replay_supported_kernel()
-        synthesis = self._synthesis
-        stable_bare_world = synthesis is None or synthesis.is_empty()
         if slab_start > anchor_scan + 1 and kernel is not None:
-            # With PilotRungs installed, dense compiled positioning preserves
-            # HEAD's current-World replay semantics while still avoiding a
-            # second, run-up-sized state log.  Ordinary folding is enabled only
-            # for the stable bare World; historical World epochs are not yet
-            # represented in the scan log, so synthesis replay fails closed.
+            # History ownership has already selected the immutable execution
+            # epoch that ran this scan. Its synthesis brackets are therefore
+            # stable replay logic, just like the bare Program, and the ordinary
+            # fold proof may position through a long cold gap without densely
+            # re-executing it. A descendant never reaches this branch with its
+            # own overlay for an inherited scan: ``_causal_state_at`` delegates
+            # to the historical owner first.
             positioned = self._replay_to_compiled(
                 slab_start - 1,
                 kernel,
-                fold=stable_bare_world,
+                fold=True,
             )
             states = self._replay_range_from_compiled(
                 positioned,
@@ -1921,7 +2020,7 @@ class PLC:
                 slab_end,
                 kernel,
             )
-            positioned_with_fold = stable_bare_world
+            positioned_with_fold = True
         else:
             states = self._replay_range(anchor_scan + 1, slab_end)
             if slab_start > anchor_scan + 1:
@@ -2013,6 +2112,7 @@ class PLC:
         self._causal_floor_scan_id = scan_id
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
+        self._committed_tag_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
         self._replay_slabs.clear()
         for cp in [k for k in self._checkpoints if k < scan_id]:
@@ -2020,6 +2120,7 @@ class PLC:
         if scan_id > self._initial_scan_id:
             self._initial_scan_id = scan_id
             self._initial_state = new_floor_state
+            self._causal_initial_tags = dict(new_floor_state.tags)
             self._causal_parent = None
             while self._recent_state_cache:
                 oldest_sid = next(iter(self._recent_state_cache))
@@ -2566,9 +2667,11 @@ class PLC:
         populated capture (``.views`` + ``.reads``), or ``None`` (never
         raises) when there is nothing to replay: no Program (logic-list PLCs
         have no subroutines), the scan predates the first executed scan, or
-        the scan is beyond the tip.  One-slot cached like
-        :attr:`_cached_replay_trace`, shared by :meth:`_replay_node_views_at`
-        and :meth:`_replay_node_reads_at`.
+        the scan is beyond the tip.  A bounded epoch-local LRU is shared by
+        :meth:`_replay_node_views_at`, :meth:`_replay_rung_runs_at`, and
+        :meth:`_replay_node_reads_at`.  The epoch boundary is the correctness
+        boundary: sibling worlds may reuse an immutable prefix scan, but never
+        a scan executed under a different synthesis overlay.
         """
         if self._program is None:
             return None
@@ -2577,9 +2680,10 @@ class PLC:
         if target_scan_id < self._scan_log.base_scan:
             return None
 
-        cached = self._cached_replay_capture
-        if cached is not None and cached[0] == target_scan_id:
-            return cached[1]
+        cached = self._cached_replay_captures.get(target_scan_id)
+        if cached is not None:
+            self._cached_replay_captures.move_to_end(target_scan_id)
+            return cached
 
         log = self._scan_log.snapshot()
         lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
@@ -2622,7 +2726,10 @@ class PLC:
         replay._capture_previous_states(ctx, _dt)
         replay._system_runtime.on_scan_end(ctx)
 
-        self._cached_replay_capture = (target_scan_id, capture)
+        self._cached_replay_captures[target_scan_id] = capture
+        self._cached_replay_captures.move_to_end(target_scan_id)
+        while len(self._cached_replay_captures) > _REPLAY_CAPTURE_CACHE_SCANS:
+            self._cached_replay_captures.popitem(last=False)
         return capture
 
     def _replay_node_views_at(self, target_scan_id: int) -> dict[RungId, ConditionView]:
@@ -2651,6 +2758,28 @@ class PLC:
             return owner._replay_rung_runs_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
         return capture.runs if capture is not None else ()
+
+    def _replay_rung_write_projection_at(self, target_scan_id: int) -> Any:
+        """Exact read/write projection cached with its immutable scan journal."""
+        owner = self._causal_owner_at(target_scan_id)
+        if owner is not None and owner is not self:
+            return owner._replay_rung_write_projection_at(target_scan_id)
+        capture = self._replay_capture_at(target_scan_id)
+        if capture is None:
+            return None
+        projection = capture._causal_projection
+        if projection is None:
+            from pyrung.core.analysis.causal._rung_writes import (
+                build_scan_rung_write_projection,
+            )
+
+            projection = build_scan_rung_write_projection(
+                self.history,
+                target_scan_id,
+                capture.runs,
+            )
+            capture._causal_projection = projection
+        return projection
 
     def _replay_node_reads_at(self, target_scan_id: int) -> dict[RungId, set[str]]:
         """Per-node data-read footprint for a historical scan (Crossings Tier 2).
@@ -2993,7 +3122,7 @@ class PLC:
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
         self._cached_replay_trace = None
-        self._cached_replay_capture = None
+        self._cached_replay_captures.clear()
 
     def _normalize_rtc_datetime(self, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -3072,7 +3201,9 @@ class PLC:
         # and checkpoints — Option B treats reboot like a fresh session
         # (see stage-4 notes in the design doc).
         self._rung_firing_timelines.reset()
+        self._committed_tag_timelines.reset()
         self._node_firing_timelines.reset()
+        self._causal_initial_tags = dict(self._state.tags)
 
         if self._time_mode == TimeMode.REALTIME:
             self._last_step_time = time.perf_counter()
@@ -3593,6 +3724,14 @@ class PLC:
         if ctx._io_drain_staging:
             for key, record in ctx._io_drain_staging.items():
                 self._scan_log.record_io_drain(new_scan_id, key, record)
+        # Record the actual committed boundary, not attempted rung writes. This
+        # is the cheap exactness index consumed by cause(): later same-scan
+        # writers, synthesis, and forces have already won before this point.
+        for name in ctx._tags_pending:
+            before = previous_state.tags.get(name)
+            after = self._state.tags.get(name)
+            if before != after:
+                self._committed_tag_timelines.append(name, new_scan_id, {name: after})
         # Per-rung timeline append.  Only rungs that fired this scan
         # get a timeline update — stable rungs extend the tail range
         # (no allocation), period-2 oscillators collapse into a single
@@ -3819,7 +3958,7 @@ class PLC:
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
         self._cached_replay_trace = None
-        self._cached_replay_capture = None
+        self._cached_replay_captures.clear()
         ctx, dt = self._prepare_scan(fast_reads=True)
         if self._program is not None:
             execute_program(self._program, ctx, capture_rungs=True)

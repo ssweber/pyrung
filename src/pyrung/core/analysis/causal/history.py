@@ -41,6 +41,9 @@ def _boundary_transition_at_scan(
     tag during one scan.  Adjacent committed states are therefore the sole
     authority for the transition endpoints.
     """
+    indexed = getattr(history, "_committed_transition_at", None)
+    if indexed is not None:
+        return indexed(tag_name, scan_id)
     idx = _scan_index(ids, scan_id)
     if idx is None:
         return None
@@ -69,13 +72,14 @@ def _scan_log_transition_before(
         return None
     initial_value = initial_tags.get(tag_name)
     cursor = before_scan_id
+    floor = ids[0] if ids else 0
     while True:
         scan_id = scan_log.last_effective_input_change_before(
             tag_name,
             cursor,
             initial_value=initial_value,
         )
-        if scan_id is None:
+        if scan_id is None or scan_id <= floor:
             return None
         transition = _boundary_transition_at_scan(history, tag_name, scan_id, ids)
         if transition is not None:
@@ -114,6 +118,10 @@ def _find_transition(
             scan_log=scan_log,
             initial_tags=initial_tags,
         )
+
+    indexed_latest = getattr(history, "_last_committed_transition_before", None)
+    if indexed_latest is not None:
+        return indexed_latest(tag_name, ids[-1] + 1 if ids else 0)
 
     # Walk backward to find most recent transition.
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
@@ -202,6 +210,10 @@ def _find_last_transition_scan(
     """
     ids = history.scan_ids()
     n = len(ids)
+    indexed_latest = getattr(history, "_last_committed_transition_before", None)
+    if indexed_latest is not None:
+        transition = indexed_latest(tag_name, before_scan_id)
+        return transition.scan_id if transition is not None else None
     writers = _writer_indices(pdg, tag_name) if pdg is not None else None
 
     # Static-known writers: the compressed candidate branch is
@@ -285,6 +297,8 @@ def _last_transition_scan_via_timeline(
     for candidate_scan in _timeline_candidate_scans_before(
         timelines, writers, tag_name, before_scan_id
     ):
+        if ids and candidate_scan <= ids[0]:
+            return None
         if candidate_scan >= before_scan_id:
             continue
         idx = _scan_index(ids, candidate_scan)
@@ -345,6 +359,8 @@ def _find_transition_via_timeline(
     for candidate_scan in _timeline_candidate_scans_before(
         timelines, writers, tag_name, before_scan_id
     ):
+        if candidate_scan <= ids[0]:
+            return None
         idx = _scan_index(ids, candidate_scan)
         if idx is None or idx <= 0:
             continue

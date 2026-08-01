@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.avoid import _avoid_violations
-from pyrung.core.analysis.pilot.causal import chase_cause_roots
+from pyrung.core.analysis.pilot.causal import action_caused_change as _action_caused_change
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
     LIMITS,
@@ -174,7 +174,11 @@ def _apply_actions(
 
     fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
-    session = CoastSession(fork, kind="pulse")
+    session = CoastSession(
+        fork,
+        kind="pulse",
+        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+    )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     patch = {t: v for t, v in actions}
@@ -244,25 +248,6 @@ def _apply_actions(
 # ---------------------------------------------------------------------------
 
 
-def _action_caused_change(
-    fork: PLC,
-    action_tag: str,
-    changed_tag: str,
-    steerable: frozenset[str],
-    *,
-    scan: int | None,
-) -> bool:
-    """True if *action_tag* is a causal root of *changed_tag*'s transition.
-
-    Distinguishes a change the pilot's control input produced from one that
-    happened ambiently in the same scan (a timer or alarm firing).  This is the
-    "control vs wind" check: only the former should be learned as an action
-    transition.
-    """
-    roots, _holds = chase_cause_roots(fork, changed_tag, steerable, scan=scan)
-    return action_tag in roots
-
-
 def _compass_observations(
     cause: TransitionCause,
     frame: _IterationFrame,
@@ -275,6 +260,8 @@ def _compass_observations(
     applied: tuple[_ActionPair, ...] = (),
     fork: PLC | None = None,
     scan: int | None = None,
+    start_scan: int | None = None,
+    timeline: tuple[Any, ...] = (),
 ) -> tuple[CompassObservation, ...]:
     """Return compass-relevant motion between two snapshots without applying it.
 
@@ -296,7 +283,21 @@ def _compass_observations(
             if (
                 action_tag is not None
                 and fork is not None
-                and not _action_caused_change(fork, action_tag, n.tag, ctx.steerable, scan=scan)
+                and not getattr(ctx, "collect_action_attribution", True)
+            ):
+                continue
+            if (
+                action_tag is not None
+                and fork is not None
+                and not _action_caused_change(
+                    fork,
+                    action_tag,
+                    n.tag,
+                    ctx.steerable,
+                    scan=scan,
+                    start_scan=start_scan,
+                    timeline=timeline,
+                )
             ):
                 continue
             observations.append(
@@ -384,6 +385,8 @@ def _try_action_batch(
                 applied=policy.applied,
                 fork=trial.fork,
                 scan=trial.action_scan,
+                start_scan=trial.scan_before + 1,
+                timeline=trial.timeline,
             )
         )
     wait_before = trial.action_snap
@@ -510,7 +513,11 @@ def _try_bearing_coast(
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_pilot_rungs installs
     # only the steady half.
-    session = CoastSession(fork, kind="bearing_coast")
+    session = CoastSession(
+        fork,
+        kind="bearing_coast",
+        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+    )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     dwell, bearing_coast_receipt = _coast_to_bearing(
@@ -636,7 +643,11 @@ def _try_terminal_letrun(
             state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
         ),
     )
-    session = CoastSession(fork, kind="letrun")
+    session = CoastSession(
+        fork,
+        kind="letrun",
+        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+    )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     letrun_receipt = _coast_holding_state(
@@ -758,7 +769,11 @@ def _try_terminal_dwell(
             state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
         ),
     )
-    session = CoastSession(fork, kind="settle")
+    session = CoastSession(
+        fork,
+        kind="settle",
+        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+    )
     session.arm_pens(_pen_tags(state, ctx))
     dwell = _settle_watched_tags(
         fork,

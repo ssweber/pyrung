@@ -230,6 +230,41 @@ def test_explicit_scan_cause_is_shared_across_investigation_passes(
     assert calls == 2
 
 
+def test_explicit_scan_cause_is_shared_by_sibling_counterfactual_worlds(
+    monkeypatch,
+) -> None:
+    """Immutable prefix evidence belongs to its epoch, not either child."""
+    logic = _chain_program()
+    source = PLC(logic)
+    source.step()
+    source.patch({"Lever": True})
+    source.step()
+    scan = source.state.scan_id
+
+    left = source.fork(scan_id=scan, inherit_log=True)
+    right = source.fork(scan_id=scan, inherit_log=True)
+    owner = left._causal_owner_at(scan)
+    assert owner is not None
+    assert right._causal_owner_at(scan) is owner
+
+    original = owner.cause
+    calls = 0
+
+    def counted_cause(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "cause", counted_cause)
+
+    first = _shared_cause(left, "Out", scan)
+    second = _shared_cause(right, "Out", scan)
+
+    assert first is not None
+    assert second is first
+    assert calls == 1
+
+
 # ---------------------------------------------------------------------------
 # Consumer: skiff probe selection
 # ---------------------------------------------------------------------------

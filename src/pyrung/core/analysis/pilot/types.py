@@ -422,6 +422,15 @@ class _PilotContext:
     max_scans: int
     key_config: _StateKeyConfig | None = None
     avoid_pred: Any = None
+    # A disposable retained-composition continuation observes only whether it
+    # exposes another retained occurrence. The outer committed attempt owns
+    # action-edge learning and its deep causal attribution.
+    collect_action_attribution: bool = True
+    # Exact-occurrence closure may prefer the next retained writer while it is
+    # assembling one bounded correction.  The live outer loop leaves this
+    # false so executable present-world continuation always outranks rewriting
+    # older causal history.
+    retained_recovery_first: bool = False
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
     # Kept off prerequisite holds (options.py) and off preferred init/reset
     # writer selection (trace._rank_writers): a momentary command, never a hold.

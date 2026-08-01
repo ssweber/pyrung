@@ -21,7 +21,7 @@ installation belongs to the orchestration/recovery owner.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from types import SimpleNamespace
@@ -1170,9 +1170,26 @@ def build_replay_fn(
     earned_work = incident.earned_work
     progress_anchor = incident.progress_anchor
     regression_progress_floor = incident.regression_progress_floor
+    replay_cache: dict[tuple[bool, tuple[tuple[str, Any], ...]], ReplayOutcome] = {}
 
-    def _replay(holds: tuple[Any, ...]) -> ReplayOutcome:
+    def _replay(
+        holds: tuple[Any, ...],
+        *,
+        prove_continuation: bool = False,
+    ) -> ReplayOutcome:
         from pyrung.core.analysis.pilot.coast import CoastSession
+
+        replay_key = (
+            prove_continuation,
+            tuple(_proposal_identity(hold) for hold in holds),
+        )
+        cached = replay_cache.get(replay_key)
+        if cached is not None:
+            return cached
+
+        def _remember(outcome: ReplayOutcome) -> ReplayOutcome:
+            replay_cache[replay_key] = outcome
+            return outcome
 
         probe = fork_with_pilot_rungs(cp_fork, pilot_rungs)
         probe_pilot_rungs = list(pilot_rungs)
@@ -1302,7 +1319,13 @@ def build_replay_fn(
             ctx.target.predicate,
         ):
             continuation = Reachable(("actual-target-witness",))
-        elif neutralized:
+        elif neutralized and prove_continuation:
+            # Relational corrections need a concrete counterexample beyond the
+            # incident horizon: the safe boundary may be several refinements
+            # away. This second stage is requested only for that family. Exact
+            # latch/absence repairs stop at the bounded incident and return to
+            # the ordinary outer loop instead of replaying the whole route for
+            # every candidate.
             continuation_receipt = _coast_holding_state(
                 probe,
                 target_tag,
@@ -1409,7 +1432,7 @@ def build_replay_fn(
             accepted = (
                 earned_work_advanced or (not cause_repeated and (reached or progressed is not None))
             ) and not progress_erased
-            return ReplayOutcome(
+            return _remember(ReplayOutcome(
                 accepted=accepted,
                 trend=None,
                 snapshot=snap,
@@ -1463,13 +1486,13 @@ def build_replay_fn(
                     and replacement_witness is not None
                     else None
                 ),
-            )
+            ))
 
         # Terminal let-run without a channel register (no recognized state
         # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
-            return ReplayOutcome(
+            return _remember(ReplayOutcome(
                 accepted=reached,
                 trend=None,
                 snapshot=snap,
@@ -1484,13 +1507,13 @@ def build_replay_fn(
                     )
                 ),
                 continuation_snapshot=snap,
-            )
+            ))
 
         # Command incident: no register to coast toward — judge the bounded
         # bearing-held directly.
         if departure_bearing:
             held = all(_values_match(snap.get(t), v) for t, v in departure_bearing)
-            return ReplayOutcome(
+            return _remember(ReplayOutcome(
                 accepted=held,
                 trend=None,
                 snapshot=snap,
@@ -1498,7 +1521,7 @@ def build_replay_fn(
                 justification=ReplayJustification.BEARING_HELD if held else None,
                 continuation=continuation,
                 continuation_snapshot=continuation_snapshot,
-            )
+            ))
 
         tree = trace_back(
             target_tag,
@@ -1514,7 +1537,7 @@ def build_replay_fn(
             prior=prior,
         )
         trend = tree.unsatisfied_count()
-        return ReplayOutcome(
+        return _remember(ReplayOutcome(
             accepted=trend <= cp_trend,
             trend=trend,
             snapshot=snap,
@@ -1522,8 +1545,12 @@ def build_replay_fn(
             justification=ReplayJustification.ADVANCED if trend < cp_trend else None,
             continuation=continuation,
             continuation_snapshot=continuation_snapshot,
-        )
+        ))
 
+    _replay.with_continuation = lambda holds: _replay(  # type: ignore[attr-defined]
+        holds,
+        prove_continuation=True,
+    )
     return _replay
 
 
@@ -1997,12 +2024,29 @@ def _rank_hypotheses(
                 best = min(best, chan_scan - last)
         return best
 
-    def _key(pair: tuple[int, CorrectionHypothesis]) -> tuple[int, int, int, int]:
+    def _key(pair: tuple[int, CorrectionHypothesis]) -> tuple[int, int, int, int, int, int]:
         idx, h = pair
         tags = set(h.sources) | {_proposal_pair(p)[0] for p in h.holds}
         in_chain = 0 if (primal and tags & primal) else 1
-        proximity = 0 if in_chain == 0 else _proximity(tags)
-        return (in_chain, proximity, len(h.holds), idx)
+        incident_specific = 0 if (h.kind == "latch-exposure" or h.incident_local) else 1
+        if h.kind == "absence-root":
+            # A recorded external terminal is a true causal leaf (the Sail
+            # permissive); a never-written default is a broad explanation of
+            # the cold world (the factory-reset command). Exact fired-chain
+            # evidence belongs between those two strengths.
+            family = 0 if h.history_origin == "external" else 2
+        elif h.kind == "precise-cause":
+            family = 1
+        else:
+            family = 3
+        # Chain membership establishes relevance; it does not erase temporal
+        # precision within a hypothesis family. Exact latch evidence gets its
+        # own stronger tier, while a true absence root remains the explanation
+        # rather than losing to a downstream precise suppressor on the same
+        # chain. Within liveness/precise siblings, the incident-nearest owner
+        # still beats unrelated first-scan noise.
+        proximity = _proximity(tags)
+        return (in_chain, incident_specific, family, proximity, len(h.holds), idx)
 
     return [h for _, h in sorted(enumerate(hypotheses), key=_key)]
 
@@ -2031,8 +2075,14 @@ def _compose_hypotheses(
         kind=kind,
         holds=tuple(holds),
         sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
-        detail=f"composed causal candidate: {base.detail}; then {addition.detail}",
+        detail=f"nested causal closure: {base.detail}; then {addition.detail}",
         constraint=base.constraint or addition.constraint,
+        incident_local=base.incident_local and addition.incident_local,
+        history_origin=(
+            base.history_origin
+            if base.history_origin == addition.history_origin
+            else None
+        ),
     )
 
 
@@ -2092,19 +2142,63 @@ def investigate_deviation(
         for rung in overlay.effective
         if _rung_identity(rung) in correction_ids
     }
-    produced, absence_tags = derive_correction_hypotheses(
-        plc,
-        incident,
-        ctx,
-        installed=correction_active,
-    )
-    hypotheses = _rank_hypotheses(
-        plc,
-        produced,
-        incident,
-        primal_extra=absence_tags,
-    )
-    observed_hypotheses = list(hypotheses)
+    def _initial_hypotheses() -> Iterator[CorrectionHypothesis]:
+        """Try exact live-incident evidence before expanding older ancestry.
+
+        This is deliberately lazy. If an incident-local latch correction
+        replays successfully, the generator is never resumed and no global
+        deep walk is issued. If it fails, the ordinary unbounded causal
+        families remain available and may follow a specific support through
+        any parent epoch.
+        """
+        local, _ = derive_correction_hypotheses(
+            plc,
+            incident,
+            ctx,
+            installed=correction_active,
+            incident_local_only=True,
+        )
+        local = tuple(_rank_hypotheses(plc, local, incident))
+        local_ids = {_hypothesis_identity(item.holds) for item in local}
+        yield from local
+
+        # A moved trigger frontier belongs to the exact departure occurrence,
+        # just as a latch exposure does.  Try it before asking which inputs
+        # were cold across the accumulated history.  If it confirms, this
+        # generator is never resumed and the broad held-since walk is skipped;
+        # if it fails, older epochs remain available below.
+        transition_local, _ = derive_correction_hypotheses(
+            plc,
+            incident,
+            ctx,
+            installed=correction_active,
+            incident_transition_only=True,
+        )
+        transition_local = tuple(
+            item
+            for item in _rank_hypotheses(plc, transition_local, incident)
+            if _hypothesis_identity(item.holds) not in local_ids
+        )
+        local_ids.update(_hypothesis_identity(item.holds) for item in transition_local)
+        yield from transition_local
+
+        produced, absence_tags = derive_correction_hypotheses(
+            plc,
+            incident,
+            ctx,
+            installed=correction_active,
+        )
+        for item in _rank_hypotheses(
+            plc,
+            produced,
+            incident,
+            primal_extra=absence_tags,
+        ):
+            if _hypothesis_identity(item.holds) not in local_ids:
+                yield item
+
+    hypotheses = _initial_hypotheses()
+    observed_hypotheses: list[CorrectionHypothesis] = []
     confirmed: list[CorrectionHypothesis] = []
     confirmed_correction: _ConfirmedCorrection | None = None
     rejected: list[InvestigationRejection] = []
@@ -2152,7 +2246,22 @@ def investigate_deviation(
                 return composite
         return None
 
+    def _replay_candidate(
+        hypothesis: CorrectionHypothesis,
+        holds: tuple[Any, ...],
+    ) -> ReplayOutcome:
+        """Use the staged continuation probe only when refinement consumes it."""
+        with_continuation = getattr(replay, "with_continuation", None)
+        if hypothesis.constraint is not None and with_continuation is not None:
+            return with_continuation(holds)
+        return replay(holds)
+
     for hypothesis in hypotheses:
+        if not any(
+            _hypothesis_identity(known.holds) == _hypothesis_identity(hypothesis.holds)
+            for known in observed_hypotheses
+        ):
+            observed_hypotheses.append(hypothesis)
         if not hypothesis.holds:
             _reject(hypothesis, "no-holds", "no holds proposed")
             continue
@@ -2234,7 +2343,7 @@ def investigate_deviation(
                     preflight.proof,
                 )
                 break
-            outcome = replay(exploratory)
+            outcome = _replay_candidate(current, exploratory)
             if current.constraint is not None and not isinstance(
                 outcome.continuation,
                 Reachable,
@@ -2332,7 +2441,11 @@ def investigate_deviation(
             # scoping unchanged. Replay is deterministic from the retained
             # incident checkpoint, so an identical executable correction has
             # already proved its installed form in the exploratory pass.
-            installed_outcome = outcome if scoped == exploratory else replay(scoped)
+            installed_outcome = (
+                outcome
+                if scoped == exploratory
+                else _replay_candidate(current, scoped)
+            )
             if current.constraint is not None and not isinstance(
                 installed_outcome.continuation,
                 Reachable,
@@ -2369,6 +2482,8 @@ def investigate_deviation(
                 holds=scoped,
                 sources=current.sources,
                 detail=current.detail,
+                incident_local=current.incident_local,
+                history_origin=current.history_origin,
             )
             confirmed.append(confirmed_hypothesis)
             confirmed_correction = _ConfirmedCorrection(

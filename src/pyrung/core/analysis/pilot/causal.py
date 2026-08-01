@@ -22,6 +22,89 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def action_caused_change(
+    fork: PLC,
+    action_tag: str,
+    changed_tag: str,
+    steerable: frozenset[str],
+    *,
+    scan: int | None,
+    start_scan: int | None = None,
+    timeline: tuple[Any, ...] = (),
+) -> bool:
+    """Whether one pulse caused a change, using only its executed suffix.
+
+    The inherited prefix is established context. Exact occurrences inside the
+    pulse may cross execution epochs transparently through ``PLC.cause()``, but
+    this optional agency observation never asks why the window-entry state was
+    already true.
+    """
+    if action_tag not in steerable:
+        return False
+
+    end_scan = fork.state.scan_id if scan is None else scan
+    first_scan = end_scan if start_scan is None else start_scan
+    if first_scan > end_scan:
+        return False
+
+    occurrence_scan: int | None = None
+    for event in reversed(timeline):
+        if event.scan < first_scan or event.scan > end_scan:
+            continue
+        if any(
+            tag == changed_tag and not _values_match(before, after)
+            for tag, before, after in event.transitions
+        ):
+            occurrence_scan = event.scan
+            break
+
+    if occurrence_scan is None:
+        try:
+            states = fork.history.range(
+                max(fork.history.oldest_scan_id, first_scan - 1),
+                end_scan + 1,
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        pairs = zip(states, states[1:], strict=False)
+        for before, after in reversed(tuple(pairs)):
+            if not _values_match(before.tags.get(changed_tag), after.tags.get(changed_tag)):
+                occurrence_scan = after.scan_id
+                break
+    if occurrence_scan is None or occurrence_scan < first_scan:
+        return False
+
+    pending = [(changed_tag, occurrence_scan)]
+    visited: set[tuple[str, int]] = set()
+    while pending:
+        tag, exact_scan = pending.pop()
+        key = (tag, exact_scan)
+        if key in visited:
+            continue
+        visited.add(key)
+        try:
+            local = fork.cause(tag, scan=exact_scan, deep=False, since=first_scan)
+        except Exception:  # noqa: BLE001
+            continue
+        if local is None:
+            continue
+        for step in local.steps:
+            for trigger in step.triggers:
+                if trigger.scan_id < first_scan or trigger.scan_id > end_scan:
+                    continue
+                if trigger.tag_name == action_tag:
+                    return True
+                pending.append((trigger.tag_name, trigger.scan_id))
+            for enabler in step.enablers:
+                held_since = enabler.held_since_scan
+                if held_since is None or held_since < first_scan or held_since > end_scan:
+                    continue
+                if enabler.tag_name == action_tag:
+                    return True
+                pending.append((enabler.tag_name, held_since))
+    return False
+
+
 def _reference_constants(plc: PLC) -> frozenset[str]:
     """Lookup-table reference constants for *plc*'s program, cached per fork.
 
@@ -168,6 +251,7 @@ def chase_cause_roots(
     steerable: frozenset[str],
     *,
     scan: int | None = None,
+    since: int | None = None,
     empirical_writes: frozenset[str] | None = None,
 ) -> tuple[set[str], list[tuple[str, Any]]]:
     """Chase the deep ``cause()`` chain to steerable-input roots.
@@ -200,7 +284,7 @@ def chase_cause_roots(
     # Cross-chase result memo, stored on the fork.  chase_cause_roots is pure for
     # a fixed fork — ``cause()`` is pure for a fixed fork (see ``_cause``) and a
     # fork's recorded history at a *past* scan is immutable — so
-    # ``(tag, scan, steerable_eff) -> (nogoods, holds)`` is stable for the fork's
+    # ``(tag, scan, since, steerable_eff) -> (nogoods, holds)`` is stable for the fork's
     # lifetime.  The verify loops re-chase the same key dozens of times, so the
     # memo saves ~95% of ``cause()`` calls.  ``fork()`` / ``load_world()`` hand
     # back a fresh fork with an empty memo, so it is invalidated by construction.
@@ -212,12 +296,12 @@ def chase_cause_roots(
         memo = plc.__dict__.get("_pilot_chase_memo")
         if memo is None:
             memo = plc.__dict__["_pilot_chase_memo"] = {}
-        memo_key = (tag, scan, steerable_eff)
+        memo_key = (tag, scan, since, steerable_eff)
         cached = memo.get(memo_key)
         if cached is not None:
             return cached
 
-    chain = _shared_cause(plc, tag, scan)
+    chain = _shared_cause(plc, tag, scan, since=since)
     if chain is None:
         result: tuple[set[str], list[tuple[str, Any]]] = (set(), [])
     else:
@@ -232,6 +316,7 @@ def chase_chain_tags(
     tag: str,
     *,
     scan: int | None = None,
+    since: int | None = None,
 ) -> set[str]:
     """Every meaningful tag on the deep cause chain of *tag*'s transition.
 
@@ -249,9 +334,14 @@ def chase_chain_tags(
     trigger standing merely through recursion. System tags (``sys.*`` /
     ``rtc.*``) and lookup-table reference constants are dropped.
     """
-    chain = _shared_cause(plc, tag, scan)
+    chain = _shared_cause(plc, tag, scan, since=since)
     if chain is None:
         return set()
+    return chain_tags(plc, chain)
+
+
+def chain_tags(plc: PLC, chain: CausalChain) -> set[str]:
+    """Read meaningful spine membership from an already-built chain."""
     ref_consts = _reference_constants(plc)
     spine: set[str] = {chain.effect.tag_name}
     for step in chain.steps:
@@ -270,28 +360,37 @@ def _shared_cause(
     plc: PLC,
     tag: str,
     scan: int | None = None,
-    cache: dict[tuple[str, int | None], Any] | None = None,
+    cache: dict[tuple[str, int | None, int | None], Any] | None = None,
+    *,
+    since: int | None = None,
 ) -> CausalChain | None:
     """Shared deep ``cause()`` for PILOT consumers on one fixed fork.
 
-    The same ``(tag, scan)`` reappears across overlapping chases, and each call
+    The same ``(tag, scan, since)`` reappears across overlapping chases, and each call
     can fork+replay a historical view, so a per-chase cache avoids re-resolving
     the same registers dozens of times (``cause()`` is pure for a fixed fork).
     ``deep=True`` (the default) recursively explains enablers on fired rungs
     through observed value origins and classifies terminals in ``chain.roots``.
     """
-    key = (tag, scan)
+    key = (tag, scan, since)
     if cache is not None and key in cache:
         return cache[key]
     # An explicit historical scan is immutable on a fixed fork. Keep the
     # completed causal chain—not its thousands of replay captures—so separate
     # investigation passes over the same incident do not reconstruct identical
     # per-scan RungRun evidence. A tip-relative query remains uncached.
-    shared: dict[tuple[str, int | None], CausalChain | None] | None = None
+    shared: dict[tuple[str, int | None, int | None], CausalChain | None] | None = None
     if scan is not None:
-        shared = plc.__dict__.get("_pilot_cause_memo")
+        # The execution epoch owns historical truth for this scan.  Several
+        # counterfactual PILOT forks can share that immutable prefix while
+        # remaining distinct worlds after their fork boundary; caching on the
+        # transient child makes every sibling reconstruct the same exact
+        # RungRun occurrences.  Resolve the owner first so only genuinely
+        # shared history shares a completed causal chain.
+        owner = plc._causal_owner_at(scan) or plc
+        shared = owner.__dict__.get("_pilot_cause_memo")
         if shared is None:
-            shared = plc.__dict__["_pilot_cause_memo"] = {}
+            shared = owner.__dict__["_pilot_cause_memo"] = {}
         if key in shared:
             result = shared[key]
             if cache is not None:
@@ -299,7 +398,7 @@ def _shared_cause(
             return result
     try:
         if scan is not None:
-            result = plc.cause(tag, scan=scan)
+            result = plc.cause(tag, scan=scan, since=since)
         else:
             result = plc.cause(tag)
     except Exception:  # noqa: BLE001

@@ -316,3 +316,92 @@ class TestCompassObservations:
             (observation.tag, observation.from_val, observation.to_val)
             for observation in observations
         ] == [(action_effect.name, False, True)]
+
+    def test_action_transition_uses_exact_bounded_scan(self, monkeypatch):
+        action = Bool("CompassLocalControl", external=True)
+        intermediate = Bool("CompassLocalIntermediate")
+        effect = Bool("CompassLocalEffect")
+        with Program() as program:
+            with Rung(action):
+                out(intermediate)
+            with Rung(intermediate):
+                out(effect)
+
+        plc = PLC(program, dt=0.010)
+        plc.patch({action.name: True})
+        plc.step()
+
+        original_cause = PLC.cause
+        calls = []
+
+        def bounded_cause(self, *args, **kwargs):
+            calls.append(kwargs)
+            assert kwargs["deep"] is False
+            assert kwargs["since"] == plc.state.scan_id
+            return original_cause(self, *args, **kwargs)
+
+        monkeypatch.setattr(PLC, "cause", bounded_cause)
+        assert _action_caused_change(
+            plc,
+            action.name,
+            effect.name,
+            frozenset({action.name}),
+            scan=plc.state.scan_id,
+            start_scan=plc.state.scan_id,
+        )
+        assert calls
+
+    def test_action_relationship_can_cross_scans_inside_pulse_window(self):
+        action = Bool("CompassWindowControl", external=True)
+        intermediate = Bool("CompassWindowIntermediate")
+        effect = Bool("CompassWindowEffect")
+        with Program() as program:
+            # Read the intermediate before its writer so the effect follows on
+            # the next scan rather than the action's own scan.
+            with Rung(intermediate):
+                out(effect)
+            with Rung(action):
+                out(intermediate)
+
+        plc = PLC(program, dt=0.010)
+        plc.patch({action.name: True})
+        plc.step()
+        first_scan = plc.state.scan_id
+        assert plc.state.tags[intermediate.name] is True
+        assert plc.state.tags[effect.name] is False
+        plc.step()
+        assert plc.state.tags[effect.name] is True
+
+        assert _action_caused_change(
+            plc,
+            action.name,
+            effect.name,
+            frozenset({action.name}),
+            scan=plc.state.scan_id,
+            start_scan=first_scan,
+        )
+
+    def test_change_before_pulse_window_does_not_call_cause(self, monkeypatch):
+        action = Bool("CompassOldControl", external=True)
+        effect = Bool("CompassOldEffect")
+        with Program() as program:
+            with Rung(action):
+                out(effect)
+
+        plc = PLC(program, dt=0.010)
+        plc.patch({action.name: True})
+        plc.step()
+        plc.step()
+
+        def no_cause(*_args, **_kwargs):
+            raise AssertionError("pre-window motion is established context")
+
+        monkeypatch.setattr(PLC, "cause", no_cause)
+        assert not _action_caused_change(
+            plc,
+            action.name,
+            effect.name,
+            frozenset({action.name}),
+            scan=plc.state.scan_id,
+            start_scan=plc.state.scan_id,
+        )

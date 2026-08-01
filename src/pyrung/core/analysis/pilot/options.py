@@ -384,7 +384,14 @@ def _holds_defeat_needed(
     pdg: Any,
     program: Any,
 ) -> bool:
-    """Static write-vs-need proof for one executable hold assignment."""
+    """Static proof that one hold assignment defeats a checkpoint need.
+
+    A hold can defeat progress in either direction: it can enable a literal
+    write of the wrong value, or force every writer of a required value
+    non-conductive.  The latter matters for retained occurrence repairs: a
+    master-enable cut may prevent the historical fault while also disabling
+    the only sibling writer that earns later progress.
+    """
 
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.simplified import Atom, _conditions_list_to_expr, _expr_forced_true
@@ -425,6 +432,44 @@ def _holds_defeat_needed(
             written = _literal_write(rung, needed_tag)
             if written is not None and not _values_match(written, needed_value):
                 return True
+
+    # Negative-write proof. For each required value, collect every literal
+    # writer capable of producing it. The hold defeats that need only when it
+    # structurally forces *all* such writer guards false; an unreadable or
+    # unaffected alternative keeps the result conservative.
+    for needed_tag, needed_value in needed_first.items():
+        matching_writers: list[Any] = []
+        for node_index in pdg.writers_of.get(needed_tag, frozenset()):
+            node = pdg.rung_nodes[node_index]
+            rung = resolve_rung(program, node)
+            if rung is None:
+                matching_writers = []
+                break
+            written = _literal_write(rung, needed_tag)
+            if written is not None and _values_match(written, needed_value):
+                matching_writers.append((node, rung))
+        if not matching_writers:
+            continue
+
+        all_blocked = True
+        for node, rung in matching_writers:
+            read_tags = tuple(tag for tag in node.condition_reads if tag in held_values)
+            if not read_tags:
+                all_blocked = False
+                break
+            expr = _conditions_list_to_expr(getattr(rung, "_conditions", []))
+            assignments = (
+                dict(zip(read_tags, values, strict=True))
+                for values in product(*(held_values[tag] for tag in read_tags))
+            )
+            if not all(
+                _expr_forced_true(expr, assignment) is False
+                for assignment in assignments
+            ):
+                all_blocked = False
+                break
+        if all_blocked:
+            return True
     return False
 
 

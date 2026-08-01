@@ -20,7 +20,6 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
-from pyrung.core.analysis.pilot.causal import chase_cause_roots
 from pyrung.core.analysis.pilot.coast import _has_pending_effects
 from pyrung.core.analysis.pilot.constrained_reachability import (
     NavigationEvidence,
@@ -526,7 +525,6 @@ def _verify_after_spin(
         ctx,
         dead_end.trend,
         dead_end.has_new_frontier,
-        chase_cause_roots,
         route_prescribed=policy.route_prescribed,
         channel_motion=channel_motion,
         earned_work_receipt=earned_work_receipt,

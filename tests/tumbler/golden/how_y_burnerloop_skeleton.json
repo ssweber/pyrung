@@ -1258,7 +1258,7 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "nested causal closure: latch A_Alm14_DoorOpen_Trig fired during incident; then latch A_Alm15_LintOpen_Trig fired during incident",
+     "detail": "nested causal closure: prevent latch A_Alm14_DoorOpen_Trig via x_DoorClosed; then prevent latch A_Alm15_LintOpen_Trig via x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1282,10 +1282,10 @@
      ]
     }
    ],
-   "hypotheses": 3,
+   "hypotheses": 2,
    "hypothesis_detail": [
     {
-     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "detail": "prevent latch A_Alm14_DoorOpen_Trig via x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1301,7 +1301,7 @@
      ]
     },
     {
-     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "detail": "prevent latch A_Alm15_LintOpen_Trig via x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1313,30 +1313,6 @@
      "kind": "latch-exposure",
      "sources": [
       "A_Alm15_LintOpen_Trig",
-      "x_LintDoorClosed"
-     ]
-    },
-    {
-     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_DoorClosed",
-       "guard": "Sts_StateCurrent == 3",
-       "value": true
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_LintDoorClosed",
-       "guard": "Sts_StateCurrent == 3",
-       "value": true
-      }
-     ],
-     "kind": "latch-exposure",
-     "sources": [
-      "A_Alm14_DoorOpen_Trig",
-      "A_Alm15_LintOpen_Trig",
-      "x_DoorClosed",
       "x_LintDoorClosed"
      ]
     }
@@ -2160,33 +2136,37 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "sm_CtrlCmd2StateRequest:R3 fired at scan <N>; revert exact trigger frontier",
+     "detail": "sm_CopyOrJumpState:R4 fired at scan <N>; revert exact trigger frontier",
      "holds": [
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "Sts_StateCurrent == 6",
+       "guard": "And(Sts_StateCurrent == 6, Internal__Step == 101)",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "Sts_StateCurrent == 6",
+       "guard": "And(Sts_StateCurrent == 6, Internal__Step == 101)",
        "value": true
       }
      ],
      "kind": "precise-cause",
      "sources": [
+      "Cmd_Mode_Production",
+      "Cmd_State_Clear",
+      "Cmd_State_Reset",
+      "Cmd_State_Start",
       "Sts_StateCurrent",
       "x_DoorClosed",
       "x_LintDoorClosed"
      ]
     }
    ],
-   "hypotheses": 2,
+   "hypotheses": 1,
    "hypothesis_detail": [
     {
-     "detail": "sm_CtrlCmd2StateRequest:R3 fired at scan <N>; revert exact trigger frontier",
+     "detail": "sm_CopyOrJumpState:R4 fired at scan <N>; revert exact trigger frontier",
      "holds": [
       [
        "x_DoorClosed",
@@ -2199,36 +2179,11 @@
      ],
      "kind": "precise-cause",
      "sources": [
+      "Cmd_Mode_Production",
+      "Cmd_State_Clear",
+      "Cmd_State_Reset",
+      "Cmd_State_Start",
       "Sts_StateCurrent",
-      "x_DoorClosed",
-      "x_LintDoorClosed"
-     ]
-    },
-    {
-     "detail": "ProductionStates:R5 fired at scan <N>; minimal conductive cut",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_DoorClosed",
-       "guard": "Sts_StateCurrent == 6",
-       "value": true
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_LintDoorClosed",
-       "guard": "Sts_StateCurrent == 6",
-       "value": true
-      }
-     ],
-     "kind": "precise-cause",
-     "sources": [
-      "Cmd_CtrlCmd",
-      "Ref_Cmd_Hold",
-      "Sts_StateCurrent",
-      "Sts_State_Execute",
-      "Sts_UnitModeCurrent",
-      "i_DoorClosed",
-      "i_LintDoorClosed",
       "x_DoorClosed",
       "x_LintDoorClosed"
      ]
@@ -2557,24 +2512,8 @@
      ]
     }
    ],
-   "hypotheses": 2,
+   "hypotheses": 1,
    "hypothesis_detail": [
-    {
-     "detail": "reset A_TimeBetween1stScan_tmr_Done: Test_Simulate_1st_Scan=True until Eq(tag='Test_Simulate_1st_Scan', values=frozenset({True}))",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "Test_Simulate_1st_Scan",
-       "guard": "And(~A_TimeBetween1stScan_tmr.Done, ~Test_Simulate_1st_Scan)",
-       "value": true
-      }
-     ],
-     "kind": "liveness",
-     "sources": [
-      "A_TimeBetween1stScan_tmr_Done",
-      "Test_Simulate_1st_Scan"
-     ]
-    },
     {
      "detail": "reset Rotate_SensorOffWD_tmr_Done: x_RotateSensor=True until Eq(tag='x_RotateSensor', values=frozenset({True}))",
      "holds": [
@@ -2592,27 +2531,8 @@
      ]
     }
    ],
-   "rejected": 1,
-   "rejected_detail": [
-    {
-     "detail": "reset A_TimeBetween1stScan_tmr_Done: Test_Simulate_1st_Scan=True until Eq(tag='Test_Simulate_1st_Scan', values=frozenset({True}))",
-     "ground": "exploratory replay rejected: recorded regression cause replayed; correction masked its result",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "Test_Simulate_1st_Scan",
-       "guard": "And(~A_TimeBetween1stScan_tmr.Done, ~Test_Simulate_1st_Scan)",
-       "value": true
-      }
-     ],
-     "kind": "liveness",
-     "slug": "exploratory-replay-failed",
-     "sources": [
-      "A_TimeBetween1stScan_tmr_Done",
-      "Test_Simulate_1st_Scan"
-     ]
-    }
-   ],
+   "rejected": 0,
+   "rejected_detail": [],
    "unresolved": []
   },
   "kind": "trend_regression",

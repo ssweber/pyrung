@@ -29,6 +29,71 @@ if TYPE_CHECKING:
 _ANY_TRANSITION_VALUE = object()
 
 
+class _CausalHistoryWindow:
+    """A bounded view onto one runner's inherited causal lineage.
+
+    ``first_transition_scan`` is inclusive.  The immediately preceding state
+    remains visible as boundary context, but is index zero in ``scan_ids()``
+    and therefore cannot itself become a transition inside the window.
+
+    The backing :class:`History` still resolves every state through its owning
+    execution epoch.  This view narrows a causal question; it does not copy,
+    replay, or reinterpret any part of the lineage.
+    """
+
+    def __init__(
+        self,
+        backing: History,
+        first_transition_scan: int,
+        last_scan: int | None,
+    ) -> None:
+        newest = backing.newest_scan_id if last_scan is None else min(last_scan, backing.newest_scan_id)
+        context = max(backing.oldest_scan_id, first_transition_scan - 1)
+        self._backing = backing
+        self._oldest = context
+        self._newest = newest
+
+    def at(self, scan_id: int) -> SystemState:
+        if scan_id < self._oldest or scan_id > self._newest:
+            raise KeyError(scan_id)
+        return self._backing.at(scan_id)
+
+    def range(self, start_scan_id: int, end_scan_id: int) -> list[SystemState]:
+        return self._backing.range(
+            max(self._oldest, start_scan_id),
+            min(self._newest + 1, end_scan_id),
+        )
+
+    @property
+    def oldest_scan_id(self) -> int:
+        return self._oldest
+
+    @property
+    def newest_scan_id(self) -> int:
+        return self._newest
+
+    def scan_ids(self) -> Sequence[int]:
+        if self._newest < self._oldest:
+            return range(0)
+        return range(self._oldest, self._newest + 1)
+
+    def _committed_transition_at(self, tag_name: str, scan_id: int) -> Transition | None:
+        if scan_id <= self._oldest or scan_id > self._newest:
+            return None
+        return self._backing._committed_transition_at(tag_name, scan_id)
+
+    def _last_committed_transition_before(
+        self,
+        tag_name: str,
+        before_scan_id: int,
+    ) -> Transition | None:
+        transition = self._backing._last_committed_transition_before(
+            tag_name,
+            min(before_scan_id, self._newest + 1),
+        )
+        return transition if transition is not None and transition.scan_id > self._oldest else None
+
+
 @dataclass(frozen=True)
 class LabeledSnapshot:
     """Label metadata attached to one labeled scan."""
@@ -110,9 +175,29 @@ class History:
             return False
         return self._plc._causal_history_contains(scan_id)
 
+    def _causal_window(
+        self,
+        first_transition_scan: int,
+        last_scan: int | None = None,
+    ) -> _CausalHistoryWindow:
+        """Return a no-copy bounded view for an incident-local cause query."""
+        return _CausalHistoryWindow(self, first_transition_scan, last_scan)
+
     def scan_ids(self) -> Sequence[int]:
         """Return the addressable scan ids as a ``range`` (oldest -> newest)."""
         return range(self.oldest_scan_id, self._plc._state.scan_id + 1)
+
+    def _committed_transition_at(self, tag_name: str, scan_id: int) -> Transition | None:
+        """Authoritative committed boundary from the retained epoch index."""
+        return self._plc._causal_committed_transition_at(tag_name, scan_id)
+
+    def _last_committed_transition_before(
+        self,
+        tag_name: str,
+        before_scan_id: int,
+    ) -> Transition | None:
+        """Latest indexed committed boundary across the inherited lineage."""
+        return self._plc._causal_last_committed_transition_before(tag_name, before_scan_id)
 
     def previous_transition(
         self,
@@ -149,6 +234,7 @@ class History:
 
         plc = self._plc
         pdg = plc._ensure_pdg() if plc._logic else None
+        initial_tags = plc._causal_initial_tags
         while cursor > oldest:
             scan_id = _find_last_transition_scan(
                 self,
@@ -157,7 +243,7 @@ class History:
                 timelines=plc._causal_rung_firing_timelines,
                 pdg=pdg,
                 scan_log=plc._scan_log,
-                initial_tags=self.at(self.oldest_scan_id).tags,
+                initial_tags=initial_tags,
             )
             if scan_id is None:
                 return None
@@ -168,7 +254,7 @@ class History:
                 timelines=plc._causal_rung_firing_timelines,
                 pdg=pdg,
                 scan_log=plc._scan_log,
-                initial_tags=self.at(self.oldest_scan_id).tags,
+                initial_tags=initial_tags,
             )
             if transition is not None and (
                 to is _ANY_TRANSITION_VALUE or transition.to_value == to

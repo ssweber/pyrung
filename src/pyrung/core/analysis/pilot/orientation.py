@@ -608,16 +608,15 @@ def _orient_read(
                 rationale=f"widen trace context to {width} atomic actions",
             )
 
-    # A retained causal occurrence is one more current-world candidate. Its
-    # bounded investigation returns exactly one replay act; execution and the
-    # ordinary verification/commit loop still decide whether it advances.
-    from pyrung.core.analysis.pilot.retained import read_retained_replay
+    def _retained_fallback() -> Bearing | None:
+        from pyrung.core.analysis.pilot.retained import read_retained_replay
 
-    retained = read_retained_replay(world)
-    if retained is not None and not compass.knowledge.act_is_nogood(
-        world.world_key,
-        act_identity(retained),
-    ):
+        retained = read_retained_replay(world)
+        if retained is None or compass.knowledge.act_is_nogood(
+            world.world_key,
+            act_identity(retained),
+        ):
+            return None
         return _bearing(
             world,
             retained,
@@ -629,13 +628,22 @@ def _orient_read(
             ),
         )
 
+    if getattr(world.context, "retained_recovery_first", False):
+        retained = _retained_fallback()
+        if retained is not None:
+            return retained
+
     if candidates.diagnosis is not None:
-        return _probe_or_stuck(
+        diagnosed = _probe_or_stuck(
             compass,
             world,
             candidates,
             candidates.diagnosis.reason,
         )
+        if isinstance(diagnosed, NeedProbe):
+            return diagnosed
+        retained = _retained_fallback()
+        return retained if retained is not None else diagnosed
 
     terminal: Coast | Dwell
     if compass.knowledge.coast_receipt(world.world_key) is None:
@@ -663,6 +671,17 @@ def _orient_read(
             target=target,
             rationale=rationale,
         )
+
+    # A retained causal occurrence is a recovery from exhausted present-world
+    # motion, not a competitor with it.  In particular, an open operation may
+    # have a perfectly useful coast even though one of its old writer
+    # occurrences admits a counterfactual rewrite.  Prefer the technician's
+    # live point-A -> point-B continuation; only revisit the accumulated causal
+    # past after actions, diagnosis probes, and maintenance have no admissible
+    # next step.  The replay still passes through ordinary execution and verify.
+    retained = _retained_fallback()
+    if retained is not None:
+        return retained
 
     return _probe_or_stuck(compass, world, candidates, "all_rejected")
 

@@ -1741,7 +1741,7 @@
    "confirmed": 1,
    "confirmed_detail": [
     {
-     "detail": "nested causal closure: latch A_Alm14_DoorOpen_Trig fired during incident; then latch A_Alm15_LintOpen_Trig fired during incident",
+     "detail": "nested causal closure: prevent latch A_Alm14_DoorOpen_Trig via x_DoorClosed; then prevent latch A_Alm15_LintOpen_Trig via x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1765,10 +1765,10 @@
      ]
     }
    ],
-   "hypotheses": 3,
+   "hypotheses": 2,
    "hypothesis_detail": [
     {
-     "detail": "latch A_Alm14_DoorOpen_Trig fired during incident",
+     "detail": "prevent latch A_Alm14_DoorOpen_Trig via x_DoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1784,7 +1784,7 @@
      ]
     },
     {
-     "detail": "latch A_Alm15_LintOpen_Trig fired during incident",
+     "detail": "prevent latch A_Alm15_LintOpen_Trig via x_LintDoorClosed",
      "holds": [
       {
        "__type__": "PilotRung",
@@ -1796,30 +1796,6 @@
      "kind": "latch-exposure",
      "sources": [
       "A_Alm15_LintOpen_Trig",
-      "x_LintDoorClosed"
-     ]
-    },
-    {
-     "detail": "clear 2 active latches: A_Alm14_DoorOpen_Trig, A_Alm15_LintOpen_Trig",
-     "holds": [
-      {
-       "__type__": "PilotRung",
-       "dest": "x_DoorClosed",
-       "guard": "Sts_StateCurrent == 3",
-       "value": true
-      },
-      {
-       "__type__": "PilotRung",
-       "dest": "x_LintDoorClosed",
-       "guard": "Sts_StateCurrent == 3",
-       "value": true
-      }
-     ],
-     "kind": "latch-exposure",
-     "sources": [
-      "A_Alm14_DoorOpen_Trig",
-      "A_Alm15_LintOpen_Trig",
-      "x_DoorClosed",
       "x_LintDoorClosed"
      ]
     }

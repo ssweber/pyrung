@@ -298,6 +298,53 @@ def test_fork_without_log_inheritance_keeps_history_local() -> None:
     assert tuple(local.history.scan_ids()) == (boundary_scan, boundary_scan + 1)
 
 
+def test_committed_transitions_cross_epoch_lineage_without_state_replay(monkeypatch) -> None:
+    """A+B+C remains one cheap history under each epoch's owning overlay."""
+    program, command, _seen = _branching_history_program()
+    root = PLC(program)
+    root.patch({command.name: True})
+    root.step()
+
+    child = root.fork()
+    child.patch({command.name: False})
+    child.step()
+    grandchild = child.fork()
+    grandchild.step()
+
+    def forbid_state_replay(*_args, **_kwargs):
+        raise AssertionError("indexed transition lookup reconstructed an old state")
+
+    monkeypatch.setattr(type(grandchild.history), "at", forbid_state_replay)
+
+    latest = grandchild.history.previous_transition(command)
+    parent = grandchild.history.previous_transition(
+        command,
+        to=True,
+        at_or_before=1,
+    )
+    assert latest == Transition(command.name, 2, True, False)
+    assert parent == Transition(command.name, 1, False, True)
+
+
+def test_noninherited_fork_uses_its_boundary_as_causal_initial_state() -> None:
+    """A local history never borrows endpoint values from discarded ancestry."""
+    program, command, _seen = _branching_history_program()
+    parent = PLC(program)
+    parent.patch({command.name: True})
+    parent.step()
+
+    local = parent.fork(inherit_log=False)
+    local.patch({command.name: False})
+    local.step()
+
+    assert local.history.previous_transition(command) == Transition(
+        command.name,
+        2,
+        True,
+        False,
+    )
+
+
 @pytest.mark.parametrize("mutation", ["reboot", "trim"])
 def test_child_causal_history_is_independent_of_later_parent_mutation(mutation: str) -> None:
     program, command, seen = _branching_history_program()

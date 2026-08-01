@@ -624,6 +624,7 @@ def _accepted_payload(
     trial: _AcceptedTrial,
     frame: _IterationFrame,
     state: _PilotState,
+    seen_keys: frozenset[Any] | None = None,
 ) -> dict[str, Any]:
     attempt = trial.attempt
     pulse = attempt.pulse
@@ -658,7 +659,11 @@ def _accepted_payload(
             "trend_before": frame.distance_before,
             "trend_after": assessed.trend if assessed is not None else None,
             "state_key_changed": (assessed is not None and assessed.new_key != frame.key),
-            "novel_key": (assessed is not None and assessed.new_key not in state.seen_keys),
+            "novel_key": (
+                assessed is not None
+                and assessed.new_key
+                not in (state.seen_keys if seen_keys is None else seen_keys)
+            ),
             "target_reached": _values_match(
                 execution.after_snap.get(frame.tree.tag),
                 frame.tree.value,
@@ -690,6 +695,7 @@ def _act_event(
     trial: _AcceptedTrial | None = None,
     frame: _IterationFrame | None = None,
     state: _PilotState | None = None,
+    seen_keys: frozenset[Any] | None = None,
 ) -> PilotEvent | None:
     """Render one navigation-act lifecycle event through a single kind dispatch."""
 
@@ -734,7 +740,7 @@ def _act_event(
             scan,
             {
                 **retained,
-                **_accepted_payload(act.policy, trial, frame, state),
+                **_accepted_payload(act.policy, trial, frame, state, seen_keys),
             },
         )
 
@@ -769,7 +775,7 @@ def _act_event(
                 "crossing_accepted",
                 scan,
                 {
-                    **_accepted_payload(act.policy, trial, frame, state),
+                    **_accepted_payload(act.policy, trial, frame, state, seen_keys),
                     "crossing": crossing,
                 },
             )
@@ -802,7 +808,7 @@ def _act_event(
         return PilotEvent(
             "candidate_accepted",
             scan,
-            _accepted_payload(act.policy, trial, frame, state),
+            _accepted_payload(act.policy, trial, frame, state, seen_keys),
         )
 
     if isinstance(act, (Coast, Dwell)):

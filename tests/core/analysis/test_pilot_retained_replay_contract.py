@@ -425,7 +425,7 @@ def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
     assert plan.journey[0].inputs == {start.name: True}
 
 
-def test_replay_correspondence_survives_unrelated_overlay_ordinal_shift() -> None:
+def test_replay_correspondence_survives_unrelated_overlay_ordinal_shift(monkeypatch) -> None:
     program, _enable, _guard, start, trip, _target = _single_departure_program()
     source = PLC(program)
     source.step()
@@ -433,8 +433,17 @@ def test_replay_correspondence_survives_unrelated_overlay_ordinal_shift() -> Non
     assert aggregate is not None
     assert aggregate.occurrence_ordinal is None
 
+    requested_depths: list[bool] = []
+    original_cause = source.cause
+
+    def recording_cause(tag, scan=None, *, deep=True, **kwargs):
+        requested_depths.append(deep)
+        return original_cause(tag, scan=scan, deep=deep, **kwargs)
+
+    monkeypatch.setattr(source, "cause", recording_cause)
     resolved = _writer_occurrence(source, trip.name, True, source.state.scan_id)
     assert resolved is not None
+    assert requested_depths and requested_depths == [False]
     _rung, writer, exact, address = resolved
     assert writer == (None, 0)
     assert exact.occurrence_ordinal is not None

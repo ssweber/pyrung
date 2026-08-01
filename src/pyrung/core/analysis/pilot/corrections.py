@@ -34,6 +34,7 @@ from pyrung.core.analysis.pilot.avoid import _hold_allowed
 from pyrung.core.analysis.pilot.causal import (
     _shared_cause,
     chase_cause_roots,
+    chase_chain_tags,
     empirical_program_writes,
 )
 from pyrung.core.analysis.pilot.overlay import (
@@ -83,6 +84,16 @@ class CorrectionHypothesis:
     # against a later counterexample snapshot without knowing which instruction
     # produced it.
     constraint: Any = None
+    # True when the proposal is obtained from a transition that occurred in
+    # this bounded incident, rather than inferred from older steady history.
+    # This is evidence provenance, not a presentation/category distinction:
+    # investigation uses it to exhaust exact occurrence evidence before it
+    # asks the broader held-since question.
+    incident_local: bool = False
+    # For steady-history roots, retain the recorder's structural origin. An
+    # external terminal and an unwritten default are both absence evidence,
+    # but the former is a causal leaf while the latter is a broad fallback.
+    history_origin: str | None = None
 
 
 def _complement_constraint(constraint: Any) -> Any | None:
@@ -217,6 +228,8 @@ def derive_correction_hypotheses(
     ctx: Any,
     *,
     installed: Mapping[str, Any] | None = None,
+    incident_local_only: bool = False,
+    incident_transition_only: bool = False,
 ) -> tuple[tuple[CorrectionHypothesis, ...], frozenset[str]]:
     """Produce one incident's ordered, deduplicated correction hypotheses.
 
@@ -224,6 +237,50 @@ def derive_correction_hypotheses(
     corrections. Duplicate hold sets keep their first producer. The returned
     absence-root tags are causal evidence for investigation's ranking pass.
     """
+    if incident_transition_only:
+        precise = _precise_causes(plc, incident, ctx)
+        return (
+            _dedupe_hypotheses(
+                hypothesis for hypothesis in precise if hypothesis.incident_local
+            ),
+            frozenset(),
+        )
+
+    enablers = correct_enablers(plc, incident, ctx)
+    incident_changes = set(getattr(incident, "changed_tags", ()))
+    channel_tag = getattr(incident, "channel_tag", None)
+    channel_chain: set[str] | None = None
+    if channel_tag is not None:
+        channel_scan = next(
+            (
+                departure.scan
+                for departure in getattr(incident, "departures", ())
+                if departure.tag == channel_tag and departure.scan is not None
+            ),
+            None,
+        )
+        channel_chain = {channel_tag, *chase_chain_tags(plc, channel_tag, scan=channel_scan)}
+    incident_local = [
+        hypothesis
+        for hypothesis in enablers
+        if (
+            hypothesis.kind == "latch-exposure"
+            or (
+                hypothesis.incident_local
+                and (
+                    channel_chain is None
+                    or bool(channel_chain.intersection(hypothesis.sources))
+                )
+            )
+        )
+        and incident_changes.intersection(hypothesis.sources)
+    ]
+    if incident_local_only:
+        return _dedupe_hypotheses(incident_local), frozenset()
+    # The full producer remains complete: after an exact local probe fails,
+    # investigation may need a support from any older epoch. Laziness and
+    # suppression belong to investigation's staged consumption, not to an
+    # amputated hypothesis stream.
     absence_hypotheses, absence_tags = _absence_root_correctives(
         plc,
         incident,
@@ -231,11 +288,8 @@ def derive_correction_hypotheses(
         exclude=frozenset(tag for tag, _value in incident.action),
         installed=installed or {},
     )
-    hypotheses = [
-        *absence_hypotheses,
-        *_precise_causes(plc, incident, ctx),
-        *correct_enablers(plc, incident, ctx),
-    ]
+    precise = _precise_causes(plc, incident, ctx)
+    hypotheses = [*absence_hypotheses, *precise, *enablers]
     return _dedupe_hypotheses(hypotheses), absence_tags
 
 
@@ -528,38 +582,63 @@ def _coil_corrections(
         return guard_correction_holds(plc, tuple(holds), source_tags, incident, ctx)
 
     corrections: list[CorrectionHypothesis] = []
-    conjunction: list[ActionPair] = []
-    conj_seen: set[ActionPair] = set()
     conj_latches: list[str] = []
+    latch_alternatives: list[tuple[ActionPair, ...]] = []
     for tag, val in sorted(incident.after_snap.items()):
         if val is not True or incident.before_snap.get(tag) is True:
             continue
         latch_holds = _latch_guard_holds(tag)
         if not latch_holds:
             continue
-        corrections.append(
-            CorrectionHypothesis(
-                kind="latch-exposure",
-                holds=_guarded(latch_holds, (tag,)),
-                sources=(tag, *(h[0] for h in latch_holds)),
-                detail=f"latch {tag} fired during incident",
-            )
-        )
-        conj_latches.append(tag)
+        # Each guard assignment above independently forces this latch rung
+        # false. They are alternative minimal cuts, not one coordinated hold.
+        # Coordination belongs between distinct latches that all fired.
         for hold in latch_holds:
-            if hold not in conj_seen:
-                conj_seen.add(hold)
-                conjunction.append(hold)
-
-    if len(conjunction) > 1:
-        corrections.append(
-            CorrectionHypothesis(
-                kind="latch-exposure",
-                holds=_guarded(conjunction, tuple(conj_latches)),
-                sources=(*conj_latches, *(h[0] for h in conjunction)),
-                detail=f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}",
+            corrections.append(
+                CorrectionHypothesis(
+                    kind="latch-exposure",
+                    holds=_guarded([hold], (tag,)),
+                    sources=(tag, hold[0]),
+                    detail=f"prevent latch {tag} via {hold[0]}",
+                    incident_local=True,
+                )
             )
-        )
+        conj_latches.append(tag)
+        latch_alternatives.append(tuple(latch_holds))
+
+    if len(latch_alternatives) > 1:
+        # Each latch may admit alternative minimal cuts (e.g. close Door *or*
+        # leave Starting). A coordinated repair chooses one cut per latch; it
+        # must not union every alternative into an over-constrained batch.
+        seen_joint: set[tuple[ActionPair, ...]] = set()
+        joint_candidates: list[tuple[ActionPair, ...]] = []
+        for selected in itertools.product(*latch_alternatives):
+            conjunction = tuple(dict.fromkeys(selected))
+            if conjunction in seen_joint:
+                continue
+            seen_joint.add(conjunction)
+            joint_candidates.append(conjunction)
+        minimal_joint = [
+            candidate
+            for candidate in joint_candidates
+            if not any(
+                set(other) < set(candidate)
+                for other in joint_candidates
+            )
+        ]
+        for conjunction in minimal_joint:
+            corrections.append(
+                CorrectionHypothesis(
+                    kind="latch-exposure",
+                    holds=_guarded(list(conjunction), tuple(conj_latches)),
+                    sources=(*conj_latches, *(h[0] for h in conjunction)),
+                    detail=(
+                        f"clear {len(conj_latches)} active latches: "
+                        f"{', '.join(conj_latches)}"
+                    ),
+                    incident_local=True,
+                )
+            )
     return corrections
 
 
@@ -690,6 +769,7 @@ def _accumulator_corrections(
                 # therefore distinguish this operation from a bystander timer.
                 sources=(done_name, *(r.dest for r in operation_holds)),
                 detail=f"reset {done_name}: {detail}",
+                incident_local=True,
             )
         )
 
@@ -734,6 +814,7 @@ def _accumulator_corrections(
                 holds=tuple(holds),
                 sources=(done_name, *(phys for phys, _ in holds)),
                 detail=detail + ")",
+                incident_local=True,
             )
         )
 
@@ -783,6 +864,7 @@ def _accumulator_corrections(
                             f"keep {profile.done.name} from completing by satisfying {complement!r}"
                         ),
                         constraint=complement,
+                        incident_local=True,
                     )
                 )
 
@@ -1356,7 +1438,16 @@ def _precise_causes(
             for pair in _dedupe_pairs(mover_holds)
             if pair[0] in moved_tags and _hold_allowed(ctx, pair)
         )
-        if mover_holds_filtered:
+        mover_values: dict[str, Any] = {}
+        mover_contradiction = False
+        for mover_tag, mover_value in mover_holds_filtered:
+            if mover_tag in mover_values and not _values_match(
+                mover_values[mover_tag], mover_value
+            ):
+                mover_contradiction = True
+                break
+            mover_values[mover_tag] = mover_value
+        if mover_holds_filtered and not mover_contradiction:
             mover_names = {tag for tag, _value in mover_holds_filtered}
             common: list[tuple[int, Any]] = []
             for index, step in enumerate(chain.steps):
@@ -1384,6 +1475,7 @@ def _precise_causes(
                         f"{_step_label(frontier)} fired at scan "
                         f"{frontier.transition.scan_id}; revert exact trigger frontier"
                     ),
+                    incident_local=True,
                 )
             )
 
@@ -1711,6 +1803,7 @@ def _absence_root_correctives(
                         f"on {departure.tag}'s deep cause chain "
                         f"[{root.kind}]{relation_note}"
                     ),
+                    history_origin=root.kind,
                 ),
             )
         )

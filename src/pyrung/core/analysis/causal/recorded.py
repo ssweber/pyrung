@@ -78,6 +78,7 @@ def recorded_cause(
     node_rung_fn: Any = None,  # Callable[[RungId, int], Rung | None] | None
     node_views_fn: Any = None,  # Callable[[int], dict[RungId, ConditionView]] | None
     node_runs_fn: Any = None,  # Callable[[int], tuple[RungRun, ...]] | None
+    rung_write_projection_fn: Any = None,  # Callable[[int], ScanRungWriteProjection | None]
     node_reads_fn: Any = None,  # Callable[[int], dict[RungId, set[str]]] | None
     deep: bool = True,
 ) -> CausalChain | None:
@@ -144,6 +145,7 @@ def recorded_cause(
         node_runs_fn,
         node_runs_cache,
         rung_write_projection_cache,
+        rung_write_projection_fn,
     )
     if rung_writes is not None:
         boundary = rung_writes.boundary_transition(tag_name)
@@ -173,6 +175,7 @@ def recorded_cause(
         node_runs_fn=node_runs_fn,
         node_runs_cache=node_runs_cache,
         rung_write_projection_cache=rung_write_projection_cache,
+        rung_write_projection_fn=rung_write_projection_fn,
         node_reads_fn=node_reads_fn,
         node_reads_cache=node_reads_cache,
         deep=deep_state,
@@ -267,16 +270,21 @@ def _rung_write_projection_at(
     node_runs_fn: Any,
     node_runs_cache: dict[int, tuple[Any, ...]] | None,
     projection_cache: dict[int, ScanRungWriteProjection | None] | None,
+    projection_fn: Any = None,
 ) -> ScanRungWriteProjection | None:
     """Reconstruct and memoize one scan's compact rung-write projection."""
-    if node_runs_fn is None:
+    if node_runs_fn is None and projection_fn is None:
         return None
     if projection_cache is not None and scan_id in projection_cache:
         return projection_cache[scan_id]
-    projection = build_scan_rung_write_projection(
-        history,
-        scan_id,
-        _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+    projection = (
+        projection_fn(scan_id)
+        if projection_fn is not None
+        else build_scan_rung_write_projection(
+            history,
+            scan_id,
+            _node_runs_at(scan_id, node_runs_fn, node_runs_cache),
+        )
     )
     if projection_cache is not None:
         projection_cache[scan_id] = projection
@@ -608,6 +616,7 @@ def _walk_backward(
     node_runs_fn: Any = None,
     node_runs_cache: dict[int, tuple[Any, ...]] | None = None,
     rung_write_projection_cache: dict[int, ScanRungWriteProjection | None] | None = None,
+    rung_write_projection_fn: Any = None,
     node_reads_fn: Any = None,
     node_reads_cache: dict[int, dict[RungId, Any]] | None = None,
     deep: _DeepSupport | None = None,
@@ -638,6 +647,7 @@ def _walk_backward(
         node_runs_fn,
         node_runs_cache,
         rung_write_projection_cache,
+        rung_write_projection_fn,
     )
 
     trail = (*trail, f"{tag_name}@{scan_id}")
@@ -734,6 +744,8 @@ def _walk_backward(
                         node_views_cache=node_views_cache,
                         node_runs_fn=node_runs_fn,
                         node_runs_cache=node_runs_cache,
+                        rung_write_projection_cache=rung_write_projection_cache,
+                        rung_write_projection_fn=rung_write_projection_fn,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -844,6 +856,8 @@ def _walk_backward(
             node_views_cache=node_views_cache,
             node_runs_fn=node_runs_fn,
             node_runs_cache=node_runs_cache,
+            rung_write_projection_cache=rung_write_projection_cache,
+            rung_write_projection_fn=rung_write_projection_fn,
             node_reads_fn=node_reads_fn,
             node_reads_cache=node_reads_cache,
             deep=deep,
@@ -1000,6 +1014,8 @@ def _walk_backward(
                     node_views_cache=node_views_cache,
                     node_runs_fn=node_runs_fn,
                     node_runs_cache=node_runs_cache,
+                    rung_write_projection_cache=rung_write_projection_cache,
+                    rung_write_projection_fn=rung_write_projection_fn,
                     node_reads_fn=node_reads_fn,
                     node_reads_cache=node_reads_cache,
                     deep=deep,
@@ -1074,6 +1090,8 @@ def _walk_backward(
                         node_views_cache=node_views_cache,
                         node_runs_fn=node_runs_fn,
                         node_runs_cache=node_runs_cache,
+                        rung_write_projection_cache=rung_write_projection_cache,
+                        rung_write_projection_fn=rung_write_projection_fn,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -1261,6 +1279,8 @@ def _walk_backward(
                         node_views_cache=node_views_cache,
                         node_runs_fn=node_runs_fn,
                         node_runs_cache=node_runs_cache,
+                        rung_write_projection_cache=rung_write_projection_cache,
+                        rung_write_projection_fn=rung_write_projection_fn,
                         node_reads_fn=node_reads_fn,
                         node_reads_cache=node_reads_cache,
                         deep=deep,
@@ -1297,6 +1317,8 @@ def _walk_backward(
                     node_views_cache=node_views_cache,
                     node_runs_fn=node_runs_fn,
                     node_runs_cache=node_runs_cache,
+                    rung_write_projection_cache=rung_write_projection_cache,
+                    rung_write_projection_fn=rung_write_projection_fn,
                     node_reads_fn=node_reads_fn,
                     node_reads_cache=node_reads_cache,
                     deep=deep,

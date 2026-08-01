@@ -22,7 +22,7 @@ from types import SimpleNamespace
 import pytest
 from pyrsistent import pvector
 
-from pyrung import PLC, Bool, Int, Or, Program, copy, fill, out, rise, rung
+from pyrung import PLC, Bool, Int, Or, Program, copy, fill, latch, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
 from pyrung.core.analysis.pilot.investigate import (
@@ -180,6 +180,38 @@ def test_benign_lever_not_self_defeating():
 
     pdg = _pdg(prog)
     assert hold_defeats_needed("Sensor", True, [("Counter", 3)], pdg, prog) is False
+
+
+def test_hold_that_blocks_every_needed_writer_is_self_defeating():
+    enable = Bool("NeededWriterEnable", external=True)
+    alternate = Bool("NeededWriterAlternate", external=True)
+    ready = Bool("NeededWriterReady")
+
+    with Program(strict=False) as sole_writer:
+        with rung(enable):
+            latch(ready)
+
+    assert hold_defeats_needed(
+        enable.name,
+        False,
+        [(ready.name, True)],
+        _pdg(sole_writer),
+        sole_writer,
+    )
+
+    with Program(strict=False) as alternative_writer:
+        with rung(enable):
+            latch(ready)
+        with rung(alternate):
+            latch(ready)
+
+    assert not hold_defeats_needed(
+        enable.name,
+        False,
+        [(ready.name, True)],
+        _pdg(alternative_writer),
+        alternative_writer,
+    )
 
 
 def test_write_consistent_with_need_is_allowed():

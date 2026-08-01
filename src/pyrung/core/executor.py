@@ -518,6 +518,7 @@ class ConditionViewCapture(_NoopExecutionObserver):
         "_active_instructions",
         "_active_iterations",
         "_ordinal",
+        "_causal_projection",
     )
 
     def __init__(self) -> None:
@@ -530,6 +531,10 @@ class ConditionViewCapture(_NoopExecutionObserver):
         self._active_instructions: list[_InstructionRunBuilder] = []
         self._active_iterations: list[_LoopIterationRunBuilder] = []
         self._ordinal = 0
+        # Lazily populated by the historical causal reader.  The projection is
+        # another immutable view of this exact selected-scan journal, so it has
+        # the same epoch/scan lifetime as the capture itself.
+        self._causal_projection: Any = None
 
     @property
     def body(self) -> tuple[ExecutionBodyItem, ...]:

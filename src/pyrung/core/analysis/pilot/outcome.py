@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from pyrung.core.analysis.pilot.causal import action_caused_change
 from pyrung.core.analysis.pilot.compass import CompassEntry, Provenance, TransitionCause
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReceipt,
@@ -96,7 +97,7 @@ def _motion_agency(
     applied_actions: tuple[_ActionPair, ...],
     frame: Any,
     ctx: Any,
-    chase_cause_roots: Any,
+    causal_probe: Any = None,
 ) -> Agency:
     """Attribute relevant motion only from positive causal evidence.
 
@@ -106,14 +107,40 @@ def _motion_agency(
     """
     if not applied_actions:
         return Agency.PROGRAM
+    if not getattr(ctx, "collect_action_attribution", True):
+        # A disposable retained-composition continuation is not allowed to
+        # publish causal learning. Its exact agency remains unknown until the
+        # outer loop executes and attributes the committed operation.
+        return Agency.UNKNOWN
 
     action_tags = {tag for tag, _ in applied_actions}
     for tag in ctx.opaque_loop:
         if _values_match(frame.snap.get(tag), trial.snap.get(tag)):
             continue
-        roots, _holds = chase_cause_roots(trial.fork, tag, ctx.steerable, scan=trial.action_scan)
-        if roots & action_tags:
-            return Agency.PILOT
+        # Preserve the small injectable seam used by pure classification
+        # clients. Production deliberately omits it and uses the bounded
+        # action-window query below.
+        if causal_probe is not None:
+            roots, _holds = causal_probe(
+                trial.fork,
+                tag,
+                ctx.steerable,
+                scan=trial.action_scan,
+            )
+            if roots & action_tags:
+                return Agency.PILOT
+            continue
+        for action_tag in action_tags:
+            if action_caused_change(
+                trial.fork,
+                action_tag,
+                tag,
+                ctx.steerable,
+                scan=trial.action_scan,
+                start_scan=trial.scan_before + 1,
+                timeline=trial.timeline,
+            ):
+                return Agency.PILOT
     return Agency.UNKNOWN
 
 
@@ -129,7 +156,7 @@ def assess_outcome(
     ctx: Any,
     new_trend: int,
     has_new_frontier: bool,
-    chase_cause_roots: Any,
+    causal_probe: Any = None,
     *,
     route_prescribed: bool,
     channel_motion: ChannelMotion,
@@ -161,7 +188,7 @@ def assess_outcome(
         applied_actions,
         frame,
         ctx,
-        chase_cause_roots,
+        causal_probe,
     )
 
     if channel_motion.active:

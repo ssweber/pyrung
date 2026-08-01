@@ -103,6 +103,78 @@ def test_correction_producer_preserves_family_order_and_first_wins(monkeypatch):
     assert absence_tags == frozenset({"A"})
 
 
+def test_incident_local_correction_suppresses_cold_absence_roots(monkeypatch):
+    absence = CorrectionHypothesis(
+        "absence-root",
+        (("ColdPermissive", True),),
+        sources=("ColdPermissive",),
+    )
+    local = CorrectionHypothesis(
+        "latch-exposure",
+        (("DoorClosed", True),),
+        sources=("DoorAlarm", "DoorClosed"),
+        incident_local=True,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
+        lambda *_args, **_kwargs: ([absence], frozenset({"ColdPermissive"})),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
+        lambda *_args, **_kwargs: [local],
+    )
+
+    hypotheses, absence_tags = derive_correction_hypotheses(
+        object(),
+        SimpleNamespace(action=(), changed_tags=("DoorAlarm",)),
+        object(),
+        incident_local_only=True,
+    )
+
+    assert hypotheses == (local,)
+    assert absence_tags == frozenset()
+
+
+def test_incident_transition_stage_does_not_query_cold_history(monkeypatch):
+    exact = CorrectionHypothesis(
+        "precise-cause",
+        (("DoorClosed", True),),
+        sources=("DoorClosed", "State"),
+        incident_local=True,
+    )
+    older = CorrectionHypothesis(
+        "precise-cause",
+        (("OlderPermissive", True),),
+        sources=("OlderPermissive",),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._precise_causes",
+        lambda *_args, **_kwargs: [older, exact],
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections._absence_root_correctives",
+        lambda *_args, **_kwargs: pytest.fail("cold history was queried"),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.corrections.correct_enablers",
+        lambda *_args, **_kwargs: pytest.fail("unrelated enablers were queried"),
+    )
+
+    hypotheses, absence_tags = derive_correction_hypotheses(
+        object(),
+        SimpleNamespace(action=(), changed_tags=("State",)),
+        object(),
+        incident_transition_only=True,
+    )
+
+    assert hypotheses == (exact,)
+    assert absence_tags == frozenset()
+
+
 def _make_ctx(
     prog: Program,
     plc: PLC,

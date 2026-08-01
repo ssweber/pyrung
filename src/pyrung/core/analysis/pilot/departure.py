@@ -443,13 +443,17 @@ def observe_departure(
         if occurrence_scan is not None
         else getattr(getattr(work, "state", None), "scan_id", None)
     )
-    chain = _shared_cause(work, channel_tag, cause_scan) if work is not None else None
+    # Execution's pen timeline already names the exact occurrence scan.  Use
+    # its predecessor for the earned-work receipt before asking for a deep
+    # causal explanation.  On a long folded run, rebuilding that explanation
+    # merely to discover an already-proven clean forward continuation turns
+    # this classification into a history replay.
     if (
         work is not None
-        and chain is not None
-        and chain.effect.scan_id > work.history.oldest_scan_id
+        and cause_scan is not None
+        and cause_scan > work.history.oldest_scan_id
     ):
-        anchor_snap = dict(work.history.at(chain.effect.scan_id - 1).tags)
+        anchor_snap = dict(work.history.at(cause_scan - 1).tags)
     else:
         anchor_snap = dict(source_snap)
     fork, receipt = _settle_departure(state, channel_tag)
@@ -460,16 +464,26 @@ def observe_departure(
         if earned_work is not None and getattr(earned_work, "components", ())
         else EarnedWorkReceipt()
     )
-    reading = _departure_reading(
-        chain,
-        ctx,
-        channel_tag,
-        settled_value,
-        occurrence_scan,
-        earned_work,
-    )
+    def _reading(*, explain: bool) -> DepartureReading:
+        chain = (
+            _shared_cause(work, channel_tag, cause_scan)
+            if explain and work is not None
+            else None
+        )
+        return _departure_reading(
+            chain,
+            ctx,
+            channel_tag,
+            settled_value,
+            occurrence_scan,
+            earned_work,
+        )
 
-    def _observation(continuation: ContinuationEvidence) -> tuple[DepartureObservation, PLC]:
+    def _observation(
+        continuation: ContinuationEvidence,
+        *,
+        explain: bool = False,
+    ) -> tuple[DepartureObservation, PLC]:
         return (
             DepartureObservation(
                 channel_tag=channel_tag,
@@ -477,7 +491,7 @@ def observe_departure(
                 settled_value=settled_value,
                 landing_receipt=receipt,
                 progress=progress,
-                reading=reading,
+                reading=_reading(explain=explain),
                 continuation=continuation,
             ),
             fork,
@@ -540,7 +554,10 @@ def observe_departure(
         edge_allowed=_safe_continuation_edge,
     )
     if isinstance(continuation, Reachable):
-        return _observation(ContinuationEvidence(continuation))
+        return _observation(
+            ContinuationEvidence(continuation),
+            explain=progress.movement is not EarnedWorkMovement.FORWARD,
+        )
 
     # A unique, non-avoided operator push that the program is waiting for is
     # affirmative continuation evidence too. This covers machines whose useful
@@ -584,8 +601,16 @@ def observe_departure(
                 awaited_action_inspected=True,
                 awaited_action=awaited_action,
             ),
+            explain=progress.movement is not EarnedWorkMovement.FORWARD,
         )
-    return _observation(ContinuationEvidence(continuation, awaited_action_inspected=True))
+    return _observation(
+        ContinuationEvidence(continuation, awaited_action_inspected=True),
+        # With neither a chart route nor an awaited action the classification
+        # is UNKNOWN regardless of producer ancestry. Investigation owns the
+        # next question and can try exact local evidence before selectively
+        # following older supports; a deep walk here cannot change the verdict.
+        explain=False,
+    )
 
 
 def classify_departure(observation: DepartureObservation) -> DepartureResult:
