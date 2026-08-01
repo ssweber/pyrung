@@ -440,9 +440,7 @@ def test_repeated_boundary_forks_do_not_create_executed_empty_epochs() -> None:
     root.step()
     child = root.fork().fork().fork()
 
-    assert [(first, last) for _owner, first, last in child._causal_epoch_intervals()] == [
-        (0, 1)
-    ]
+    assert [(first, last) for _owner, first, last in child._causal_epoch_intervals()] == [(0, 1)]
 
     child.step()
     assert [(first, last) for _owner, first, last in child._causal_epoch_intervals()] == [

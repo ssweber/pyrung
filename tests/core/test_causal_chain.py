@@ -447,9 +447,7 @@ class TestEdgeCases:
         assert chain is not None
         assert any(step.transition.tag_name == "Starting" for step in chain.steps)
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
-        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
-            ("State", 3)
-        }
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
         assert starting_step.enablers == ()
 
     def test_deep_enabler_uses_observed_subroutine_writer_on_first_fork_scan(
@@ -482,9 +480,7 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_state"
-        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
-            ("State", 3)
-        }
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
         assert starting_step.enablers == ()
 
     def test_deep_enabler_resolves_block_slot_writer_when_firing_log_omits_it(
@@ -527,9 +523,7 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.subroutine == "map_block_state"
-        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
-            ("State", 3)
-        }
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
         assert starting_step.enablers == ()
 
     def test_deep_enabler_does_not_infer_an_uncalled_static_writer(self) -> None:
@@ -611,9 +605,7 @@ class TestEdgeCases:
         assert chain is not None
         starting_step = next(step for step in chain.steps if step.transition.tag_name == "Starting")
         assert starting_step.transition.scan_id == child.state.scan_id - 1
-        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
-            ("State", 3)
-        }
+        assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {("State", 3)}
         assert starting_step.enablers == ()
 
     def test_deep_enabler_jumps_to_sparse_prior_writer(
@@ -671,9 +663,7 @@ class TestEdgeCases:
         assert {(t.tag_name, t.to_value) for t in starting_step.triggers} == {
             (Seed.name, True),
         }
-        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {
-            (CallMap.name, True)
-        }
+        assert {(e.tag_name, e.value) for e in starting_step.enablers} == {(CallMap.name, True)}
         assert len(set(capture_scans)) < 20
 
     def test_fork_boundary_cause_uses_parent_execution_evidence(self) -> None:

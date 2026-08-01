@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, TypeGuard
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
 
 from pyrsistent import PMap
 
@@ -583,7 +583,9 @@ class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
             )
             if candidate is not None and first_scan <= candidate[0] <= last_scan:
                 candidates.append(candidate)
-        return max((item for item in candidates if item is not None), default=None, key=lambda x: x[0])
+        return max(
+            (item for item in candidates if item is not None), default=None, key=lambda x: x[0]
+        )
 
     def rung_writes_at(self, rung_index: Any, scan_id: int) -> PMap | None:
         owner = self._plc._causal_owner_at(scan_id)
@@ -1406,14 +1408,12 @@ class PLC:
             return owner.cause(tag, scan=scan, deep=deep, since=since)
 
         cause_history = (
-            self._history._causal_window(since, scan)
-            if since is not None
-            else self._history
+            self._history._causal_window(since, scan) if since is not None else self._history
         )
 
         return recorded_cause(
             logic=self._logic,
-            history=cause_history,
+            history=cast(History, cause_history),
             rung_firings_fn=self.rung_firings,
             tag=tag,
             scan_id=scan,
@@ -1780,9 +1780,7 @@ class PLC:
             ),
         )
         fork._set_time_mode(self._time_mode, dt=self._dt)
-        parent_rtc_at_fork_point = historical_owner._system_runtime._rtc_now(
-            historical_state
-        )
+        parent_rtc_at_fork_point = historical_owner._system_runtime._rtc_now(historical_state)
         fork._set_rtc_internal(parent_rtc_at_fork_point, fork.current_state.timestamp)
         if self._harness is not None:
             # Re-install the feedback harness on the fork (it rebuilds its plant
@@ -1841,15 +1839,11 @@ class PLC:
             for scan_id, state in self._checkpoints.items()
             if scan_id <= target_scan_id
         }
-        frozen._rung_firing_timelines = self._rung_firing_timelines.snapshot(
-            up_to=target_scan_id
-        )
+        frozen._rung_firing_timelines = self._rung_firing_timelines.snapshot(up_to=target_scan_id)
         frozen._committed_tag_timelines = self._committed_tag_timelines.snapshot(
             up_to=target_scan_id
         )
-        frozen._node_firing_timelines = self._node_firing_timelines.snapshot(
-            up_to=target_scan_id
-        )
+        frozen._node_firing_timelines = self._node_firing_timelines.snapshot(up_to=target_scan_id)
         frozen._replay_slabs = {}
         frozen._cached_replay_trace = None
         frozen._cached_replay_captures = OrderedDict()

@@ -661,8 +661,7 @@ def _accepted_payload(
             "state_key_changed": (assessed is not None and assessed.new_key != frame.key),
             "novel_key": (
                 assessed is not None
-                and assessed.new_key
-                not in (state.seen_keys if seen_keys is None else seen_keys)
+                and assessed.new_key not in (state.seen_keys if seen_keys is None else seen_keys)
             ),
             "target_reached": _values_match(
                 execution.after_snap.get(frame.tree.tag),

@@ -429,9 +429,7 @@ class TestPilotRungs:
         prog, _In, Scope = _scoped_input_program()
         plc = PLC(prog, dt=0.010)
         pilot_rungs = _merged_pilot_rungs([PilotRung("In", True, ~Scope)], [])
-        pilot_rungs = _merged_pilot_rungs(
-            [PilotRung("In", False, ~Scope)], pilot_rungs
-        )
+        pilot_rungs = _merged_pilot_rungs([PilotRung("In", False, ~Scope)], pilot_rungs)
         plc = fork_with_pilot_rungs(plc, pilot_rungs)
         plc.step()
         assert plc.state.tags["In"] is False
@@ -525,9 +523,7 @@ class TestPilotRungs:
     def test_semantically_duplicate_rung_is_not_another_world_change(self):
         _prog, _In, Scope = _scoped_input_program()
         pilot_rungs = _merged_pilot_rungs([PilotRung("In", True, ~Scope)], [])
-        pilot_rungs = _merged_pilot_rungs(
-            [PilotRung("In", True, ~Scope)], pilot_rungs
-        )
+        pilot_rungs = _merged_pilot_rungs([PilotRung("In", True, ~Scope)], pilot_rungs)
 
         assert len(pilot_rungs) == 1
 

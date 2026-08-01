@@ -652,8 +652,7 @@ def _retained_occurrence_scope(
             )
     if not retained:
         raise UnsupportedOccurrenceScope(
-            "retained writer has no independent condition left after projecting "
-            "the corrected lever"
+            "retained writer has no independent condition left after projecting the corrected lever"
         )
     return retained[0] if len(retained) == 1 else AllCondition(*retained)
 
@@ -1432,96 +1431,102 @@ def build_replay_fn(
             accepted = (
                 earned_work_advanced or (not cause_repeated and (reached or progressed is not None))
             ) and not progress_erased
-            return _remember(ReplayOutcome(
-                accepted=accepted,
-                trend=None,
-                snapshot=snap,
-                reason=(progressed if accepted else rejection_reason) or rejection_reason,
-                continuation=continuation,
-                continuation_snapshot=continuation_snapshot,
-                # A coast that timed out mid-journey landed nowhere — its end
-                # snapshot must not seed a channel scope.
-                landed=(
-                    reached
-                    or (
-                        neutralized
-                        and not source_preserved
+            return _remember(
+                ReplayOutcome(
+                    accepted=accepted,
+                    trend=None,
+                    snapshot=snap,
+                    reason=(progressed if accepted else rejection_reason) or rejection_reason,
+                    continuation=continuation,
+                    continuation_snapshot=continuation_snapshot,
+                    # A coast that timed out mid-journey landed nowhere — its end
+                    # snapshot must not seed a channel scope.
+                    landed=(
+                        reached
+                        or (
+                            neutralized
+                            and not source_preserved
+                            and replacement_witness is not None
+                            and regression_witness is not None
+                            and not _values_match(
+                                replacement_witness.landing,
+                                regression_witness.landing,
+                            )
+                        )
+                    ),
+                    justification=(
+                        (
+                            ReplayJustification.REACHED
+                            if isinstance(continuation, Reachable)
+                            else (
+                                ReplayJustification.NEUTRALIZED
+                                if neutralized_reason is not None
+                                else ReplayJustification.ADVANCED
+                                if progressed is not None
+                                else None
+                            )
+                        )
+                        if accepted
+                        else None
+                    ),
+                    replacement_cause=(
+                        ownership.replacement_cause or frozenset()
+                        if ownership is not None
+                        else frozenset()
+                    ),
+                    replacement=(
+                        ReplacementEvidence(
+                            plc=probe,
+                            incident=replacement_incident,
+                            witness=replacement_witness,
+                            shared_suffix=ownership.shared_suffix,
+                        )
+                        if ownership is not None
+                        and replacement_incident is not None
                         and replacement_witness is not None
-                        and regression_witness is not None
-                        and not _values_match(
-                            replacement_witness.landing,
-                            regression_witness.landing,
-                        )
-                    )
-                ),
-                justification=(
-                    (
-                        ReplayJustification.REACHED
-                        if isinstance(continuation, Reachable)
-                        else (
-                            ReplayJustification.NEUTRALIZED
-                            if neutralized_reason is not None
-                            else ReplayJustification.ADVANCED
-                            if progressed is not None
-                            else None
-                        )
-                    )
-                    if accepted
-                    else None
-                ),
-                replacement_cause=(
-                    ownership.replacement_cause or frozenset()
-                    if ownership is not None
-                    else frozenset()
-                ),
-                replacement=(
-                    ReplacementEvidence(
-                        plc=probe,
-                        incident=replacement_incident,
-                        witness=replacement_witness,
-                        shared_suffix=ownership.shared_suffix,
-                    )
-                    if ownership is not None
-                    and replacement_incident is not None
-                    and replacement_witness is not None
-                    else None
-                ),
-            ))
+                        else None
+                    ),
+                )
+            )
 
         # Terminal let-run without a channel register (no recognized state
         # machine): judge the global target at the bounded point.
         if terminal_letrun_role_tags is not None:
             reached = _values_match(snap.get(target_tag), target_value)
-            return _remember(ReplayOutcome(
-                accepted=reached,
-                trend=None,
-                snapshot=snap,
-                reason=f"{target_tag} -> {target_value!r} reached={reached}",
-                justification=ReplayJustification.REACHED if reached else None,
-                continuation=(
-                    Reachable(("actual-target-witness",))
-                    if reached
-                    else Unknown(
-                        "bounded terminal replay did not reach the target",
-                        ((target_tag, target_value),),
-                    )
-                ),
-                continuation_snapshot=snap,
-            ))
+            return _remember(
+                ReplayOutcome(
+                    accepted=reached,
+                    trend=None,
+                    snapshot=snap,
+                    reason=f"{target_tag} -> {target_value!r} reached={reached}",
+                    justification=ReplayJustification.REACHED if reached else None,
+                    continuation=(
+                        Reachable(("actual-target-witness",))
+                        if reached
+                        else Unknown(
+                            "bounded terminal replay did not reach the target",
+                            ((target_tag, target_value),),
+                        )
+                    ),
+                    continuation_snapshot=snap,
+                )
+            )
 
         # Command incident: no register to coast toward — judge the bounded
         # bearing-held directly.
         if departure_bearing:
             held = all(_values_match(snap.get(t), v) for t, v in departure_bearing)
-            return _remember(ReplayOutcome(
-                accepted=held,
-                trend=None,
-                snapshot=snap,
-                reason=f"bearing {'held' if held else 'departed'} at bounded replay",
-                justification=ReplayJustification.BEARING_HELD if held else None,
-                continuation=continuation,
-                continuation_snapshot=continuation_snapshot,
-            ))
+            return _remember(
+                ReplayOutcome(
+                    accepted=held,
+                    trend=None,
+                    snapshot=snap,
+                    reason=f"bearing {'held' if held else 'departed'} at bounded replay",
+                    justification=ReplayJustification.BEARING_HELD if held else None,
+                    continuation=continuation,
+                    continuation_snapshot=continuation_snapshot,
+                )
+            )
 
         tree = trace_back(
             target_tag,
@@ -1537,19 +1542,20 @@ def build_replay_fn(
             prior=prior,
         )
         trend = tree.unsatisfied_count()
-        return _remember(ReplayOutcome(
-            accepted=trend <= cp_trend,
-            trend=trend,
-            snapshot=snap,
-            reason=f"trend {trend} <= checkpoint {cp_trend}",
-            justification=ReplayJustification.ADVANCED if trend < cp_trend else None,
-            continuation=continuation,
-            continuation_snapshot=continuation_snapshot,
-        ))
+        return _remember(
+            ReplayOutcome(
+                accepted=trend <= cp_trend,
+                trend=trend,
+                snapshot=snap,
+                reason=f"trend {trend} <= checkpoint {cp_trend}",
+                justification=ReplayJustification.ADVANCED if trend < cp_trend else None,
+                continuation=continuation,
+                continuation_snapshot=continuation_snapshot,
+            )
+        )
 
-    _replay.with_continuation = lambda holds: _replay(  # type: ignore[attr-defined]
-        holds,
-        prove_continuation=True,
+    _replay.with_continuation = lambda holds: _replay(  # ty: ignore[unresolved-attribute]
+        holds, prove_continuation=True
     )
     return _replay
 
@@ -2079,9 +2085,7 @@ def _compose_hypotheses(
         constraint=base.constraint or addition.constraint,
         incident_local=base.incident_local and addition.incident_local,
         history_origin=(
-            base.history_origin
-            if base.history_origin == addition.history_origin
-            else None
+            base.history_origin if base.history_origin == addition.history_origin else None
         ),
     )
 
@@ -2142,6 +2146,7 @@ def investigate_deviation(
         for rung in overlay.effective
         if _rung_identity(rung) in correction_ids
     }
+
     def _initial_hypotheses() -> Iterator[CorrectionHypothesis]:
         """Try exact live-incident evidence before expanding older ancestry.
 
@@ -2442,9 +2447,7 @@ def investigate_deviation(
             # incident checkpoint, so an identical executable correction has
             # already proved its installed form in the exploratory pass.
             installed_outcome = (
-                outcome
-                if scoped == exploratory
-                else _replay_candidate(current, scoped)
+                outcome if scoped == exploratory else _replay_candidate(current, scoped)
             )
             if current.constraint is not None and not isinstance(
                 installed_outcome.continuation,

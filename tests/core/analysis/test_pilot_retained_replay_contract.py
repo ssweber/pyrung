@@ -211,9 +211,7 @@ def test_retained_guard_is_the_writer_condition_minus_the_corrected_lever(monkey
     assert len(accepted) == 1
     occurrence = accepted[0].data["occurrence"]
     blocker_change = next(
-        change
-        for change in accepted[0].data["changes"]["total"]
-        if change.tag == occurrence["tag"]
+        change for change in accepted[0].data["changes"]["total"] if change.tag == occurrence["tag"]
     )
     assert (blocker_change.before, blocker_change.after) == (
         occurrence["to"],
@@ -227,9 +225,7 @@ def test_retained_guard_is_the_writer_condition_minus_the_corrected_lever(monkey
 
 
 def test_successive_rebases_compose_one_bearing_without_fake_steps(monkeypatch) -> None:
-    program, guard_a, guard_b, start, _fault_a, _fault_b, target = (
-        _composed_departure_program()
-    )
+    program, guard_a, guard_b, start, _fault_a, _fault_b, target = _composed_departure_program()
     retained = _capture_retained_bearings(monkeypatch)
 
     plan = pilot_how(PLC(program), target, max_scans=60)
@@ -353,9 +349,7 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
     assert verified
     assert all(dests == (guard_a.name,) and accepted for dests, accepted in verified)
     assert len(retained) == 1
-    assert tuple(
-        rung.dest for rung in retained[0][1].correction.pilot_rungs
-    ) == (guard_a.name,)
+    assert tuple(rung.dest for rung in retained[0][1].correction.pilot_rungs) == (guard_a.name,)
 
 
 def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
@@ -389,9 +383,7 @@ def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
 def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
     monkeypatch,
 ) -> None:
-    program, heel_step, guard_10, guard_94, start, target = (
-        _successive_overwrite_program()
-    )
+    program, heel_step, guard_10, guard_94, start, target = _successive_overwrite_program()
     retained = _capture_retained_bearings(monkeypatch)
 
     plan = pilot_how(PLC(program), target, max_scans=60)
@@ -403,9 +395,10 @@ def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
     # at 10, then re-orient and suppress the preceding 81 -> 10 occurrence.
     assert [act.occurrence.from_value for _key, act in retained] == [10, 81]
     assert [act.occurrence.to_value for _key, act in retained] == [94, 10]
-    assert [
-        act.correction.pilot_rungs[0].dest for _key, act in retained
-    ] == [guard_94.name, guard_10.name]
+    assert [act.correction.pilot_rungs[0].dest for _key, act in retained] == [
+        guard_94.name,
+        guard_10.name,
+    ]
     causal_identities = {
         (
             act.occurrence.writer,
@@ -535,9 +528,10 @@ def test_repeated_same_subroutine_writer_calls_have_distinct_addresses() -> None
         and write.transition.tag_name == output.name
     )
     assert len(writes) == 2
-    assert [
-        (write.transition.from_value, write.transition.to_value) for write in writes
-    ] == [(False, True), (False, True)]
+    assert [(write.transition.from_value, write.transition.to_value) for write in writes] == [
+        (False, True),
+        (False, True),
+    ]
 
     addresses = tuple(_write_address(projection, write) for write in writes)
     assert addresses[0] != addresses[1]

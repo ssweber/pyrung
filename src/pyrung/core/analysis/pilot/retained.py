@@ -155,12 +155,17 @@ def _occurrence_repeated(replay: Any, occurrence: RetainedOccurrence) -> bool:
         and run.call_stack == call_stack
         and run.caller_rung == caller_rung
     )
+
     def matches(write: Any) -> bool:
         transition = write.transition
-        return transition.tag_name == occurrence.tag and _values_match(
-            transition.from_value,
-            occurrence.from_value,
-        ) and _values_match(transition.to_value, occurrence.to_value)
+        return (
+            transition.tag_name == occurrence.tag
+            and _values_match(
+                transition.from_value,
+                occurrence.from_value,
+            )
+            and _values_match(transition.to_value, occurrence.to_value)
+        )
 
     if run_rank < len(runs):
         addressed = tuple(
@@ -175,11 +180,7 @@ def _occurrence_repeated(replay: Any, occurrence: RetainedOccurrence) -> bool:
     # of every later peer. There is no stable call-site coordinate in RungRun,
     # so fail closed: any same-context write with the same exact transition is
     # repetition evidence, never proof that the selected occurrence vanished.
-    return any(
-        matches(write)
-        for run in runs
-        for write in projection.writes_for_run(run)
-    )
+    return any(matches(write) for run in runs for write in projection.writes_for_run(run))
 
 
 def replay_retained_prefix(
@@ -201,9 +202,7 @@ def replay_retained_prefix(
         raise KeyError((floor_scan, through_scan))
     log = source._scan_log.snapshot()
     if floor_scan < log.base_scan:
-        raise ValueError(
-            f"retained floor {floor_scan} predates scan-log horizon {log.base_scan}"
-        )
+        raise ValueError(f"retained floor {floor_scan} predates scan-log horizon {log.base_scan}")
 
     replay = fork_with_pilot_rungs(
         source,
@@ -292,10 +291,7 @@ def _retained_correction_candidates(
     )
     logger.debug(
         "retained raw hypotheses=%r absence=%r",
-        tuple(
-            (item.kind, item.holds, item.sources)
-            for item in produced
-        ),
+        tuple((item.kind, item.holds, item.sources) for item in produced),
         absence,
     )
     candidates: list[_ConfirmedCorrection] = []
@@ -376,17 +372,13 @@ def read_retained_replay(world: Any) -> RetainedReplay | None:
     floor_scan = history.oldest_scan_id
     through_scan = work.state.scan_id
     installed = tuple(getattr(state, "pilot_rungs", ()))
-    excluded = frozenset(
-        getattr(state, "correction_nogoods", {}).get(frame.key, set())
-    )
+    excluded = frozenset(getattr(state, "correction_nogoods", {}).get(frame.key, set()))
 
     blockers: list[tuple[str, Any]] = []
     seen_blockers: set[tuple[str, str]] = set()
     nodes = tuple(frame.tree.iter_nodes(order="depth_first"))
     frontier_needs = tuple(
-        (node.tag, node.value)
-        for node in nodes
-        if not node.satisfied and node.value is not None
+        (node.tag, node.value) for node in nodes if not node.satisfied and node.value is not None
     )
     for node in reversed(nodes):
         if (
@@ -565,13 +557,10 @@ def _merge_retained_bearings(base: Bearing, addition: Bearing) -> Bearing | None
         identity=correction_identity(rungs),
         pilot_rungs=rungs,
         sources=tuple(
-            dict.fromkeys(
-                (*base_act.correction.sources, *addition_act.correction.sources)
-            )
+            dict.fromkeys((*base_act.correction.sources, *addition_act.correction.sources))
         ),
         justification=(
-            f"{base_act.correction.justification}; then "
-            f"{addition_act.correction.justification}"
+            f"{base_act.correction.justification}; then {addition_act.correction.justification}"
         ),
     )
     pairs = _correction_pairs(rungs)

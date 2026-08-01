@@ -769,9 +769,7 @@ class RungFiringTimelines(Generic[K]):
             if not kept:
                 continue
             frozen._timelines[rung_index] = kept
-            retained_fired_only = any(
-                isinstance(range_.payload, FiredOnly) for range_ in kept
-            )
+            retained_fired_only = any(isinstance(range_.payload, FiredOnly) for range_ in kept)
             frozen._mode[rung_index] = "fired_only" if retained_fired_only else "cycle"
             if retained_fired_only and rung_index in self._fired_only_writes:
                 # Share the immutable PMap so its sentinel values retain exact

@@ -448,11 +448,7 @@ def observe_departure(
     # causal explanation.  On a long folded run, rebuilding that explanation
     # merely to discover an already-proven clean forward continuation turns
     # this classification into a history replay.
-    if (
-        work is not None
-        and cause_scan is not None
-        and cause_scan > work.history.oldest_scan_id
-    ):
+    if work is not None and cause_scan is not None and cause_scan > work.history.oldest_scan_id:
         anchor_snap = dict(work.history.at(cause_scan - 1).tags)
     else:
         anchor_snap = dict(source_snap)
@@ -464,11 +460,10 @@ def observe_departure(
         if earned_work is not None and getattr(earned_work, "components", ())
         else EarnedWorkReceipt()
     )
+
     def _reading(*, explain: bool) -> DepartureReading:
         chain = (
-            _shared_cause(work, channel_tag, cause_scan)
-            if explain and work is not None
-            else None
+            _shared_cause(work, channel_tag, cause_scan) if explain and work is not None else None
         )
         return _departure_reading(
             chain,

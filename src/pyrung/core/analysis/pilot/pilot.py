@@ -569,9 +569,7 @@ def _record_attempt(
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
     retained = isinstance(act, RetainedReplay)
-    if attempt.confirmed_correction is not None and (
-        not retained or attempt.trial is not None
-    ):
+    if attempt.confirmed_correction is not None and (not retained or attempt.trial is not None):
         _anchor_frame_receipt(frame, state, objective)
         _install_confirmed_correction(
             state,
@@ -903,19 +901,14 @@ def _transition_once(
             if attempt.stall_receipt is not None
             else (
                 attempt.trial.execution.coast_receipt.stop_reason
-                if (
-                    attempt.trial is not None
-                    and attempt.trial.execution.coast_receipt is not None
-                )
+                if (attempt.trial is not None and attempt.trial.execution.coast_receipt is not None)
                 else "terminal-coast"
             )
         )
         ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
 
     if attempt.trial is None:
-        ctx.compass, _ = ctx.compass.apply(
-            (ActionNogoodObservation(frame.key, act_identity(act)),)
-        )
+        ctx.compass, _ = ctx.compass.apply((ActionNogoodObservation(frame.key, act_identity(act)),))
         return _IterationTransition(result=result, frame=frame, attempt=attempt)
 
     trial = _adopt_trial(attempt.trial, frame, state, ctx)

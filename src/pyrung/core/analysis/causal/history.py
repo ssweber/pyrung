@@ -241,9 +241,7 @@ def _find_last_transition_scan(
             initial_tags,
             ids,
         )
-        scan_log_scan = (
-            scan_log_transition.scan_id if scan_log_transition is not None else None
-        )
+        scan_log_scan = scan_log_transition.scan_id if scan_log_transition is not None else None
         observed = timelines.observed_writers_of(tag_name) if timelines is not None else frozenset()
         if observed and timelines is not None:
             timeline_scan = _last_transition_scan_via_timeline(

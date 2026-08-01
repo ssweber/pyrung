@@ -260,9 +260,7 @@ def observe(profile: Profile) -> Iterator[None]:
 
     def capture(self: PLC, target_scan_id: int) -> Any:
         profile.capture_requests += 1
-        hit = self._cached_replay_capture is not None and (
-            self._cached_replay_capture[0] == target_scan_id
-        )
+        hit = target_scan_id in self._cached_replay_captures
         profile.capture_hits += int(hit)
         profile.capture_misses += int(not hit)
         started = time.perf_counter()

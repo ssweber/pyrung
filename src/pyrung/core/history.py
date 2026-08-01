@@ -47,7 +47,9 @@ class _CausalHistoryWindow:
         first_transition_scan: int,
         last_scan: int | None,
     ) -> None:
-        newest = backing.newest_scan_id if last_scan is None else min(last_scan, backing.newest_scan_id)
+        newest = (
+            backing.newest_scan_id if last_scan is None else min(last_scan, backing.newest_scan_id)
+        )
         context = max(backing.oldest_scan_id, first_transition_scan - 1)
         self._backing = backing
         self._oldest = context

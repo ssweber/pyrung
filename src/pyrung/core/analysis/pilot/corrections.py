@@ -240,9 +240,7 @@ def derive_correction_hypotheses(
     if incident_transition_only:
         precise = _precise_causes(plc, incident, ctx)
         return (
-            _dedupe_hypotheses(
-                hypothesis for hypothesis in precise if hypothesis.incident_local
-            ),
+            _dedupe_hypotheses(hypothesis for hypothesis in precise if hypothesis.incident_local),
             frozenset(),
         )
 
@@ -267,10 +265,7 @@ def derive_correction_hypotheses(
             hypothesis.kind == "latch-exposure"
             or (
                 hypothesis.incident_local
-                and (
-                    channel_chain is None
-                    or bool(channel_chain.intersection(hypothesis.sources))
-                )
+                and (channel_chain is None or bool(channel_chain.intersection(hypothesis.sources)))
             )
         )
         and incident_changes.intersection(hypothesis.sources)
@@ -621,10 +616,7 @@ def _coil_corrections(
         minimal_joint = [
             candidate
             for candidate in joint_candidates
-            if not any(
-                set(other) < set(candidate)
-                for other in joint_candidates
-            )
+            if not any(set(other) < set(candidate) for other in joint_candidates)
         ]
         for conjunction in minimal_joint:
             corrections.append(
@@ -632,10 +624,7 @@ def _coil_corrections(
                     kind="latch-exposure",
                     holds=_guarded(list(conjunction), tuple(conj_latches)),
                     sources=(*conj_latches, *(h[0] for h in conjunction)),
-                    detail=(
-                        f"clear {len(conj_latches)} active latches: "
-                        f"{', '.join(conj_latches)}"
-                    ),
+                    detail=(f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}"),
                     incident_local=True,
                 )
             )

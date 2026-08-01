@@ -462,10 +462,7 @@ def _holds_defeat_needed(
                 dict(zip(read_tags, values, strict=True))
                 for values in product(*(held_values[tag] for tag in read_tags))
             )
-            if not all(
-                _expr_forced_true(expr, assignment) is False
-                for assignment in assignments
-            ):
+            if not all(_expr_forced_true(expr, assignment) is False for assignment in assignments):
                 all_blocked = False
                 break
         if all_blocked:

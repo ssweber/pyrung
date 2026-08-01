@@ -61,9 +61,7 @@ def test_observed_seed_departure_replays_full_ordinary_drive() -> None:
 
 
 def test_observed_departures_compose_through_successive_outer_loop_rebases() -> None:
-    program, guard_a, guard_b, start, fault_a, fault_b, target = (
-        _composed_startup_program()
-    )
+    program, guard_a, guard_b, start, fault_a, fault_b, target = _composed_startup_program()
     plan = pilot_how(PLC(program), target, max_scans=60)
 
     assert plan.reachable, plan.reason
