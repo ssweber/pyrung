@@ -2,8 +2,8 @@
 
 The producer emits absence-root, precise fired-chain, and enabler hypotheses in
 that order. These are hypotheses, not installed corrections:
-``investigate.py`` ranks and replay-validates them, and ``progress.py`` installs
-at most one confirmed result.
+``correction_candidates.py`` ranks and materializes them, ``investigate.py``
+replay-validates them, and ``progress.py`` installs at most one confirmed result.
 
 Coil writers produce guard-breaking candidates; accumulating instructions ask
 their owner for the operation that prevents or clears an unwanted completion.

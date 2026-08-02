@@ -118,9 +118,10 @@ scan.
    `earned_work.py` supplies conservative target-relative evidence for whether
    a pending departure should be promoted, kept pending, regressed, or expired.
 4. A regression or anomalous departure invokes `causal.py` to read recorded
-   causes. `corrections.py` produces hypotheses; `investigate.py` ranks and
-   replay-tests them; `progress.py` alone installs one confirmed correction and
-   reverts to the selected checkpoint.
+   causes. `corrections.py` produces hypotheses; `correction_candidates.py`
+   ranks and materializes them; `investigate.py` replay-tests them;
+   `progress.py` alone installs one confirmed correction and reverts to the
+   selected checkpoint.
 5. Pending-departure expiry rolls back without claiming the transition was
    impossible and without creating a nogood.
 
@@ -298,9 +299,10 @@ this table only locates the owner.
   `_monitor_trend` detects a channel departure
 - Corrective hypothesis production:
   `corrections.py::derive_correction_hypotheses`
-- Corrective hypothesis ranking, replay, neutralization-versus-masking, and
-  confirmation: `investigate.py::_rank_hypotheses`, `build_replay_fn`, and
-  `_resolve_replay_attempt`
+- Corrective hypothesis identity, ranking, composition, executable scoping,
+  and self-defeat classification: `correction_candidates.py`
+- Corrective replay, neutralization-versus-masking, and confirmation:
+  `investigate.py::build_replay_fn` and `_resolve_replay_attempt`
 - Bounded relational counterexample refinement and pinned suppression
   nominations: `refinement.py`
 - Bounded corrective composition: `recovery.py::compose_corrections`
@@ -422,8 +424,10 @@ Judgment and recovery:
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
-- `investigate.py` — hypothesis ranking, composite replay, excursion replay,
-  and confirmation; no drive-loop ownership
+- `investigate.py` — bounded hypothesis replay, excursion replay, and
+  confirmation; no drive-loop ownership
+- `correction_candidates.py` — correction identity, ordering, composition,
+  executable scoping, and self-defeat checks
 - `refinement.py` — bounded relational refinement and pinned suppression evidence
 - `recovery.py` — bounded corrective-composition transaction
 - `corrections.py` — corrective-hold hypothesis production

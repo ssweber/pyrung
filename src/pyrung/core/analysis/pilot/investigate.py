@@ -6,6 +6,9 @@ exploratory replay returned by ``build_replay_fn``.
 ``refinement.py`` owns bounded relational counterexample refinement and pinned
 suppression nominations; this module retains compatibility facades for its
 former private imports.
+``correction_candidates.py`` owns candidate identity, ordering, composition,
+materialization, and self-defeat checks; compatibility facades here preserve
+the established investigation test surface.
 ``_resolve_replay_attempt`` either accepts, rejects, or composes a candidate;
 bounded candidate composition uses ``_compose_hypotheses`` and always replays
 the composite from the original checkpoint.  This is an orient-phase
@@ -24,12 +27,13 @@ installation belongs to the orchestration/recovery owner.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 
+import pyrung.core.analysis.pilot.correction_candidates as _candidates
 import pyrung.core.analysis.pilot.refinement as _refinement
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.avoid import _hold_allowed
@@ -54,18 +58,15 @@ from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     break_guard_holds,
     derive_correction_hypotheses,
-    producer_envelope_correction_holds,
     refine_relational_hypothesis,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
-from pyrung.core.analysis.pilot.options import _holds_defeat_needed
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _pilot_rung_execution_receipt,
     _pilot_rungs_from_proposals,
     _set_pilot_rungs,
     _target_unresolved_condition,
-    _union_conditions,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
@@ -81,10 +82,7 @@ from pyrung.core.analysis.pilot.recovery import (
 )
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import (
-    UnsupportedConstruct,
     _can_produce,
-    _route_has_no_dead_end,
-    enumerate_trace_choices,
     target_reached,
     trace_back,
 )
@@ -123,56 +121,12 @@ _RelationalRefinementReceipt = _refinement._RelationalRefinementReceipt
 _MAX_CANDIDATE_COMPOSITIONS = 8
 
 ActionPair = tuple[str, Any]
-CorrectionIdentity = tuple[tuple[Any, ...], ...]
-
-
-class UnsupportedOccurrenceScope(RuntimeError):
-    """A retained writer condition cannot be projected without widening it."""
-
-
-def _proposal_pair(proposal: Any) -> ActionPair:
-    if isinstance(proposal, PilotRung):
-        return proposal.dest, proposal.value
-    return proposal
-
-
-def _proposal_identity(proposal: Any) -> tuple[str, Any]:
-    """Pre-install identity used only to compare generated hypotheses.
-
-    A hypothesis names the corrective write and optional operation boundary,
-    not its eventual installed lifetime.  Pair and ``PilotRung`` forms of the
-    same idea therefore remain equivalent during causal closure; durable
-    negative evidence uses :func:`correction_identity` only after scoping.
-    """
-    if isinstance(proposal, PilotRung):
-        return proposal.dest, (
-            _semantic_key(proposal.value),
-            _semantic_key(proposal.operation),
-        )
-    tag, value = proposal
-    return tag, (_semantic_key(value), None)
-
-
-def _hypothesis_identity(proposals: Iterable[Any]) -> tuple[tuple[str, Any], ...]:
-    """Stable comparison key for proposals that may not own a scope yet."""
-    pairs = map(_proposal_identity, proposals)
-    return tuple(sorted(pairs, key=lambda pair: (pair[0], repr(pair[1]))))
-
-
-def correction_identity(pilot_rungs: Iterable[PilotRung]) -> CorrectionIdentity:
-    """Exact identity of an executable, replay-confirmed correction.
-
-    ``_rung_identity`` owns executable identity, including the guard and any
-    owner-issued operation boundary.  A generated pair is only a hypothesis;
-    it cannot become durable negative evidence until investigation gives it a
-    scope and confirms that exact installed form.
-    """
-    identities: list[tuple[Any, ...]] = []
-    for rung in pilot_rungs:
-        if not isinstance(rung, PilotRung):
-            raise TypeError("correction identity requires executable PilotRungs")
-        identities.append(_rung_identity(rung))
-    return tuple(sorted(identities, key=repr))
+CorrectionIdentity = _candidates.CorrectionIdentity
+UnsupportedOccurrenceScope = _candidates.UnsupportedOccurrenceScope
+_proposal_pair = _candidates._proposal_pair
+_proposal_identity = _candidates._proposal_identity
+_hypothesis_identity = _candidates._hypothesis_identity
+correction_identity = _candidates.correction_identity
 
 
 ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
@@ -511,178 +465,27 @@ def _scoped_correction_rungs(
     progress_mark: tuple[tuple[str, Any], ...] = (),
     producer_envelope: bool = False,
 ) -> tuple[PilotRung, ...]:
-    """Give a replay-successful correction its evidence-derived lifetime.
+    """Compatibility facade for candidate correction materialization."""
 
-    The installed form is scoped from the incident-local replay and replayed
-    *again* before confirmation:
-
-    * neutralizing a recorded channel incident -> remain active only while
-      that incident's source context holds;
-    * other observed channel motion -> remain active until its bounded
-      landing;
-    * no channel evidence -> the target-unresolved outer boundary.
-
-    When the caller has an exact progress receipt, its source mark further
-    narrows that lifetime.  A correction proved while the recipe sat at Step
-    101, for example, cannot keep owning the same input after the recipe earns
-    Step 103 without a new proof for that occurrence.
-
-    An operation-bearing :class:`PilotRung` already owns its lifetime and
-    passes through unchanged. This scoper never manufactures operation
-    ownership: only a program/trace owner that can name the operation's actual
-    completion and progress conditions may issue that receipt. A guard-only
-    rung from causal exposure names where the harmful writer fired; for a
-    channel incident that is evidence about the correction, not its start
-    time. The replay-derived source scope replaces that exposure guard so
-    prerequisite inputs can settle before the harmful state begins.
-    """
-    if incident.occurrence_conditions:
-        occurrence_scope = _retained_occurrence_scope(proposals, incident)
-        return _retained_scoped_rungs(
-            plc,
-            proposals,
-            occurrence_scope,
-            ctx,
-        )
-
-    if all(
-        isinstance(proposal, PilotRung) and proposal.operation is not None for proposal in proposals
-    ):
-        return tuple(proposals)
-
-    if producer_envelope and all(isinstance(proposal, PilotRung) for proposal in proposals):
-        # The proposer retained every non-lever producer and caller condition.
-        # This broader executable form is replayed below before installation;
-        # EarnedWork remains the fallback when that structural proof is absent.
-        # Bound the envelope by the outer objective so a sibling producer after
-        # the target (for example Completed -> Resetting) cannot keep ownership
-        # after the route has already landed. Rung-entry evaluation keeps the
-        # correction active through the target-establishing scan.
-        from pyrung.core.condition import AllCondition
-
-        unresolved = _target_unresolved_condition(
-            plc,
-            ctx.target.tag,
-            ctx.target.value,
-            ctx.target.predicate,
-        )
-        return tuple(
-            PilotRung(
-                proposal.dest,
-                proposal.value,
-                AllCondition(unresolved, proposal.guard),
-                operation=proposal.operation,
-            )
-            for proposal in proposals
-        )
-
-    scoped_proposals = tuple(
-        (proposal.dest, proposal.value)
-        if isinstance(proposal, PilotRung)
-        and proposal.operation is None
-        and (incident.channel_tag is not None or progress_mark)
-        else proposal
-        for proposal in proposals
+    return _candidates._scoped_correction_rungs(
+        plc,
+        proposals,
+        incident,
+        outcome,
+        ctx,
+        progress_mark,
+        producer_envelope,
+        neutralized=outcome.justification is ReplayJustification.NEUTRALIZED,
     )
-
-    channel_tag = incident.channel_tag
-    exposure_guards = tuple(
-        proposal.guard
-        for proposal in proposals
-        if isinstance(proposal, PilotRung) and proposal.operation is None
-    )
-    if (
-        channel_tag is not None
-        and (channel := plc._known_tags_by_name.get(channel_tag)) is not None
-        and (outcome.justification is ReplayJustification.NEUTRALIZED or outcome.landed)
-    ):
-        from pyrung.core.condition import CompareEq, CompareNe
-
-        before = incident.before_snap.get(channel_tag)
-        if (
-            outcome.justification is ReplayJustification.NEUTRALIZED
-            and not outcome.landed
-            and exposure_guards
-        ):
-            # The bounded proof observed no safe landing. Preserve the exact
-            # source-through-exposure lifetime that succeeded exploratorily;
-            # narrowing back to the source would release the correction on the
-            # first harmful intermediate state.
-            scope = _union_conditions((CompareEq(channel, before), *exposure_guards))
-        else:
-            landing = outcome.snapshot.get(channel_tag) if outcome.landed else before
-            if outcome.landed and progress_mark and exposure_guards:
-                # Reaching the safe channel value is not yet an acknowledgment:
-                # the user program reads that landing on its next scan. Keep
-                # the correction across the observed source/intermediate/
-                # landing corridor until the earned-work coordinate advances.
-                scope = _union_conditions(
-                    (
-                        CompareEq(channel, before),
-                        *exposure_guards,
-                        CompareEq(channel, landing),
-                    )
-                )
-            else:
-                scope = (
-                    CompareEq(channel, before)
-                    if _values_match(landing, before)
-                    else CompareNe(channel, landing)
-                )
-    else:
-        scope = _target_unresolved_condition(
-            plc,
-            ctx.target.tag,
-            ctx.target.value,
-            ctx.target.predicate,
-        )
-    coordinates = []
-    if progress_mark:
-        from pyrung.core.condition import AllCondition, CompareEq
-
-        for tag_name, value in progress_mark:
-            tag = plc._known_tags_by_name.get(tag_name)
-            if tag is None:
-                raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
-            coordinates.append(CompareEq(tag, value))
-        scope = AllCondition(scope, *coordinates)
-    return tuple(_pilot_rungs_from_proposals(list(scoped_proposals), scope))
 
 
 def _retained_occurrence_scope(
     proposals: tuple[Any, ...],
     incident: DeviationIncident,
 ) -> Any:
-    """Project corrected direct conjuncts out of one observed writer guard.
+    """Compatibility facade for retained occurrence projection."""
 
-    Rung-level conditions are an implicit conjunction. A conjunct that reads
-    only a corrected destination is the lever term the correction deliberately
-    falsifies; the remaining original condition objects name the exact writer
-    opportunity. Mixed/nested dependencies are declined because dropping one
-    would widen the occurrence beyond recorded evidence.
-    """
-
-    from pyrung.core.analysis.pdg import _extract_reads_from_condition
-    from pyrung.core.condition import AllCondition
-
-    corrected = {_proposal_pair(proposal)[0] for proposal in proposals}
-    retained: list[Any] = []
-    for condition in incident.occurrence_conditions:
-        reads = set(_extract_reads_from_condition(condition, {}))
-        overlap = reads & corrected
-        if not overlap:
-            retained.append(condition)
-            continue
-        if not reads <= corrected:
-            raise UnsupportedOccurrenceScope(
-                "retained writer has a mixed condition containing both the "
-                f"corrected lever and occurrence context: {condition!r}"
-            )
-    if not retained:
-        raise UnsupportedOccurrenceScope(
-            "retained writer has no independent condition left after projecting the corrected lever"
-        )
-    return retained[0] if len(retained) == 1 else AllCondition(*retained)
+    return _candidates._retained_occurrence_scope(proposals, incident)
 
 
 def _retained_scoped_rungs(
@@ -691,67 +494,18 @@ def _retained_scoped_rungs(
     occurrence_scope: Any,
     ctx: Any,
 ) -> tuple[PilotRung, ...]:
-    """Start at the exact occurrence and self-continue only to the target.
+    """Compatibility facade for retained correction materialization."""
 
-    The corrected value is an executable receipt that this guard-only rule
-    already fired. Combining it with the target's unresolved condition keeps
-    the correction through the target-establishing scan, then releases it on
-    the following scan. This is deliberately not an ``OperationReceipt``:
-    retained causal evidence does not own a program operation contract.
-    """
-
-    from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
-
-    unresolved = _target_unresolved_condition(
-        plc,
-        ctx.target.tag,
-        ctx.target.value,
-        ctx.target.predicate,
-    )
-    result: list[PilotRung] = []
-    for proposal in proposals:
-        if isinstance(proposal, PilotRung) and proposal.operation is not None:
-            result.append(proposal)
-            continue
-        tag, value = _proposal_pair(proposal)
-        dest = plc._known_tags_by_name.get(tag)
-        if dest is None:
-            raise KeyError(f"retained correction tag {tag!r} is not a program tag")
-        continuation = CompareEq(dest, value)
-        # The historical occurrence owns the start even when the replay-floor
-        # snapshot already satisfies the eventual target.  Requiring
-        # ``unresolved`` on that same scan would prevent the intervention that
-        # preserves the target from ever starting.  After the occurrence, the
-        # corrected value self-continues only while the target is unresolved.
-        guard = AnyCondition(
-            occurrence_scope,
-            AllCondition(unresolved, continuation),
-        )
-        result.append(PilotRung(tag, value, guard))
-    return tuple(result)
+    return _candidates._retained_scoped_rungs(plc, proposals, occurrence_scope, ctx)
 
 
 def _discharges_occurrence_requirements(
     proposals: tuple[Any, ...],
     requirements: tuple[tuple[str, Any], ...],
 ) -> bool:
-    """Whether *proposals* directly falsify every recorded support demand.
+    """Compatibility facade for retained support-demand classification."""
 
-    The requirements come from the already-recorded producer occurrence.  This
-    reader does not reconstruct its cause or widen a guard: it only recognizes
-    the correction that changes each exact external support away from the value
-    that made the producer conductive.
-    """
-    if not proposals or not requirements:
-        return False
-    demanded = {tag: value for tag, value in requirements}
-    corrected: set[str] = set()
-    for proposal in proposals:
-        tag, value = _proposal_pair(proposal)
-        if tag not in demanded or _values_match(value, demanded[tag]):
-            return False
-        corrected.add(tag)
-    return corrected == set(demanded)
+    return _candidates._discharges_occurrence_requirements(proposals, requirements)
 
 
 def _exploratory_correction_rungs(
@@ -761,68 +515,15 @@ def _exploratory_correction_rungs(
     progress_mark: tuple[tuple[str, Any], ...],
     ctx: Any,
 ) -> tuple[Any, ...]:
-    """Test a raw correction only where the incident was observed.
+    """Compatibility facade for exploratory candidate materialization."""
 
-    A global exploratory hold is a broader intervention than the guarded fact
-    PILOT would install. It can therefore erase earlier, compatible work and
-    reject a locally-correct hypothesis for behavior the hypothesis would never
-    own. An exact EarnedWork mark is enough to keep that first replay at the incident;
-    the accepted outcome still supplies the narrower channel lifetime below.
-    """
-
-    from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
-
-    if incident.occurrence_conditions:
-        occurrence_scope = _retained_occurrence_scope(proposals, incident)
-        return _retained_scoped_rungs(plc, proposals, occurrence_scope, ctx)
-
-    progress_coordinates = []
-    source_scope = None
-    channel_name = incident.channel_tag
-    if channel_name is not None:
-        channel = plc._known_tags_by_name.get(channel_name)
-        if channel is None:
-            raise KeyError(f"incident channel {channel_name!r} is not a program tag")
-        source_scope = CompareEq(channel, incident.before_snap.get(channel_name))
-    for tag_name, value in progress_mark:
-        tag = plc._known_tags_by_name.get(tag_name)
-        if tag is None:
-            raise KeyError(f"progress receipt tag {tag_name!r} is not a program tag")
-        progress_coordinates.append(CompareEq(tag, value))
-    if source_scope is None and not progress_coordinates:
-        return proposals
-
-    result: list[PilotRung] = []
-    for proposal in proposals:
-        if isinstance(proposal, PilotRung) and proposal.operation is not None:
-            result.append(proposal)
-            continue
-        if isinstance(proposal, PilotRung):
-            # Causal exposure is where the harmful writer becomes conductive.
-            # Start in the source context and keep the input owned through that
-            # exposure; otherwise a Boolean overlay releases it on the first
-            # intermediate channel scan.
-            lifetime = (
-                AnyCondition(source_scope, proposal.guard)
-                if source_scope is not None
-                else proposal.guard
-            )
-            guard = (
-                AllCondition(lifetime, *progress_coordinates) if progress_coordinates else lifetime
-            )
-            result.append(PilotRung(proposal.dest, proposal.value, guard))
-            continue
-        guard_terms = (
-            *((source_scope,) if source_scope is not None else ()),
-            *progress_coordinates,
-        )
-        result.extend(_pilot_rungs_from_proposals([proposal], AllCondition(*guard_terms)))
-    return tuple(result)
-
-
-# ---------------------------------------------------------------------------
-# Replay harness — fork, hold, replay steps, trace-back, judge
-# ---------------------------------------------------------------------------
+    return _candidates._exploratory_correction_rungs(
+        plc,
+        proposals,
+        incident,
+        progress_mark,
+        ctx,
+    )
 
 
 def incident_regression_witness(
@@ -1927,43 +1628,18 @@ def _hold_is_noop(
     after_snap: Mapping[str, Any] | None = None,
     synthesis_rungs: Sequence[PilotRung] = (),
 ) -> bool:
-    """A hold that changes nothing cannot be a correction.
+    """Compatibility facade for inert-candidate classification."""
 
-    Pinning *tag* at a value it already holds is inert when no program writer
-    can move it off that value (every writer stamps a literal matching it —
-    the clear-only idiom: holding ``Heat_xPause`` at its rest 0 counters
-    nothing, because the program only ever writes 0).  A FREEZE survives this
-    test: it either drives the tag OFF its current value or pins against a
-    writer that can produce a different one.  Oscillating (``PilotRung``)
-    values are never no-ops.
-
-    A tag recorded as moving during this incident, whose endpoint differs from
-    its anchor, or which is written by the installed synthesis overlay is not a
-    no-op even when the proposed correction equals its anchor value.  The
-    overlay is executable writer evidence outside the program PDG; replay, not
-    this cheap prefilter, decides whether a different scoped rule is useful.
-    """
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.steerable import _literal_write
-
-    if tag in incident_movers:
-        return False
-    if after_snap is not None and not _values_match(after_snap.get(tag), value):
-        return False
-    if getattr(value, "rules", None) is not None:
-        return False
-    if any(rung.dest == tag for rung in synthesis_rungs):
-        return False
-    if not _values_match(snap.get(tag), value):
-        return False
-    for ri in pdg.writers_of.get(tag, frozenset()):
-        ro = resolve_rung(program, pdg.rung_nodes[ri])
-        if ro is None:
-            return False  # unreadable writer — assume it could move the tag
-        lw = _literal_write(ro, tag)
-        if lw is None or not _values_match(lw, value):
-            return False  # a write that can move the tag — the hold pins something
-    return True
+    return _candidates._hold_is_noop(
+        tag,
+        value,
+        snap,
+        pdg,
+        program,
+        incident_movers,
+        after_snap,
+        synthesis_rungs,
+    )
 
 
 def _rank_hypotheses(
@@ -1972,151 +1648,18 @@ def _rank_hypotheses(
     incident: DeviationIncident,
     primal_extra: frozenset[str] = frozenset(),
 ) -> list[CorrectionHypothesis]:
-    """Order competing hypotheses by **causal primacy**, not generation order.
+    """Compatibility facade for correction-candidate ordering."""
 
-    The channel departure (``incident.channel_tag`` — the ejection itself)
-    is the incident; other departures are collateral downstream of it (the
-    state-8 shared-init resetting ``Heat_CurStep``).  Two primacy signals,
-    strongest first:
-
-    * **chain membership** — the hypothesis's tags sit inside the cause chain
-      of the channel departure.  ``chase_chain_tags`` follows the native deep
-      cause chain across held pipeline enablers, so on a PackML-shaped program
-      the chain reaches the starved watchdog directly.
-    * **temporal precedence** — how close the hypothesis's most recent source
-      transition sits to the channel departure scan.  Pure scan-log
-      observation, no inversion: the ejecting watchdog's Done rises *at* the
-      ejection; a bystander (``Test_Simulate_1st_Scan``'s alarm timer) fired
-      somewhere earlier in a 1000-scan coast, and a collateral symptom
-      (``Heat_CurStep`` at 1810 vs the ejection at 1855) trails by the same
-      measure.
-
-    Ties break by lightest intervention, then generation order.
-    """
-    chan = incident.channel_tag
-    dep_scan = {d.tag: d.scan for d in incident.departures if d.scan is not None}
-    primal: set[str] = set()
-    chan_scan = incident.end_scan
-    if chan is not None:
-        if dep_scan.get(chan) is not None:
-            chan_scan = dep_scan[chan]
-        # All tags on the chain, not just steerable roots: an absence-caused
-        # ejection (a sensor that never moved) has no steerable mover at all.
-        # The native deep chain crosses held pipeline enablers and reaches the
-        # true root, making causal primacy exact rather than won on temporal
-        # proximity.
-        primal = {chan} | chase_chain_tags(plc, chan, scan=dep_scan.get(chan))
-    # Deep-walk roots of the channel departure (``primal_extra``) are chain
-    # members by construction — an absence root has no transition for the
-    # proximity signal to see, so without this it would rank dead last behind
-    # every temporally-nearby bystander.
-    primal |= primal_extra
-
-    big = 1 << 30
-
-    def _proximity(tags: set[str]) -> int:
-        best = big
-        for t in tags:
-            last = _last_transition_scan(plc, t, incident.anchor_scan, chan_scan)
-            if last is not None:
-                best = min(best, chan_scan - last)
-        return best
-
-    def _key(pair: tuple[int, CorrectionHypothesis]) -> tuple[int, int, int, int, int, int]:
-        idx, h = pair
-        tags = set(h.sources) | {_proposal_pair(p)[0] for p in h.holds}
-        in_chain = 0 if (primal and tags & primal) else 1
-        incident_specific = 0 if (h.kind == "latch-exposure" or h.incident_local) else 1
-        if h.kind == "absence-root":
-            # A recorded external terminal is a true causal leaf (the Sail
-            # permissive); a never-written default is a broad explanation of
-            # the cold world (the factory-reset command). Exact fired-chain
-            # evidence belongs between those two strengths.
-            family = 0 if h.history_origin == "external" else 2
-        elif h.kind == "precise-cause":
-            family = 1
-        else:
-            family = 3
-        # Chain membership establishes relevance; it does not erase temporal
-        # precision within a hypothesis family. Exact latch evidence gets its
-        # own stronger tier, while a true absence root remains the explanation
-        # rather than losing to a downstream precise suppressor on the same
-        # chain. Within liveness/precise siblings, the incident-nearest owner
-        # still beats unrelated first-scan noise.
-        proximity = _proximity(tags)
-        return (in_chain, incident_specific, family, proximity, len(h.holds), idx)
-
-    return [h for _, h in sorted(enumerate(hypotheses), key=_key)]
+    return _candidates._rank_hypotheses(plc, hypotheses, incident, primal_extra)
 
 
 def _compose_hypotheses(
     base: CorrectionHypothesis,
     addition: CorrectionHypothesis,
 ) -> CorrectionHypothesis | None:
-    """Create a newly replayable union, declining contradictory operations."""
-    # A composed replacement is a new causal closure. Keep the exact forms of
-    # any individually widened members; a union of separately complete
-    # envelopes is not itself proof that their combined cascade is complete.
-    base_holds = base.fallback_holds or base.holds
-    addition_holds = addition.fallback_holds or addition.holds
-    holds = list(base_holds)
-    seen = {_proposal_identity(hold) for hold in holds}
-    by_dest = {dest: value for dest, value in map(_proposal_pair, holds)}
-    for hold in addition_holds:
-        dest, value = _proposal_pair(hold)
-        if dest in by_dest and not _values_match(by_dest[dest], value):
-            return None
-        identity = _proposal_identity(hold)
-        if identity not in seen:
-            seen.add(identity)
-            holds.append(hold)
-            by_dest.setdefault(dest, value)
-    if len(holds) == len(base_holds):
-        return None
+    """Compatibility facade for correction-candidate composition."""
 
-    producer_cuts = list(base.producer_cuts)
-    seen_cuts = {
-        (
-            hold[0],
-            _semantic_key(hold[1]),
-            tag,
-            _semantic_key(value),
-        )
-        for hold, tag, value in producer_cuts
-    }
-    cut_assignments = {tag: value for _hold, tag, value in producer_cuts}
-    cut_conflict = False
-    for hold, tag, value in addition.producer_cuts:
-        if tag in cut_assignments and not _values_match(cut_assignments[tag], value):
-            cut_conflict = True
-            break
-        key = (hold[0], _semantic_key(hold[1]), tag, _semantic_key(value))
-        if key not in seen_cuts:
-            seen_cuts.add(key)
-            producer_cuts.append((hold, tag, value))
-        cut_assignments.setdefault(tag, value)
-    if cut_conflict:
-        # The exact nested correction may still be valid, but these two pieces
-        # cannot support one coordinated structural widening.
-        producer_cuts = []
-
-    kind = base.kind if base.kind == addition.kind else "nested-cause"
-    return CorrectionHypothesis(
-        kind=kind,
-        holds=tuple(holds),
-        sources=tuple(dict.fromkeys((*base.sources, *addition.sources))),
-        detail=f"nested causal closure: {base.detail}; then {addition.detail}",
-        constraint=base.constraint or addition.constraint,
-        incident_local=base.incident_local and addition.incident_local,
-        history_origin=(
-            base.history_origin if base.history_origin == addition.history_origin else None
-        ),
-        producer_envelope=False,
-        fallback_holds=(),
-        producer_cuts=tuple(producer_cuts),
-        producer_sources=tuple(dict.fromkeys((*base.producer_sources, *addition.producer_sources))),
-        producer_causal_spine=(base.producer_causal_spine | addition.producer_causal_spine),
-    )
+    return _candidates._compose_hypotheses(base, addition)
 
 
 def _reprove_composite_producer_envelope(
@@ -2124,42 +1667,12 @@ def _reprove_composite_producer_envelope(
     ctx: Any,
     channel_tag: str | None,
 ) -> CorrectionHypothesis:
-    """Promote one exact nested closure only after a fresh coordinated proof."""
+    """Compatibility facade for coordinated producer-envelope proof."""
 
-    if (
-        channel_tag is None
-        or not hypothesis.producer_cuts
-        or not hypothesis.producer_sources
-        or not hypothesis.producer_causal_spine
-    ):
-        return hypothesis
-    exact_holds = hypothesis.holds
-    exact_pairs = tuple(_proposal_pair(hold) for hold in exact_holds)
-    if not all(
-        any(
-            owned[0] == hold[0] and _values_match(owned[1], hold[1])
-            for owned, _tag, _value in hypothesis.producer_cuts
-        )
-        for hold in exact_pairs
-    ):
-        # Mixed causal closures (for example latch + timer operation) retain
-        # their exact composite; only a fully-owned cut may be widened.
-        return hypothesis
-    widened = producer_envelope_correction_holds(
-        exact_pairs,
-        hypothesis.producer_sources,
+    return _candidates._reprove_composite_producer_envelope(
+        hypothesis,
         ctx,
         channel_tag,
-        hypothesis.producer_cuts,
-        hypothesis.producer_causal_spine,
-    )
-    if not widened:
-        return hypothesis
-    return replace(
-        hypothesis,
-        holds=widened,
-        producer_envelope=True,
-        fallback_holds=exact_holds,
     )
 
 
@@ -2745,17 +2258,15 @@ def _active_pilot_rungs_defeat_needed(
     pdg: Any,
     program: Any,
 ) -> bool:
-    """Whether the guarded correction provably pins a checkpoint need.
+    """Compatibility facade for active correction self-defeat checks."""
 
-    The compiler-owned receipt evaluates the exact pre-incident world because
-    synthesized PilotRung branches read one frozen rung-entry snapshot. Only
-    effective owners are checked as one assignment, so a coordinated correction
-    that forces an ``And``-gated reset is caught even when no member defeats
-    progress alone; dormant and shadowed siblings cannot manufacture a pin.
-    """
-    overlay = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
-    active = [(rung.dest, rung.value) for rung in overlay.effective]
-    return _holds_defeat_needed(active, needed, pdg, program)
+    return _candidates._active_pilot_rungs_defeat_needed(
+        pilot_rungs,
+        needed,
+        snapshot,
+        pdg,
+        program,
+    )
 
 
 def _continuation_with_active_correction(
@@ -2763,91 +2274,13 @@ def _continuation_with_active_correction(
     snapshot: Mapping[str, Any],
     ctx: Any,
 ) -> FrontierStatus:
-    """Classify static target continuation under one executable correction.
+    """Compatibility facade for static correction continuation checks."""
 
-    This is the negative-write counterpart of
-    :func:`_active_pilot_rungs_defeat_needed`: a pin can defeat progress by
-    making every producer guard false, even though no conflicting write fires.
-    Only an explicit action contradiction on every enumerated route proves the
-    cut. A viable static trace is still ``Unknown`` because only execution can
-    witness the target; an opaque or incomplete trace stays ``Unknown`` too.
-    """
-
-    if not all(isinstance(rung, PilotRung) for rung in pilot_rungs):
-        return Unknown("correction has no executable scope for continuation analysis")
-    if getattr(ctx.target, "predicate", None) is not None:
-        return Unknown("predicate target continuation requires execution")
-    overlay = _pilot_rung_execution_receipt(pilot_rungs, snapshot)
-    active = {rung.dest: rung.value for rung in overlay.effective}
-    if not active:
-        return Unknown("correction is inactive at the incident anchor")
-    projected = {**dict(snapshot), **active}
-    choices = enumerate_trace_choices(
-        ctx.target.tag,
-        ctx.target.value,
-        projected,
-        ctx.pdg,
-        ctx.program,
-        steerable=ctx.steerable,
-        clear_only=getattr(ctx, "clear_only", frozenset()),
+    return _candidates._continuation_with_active_correction(
+        pilot_rungs,
+        snapshot,
+        ctx,
     )
-    routes: tuple[Any, ...] = tuple(choices) if choices else (None,)
-    saw_complete = False
-    for route in routes:
-        rejected_actions: frozenset[tuple[str, Any]] = frozenset()
-        route_blocked = False
-        for _ in range(16):
-            try:
-                tree = trace_back(
-                    ctx.target.tag,
-                    ctx.target.value,
-                    projected,
-                    ctx.pdg,
-                    ctx.program,
-                    ctx.steerable,
-                    clear_only=getattr(ctx, "clear_only", frozenset()),
-                    opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
-                    pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
-                    route=route,
-                    prior=getattr(ctx, "domain_prior", None),
-                    rejected_actions=rejected_actions,
-                )
-            except UnsupportedConstruct:
-                return Unknown("target trace contains an unsupported construct")
-            # A dead-end leaf is incomplete evidence, not proof that the active
-            # correction cut a route.  Keep Unknown distinct from NoRoute by
-            # declining the static rejection and allowing bounded replay to judge.
-            if not _route_has_no_dead_end([tree]):
-                frontier = tuple(
-                    (leaf.tag, leaf.value) for leaf in tree.leaves() if not leaf.satisfied
-                )
-                return Unknown("target trace has an unreadable frontier", frontier)
-            actions = tree.ordered_action_details()
-            if not actions:
-                return Unknown("target trace has no executable continuation")
-            conflicts = frozenset(
-                action.pair
-                for action in actions
-                if action.tag in active and not _values_match(active[action.tag], action.value)
-            )
-            if not conflicts:
-                return Unknown(
-                    "a target continuation remains compatible with the correction",
-                    tuple(action.pair for action in actions),
-                )
-            novel = conflicts - rejected_actions
-            if not novel:
-                route_blocked = True
-                saw_complete = True
-                break
-            rejected_actions |= novel
-        if not route_blocked:
-            # Alternative enumeration is bounded.  Exhaustion is Unknown, not
-            # proof that the route is absent.
-            return Unknown("target alternative enumeration exhausted its bound")
-    if saw_complete:
-        return NoRoute("active correction conflicts with every complete target trace")
-    return Unknown("target continuation could not be classified")
 
 
 # ---------------------------------------------------------------------------
@@ -2861,18 +2294,6 @@ def _last_transition_scan(
     start_scan: int,
     end_scan: int,
 ) -> int | None:
-    """The latest scan in the window where *tag* changed value, or ``None``.
+    """Compatibility facade for candidate-ranking transition evidence."""
 
-    The temporal-precedence signal for hypothesis ranking: the watchdog Done
-    that ejected the bearing rises *at* the channel departure; a bystander
-    fired somewhere earlier in a long coast window.
-    """
-    try:
-        states = plc.history.range(start_scan, end_scan + 1)
-    except Exception:  # noqa: BLE001
-        return None
-    last: int | None = None
-    for prev, cur in zip(states, states[1:], strict=False):
-        if not _values_match(prev.tags.get(tag), cur.tags.get(tag)):
-            last = cur.scan_id
-    return last
+    return _candidates._last_transition_scan(plc, tag, start_scan, end_scan)

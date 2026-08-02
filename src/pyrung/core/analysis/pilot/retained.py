@@ -17,16 +17,16 @@ from pyrung.core.analysis.causal._rung_writes import (
 )
 from pyrung.core.analysis.pilot.coast import CoastTriggerEvent
 from pyrung.core.analysis.pilot.constrained_reachability import NoRoute
-from pyrung.core.analysis.pilot.corrections import derive_correction_hypotheses
-from pyrung.core.analysis.pilot.investigate import (
+from pyrung.core.analysis.pilot.correction_candidates import (
     UnsupportedOccurrenceScope,
     _active_pilot_rungs_defeat_needed,
     _continuation_with_active_correction,
     _exploratory_correction_rungs,
     _rank_hypotheses,
-    build_deviation_incident,
     correction_identity,
 )
+from pyrung.core.analysis.pilot.corrections import derive_correction_hypotheses
+from pyrung.core.analysis.pilot.investigate import build_deviation_incident
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
