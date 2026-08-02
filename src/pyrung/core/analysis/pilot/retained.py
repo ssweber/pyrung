@@ -636,7 +636,7 @@ def compose_retained_bearing(
 
     def _attempt_composition(
         candidate: _RetainedCompositionCandidate,
-        _attempt_ctx: AttemptContext,
+        recovery_ctx: AttemptContext,
     ):
         current = candidate.bearing
         current_act = current.act
@@ -648,6 +648,7 @@ def compose_retained_bearing(
             source_rungs,
             rebased=False,
         )
+        recovery_ctx.register_disposable_state(attempt_state)
         attempt_state.key_config = source_world.key_config
         attempt_ctx = replace(
             source_world.context,
@@ -769,7 +770,7 @@ def compose_retained_bearing(
     def _rollback_to_sibling(
         candidate: _RetainedCompositionCandidate,
         rejected: Bearing,
-        attempt_ctx: AttemptContext,
+        recovery_ctx: AttemptContext,
     ):
         # Roll back the disposable branch and its derived knowledge.  Only the
         # root-scoped rejection survives into sibling selection; landing-local
@@ -788,6 +789,7 @@ def compose_retained_bearing(
             source_rungs,
             rebased=False,
         )
+        recovery_ctx.register_disposable_state(sibling_state)
         sibling_state.key_config = source_world.key_config
         sibling_ctx = replace(
             source_world.context,
@@ -800,7 +802,7 @@ def compose_retained_bearing(
             state=sibling_state,
             context=sibling_ctx,
         )
-        while attempt_ctx.budget.remaining > 0:
+        while recovery_ctx.budget.remaining > 0:
             sibling = local_compass.orient(sibling_world, target, constraints)
             if isinstance(sibling, NeedProbe | Stuck):
                 return Stop(rejected)
@@ -821,7 +823,7 @@ def compose_retained_bearing(
             # next retained sibling. Exercise it with the same transition
             # kernel: rejection adds a local nogood and re-orients this source;
             # acceptance makes that ordinary Bearing the honest outer choice.
-            if not attempt_ctx.consume_auxiliary():
+            if not recovery_ctx.consume_auxiliary():
                 return Stop(rejected)
             source_transition = _transition_once(
                 sibling_state,
@@ -850,6 +852,7 @@ def compose_retained_bearing(
         budget_exhausted=lambda candidate: candidate.bearing,
         initial_identity=act_identity(bearing.act),
         rollback_to_sibling=_rollback_to_sibling,
+        protected_states=(source_state,),
     )
     return composition.value
 

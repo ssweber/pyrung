@@ -157,9 +157,9 @@ A retained replay is still one pass through steps 2--5: orientation returns
 one Bearing, execution reconstructs its retained prefix with the correction,
 verification judges the landing, and the outer loop alone accepts or rejects
 it. Successive retained corrections therefore compose through successive
-outer iterations. The bounded composition loop inside `investigate.py` is only
-an optimization for constructing one candidate Bearing; it cannot install,
-commit, or recursively drive PILOT.
+outer iterations. `recovery.py::compose_corrections` owns the bounded
+composition transaction used to construct one candidate Bearing; its module
+contract defines the permitted recovery boundary.
 
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
@@ -301,6 +301,7 @@ this table only locates the owner.
 - Corrective hypothesis ranking, replay, neutralization-versus-masking, and
   confirmation: `investigate.py::_rank_hypotheses`, `build_replay_fn`, and
   `_resolve_replay_attempt`
+- Bounded corrective composition: `recovery.py::compose_corrections`
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `overlay.py::_set_pilot_rungs` only compiles that
   receipt and preserves an already-active owner by its progress witness
@@ -421,6 +422,7 @@ Judgment and recovery:
 - `causal.py` — recorded cause-chain queries
 - `investigate.py` — hypothesis ranking, composite replay, excursion replay,
   and confirmation; no drive-loop ownership
+- `recovery.py` — bounded corrective-composition transaction
 - `corrections.py` — corrective-hold hypothesis production
 
 Module docstrings define the current local contracts. If a change moves a

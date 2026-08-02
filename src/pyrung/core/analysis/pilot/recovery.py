@@ -1,20 +1,31 @@
-"""Bounded correction-chain composition shared by PILOT recovery readers.
+"""The bounded-recovery invariant shared by PILOT recovery readers.
 
-The callers own how a correction is replayed, scoped, or oriented.  This
-module owns the invariant common to those domains: a candidate is attempted
-only while budget remains, an extension identity is admitted once, rejection
-may roll back to a sibling, and success or a named terminal stops the chain.
+Bounded recovery may read evidence, including bounded pinned scans, execute
+disposable forks or one-step transition kernels, and accumulate
+transaction-local knowledge.  It returns at most one ordinary candidate or
+confirmation.  It cannot install a correction in or commit the outer PILOT
+world, recursively invoke the drive loop, invoke skiff navigation or commit
+probe observations, or leave an unbounded retry.
+
+Callers own how a correction is replayed, scoped, or oriented.  This module
+owns the transaction boundary, finite budget, extension identity admission,
+rejection rollback, and single terminal result shared by those domains.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Generic, TypeVar
 
 Candidate = TypeVar("Candidate")
 Value = TypeVar("Value")
+
+
+class RecoveryInvariantViolation(RuntimeError):
+    """A bounded recovery callback crossed an outer-orchestration boundary."""
 
 
 @dataclass
@@ -43,11 +54,60 @@ class AttemptContext:
 
     budget: CompositionBudget
     seen: set[Hashable] = field(default_factory=set)
+    protected_states: dict[int, object] = field(default_factory=dict)
+    disposable_states: dict[int, object] = field(default_factory=dict)
+    finished: bool = False
 
     def consume_auxiliary(self) -> bool:
         """Charge one caller-owned attempt against the same chain budget."""
 
         return self.budget.consume()
+
+    def register_disposable_state(self, state: object) -> None:
+        """Authorize one transaction-local state for a one-step transition."""
+
+        if _ACTIVE_RECOVERY.get() is not self:
+            raise RecoveryInvariantViolation(
+                "disposable recovery state may be registered only by its active transaction"
+            )
+        if id(state) in self.protected_states and self.protected_states[id(state)] is state:
+            raise RecoveryInvariantViolation(
+                "bounded recovery cannot register the outer PILOT world as disposable"
+            )
+        self.disposable_states[id(state)] = state
+
+    def finish(self) -> None:
+        """Record the transaction's single terminal result."""
+
+        if self.finished:
+            raise RecoveryInvariantViolation("bounded recovery produced more than one result")
+        self.finished = True
+
+
+_ACTIVE_RECOVERY: ContextVar[AttemptContext | None] = ContextVar(
+    "pyrung_active_recovery",
+    default=None,
+)
+
+
+def assert_recovery_inactive(operation: str) -> None:
+    """Reject an outer-owner operation from inside bounded recovery."""
+
+    if _ACTIVE_RECOVERY.get() is not None:
+        raise RecoveryInvariantViolation(f"bounded recovery cannot {operation}")
+
+
+def assert_recovery_disposable_state(state: object, operation: str) -> None:
+    """Require transaction-local state for an otherwise permitted local commit."""
+
+    recovery = _ACTIVE_RECOVERY.get()
+    if recovery is not None and (
+        id(state) not in recovery.disposable_states
+        or recovery.disposable_states[id(state)] is not state
+    ):
+        raise RecoveryInvariantViolation(
+            f"bounded recovery cannot {operation} on the outer PILOT world"
+        )
 
 
 @dataclass(frozen=True)
@@ -126,6 +186,7 @@ def compose_corrections(
     budget_exhausted: Callable[[Candidate], Value],
     initial_identity: Hashable | None = None,
     rollback_to_sibling: Rollback[Candidate, Value] | None = None,
+    protected_states: tuple[object, ...] = (),
 ) -> CompositionResult[Candidate, Value]:
     """Run one bounded, identity-safe correction-composition transaction.
 
@@ -134,17 +195,49 @@ def compose_corrections(
     before deriving another candidate or mutating caller observation state.
     ``rollback_to_sibling`` runs only after a proved rejection and may return a
     sibling extension, an outer-loop handoff, or a terminal decision.
+    ``protected_states`` names outer owners that callbacks cannot relabel as
+    disposable transition state.
     """
 
-    current = initial
-    context = AttemptContext(budget)
+    if _ACTIVE_RECOVERY.get() is not None:
+        raise RecoveryInvariantViolation("bounded recovery cannot recursively compose")
+    context = AttemptContext(
+        budget,
+        protected_states={id(state): state for state in protected_states},
+    )
     if initial_identity is not None:
         context.seen.add(initial_identity)
+    token = _ACTIVE_RECOVERY.set(context)
+    try:
+        return _compose_transaction(
+            initial,
+            context=context,
+            attempt=attempt,
+            budget_exhausted=budget_exhausted,
+            rollback_to_sibling=rollback_to_sibling,
+        )
+    finally:
+        _ACTIVE_RECOVERY.reset(token)
+
+
+def _compose_transaction(
+    initial: Candidate,
+    *,
+    context: AttemptContext,
+    attempt: Attempt[Candidate, Value],
+    budget_exhausted: Callable[[Candidate], Value],
+    rollback_to_sibling: Rollback[Candidate, Value] | None,
+) -> CompositionResult[Candidate, Value]:
+    """Execute inside the active bounded-recovery transaction."""
+
+    current = initial
+    budget = context.budget
 
     def _finish(
         value: Value,
         termination: CompositionTermination,
     ) -> CompositionResult[Candidate, Value]:
+        context.finish()
         return CompositionResult(current, value, termination, budget.used)
 
     charge_attempt = True

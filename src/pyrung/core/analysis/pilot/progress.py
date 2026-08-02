@@ -61,6 +61,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     fork_with_pilot_rungs,
 )
+from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -946,6 +947,7 @@ def _install_confirmed_correction(
     Installation banks active corrections into every revert anchor, and
     revocation removes them symmetrically.
     """
+    assert_recovery_disposable_state(state, "install a correction")
     if not correction.pilot_rungs:
         raise ValueError("a confirmed correction must own at least one rung")
     if any(not isinstance(rung, PilotRung) for rung in correction.pilot_rungs):

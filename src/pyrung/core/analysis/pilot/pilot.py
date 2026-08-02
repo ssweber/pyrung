@@ -75,6 +75,10 @@ from pyrung.core.analysis.pilot.recording import (
     _iteration_payload,
     _knowledge_payload,
 )
+from pyrung.core.analysis.pilot.recovery import (
+    assert_recovery_disposable_state,
+    assert_recovery_inactive,
+)
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.trace import (
@@ -706,6 +710,7 @@ def _monitor_committed_trial(
 ) -> Iterator[PilotEvent]:
     """Emit one adopted trial and apply outer-loop progress policy."""
 
+    assert_recovery_inactive("monitor a committed trial")
     policy = trial.attempt.bearing.act.policy
     yield PilotEvent(
         "trial_committed",
@@ -726,6 +731,7 @@ def _commit_trial(
     state: _PilotState,
     ctx: _PilotContext,
 ) -> None:
+    assert_recovery_disposable_state(state, "commit")
     attempt = trial.attempt
     pulse = attempt.pulse
     bearing = attempt.bearing
@@ -864,6 +870,7 @@ def _transition_once(
     may roll them back without leaking Compass knowledge.
     """
 
+    assert_recovery_disposable_state(state, "execute a transition")
     result = oriented
     if result is None:
         raw_world = OrientationWorld(
@@ -1015,6 +1022,8 @@ def _pilot_loop_events(
     ctx: _PilotContext,
 ) -> Iterator[PilotEvent]:
     """Run the PILOT loop as a structured event stream."""
+
+    assert_recovery_inactive("invoke the drive loop")
     # Semantic sets for the plan journal (see ``_build_plan_journal``): the
     # channel registers (opaque-loop tags + each pipeline role's
     # ``channel_tag``) pick the transition label; the accumulator registers
