@@ -38,7 +38,7 @@ src/pyrung/
 │   ├── tag.py           # Tag types (Bool, Int, Dint, Real, Word, Char), UDT, named_array
 │   ├── state.py         # SystemState (immutable PRecord), scan state
 │   ├── rung.py          # Rung DSL, condition evaluation
-│   ├── runner.py        # Consumer-driven engine (step, run, run_for, seek, fork)
+│   ├── runner.py        # Engine plus first-class causal Epoch lineage (step, seek, fork)
 │   ├── kernel.py        # Compiled execution kernel
 │   ├── condition.py     # Condition combinators (And, Or, rise, fall, comparisons)
 │   ├── expression.py    # Expression tree for conditions/calc

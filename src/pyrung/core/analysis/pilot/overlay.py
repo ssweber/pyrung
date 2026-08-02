@@ -545,7 +545,7 @@ def _set_synth_holds(plc: PLC, rungs: list[Any]) -> None:
     plc._fold_context_cache = None
     plc._compiled_replay_kernel = None
     plc._soft_exec_program_cache = None
-    plc._causal_epoch_snapshots.clear()
+    plc._causal_lineage.invalidate_current_epoch()
     # Historical causal replay includes the synthesis brackets. A new hold
     # world must not reuse a chain or root classification observed under the
     # previous brackets.

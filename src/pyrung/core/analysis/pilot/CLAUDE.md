@@ -338,15 +338,19 @@ documented on `CompassEntry` and `StaticEdgeObservation`; recovery-floor and
 nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
 
 Public `PLC.history` is the sole historical query surface and spans the
-retained execution branch. Each fork boundary freezes the epoch that actually
-executed the inherited prefix, including its synthesis overlay, clipped scan
-log, checkpoints, state cache, and firing timelines. Cache residency is only a
-performance detail: a retained state may be returned directly or reconstructed
-under its owning epoch. Never reconstruct an inherited scan under the current
-overlay; that changes writer and occurrence identity. The recorded absolute
-occurrence ordinal remains historical identity, while retained counterfactual
-matching uses an overlay-independent dynamic writer address and fails closed
-when correspondence is ambiguous.
+retained execution branch. Each fork boundary seals the epoch that actually
+executed the inherited prefix as an immutable `Epoch`: its inclusive scan
+interval, synthesis overlay, clipped scan log, checkpoints, state window, and
+firing timelines travel together. `CausalLineage` stores those records behind
+the live runner's current epoch; an `EpochQuery` may lazily construct a private
+disposable replay runner, but neither that runner nor a copied/frozen `PLC` is
+historical identity. Cache residency is only a performance detail: a retained
+state may be returned directly or reconstructed under its owning epoch. Never
+reconstruct an inherited scan under the current overlay; that changes writer
+and occurrence identity. The recorded absolute occurrence ordinal remains
+historical identity, while retained counterfactual matching uses an
+overlay-independent dynamic writer address and fails closed when correspondence
+is ambiguous.
 
 ## Soundness and behavior invariants
 

@@ -258,9 +258,12 @@ class TestBoolAutoharness:
         plc, Cmd, dev = _make_plc(SimplePair)
         harness = Harness(plc)
         harness.install()
+        plc.step()
+        installed_epoch = plc._causal_lineage.current_epoch()
         harness.uninstall()
         assert plc._harness is None
         assert plc._synthesis is None or not plc._synthesis.plant
+        assert plc._causal_lineage.current_epoch() is not installed_epoch
 
         plc.patch({Cmd: True})
         plc.run_for(0.050)

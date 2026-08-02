@@ -265,6 +265,42 @@ def test_explicit_scan_cause_is_shared_by_sibling_counterfactual_worlds(
     assert calls == 1
 
 
+def test_explicit_scan_cause_reuses_ancestor_owner_in_grandchild(
+    monkeypatch,
+) -> None:
+    """A deeper fork reuses the detached owner and its completed cause memo."""
+    logic = _chain_program()
+    source = PLC(logic)
+    source.step()
+    source.patch({"Lever": True})
+    source.step()
+    scan = source.state.scan_id
+
+    child = source.fork(scan_id=scan, inherit_log=True)
+    child.step()
+    grandchild = child.fork(inherit_log=True)
+    owner = child._causal_owner_at(scan)
+    assert owner is not None
+    assert grandchild._causal_owner_at(scan) is owner
+
+    original = owner.cause
+    calls = 0
+
+    def counted_cause(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(owner, "cause", counted_cause)
+
+    first = _shared_cause(child, "Out", scan)
+    second = _shared_cause(grandchild, "Out", scan)
+
+    assert first is not None
+    assert second is first
+    assert calls == 1
+
+
 # ---------------------------------------------------------------------------
 # Consumer: skiff probe selection
 # ---------------------------------------------------------------------------

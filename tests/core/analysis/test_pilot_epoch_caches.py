@@ -9,7 +9,6 @@ from pyrung.core.executor import ConditionViewCapture
 
 _ALL_CACHES = {
     "recent_states",
-    "epoch_snapshots",
     "replay_slabs",
     "replay_trace",
     "replay_captures",
@@ -17,7 +16,6 @@ _ALL_CACHES = {
 
 
 def _warm_all(plc: PLC) -> None:
-    plc._causal_epoch_snapshots[-1] = plc
     plc._replay_slabs[-1] = {plc.state.scan_id: plc.state}
     plc._cached_replay_trace = (plc.state.scan_id, {})
     plc._cached_replay_captures[plc.state.scan_id] = ConditionViewCapture()
@@ -27,8 +25,6 @@ def _warm_cache_names(plc: PLC) -> set[str]:
     names: set[str] = set()
     if plc._recent_state_cache:
         names.add("recent_states")
-    if plc._causal_epoch_snapshots:
-        names.add("epoch_snapshots")
     if plc._replay_slabs:
         names.add("replay_slabs")
     if plc._cached_replay_trace is not None:
@@ -42,26 +38,16 @@ def _warm_cache_names(plc: PLC) -> set[str]:
     ("event", "cleared"),
     [
         ("on_tip_advanced", {"replay_trace", "replay_captures"}),
-        ("on_history_trimmed", {"epoch_snapshots", "replay_slabs"}),
+        ("on_history_trimmed", {"replay_slabs"}),
         (
             "on_runtime_scope_reset",
             {
                 "recent_states",
-                "epoch_snapshots",
                 "replay_trace",
                 "replay_captures",
             },
         ),
         ("on_recording_reset", {"replay_slabs"}),
-        (
-            "on_fork_boundary",
-            {
-                "epoch_snapshots",
-                "replay_slabs",
-                "replay_trace",
-                "replay_captures",
-            },
-        ),
         ("on_replay_anchor_replaced", {"recent_states"}),
         ("on_replay_evidence_discarded", {"replay_trace", "replay_captures"}),
     ],
@@ -85,7 +71,6 @@ def test_tip_advance_invalidates_only_replay_evidence() -> None:
 
     assert _warm_cache_names(plc) == {
         "recent_states",
-        "epoch_snapshots",
         "replay_slabs",
     }
 
@@ -126,14 +111,13 @@ def test_reboot_composes_runtime_and_recording_reset() -> None:
     assert _warm_cache_names(plc) == {"recent_states"}
 
 
-def test_fork_boundary_clears_only_the_detached_owner_caches() -> None:
+def test_fork_seals_epoch_without_invalidating_live_runner_caches() -> None:
     source = PLC(logic=[])
     source.step()
     _warm_all(source)
 
     child = source.fork()
-    frozen = child._causal_parent
 
-    assert frozen is not None
     assert _warm_cache_names(source) == _ALL_CACHES
-    assert _warm_cache_names(frozen) == {"recent_states"}
+    assert len(child._causal_lineage.sealed_epochs) == 1
+    assert not hasattr(child, "_causal_epoch_snapshots")

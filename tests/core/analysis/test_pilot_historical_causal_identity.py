@@ -122,8 +122,8 @@ def test_recorded_startup_cause_survives_later_pilot_overlay() -> None:
         ),
     )
     assert state.work is not executed
-    assert state.work._causal_parent is not executed
-    assert state.work._causal_parent._is_frozen_causal_owner
+    assert len(state.work._causal_lineage.sealed_epochs) == 1
+    assert state.work._causal_lineage.sealed_epochs[-1].last_scan == executed.state.scan_id
     assert state.work.state == executed.state
 
     child = state.work
@@ -133,8 +133,8 @@ def test_recorded_startup_cause_survives_later_pilot_overlay() -> None:
 
     state.pilot_rungs = (PilotRung(enable.name, False, trip),)
     assert state.work is not child
-    assert state.work._causal_parent is not child
-    assert state.work._causal_parent._is_frozen_causal_owner
+    assert len(state.work._causal_lineage.sealed_epochs) == 2
+    assert state.work._causal_lineage.sealed_epochs[-1].last_scan == child.state.scan_id
     assert state.work.state == child.state
     state.work.step()
     assert state.work.state.tags[enable.name] is False
@@ -187,8 +187,8 @@ def test_deep_cause_resolves_synthetic_rung_in_its_executing_overlay_epoch() -> 
     # also PILOT:0, but it is not the rung that established ``Held`` in scan 1.
     state.pilot_rungs = (PilotRung(held.name, False, child_guard),)
     child = state.work
-    assert child._causal_parent is not parent
-    assert child._causal_parent._is_frozen_causal_owner
+    assert len(child._causal_lineage.sealed_epochs) == 2
+    assert child._causal_lineage.sealed_epochs[-1].synthesis is not None
     child_synthetic_rung = child._synthesis.holds[0]
     assert child_synthetic_rung is not parent_synthetic_rung
     child.patch({continue_.name: True})
@@ -196,7 +196,15 @@ def test_deep_cause_resolves_synthetic_rung_in_its_executing_overlay_epoch() -> 
     assert child.state.tags[held.name] is False
     assert child.state.tags[later.name] is True
 
-    parent._clear_retained_debug_trace_caches()
+    # The sealed epoch owns its synthesis identity even if the former live
+    # parent is rebooted and given a different overlay later.
+    parent.reboot()
+    _set_pilot_rungs(parent, (PilotRung(held.name, False, child_guard),))
+    owner = child._causal_lineage.owner_at(establishing_scan)
+    assert owner is not None
+    assert owner.epoch.synthesis is not None
+    assert owner.epoch.synthesis.holds[0] is parent_synthetic_rung
+    assert owner.resolve_node_rung(RungId("PILOT", 0), establishing_scan) is parent_synthetic_rung
     cause = child.cause(later, scan=child.state.scan_id, deep=True)
     assert cause is not None
     inherited_step = next(step for step in cause.steps if step.transition.tag_name == held.name)
@@ -286,7 +294,7 @@ def test_fork_without_log_inheritance_keeps_history_local() -> None:
 
     local = parent.fork(inherit_log=False)
     boundary_scan = local.state.scan_id
-    assert local._causal_parent is None
+    assert not local._causal_lineage.sealed_epochs
     assert local.history.oldest_scan_id == boundary_scan
     assert local.history.newest_scan_id == boundary_scan
     assert local.history.contains(boundary_scan)
@@ -427,12 +435,12 @@ def test_child_trim_and_reboot_reset_only_its_retained_floor() -> None:
     child._trim_history_before(3)
     assert child.history.oldest_scan_id == 3
     assert tuple(child.history.scan_ids()) == (3, 4)
-    assert child._causal_parent is None
+    assert not child._causal_lineage.sealed_epochs
 
     child.reboot()
     assert child.history.oldest_scan_id == 0
     assert tuple(child.history.scan_ids()) == (0,)
-    assert child._causal_parent is None
+    assert not child._causal_lineage.sealed_epochs
 
 
 def test_repeated_boundary_forks_do_not_create_executed_empty_epochs() -> None:
@@ -455,15 +463,14 @@ def test_causal_lineage_owns_boundary_and_preclips_covering_epochs() -> None:
     child = root.fork()
     child.run(2)
 
-    parent_owner = child._causal_parent
-    assert parent_owner is not None
-    assert child._causal_lineage.owner_at(2) is parent_owner
-    assert child._causal_lineage.owner_at(3) is child
+    parent_epoch = child._causal_lineage.sealed_epochs[-1]
+    assert child._causal_lineage.owner_at(2).epoch is parent_epoch
+    assert child._causal_lineage.owner_at(3).epoch.first_scan == 3
     assert child._causal_lineage.owner_at(5) is None
-    assert list(child._causal_lineage.epochs_covering(1, 3)) == [
-        (parent_owner, 1, 2),
-        (child, 3, 3),
-    ]
+    covering = list(child._causal_lineage.epochs_covering(1, 3))
+    assert [(first, last) for _epoch, first, last in covering] == [(1, 2), (3, 3)]
+    assert covering[0][0] is parent_epoch
+    assert covering[1][0].first_scan == 3
 
 
 def test_causal_lineage_newest_clamps_each_epoch_and_range_spans_lineage() -> None:
@@ -495,12 +502,9 @@ def test_causal_lineage_newest_clamps_each_epoch_and_range_spans_lineage() -> No
 
     # Even a corrupt epoch-local index containing a post-fork entry cannot
     # leak it: newest passes the parent its owned boundary, not the query tip.
-    parent_owner = grandchild._causal_parent
-    assert parent_owner is not None
-    parent_owner = parent_owner._causal_parent
-    assert parent_owner is not None
-    parent_owner._rung_firing_timelines.append(99, 2, pmap({"Leak": True}))
-    parent_owner._rung_firing_timelines.append(99, 3, pmap({"Leak": True}))
+    parent_epoch = grandchild._causal_lineage.sealed_epochs[0]
+    parent_epoch.rung_firing_timelines.append(99, 2, pmap({"Leak": True}))
+    parent_epoch.rung_firing_timelines.append(99, 3, pmap({"Leak": True}))
     assert grandchild._node_latest_firing_at_or_before(
         frozenset({RungId(None, 99)}),
         5,

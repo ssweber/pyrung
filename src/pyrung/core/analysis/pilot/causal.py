@@ -387,10 +387,11 @@ def _shared_cause(
         # transient child makes every sibling reconstruct the same exact
         # RungRun occurrences.  Resolve the owner first so only genuinely
         # shared history shares a completed causal chain.
-        owner = plc._causal_lineage.owner_at(scan) or plc
-        shared = owner.__dict__.get("_pilot_cause_memo")
-        if shared is None:
-            shared = owner.__dict__["_pilot_cause_memo"] = {}
+        owner = plc._causal_lineage.owner_at(scan)
+        if owner is None:
+            shared = plc.__dict__.setdefault("_pilot_cause_memo", {})
+        else:
+            shared = owner.cause_memo
         if key in shared:
             result = shared[key]
             if cache is not None:
@@ -398,7 +399,11 @@ def _shared_cause(
             return result
     try:
         if scan is not None:
-            result = plc.cause(tag, scan=scan, since=since)
+            result = (
+                owner.cause(plc._causal_lineage, tag, scan=scan, since=since)
+                if owner is not None
+                else plc.cause(tag, scan=scan, since=since)
+            )
         else:
             result = plc.cause(tag)
     except Exception:  # noqa: BLE001
