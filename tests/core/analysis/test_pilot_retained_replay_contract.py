@@ -251,6 +251,17 @@ def test_retained_inner_orientation_composes_unchanged_candidate_and_reuses_veri
 ) -> None:
     """A shifted identical blocker is solved only as one verified A+B act."""
 
+    from pyrung.core.analysis.pilot import retained as retained_module
+
+    composition_limits: list[int] = []
+    original_compose = retained_module.compose_corrections
+
+    def recording_compose(*args, **kwargs):
+        composition_limits.append(kwargs["budget"].limit)
+        return original_compose(*args, **kwargs)
+
+    monkeypatch.setattr(retained_module, "compose_corrections", recording_compose)
+
     program, process_step, guard_a, guard_b = _shifted_identical_blocker_program()
     assert guard_b is not None
     retained = _capture_retained_bearings(monkeypatch)
@@ -318,6 +329,7 @@ def test_retained_inner_orientation_composes_unchanged_candidate_and_reuses_veri
     assert any(frozenset(dests) == composite_dests and accepted for dests, accepted in verified)
     assert len(retained) == 1
     assert frozenset(rung.dest for rung in retained[0][1].correction.pilot_rungs) == composite_dests
+    assert composition_limits == [_MAX_RETAINED_COMPOSITIONS + 1]
 
     # Inner orientation and attempts are disposable.  Their observations and
     # nogoods are returned as receipts to the local composer; they do not apply
@@ -355,7 +367,9 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
 def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
     """A long latent-writer chain stops at the inner composition budget."""
 
-    program, process_step, guards = _shifted_blocker_chain_program(_MAX_RETAINED_COMPOSITIONS + 4)
+    program, process_step, guards = _shifted_blocker_chain_program(
+        _MAX_RETAINED_COMPOSITIONS + 4
+    )
     retained = _capture_retained_bearings(monkeypatch)
     verified = _capture_retained_verifications(monkeypatch)
 

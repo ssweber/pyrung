@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.corrections import (
     derive_correction_hypotheses,
 )
 from pyrung.core.analysis.pilot.investigate import (
+    _MAX_CANDIDATE_COMPOSITIONS,
     CausalOccurrence,
     DeviationIncident,
     InvestigationRejection,
@@ -1171,6 +1172,16 @@ def test_investigation_reuses_exploratory_proof_for_identical_installed_rungs(mo
 
 def test_investigation_composes_cuts_before_returning_one_candidate(monkeypatch):
     """A retained replay supplies B; investigation returns A+B without installing it."""
+    from pyrung.core.analysis.pilot import investigate as investigate_module
+
+    composition_limits: list[int] = []
+    original_compose = investigate_module.compose_corrections
+
+    def recording_compose(*args, **kwargs):
+        composition_limits.append(kwargs["budget"].limit)
+        return original_compose(*args, **kwargs)
+
+    monkeypatch.setattr(investigate_module, "compose_corrections", recording_compose)
     A = Bool("Nested_A", external=True)
     B = Bool("Nested_B", external=True)
     State = Int("Nested_State", default=3)
@@ -1269,6 +1280,7 @@ def test_investigation_composes_cuts_before_returning_one_candidate(monkeypatch)
         (A.name, B.name),
         (A.name, B.name),
     ]
+    assert composition_limits == [_MAX_CANDIDATE_COMPOSITIONS + 1]
     assert all(attempt != (B.name,) for attempt in attempts)
 
 

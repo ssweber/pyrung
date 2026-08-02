@@ -65,6 +65,16 @@ from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
+from pyrung.core.analysis.pilot.recovery import (
+    AttemptContext,
+    CompositionBudget,
+    CompositionTermination,
+    Extend,
+    Reject,
+    Retry,
+    Succeed,
+    compose_corrections,
+)
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
 from pyrung.core.analysis.pilot.trace import (
     UnsupportedConstruct,
@@ -433,6 +443,20 @@ _ReplayResolution = _ReplayAccepted | _CandidateComposed | _ReplayRejected
 
 
 @dataclass(frozen=True)
+class _InvestigationCompositionCandidate:
+    """One hypothesis plus retry evidence retained across its extensions."""
+
+    hypothesis: CorrectionHypothesis
+    refinement: _RelationalRefinementReceipt
+
+
+@dataclass(frozen=True)
+class _InvestigationConfirmation:
+    hypothesis: CorrectionHypothesis
+    correction: _ConfirmedCorrection
+
+
+@dataclass(frozen=True)
 class InvestigationResult:
     """Replay-confirmed corrective information."""
 
@@ -476,9 +500,7 @@ def _resolve_replay_attempt(
     if replacement is None or not replacement.shared_suffix:
         return _ReplayAccepted(outcome)
 
-    fingerprint = tuple(
-        (item.rung, item.tag, _semantic_key(item.value)) for item in replacement.witness.cause
-    )
+    fingerprint = _replacement_identity(replacement)
     if fingerprint in seen_replacements:
         ground = (
             "counterfactual replacement cause repeated inside one investigation"
@@ -500,6 +522,14 @@ def _resolve_replay_attempt(
             )
         )
     return _CandidateComposed(extended)
+
+
+def _replacement_identity(replacement: ReplacementEvidence) -> tuple[Any, ...]:
+    """Exact identity of one replacement cause inside a composition chain."""
+
+    return tuple(
+        (item.rung, item.tag, _semantic_key(item.value)) for item in replacement.witness.cause
+    )
 
 
 def _scoped_correction_rungs(
@@ -2444,240 +2474,320 @@ def investigate_deviation(
                 "vacuous no-op hold: every proposed value is already stable in the incident anchor",
             )
             continue
-        current = hypothesis
-        seen_replacements: set[tuple[Any, ...]] = set()
-        refinement_receipt = _RelationalRefinementReceipt()
-        candidate_compositions = 0
 
-        while candidate_compositions <= _MAX_CANDIDATE_COMPOSITIONS:
-            exploratory_holds = (
-                current.fallback_holds
-                if current.producer_envelope and current.fallback_holds
-                else current.holds
-            )
-            exploratory = _exploratory_correction_rungs(
-                plc,
-                exploratory_holds,
-                incident,
-                correction_progress_mark,
-                ctx,
-            )
-            preflight = _continuation_with_active_correction(
-                exploratory,
-                incident.before_snap,
-                ctx,
-            )
-            if isinstance(preflight, NoRoute):
-                _reject(
-                    current,
-                    "target-cut",
-                    preflight.proof,
-                )
-                break
-            outcome = _replay_candidate(current, exploratory)
-            if current.constraint is not None and not isinstance(
-                outcome.continuation,
-                Reachable,
-            ):
-                refined, ground = _refine_unknown_continuation(
-                    current,
-                    outcome,
-                    ctx,
-                    refinement_receipt,
-                )
-                if refined is not None:
-                    current = refined
-                    observed_hypotheses.append(refined)
-                    continue
-                _reject(current, "relational-continuation-unknown", ground)
-                break
-            resolution = _resolve_replay_attempt(
-                phase="exploratory",
-                current=current,
-                outcome=outcome,
-                seen_replacements=seen_replacements,
-                extend=_compose_replacement_candidate,
-            )
-            if isinstance(resolution, _ReplayRejected):
-                rejected.append(resolution.rejection)
-                break
-            if isinstance(resolution, _CandidateComposed):
-                current = resolution.hypothesis
-                candidate_compositions += 1
-                continue
-            outcome = resolution.outcome
+        def _attempt_composition(
+            candidate: _InvestigationCompositionCandidate,
+            _attempt_ctx: AttemptContext,
+        ):
+            """Replay one candidate until it extends, confirms, or rejects.
 
-            # A target-work correction belongs to the exact earned-work occurrence.
-            # A correction that directly discharges this producer occurrence's
-            # recorded external supports instead belongs to the already-derived
-            # channel-source lifetime.  Its final installed form is still
-            # replayed below; this only selects between the two existing scopes.
-            scoped_progress_mark = (
-                ()
-                if _discharges_occurrence_requirements(
-                    current.holds,
-                    occurrence_requirements,
-                )
-                else correction_progress_mark
-            )
-            scoped = _scoped_correction_rungs(
-                plc,
-                current.holds,
-                incident,
-                outcome,
-                ctx,
-                scoped_progress_mark,
-                current.producer_envelope,
-            )
+            Relational refinement and producer-envelope fallback are retries of
+            the same correction, so they do not consume causal-composition
+            budget.  Only an admitted replacement returns ``Extend``.
+            """
 
-            def _fall_back_from_envelope() -> bool:
-                nonlocal current
+            current = candidate.hypothesis
+            refinement_receipt = candidate.refinement
+
+            def _fallback_candidate() -> _InvestigationCompositionCandidate | None:
                 if not current.producer_envelope or not current.fallback_holds:
-                    return False
-                current = replace(
-                    current,
-                    holds=current.fallback_holds,
-                    producer_envelope=False,
-                    fallback_holds=(),
-                    detail=f"{current.detail}; producer envelope declined",
-                )
-                return True
-
-            if correction_identity(scoped) in excluded_corrections:
-                if _fall_back_from_envelope():
-                    continue
-                _reject(
-                    current,
-                    "correction-revoked",
-                    "correction was previously revoked after causing a later regression",
-                )
-                break
-            scoped_preflight = _continuation_with_active_correction(
-                scoped,
-                incident.before_snap,
-                ctx,
-            )
-            if isinstance(scoped_preflight, NoRoute):
-                if _fall_back_from_envelope():
-                    continue
-                _reject(current, "target-cut", scoped_preflight.proof)
-                break
-            required_progress = (*incident.bearing, *needed)
-            if (
-                pdg is not None
-                and program is not None
-                and _active_pilot_rungs_defeat_needed(
-                    scoped,
-                    required_progress,
-                    incident.before_snap,
-                    pdg,
-                    program,
-                )
-            ):
-                if _fall_back_from_envelope():
-                    continue
-                # Replay windows are deliberately bounded to the incident. A
-                # correction can silence that incident yet pin a slower progress
-                # register behind the checkpoint frontier after the window ends.
-                # Screen the exact guarded form that would be installed; the
-                # guard limits where the pin applies, but cannot make it harmless
-                # while that context is active.
-                _reject(
-                    current,
-                    "self-defeat",
-                    "guarded correction defeats requested progress: "
-                    f"needed={required_progress!r}, correction={tuple(scoped)!r}",
-                )
-                break
-            # Operation-owned proposals and already-exact guards can survive
-            # scoping unchanged. Replay is deterministic from the retained
-            # incident checkpoint, so an identical executable correction has
-            # already proved its installed form in the exploratory pass.
-            same_executable = all(
-                isinstance(rung, PilotRung) for rung in exploratory
-            ) and correction_identity(scoped) == correction_identity(exploratory)
-            installed_outcome = outcome if same_executable else _replay_candidate(current, scoped)
-            if current.constraint is not None and not isinstance(
-                installed_outcome.continuation,
-                Reachable,
-            ):
-                refined, ground = _refine_unknown_continuation(
-                    current,
-                    installed_outcome,
-                    ctx,
+                    return None
+                return _InvestigationCompositionCandidate(
+                    replace(
+                        current,
+                        holds=current.fallback_holds,
+                        producer_envelope=False,
+                        fallback_holds=(),
+                        detail=f"{current.detail}; producer envelope declined",
+                    ),
                     refinement_receipt,
                 )
-                if refined is not None:
-                    current = refined
-                    observed_hypotheses.append(refined)
-                    continue
-                if _fall_back_from_envelope():
-                    continue
-                _reject(current, "relational-continuation-unknown", ground)
-                break
-            resolution = _resolve_replay_attempt(
-                phase="guarded",
-                current=current,
-                outcome=installed_outcome,
-                seen_replacements=seen_replacements,
-                extend=_compose_replacement_candidate,
-            )
-            if isinstance(resolution, _ReplayRejected):
-                if _fall_back_from_envelope():
-                    continue
-                rejected.append(resolution.rejection)
-                break
-            if isinstance(resolution, _CandidateComposed):
-                current = resolution.hypothesis
-                candidate_compositions += 1
-                continue
-            installed_outcome = resolution.outcome
-            confirmed_hypothesis = CorrectionHypothesis(
-                kind=current.kind,
-                holds=scoped,
-                sources=current.sources,
-                detail=current.detail,
-                incident_local=current.incident_local,
-                history_origin=current.history_origin,
-                producer_envelope=current.producer_envelope,
-                fallback_holds=current.fallback_holds,
-                producer_cuts=current.producer_cuts,
-                producer_sources=current.producer_sources,
-                producer_causal_spine=current.producer_causal_spine,
-            )
-            confirmed.append(confirmed_hypothesis)
-            confirmed_correction = _ConfirmedCorrection(
-                identity=correction_identity(scoped),
-                pilot_rungs=scoped,
-                sources=confirmed_hypothesis.sources,
-                justification=(
-                    (
-                        installed_outcome.justification.value
-                        if installed_outcome.justification is not None
-                        else installed_outcome.reason or "replay-confirmed"
-                    )
-                    if isinstance(installed_outcome.continuation, Reachable)
-                    else (
-                        "legacy-local-replay; target continuation unknown: "
-                        f"{_continuation_ground(installed_outcome.continuation)}; "
-                        + (
-                            installed_outcome.justification.value
-                            if installed_outcome.justification is not None
-                            else installed_outcome.reason or "replay-confirmed"
+
+            def _replacement_decision(
+                phase: Literal["exploratory", "guarded"],
+                outcome: ReplayOutcome,
+            ):
+                if not outcome.accepted:
+                    return Reject(
+                        InvestigationRejection(
+                            current,
+                            f"{phase}-replay-failed",
+                            f"{phase} replay rejected: "
+                            + (outcome.reason or "no replay reason supplied"),
                         )
                     )
-                ),
-            )
-            break
-        else:
-            _reject(
-                current,
+                replacement = outcome.replacement
+                if replacement is None or not replacement.shared_suffix:
+                    return None
+                fingerprint = _replacement_identity(replacement)
+                cycle_ground = (
+                    "counterfactual replacement cause repeated inside one investigation"
+                    if phase == "exploratory"
+                    else "guarded replay repeated a counterfactual replacement cause"
+                )
+                unresolved_prefix = (
+                    "replacement" if phase == "exploratory" else "guarded replacement"
+                )
+                fallback = _fallback_candidate() if phase == "guarded" else None
+
+                def _build():
+                    extended = _compose_replacement_candidate(current, replacement)
+                    if extended is None:
+                        return None
+                    return _InvestigationCompositionCandidate(
+                        extended,
+                        refinement_receipt,
+                    )
+
+                return Extend(
+                    fingerprint,
+                    _build,
+                    (
+                        Retry(fallback)
+                        if fallback is not None
+                        else Reject(
+                            InvestigationRejection(
+                                current,
+                                "nested-cause-cycle",
+                                cycle_ground,
+                            )
+                        )
+                    ),
+                    (
+                        Retry(fallback)
+                        if fallback is not None
+                        else Reject(
+                            InvestigationRejection(
+                                current,
+                                "nested-cause-unresolved",
+                                f"{unresolved_prefix} reproduced the same bounded outcome "
+                                "and pipeline but yielded no additional corrective cut",
+                            )
+                        )
+                    ),
+                )
+
+            while True:
+                exploratory_holds = (
+                    current.fallback_holds
+                    if current.producer_envelope and current.fallback_holds
+                    else current.holds
+                )
+                exploratory = _exploratory_correction_rungs(
+                    plc,
+                    exploratory_holds,
+                    incident,
+                    correction_progress_mark,
+                    ctx,
+                )
+                preflight = _continuation_with_active_correction(
+                    exploratory,
+                    incident.before_snap,
+                    ctx,
+                )
+                if isinstance(preflight, NoRoute):
+                    return Reject(InvestigationRejection(current, "target-cut", preflight.proof))
+                outcome = _replay_candidate(current, exploratory)
+                if current.constraint is not None and not isinstance(
+                    outcome.continuation,
+                    Reachable,
+                ):
+                    refined, ground = _refine_unknown_continuation(
+                        current,
+                        outcome,
+                        ctx,
+                        refinement_receipt,
+                    )
+                    if refined is not None:
+                        current = refined
+                        observed_hypotheses.append(refined)
+                        continue
+                    return Reject(
+                        InvestigationRejection(
+                            current,
+                            "relational-continuation-unknown",
+                            ground,
+                        )
+                    )
+                resolution = _replacement_decision("exploratory", outcome)
+                if resolution is not None:
+                    return resolution
+
+                # A target-work correction belongs to the exact earned-work occurrence.
+                # A correction that directly discharges this producer occurrence's
+                # recorded external supports instead belongs to the already-derived
+                # channel-source lifetime.  Its final installed form is still
+                # replayed below; this only selects between the two existing scopes.
+                scoped_progress_mark = (
+                    ()
+                    if _discharges_occurrence_requirements(
+                        current.holds,
+                        occurrence_requirements,
+                    )
+                    else correction_progress_mark
+                )
+                scoped = _scoped_correction_rungs(
+                    plc,
+                    current.holds,
+                    incident,
+                    outcome,
+                    ctx,
+                    scoped_progress_mark,
+                    current.producer_envelope,
+                )
+
+                def _fall_back_from_envelope() -> bool:
+                    nonlocal current
+                    fallback = _fallback_candidate()
+                    if fallback is None:
+                        return False
+                    current = fallback.hypothesis
+                    return True
+
+                if correction_identity(scoped) in excluded_corrections:
+                    if _fall_back_from_envelope():
+                        continue
+                    return Reject(
+                        InvestigationRejection(
+                            current,
+                            "correction-revoked",
+                            "correction was previously revoked after causing a later regression",
+                        )
+                    )
+                scoped_preflight = _continuation_with_active_correction(
+                    scoped,
+                    incident.before_snap,
+                    ctx,
+                )
+                if isinstance(scoped_preflight, NoRoute):
+                    if _fall_back_from_envelope():
+                        continue
+                    return Reject(
+                        InvestigationRejection(current, "target-cut", scoped_preflight.proof)
+                    )
+                required_progress = (*incident.bearing, *needed)
+                if (
+                    pdg is not None
+                    and program is not None
+                    and _active_pilot_rungs_defeat_needed(
+                        scoped,
+                        required_progress,
+                        incident.before_snap,
+                        pdg,
+                        program,
+                    )
+                ):
+                    if _fall_back_from_envelope():
+                        continue
+                    return Reject(
+                        InvestigationRejection(
+                            current,
+                            "self-defeat",
+                            "guarded correction defeats requested progress: "
+                            f"needed={required_progress!r}, correction={tuple(scoped)!r}",
+                        )
+                    )
+                # Operation-owned proposals and already-exact guards can survive
+                # scoping unchanged. Replay is deterministic from the retained
+                # incident checkpoint, so an identical executable correction has
+                # already proved its installed form in the exploratory pass.
+                same_executable = all(
+                    isinstance(rung, PilotRung) for rung in exploratory
+                ) and correction_identity(scoped) == correction_identity(exploratory)
+                installed_outcome = (
+                    outcome if same_executable else _replay_candidate(current, scoped)
+                )
+                if current.constraint is not None and not isinstance(
+                    installed_outcome.continuation,
+                    Reachable,
+                ):
+                    refined, ground = _refine_unknown_continuation(
+                        current,
+                        installed_outcome,
+                        ctx,
+                        refinement_receipt,
+                    )
+                    if refined is not None:
+                        current = refined
+                        observed_hypotheses.append(refined)
+                        continue
+                    if _fall_back_from_envelope():
+                        continue
+                    return Reject(
+                        InvestigationRejection(
+                            current,
+                            "relational-continuation-unknown",
+                            ground,
+                        )
+                    )
+                resolution = _replacement_decision("guarded", installed_outcome)
+                if resolution is not None:
+                    if isinstance(resolution, Reject) and _fall_back_from_envelope():
+                        continue
+                    return resolution
+
+                confirmed_hypothesis = CorrectionHypothesis(
+                    kind=current.kind,
+                    holds=scoped,
+                    sources=current.sources,
+                    detail=current.detail,
+                    incident_local=current.incident_local,
+                    history_origin=current.history_origin,
+                    producer_envelope=current.producer_envelope,
+                    fallback_holds=current.fallback_holds,
+                    producer_cuts=current.producer_cuts,
+                    producer_sources=current.producer_sources,
+                    producer_causal_spine=current.producer_causal_spine,
+                )
+                installed_justification = (
+                    installed_outcome.justification.value
+                    if installed_outcome.justification is not None
+                    else installed_outcome.reason or "replay-confirmed"
+                )
+                confirmed_candidate = _ConfirmedCorrection(
+                    identity=correction_identity(scoped),
+                    pilot_rungs=scoped,
+                    sources=confirmed_hypothesis.sources,
+                    justification=(
+                        installed_justification
+                        if isinstance(installed_outcome.continuation, Reachable)
+                        else (
+                            "legacy-local-replay; target continuation unknown: "
+                            f"{_continuation_ground(installed_outcome.continuation)}; "
+                            f"{installed_justification}"
+                        )
+                    ),
+                )
+                return Succeed(
+                    _InvestigationConfirmation(
+                        confirmed_hypothesis,
+                        confirmed_candidate,
+                    )
+                )
+
+        composition = compose_corrections(
+            _InvestigationCompositionCandidate(
+                hypothesis,
+                _RelationalRefinementReceipt(),
+            ),
+            budget=CompositionBudget(_MAX_CANDIDATE_COMPOSITIONS + 1),
+            attempt=_attempt_composition,
+            budget_exhausted=lambda candidate: InvestigationRejection(
+                candidate.hypothesis,
                 "nested-cause-budget",
                 "candidate composition exceeded "
                 f"{_MAX_CANDIDATE_COMPOSITIONS} replacement branches",
-            )
-        if confirmed:
+            ),
+        )
+        if composition.termination is CompositionTermination.SUCCESS:
+            confirmation = composition.value
+            assert isinstance(confirmation, _InvestigationConfirmation)
+            confirmed.append(confirmation.hypothesis)
+            confirmed_correction = confirmation.correction
             break  # return one confirmed composite candidate to the outer loop
+        rejection = composition.value
+        assert isinstance(rejection, InvestigationRejection)
+        rejected.append(rejection)
 
     return InvestigationResult(
         correction=confirmed_correction,

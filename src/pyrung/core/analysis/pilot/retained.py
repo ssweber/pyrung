@@ -6,7 +6,7 @@ import logging
 import math
 from collections.abc import Iterable
 from copy import copy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pyrsistent import pvector
@@ -46,6 +46,15 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     fork_with_pilot_rungs,
 )
+from pyrung.core.analysis.pilot.recovery import (
+    AttemptContext,
+    CompositionBudget,
+    Extend,
+    Reject,
+    Stop,
+    Succeed,
+    compose_corrections,
+)
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
@@ -63,6 +72,14 @@ from pyrung.core.context import RungId
 logger = logging.getLogger(__name__)
 
 _MAX_RETAINED_COMPOSITIONS = 8
+
+
+@dataclass(frozen=True)
+class _RetainedCompositionCandidate:
+    """One retained Bearing and its transaction-local Compass knowledge."""
+
+    bearing: Bearing
+    compass: Any
 
 
 def _correction_pairs(pilot_rungs: Iterable[PilotRung]) -> tuple[tuple[str, Any], ...]:
@@ -616,16 +633,15 @@ def compose_retained_bearing(
     source_world = bearing.orientation.world
     source_state: _PilotState = source_world.state
     source_rungs = tuple(source_state.pilot_rungs)
-    current = bearing
-    local_compass = compass
-    seen = {act_identity(current.act)}
-    remaining = _MAX_RETAINED_COMPOSITIONS + 1
 
-    while remaining > 0:
+    def _attempt_composition(
+        candidate: _RetainedCompositionCandidate,
+        _attempt_ctx: AttemptContext,
+    ):
+        current = candidate.bearing
         current_act = current.act
         if not isinstance(current_act, RetainedReplay):
-            return current
-        branch_base_compass = local_compass
+            return Succeed(current)
         attempt_state = _disposable_state(
             source_state,
             source_state.work,
@@ -635,11 +651,10 @@ def compose_retained_bearing(
         attempt_state.key_config = source_world.key_config
         attempt_ctx = replace(
             source_world.context,
-            compass=local_compass,
+            compass=candidate.compass,
             collect_action_attribution=False,
             retained_recovery_first=True,
         )
-        remaining -= 1
         transition = _transition_once(
             attempt_state,
             attempt_ctx,
@@ -656,7 +671,7 @@ def compose_retained_bearing(
             attempt.executed is not None,
         )
         if attempt.executed is None:
-            return current
+            return Stop(current)
         landing = attempt.executed.pulse.fork
         accepted = transition.trial is not None
         if accepted:
@@ -677,7 +692,7 @@ def compose_retained_bearing(
             source_world.context.target.value,
             source_world.context.target.predicate,
         ):
-            return current
+            return Succeed(current)
 
         # `_transition_once` applied the ordinary observations/nogood to the
         # transaction-local Compass and, on acceptance, adopted the replay fork
@@ -714,8 +729,6 @@ def compose_retained_bearing(
             context=local_ctx,
             key_config=local_state.key_config,
         )
-        failed = False
-        merged_successor = False
         while True:
             replacement = local_compass.orient(local_world, target, constraints)
             if isinstance(replacement, Bearing) and isinstance(
@@ -723,47 +736,49 @@ def compose_retained_bearing(
                 RetainedReplay,
             ):
                 merged = _merge_retained_bearings(current, replacement)
-                if merged is None or act_identity(merged.act) in seen:
-                    return current
-                current = merged
-                seen.add(act_identity(current.act))
-                merged_successor = True
-                break
+                if merged is None:
+                    return Stop(current)
+                return Extend(
+                    act_identity(merged.act),
+                    lambda merged=merged, local_compass=local_compass: (
+                        _RetainedCompositionCandidate(merged, local_compass)
+                    ),
+                    Stop(current),
+                    Stop(current),
+                )
 
             # A probe request is unresolved evidence, not proof that the root
             # correction is dead.  The bounded composer never runs skiff.
             if isinstance(replacement, NeedProbe):
-                return current
+                return Succeed(current) if accepted else Stop(current)
             if isinstance(replacement, Stuck):
                 if accepted:
-                    return current
-                failed = True
-                break
+                    return Succeed(current)
+                return Reject(current)
             if not isinstance(replacement, Bearing):
-                return current
+                return Stop(current)
 
             # Match the incident-local investigation boundary: another exact
             # retained occurrence composes above; an ordinary future Bearing
             # is the handoff to the live outer loop.  Do not turn this causal
             # closure into a nested PILOT route search.
             if accepted:
-                return current
-            failed = True
-            break
+                return Succeed(current)
+            return Reject(current)
 
-        if merged_successor:
-            continue
-        if not failed:
-            return current
-
+    def _rollback_to_sibling(
+        candidate: _RetainedCompositionCandidate,
+        rejected: Bearing,
+        attempt_ctx: AttemptContext,
+    ):
         # Roll back the disposable branch and its derived knowledge.  Only the
         # root-scoped rejection survives into sibling selection; landing-local
         # action/coast receipts must not poison another source transaction.
-        local_compass, _ = branch_base_compass.apply(
+        local_compass, _ = candidate.compass.apply(
             (
                 ActionNogoodObservation(
-                    current.world_key,
-                    act_identity(current.act),
+                    rejected.world_key,
+                    act_identity(rejected.act),
                 ),
             )
         )
@@ -785,25 +800,29 @@ def compose_retained_bearing(
             state=sibling_state,
             context=sibling_ctx,
         )
-        while remaining > 0:
+        while attempt_ctx.budget.remaining > 0:
             sibling = local_compass.orient(sibling_world, target, constraints)
             if isinstance(sibling, NeedProbe | Stuck):
-                return current
+                return Stop(rejected)
             if not isinstance(sibling, Bearing):
-                return current
+                return Stop(rejected)
             if isinstance(sibling.act, RetainedReplay):
                 sibling_identity = act_identity(sibling.act)
-                if sibling_identity in seen:
-                    return current
-                current = sibling
-                seen.add(sibling_identity)
-                break
+                return Extend(
+                    sibling_identity,
+                    lambda sibling=sibling, local_compass=local_compass: (
+                        _RetainedCompositionCandidate(sibling, local_compass)
+                    ),
+                    Stop(rejected),
+                    Stop(rejected),
+                )
 
             # Rollback may expose an ordinary source alternative before the
             # next retained sibling. Exercise it with the same transition
             # kernel: rejection adds a local nogood and re-orients this source;
             # acceptance makes that ordinary Bearing the honest outer choice.
-            remaining -= 1
+            if not attempt_ctx.consume_auxiliary():
+                return Stop(rejected)
             source_transition = _transition_once(
                 sibling_state,
                 sibling_ctx,
@@ -813,7 +832,7 @@ def compose_retained_bearing(
             )
             local_compass = sibling_ctx.compass
             if source_transition.trial is not None:
-                return sibling
+                return Succeed(sibling)
             sibling_world = OrientationWorld(
                 world_key=(),
                 snapshot=dict(sibling_state.work.state.tags),
@@ -822,9 +841,17 @@ def compose_retained_bearing(
                 context=sibling_ctx,
                 key_config=sibling_state.key_config,
             )
-        else:
-            return current
-    return current
+        return Stop(rejected)
+
+    composition = compose_corrections(
+        _RetainedCompositionCandidate(bearing, compass),
+        budget=CompositionBudget(_MAX_RETAINED_COMPOSITIONS + 1),
+        attempt=_attempt_composition,
+        budget_exhausted=lambda candidate: candidate.bearing,
+        initial_identity=act_identity(bearing.act),
+        rollback_to_sibling=_rollback_to_sibling,
+    )
+    return composition.value
 
 
 def execute_retained_replay(
