@@ -316,6 +316,22 @@ class TestDiagnoseUnwrittenTagsProgressInfo:
 
 
 class TestPassReuse:
+    def test_classification_threads_atom_index_through_absorption_helpers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        ctx = _make_pass_context(_discovery_program())
+        _pass_build_graph(ctx)
+
+        def fail(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("absorption helpers should reuse the classification atom index")
+
+        monkeypatch.setattr("pyrung.core.analysis.prove.absorb._build_atom_index", fail)
+
+        _pass_classify_dimensions(ctx)
+
+        assert ctx.stateful_dims is not None
+
     def test_find_threshold_absorptions_reuses_classification_result(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -20,28 +20,16 @@ def _build_atom_index(exprs: list[Expr]) -> dict[str, list[Atom]]:
 def _index_atoms(expr: Expr, index: dict[str, list[Atom]]) -> None:
     if isinstance(expr, Atom):
         index.setdefault(expr.tag, []).append(expr)
-        if expr.operand_is_tag:
+        if expr.operand_is_tag and expr.operand != expr.tag:
             index.setdefault(expr.operand, []).append(expr)
     elif isinstance(expr, (And, Or)):
         for t in expr.terms:
             _index_atoms(t, index)
 
 
-def _collect_atoms_for_tag(exprs: list[Expr], tag_name: str) -> list[Atom]:
-    """Collect all Atom nodes referencing a specific tag from a list of expressions."""
-    atoms: list[Atom] = []
-    for expr in exprs:
-        _walk_atoms(expr, tag_name, atoms)
-    return atoms
-
-
-def _walk_atoms(expr: Expr, tag_name: str, out: list[Atom]) -> None:
-    if isinstance(expr, Atom):
-        if expr.tag == tag_name or (expr.operand_is_tag and expr.operand == tag_name):
-            out.append(expr)
-    elif isinstance(expr, (And, Or)):
-        for t in expr.terms:
-            _walk_atoms(t, tag_name, out)
+def _collect_atoms_for_tag(atom_index: Mapping[str, list[Atom]], tag_name: str) -> list[Atom]:
+    """Look up all Atom nodes referencing a specific tag."""
+    return atom_index.get(tag_name, [])
 
 
 def _eval_atom(atom: Atom, value: Any) -> bool | None:

@@ -1716,11 +1716,9 @@ def _extract_value_domain(
     elif literal_write_domains and tag_name in literal_write_domains:
         base_domain = literal_write_domains[tag_name]
 
-    atoms = (
-        atom_index.get(tag_name, [])
-        if atom_index is not None
-        else _collect_atoms_for_tag(all_exprs, tag_name)
-    )
+    if atom_index is None:
+        atom_index = _build_atom_index(all_exprs)
+    atoms = _collect_atoms_for_tag(atom_index, tag_name)
 
     if not atoms:
         return base_domain or ()
@@ -1873,11 +1871,11 @@ _BOUNDARY_DOMAIN_CAP = 32
 def _compressed_acc_boundary_domain(
     program: Program,
     graph: ProgramGraph,
-    all_exprs: list[Any],
     tag: Tag,
     acc_name: str,
     done_name: str,
     done_acc_info: Any,
+    atom_index: dict[str, list[Atom]],
 ) -> tuple[Any, ...] | None:
     """Boundary-compressed domain for a consumed accumulator.
 
@@ -1896,7 +1894,7 @@ def _compressed_acc_boundary_domain(
     if _has_forbidden_data_read(program, acc_name):
         return None
 
-    atoms = _collect_atoms_for_tag(all_exprs, acc_name)
+    atoms = _collect_atoms_for_tag(atom_index, acc_name)
     boundaries: set[int] = set()
     for atom in atoms:
         specs = _threshold_atom_for_progress(atom, acc_name, graph, kind)
@@ -2280,6 +2278,7 @@ def _classify_dimensions_from_graph(
             all_exprs,
             done_acc_info,
             consumed_accs,
+            atom_idx,
         )
         consumed_accs.difference_update(absorptions.acc_names)
         if profile:
@@ -2292,6 +2291,7 @@ def _classify_dimensions_from_graph(
             graph,
             all_exprs,
             project=project,
+            atom_index=atom_idx,
         )
         if profile:
             profile_last = _classify_profile_mark(timings, "threshold_absorptions", profile_last)
@@ -2302,6 +2302,7 @@ def _classify_dimensions_from_graph(
             structural_domains,
             project=project,
             receive_dest_names=receive_dest_names,
+            atom_index=atom_idx,
         )
         if profile:
             profile_last = _classify_profile_mark(timings, "comparison_absorptions", profile_last)
@@ -2510,7 +2511,13 @@ def _classify_dimensions_from_graph(
                 if domain is not None and len(domain) > _BOUNDARY_DOMAIN_CAP:
                     compressed = (
                         _compressed_acc_boundary_domain(
-                            program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                            program,
+                            graph,
+                            tag,
+                            tag_name,
+                            done_name,
+                            done_acc_info,
+                            atom_idx,
                         )
                         if done_name is not None
                         else None
@@ -2519,7 +2526,13 @@ def _classify_dimensions_from_graph(
                         domain = compressed
                 if domain is None and done_name is not None:
                     domain = _compressed_acc_boundary_domain(
-                        program, graph, all_exprs, tag, tag_name, done_name, done_acc_info
+                        program,
+                        graph,
+                        tag,
+                        tag_name,
+                        done_name,
+                        done_acc_info,
+                        atom_idx,
                     )
                 if domain is not None:
                     stateful[tag_name] = domain

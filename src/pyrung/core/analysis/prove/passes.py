@@ -52,7 +52,7 @@ from .classify import (
 )
 from .elision import _elide_scan_local_stateful_dims
 from .events import _DoneEventSpec, _StateKeyDoneSpec, _ThresholdEventSpec
-from .expr import _collect_atoms_for_tag, _partition_edge_bearing_inputs
+from .expr import _build_atom_index, _collect_atoms_for_tag, _partition_edge_bearing_inputs
 from .inputs import (
     _detect_auto_joint_inputs,
     _detect_exclusive_input_groups,
@@ -1549,10 +1549,11 @@ def _pass_collect_done_acc_pairs(ctx: _PassContext) -> None:
 def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
     assert ctx.graph is not None and ctx.all_exprs is not None
     assert ctx.done_acc_info is not None
+    atom_index = _build_atom_index(ctx.all_exprs)
     consumed_accs = {
         acc_name
         for acc_name in ctx.done_acc_info.pairs.values()
-        if _collect_atoms_for_tag(ctx.all_exprs, acc_name)
+        if _collect_atoms_for_tag(atom_index, acc_name)
         or _has_forbidden_data_read(ctx.program, acc_name)
     }
     ctx.absorptions = _find_redundant_acc_absorptions(
@@ -1561,6 +1562,7 @@ def _pass_find_redundant_absorptions(ctx: _PassContext) -> None:
         ctx.all_exprs,
         ctx.done_acc_info,
         consumed_accs,
+        atom_index,
     )
     ctx.synthetic_preset_tags = tuple(sorted(ctx.absorptions.preset_tags))
     if ctx.journal_builder is not None:
@@ -1661,12 +1663,14 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         return
     assert ctx.graph is not None and ctx.all_exprs is not None
     structural_domains = _get_structural_domain_info(ctx)[0]
+    atom_index = _build_atom_index(ctx.all_exprs)
 
     threshold_absorptions = _find_threshold_absorptions(
         ctx.program,
         ctx.graph,
         ctx.all_exprs,
         project=ctx.project,
+        atom_index=atom_index,
     )
     comparison_absorptions = _find_comparison_absorptions(
         ctx.program,
@@ -1675,6 +1679,7 @@ def _pass_find_threshold_absorptions(ctx: _PassContext) -> None:
         structural_domains,
         project=ctx.project,
         receive_dest_names=ctx.receive_dest_names,
+        atom_index=atom_index,
     )
     ctx.threshold_absorptions = _merge_threshold_absorptions(
         threshold_absorptions,
