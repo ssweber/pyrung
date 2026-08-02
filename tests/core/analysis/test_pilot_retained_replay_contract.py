@@ -79,21 +79,21 @@ def _composed_departure_program() -> tuple[Program, Bool, Bool, Bool, Bool, Bool
 
 
 def _successive_overwrite_program() -> tuple[Program, Int, Bool, Bool, Bool, Bool]:
-    heel_step = Int("ContractHeelStep")
+    process_step = Int("ContractProcessStep")
     guard_10 = Bool("ContractGuard10", external=True)
     guard_94 = Bool("ContractGuard94", external=True)
     start = Bool("ContractOverwriteStart", external=True)
     target = Bool("ContractOverwriteTarget")
     with Program() as program:
         with rung(system.sys.first_scan):
-            copy(81, heel_step)
+            copy(81, process_step)
         with rung(system.sys.first_scan, ~guard_10):
-            copy(10, heel_step)
+            copy(10, process_step)
         with rung(system.sys.first_scan, ~guard_94):
-            copy(94, heel_step)
-        with rung(heel_step == 81, start):
+            copy(94, process_step)
+        with rung(process_step == 81, start):
             latch(target)
-    return program, heel_step, guard_10, guard_94, start, target
+    return program, process_step, guard_10, guard_94, start, target
 
 
 def _shifted_identical_blocker_program(
@@ -109,7 +109,7 @@ def _shifted_identical_blocker_program(
     defensible replacement Bearing.
     """
 
-    heel_step = Int("ContractShiftedHeelStep", default=81)
+    process_step = Int("ContractShiftedProcessStep", default=81)
     guard_a = Bool("ContractShiftedGuardA", external=True)
     guard_b = Bool("ContractShiftedGuardB", external=True) if correctable_replacement else None
     with Program(strict=False) as program:
@@ -117,10 +117,10 @@ def _shifted_identical_blocker_program(
             (system.sys.first_scan, ~guard_b) if guard_b is not None else (system.sys.first_scan,)
         )
         with rung(*replacement_condition):
-            copy(98, heel_step)
+            copy(98, process_step)
         with rung(system.sys.first_scan, ~guard_a):
-            copy(98, heel_step)
-    return program, heel_step, guard_a, guard_b
+            copy(98, process_step)
+    return program, process_step, guard_a, guard_b
 
 
 def _shifted_blocker_chain_program(
@@ -128,13 +128,13 @@ def _shifted_blocker_chain_program(
 ) -> tuple[Program, Int, tuple[Bool, ...]]:
     """A long succession of latent identical retained blockers."""
 
-    heel_step = Int("ContractBoundedHeelStep", default=81)
+    process_step = Int("ContractBoundedProcessStep", default=81)
     guards = tuple(Bool(f"ContractBoundedGuard{index}", external=True) for index in range(length))
     with Program(strict=False) as program:
         for guard in guards:
             with rung(system.sys.first_scan, ~guard):
-                copy(98, heel_step)
-    return program, heel_step, guards
+                copy(98, process_step)
+    return program, process_step, guards
 
 
 def _capture_retained_bearings(monkeypatch) -> list[tuple[tuple, RetainedReplay]]:
@@ -251,7 +251,7 @@ def test_retained_inner_orientation_composes_unchanged_candidate_and_reuses_veri
 ) -> None:
     """A shifted identical blocker is solved only as one verified A+B act."""
 
-    program, heel_step, guard_a, guard_b = _shifted_identical_blocker_program()
+    program, process_step, guard_a, guard_b = _shifted_identical_blocker_program()
     assert guard_b is not None
     retained = _capture_retained_bearings(monkeypatch)
     verified = _capture_retained_verifications(monkeypatch)
@@ -298,16 +298,16 @@ def test_retained_inner_orientation_composes_unchanged_candidate_and_reuses_veri
 
     source = PLC(program)
     source.step()
-    assert source.state.tags[heel_step.name] == 98
-    plan = pilot_how(source, heel_step == 81, max_scans=40)
+    assert source.state.tags[process_step.name] == 98
+    plan = pilot_how(source, process_step == 81, max_scans=40)
 
     assert plan.reachable, (
         plan.reason,
         verified,
         [tuple(rung.dest for rung in act.correction.pilot_rungs) for _key, act in retained],
     )
-    assert plan.tags[heel_step.name] == 81
-    assert plan.replay().state.tags[heel_step.name] == 81
+    assert plan.tags[process_step.name] == 81
+    assert plan.replay().state.tags[process_step.name] == 81
 
     composite_dests = frozenset({guard_a.name, guard_b.name})
     # The exact ordinary verifier accepts A as a novel correction-overlay
@@ -333,7 +333,7 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
 ) -> None:
     """An accepted singleton cannot fabricate a target or a composite."""
 
-    program, heel_step, guard_a, guard_b = _shifted_identical_blocker_program(
+    program, process_step, guard_a, guard_b = _shifted_identical_blocker_program(
         correctable_replacement=False
     )
     assert guard_b is None
@@ -342,8 +342,8 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
 
     source = PLC(program)
     source.step()
-    assert source.state.tags[heel_step.name] == 98
-    plan = pilot_how(source, heel_step == 81, max_scans=20)
+    assert source.state.tags[process_step.name] == 98
+    plan = pilot_how(source, process_step == 81, max_scans=20)
 
     assert not plan.reachable
     assert verified
@@ -355,17 +355,17 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
 def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
     """A long latent-writer chain stops at the inner composition budget."""
 
-    program, heel_step, guards = _shifted_blocker_chain_program(_MAX_RETAINED_COMPOSITIONS + 4)
+    program, process_step, guards = _shifted_blocker_chain_program(_MAX_RETAINED_COMPOSITIONS + 4)
     retained = _capture_retained_bearings(monkeypatch)
     verified = _capture_retained_verifications(monkeypatch)
 
     source = PLC(program)
     source.step()
-    assert source.state.tags[heel_step.name] == 98
-    plan = pilot_how(source, heel_step == 81, max_scans=20)
+    assert source.state.tags[process_step.name] == 98
+    plan = pilot_how(source, process_step == 81, max_scans=20)
 
     assert plan.reachable, plan.reason
-    assert plan.tags[heel_step.name] == 81
+    assert plan.tags[process_step.name] == 81
     # The outer loop may legitimately accept several bounded prefixes. No one
     # inner composition may exhaust the full latent chain, and the finite set of
     # outer prefixes must terminate instead of reconstructing one in a cycle.
@@ -383,13 +383,13 @@ def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
 def test_same_scan_overwrites_recover_exact_final_then_preceding_occurrence(
     monkeypatch,
 ) -> None:
-    program, heel_step, guard_10, guard_94, start, target = _successive_overwrite_program()
+    program, process_step, guard_10, guard_94, start, target = _successive_overwrite_program()
     retained = _capture_retained_bearings(monkeypatch)
 
     plan = pilot_how(PLC(program), target, max_scans=60)
 
     assert plan.reachable, plan.reason
-    assert plan.tags[heel_step.name] == 81
+    assert plan.tags[process_step.name] == 81
     # The scan endpoint 81 -> 94 hides two ordered writes. Recovery must first
     # suppress the exact final 10 -> 94 occurrence, accept its honest landing
     # at 10, then re-orient and suppress the preceding 81 -> 10 occurrence.

@@ -43,7 +43,7 @@ def test_tagmap_block_range_mapping():
 
 def test_to_nickname_file_writes_slot_override_nickname(tmp_path):
     addr = 4450
-    ds.slot(addr, name="cpHeel2nd")
+    ds.slot(addr, name="cpStage2nd")
     try:
         alarms = Block("Alarm", TagType.INT, 1, 3)
         tm = TagMap({alarms: ds.select(addr - 1, addr + 1)})
@@ -52,7 +52,7 @@ def test_to_nickname_file_writes_slot_override_nickname(tmp_path):
         tm.to_nickname_file(path)
 
         rows = pyclickplc.read_csv(path)
-        assert rows[get_addr_key("DS", addr)].nickname == "cpHeel2nd"
+        assert rows[get_addr_key("DS", addr)].nickname == "cpStage2nd"
     finally:
         ds._slot_config.pop(addr, None)
         ds._tag_cache.pop(addr, None)

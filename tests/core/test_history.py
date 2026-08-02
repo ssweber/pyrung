@@ -109,17 +109,17 @@ def test_previous_transition_validates_compressed_candidate_against_committed_bo
     Seed = Bool("HistoryBoundarySeed", external=True)
     MainWrite = Bool("HistoryBoundaryMainWrite", external=True)
     ErrorWrite = Bool("HistoryBoundaryErrorWrite", external=True)
-    HeelStep = Int("HistoryBoundaryHeelStep")
+    ProcessStep = Int("HistoryBoundaryProcessStep")
     Observed = Bool("HistoryBoundaryObserved")
 
     with Program() as program:
         with Rung(Seed):
-            copy(99, HeelStep)
+            copy(99, ProcessStep)
         with Rung(MainWrite):
-            copy(10, HeelStep)
+            copy(10, ProcessStep)
         with Rung(ErrorWrite):
-            copy(98, HeelStep)
-        with Rung(HeelStep == 98):
+            copy(98, ProcessStep)
+        with Rung(ProcessStep == 98):
             out(Observed)
 
     runner = PLC(program)
@@ -134,31 +134,31 @@ def test_previous_transition_validates_compressed_candidate_against_committed_bo
     )
     runner.step()
 
-    assert runner.history.at(1).tags[HeelStep.name] == 99
-    assert runner.history.at(2).tags[HeelStep.name] == 98
+    assert runner.history.at(1).tags[ProcessStep.name] == 99
+    assert runner.history.at(2).tags[ProcessStep.name] == 98
 
-    writers = runner._ensure_pdg().timeline_writers_of(HeelStep.name)
+    writers = runner._ensure_pdg().timeline_writers_of(ProcessStep.name)
     candidates = runner._causal_rung_firing_timelines.tag_transition_candidate_scans_before(
         writers,
-        HeelStep.name,
+        ProcessStep.name,
         3,
     )
     assert candidates[0] == 2
 
-    boundary = runner.history.previous_transition(HeelStep)
+    boundary = runner.history.previous_transition(ProcessStep)
     assert boundary is not None
     assert boundary.scan_id == 2
     assert boundary.occurrence_ordinal is None
     assert (boundary.from_value, boundary.to_value) == (99, 98)
-    assert runner.history.previous_transition(HeelStep, to=98) == boundary
+    assert runner.history.previous_transition(ProcessStep, to=98) == boundary
     # The first writer's 99 -> 10 occurrence is real execution evidence, but
     # it was overwritten before commit and is not an observed History boundary.
-    assert runner.history.previous_transition(HeelStep, to=10) is None
+    assert runner.history.previous_transition(ProcessStep, to=10) is None
 
     # Public cause preserves the committed boundary while attributing it to the
     # final writer. Exact immediate values live only in the ephemeral replay
     # projection built after the compressed query has selected scan 2.
-    exact = runner.cause(HeelStep, scan=boundary.scan_id, deep=True)
+    exact = runner.cause(ProcessStep, scan=boundary.scan_id, deep=True)
     assert exact is not None
     assert (
         exact.effect.scan_id,
