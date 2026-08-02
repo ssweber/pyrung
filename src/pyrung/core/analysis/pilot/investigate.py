@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
@@ -50,6 +50,7 @@ from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     break_guard_holds,
     derive_correction_hypotheses,
+    producer_envelope_correction_holds,
     refine_relational_hypothesis,
 )
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
@@ -508,6 +509,7 @@ def _scoped_correction_rungs(
     outcome: ReplayOutcome,
     ctx: Any,
     progress_mark: tuple[tuple[str, Any], ...] = (),
+    producer_envelope: bool = False,
 ) -> tuple[PilotRung, ...]:
     """Give a replay-successful correction its evidence-derived lifetime.
 
@@ -547,6 +549,32 @@ def _scoped_correction_rungs(
         isinstance(proposal, PilotRung) and proposal.operation is not None for proposal in proposals
     ):
         return tuple(proposals)
+
+    if producer_envelope and all(isinstance(proposal, PilotRung) for proposal in proposals):
+        # The proposer retained every non-lever producer and caller condition.
+        # This broader executable form is replayed below before installation;
+        # EarnedWork remains the fallback when that structural proof is absent.
+        # Bound the envelope by the outer objective so a sibling producer after
+        # the target (for example Completed -> Resetting) cannot keep ownership
+        # after the route has already landed. Rung-entry evaluation keeps the
+        # correction active through the target-establishing scan.
+        from pyrung.core.condition import AllCondition
+
+        unresolved = _target_unresolved_condition(
+            plc,
+            ctx.target.tag,
+            ctx.target.value,
+            ctx.target.predicate,
+        )
+        return tuple(
+            PilotRung(
+                proposal.dest,
+                proposal.value,
+                AllCondition(unresolved, proposal.guard),
+                operation=proposal.operation,
+            )
+            for proposal in proposals
+        )
 
     scoped_proposals = tuple(
         (proposal.dest, proposal.value)
@@ -2062,10 +2090,15 @@ def _compose_hypotheses(
     addition: CorrectionHypothesis,
 ) -> CorrectionHypothesis | None:
     """Create a newly replayable union, declining contradictory operations."""
-    holds = list(base.holds)
+    # A composed replacement is a new causal closure. Keep the exact forms of
+    # any individually widened members; a union of separately complete
+    # envelopes is not itself proof that their combined cascade is complete.
+    base_holds = base.fallback_holds or base.holds
+    addition_holds = addition.fallback_holds or addition.holds
+    holds = list(base_holds)
     seen = {_proposal_identity(hold) for hold in holds}
     by_dest = {dest: value for dest, value in map(_proposal_pair, holds)}
-    for hold in addition.holds:
+    for hold in addition_holds:
         dest, value = _proposal_pair(hold)
         if dest in by_dest and not _values_match(by_dest[dest], value):
             return None
@@ -2074,8 +2107,35 @@ def _compose_hypotheses(
             seen.add(identity)
             holds.append(hold)
             by_dest.setdefault(dest, value)
-    if len(holds) == len(base.holds):
+    if len(holds) == len(base_holds):
         return None
+
+    producer_cuts = list(base.producer_cuts)
+    seen_cuts = {
+        (
+            hold[0],
+            _semantic_key(hold[1]),
+            tag,
+            _semantic_key(value),
+        )
+        for hold, tag, value in producer_cuts
+    }
+    cut_assignments = {tag: value for _hold, tag, value in producer_cuts}
+    cut_conflict = False
+    for hold, tag, value in addition.producer_cuts:
+        if tag in cut_assignments and not _values_match(cut_assignments[tag], value):
+            cut_conflict = True
+            break
+        key = (hold[0], _semantic_key(hold[1]), tag, _semantic_key(value))
+        if key not in seen_cuts:
+            seen_cuts.add(key)
+            producer_cuts.append((hold, tag, value))
+        cut_assignments.setdefault(tag, value)
+    if cut_conflict:
+        # The exact nested correction may still be valid, but these two pieces
+        # cannot support one coordinated structural widening.
+        producer_cuts = []
+
     kind = base.kind if base.kind == addition.kind else "nested-cause"
     return CorrectionHypothesis(
         kind=kind,
@@ -2087,6 +2147,55 @@ def _compose_hypotheses(
         history_origin=(
             base.history_origin if base.history_origin == addition.history_origin else None
         ),
+        producer_envelope=False,
+        fallback_holds=(),
+        producer_cuts=tuple(producer_cuts),
+        producer_sources=tuple(dict.fromkeys((*base.producer_sources, *addition.producer_sources))),
+        producer_causal_spine=(base.producer_causal_spine | addition.producer_causal_spine),
+    )
+
+
+def _reprove_composite_producer_envelope(
+    hypothesis: CorrectionHypothesis,
+    ctx: Any,
+    channel_tag: str | None,
+) -> CorrectionHypothesis:
+    """Promote one exact nested closure only after a fresh coordinated proof."""
+
+    if (
+        channel_tag is None
+        or not hypothesis.producer_cuts
+        or not hypothesis.producer_sources
+        or not hypothesis.producer_causal_spine
+    ):
+        return hypothesis
+    exact_holds = hypothesis.holds
+    exact_pairs = tuple(_proposal_pair(hold) for hold in exact_holds)
+    if not all(
+        any(
+            owned[0] == hold[0] and _values_match(owned[1], hold[1])
+            for owned, _tag, _value in hypothesis.producer_cuts
+        )
+        for hold in exact_pairs
+    ):
+        # Mixed causal closures (for example latch + timer operation) retain
+        # their exact composite; only a fully-owned cut may be widened.
+        return hypothesis
+    widened = producer_envelope_correction_holds(
+        exact_pairs,
+        hypothesis.producer_sources,
+        ctx,
+        channel_tag,
+        hypothesis.producer_cuts,
+        hypothesis.producer_causal_spine,
+    )
+    if not widened:
+        return hypothesis
+    return replace(
+        hypothesis,
+        holds=widened,
+        producer_envelope=True,
+        fallback_holds=exact_holds,
     )
 
 
@@ -2102,6 +2211,7 @@ def investigate_deviation(
     correction_progress_mark: tuple[tuple[str, Any], ...] = (),
     occurrence_requirements: tuple[tuple[str, Any], ...] = (),
     excluded_corrections: frozenset[CorrectionIdentity] = frozenset(),
+    regression_witness: RegressionWitness | None = None,
 ) -> InvestigationResult:
     """Investigate an incident with precise hypothesis generation.
 
@@ -2146,6 +2256,9 @@ def investigate_deviation(
         for rung in overlay.effective
         if _rung_identity(rung) in correction_ids
     }
+    causal_spine = (
+        regression_witness.causal_spine if regression_witness is not None else frozenset()
+    )
 
     def _initial_hypotheses() -> Iterator[CorrectionHypothesis]:
         """Try exact live-incident evidence before expanding older ancestry.
@@ -2162,6 +2275,7 @@ def investigate_deviation(
             ctx,
             installed=correction_active,
             incident_local_only=True,
+            causal_spine=causal_spine,
         )
         local = tuple(_rank_hypotheses(plc, local, incident))
         local_ids = {_hypothesis_identity(item.holds) for item in local}
@@ -2178,6 +2292,7 @@ def investigate_deviation(
             ctx,
             installed=correction_active,
             incident_transition_only=True,
+            causal_spine=causal_spine,
         )
         transition_local = tuple(
             item
@@ -2192,6 +2307,7 @@ def investigate_deviation(
             incident,
             ctx,
             installed=correction_active,
+            causal_spine=causal_spine,
         )
         for item in _rank_hypotheses(
             plc,
@@ -2226,6 +2342,7 @@ def investigate_deviation(
             evidence.plc,
             evidence.incident,
             ctx,
+            causal_spine=evidence.witness.causal_spine,
         )
         nested = _rank_hypotheses(
             evidence.plc,
@@ -2248,7 +2365,11 @@ def investigate_deviation(
                 observed_hypotheses.append(candidate)
             composite = _compose_hypotheses(current, chosen)
             if composite is not None:
-                return composite
+                return _reprove_composite_producer_envelope(
+                    composite,
+                    ctx,
+                    incident.channel_tag,
+                )
         return None
 
     def _replay_candidate(
@@ -2329,9 +2450,14 @@ def investigate_deviation(
         candidate_compositions = 0
 
         while candidate_compositions <= _MAX_CANDIDATE_COMPOSITIONS:
+            exploratory_holds = (
+                current.fallback_holds
+                if current.producer_envelope and current.fallback_holds
+                else current.holds
+            )
             exploratory = _exploratory_correction_rungs(
                 plc,
-                current.holds,
+                exploratory_holds,
                 incident,
                 correction_progress_mark,
                 ctx,
@@ -2401,8 +2527,25 @@ def investigate_deviation(
                 outcome,
                 ctx,
                 scoped_progress_mark,
+                current.producer_envelope,
             )
+
+            def _fall_back_from_envelope() -> bool:
+                nonlocal current
+                if not current.producer_envelope or not current.fallback_holds:
+                    return False
+                current = replace(
+                    current,
+                    holds=current.fallback_holds,
+                    producer_envelope=False,
+                    fallback_holds=(),
+                    detail=f"{current.detail}; producer envelope declined",
+                )
+                return True
+
             if correction_identity(scoped) in excluded_corrections:
+                if _fall_back_from_envelope():
+                    continue
                 _reject(
                     current,
                     "correction-revoked",
@@ -2415,6 +2558,8 @@ def investigate_deviation(
                 ctx,
             )
             if isinstance(scoped_preflight, NoRoute):
+                if _fall_back_from_envelope():
+                    continue
                 _reject(current, "target-cut", scoped_preflight.proof)
                 break
             required_progress = (*incident.bearing, *needed)
@@ -2429,6 +2574,8 @@ def investigate_deviation(
                     program,
                 )
             ):
+                if _fall_back_from_envelope():
+                    continue
                 # Replay windows are deliberately bounded to the incident. A
                 # correction can silence that incident yet pin a slower progress
                 # register behind the checkpoint frontier after the window ends.
@@ -2446,9 +2593,10 @@ def investigate_deviation(
             # scoping unchanged. Replay is deterministic from the retained
             # incident checkpoint, so an identical executable correction has
             # already proved its installed form in the exploratory pass.
-            installed_outcome = (
-                outcome if scoped == exploratory else _replay_candidate(current, scoped)
-            )
+            same_executable = all(
+                isinstance(rung, PilotRung) for rung in exploratory
+            ) and correction_identity(scoped) == correction_identity(exploratory)
+            installed_outcome = outcome if same_executable else _replay_candidate(current, scoped)
             if current.constraint is not None and not isinstance(
                 installed_outcome.continuation,
                 Reachable,
@@ -2463,6 +2611,8 @@ def investigate_deviation(
                     current = refined
                     observed_hypotheses.append(refined)
                     continue
+                if _fall_back_from_envelope():
+                    continue
                 _reject(current, "relational-continuation-unknown", ground)
                 break
             resolution = _resolve_replay_attempt(
@@ -2473,6 +2623,8 @@ def investigate_deviation(
                 extend=_compose_replacement_candidate,
             )
             if isinstance(resolution, _ReplayRejected):
+                if _fall_back_from_envelope():
+                    continue
                 rejected.append(resolution.rejection)
                 break
             if isinstance(resolution, _CandidateComposed):
@@ -2487,6 +2639,11 @@ def investigate_deviation(
                 detail=current.detail,
                 incident_local=current.incident_local,
                 history_origin=current.history_origin,
+                producer_envelope=current.producer_envelope,
+                fallback_holds=current.fallback_holds,
+                producer_cuts=current.producer_cuts,
+                producer_sources=current.producer_sources,
+                producer_causal_spine=current.producer_causal_spine,
             )
             confirmed.append(confirmed_hypothesis)
             confirmed_correction = _ConfirmedCorrection(

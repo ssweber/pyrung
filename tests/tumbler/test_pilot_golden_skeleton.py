@@ -29,7 +29,6 @@ import pytest
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.overlay import PilotRung
-from pyrung.core.condition import AllCondition, AnyCondition, CompareEq
 from pyrung.core.runner import _compile_avoid
 from tests.fixtures.tumbler import enter_production
 from tests.tumbler.bench import Bench
@@ -251,17 +250,6 @@ def _hold_dest(hold) -> str | None:
     return None
 
 
-def _guard_equalities(condition) -> set[tuple[str, object]]:
-    """Literal equality facts nested anywhere in an And/Or guard."""
-
-    if isinstance(condition, CompareEq):
-        name = getattr(condition.tag, "name", None)
-        return {(name, condition.value)} if name is not None else set()
-    if isinstance(condition, (AllCondition, AnyCondition)):
-        return {fact for child in condition.conditions for fact in _guard_equalities(child)}
-    return set()
-
-
 def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
     """The exact deep-chain route to the burner output."""
     events = _drive_bool_target(
@@ -283,40 +271,43 @@ def test_pilot_golden_skeleton_y_burnerloop(tumbler_logic) -> None:
         for tag, _value in entry.get("completion_frontier") or ()
     ), "the Starting->Execute completion frontier never named x_RotateFB"
 
-    # The Execute-era departure has one exact coordinated corrective frontier:
-    # the physical door contacts. Defaults and first-scan plumbing must never
+    # The two contacts discovered at the Starting incident are re-proved as a
+    # coordinated producer cut. Defaults and first-scan plumbing must never
     # reappear as a broad batch.
-    precise_dest_sets = [
+    latch_dest_sets = [
         {_hold_dest(hold) for hold in holds}
-        for holds in _confirmed_holds(skeleton, "precise-cause")
+        for holds in _confirmed_holds(skeleton, "latch-exposure")
     ]
-    assert {"x_DoorClosed", "x_LintDoorClosed"} in precise_dest_sets
+    assert {"x_DoorClosed", "x_LintDoorClosed"} in latch_dest_sets
     assert not any(
         dest in {"Test_Simulate_1st_Scan", "Cmd_ForceClear", "Cmd_CmdChgRequest"}
-        for destinations in precise_dest_sets
+        for destinations in latch_dest_sets
         for dest in destinations
     )
 
-    # The first door correction owns the actual Starting/Step-101 occurrence
-    # from the recorded deep chain. The exact corridor may be a nested state
-    # mapping condition; the raw-object tripwire requires both coordinates so
-    # regeneration cannot bless a global door hold.
-    starting_door_rungs = [
+    # Discovery order no longer freezes the exact Starting/Step-101 fallback.
+    # The individual guards explain their complete lifetimes: both contacts
+    # own the shared Execute producer, while only the main door owns the
+    # Completed sibling.
+    door_rungs = [
         hold
         for event in events
         if event.kind == "trend_regression"
         for hypothesis in (event.data.get("investigation") or {}).get("confirmed_detail", ())
         if hypothesis.get("kind") == "latch-exposure"
         for hold in hypothesis.get("holds", ())
-        if isinstance(hold, PilotRung)
-        and hold.dest in {"x_DoorClosed", "x_LintDoorClosed"}
-        and ("Sts_StateCurrent", 3) in _guard_equalities(hold.guard)
-        and ("Internal__Step", 101) in _guard_equalities(hold.guard)
+        if isinstance(hold, PilotRung) and hold.dest in {"x_DoorClosed", "x_LintDoorClosed"}
     ]
-    assert {rung.dest for rung in starting_door_rungs} == {
+    assert {rung.dest for rung in door_rungs} == {
         "x_DoorClosed",
         "x_LintDoorClosed",
     }
+    guards = {rung.dest: repr(rung.guard) for rung in door_rungs}
+    assert "Sts_State_Execute" in guards["x_DoorClosed"]
+    assert "Sts_State_Execute" in guards["x_LintDoorClosed"]
+    assert "Sts_State_Completed" in guards["x_DoorClosed"]
+    assert "Sts_State_Completed" not in guards["x_LintDoorClosed"]
+    assert all("Internal__Step" not in guard for guard in guards.values())
 
     # The later complement-reset watchdog is a separate causal era.
     liveness_dest_sets = [
@@ -386,26 +377,27 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     The former endpoint was an Unhold read at HELD/Step101. That landing was
     premature safety motion, not recipe progress; the exact-producer bearing
     now preserves Execute long enough for investigation to identify and install
-        the two door guards. Later watchdog regressions must accept the recorded
-        rotate-sensor reset operation and then the sail-relay absence root as
-        distinct owners of their Execute->Abort incidents. The owner-verified dry dwell must then advance the
+    the two door guards. Their nested closure is re-proved across the complete
+    participating producer cascade, so it prevents the later Unhold-era alarm
+    without another correction. Later watchdog regressions must accept the
+    recorded rotate-sensor reset operation and then the sail-relay absence root
+    as distinct owners of their Execute->Abort incidents. The owner-verified dry dwell must then advance the
     recipe through the dry, cool, hold-for-fluff, and fluff operations. Pipeline
     motion observed while reading a later producer must keep its current owner;
-    it must not introduce a duplicate Hold command. Each later door incident on
-    the reused state-transition executor is corrected in its own causal era,
-    after which the program-owned Complete transition reaches State 17 and
-    asserts ``Sts_State_Completed``. The Boolean target is deliberate: reaching
-    state 17 one scan before its status output is not completion.
+    it must not introduce a duplicate Hold command. The intentional Held escape
+    used by Hold-for-Fluff remains, and its one Unhold lands back in Execute.
+    The program-owned Complete transition then reaches State 17 and asserts
+    ``Sts_State_Completed``. The Boolean target is deliberate: reaching state 17
+    one scan before its status output is not completion.
     """
     plc = PLC(tumbler_logic)
     plc.step()
     tags = plc._known_tags_by_name
     avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
     events = []
-    door_correction = None
+    door_corrections = []
     liveness_correction = None
     sail_correction = None
-    post_sail_door_corrections: set[str] = set()
     finished = None
     deadline = time.monotonic() + INTERNAL_ROUTE_WALL_BUDGET_S
     for event in pilot_events(
@@ -420,15 +412,15 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
                 "confirmed_detail",
                 (),
             )
-            precise = {
+            latch_exposure = {
                 rung.dest
                 for hypothesis in confirmed
-                if hypothesis.get("kind") == "precise-cause"
+                if hypothesis.get("kind") == "latch-exposure"
                 for rung in hypothesis.get("holds", ())
                 if hasattr(rung, "dest")
             }
-            if {"x_DoorClosed", "x_LintDoorClosed"} <= precise:
-                door_correction = event
+            if {"x_DoorClosed", "x_LintDoorClosed"} <= latch_exposure:
+                door_corrections.append(event)
             liveness = {
                 rung.dest
                 for hypothesis in confirmed
@@ -447,17 +439,6 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
             }
             if "x_SailRelay" in absence_roots:
                 sail_correction = event
-            latch_exposure = {
-                rung.dest
-                for hypothesis in confirmed
-                if hypothesis.get("kind") == "latch-exposure"
-                for rung in hypothesis.get("holds", ())
-                if hasattr(rung, "dest")
-            }
-            if sail_correction is not None:
-                post_sail_door_corrections.update(
-                    latch_exposure & {"x_DoorClosed", "x_LintDoorClosed"}
-                )
         if event.kind == "finished":
             finished = event
             break
@@ -466,13 +447,9 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
                 "cold avoided-Complete drive did not correct its Execute watchdog departure"
             )
 
-    assert door_correction is not None
+    assert len(door_corrections) == 1
     assert liveness_correction is not None
     assert sail_correction is not None
-    # Bounded correction proof owns one recorded fault. The post-sail door
-    # contacts may therefore be learned in successive incidents instead of a
-    # single eager reconstruction, but both must be present before completion.
-    assert post_sail_door_corrections == {"x_DoorClosed", "x_LintDoorClosed"}
     assert finished is not None
     assert finished.data["reached"] is True
     assert liveness_correction.data["investigation"]["confirmed"] > 0
@@ -489,6 +466,19 @@ def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
         event.kind == "candidate_accepted"
         and tuple(event.data.get("applied") or ()) == (("Cmd_State_Unhold", True),)
         for event in events
+    )
+    # The sole logical Unhold is the intentional Hold-for-Fluff
+    # departure/landing. Retry receipts may repeat at the same scan.
+    assert (
+        len(
+            {
+                event.scan
+                for event in events
+                if event.kind == "candidate_accepted"
+                and tuple(event.data.get("applied") or ()) == (("Cmd_State_Unhold", True),)
+            }
+        )
+        == 1
     )
     assert any(
         pair[0] == "Internal__Step" and pair[1] >= 109

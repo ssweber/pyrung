@@ -1746,13 +1746,13 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "And(Or(Sts_StateCurrent == 4, Sts_StateCurrent == 3), Internal__Step == 101)",
+       "guard": "And(Sts_StateCurrent != 17, Or(And(And(Sts_UnitModeCurrent == 1, Sts_Pending1stScanSuspnd != 1), Or(Sts_State_Starting, Sts_State_Unholding, Sts_State_Unsuspending)), And(Sts_UnitModeCurrent == 1, Sts_State_Execute), And(Sts_UnitModeCurrent == 1, Sts_State_Completed)))",
        "value": true
       },
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "And(Or(Sts_StateCurrent == 4, Sts_StateCurrent == 3), Internal__Step == 101)",
+       "guard": "And(Sts_StateCurrent != 17, Or(And(And(Sts_UnitModeCurrent == 1, Sts_Pending1stScanSuspnd != 1), Or(Sts_State_Starting, Sts_State_Unholding, Sts_State_Unsuspending)), And(Sts_UnitModeCurrent == 1, Sts_State_Execute)))",
        "value": true
       }
      ],
@@ -1773,7 +1773,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_DoorClosed",
-       "guard": "Sts_StateCurrent == 3",
+       "guard": "Or(And(And(Sts_UnitModeCurrent == 1, Sts_Pending1stScanSuspnd != 1), Or(Sts_State_Starting, Sts_State_Unholding, Sts_State_Unsuspending)), And(Sts_UnitModeCurrent == 1, Sts_State_Completed))",
        "value": true
       }
      ],
@@ -1789,7 +1789,7 @@
       {
        "__type__": "PilotRung",
        "dest": "x_LintDoorClosed",
-       "guard": "Sts_StateCurrent == 3",
+       "guard": "And(And(Sts_UnitModeCurrent == 1, Sts_Pending1stScanSuspnd != 1), Or(Sts_State_Starting, Sts_State_Unholding, Sts_State_Unsuspending))",
        "value": true
       }
      ],

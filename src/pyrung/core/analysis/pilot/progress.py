@@ -1354,6 +1354,7 @@ def _investigate_and_revert(
             correction_progress_mark=correction_progress_mark,
             occurrence_requirements=occurrence_requirements,
             excluded_corrections=frozenset(excluded_corrections),
+            regression_witness=regression_witness,
         )
         investigation_nogoods.update(investigation.regression_nogoods)
         # Investigation has already derived a finite guard and replayed this

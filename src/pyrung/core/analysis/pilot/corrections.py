@@ -94,6 +94,23 @@ class CorrectionHypothesis:
     # external terminal and an unwritten default are both absence evidence,
     # but the former is a causal leaf while the latter is a broad fallback.
     history_origin: str | None = None
+    # The executable guards already name every channel-pipeline producer that
+    # this correction structurally disables.  Investigation may therefore
+    # replay that producer envelope without intersecting it with the incidental
+    # EarnedWork coordinate where the first occurrence was observed.
+    producer_envelope: bool = False
+    # Exact incident-local form proved before a producer-envelope widening.
+    # If the broader guarded replay finds an escape hatch, investigation falls
+    # back to this form rather than discarding a valid correction.
+    fallback_holds: tuple[Any, ...] = ()
+    # Structural provenance for re-proving a nested causal closure. Each item
+    # maps one physical hold to the image/contact assignment that makes a
+    # recorded producer non-conductive: ``((hold_tag, hold_value), tag, value)``.
+    # A composite may combine these assignments, but the resulting executable
+    # scopes remain individual PilotRungs.
+    producer_cuts: tuple[tuple[ActionPair, str, Any], ...] = ()
+    producer_sources: tuple[str, ...] = ()
+    producer_causal_spine: frozenset[str] = frozenset()
 
 
 def _complement_constraint(constraint: Any) -> Any | None:
@@ -192,6 +209,8 @@ def correct_enablers(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
+    *,
+    causal_spine: frozenset[str] = frozenset(),
 ) -> list[CorrectionHypothesis]:
     """The single ``no-steerable-trigger -> corrective hold`` pass.
 
@@ -199,7 +218,7 @@ def correct_enablers(
     :class:`CorrectionHypothesis` stream. Coil corrections precede accumulator
     corrections, matching the latch-exposure → done-boundary ordering.
     """
-    coil = _coil_corrections(plc, incident, ctx)
+    coil = _coil_corrections(plc, incident, ctx, causal_spine=causal_spine)
     accumulator = _accumulator_corrections(plc, incident, ctx)
     operation_inputs = {
         getattr(hold, "dest", hold[0] if isinstance(hold, tuple) else None)
@@ -230,6 +249,7 @@ def derive_correction_hypotheses(
     installed: Mapping[str, Any] | None = None,
     incident_local_only: bool = False,
     incident_transition_only: bool = False,
+    causal_spine: frozenset[str] = frozenset(),
 ) -> tuple[tuple[CorrectionHypothesis, ...], frozenset[str]]:
     """Produce one incident's ordered, deduplicated correction hypotheses.
 
@@ -244,7 +264,7 @@ def derive_correction_hypotheses(
             frozenset(),
         )
 
-    enablers = correct_enablers(plc, incident, ctx)
+    enablers = correct_enablers(plc, incident, ctx, causal_spine=causal_spine)
     incident_changes = set(getattr(incident, "changed_tags", ()))
     channel_tag = getattr(incident, "channel_tag", None)
     channel_chain: set[str] | None = None
@@ -460,6 +480,298 @@ def guard_correction_holds(
     return tuple(PilotRung(tag, value, guard) for tag, value in holds)
 
 
+def _condition_conjunction(conditions: Iterable[Any]) -> Any | None:
+    """Executable conjunction, with ``None`` representing logical True."""
+
+    from pyrung.core.condition import AllCondition
+
+    terms = tuple(conditions)
+    if not terms:
+        return None
+    return terms[0] if len(terms) == 1 else AllCondition(*terms)
+
+
+def _condition_disjunction(conditions: Iterable[Any]) -> Any | None:
+    """Executable disjunction; callers handle an empty/True result explicitly."""
+
+    from pyrung.core.condition import AnyCondition
+
+    terms = tuple(conditions)
+    if not terms:
+        return None
+    return terms[0] if len(terms) == 1 else AnyCondition(*terms)
+
+
+def _producer_caller_scope(program: Any, subroutine: str) -> tuple[Any | None, bool, bool]:
+    """Return ``(guard, reachable, complete)`` for a subroutine call path.
+
+    ``guard is None`` with ``reachable`` means an unconditional path.  Raw call
+    conditions are retained so the resulting scope is directly executable;
+    recursive/unknown call structure declines the widening rather than
+    manufacturing a partial outer guard.
+    """
+
+    from pyrung.core.condition import AllCondition, AnyCondition
+    from pyrung.core.validation._common import _build_caller_map
+
+    caller_map = _build_caller_map(program)
+    memo: dict[str, tuple[Any | None, bool, bool]] = {}
+    visiting: set[str] = set()
+
+    def visit(name: str) -> tuple[Any | None, bool, bool]:
+        if name in memo:
+            return memo[name]
+        if name in visiting:
+            return None, False, False
+        callers = caller_map.get(name, ())
+        if not callers:
+            result = (None, False, True)
+            memo[name] = result
+            return result
+        visiting.add(name)
+        alternatives: list[Any] = []
+        unconditional = False
+        for scope, caller_sub, _ri, _branch, conditions in callers:
+            local = _condition_conjunction(conditions)
+            if scope == "subroutine" and caller_sub is not None:
+                parent, reachable, complete = visit(caller_sub)
+                if not complete:
+                    visiting.discard(name)
+                    return None, False, False
+                if not reachable:
+                    continue
+                if parent is None:
+                    term = local
+                elif local is None:
+                    term = parent
+                else:
+                    term = AllCondition(parent, local)
+            else:
+                term = local
+            if term is None:
+                unconditional = True
+                break
+            alternatives.append(term)
+        visiting.discard(name)
+        if unconditional:
+            result = (None, True, True)
+        elif not alternatives:
+            result = (None, False, True)
+        else:
+            result = (
+                alternatives[0] if len(alternatives) == 1 else AnyCondition(*alternatives),
+                True,
+                True,
+            )
+        memo[name] = result
+        return result
+
+    return visit(subroutine)
+
+
+@dataclass(frozen=True)
+class _ProducerEnvelopeTerm:
+    """One producer context and the corrective contacts needed to cut it."""
+
+    guard: Any
+    cut_tags: frozenset[str]
+    writes: frozenset[str]
+
+
+def _producer_envelope_terms(
+    ctx: Any,
+    channel_tag: str,
+    cut_assignments: Mapping[str, Any],
+    causal_spine: frozenset[str],
+) -> tuple[_ProducerEnvelopeTerm, ...] | None:
+    """Producer contexts cut by a coordinated corrective assignment.
+
+    Starting from the image/contact values resolved by ``trace_back``, inspect
+    only readers that write onto the recorded channel cascade. Each writer is
+    assigned one deterministic inclusion-minimal corrective cut. Direct
+    conjuncts owned wholly by that cut are projected out; every other local
+    condition and recursive caller guard is retained.
+    """
+
+    from pyrung.core.analysis.pdg import _extract_reads_from_condition, resolve_rung
+    from pyrung.core.analysis.simplified import _conditions_list_to_expr, _expr_forced_true
+    from pyrung.core.condition import AllCondition
+
+    pdg = getattr(ctx, "pdg", None)
+    program = getattr(ctx, "program", None)
+    if pdg is None or program is None or not cut_assignments or not causal_spine:
+        return None
+
+    # ``RegressionWitness.causal_spine`` is the exact cascade that produced the
+    # observed channel departure. A whole static upstream cone is not a
+    # substitute: shared status plumbing can pull in unrelated writers.
+    pipeline = set(causal_spine) | {channel_tag}
+    candidate_nodes = {
+        node_index for tag in cut_assignments for node_index in pdg.readers_of.get(tag, frozenset())
+    }
+    terms: list[_ProducerEnvelopeTerm] = []
+    seen_terms: set[tuple[Any, frozenset[str]]] = set()
+    for node_index in sorted(candidate_nodes):
+        node = pdg.rung_nodes[node_index]
+        if not (set(node.writes) & pipeline):
+            continue
+        rung = resolve_rung(program, node)
+        if rung is None:
+            return None
+        conditions = tuple(getattr(rung, "_conditions", ()) or ())
+        expr = _conditions_list_to_expr(list(conditions))
+        if _expr_forced_true(expr, dict(cut_assignments)) is not False:
+            continue
+
+        # The joint Execute producer ``~Door OR ~Lint`` needs both contacts;
+        # a door-only alarm drops the irrelevant lint assignment. The proof is
+        # coordinated, while the resulting executable scopes stay individual.
+        minimal = dict(cut_assignments)
+        for tag in sorted(tuple(minimal)):
+            trial = {name: value for name, value in minimal.items() if name != tag}
+            if _expr_forced_true(expr, trial) is False:
+                minimal = trial
+        cut_tags = frozenset(minimal)
+        if not cut_tags:
+            continue
+
+        retained: list[Any] = []
+        projected = False
+        for condition in conditions:
+            reads = set(_extract_reads_from_condition(condition, {}))
+            overlap = reads & cut_tags
+            if not overlap:
+                retained.append(condition)
+                continue
+            if not reads <= cut_tags:
+                # A nested expression mixing one lever with retained context
+                # cannot be projected without reconstructing its Boolean form.
+                return None
+            projected = True
+        if not projected:
+            return None
+
+        caller = None
+        if node.subroutine is not None:
+            caller, reachable, complete = _producer_caller_scope(program, node.subroutine)
+            if not complete:
+                return None
+            if not reachable:
+                continue
+        local = _condition_conjunction(retained)
+        if caller is None:
+            term = local
+        elif local is None:
+            term = caller
+        else:
+            term = AllCondition(caller, local)
+        # A globally-active envelope has no principled release boundary.
+        if term is None:
+            return None
+        key = (_semantic_key(term), cut_tags)
+        if key not in seen_terms:
+            seen_terms.add(key)
+            terms.append(_ProducerEnvelopeTerm(term, cut_tags, frozenset(node.writes)))
+    return tuple(terms)
+
+
+def _producer_envelope_guard(
+    ctx: Any,
+    channel_tag: str,
+    cut_assignments: Mapping[str, Any],
+    required_sources: tuple[str, ...],
+    causal_spine: frozenset[str],
+) -> Any | None:
+    """Complete shared scope for compatibility with single-scope consumers."""
+
+    terms = _producer_envelope_terms(ctx, channel_tag, cut_assignments, causal_spine)
+    if terms is None:
+        return None
+    covered_sources = set().union(*(term.writes for term in terms)) if terms else set()
+    if not set(required_sources) <= covered_sources:
+        return None
+    return _condition_disjunction(term.guard for term in terms)
+
+
+def producer_envelope_correction_holds(
+    holds: tuple[ActionPair, ...],
+    source_tags: tuple[str, ...],
+    ctx: Any,
+    channel_tag: str,
+    producer_cuts: tuple[tuple[ActionPair, str, Any], ...],
+    causal_spine: frozenset[str],
+) -> tuple[PilotRung, ...]:
+    """Re-prove individual hold scopes from one coordinated producer cut."""
+
+    assignments: dict[str, Any] = {}
+    for _hold, tag, value in producer_cuts:
+        if tag in assignments and not _values_match(assignments[tag], value):
+            return ()
+        assignments[tag] = value
+    if not assignments:
+        return ()
+
+    terms = _producer_envelope_terms(ctx, channel_tag, assignments, causal_spine)
+    if terms is None:
+        return ()
+    covered_sources = set().union(*(term.writes for term in terms)) if terms else set()
+    if not set(source_tags) <= covered_sources:
+        return ()
+
+    widened: list[PilotRung] = []
+    for hold in holds:
+        owned_tags = {
+            tag
+            for owned_hold, tag, _value in producer_cuts
+            if owned_hold[0] == hold[0] and _values_match(owned_hold[1], hold[1])
+        }
+        guard = _condition_disjunction(term.guard for term in terms if term.cut_tags & owned_tags)
+        if guard is None:
+            return ()
+        widened.append(PilotRung(hold[0], hold[1], guard))
+    return tuple(widened)
+
+
+def producer_scoped_correction_holds(
+    plc: PLC,
+    holds: tuple[ActionPair, ...],
+    source_tags: tuple[str, ...],
+    incident: DeviationIncident,
+    ctx: Any,
+    cut_assignments: Mapping[str, Any],
+    causal_spine: frozenset[str],
+    producer_cuts: tuple[tuple[ActionPair, str, Any], ...] = (),
+) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+    """Prefer a complete producer envelope, falling back to exact exposure."""
+
+    fallback = guard_correction_holds(plc, holds, source_tags, incident, ctx)
+    if incident.channel_tag is None:
+        return fallback, ()
+    if producer_cuts:
+        widened = producer_envelope_correction_holds(
+            holds,
+            source_tags,
+            ctx,
+            incident.channel_tag,
+            producer_cuts,
+            causal_spine,
+        )
+    else:
+        guard = _producer_envelope_guard(
+            ctx,
+            incident.channel_tag,
+            cut_assignments,
+            source_tags,
+            causal_spine,
+        )
+        widened = (
+            tuple(PilotRung(tag, value, guard) for tag, value in holds) if guard is not None else ()
+        )
+    if not widened:
+        return fallback, ()
+    return widened, fallback
+
+
 # ---------------------------------------------------------------------------
 # Coil arm — latches that fired during the incident  (FLIP a non-state guard)
 # ---------------------------------------------------------------------------
@@ -469,6 +781,8 @@ def _coil_corrections(
     plc: PLC,
     incident: DeviationIncident,
     ctx: Any,
+    *,
+    causal_spine: frozenset[str] = frozenset(),
 ) -> list[CorrectionHypothesis]:
     """Latch-exposure: alarm latches that fired as a consequence of our action.
 
@@ -520,7 +834,7 @@ def _coil_corrections(
             return []
         return list(tree.steerable_leaves())
 
-    def _latch_guard_holds(tag: str) -> list[ActionPair]:
+    def _latch_guard_holds(tag: str) -> list[tuple[ActionPair, str, Any]]:
         """Corrective steerable holds for an active latch *tag*, or [].
 
         The trace may bridge an image-level contact such as
@@ -528,7 +842,7 @@ def _coil_corrections(
         """
         from pyrung.core.analysis.simplified import _conditions_list_to_expr, _expr_forced_true
 
-        holds: list[ActionPair] = []
+        holds: list[tuple[ActionPair, str, Any]] = []
         seen: set[ActionPair] = set()
         for ri in pdg.writers_of.get(tag, frozenset()):
             node = pdg.rung_nodes[ri]
@@ -566,19 +880,30 @@ def _coil_corrections(
                 ]
                 for hold in resolved:
                     seen.add(hold)
-                    holds.append(hold)
+                    holds.append((hold, guard, safe))
         return holds
 
     def _guarded(
         holds: list[ActionPair],
         source_tags: tuple[str, ...],
-    ) -> tuple[Any, ...]:
-        """Wrap holds in the exact recorded conductive context when readable."""
-        return guard_correction_holds(plc, tuple(holds), source_tags, incident, ctx)
+        cut_assignments: Mapping[str, Any],
+        producer_cuts: tuple[tuple[ActionPair, str, Any], ...],
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+        """Wrap holds in the complete cut envelope when structurally provable."""
+        return producer_scoped_correction_holds(
+            plc,
+            tuple(holds),
+            source_tags,
+            incident,
+            ctx,
+            cut_assignments,
+            causal_spine,
+            producer_cuts,
+        )
 
     corrections: list[CorrectionHypothesis] = []
     conj_latches: list[str] = []
-    latch_alternatives: list[tuple[ActionPair, ...]] = []
+    latch_alternatives: list[tuple[tuple[ActionPair, str, Any], ...]] = []
     for tag, val in sorted(incident.after_snap.items()):
         if val is not True or incident.before_snap.get(tag) is True:
             continue
@@ -588,14 +913,26 @@ def _coil_corrections(
         # Each guard assignment above independently forces this latch rung
         # false. They are alternative minimal cuts, not one coordinated hold.
         # Coordination belongs between distinct latches that all fired.
-        for hold in latch_holds:
+        for hold, guard_tag, safe in latch_holds:
+            cuts = ((hold, guard_tag, safe),)
+            guarded_holds, fallback = _guarded(
+                [hold],
+                (tag,),
+                {guard_tag: safe},
+                cuts,
+            )
             corrections.append(
                 CorrectionHypothesis(
                     kind="latch-exposure",
-                    holds=_guarded([hold], (tag,)),
+                    holds=guarded_holds,
                     sources=(tag, hold[0]),
                     detail=f"prevent latch {tag} via {hold[0]}",
                     incident_local=True,
+                    producer_envelope=bool(fallback),
+                    fallback_holds=fallback,
+                    producer_cuts=cuts,
+                    producer_sources=(tag,),
+                    producer_causal_spine=causal_spine,
                 )
             )
         conj_latches.append(tag)
@@ -606,26 +943,42 @@ def _coil_corrections(
         # leave Starting). A coordinated repair chooses one cut per latch; it
         # must not union every alternative into an over-constrained batch.
         seen_joint: set[tuple[ActionPair, ...]] = set()
-        joint_candidates: list[tuple[ActionPair, ...]] = []
+        joint_candidates: list[tuple[tuple[ActionPair, str, Any], ...]] = []
         for selected in itertools.product(*latch_alternatives):
-            conjunction = tuple(dict.fromkeys(selected))
+            conjunction = tuple(dict.fromkeys(item[0] for item in selected))
             if conjunction in seen_joint:
                 continue
             seen_joint.add(conjunction)
-            joint_candidates.append(conjunction)
+            joint_candidates.append(selected)
         minimal_joint = [
             candidate
             for candidate in joint_candidates
-            if not any(set(other) < set(candidate) for other in joint_candidates)
+            if not any(
+                {item[0] for item in other} < {item[0] for item in candidate}
+                for other in joint_candidates
+            )
         ]
-        for conjunction in minimal_joint:
+        for selected in minimal_joint:
+            conjunction = tuple(dict.fromkeys(item[0] for item in selected))
+            assignments = {guard: safe for _hold, guard, safe in selected}
+            guarded_holds, fallback = _guarded(
+                list(conjunction),
+                tuple(conj_latches),
+                assignments,
+                selected,
+            )
             corrections.append(
                 CorrectionHypothesis(
                     kind="latch-exposure",
-                    holds=_guarded(list(conjunction), tuple(conj_latches)),
+                    holds=guarded_holds,
                     sources=(*conj_latches, *(h[0] for h in conjunction)),
                     detail=(f"clear {len(conj_latches)} active latches: {', '.join(conj_latches)}"),
                     incident_local=True,
+                    producer_envelope=bool(fallback),
+                    fallback_holds=fallback,
+                    producer_cuts=selected,
+                    producer_sources=tuple(conj_latches),
+                    producer_causal_spine=causal_spine,
                 )
             )
     return corrections

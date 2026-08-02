@@ -14,7 +14,23 @@ from typing import Any
 
 import pytest
 
-from pyrung import And, Bool, Int, Or, Program, Rung, Timer, calc, copy, latch, on_delay, out, rise
+from pyrung import (
+    And,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    Timer,
+    calc,
+    call,
+    copy,
+    latch,
+    on_delay,
+    out,
+    rise,
+    subroutine,
+)
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.coast import CoastSession, CoastTriggerEvent, _coast_holding_state
 from pyrung.core.analysis.pilot.constrained_reachability import NoRoute, Unknown
@@ -22,6 +38,7 @@ from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
     _dedupe_pairs,
     _precise_causes,
+    _producer_envelope_guard,
     correct_enablers,
     derive_correction_hypotheses,
 )
@@ -36,6 +53,7 @@ from pyrung.core.analysis.pilot.investigate import (
     ReplayOutcome,
     ReplayStep,
     _CandidateComposed,
+    _compose_hypotheses,
     _continuation_with_active_correction,
     _first_timeline_departure,
     _hold_allowed,
@@ -45,6 +63,7 @@ from pyrung.core.analysis.pilot.investigate import (
     _RelationalRefinementReceipt,
     _ReplayAccepted,
     _ReplayRejected,
+    _reprove_composite_producer_envelope,
     _resolve_replay_attempt,
     _shared_causal_suffix,
     build_deviation_incident,
@@ -72,6 +91,250 @@ from pyrung.core.instruction.advance import ConditionDemand
 from pyrung.core.runner import PLC
 
 _DEFAULT_TARGET = TargetSpec("", None)
+
+
+class _ConditionSnapshot:
+    def __init__(self, values: dict[str, Any]):
+        self.values = values
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        return self.values.get(name, default)
+
+
+def test_nested_closure_reproves_individual_scopes_with_a_shared_joint_cut():
+    """Composition coordinates its proof without merging runtime scopes."""
+
+    Mode = Bool("CompositeEnvelope_Mode", external=True)
+    Door = Bool("CompositeEnvelope_Door", external=True)
+    Lint = Bool("CompositeEnvelope_Lint", external=True)
+    ExactDoor = Bool("CompositeEnvelope_ExactDoor", external=True)
+    ExactLint = Bool("CompositeEnvelope_ExactLint", external=True)
+    State = Int("CompositeEnvelope_State")
+    DoorAlarm = Bool("CompositeEnvelope_DoorAlarm")
+    LintAlarm = Bool("CompositeEnvelope_LintAlarm")
+    Command = Int("CompositeEnvelope_Command")
+
+    with Program() as program:
+        with Rung(Mode, Or(State == 3, State == 11), ~Door):
+            latch(DoorAlarm)
+        with Rung(Mode, Or(State == 3, State == 11), ~Lint):
+            latch(LintAlarm)
+        # Neither individual assignment disables this writer; the pair does.
+        with Rung(Mode, State == 6, Or(~Door, ~Lint)):
+            copy(4, Command)
+        # A door-only sibling must not broaden the lint correction.
+        with Rung(Mode, State == 17, ~Door):
+            copy(4, Command)
+        with Rung(DoorAlarm):
+            copy(4, Command)
+        with Rung(LintAlarm):
+            copy(4, Command)
+        with Rung(Command == 4):
+            copy(8, State)
+
+    ctx = SimpleNamespace(pdg=build_program_graph(program), program=program)
+    spine = frozenset({DoorAlarm.name, LintAlarm.name, Command.name, State.name})
+    first = CorrectionHypothesis(
+        "latch-exposure",
+        (PilotRung(Door.name, True, State == 3),),
+        sources=(DoorAlarm.name, Door.name),
+        producer_envelope=True,
+        fallback_holds=(PilotRung(Door.name, True, ExactDoor),),
+        producer_cuts=(((Door.name, True), Door.name, True),),
+        producer_sources=(DoorAlarm.name,),
+        producer_causal_spine=spine,
+    )
+    second = CorrectionHypothesis(
+        "latch-exposure",
+        (PilotRung(Lint.name, True, State == 3),),
+        sources=(LintAlarm.name, Lint.name),
+        producer_envelope=True,
+        fallback_holds=(PilotRung(Lint.name, True, ExactLint),),
+        producer_cuts=(((Lint.name, True), Lint.name, True),),
+        producer_sources=(LintAlarm.name,),
+        producer_causal_spine=spine,
+    )
+
+    composite = _compose_hypotheses(first, second)
+    assert composite is not None
+    assert tuple(rung.guard for rung in composite.holds) == (ExactDoor, ExactLint)
+
+    reproved = _reprove_composite_producer_envelope(composite, ctx, State.name)
+
+    assert reproved.producer_envelope
+    assert reproved.fallback_holds == composite.holds
+    by_dest = {rung.dest: rung.guard for rung in reproved.holds}
+
+    def active(tag: str, state: int, *, mode: bool = True) -> bool:
+        return by_dest[tag].evaluate(
+            _ConditionSnapshot(
+                {
+                    Mode.name: mode,
+                    Door.name: False,
+                    Lint.name: False,
+                    State.name: state,
+                    DoorAlarm.name: False,
+                    LintAlarm.name: False,
+                    Command.name: 0,
+                }
+            )
+        )
+
+    assert active(Door.name, 3)
+    assert active(Lint.name, 3)
+    assert active(Door.name, 6)
+    assert active(Lint.name, 6)
+    assert active(Door.name, 17)
+    assert not active(Lint.name, 17)
+    assert not active(Door.name, 6, mode=False)
+
+
+def test_producer_envelope_follows_recorded_cascade_and_retains_escape_conditions():
+    """Sibling discovery stays on the causal skeleton, not a broad cone."""
+
+    Mode = Bool("Envelope_Mode", external=True)
+    Door = Bool("Envelope_Door", external=True)
+    State = Int("Envelope_State")
+    Step = Int("Envelope_Step")
+    Alarm = Bool("Envelope_Alarm")
+    Command = Int("Envelope_Command")
+    Warning = Bool("Envelope_Warning")
+
+    with Program() as program:
+        with subroutine("EnvelopeFaults"):
+            with Rung(Or(State == 3, State == 11), ~Door):
+                latch(Alarm)
+            with Rung(State == 6, ~Door):
+                copy(4, Command)
+            # This sibling really is step-dependent; projection must retain
+            # that escape condition rather than generalizing over State=12.
+            with Rung(State == 12, Step == 7, ~Door):
+                copy(4, Command)
+            # Door-dependent shared plumbing outside the recorded cascade.
+            with Rung(State == 12, ~Door):
+                out(Warning)
+        with Rung(Mode):
+            call("EnvelopeFaults")
+        with Rung(Alarm):
+            copy(4, Command)
+        with Rung(Command == 4):
+            copy(8, State)
+
+    pdg = build_program_graph(program)
+    guard = _producer_envelope_guard(
+        SimpleNamespace(pdg=pdg, program=program),
+        State.name,
+        {Door.name: True},
+        (Alarm.name,),
+        frozenset({Alarm.name, Command.name, State.name}),
+    )
+
+    assert guard is not None
+
+    def active(**values: Any) -> bool:
+        snapshot = {
+            Mode.name: False,
+            Door.name: False,
+            State.name: 0,
+            Step.name: 0,
+            Alarm.name: False,
+            Command.name: 0,
+            Warning.name: False,
+            **values,
+        }
+        return guard.evaluate(_ConditionSnapshot(snapshot))
+
+    assert active(**{Mode.name: True, State.name: 3})
+    assert active(**{Mode.name: True, State.name: 6})
+    assert active(**{Mode.name: True, State.name: 12, Step.name: 7})
+    assert not active(**{Mode.name: False, State.name: 3})
+    assert not active(**{Mode.name: True, State.name: 12, Step.name: 8})
+
+
+def test_producer_envelope_punts_when_lever_is_mixed_with_context():
+    Door = Bool("MixedEnvelope_Door", external=True)
+    State = Int("MixedEnvelope_State")
+    Alarm = Bool("MixedEnvelope_Alarm")
+
+    with Program() as program:
+        # One nested condition cannot be projected into independent lever and
+        # context terms without Boolean reconstruction. The sound result is the
+        # ordinary exact EarnedWork fallback.
+        with Rung(And(State == 3, ~Door)):
+            latch(Alarm)
+        with Rung(Alarm):
+            copy(8, State)
+
+    pdg = build_program_graph(program)
+    guard = _producer_envelope_guard(
+        SimpleNamespace(pdg=pdg, program=program),
+        State.name,
+        {Door.name: True},
+        (Alarm.name,),
+        frozenset({Alarm.name, State.name}),
+    )
+
+    assert guard is None
+
+
+def test_rejected_producer_envelope_falls_back_to_exact_occurrence(monkeypatch):
+    Held = Bool("EnvelopeFallback_Held", external=True)
+    Broad = Bool("EnvelopeFallback_Broad", external=True)
+    Exact = Bool("EnvelopeFallback_Exact", external=True)
+    Target = Bool("EnvelopeFallback_Target", external=True)
+
+    with Program(strict=False) as program:
+        with Rung(Held):
+            out(Bool("EnvelopeFallback_Out"))
+        with Rung(Target):
+            out(Bool("EnvelopeFallback_TargetSeen"))
+
+    plc = PLC(program)
+    ctx = _make_ctx(program, plc)
+    ctx.target = TargetSpec(Target.name, True)
+    exact = (PilotRung(Held.name, True, Exact),)
+    widened = (PilotRung(Held.name, True, Broad),)
+    hypothesis = CorrectionHypothesis(
+        "latch-exposure",
+        widened,
+        producer_envelope=True,
+        fallback_holds=exact,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate.derive_correction_hypotheses",
+        lambda *_args, **_kwargs: ((hypothesis,), frozenset()),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._hold_is_noop",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.investigate._continuation_with_active_correction",
+        lambda *_args, **_kwargs: Unknown("execution must judge"),
+    )
+
+    attempted_guards: list[str] = []
+
+    def replay(holds):
+        attempted_guards.append(repr(holds[0].guard))
+        broad = "EnvelopeFallback_Broad" in attempted_guards[-1]
+        return ReplayOutcome(
+            not broad,
+            None,
+            dict(plc.state.tags),
+            "broad scope crossed an escape hatch" if broad else "exact occurrence silenced",
+            ReplayJustification.NEUTRALIZED if not broad else None,
+        )
+
+    result = investigate_deviation(plc, _ground_test_incident(plc), ctx, replay)
+
+    assert result.correction is not None
+    assert result.correction.pilot_rungs == exact
+    assert attempted_guards == [
+        repr(Exact),
+        repr(And(~Target, Broad)),
+        repr(Exact),
+    ]
 
 
 def test_correction_producer_preserves_family_order_and_first_wins(monkeypatch):
