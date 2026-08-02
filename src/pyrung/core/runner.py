@@ -520,6 +520,99 @@ def _compile_avoid(spec: Any) -> Any:
     return _AvoidPredicate(tuple(members))
 
 
+_EpochCacheName = Literal[
+    "recent_states",
+    "epoch_snapshots",
+    "replay_slabs",
+    "replay_trace",
+    "replay_captures",
+]
+_EpochCacheEvent = Literal[
+    "tip_advanced",
+    "history_trimmed",
+    "runtime_scope_reset",
+    "recording_reset",
+    "fork_boundary",
+    "replay_anchor_replaced",
+    "replay_evidence_discarded",
+]
+
+
+class EpochCaches:
+    """Invalidation registry for history-derived epoch caches.
+
+    The matrix deliberately preserves the lifecycle asymmetry.  Trimming
+    prunes surviving recent states separately, while a runtime-scope reset and
+    recording reset are distinct because STOP-to-RUN keeps replay slabs and a
+    reboot does not.
+    """
+
+    INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = (
+        MappingProxyType(
+            {
+                "tip_advanced": ("replay_trace", "replay_captures"),
+                "history_trimmed": ("epoch_snapshots", "replay_slabs"),
+                "runtime_scope_reset": (
+                    "recent_states",
+                    "epoch_snapshots",
+                    "replay_trace",
+                    "replay_captures",
+                ),
+                "recording_reset": ("replay_slabs",),
+                "fork_boundary": (
+                    "epoch_snapshots",
+                    "replay_slabs",
+                    "replay_trace",
+                    "replay_captures",
+                ),
+                "replay_anchor_replaced": ("recent_states",),
+                "replay_evidence_discarded": ("replay_trace", "replay_captures"),
+            }
+        )
+    )
+
+    def __init__(self, plc: PLC) -> None:
+        self._plc = plc
+
+    def _invalidate(self, event: _EpochCacheEvent) -> None:
+        for cache_name in self.INVALIDATION_MATRIX[event]:
+            self._clear(cache_name)
+
+    def _clear(self, cache_name: _EpochCacheName) -> None:
+        if cache_name == "recent_states":
+            self._plc._recent_state_cache = OrderedDict()
+            self._plc._recent_state_cache_bytes = 0
+        elif cache_name == "epoch_snapshots":
+            self._plc._causal_epoch_snapshots = {}
+        elif cache_name == "replay_slabs":
+            self._plc._replay_slabs = {}
+        elif cache_name == "replay_trace":
+            self._plc._cached_replay_trace = None
+        elif cache_name == "replay_captures":
+            self._plc._cached_replay_captures = OrderedDict()
+
+    def on_tip_advanced(self) -> None:
+        self._invalidate("tip_advanced")
+
+    def on_history_trimmed(self) -> None:
+        self._invalidate("history_trimmed")
+
+    def on_runtime_scope_reset(self) -> None:
+        self._invalidate("runtime_scope_reset")
+
+    def on_recording_reset(self) -> None:
+        self._invalidate("recording_reset")
+
+    def on_fork_boundary(self) -> None:
+        self._invalidate("fork_boundary")
+
+    def on_replay_anchor_replaced(self) -> None:
+        self._invalidate("replay_anchor_replaced")
+
+    def on_replay_evidence_discarded(self) -> None:
+        self._invalidate("replay_evidence_discarded")
+
+
 class CausalLineage:
     """A retained epoch chain addressed as one continuous timeline.
 
@@ -912,6 +1005,7 @@ class PLC:
         # Read-only owner snapshots are shared by forks from the same boundary.
         # They detach causal evidence from later reboot/trim/motion of ``self``.
         self._causal_epoch_snapshots: dict[int, PLC] = {}
+        self._epoch_caches = EpochCaches(self)
         self._rtc_base = self._normalize_rtc_datetime(datetime.now())
         self._rtc_base_sim_time = float(self._state.timestamp)
         self._system_runtime = SystemPointRuntime(
@@ -1886,13 +1980,11 @@ class PLC:
             up_to=target_scan_id
         )
         frozen._node_firing_timelines = self._node_firing_timelines.snapshot(up_to=target_scan_id)
-        frozen._replay_slabs = {}
-        frozen._cached_replay_trace = None
-        frozen._cached_replay_captures = OrderedDict()
+        frozen._epoch_caches = EpochCaches(frozen)
+        frozen._epoch_caches.on_fork_boundary()
         frozen._history = History(frozen)
         frozen._causal_rung_firing_timelines = _CausalRungFiringTimelines(frozen)
         frozen._causal_lineage = CausalLineage(frozen)
-        frozen._causal_epoch_snapshots = {}
         frozen._is_frozen_causal_owner = True
         frozen._harness = None
         frozen.__dict__.pop("_pilot_cause_memo", None)
@@ -2112,8 +2204,7 @@ class PLC:
 
     def _reset_cache(self, state: SystemState) -> None:
         """Clear cache and seed with a single *state*."""
-        self._recent_state_cache.clear()
-        self._recent_state_cache_bytes = 0
+        self._epoch_caches.on_replay_anchor_replaced()
         self._cache_state(state)
 
     def _state_in_cache(self, scan_id: int) -> bool:
@@ -2145,13 +2236,12 @@ class PLC:
         if not self._causal_history_contains(scan_id):
             raise KeyError(scan_id)
         new_floor_state = self._causal_state_at(scan_id)
-        self._causal_epoch_snapshots.clear()
+        self._epoch_caches.on_history_trimmed()
         self._causal_floor_scan_id = scan_id
         self._scan_log.trim_before(scan_id)
         self._rung_firing_timelines.trim_before(scan_id)
         self._committed_tag_timelines.trim_before(scan_id)
         self._node_firing_timelines.trim_before(scan_id)
-        self._replay_slabs.clear()
         for cp in [k for k in self._checkpoints if k < scan_id]:
             del self._checkpoints[cp]
         if scan_id > self._initial_scan_id:
@@ -3057,7 +3147,7 @@ class PLC:
         self._running = True
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=0)
         self._checkpoints = {}
-        self._replay_slabs.clear()
+        self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = {}
         self._this_scan_drained_patches = {}
         return self._state
@@ -3077,7 +3167,7 @@ class PLC:
         # and no recorded history is lost.
         self._scan_log = ScanLog(time_mode=self._time_mode, base_scan=self._state.scan_id)
         self._checkpoints = {}
-        self._replay_slabs.clear()
+        self._epoch_caches.on_recording_reset()
         self._forces_last_recorded = dict(self._input_overrides.forces)
 
     @staticmethod
@@ -3153,13 +3243,15 @@ class PLC:
             rebuilt[tag.name] = tag.default
         return rebuilt
 
-    def _clear_retained_debug_trace_caches(self) -> None:
+    def _clear_retained_debug_trace_state(self) -> None:
         self._current_rung_traces = {}
         self._current_rung_traces_scan_id = None
         self._clear_inflight_debug_scan()
         self._latest_committed_trace_event = None
-        self._cached_replay_trace = None
-        self._cached_replay_captures.clear()
+
+    def _clear_retained_debug_trace_caches(self) -> None:
+        self._clear_retained_debug_trace_state()
+        self._epoch_caches.on_replay_evidence_discarded()
 
     def _normalize_rtc_datetime(self, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -3209,7 +3301,7 @@ class PLC:
         mode_run: bool,
         preserve_rtc_continuity: bool = True,
     ) -> None:
-        self._causal_epoch_snapshots.clear()
+        self._epoch_caches.on_runtime_scope_reset()
         rtc_after_reset = (
             self._rtc_at_sim_time(self._state.timestamp)
             if preserve_rtc_continuity
@@ -3222,7 +3314,7 @@ class PLC:
             battery_present=self._battery_present,
         )
         self._set_rtc_internal(rtc_after_reset, self._state.timestamp)
-        self._reset_cache(self._state)
+        self._cache_state(self._state)
         self._initial_scan_id = self._state.scan_id
         self._initial_state = self._state
         self._causal_floor_scan_id = self._initial_scan_id
@@ -3233,7 +3325,7 @@ class PLC:
         self._pending_patches.clear()
         self._forces.clear()
         self._pause_requested_this_scan = False
-        self._clear_retained_debug_trace_caches()
+        self._clear_retained_debug_trace_state()
         # Reboot drops the firing timelines together with the scan log
         # and checkpoints — Option B treats reboot like a fresh session
         # (see stage-4 notes in the design doc).
@@ -3994,8 +4086,7 @@ class PLC:
         return self._run_single_scan(consume_pause_request=True)
 
     def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
-        self._cached_replay_trace = None
-        self._cached_replay_captures.clear()
+        self._epoch_caches.on_tip_advanced()
         ctx, dt = self._prepare_scan(fast_reads=True)
         if self._program is not None:
             execute_program(self._program, ctx, capture_rungs=True)
