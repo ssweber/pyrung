@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, TypeVar, cast
 
 from pyrsistent import PMap
 
@@ -88,6 +88,8 @@ _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
 # Monitor ``previous_value`` / ``_prev:*`` reads assume N-1 is always
 # present; the recent-state cache floor must not regress under budget pressure.
 _RECENT_STATE_CACHE_MIN_ENTRIES = 20
+
+_T = TypeVar("_T")
 
 
 def _parse_retention(value: str | int | None, dt_seconds: float) -> int | None:
@@ -518,6 +520,85 @@ def _compile_avoid(spec: Any) -> Any:
     return _AvoidPredicate(tuple(members))
 
 
+class CausalLineage:
+    """A retained epoch chain addressed as one continuous timeline.
+
+    A child starts executing after its ``initial_scan_id``; the boundary
+    itself belongs to the frozen parent.  Epoch-aware queries use this object
+    so ownership, interval clipping, and newest-result clamping share that one
+    rule.
+    """
+
+    def __init__(self, plc: PLC) -> None:
+        self._plc = plc
+
+    def _owned_intervals(self) -> tuple[tuple[PLC, int, int], ...]:
+        epochs: list[PLC] = []
+        cursor: PLC | None = self._plc
+        while cursor is not None:
+            epochs.append(cursor)
+            cursor = cursor._causal_parent
+        epochs.reverse()
+
+        intervals: list[tuple[PLC, int, int]] = []
+        for index, epoch in enumerate(epochs):
+            first_scan = epoch._initial_scan_id if index == 0 else epoch._initial_scan_id + 1
+            first_scan = max(first_scan, self._plc._causal_floor_scan_id)
+            last_scan = (
+                epochs[index + 1]._initial_scan_id
+                if index + 1 < len(epochs)
+                else self._plc._state.scan_id
+            )
+            if first_scan <= last_scan:
+                intervals.append((epoch, first_scan, last_scan))
+        return tuple(intervals)
+
+    def owner_at(self, scan_id: int) -> PLC | None:
+        """Return the epoch that executed *scan_id*, if it is retained."""
+        if not isinstance(scan_id, int):
+            return None
+        return next(
+            (
+                epoch
+                for epoch, _first_scan, _last_scan in self.epochs_covering(scan_id, scan_id)
+            ),
+            None,
+        )
+
+    def epochs_covering(self, lo: int, hi: int) -> Iterator[tuple[PLC, int, int]]:
+        """Yield epochs overlapping inclusive ``[lo, hi]``, already clipped."""
+        if hi < lo:
+            return
+        for epoch, first_scan, last_scan in self._owned_intervals():
+            clipped_first = max(lo, first_scan)
+            clipped_last = min(hi, last_scan)
+            if clipped_first <= clipped_last:
+                yield epoch, clipped_first, clipped_last
+
+    def newest(
+        self,
+        query: Callable[[PLC, int], _T | None],
+        before: int,
+        *,
+        scan_of: Callable[[_T], int],
+    ) -> _T | None:
+        """Ask each epoch its clamped question and return the newest result.
+
+        ``before`` is inclusive.  The query receives the latest scan owned by
+        that epoch which is not after ``before``.  Results outside the epoch's
+        clipped interval are ignored, preventing an epoch-local index from
+        leaking an ancestor or frozen future.
+        """
+        intervals = tuple(
+            self.epochs_covering(self._plc._causal_floor_scan_id, before)
+        )
+        for epoch, first_scan, last_scan in reversed(intervals):
+            candidate = query(epoch, last_scan)
+            if candidate is not None and first_scan <= scan_of(candidate) <= last_scan:
+                return candidate
+        return None
+
+
 class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
     """Compressed firing lookup across immutable overlay epochs."""
 
@@ -526,7 +607,11 @@ class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
 
     def observed_writers_of(self, tag_name: str) -> frozenset[Any]:
         writers: set[Any] = set()
-        for epoch, first_scan, last_scan in self._plc._causal_epoch_intervals():
+        lineage = self._plc._causal_lineage
+        for epoch, first_scan, last_scan in lineage.epochs_covering(
+            self._plc._causal_floor_scan_id,
+            self._plc._state.scan_id,
+        ):
             timelines = epoch._rung_firing_timelines
             for rung_index, ranges in timelines._timelines.items():
                 for firing_range in ranges:
@@ -555,14 +640,17 @@ class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
         before_scan_id: int,
     ) -> tuple[int, ...]:
         candidates: set[int] = set()
-        for epoch, first_scan, last_scan in self._plc._causal_epoch_intervals():
-            epoch_before = min(before_scan_id, last_scan + 1)
+        lineage = self._plc._causal_lineage
+        for epoch, first_scan, last_scan in lineage.epochs_covering(
+            self._plc._causal_floor_scan_id,
+            before_scan_id - 1,
+        ):
             candidates.update(
                 scan_id
                 for scan_id in epoch._rung_firing_timelines.tag_transition_candidate_scans_before(
                     writer_indices,
                     tag_name,
-                    epoch_before,
+                    last_scan + 1,
                 )
                 if first_scan <= scan_id <= last_scan
             )
@@ -574,21 +662,18 @@ class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
         tag_name: str,
         before_scan_id: int,
     ) -> tuple[int, Any] | None:
-        candidates = []
-        for epoch, first_scan, last_scan in self._plc._causal_epoch_intervals():
-            candidate = epoch._rung_firing_timelines.last_tag_write_before(
+        return self._plc._causal_lineage.newest(
+            lambda epoch, at_or_before: epoch._rung_firing_timelines.last_tag_write_before(
                 writer_indices,
                 tag_name,
-                min(before_scan_id, last_scan + 1),
-            )
-            if candidate is not None and first_scan <= candidate[0] <= last_scan:
-                candidates.append(candidate)
-        return max(
-            (item for item in candidates if item is not None), default=None, key=lambda x: x[0]
+                at_or_before + 1,
+            ),
+            before_scan_id - 1,
+            scan_of=lambda candidate: candidate[0],
         )
 
     def rung_writes_at(self, rung_index: Any, scan_id: int) -> PMap | None:
-        owner = self._plc._causal_owner_at(scan_id)
+        owner = self._plc._causal_lineage.owner_at(scan_id)
         return (
             owner._rung_firing_timelines.rung_writes_at(rung_index, scan_id)
             if owner is not None
@@ -821,6 +906,7 @@ class PLC:
         # this parent instead of trying to replay the scan under the child's
         # current overlay. Forward state remains fully independent.
         self._causal_parent: PLC | None = None
+        self._causal_lineage = CausalLineage(self)
         self._causal_floor_scan_id = self._initial_scan_id
         self._is_frozen_causal_owner = False
         # Read-only owner snapshots are shared by forks from the same boundary.
@@ -925,53 +1011,28 @@ class PLC:
         """Oldest scan retained anywhere in this runner's causal ancestry."""
         return self._causal_floor_scan_id
 
-    def _causal_epochs(self) -> tuple[PLC, ...]:
-        """Overlay epochs on this retained branch, oldest first."""
-        epochs: list[PLC] = []
-        cursor: PLC | None = self
-        while cursor is not None:
-            epochs.append(cursor)
-            cursor = cursor._causal_parent
-        epochs.reverse()
-        return tuple(epochs)
-
     def _causal_epoch_intervals(self) -> tuple[tuple[PLC, int, int], ...]:
-        """Executed scan interval owned by each retained overlay epoch."""
-        epochs = self._causal_epochs()
-        intervals: list[tuple[PLC, int, int]] = []
-        for index, epoch in enumerate(epochs):
-            first_scan = epoch._initial_scan_id if index == 0 else epoch._initial_scan_id + 1
-            first_scan = max(first_scan, self._causal_floor_scan_id)
-            last_scan = (
-                epochs[index + 1]._initial_scan_id
-                if index + 1 < len(epochs)
-                else self._state.scan_id
+        """Compatibility view of executed intervals in the causal lineage."""
+        return tuple(
+            self._causal_lineage.epochs_covering(
+                self._causal_floor_scan_id,
+                self._state.scan_id,
             )
-            if first_scan <= last_scan:
-                intervals.append((epoch, first_scan, last_scan))
-        return tuple(intervals)
+        )
 
     def _causal_owner_at(self, scan_id: int) -> PLC | None:
-        """Runner that executed *scan_id* on this retained branch."""
-        if not self._causal_history_contains(scan_id):
-            return None
-        # A child starts executing on the scan *after* its fork boundary; the
-        # boundary itself remains owned by the frozen parent.  Walk that spine
-        # directly instead of rebuilding the complete epoch interval tuple for
-        # every causal lookup.
-        if self._causal_parent is not None and scan_id <= self._initial_scan_id:
-            return self._causal_parent._causal_owner_at(scan_id)
-        return self
+        """Compatibility facade for the centralized lineage owner lookup."""
+        return self._causal_lineage.owner_at(scan_id)
 
     def _causal_state_at(self, scan_id: int) -> SystemState:
         """Read a state from the overlay epoch that executed its scan."""
-        owner = self._causal_owner_at(scan_id)
+        owner = self._causal_lineage.owner_at(scan_id)
         if owner is None:
             raise KeyError(scan_id)
         return owner._state_at(scan_id)
 
     def _causal_state_in_cache(self, scan_id: int) -> bool:
-        owner = self._causal_owner_at(scan_id)
+        owner = self._causal_lineage.owner_at(scan_id)
         return owner._state_in_cache(scan_id) if owner is not None else False
 
     def _causal_raw_committed_transition_before(
@@ -980,27 +1041,14 @@ class PLC:
         before_scan_id: int,
     ) -> tuple[int, Any] | None:
         """Latest authoritative committed change across the epoch lineage."""
-        parent = self._causal_parent
-        first_owned_scan = self._initial_scan_id + (1 if parent is not None else 0)
-        first_owned_scan = max(first_owned_scan, self._causal_floor_scan_id)
-        local_before = min(before_scan_id, self._state.scan_id + 1)
-        if local_before > first_owned_scan:
-            candidate = self._committed_tag_timelines.last_tag_write_before(
+        return self._causal_lineage.newest(
+            lambda epoch, at_or_before: epoch._committed_tag_timelines.last_tag_write_before(
                 frozenset({tag_name}),
                 tag_name,
-                local_before,
-            )
-            if candidate is not None and candidate[0] >= first_owned_scan:
-                # Epochs are contiguous and chronological, so any local hit is
-                # necessarily newer than every possible ancestral hit.
-                return candidate
-        if parent is None:
-            return None
-        # The parent owns the fork boundary.  Clamp there so a frozen parent's
-        # future can never leak into this branch.
-        return parent._causal_raw_committed_transition_before(
-            tag_name,
-            min(before_scan_id, self._initial_scan_id + 1),
+                at_or_before + 1,
+            ),
+            before_scan_id - 1,
+            scan_of=lambda candidate: candidate[0],
         )
 
     def _causal_committed_transition_at(
@@ -1009,7 +1057,7 @@ class PLC:
         scan_id: int,
     ) -> Transition | None:
         """Exact post-precedence boundary transition, without state replay."""
-        owner = self._causal_owner_at(scan_id)
+        owner = self._causal_lineage.owner_at(scan_id)
         if owner is None:
             return None
         writes = owner._committed_tag_timelines.rung_writes_at(tag_name, scan_id)
@@ -1078,7 +1126,7 @@ class PLC:
         causal execution consumers retain the exact writer occurrence.
         """
         target = self._playhead if scan_id is None else scan_id
-        owner = self._causal_owner_at(target)
+        owner = self._causal_lineage.owner_at(target)
         if owner is not None and owner is not self:
             return owner._rung_firing_timelines.at(target)
         return self._rung_firing_timelines.at(target)
@@ -1092,7 +1140,7 @@ class PLC:
         exclusively in :meth:`rung_firings`.
         """
         target = self._playhead if scan_id is None else scan_id
-        owner = self._causal_owner_at(target)
+        owner = self._causal_lineage.owner_at(target)
         if owner is not None and owner is not self:
             return owner._node_firing_timelines.at(target)
         return self._node_firing_timelines.at(target)
@@ -1103,30 +1151,27 @@ class PLC:
         scan_id: int,
     ) -> int | None:
         """Latest retained execution of any selected node at/before a scan."""
-        if (
-            self._causal_parent is not None
-            and scan_id <= self._initial_scan_id
-            and self._causal_parent._causal_history_contains(scan_id)
-        ):
-            return self._causal_parent._node_latest_firing_at_or_before(rung_ids, scan_id)
+        return self._causal_lineage.newest(
+            lambda epoch, at_or_before: epoch._local_node_latest_firing_at_or_before(
+                rung_ids,
+                at_or_before,
+            ),
+            scan_id,
+            scan_of=lambda candidate: candidate,
+        )
+
+    def _local_node_latest_firing_at_or_before(
+        self,
+        rung_ids: frozenset[RungId],
+        scan_id: int,
+    ) -> int | None:
+        """Latest selected-node execution in this epoch's local indexes."""
         main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
         nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
         candidates = [
             self._rung_firing_timelines.latest_firing_scan_at_or_before(main, scan_id),
             self._node_firing_timelines.latest_firing_scan_at_or_before(nested, scan_id),
         ]
-        # A fork owns only executions after its boundary. A miss in that suffix
-        # does not prove the writer never ran: merge the latest retained parent
-        # occurrence so sparse held support can cross the fork exactly.
-        if self._causal_parent is not None and self._causal_parent._causal_history_contains(
-            self._initial_scan_id
-        ):
-            candidates.append(
-                self._causal_parent._node_latest_firing_at_or_before(
-                    rung_ids,
-                    min(scan_id, self._initial_scan_id),
-                )
-            )
         return max((candidate for candidate in candidates if candidate is not None), default=None)
 
     def _node_latest_value_transition_at_or_before(
@@ -1137,17 +1182,25 @@ class PLC:
         scan_id: int,
     ) -> int | None:
         """Latest retained selected-node range that may establish a value."""
-        if (
-            self._causal_parent is not None
-            and scan_id <= self._initial_scan_id
-            and self._causal_parent._causal_history_contains(scan_id)
-        ):
-            return self._causal_parent._node_latest_value_transition_at_or_before(
+        return self._causal_lineage.newest(
+            lambda epoch, at_or_before: epoch._local_node_latest_value_transition_at_or_before(
                 rung_ids,
                 tag_name,
                 value,
-                scan_id,
-            )
+                at_or_before,
+            ),
+            scan_id,
+            scan_of=lambda candidate: candidate,
+        )
+
+    def _local_node_latest_value_transition_at_or_before(
+        self,
+        rung_ids: frozenset[RungId],
+        tag_name: str,
+        value: Any,
+        scan_id: int,
+    ) -> int | None:
+        """Latest selected-node value candidate in this epoch's indexes."""
         main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
         nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
         retained = self._consumed_tags_for_capture()
@@ -1168,22 +1221,11 @@ class PLC:
                 missing_is_unknown=missing_is_unknown,
             ),
         ]
-        if self._causal_parent is not None and self._causal_parent._causal_history_contains(
-            self._initial_scan_id
-        ):
-            candidates.append(
-                self._causal_parent._node_latest_value_transition_at_or_before(
-                    rung_ids,
-                    tag_name,
-                    value,
-                    min(scan_id, self._initial_scan_id),
-                )
-            )
         return max((candidate for candidate in candidates if candidate is not None), default=None)
 
     def _resolve_node_rung(self, rung_id: RungId, scan_id: int) -> Rung | None:
         """Resolve a recorded node against the world that executed *scan_id*."""
-        owner = self._causal_owner_at(scan_id)
+        owner = self._causal_lineage.owner_at(scan_id)
         if owner is not None and owner is not self:
             return owner._resolve_node_rung(rung_id, scan_id)
         from pyrung.core.synthesis import (
@@ -1403,7 +1445,7 @@ class PLC:
 
         from pyrung.core.analysis.causal import recorded_cause
 
-        owner = self._causal_owner_at(scan) if scan is not None else None
+        owner = self._causal_lineage.owner_at(scan) if scan is not None else None
         if owner is not None and owner is not self:
             return owner.cause(tag, scan=scan, deep=deep, since=since)
 
@@ -1758,7 +1800,7 @@ class PLC:
         target_scan_id = self._state.scan_id if scan_id is None else scan_id
         if not self.history.contains(target_scan_id):
             raise KeyError(target_scan_id)
-        historical_owner = self._causal_owner_at(target_scan_id)
+        historical_owner = self._causal_lineage.owner_at(target_scan_id)
         if historical_owner is None:
             raise KeyError(target_scan_id)
         historical_state = historical_owner._state_at(target_scan_id)
@@ -1800,7 +1842,7 @@ class PLC:
 
     def _snapshot_causal_owner_at(self, target_scan_id: int) -> PLC:
         """Freeze the exact epoch that executed *target_scan_id*."""
-        owner = self._causal_owner_at(target_scan_id)
+        owner = self._causal_lineage.owner_at(target_scan_id)
         if owner is None:
             raise KeyError(target_scan_id)
         return owner._snapshot_local_epoch(target_scan_id)
@@ -1849,6 +1891,7 @@ class PLC:
         frozen._cached_replay_captures = OrderedDict()
         frozen._history = History(frozen)
         frozen._causal_rung_firing_timelines = _CausalRungFiringTimelines(frozen)
+        frozen._causal_lineage = CausalLineage(frozen)
         frozen._causal_epoch_snapshots = {}
         frozen._is_frozen_causal_owner = True
         frozen._harness = None
@@ -1883,11 +1926,11 @@ class PLC:
         if end_scan_id <= start_scan_id:
             return []
         states: list[SystemState] = []
-        for owner, first_scan, last_scan in self._causal_epoch_intervals():
-            lo = max(start_scan_id, first_scan)
-            hi = min(end_scan_id, last_scan + 1)
-            if lo < hi:
-                states.extend(owner._local_history_range(lo, hi))
+        for owner, first_scan, last_scan in self._causal_lineage.epochs_covering(
+            start_scan_id,
+            end_scan_id - 1,
+        ):
+            states.extend(owner._local_history_range(first_scan, last_scan + 1))
         return states
 
     def _local_history_range(
@@ -2734,7 +2777,7 @@ class PLC:
         over :meth:`_replay_capture_at`; returns ``{}`` when there is nothing to
         replay.
         """
-        owner = self._causal_owner_at(target_scan_id)
+        owner = self._causal_lineage.owner_at(target_scan_id)
         if owner is not None and owner is not self:
             return owner._replay_node_views_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
@@ -2747,7 +2790,7 @@ class PLC:
         this preserves repeated calls of the same subroutine rung separately.
         It is reconstructed on demand and never retained per scan.
         """
-        owner = self._causal_owner_at(target_scan_id)
+        owner = self._causal_lineage.owner_at(target_scan_id)
         if owner is not None and owner is not self:
             return owner._replay_rung_runs_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
@@ -2755,7 +2798,7 @@ class PLC:
 
     def _replay_rung_write_projection_at(self, target_scan_id: int) -> Any:
         """Exact read/write projection cached with its immutable scan journal."""
-        owner = self._causal_owner_at(target_scan_id)
+        owner = self._causal_lineage.owner_at(target_scan_id)
         if owner is not None and owner is not self:
             return owner._replay_rung_write_projection_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)
@@ -2785,7 +2828,7 @@ class PLC:
         crossing an opaque data-writer.  Returns ``{}`` when there is nothing to
         replay.
         """
-        owner = self._causal_owner_at(target_scan_id)
+        owner = self._causal_lineage.owner_at(target_scan_id)
         if owner is not None and owner is not self:
             return owner._replay_node_reads_at(target_scan_id)
         capture = self._replay_capture_at(target_scan_id)

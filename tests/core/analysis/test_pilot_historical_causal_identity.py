@@ -447,3 +447,61 @@ def test_repeated_boundary_forks_do_not_create_executed_empty_epochs() -> None:
         (0, 1),
         (2, 2),
     ]
+
+
+def test_causal_lineage_owns_boundary_and_preclips_covering_epochs() -> None:
+    root = PLC(logic=[])
+    root.run(2)
+    child = root.fork()
+    child.run(2)
+
+    parent_owner = child._causal_parent
+    assert parent_owner is not None
+    assert child._causal_lineage.owner_at(2) is parent_owner
+    assert child._causal_lineage.owner_at(3) is child
+    assert child._causal_lineage.owner_at(5) is None
+    assert list(child._causal_lineage.epochs_covering(1, 3)) == [
+        (parent_owner, 1, 2),
+        (child, 3, 3),
+    ]
+
+
+def test_causal_lineage_newest_clamps_each_epoch_and_range_spans_lineage() -> None:
+    program, command, _seen = _branching_history_program()
+    root = PLC(program)
+    root.patch({command.name: True})
+    root.step()  # Root rung firing at scan 1.
+    root.patch({command.name: False})
+    root.step()
+
+    child = root.fork()
+    child.patch({command.name: True})
+    child.step()  # Child rung firing at scan 3.
+    child.patch({command.name: False})
+    child.step()
+    grandchild = child.fork()
+    grandchild.step()
+
+    selected = frozenset({RungId(None, 0)})
+    assert grandchild._node_latest_firing_at_or_before(selected, 5) == 3
+    assert grandchild._node_latest_firing_at_or_before(selected, 2) == 1
+    assert [state.scan_id for state in grandchild._causal_history_range(1, 6)] == [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]
+
+    # Even a corrupt epoch-local index containing a post-fork entry cannot
+    # leak it: newest passes the parent its owned boundary, not the query tip.
+    parent_owner = grandchild._causal_parent
+    assert parent_owner is not None
+    parent_owner = parent_owner._causal_parent
+    assert parent_owner is not None
+    parent_owner._rung_firing_timelines.append(99, 2, pmap({"Leak": True}))
+    parent_owner._rung_firing_timelines.append(99, 3, pmap({"Leak": True}))
+    assert grandchild._node_latest_firing_at_or_before(
+        frozenset({RungId(None, 99)}),
+        5,
+    ) == 2

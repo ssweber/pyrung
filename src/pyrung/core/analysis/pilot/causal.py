@@ -387,7 +387,7 @@ def _shared_cause(
         # transient child makes every sibling reconstruct the same exact
         # RungRun occurrences.  Resolve the owner first so only genuinely
         # shared history shares a completed causal chain.
-        owner = plc._causal_owner_at(scan) or plc
+        owner = plc._causal_lineage.owner_at(scan) or plc
         shared = owner.__dict__.get("_pilot_cause_memo")
         if shared is None:
             shared = owner.__dict__["_pilot_cause_memo"] = {}
