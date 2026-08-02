@@ -301,8 +301,10 @@ this table only locates the owner.
   `corrections.py::derive_correction_hypotheses`
 - Corrective hypothesis identity, ranking, composition, executable scoping,
   and self-defeat classification: `correction_candidates.py`
-- Corrective replay, neutralization-versus-masking, and confirmation:
-  `investigate.py::build_replay_fn` and `_resolve_replay_attempt`
+- Corrective incidents, replay, neutralization-versus-masking, and excursion
+  diagnosis: `investigation_replay.py`
+- Corrective candidate composition and confirmation:
+  `investigate.py::_resolve_replay_attempt` / `investigate_deviation`
 - Bounded relational counterexample refinement and pinned suppression
   nominations: `refinement.py`
 - Bounded corrective composition: `recovery.py::compose_corrections`
@@ -424,8 +426,10 @@ Judgment and recovery:
 - `departure.py` — departure observation and classification
 - `earned_work.py` — target-relative earned-work marks
 - `causal.py` — recorded cause-chain queries
-- `investigate.py` — bounded hypothesis replay, excursion replay, and
-  confirmation; no drive-loop ownership
+- `investigation_replay.py` — bounded replay evidence, incident construction,
+  regression comparison, and excursion diagnosis
+- `investigate.py` — corrective candidate composition and confirmation, plus
+  compatibility facades for replay imports; no drive-loop ownership
 - `correction_candidates.py` — correction identity, ordering, composition,
   executable scoping, and self-defeat checks
 - `refinement.py` — bounded relational refinement and pinned suppression evidence

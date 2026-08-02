@@ -1,8 +1,10 @@
-"""Build and replay bounded hypotheses for departures and excursions.
+"""Compose and confirm bounded corrective hypotheses.
 
-``build_deviation_incident`` freezes the recorded window. ``corrections.py``
-derives three hypothesis families; investigation ranks and tests them with the
-exploratory replay returned by ``build_replay_fn``.
+``investigation_replay.py`` owns incident construction, replay evidence,
+causal regression comparison, and excursion replay. This module keeps thin
+compatibility facades for that established import and monkeypatch surface.
+``corrections.py`` derives the hypothesis families; investigation ranks,
+composes, and confirms them with the replay engine.
 ``refinement.py`` owns bounded relational counterexample refinement and pinned
 suppression nominations; this module retains compatibility facades for its
 former private imports.
@@ -18,10 +20,9 @@ evidence-derived lifetime from
 ``_scoped_correction_rungs`` and must survive a guarded replay before the first
 confirmed composite is returned.
 
-``investigate_excursion`` is the shorter path for a verification-reported
-trial that reverted. The drive loop invokes it exactly once and returns its
-replay to verification for judgment. Neither path installs its correction;
-installation belongs to the orchestration/recovery owner.
+Neither departure investigation nor the excursion compatibility facade
+installs a correction; installation belongs to the orchestration/recovery
+owner.
 """
 
 from __future__ import annotations
@@ -29,47 +30,29 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
-from enum import Enum
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 
 import pyrung.core.analysis.pilot.correction_candidates as _candidates
+import pyrung.core.analysis.pilot.investigation_replay as _replay
 import pyrung.core.analysis.pilot.refinement as _refinement
-from pyrung.core.analysis.pilot.advance import iter_advance_owners
-from pyrung.core.analysis.pilot.avoid import _hold_allowed
-from pyrung.core.analysis.pilot.causal import (
-    _shared_cause,
-    chase_cause_roots,
-    chase_chain_tags,
-)
-from pyrung.core.analysis.pilot.coast import (
-    _COAST_BUDGET,
-    _coast_holding_state,
-    _coast_to_value,
-    _settle_delayed_effects,
-)
+from pyrung.core.analysis.pilot.avoid import _hold_allowed as _hold_allowed
 from pyrung.core.analysis.pilot.constrained_reachability import (
     FrontierStatus,
     NoRoute,
     Reachable,
-    Unknown,
 )
 from pyrung.core.analysis.pilot.corrections import (
     CorrectionHypothesis,
-    break_guard_holds,
     derive_correction_hypotheses,
     refine_relational_hypothesis,
 )
-from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _pilot_rung_execution_receipt,
-    _pilot_rungs_from_proposals,
-    _set_pilot_rungs,
-    _target_unresolved_condition,
-    fork_with_pilot_rungs,
 )
-from pyrung.core.analysis.pilot.pulse import _apply_pulse
+from pyrung.core.analysis.pilot.overlay import (
+    _set_pilot_rungs as _set_pilot_rungs,
+)
 from pyrung.core.analysis.pilot.recovery import (
     AttemptContext,
     CompositionBudget,
@@ -81,32 +64,17 @@ from pyrung.core.analysis.pilot.recovery import (
     compose_corrections,
 )
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
-from pyrung.core.analysis.pilot.trace import (
-    _can_produce,
-    target_reached,
-    trace_back,
-)
 from pyrung.core.analysis.pilot.types import (
-    BearingDeparture,
     DeviationIncident,
-    MotionKind,
-    _ActionPair,
     _ConfirmedCorrection,
-    _ExecutionEvidence,
-    _IterationFrame,
-    _Step,
-    _StepContext,
 )
 from pyrung.core.analysis.pilot.world_key import (
-    _pilot_state_key,
     _rung_identity,
     _semantic_key,
 )
 from pyrung.core.analysis.sp_values import (
     _values_match,
-    _written_value_for_tag,
 )
-from pyrung.core.context import RungId
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import _PilotContext
@@ -129,184 +97,16 @@ _hypothesis_identity = _candidates._hypothesis_identity
 correction_identity = _candidates.correction_identity
 
 
-ReplayFn = Callable[[tuple[Any, ...]], "ReplayOutcome"]
-
-
-@dataclass(frozen=True)
-class ReplayStep:
-    """One recorded journey step with its session spec, replay-ready.
-
-    ``kind`` is the private replay kind (``"pulse"`` / ``"bearing_coast"`` /
-    ``"letrun"`` / ``"dwell"``), read off the committed step context — never
-    inferred from position or input emptiness. A bearing coast re-arms its own
-    recorded ``channel_tag``/``channel_target``; a letrun step re-coasts
-    toward the global target bounded by its own recorded span.
-    """
-
-    inputs: tuple[tuple[str, Any], ...]
-    scans: int
-    kind: str
-    channel_tag: str | None = None
-    channel_target: Any = None
-
-
-def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
-    """Map one recorded physical step and its operation context to replay."""
-
-    kind = {
-        MotionKind.INTERVENTION: "pulse",
-        MotionKind.COAST_TO_BEARING: "bearing_coast",
-        MotionKind.COAST_HOLDING_WORLD: "letrun",
-    }[context.policy.motion]
-    channel_motion = context.execution.channel_motion
-    if kind == "bearing_coast" and channel_motion.channel_tag is None:
-        kind = "dwell"
-    return ReplayStep(
-        inputs=tuple(step.inputs.items()),
-        scans=step.scans,
-        kind=kind,
-        channel_tag=channel_motion.channel_tag,
-        channel_target=channel_motion.target_value,
-    )
-
-
-def _deviation_bearing(
-    execution: _ExecutionEvidence,
-    frame: _IterationFrame,
-    watch_tags: list[str],
-    frontier: tuple[_ActionPair, ...],
-) -> tuple[_ActionPair, ...]:
-    """Facts the failed operation actually held and then lost."""
-
-    needed_by_tag: dict[str, list[Any]] = {}
-    for tag, value in frontier:
-        needed_by_tag.setdefault(tag, []).append(value)
-    bearing: list[_ActionPair] = [
-        (tag, frame.snap.get(tag))
-        for tag in watch_tags
-        if not _values_match(frame.snap.get(tag), execution.after_snap.get(tag))
-        and not any(
-            _values_match(execution.after_snap.get(tag), needed)
-            for needed in needed_by_tag.get(tag, ())
-        )
-    ]
-    channel = execution.channel_motion.channel_tag
-    if channel is not None:
-        source = execution.before_snap.get(channel)
-        landed = execution.after_snap.get(channel)
-        if not _values_match(landed, source):
-            bearing = [(tag, value) for tag, value in bearing if tag != channel]
-            bearing.append((channel, source))
-    return tuple(bearing)
-
-
-@dataclass(frozen=True)
-class CausalOccurrence:
-    """One exact rung/write occurrence on a recorded causal explanation."""
-
-    rung: RungId
-    tag: str
-    value: Any
-
-
-@dataclass(frozen=True)
-class RegressionWitness:
-    """Exact causal explanation for a recorded channel regression.
-
-    The witness is operation-shaped, not behavior-shaped. It retains the
-    concrete changed writes on the recorded ``cause()`` chain, bounded to the
-    incident, plus the full causal spine that owns those writes. A shared state
-    executor may therefore run later for an unrelated request without
-    reproducing this regression; replay has to reproduce the recorded causal
-    branch, not merely reuse its final writer.
-    """
-
-    channel_tag: str
-    source: Any
-    departed: Any
-    # The bounded incident may pass through the same first channel edge and
-    # executor pipeline yet reach a different outcome. Keep that landing as
-    # part of the witness so nested investigation groups effects, not plumbing.
-    landing: Any
-    departure_scan: int
-    cause: tuple[CausalOccurrence, ...]
-    causal_spine: frozenset[str]
-    causal_roots: tuple[tuple[str, Any], ...] = ()
-    # Snapshot in which synthetic guards were evaluated before the causal
-    # departure scan. A correction may become active long after the incident
-    # anchor, so lifecycle ownership cannot be reconstructed from the anchor.
-    owner_snapshot: Mapping[str, Any] | None = None
-
-
-@dataclass(frozen=True)
-class ReplacementEvidence:
-    """A counterfactual branch that reproduced a channel departure.
-
-    ``plc`` is the replay fork that observed the branch.  Investigation needs
-    that exact history to derive a correction for the newly exposed cause;
-    replay owns observation, not interpretation. ``shared_suffix`` is ordered
-    effect-backward and contains the exact rung/write pipeline common to the
-    recorded and replacement causes of the same bounded channel outcome.
-    """
-
-    plc: Any
-    incident: DeviationIncident
-    witness: RegressionWitness
-    shared_suffix: tuple[CausalOccurrence, ...] = ()
-
-
-@dataclass(frozen=True)
-class ReplayIncident:
-    """The bounded occurrence and judgment evidence a replay must reproduce."""
-
-    channel_tag: str | None = None
-    channel_target: Any = None
-    terminal_role_tags: tuple[str, ...] | None = None
-    watch_roles: tuple[str, ...] = ()
-    departure_bearing: tuple[ActionPair, ...] = ()
-    regression_witness: RegressionWitness | None = None
-    earned_work: Any = None
-    progress_anchor: Mapping[str, Any] | None = None
-    regression_progress_floor: Mapping[str, Any] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Incident / hypothesis / result types
-# ---------------------------------------------------------------------------
-
-
-class ReplayJustification(Enum):
-    """The target-relative ground on which a replayed correction succeeded."""
-
-    REACHED = "reached"
-    NEUTRALIZED = "neutralized"
-    ADVANCED = "advanced"
-    BEARING_HELD = "bearing-held"
-
-
-@dataclass(frozen=True)
-class ReplayOutcome:
-    """Pilot's replay judgment for a proposed hold set."""
-
-    accepted: bool
-    trend: int | None
-    snapshot: Mapping[str, Any]
-    reason: str = ""
-    justification: ReplayJustification | None = None
-    continuation: FrontierStatus = Unknown("target continuation was not inspected")
-    continuation_snapshot: Mapping[str, Any] | None = None
-    # Whether ``snapshot`` is a real LANDING (target reached, or the coast
-    # departed and settled somewhere) rather than a mid-journey timeout.  A
-    # departure-silenced acceptance times out with the channel intact — its
-    # snapshot is where the budget ran out, not a destination, and channel
-    # scoping must not derive a lifetime from it.
-    landed: bool = True
-    # Causal spine of a replacement channel departure after the recorded
-    # regression was suppressed. Investigation composes this receipt with its
-    # sibling hypotheses; replay itself does not know the incident's full
-    # proposal set.
-    replacement_cause: frozenset[str] = frozenset()
-    replacement: ReplacementEvidence | None = None
+ReplayFn = _replay.ReplayFn
+ReplayStep = _replay.ReplayStep
+_replay_step = _replay._replay_step
+_deviation_bearing = _replay._deviation_bearing
+CausalOccurrence = _replay.CausalOccurrence
+RegressionWitness = _replay.RegressionWitness
+ReplacementEvidence = _replay.ReplacementEvidence
+ReplayIncident = _replay.ReplayIncident
+ReplayJustification = _replay.ReplayJustification
+ReplayOutcome = _replay.ReplayOutcome
 
 
 def _continuation_ground(status: FrontierStatus) -> str:
@@ -530,82 +330,8 @@ def incident_regression_witness(
     plc: PLC,
     incident: DeviationIncident,
 ) -> RegressionWitness | None:
-    """Recover the exact causal branch of the incident's channel transition.
-
-    ``cause()`` already resolves the recorded writer occurrence, including
-    its upstream owners and replay-backed recovery when a firing timeline was
-    filtered. Reuse the changed rung/write occurrences inside this incident.
-    This makes the full recorded explanation the identity: a later cause may
-    share the generic state executor without being mistaken for this cause.
-    If the branch cannot be
-    attributed, return ``None`` and let replay decline local-neutralization
-    proof rather than substituting a behavior category.
-    """
-    channel = incident.channel_tag
-    departure = next(
-        (
-            departure
-            for departure in incident.departures
-            if departure.tag == channel and departure.scan is not None
-        ),
-        None,
-    )
-    if channel is None or departure is None or departure.scan is None:
-        return None
-    chain = _shared_cause(plc, channel, departure.scan)
-    if chain is None:
-        return None
-    effect = chain.effect
-    if (
-        effect.tag_name != channel
-        or effect.scan_id != departure.scan
-        or not _values_match(effect.from_value, departure.value)
-        or _values_match(effect.from_value, effect.to_value)
-    ):
-        return None
-    cause: list[CausalOccurrence] = []
-    for step in chain.steps:
-        transition = step.transition
-        if (
-            transition.scan_id <= incident.anchor_scan
-            or transition.scan_id > departure.scan
-            or _values_match(transition.from_value, transition.to_value)
-        ):
-            continue
-        occurrence = CausalOccurrence(
-            rung=RungId(step.subroutine, step.rung_index),
-            tag=transition.tag_name,
-            value=transition.to_value,
-        )
-        if not any(
-            prior.rung == occurrence.rung
-            and prior.tag == occurrence.tag
-            and _values_match(prior.value, occurrence.value)
-            for prior in cause
-        ):
-            cause.append(occurrence)
-    if not cause:
-        return None
-    if not any(
-        occurrence.tag == channel and _values_match(occurrence.value, effect.to_value)
-        for occurrence in cause
-    ):
-        return None
-    return RegressionWitness(
-        channel_tag=channel,
-        source=effect.from_value,
-        departed=effect.to_value,
-        landing=incident.after_snap.get(channel),
-        departure_scan=departure.scan,
-        cause=tuple(cause),
-        causal_spine=frozenset(chase_chain_tags(plc, channel, scan=departure.scan)),
-        causal_roots=tuple((root.tag_name, root.value) for root in chain.roots),
-        owner_snapshot=(
-            dict(plc.history.at(departure.scan - 1).tags)
-            if departure.scan > plc.history.oldest_scan_id
-            else dict(incident.before_snap)
-        ),
-    )
+    """Compatibility facade for recorded regression witness recovery."""
+    return _replay.incident_regression_witness(plc, incident)
 
 
 def _regression_cause_replayed(
@@ -615,144 +341,21 @@ def _regression_cause_replayed(
     start_scan: int,
     end_scan: int,
 ) -> bool:
-    """Whether replay reproduced every changed write on the recorded cause.
-
-    A later fault may legitimately share the response pipeline and its generic
-    state-copy rung. It reproduces this regression only when the replay firing
-    evidence subsumes the whole incident-bounded causal signature. Exact
-    interpreted captures recover attempted writes hidden by a same-scan mask.
-    """
-    remaining = list(witness.cause)
-    for scan in range(start_scan + 1, end_scan + 1):
-        main_firings = plc.rung_firings(scan)
-        node_firings = plc._node_firings_at(scan)
-        ambiguous: set[RungId] = set()
-        matched: list[CausalOccurrence] = []
-        for occurrence in remaining:
-            writes = (
-                main_firings.get(occurrence.rung.rung_index)
-                if occurrence.rung.subroutine is None
-                else node_firings.get(occurrence.rung)
-            )
-            if writes is None:
-                continue
-            if occurrence.tag in writes and _values_match(
-                writes[occurrence.tag],
-                occurrence.value,
-            ):
-                matched.append(occurrence)
-            elif not writes:
-                # Compact firing timelines retain an empty map when a rung
-                # executed but its writes were PDG-filtered.
-                ambiguous.add(occurrence.rung)
-        if ambiguous:
-            for run in plc._replay_rung_runs_at(scan):
-                if run.rung_id not in ambiguous or not run.enabled:
-                    continue
-                attempted = dict(run.writes)
-                for occurrence in remaining:
-                    if (
-                        occurrence.rung == run.rung_id
-                        and occurrence.tag in attempted
-                        and _values_match(attempted[occurrence.tag], occurrence.value)
-                    ):
-                        matched.append(occurrence)
-        if matched:
-            remaining = [occurrence for occurrence in remaining if occurrence not in matched]
-            if not remaining:
-                return True
-    return False
-
-
-@dataclass(frozen=True)
-class _RegressionOwnership:
-    """Current replay evidence about one recorded regression branch."""
-
-    source_preserved: bool
-    cause_silenced: bool
-    replacement_cause: frozenset[str] | None
-    replacement_owned: bool | None
-    replacement_replays_recorded: bool | None
-    unrelated_departure: bool
-    neutralized: bool
-    shared_suffix: tuple[CausalOccurrence, ...] = ()
-
-
-def _replacement_departure_scan(
-    witness: RegressionWitness,
-    events: Sequence[Any],
-) -> int | None:
-    """First counterfactual departure from the recorded channel source."""
-    return next(
-        (
-            event.scan
-            for event in events
-            for tag, before, after in event.transitions
-            if tag == witness.channel_tag
-            and _values_match(before, witness.source)
-            and not _values_match(after, witness.source)
-        ),
-        None,
+    """Compatibility facade for exact causal replay matching."""
+    return _replay._regression_cause_replayed(
+        plc,
+        witness,
+        start_scan=start_scan,
+        end_scan=end_scan,
     )
 
 
-def _same_occurrence(left: CausalOccurrence, right: CausalOccurrence) -> bool:
-    return (
-        left.rung == right.rung and left.tag == right.tag and _values_match(left.value, right.value)
-    )
-
-
-def _same_bounded_channel_outcome(
-    recorded: RegressionWitness,
-    replacement: RegressionWitness,
-) -> bool:
-    """Whether two witnesses describe the same bounded transition outcome.
-
-    The first departure identifies the participating transition. The landing
-    distinguishes another cause of the failure from a healthy path that merely
-    begins with the same transition and uses the same executor machinery.
-    """
-    return (
-        recorded.channel_tag == replacement.channel_tag
-        and _values_match(recorded.source, replacement.source)
-        and _values_match(recorded.departed, replacement.departed)
-        and _values_match(recorded.landing, replacement.landing)
-    )
-
-
-def _same_bounded_channel_departure(
-    recorded: RegressionWitness,
-    replacement: RegressionWitness,
-) -> bool:
-    """Whether replay preserved the incident's first channel transition."""
-    return (
-        recorded.channel_tag == replacement.channel_tag
-        and _values_match(recorded.source, replacement.source)
-        and _values_match(recorded.departed, replacement.departed)
-    )
-
-
-def _shared_causal_suffix(
-    recorded: RegressionWitness,
-    replacement: RegressionWitness | None,
-) -> tuple[CausalOccurrence, ...]:
-    """Exact downstream pipeline shared by two effect-backward witnesses.
-
-    ``CausalChain.steps`` and therefore :attr:`RegressionWitness.cause` are
-    effect-first. Their common prefix is the program's common downstream
-    suffix. One shared occurrence is normally only the generic channel
-    executor; two prove a participating transition plus its executor pipeline.
-    The bounded landing must also match: the same first hop through the same
-    plumbing can be a healthy detour rather than another cause of the failure.
-    """
-    if replacement is None or not _same_bounded_channel_outcome(recorded, replacement):
-        return ()
-    common: list[CausalOccurrence] = []
-    for left, right in zip(recorded.cause, replacement.cause, strict=False):
-        if not _same_occurrence(left, right):
-            break
-        common.append(left)
-    return tuple(common) if len(common) >= 2 else ()
+_RegressionOwnership = _replay._RegressionOwnership
+_replacement_departure_scan = _replay._replacement_departure_scan
+_same_occurrence = _replay._same_occurrence
+_same_bounded_channel_outcome = _replay._same_bounded_channel_outcome
+_same_bounded_channel_departure = _replay._same_bounded_channel_departure
+_shared_causal_suffix = _replay._shared_causal_suffix
 
 
 def _regression_ownership(
@@ -765,73 +368,27 @@ def _regression_ownership(
     end_scan: int,
     replacement_witness: RegressionWitness | None = None,
 ) -> _RegressionOwnership:
-    """Judge the recorded branch and any replacement inside its bounded replay.
-
-    Replay does not chase a future stable landing. It does own departures
-    already visible inside the recorded horizon. Reproducing the same bounded
-    outcome on the proposal's causal spine disproves the proposal. A
-    proposal-owned replacement with a different landing has instead changed
-    this recorded incident; that landing remains probationary evidence for a
-    later live-loop iteration.
-    """
-    bounded_events = tuple(event for event in events if event.scan <= end_scan)
-    source_preserved = _values_match(
-        plc.state.tags.get(witness.channel_tag), witness.source
-    ) and not any(
-        tag == witness.channel_tag and not _values_match(after, witness.source)
-        for event in bounded_events
-        for tag, _before, after in event.transitions
-    )
-    changed_writes_silenced = not _regression_cause_replayed(
+    """Compatibility facade preserving patched replay-cause matching."""
+    return _replay._regression_ownership(
         plc,
         witness,
+        events,
+        proposal_tags,
         start_scan=start_scan,
         end_scan=end_scan,
+        replacement_witness=replacement_witness,
+        cause_replayed=_regression_cause_replayed,
     )
-    replacement_cause = (
-        replacement_witness.causal_spine if replacement_witness is not None else None
-    )
-    replacement_owned = (
-        bool(proposal_tags & replacement_cause) if replacement_cause is not None else None
-    )
-    replacement_replays_recorded = (
-        _same_bounded_channel_outcome(witness, replacement_witness)
-        and witness.causal_spine.issubset(replacement_cause)
-        if replacement_cause is not None and replacement_witness is not None
-        else None
-    )
-    unrelated_departure = (
-        replacement_cause is not None
-        and replacement_replays_recorded is False
-        and replacement_owned is False
-    )
-    shared_suffix = _shared_causal_suffix(witness, replacement_witness)
-    branch_replaced = (
-        bool(shared_suffix) and replacement_replays_recorded is False and replacement_owned is False
-    )
-    proposal_owned_detour = (
-        replacement_witness is not None
-        and replacement_owned is True
-        and replacement_replays_recorded is False
-        and _same_bounded_channel_departure(witness, replacement_witness)
-        and not _same_bounded_channel_outcome(witness, replacement_witness)
-    )
-    cause_silenced = changed_writes_silenced or branch_replaced or proposal_owned_detour
-    unrelated_departure = unrelated_departure and not shared_suffix
-    return _RegressionOwnership(
-        source_preserved=source_preserved,
-        cause_silenced=cause_silenced,
-        replacement_cause=replacement_cause,
-        replacement_owned=replacement_owned,
-        replacement_replays_recorded=replacement_replays_recorded,
-        unrelated_departure=unrelated_departure,
-        neutralized=(
-            (source_preserved and cause_silenced)
-            or branch_replaced
-            or proposal_owned_detour
-            or unrelated_departure
-        ),
-        shared_suffix=shared_suffix,
+
+
+def _replay_hooks() -> _replay.ReplayHooks:
+    """Bind replay callbacks through this module's compatibility surface."""
+    return _replay.ReplayHooks(
+        regression_cause_replayed=_regression_cause_replayed,
+        incident_regression_witness=incident_regression_witness,
+        build_deviation_incident=build_deviation_incident,
+        implicated_writers=_implicated_writers,
+        suppression_nominations=_skiff_suppression_nominations,
     )
 
 
@@ -844,449 +401,16 @@ def build_replay_fn(
     ctx: _PilotContext,
     incident: ReplayIncident | None = None,
 ) -> ReplayFn:
-    """Build a replay callback for ``investigate_deviation``.
-
-    The returned function forks from the checkpoint, installs existing holds
-    plus the proposed hypothesis holds, and re-runs the act that surfaced the
-    regression.
-
-    The judgment depends on the incident shape:
-
-    * **Channel incident** (``bearing_channel_tag`` set — a bearing coast or a
-      terminal let-run holding a macro-state) — a hold is *good* iff the
-      channel register sits at its target/held value instead of ejecting.  The
-      coast differs by shape: a **bearing** coast is unbounded and ejection-guarded
-      (the immediate bearing may be a full coast away), a **let-run** coast is
-      **bounded** to the departure window (its far-off global target is
-      unreachable inside it).  In both cases the bearing's far-off conjuncts (the
-      channel target, the global target, unrelated watch tags) are *not*
-      required — only that the register did not eject — because a bounded coast
-      cannot restore them and the bearing-held test would reject every hold.
-    * **Terminal let-run without a channel register** — judge the global
-      target at the bounded point.
-    * **Command incident** — judge *departure_bearing* directly, else fall back
-      to comparing the trace-back trend against the checkpoint trend.
-
-    A correction need not finish the remaining route. When the recorded
-    regression was a channel departure, suppressing its exact changed-write
-    branch inside the recorded incident window is local **neutralization** and
-    is sufficient. Merely overwriting that branch's result is not: exact firing
-    testimony still detects masking. A replacement departure already inside
-    that bounded window is accepted only when its cause is unrelated to the
-    proposal; motion beyond the window belongs to a later live incident.
-    """
-
-    incident = incident or ReplayIncident()
-    resting = ctx.resting
-    edge_tags = ctx.edge_tags
-    target_tag = ctx.target.tag
-    target_value = ctx.target.value
-    pdg = ctx.pdg
-    program = ctx.program
-    steerable = ctx.steerable
-    opaque_loop = ctx.opaque_loop
-    pipeline_internal_tags = ctx.pipeline_internal_tags
-    route = ctx.route
-    prior = getattr(ctx, "domain_prior", None)
-    clear_only = getattr(ctx, "clear_only", frozenset())
-    bearing_channel_tag = incident.channel_tag
-    bearing_target_value = incident.channel_target
-    terminal_letrun_role_tags = incident.terminal_role_tags
-    replay_watch_roles = incident.watch_roles
-    departure_bearing = incident.departure_bearing
-    regression_witness = incident.regression_witness
-    earned_work = incident.earned_work
-    progress_anchor = incident.progress_anchor
-    regression_progress_floor = incident.regression_progress_floor
-    replay_cache: dict[tuple[bool, tuple[tuple[str, Any], ...]], ReplayOutcome] = {}
-
-    def _replay(
-        holds: tuple[Any, ...],
-        *,
-        prove_continuation: bool = False,
-    ) -> ReplayOutcome:
-        from pyrung.core.analysis.pilot.coast import CoastSession
-
-        replay_key = (
-            prove_continuation,
-            tuple(_proposal_identity(hold) for hold in holds),
-        )
-        cached = replay_cache.get(replay_key)
-        if cached is not None:
-            return cached
-
-        def _remember(outcome: ReplayOutcome) -> ReplayOutcome:
-            replay_cache[replay_key] = outcome
-            return outcome
-
-        probe = fork_with_pilot_rungs(cp_fork, pilot_rungs)
-        probe_pilot_rungs = list(pilot_rungs)
-        scope = _target_unresolved_condition(probe, target_tag, target_value)
-        probe_pilot_rungs.extend(_pilot_rungs_from_proposals(list(holds), scope))
-        _set_pilot_rungs(probe, probe_pilot_rungs)
-        # One session spans the whole replay. The channel pen proves whether the
-        # incident's source context was preserved; exact rung-firing timelines
-        # independently prove whether its recorded causal branch replayed.
-        # ReplayStep.scans is the recorded incident's logical window.  Active
-        # hypothesis holds must not reinterpret it as a fresh kernel-work
-        # allowance and coast beyond the evidence being replayed.
-        session = CoastSession(probe, kind="replay", kernel_budget=False)
-        # The last coast step IS the incident's eject coast; its receipt is the
-        # trigger-local verdict ("did the recorded departure reproduce?") the
-        # judgment below reads alongside the endpoint snapshot.
-        eject_receipt: Any = None
-        if bearing_channel_tag is not None:
-            session.arm_pens((bearing_channel_tag,))
-        for step in steps:
-            # Each step re-arms its RECORDED session spec (``ReplayStep.kind``
-            # off the committed step context) — a letrun eject-coast is coasted,
-            # never pulsed (pulsing it would skip the coast entirely: five
-            # settle scans, channel intact, every hypothesis "confirms").
-            if step.kind == "pulse" and step.inputs:
-                _apply_pulse(probe, list(step.inputs), resting, edge_tags, session=session)
-            elif step.kind == "letrun":
-                # The replay reproduces the INCIDENT — "the channel departed" —
-                # so its watch roles (*replay_watch_roles*, an explicit caller
-                # parameter) are the channel alone, never the live coast's full
-                # role set: the checkpoint world catches the state machine's
-                # scratch registers (isCmdValid__cmd, sm__where2jump)
-                # mid-settlement, and a role guard would pause on that
-                # transient with the channel still at its held value.  The
-                # budget is the step's own recorded span — the replay seeks to
-                # first-of {target, eject, timeout} and the judgment below
-                # reads which fired, so no departure margin is needed.
-                eject_receipt = _coast_holding_state(
-                    probe,
-                    target_tag,
-                    target_value,
-                    replay_watch_roles,
-                    budget=max(1, step.scans),
-                    session=session,
-                )
-            elif step.kind == "bearing_coast" and step.channel_tag is not None:
-                # Reproduce the recorded incident, not the rest of its route.
-                # A correction only has to neutralize the causal regression
-                # inside this bounded step; extending replay to the bearing's
-                # distant destination lets a later unrelated fault reuse the
-                # same state executor and falsely refute the correction.
-                eject_receipt = _coast_to_value(
-                    probe,
-                    step.channel_tag,
-                    step.channel_target,
-                    budget=(
-                        max(1, step.scans) if regression_witness is not None else _COAST_BUDGET
-                    ),
-                    session=session,
-                )
-            else:
-                session.dwell(max(1, step.scans))
-        incident_replay_end = probe.state.scan_id
-        snap = dict(probe.state.tags)
-        proposal_tags = {_proposal_pair(hold)[0] for hold in holds}
-        replacement_incident: DeviationIncident | None = None
-        replacement_witness: RegressionWitness | None = None
-        if regression_witness is not None:
-            replacement_scan = _replacement_departure_scan(
-                regression_witness,
-                session.events,
-            )
-            if replacement_scan is not None:
-                replacement_incident = build_deviation_incident(
-                    anchor_scan=cp_fork.state.scan_id,
-                    end_scan=incident_replay_end,
-                    action=(),
-                    bearing=((regression_witness.channel_tag, regression_witness.source),),
-                    before_snap=dict(cp_fork.state.tags),
-                    after_snap=snap,
-                    timeline=session.events,
-                    channel_tag=regression_witness.channel_tag,
-                )
-                replacement_witness = incident_regression_witness(
-                    probe,
-                    replacement_incident,
-                )
-        ownership = (
-            _regression_ownership(
-                probe,
-                regression_witness,
-                session.events,
-                proposal_tags,
-                start_scan=cp_fork.state.scan_id,
-                end_scan=incident_replay_end,
-                replacement_witness=replacement_witness,
-            )
-            if regression_witness is not None
-            else None
-        )
-        progress_erased = (
-            ownership is not None
-            and ownership.neutralized
-            and earned_work is not None
-            and regression_progress_floor is not None
-            and earned_work.receipt(
-                regression_progress_floor,
-                snap,
-            ).movement
-            is EarnedWorkMovement.BACKWARD
-        )
-        # A correction owns the recorded operation, not merely its outer
-        # channel. Keeping Execute while erasing the Step/phase receipt that
-        # identified this incident is suppression by rollback, not
-        # neutralization. Check the floor at the bounded incident horizon.
-        neutralized = ownership is not None and ownership.neutralized and not progress_erased
-        source_preserved = ownership is not None and ownership.source_preserved
-        continuation_snapshot = snap
-        continuation: FrontierStatus = Unknown(
-            "bounded replay did not witness the target",
-            ((target_tag, target_value),),
-        )
-        if target_reached(
-            snap,
-            target_tag,
-            target_value,
-            ctx.target.predicate,
-        ):
-            continuation = Reachable(("actual-target-witness",))
-        elif neutralized and prove_continuation:
-            # Relational corrections need a concrete counterexample beyond the
-            # incident horizon: the safe boundary may be several refinements
-            # away. This second stage is requested only for that family. Exact
-            # latch/absence repairs stop at the bounded incident and return to
-            # the ordinary outer loop instead of replaying the whole route for
-            # every candidate.
-            continuation_receipt = _coast_holding_state(
-                probe,
-                target_tag,
-                target_value,
-                ((bearing_channel_tag,) if bearing_channel_tag is not None else ()),
-                budget=min(
-                    _COAST_BUDGET,
-                    max(1, int(getattr(ctx, "max_scans", _COAST_BUDGET))),
-                ),
-                reached_fn=(
-                    (
-                        lambda state: target_reached(
-                            state.tags,
-                            target_tag,
-                            target_value,
-                            ctx.target.predicate,
-                        )
-                    )
-                    if ctx.target.predicate is not None
-                    else None
-                ),
-                session=session,
-            )
-            continuation_snapshot = dict(probe.state.tags)
-            if target_reached(
-                continuation_snapshot,
-                target_tag,
-                target_value,
-                ctx.target.predicate,
-            ):
-                continuation = Reachable(("actual-target-witness", "coast"))
-            else:
-                continuation = Unknown(
-                    "coast-only continuation did not reach the target"
-                    f" ({continuation_receipt.stop_reason})",
-                    ((target_tag, target_value),),
-                )
-        if logger.isEnabledFor(logging.DEBUG):
-            roles = terminal_letrun_role_tags or ()
-            logger.debug(
-                "replay probe: cp_scan=%s end_scan=%s steps=%d shape=%s channel=%s=%r roles=%s",
-                cp_fork.state.scan_id,
-                probe.state.scan_id,
-                len(steps),
-                ("letrun" if terminal_letrun_role_tags is not None else "bearing_coast"),
-                bearing_channel_tag,
-                snap.get(bearing_channel_tag) if bearing_channel_tag else None,
-                {t: snap.get(t) for t in roles},
-            )
-
-        # Channel incident (channel coast OR terminal let-run hold): the hold is
-        # good iff it reaches the requested bearing destination, advances the
-        # target-relative earned work, or suppresses the incident's exact departure
-        # causal branch within the incident window. A terminal let-run's
-        # "target" is the state it was trying to hold, so equality alone is not
-        # success there: a direct channel override could mask a still-firing
-        # cause. Exact firing testimony distinguishes suppression from masking.
-        if bearing_channel_tag is not None:
-            reached = terminal_letrun_role_tags is None and _values_match(
-                snap.get(bearing_channel_tag), bearing_target_value
-            )
-            neutralized_reason = None
-            if neutralized and regression_witness is not None:
-                neutralized_reason = (
-                    "recorded regression neutralized: "
-                    f"preserved {bearing_channel_tag}={regression_witness.source!r} "
-                    f"and suppressed its {len(regression_witness.cause)}-write causal branch"
-                    if source_preserved
-                    else "recorded cause silenced before an unrelated replacement departure"
-                )
-            progressed = neutralized_reason
-            earned_work_advanced = False
-            if (
-                not reached
-                and progressed is None
-                and earned_work is not None
-                and progress_anchor is not None
-                and earned_work.receipt(progress_anchor, snap).movement
-                is EarnedWorkMovement.FORWARD
-            ):
-                earned_work_advanced = True
-                progressed = "target-relative progress advanced"
-            # Ownership already distinguishes masking from a genuine branch
-            # replacement. A healthy replacement may share generic executor
-            # writes with the recorded fault, so asking again whether every
-            # changed write disappeared would reject the observed safe landing.
-            cause_repeated = regression_witness is not None and not neutralized
-            rejection_reason = (
-                "correction erased the recorded incident's progress receipt"
-                if progress_erased
-                else (
-                    "recorded regression cause replayed; correction masked its result"
-                    if cause_repeated
-                    else (
-                        f"{bearing_channel_tag} -> {bearing_target_value!r} reached={reached}"
-                        + (
-                            f" (eject coast: {eject_receipt.stop_reason})"
-                            if eject_receipt is not None
-                            else ""
-                        )
-                    )
-                )
-            )
-            accepted = (
-                earned_work_advanced or (not cause_repeated and (reached or progressed is not None))
-            ) and not progress_erased
-            return _remember(
-                ReplayOutcome(
-                    accepted=accepted,
-                    trend=None,
-                    snapshot=snap,
-                    reason=(progressed if accepted else rejection_reason) or rejection_reason,
-                    continuation=continuation,
-                    continuation_snapshot=continuation_snapshot,
-                    # A coast that timed out mid-journey landed nowhere — its end
-                    # snapshot must not seed a channel scope.
-                    landed=(
-                        reached
-                        or (
-                            neutralized
-                            and not source_preserved
-                            and replacement_witness is not None
-                            and regression_witness is not None
-                            and not _values_match(
-                                replacement_witness.landing,
-                                regression_witness.landing,
-                            )
-                        )
-                    ),
-                    justification=(
-                        (
-                            ReplayJustification.REACHED
-                            if isinstance(continuation, Reachable)
-                            else (
-                                ReplayJustification.NEUTRALIZED
-                                if neutralized_reason is not None
-                                else ReplayJustification.ADVANCED
-                                if progressed is not None
-                                else None
-                            )
-                        )
-                        if accepted
-                        else None
-                    ),
-                    replacement_cause=(
-                        ownership.replacement_cause or frozenset()
-                        if ownership is not None
-                        else frozenset()
-                    ),
-                    replacement=(
-                        ReplacementEvidence(
-                            plc=probe,
-                            incident=replacement_incident,
-                            witness=replacement_witness,
-                            shared_suffix=ownership.shared_suffix,
-                        )
-                        if ownership is not None
-                        and replacement_incident is not None
-                        and replacement_witness is not None
-                        else None
-                    ),
-                )
-            )
-
-        # Terminal let-run without a channel register (no recognized state
-        # machine): judge the global target at the bounded point.
-        if terminal_letrun_role_tags is not None:
-            reached = _values_match(snap.get(target_tag), target_value)
-            return _remember(
-                ReplayOutcome(
-                    accepted=reached,
-                    trend=None,
-                    snapshot=snap,
-                    reason=f"{target_tag} -> {target_value!r} reached={reached}",
-                    justification=ReplayJustification.REACHED if reached else None,
-                    continuation=(
-                        Reachable(("actual-target-witness",))
-                        if reached
-                        else Unknown(
-                            "bounded terminal replay did not reach the target",
-                            ((target_tag, target_value),),
-                        )
-                    ),
-                    continuation_snapshot=snap,
-                )
-            )
-
-        # Command incident: no register to coast toward — judge the bounded
-        # bearing-held directly.
-        if departure_bearing:
-            held = all(_values_match(snap.get(t), v) for t, v in departure_bearing)
-            return _remember(
-                ReplayOutcome(
-                    accepted=held,
-                    trend=None,
-                    snapshot=snap,
-                    reason=f"bearing {'held' if held else 'departed'} at bounded replay",
-                    justification=ReplayJustification.BEARING_HELD if held else None,
-                    continuation=continuation,
-                    continuation_snapshot=continuation_snapshot,
-                )
-            )
-
-        tree = trace_back(
-            target_tag,
-            target_value,
-            snap,
-            pdg,
-            program,
-            steerable,
-            clear_only=clear_only,
-            opaque_loop=opaque_loop,
-            pipeline_internal_tags=pipeline_internal_tags,
-            route=route,
-            prior=prior,
-        )
-        trend = tree.unsatisfied_count()
-        return _remember(
-            ReplayOutcome(
-                accepted=trend <= cp_trend,
-                trend=trend,
-                snapshot=snap,
-                reason=f"trend {trend} <= checkpoint {cp_trend}",
-                justification=ReplayJustification.ADVANCED if trend < cp_trend else None,
-                continuation=continuation,
-                continuation_snapshot=continuation_snapshot,
-            )
-        )
-
-    _replay.with_continuation = lambda holds: _replay(  # ty: ignore[unresolved-attribute]
-        holds, prove_continuation=True
+    """Compatibility facade for bounded exploratory replay."""
+    return _replay.build_replay_fn(
+        cp_fork,
+        cp_trend,
+        pilot_rungs,
+        steps,
+        ctx=ctx,
+        incident=incident,
+        hooks=_replay_hooks(),
     )
-    return _replay
 
 
 # ---------------------------------------------------------------------------
@@ -1294,17 +418,7 @@ def build_replay_fn(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class ExcursionResult:
-    """Replay-confirmed correction from an excursion investigation."""
-
-    reverted: list[str]
-    correction: _ConfirmedCorrection | None = None
-    replay_fork: Any = None
-    # The replayed pulse's recorded session events — the timeline the replayed
-    # trial carries forward (its Done-bit pen marks must stay visible to a
-    # later incident window).
-    replay_timeline: tuple[Any, ...] = ()
+ExcursionResult = _replay.ExcursionResult
 
 
 def investigate_excursion(
@@ -1325,192 +439,30 @@ def investigate_excursion(
     program: Any = None,
     ctx: Any = None,
 ) -> ExcursionResult:
-    """Diagnose an excursion and replay-validate candidate holds.
-
-    Verify detected that the state key changed during the pulse but reverted
-    after settling; the drive loop invokes this function to find *why* and
-    validate one replay. ``applied_actions`` is the complete physical artifact:
-    every member is replayed and excluded from corrective nominations.
-
-    Primary path: suppress the *antagonist* — any writer of a reverted register
-    that is **causally implicated** in the deviation (``cause()`` attributes the
-    tag's change to it) and that **provably drives the tag away** from the value
-    the pulse established (``_can_produce`` False).  Dispatch is by causal
-    implication + producibility, never by instruction class name: a plain
-    clobbering ``copy`` is suppressed exactly like a ``reset``.  Each implicated
-    writer's guard is forced FALSE by the inverted-polarity forcing enumeration
-    (``break_guard_holds``); when that punts on a genuinely-live word guard, the
-    skiff runs bounded isolated probes for a suppressing lever (nominations only).
-
-    Fallback: cause-chain walk and ``cause()`` enablers resolve seal-in
-    establishment cases, where the writer *can* still produce the desired value
-    and therefore is not a suppression antagonist.
-
-    The successful result carries the exact guarded pilot rungs used by replay.
-    The caller may admit and install that correction, but must not reconstruct
-    its lifetime from the bare input values.
-    """
-    from pyrung.core.analysis.pdg import resolve_rung
-
-    reverted: list[str] = []
-    for i, name in enumerate(cfg.stateful_names):
-        if i in cfg.acc_indices:
-            continue
-        if not _values_match(pre_snap.get(name), post_pulse_snap.get(name)):
-            reverted.append(name)
-
-    candidate_holds: list[ActionPair] = []
-    seen: set[ActionPair] = set()
-
-    # Antagonist suppression path: for each reverted register, suppress any writer
-    # that is causally implicated in the deviation and provably clobbers the value
-    # the pulse established.  Guard-force enumeration first; skiff on a live-word
-    # punt.  Every hold is confirmed by the replay gate below — nothing unverified.
-    if pdg is not None and program is not None:
-        settled_snap = dict(fork.state.tags)
-        mini_ctx = SimpleNamespace(
-            pdg=pdg,
-            program=program,
-            steerable=steerable,
-            opaque_loop=frozenset(),
-            pipeline_internal_tags=frozenset(),
-            route=None,
-            domain_prior=None,
-            nd_domains=None,
-        )
-        for tag in reverted:
-            desired = post_pulse_snap.get(tag)
-            for ni in _implicated_writers(fork, tag, pdg):
-                node = pdg.rung_nodes[ni]
-                ro = resolve_rung(program, node)
-                if ro is None:
-                    continue
-                # Honesty boundary (mirrors trace's ``_preserve_children``): only
-                # suppress a writer that *provably* drives the tag off the desired
-                # value.  A writer that could still produce it (the seal-in OTE)
-                # is an establishment case for the fallback, not a clobberer.
-                if _can_produce(_written_value_for_tag(ro, tag), desired):
-                    continue
-                holds = break_guard_holds(ro, settled_snap, mini_ctx)
-                if holds is None:
-                    # Live-word guard: enumeration punted -> isolated skiff probes.
-                    holds = _skiff_suppression_nominations(
-                        work,
-                        tag,
-                        desired,
-                        node,
-                        applied_actions,
-                        pdg,
-                        steerable,
-                        pilot_rungs,
-                    )
-                for hold in holds or ():
-                    if hold not in seen:
-                        seen.add(hold)
-                        candidate_holds.append(hold)
-
-    # Fallback: cause-chain walk.
-    if not candidate_holds:
-        for tag in reverted:
-            _, holds = chase_cause_roots(fork, tag, steerable)
-            for h in holds:
-                if h not in seen:
-                    seen.add(h)
-                    candidate_holds.append(h)
-
-            try:
-                chain = fork.cause(tag, deep=False)
-            except Exception:  # noqa: BLE001
-                continue
-            if chain is None:
-                continue
-            for step in chain.steps:
-                for enabler in step.enablers:
-                    if enabler.tag_name not in steerable:
-                        continue
-                    if not isinstance(enabler.value, bool):
-                        continue
-                    hold = (enabler.tag_name, not enabler.value)
-                    if hold not in seen:
-                        seen.add(hold)
-                        candidate_holds.append(hold)
-
-    action_tags = {t for t, _ in applied_actions}
-    candidate_holds = [(t, v) for t, v in candidate_holds if t not in action_tags]
-    if ctx is not None:
-        candidate_holds = [hold for hold in candidate_holds if _hold_allowed(ctx, hold)]
-    if not candidate_holds:
-        return ExcursionResult(reverted=reverted)
-
-    replay_fork = fork_with_pilot_rungs(work, pilot_rungs)
-    replay_pilot_rungs = list(pilot_rungs)
-    from pyrung.core.analysis.pilot.coast import CoastSession
-    from pyrung.core.condition import CompareEq
-
-    preserved_tag = reverted[0]
-    preserved = replay_fork._known_tags_by_name[preserved_tag]
-    scope = CompareEq(preserved, post_pulse_snap[preserved_tag])
-    confirmed_pilot_rungs = tuple(_pilot_rungs_from_proposals(candidate_holds, scope))
-    replay_pilot_rungs.extend(confirmed_pilot_rungs)
-    _set_pilot_rungs(replay_fork, replay_pilot_rungs)
-    kickoff = list(applied_actions)
-    kickoff.extend((t, v) for t, v in candidate_holds if t not in {a for a, _ in applied_actions})
-    session = CoastSession(replay_fork, kind="excursion-replay")
-    if program is not None:
-        session.arm_pens(
-            owner.profile.done.name
-            for owner in iter_advance_owners(program)
-            if owner.profile.done is not None
-        )
-    _apply_pulse(replay_fork, kickoff, resting, edge_tags, session=session)
-    _settle_delayed_effects(replay_fork, scan_budget=scan_budget, session=session)
-    replay_snap = dict(replay_fork.state.tags)
-    replay_key = _pilot_state_key(replay_snap, cfg)
-
-    if replay_key != pre_key:
-        return ExcursionResult(
-            reverted=reverted,
-            correction=_ConfirmedCorrection(
-                identity=correction_identity(confirmed_pilot_rungs),
-                pilot_rungs=confirmed_pilot_rungs,
-                sources=tuple(dict.fromkeys((*reverted, *(tag for tag, _ in candidate_holds)))),
-                justification="excursion replay preserved the pulse-established state",
-            ),
-            replay_fork=replay_fork,
-            replay_timeline=session.events,
-        )
-    return ExcursionResult(reverted=reverted)
+    """Compatibility facade for replay-backed excursion diagnosis."""
+    return _replay.investigate_excursion(
+        work,
+        fork,
+        pre_snap,
+        post_pulse_snap,
+        pre_key,
+        applied_actions,
+        cfg=cfg,
+        steerable=steerable,
+        pilot_rungs=pilot_rungs,
+        resting=resting,
+        edge_tags=edge_tags,
+        scan_budget=scan_budget,
+        pdg=pdg,
+        program=program,
+        ctx=ctx,
+        hooks=_replay_hooks(),
+    )
 
 
 def _implicated_writers(plc: PLC, tag: str, pdg: Any) -> list[int]:
-    """PDG writer-node indices of *tag* causally implicated in its deviation.
-
-    Dispatch by causal implication, never by instruction class: ``cause()``
-    attributes the reverted tag's change to the rung(s) that actually wrote it in
-    the settled window; those are the antagonists worth suppressing.  A writer
-    that never fired is not in the chain and is left alone.  Maps the chain's
-    ``(rung_index, subroutine)`` back to the PDG writer nodes.  ``[]`` when
-    ``cause()`` is unavailable, allowing the cause-chain fallback to run.
-    """
-    try:
-        chain = plc.cause(tag, deep=False)
-    except Exception:  # noqa: BLE001
-        chain = None
-    if chain is None:
-        return []
-    implicated = {
-        (step.rung_index, step.subroutine)
-        for step in chain.steps
-        if step.transition.tag_name == tag
-    }
-    if not implicated:
-        return []
-    out: list[int] = []
-    for ni in pdg.writers_of.get(tag, frozenset()):
-        node = pdg.rung_nodes[ni]
-        if (node.rung_index, node.subroutine) in implicated:
-            out.append(ni)
-    return out
+    """Compatibility facade for causally implicated writer discovery."""
+    return _replay._implicated_writers(plc, tag, pdg)
 
 
 def _skiff_suppression_nominations(
@@ -1524,8 +476,7 @@ def _skiff_suppression_nominations(
     pilot_rungs: Sequence[PilotRung],
 ) -> list[ActionPair]:
     """Compatibility facade for bounded pinned suppression nominations."""
-
-    return _refinement._skiff_suppression_nominations(
+    return _replay._skiff_suppression_nominations(
         work,
         tag,
         desired,
@@ -1538,26 +489,13 @@ def _skiff_suppression_nominations(
     )
 
 
-# ---------------------------------------------------------------------------
-# Incident construction
-# ---------------------------------------------------------------------------
-
-
 def _first_timeline_departure(
     timeline: Sequence[Any],
     tag: str,
     value: Any,
 ) -> int | None:
-    """The recorded scan of *tag*'s first transition off *value*, or ``None``.
-
-    Read straight off the session timeline — the pen mark IS the departure
-    scan; no history window is re-scanned.
-    """
-    for event in timeline:
-        for t, before, after in event.transitions:
-            if t == tag and _values_match(before, value) and not _values_match(after, value):
-                return event.scan
-    return None
+    """Compatibility facade for recorded departure lookup."""
+    return _replay._first_timeline_departure(timeline, tag, value)
 
 
 def build_deviation_incident(
@@ -1571,45 +509,16 @@ def build_deviation_incident(
     timeline: Sequence[Any] = (),
     channel_tag: str | None = None,
 ) -> DeviationIncident:
-    """Capture the facts inside the known off-course window.
-
-    *timeline* is the recorded session evidence for the window (the committed
-    steps' pen marks and trigger landings): ``changed_tags`` membership and every
-    departure scan are read off it, never re-derived from history.  A
-    fire-then-reset watchdog pulse is two recorded transitions. That exact
-    evidence identifies which accumulator owner completed; correction then asks
-    that owner for its reset operation.
-
-    ``changed_tags`` is factual incident evidence: every recorded transition
-    plus every endpoint difference.  Consumers such as the timer correction
-    engine select their own relevant profile tags from this complete set;
-    incident construction never discards evidence on a consumer's behalf.
-
-    """
-    changed: set[str] = {t for event in timeline for t, _b, _a in event.transitions}
-    changed.update(
-        t
-        for t in set(before_snap) | set(after_snap)
-        if not _values_match(before_snap.get(t), after_snap.get(t))
-    )
-    departures = tuple(
-        BearingDeparture(tag, value, _first_timeline_departure(timeline, tag, value))
-        for tag, value in bearing
-        if not _values_match(after_snap.get(tag), value)
-    )
-    departure_scans = [d.scan for d in departures if d.scan is not None]
-    return DeviationIncident(
+    """Compatibility facade for bounded incident construction."""
+    return _replay.build_deviation_incident(
         anchor_scan=anchor_scan,
-        departure_scan=min(departure_scans) if departure_scans else None,
         end_scan=end_scan,
         action=action,
         bearing=bearing,
         before_snap=before_snap,
         after_snap=after_snap,
-        changed_tags=tuple(sorted(changed)),
-        departures=departures,
+        timeline=timeline,
         channel_tag=channel_tag,
-        timeline=tuple(timeline),
     )
 
 
