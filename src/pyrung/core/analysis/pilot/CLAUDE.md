@@ -301,6 +301,8 @@ this table only locates the owner.
 - Corrective hypothesis ranking, replay, neutralization-versus-masking, and
   confirmation: `investigate.py::_rank_hypotheses`, `build_replay_fn`, and
   `_resolve_replay_attempt`
+- Bounded relational counterexample refinement and pinned suppression
+  nominations: `refinement.py`
 - Bounded corrective composition: `recovery.py::compose_corrections`
 - Corrective operation lifetime: the instruction owner, carried through
   `trace.py::TraceAction.operation`; `overlay.py::_set_pilot_rungs` only compiles that
@@ -422,6 +424,7 @@ Judgment and recovery:
 - `causal.py` — recorded cause-chain queries
 - `investigate.py` — hypothesis ranking, composite replay, excursion replay,
   and confirmation; no drive-loop ownership
+- `refinement.py` — bounded relational refinement and pinned suppression evidence
 - `recovery.py` — bounded corrective-composition transaction
 - `corrections.py` — corrective-hold hypothesis production
 

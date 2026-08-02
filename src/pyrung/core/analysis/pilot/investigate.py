@@ -3,6 +3,9 @@
 ``build_deviation_incident`` freezes the recorded window. ``corrections.py``
 derives three hypothesis families; investigation ranks and tests them with the
 exploratory replay returned by ``build_replay_fn``.
+``refinement.py`` owns bounded relational counterexample refinement and pinned
+suppression nominations; this module retains compatibility facades for its
+former private imports.
 ``_resolve_replay_attempt`` either accepts, rejects, or composes a candidate;
 bounded candidate composition uses ``_compose_hypotheses`` and always replays
 the composite from the original checkpoint.  This is an orient-phase
@@ -22,11 +25,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal
 
+import pyrung.core.analysis.pilot.refinement as _refinement
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
 from pyrung.core.analysis.pilot.avoid import _hold_allowed
 from pyrung.core.analysis.pilot.causal import (
@@ -112,11 +116,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Skiff escalation for a live-word-gated antagonist (excursion suppression).
-_SKIFF_SCANS = 4  # pulse -> staged register -> gated clobber, all in one window
-_SKIFF_MAX_PROBES = 8  # bounded per-excursion — forks are cheap, not free
+_RELATIONAL_REFINEMENT_BUDGET = _refinement._RELATIONAL_REFINEMENT_BUDGET
+_SKIFF_MAX_PROBES = _refinement._SKIFF_MAX_PROBES
+_SKIFF_SCANS = _refinement._SKIFF_SCANS
+_RelationalRefinementReceipt = _refinement._RelationalRefinementReceipt
 _MAX_CANDIDATE_COMPOSITIONS = 8
-_RELATIONAL_REFINEMENT_BUDGET = 32
 
 ActionPair = tuple[str, Any]
 CorrectionIdentity = tuple[tuple[Any, ...], ...]
@@ -124,26 +128,6 @@ CorrectionIdentity = tuple[tuple[Any, ...], ...]
 
 class UnsupportedOccurrenceScope(RuntimeError):
     """A retained writer condition cannot be projected without widening it."""
-
-
-@dataclass
-class _RelationalRefinementReceipt:
-    """Bounded counterexample refinements, independent of causal closure."""
-
-    budget: int = _RELATIONAL_REFINEMENT_BUDGET
-    refinements: int = 0
-    seen: set[tuple[Any, ...]] = field(default_factory=set)
-
-    def admit(self, identity: tuple[Any, ...]) -> bool:
-        if identity in self.seen or self.refinements >= self.budget:
-            return False
-        self.seen.add(identity)
-        self.refinements += 1
-        return True
-
-    @property
-    def exhausted(self) -> bool:
-        return self.refinements >= self.budget
 
 
 def _proposal_pair(proposal: Any) -> ActionPair:
@@ -372,11 +356,9 @@ class ReplayOutcome:
 
 
 def _continuation_ground(status: FrontierStatus) -> str:
-    if isinstance(status, Reachable):
-        return ", ".join(status.provenance)
-    if isinstance(status, NoRoute):
-        return status.proof
-    return status.reason
+    """Compatibility facade for refinement's continuation-ground renderer."""
+
+    return _refinement._continuation_ground(status)
 
 
 def _refine_unknown_continuation(
@@ -385,27 +367,15 @@ def _refine_unknown_continuation(
     ctx: Any,
     receipt: _RelationalRefinementReceipt,
 ) -> tuple[CorrectionHypothesis | None, str]:
-    """Produce one new relational candidate or an honest terminal ground."""
+    """Compatibility facade for bounded relational counterexample refinement."""
 
-    refinement_snap = replay_outcome.continuation_snapshot or replay_outcome.snapshot
-    refined = refine_relational_hypothesis(candidate, refinement_snap, ctx)
-    if refined is None:
-        return (
-            None,
-            "relational continuation remains Unknown and yielded no new authoritative operand",
-        )
-    fingerprint = _hypothesis_identity(refined.holds)
-    if receipt.admit(fingerprint):
-        return refined, ""
-    if receipt.exhausted:
-        return (
-            None,
-            "relational continuation remains Unknown after exhausting "
-            f"{receipt.budget} counterexample refinements",
-        )
-    return (
-        None,
-        "relational continuation remains Unknown and repeated a prior counterexample refinement",
+    return _refinement._refine_unknown_continuation(
+        candidate,
+        replay_outcome,
+        ctx,
+        receipt,
+        refiner=refine_relational_hypothesis,
+        identity=_hypothesis_identity,
     )
 
 
@@ -1852,55 +1822,19 @@ def _skiff_suppression_nominations(
     steerable: frozenset[str],
     pilot_rungs: Sequence[PilotRung],
 ) -> list[ActionPair]:
-    """Bounded isolated probes for a live-word-gated antagonist — nominations only.
+    """Compatibility facade for bounded pinned suppression nominations."""
 
-    ``break_guard_holds`` punted (the antagonist's guard reads a genuinely-live
-    word with no forceable finite domain).  Probe each **condition-read**
-    steerable Bool lever in the antagonist guard's upstream cone: hold it, replay
-    the pulse in a pinned fork over the deviation window (``run_pinned_scan``),
-    and keep the levers under which the antagonist does **not** fire — the reverted
-    register ends at its desired (pulse-established) value.
-
-    Only Bool levers are probed (flipped off their current antagonist-firing
-    value); a wide/unknown word offers no sound probe value (the skiff never
-    guesses).  The returned holds are nominations: they pass the same replay
-    verification as any static hold and are never applied unconfirmed.
-    """
-    action_tags = {t for t, _ in applied_actions}
-    condition_read = {t for n in pdg.rung_nodes for t in getattr(n, "condition_reads", ())}
-    cone: set[str] = set()
-    for guard_tag in node.condition_reads:
-        cone |= set(pdg.upstream_slice(guard_tag, follow_calls=True))
-        cone.add(guard_tag)
-    levers = sorted((cone & steerable & condition_read) - action_tags)
-
-    snap = dict(work.state.tags)
-    allowed = set(pdg.upstream_slice(tag, follow_calls=True))
-    allowed.add(tag)
-    allowed.update(action_tags)
-
-    nominations: list[ActionPair] = []
-    budget = _SKIFF_MAX_PROBES
-    for lever in levers:
-        if budget <= 0:
-            break
-        cur = snap.get(lever)
-        if not isinstance(cur, bool):
-            continue  # only Bool levers — never guess a word value
-        budget -= 1
-        val = not cur  # flip off the polarity under which the antagonist fires
-        probe_actions = tuple({**dict(applied_actions), lever: val}.items())
-        result = run_pinned_scan(
-            work,
-            frozenset(allowed | {lever}),
-            pdg,
-            pilot_rungs=pilot_rungs,
-            actions=probe_actions,
-            scans=_SKIFF_SCANS,
-        )
-        if _values_match(result.after.get(tag), desired):
-            nominations.append((lever, val))
-    return nominations
+    return _refinement._skiff_suppression_nominations(
+        work,
+        tag,
+        desired,
+        node,
+        applied_actions,
+        pdg,
+        steerable,
+        pilot_rungs,
+        run_pinned=run_pinned_scan,
+    )
 
 
 # ---------------------------------------------------------------------------
