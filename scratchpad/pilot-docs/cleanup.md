@@ -14,12 +14,3 @@ Prefer either:
 
 Remove the `getattr(..., None)` fallback and add direct coverage for relational
 corrections using continuation replay.
-
-## Cache compiled replay kernels across overlay changes
-
-Avoid recompiling the unchanged user program whenever PILOT swaps plant or hold
-overlays. Cache compiled replay kernels by the executable identities that affect
-the result, including the user program and plant/hold prefix.
-
-Verify cache reuse across equivalent overlays, invalidation when executable
-overlay identity changes, and identical interpreted/compiled replay behavior.
