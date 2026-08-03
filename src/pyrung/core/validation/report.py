@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from pyrung.core.validation.registry import ALL_RULES, RULES, VALIDATOR_ORDER, resolve_rules
 from pyrung.core.validation.severity import Severity
@@ -19,11 +19,30 @@ __all__ = ["ALL_RULES", "Finding", "ValidationReport", "validate"]
 class Finding(Protocol):
     """Structural contract shared by all validation findings."""
 
-    code: str
-    target_name: str
-    message: str
-    severity: Severity
-    display: FindingDisplay  # presentation structure; ``message`` is ``display.as_text()``
+    @property
+    def code(self) -> str: ...
+
+    @property
+    def target_name(self) -> str: ...
+
+    @property
+    def message(self) -> str: ...
+
+    @property
+    def severity(self) -> Severity: ...
+
+    @property
+    def display(self) -> FindingDisplay:
+        """Presentation structure; ``message`` is ``display.as_text()``."""
+        ...
+
+
+_FindingT = TypeVar("_FindingT", bound=Finding)
+
+
+def _as_findings(findings: tuple[_FindingT, ...]) -> tuple[Finding, ...]:
+    """Widen a concrete validator's finding tuple to the shared protocol."""
+    return findings
 
 
 @dataclass(frozen=True)
@@ -128,14 +147,14 @@ def _validator_dispatch(
     from pyrung.core.validation.wait_escape import validate_wait_escapes
 
     return {
-        "stuck": lambda: validate_stuck_bits(program).findings,
-        "conflicting": lambda: validate_conflicting_outputs(program).findings,
-        "readonly": lambda: validate_readonly_writes(program).findings,
-        "pointer": lambda: validate_pointer_defaults(program).findings,
-        "choices": lambda: validate_choices(program).findings,
-        "final": lambda: validate_final_writers(program).findings,
-        "physical": lambda: validate_physical_realism(program, dt=dt).findings,
-        "rung": lambda: validate_rung_conditions(program).findings,
-        "cmp": lambda: validate_cmp_conditions(program).findings,
-        "wait": lambda: validate_wait_escapes(program).findings,
+        "stuck": lambda: _as_findings(validate_stuck_bits(program).findings),
+        "conflicting": lambda: _as_findings(validate_conflicting_outputs(program).findings),
+        "readonly": lambda: _as_findings(validate_readonly_writes(program).findings),
+        "pointer": lambda: _as_findings(validate_pointer_defaults(program).findings),
+        "choices": lambda: _as_findings(validate_choices(program).findings),
+        "final": lambda: _as_findings(validate_final_writers(program).findings),
+        "physical": lambda: _as_findings(validate_physical_realism(program, dt=dt).findings),
+        "rung": lambda: _as_findings(validate_rung_conditions(program).findings),
+        "cmp": lambda: _as_findings(validate_cmp_conditions(program).findings),
+        "wait": lambda: _as_findings(validate_wait_escapes(program).findings),
     }

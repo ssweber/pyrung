@@ -74,10 +74,10 @@ def test_dynamic_range_stays_opaque_to_exact_writer_lookup() -> None:
     assert isinstance(target, IndirectBlockRange)
 
     instr = _MixedDestinations()
-    instr.primary = target
+    instr.primary = target  # ty: ignore[invalid-assignment]
     instr.grouped = []
     instr.outputs = {}
-    instr.status = None
+    instr.status = None  # ty: ignore[invalid-assignment]
 
     assert instruction_write_targets(instr) == (target,)
     assert static_write_target_names(target) == frozenset()

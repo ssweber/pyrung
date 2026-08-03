@@ -685,7 +685,7 @@ def _bisect_joint_inputs(
                 found_any = True
                 print(f"  joint({names}): {len(result)} states (+{len(new_states)} new)")
                 for s in sorted(new_states, key=str):
-                    print(f"    {dict(s)}")  # ty: ignore[no-matching-overload]
+                    print(f"    {dict(s)}")
             else:
                 print(f"  joint({names}): {len(result)} states (no new)")
         if found_any:
@@ -706,7 +706,7 @@ def _bisect_joint_inputs(
             if new_states:
                 print(f"  joint({names}): {len(result)} states (+{len(new_states)} new)")
                 for s in sorted(new_states, key=str):
-                    print(f"    {dict(s)}")  # ty: ignore[no-matching-overload]
+                    print(f"    {dict(s)}")
                 print()
                 print(
                     "  single-flip limitation: gap explained by full joint group."

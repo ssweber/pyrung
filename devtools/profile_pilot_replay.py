@@ -331,15 +331,15 @@ def observe(profile: Profile) -> Iterator[None]:
                 profile.witness_scans += 1
                 profile.witness_time.add(started)
 
-    coast_module.CoastSession.seek = seek  # ty: ignore[invalid-assignment]
+    coast_module.CoastSession.seek = seek
     cyclefold_module.cycle_fold_until = cycle  # ty: ignore[invalid-assignment]
-    CompiledPLC.step = compiled_step  # ty: ignore[invalid-assignment]
-    CompiledPLC.step_replay = compiled_step_replay  # ty: ignore[invalid-assignment]
-    PLC._replay_capture_at = capture  # ty: ignore[invalid-assignment]
-    PLC._replay_slab_fill = slab  # ty: ignore[invalid-assignment]
+    CompiledPLC.step = compiled_step
+    CompiledPLC.step_replay = compiled_step_replay
+    PLC._replay_capture_at = capture
+    PLC._replay_slab_fill = slab
     causal_module._program_written_changes = candidate  # ty: ignore[invalid-assignment]
-    PLC._compiled_replay_supported_kernel = kernel  # ty: ignore[invalid-assignment]
-    PLC._fork_from_reconstructed_state = handoff  # ty: ignore[invalid-assignment]
+    PLC._compiled_replay_supported_kernel = kernel
+    PLC._fork_from_reconstructed_state = handoff
     runner_module.execute_program = execute  # ty: ignore[invalid-assignment]
     try:
         yield

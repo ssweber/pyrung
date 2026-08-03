@@ -254,7 +254,7 @@ def _click_dialect_validator(program: Program, *, mode: str = "warn", **kwargs: 
         raise TypeError("Program.validate('click', ...) expects tag_map=TagMap(...).")
     if mode not in {"warn", "strict"}:
         raise ValueError("Program.validate('click', ...) mode must be 'warn' or 'strict'.")
-    validated_mode = cast(ValidationMode, mode)
+    validated_mode = mode
     return validate_click_program(program, tag_map=tag_map, mode=validated_mode, **kwargs)
 
 

@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, TypeGuard
+from typing import Any, Literal, TypeGuard, cast
 
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
@@ -684,7 +684,9 @@ class CompassKnowledge:
         result: list[ActionPair] = []
         for action in ordered:
             applied = dict(base)
-            members = action if is_composite_action(action) else (action,)
+            members = (
+                cast(tuple[ActionPair, ...], action) if is_composite_action(action) else (action,)
+            )
             applied.update(members)
             tried = self.probed_actions(
                 tag,

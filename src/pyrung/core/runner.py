@@ -545,21 +545,19 @@ class EpochCaches:
     reboot does not.
     """
 
-    INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = (
-        MappingProxyType(
-            {
-                "tip_advanced": ("replay_trace", "replay_captures"),
-                "history_trimmed": ("replay_slabs",),
-                "runtime_scope_reset": (
-                    "recent_states",
-                    "replay_trace",
-                    "replay_captures",
-                ),
-                "recording_reset": ("replay_slabs",),
-                "replay_anchor_replaced": ("recent_states",),
-                "replay_evidence_discarded": ("replay_trace", "replay_captures"),
-            }
-        )
+    INVALIDATION_MATRIX: Mapping[_EpochCacheEvent, tuple[_EpochCacheName, ...]] = MappingProxyType(
+        {
+            "tip_advanced": ("replay_trace", "replay_captures"),
+            "history_trimmed": ("replay_slabs",),
+            "runtime_scope_reset": (
+                "recent_states",
+                "replay_trace",
+                "replay_captures",
+            ),
+            "recording_reset": ("replay_slabs",),
+            "replay_anchor_replaced": ("recent_states",),
+            "replay_evidence_discarded": ("replay_trace", "replay_captures"),
+        }
     )
 
     def __init__(self, plc: PLC) -> None:
@@ -851,9 +849,7 @@ class CausalLineage:
     def current_epoch(self) -> Epoch | None:
         """Return the live runner's current executed interval as an Epoch view."""
         first_scan = (
-            self._plc._initial_scan_id + 1
-            if self._sealed_epochs
-            else self._plc._initial_scan_id
+            self._plc._initial_scan_id + 1 if self._sealed_epochs else self._plc._initial_scan_id
         )
         if first_scan > self._plc._state.scan_id:
             return None
@@ -943,9 +939,7 @@ class CausalLineage:
         clipped interval are ignored, preventing an epoch-local index from
         leaking an ancestor or frozen future.
         """
-        intervals = tuple(
-            self.epochs_covering(self.oldest_scan_id, before)
-        )
+        intervals = tuple(self.epochs_covering(self.oldest_scan_id, before))
         for epoch, first_scan, last_scan in reversed(intervals):
             candidate = query(epoch, last_scan)
             if candidate is not None and first_scan <= scan_of(candidate) <= last_scan:
@@ -1534,7 +1528,7 @@ class PLC:
                 rung_ids, at_or_before
             ),
             scan_id,
-            scan_of=lambda candidate: candidate,
+            scan_of=int,
         )
 
     def _local_node_latest_firing_at_or_before(
@@ -1564,7 +1558,7 @@ class PLC:
                 epoch
             ).latest_value_transition(rung_ids, tag_name, value, at_or_before),
             scan_id,
-            scan_of=lambda candidate: candidate,
+            scan_of=int,
         )
 
     def _local_node_latest_value_transition_at_or_before(
@@ -2237,9 +2231,7 @@ class PLC:
             end_scan_id - 1,
         ):
             states.extend(
-                self._causal_lineage._query_for(epoch).history_range(
-                    first_scan, last_scan + 1
-                )
+                self._causal_lineage._query_for(epoch).history_range(first_scan, last_scan + 1)
             )
         return states
 

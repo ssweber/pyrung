@@ -25,7 +25,7 @@ def test_epoch_is_frozen_and_lineage_owns_records_not_plcs() -> None:
     assert owner is not parent
     assert owner.epoch is epoch
     with pytest.raises(FrozenInstanceError):
-        epoch.last_scan = 3  # type: ignore[misc]
+        epoch.last_scan = 3  # ty: ignore[invalid-assignment]
 
 
 def test_fork_boundary_belongs_to_sealed_epoch_and_child_executes_after_it() -> None:
@@ -67,7 +67,9 @@ def test_trim_inside_ancestor_slices_sealed_lineage() -> None:
     grandchild._trim_history_before(1)
 
     assert grandchild.history.oldest_scan_id == 1
-    assert [(epoch.first_scan, epoch.last_scan) for epoch in grandchild._causal_lineage.sealed_epochs] == [
+    assert [
+        (epoch.first_scan, epoch.last_scan) for epoch in grandchild._causal_lineage.sealed_epochs
+    ] == [
         (1, 2),
         (3, 4),
     ]

@@ -43,10 +43,17 @@ class StructuredImport:
 
 
 class StructureRuntime(Protocol):
-    count: int
-    field_names: tuple[str, ...]
-    _blocks: dict[str, Block]
-    _pyrung_click_bg_color: str | None
+    @property
+    def count(self) -> int: ...
+
+    @property
+    def field_names(self) -> tuple[str, ...]: ...
+
+    @property
+    def _blocks(self) -> dict[str, Block]: ...
+
+    @property
+    def _pyrung_click_bg_color(self) -> str | None: ...
 
 
 @dataclass(frozen=True)

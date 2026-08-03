@@ -505,7 +505,10 @@ def test_causal_lineage_newest_clamps_each_epoch_and_range_spans_lineage() -> No
     parent_epoch = grandchild._causal_lineage.sealed_epochs[0]
     parent_epoch.rung_firing_timelines.append(99, 2, pmap({"Leak": True}))
     parent_epoch.rung_firing_timelines.append(99, 3, pmap({"Leak": True}))
-    assert grandchild._node_latest_firing_at_or_before(
-        frozenset({RungId(None, 99)}),
-        5,
-    ) == 2
+    assert (
+        grandchild._node_latest_firing_at_or_before(
+            frozenset({RungId(None, 99)}),
+            5,
+        )
+        == 2
+    )

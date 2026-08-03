@@ -367,9 +367,7 @@ def test_retained_unchanged_frontier_without_replacement_does_not_claim_progress
 def test_retained_candidate_composition_is_bounded(monkeypatch) -> None:
     """A long latent-writer chain stops at the inner composition budget."""
 
-    program, process_step, guards = _shifted_blocker_chain_program(
-        _MAX_RETAINED_COMPOSITIONS + 4
-    )
+    program, process_step, guards = _shifted_blocker_chain_program(_MAX_RETAINED_COMPOSITIONS + 4)
     retained = _capture_retained_bearings(monkeypatch)
     verified = _capture_retained_verifications(monkeypatch)
 

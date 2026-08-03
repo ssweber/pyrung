@@ -996,7 +996,11 @@ class CoverageReport:
         return {
             "cold_rungs": sorted(self.cold_rungs),
             "hot_rungs": sorted(self.hot_rungs),
-            "stranded_chains": sorted(
-                {"tag": tag, "blockers": list(blockers)} for tag, blockers in self.stranded_chains
-            ),
+            "stranded_chains": [
+                {"tag": tag, "blockers": list(blockers)}
+                for tag, blockers in sorted(
+                    self.stranded_chains,
+                    key=lambda item: (item[0], repr(item[1])),
+                )
+            ],
         }

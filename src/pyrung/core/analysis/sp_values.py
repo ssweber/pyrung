@@ -815,7 +815,7 @@ def _projected_guard_frontier(
             return (True, tuple(dict.fromkeys(out)))
         # An already-true arm needs no frontier.  Otherwise choose the narrowest
         # non-counterfactual arm; trace's OR scorer will expand that frontier.
-        best = cast(tuple[str, ...], min(live, key=len))
+        best = min(live, key=len)
         return (False, best)
 
     return (False, ())

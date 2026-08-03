@@ -23,7 +23,7 @@ import itertools
 import logging
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pilot.advance import (
     AdvanceOwner,
@@ -1867,7 +1867,9 @@ def _precise_causes(
 
                 if not (isinstance(writer, OutInstruction) and step.transition.to_value is True):
                     continue
-            guard_reads = set(getattr(node, "condition_reads", ())) & set(direct_values)
+            guard_reads = cast(set[str], set(getattr(node, "condition_reads", ()))) & set(
+                direct_values
+            )
             if not guard_reads:
                 continue
             fire_frame = {**frame, **direct_values}

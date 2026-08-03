@@ -123,12 +123,23 @@ class WalkContext(Protocol):
     recursion engine.
     """
 
-    snapshot: Mapping[str, Any]
-    pdg: ProgramGraph
-    program: Any
-    steerable: frozenset[str]
-    opaque_loop: frozenset[str]
-    prior: DomainPrior | None
+    @property
+    def snapshot(self) -> Mapping[str, Any]: ...
+
+    @property
+    def pdg(self) -> ProgramGraph: ...
+
+    @property
+    def program(self) -> Any: ...
+
+    @property
+    def steerable(self) -> frozenset[str]: ...
+
+    @property
+    def opaque_loop(self) -> frozenset[str]: ...
+
+    @property
+    def prior(self) -> DomainPrior | None: ...
 
 
 @dataclass(frozen=True)
