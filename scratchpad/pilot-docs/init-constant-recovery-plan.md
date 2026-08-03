@@ -23,6 +23,13 @@ read the current world
 -> repeat only when the attempt or knowledge changed
 ```
 
+Passing the immediate boundary is only local success. A steer which appeared
+to work may have established the cause of a departure several committed
+decisions later. Its expectation and satisfying occurrence therefore remain
+addressable in retained history. Later investigation may add a requirement to
+that earlier steer, re-anchor before it, replay the retained suffix with the
+correction, and then return to ordinary current-world orientation.
+
 The first program scan is the same shape. It is a program-owned, single-scan
 coast from the retained pre-scan boundary. Pilot observes its landing and asks
 whether target-relevant work appeared before that landing. It does not need a
@@ -55,6 +62,130 @@ replay mechanics:
 `src/pyrung/core/analysis/init_constants.py` is a prover state-projection
 optimization for program-written first-scan constants. It is not the right
 home for externally supplied timer/counter values and should remain unchanged.
+
+## Design presumption to flesh out: one investigation path
+
+The working presumption is that expectation recovery is not a second
+correction system beside the current unexpected-channel investigation.
+Unexpected channel motion, an absent expected write, a same-scan overwrite,
+and a delayed consequence traced to an earlier steer are different evidence
+shapes for the same question:
+
+> Why did this steer's expectation fail, and what additional requirement makes
+> it survive replay?
+
+The intended common flow is:
+
+```text
+observe the steer expectation
+    fulfilled -> ordinary progress
+    ambiguous -> existing pending-departure evidence gathering
+    violated  -> one investigation path
+                   -> derive one nested requirement/correction
+                   -> compose it into the implicated steer
+                   -> replay from the causal anchor
+                   -> judge the original expectation again
+```
+
+This is a design presumption which must be validated against the current
+verification-time excursion, post-commit departure, and retained-replay paths.
+Implementation should not add a fourth orchestration loop and hope the
+corrections later converge.
+
+### Existing machinery which should grow a designation
+
+These owners appear structurally suitable. The expected change is primarily a
+broader input/output designation, not a duplicate mechanism:
+
+| Existing machinery | Broader designation to validate |
+| --- | --- |
+| `BearingObjective` / `ActPolicy.heading` | The steer's target-relative expectation and the boundary through which it must hold |
+| `_PulseState` / `_ExecutionEvidence` | The exact execution window in which an expectation is observed |
+| `verify.py` gates | Classify a factual expectation observation before applying ordinary spin/dead-end judgment |
+| `DepartureObservation` / `PendingDeparture` | The ambiguous arm when an observed channel movement may still be useful program motion |
+| `DeviationIncident` | The common bounded evidence for any proved expectation violation, not only a committed channel regression |
+| `investigate_deviation` / `investigate_excursion` | One expectation-investigation engine entered through evidence adapters |
+| `CorrectionHypothesis` | A proposed additional requirement on the implicated steer |
+| `compose_corrections` | The bounded transaction which nests requirements into that steer and replay-tests the composite |
+| `PilotRung` / correction receipts | Executable requirement lifetime and separately retained causal justification |
+| `_RecoveryOrigin`, checkpoints, and `RetainedOccurrence` | The causal anchor before the occurrence which needed the missing requirement |
+| `RetainedReplay` | Re-execution of a past-deadline steer/suffix under the composed requirement |
+| `CompassKnowledge` | Durable observations and attempt identity which survive rollback |
+| `progress.py` | Decide whether a committed landing is progress, ambiguous departure, or a violated expectation; do not derive a second kind of correction |
+
+The names do not all need to change. The important part is that their contracts
+say which stage they own. For example, `departure.py` may remain specialized
+channel classification while its regression result becomes one adapter into a
+general expectation investigation.
+
+### Machinery which appears genuinely new
+
+The current system does not yet have these contracts:
+
+1. **A steer-owned expectation.** A typed statement of the effect, selected
+   writer or producer, and survival boundary that execution is meant to test.
+   Composed steers may require a terminal expectation plus ordered intermediate
+   expectations; the cardinality must be decided explicitly.
+2. **An expectation observation.** An occurrence-aware result distinguishing
+   absent, appeared-then-overwritten, survived, and ambiguous. It must work for
+   bootstrap, pulses, batches, coasts, and retained replay.
+3. **An occurrence-targeted causal entry point.** Public recorded `cause()`
+   currently explains the committed boundary transition for a tag/scan. Pilot
+   also needs to ask about a selected transient write or overwriter by exact
+   occurrence, and about the reason a selected writer occurrence was absent.
+4. **A requirement with an occurrence deadline.** The logical condition,
+   selected writer, source occurrence, `(scan, ordinal)` deadline, and temporal
+   phase needed to decide compose-now versus re-anchor-and-replay.
+5. **A committed expectation receipt.** The link from a later causal chain back
+   to the earlier steer, source world, and satisfying occurrence it implicated.
+6. **Exact one-shot rearm evidence.** A receipt that a selected instruction's
+   hidden `_oneshot` memory key was cleared by a false scan, even when the
+   public world key did not move.
+7. **Attempt evidence distinct from proof.** `AttemptReceipt` prevents an
+   identical semantic replay; `NogoodProof` requires complete-domain evidence.
+8. **A bootstrap-steer adapter.** Boundary `0 -> 1` must produce the same
+   expectation/execution/incident contracts without pretending to be one of
+   the existing multi-scan coast modes.
+9. **Instruction-boundary inversion.** Timer/counter ownership can state its
+   completion relation today; recovery additionally needs to solve the
+   constraint which keeps that relation false or true through an exact
+   deadline.
+
+These should be introduced as the narrow seams consumed by existing
+investigation and replay machinery. They are not authorization to create a
+parallel expectation planner.
+
+### Questions which must be settled before implementation
+
+1. Is a steer expectation one terminal effect, a conjunction, or an ordered
+   chain? A `BatchPulse` and a program-owned startup scan can establish several
+   route nodes in one scan.
+2. What exact boundary ends the promise for each act: action scan, settle
+   window, owned channel boundary, committed landing, or an explicit
+   operation lifetime?
+3. Which component converts `ABSENT` into guard-false, spent, unavailable, or
+   unknown without duplicating `trace.py` writer selection?
+4. How are rung guard reads and instruction data reads combined for one exact
+   overwriter? `reads_observed_by_write()` alone is instruction-scoped and is
+   not the complete enabling-read set for a guarded write.
+5. What evidence changes an unexpected channel movement from ambiguous
+   `PendingDeparture` into a violated expectation? Existing earned-work and
+   departure classification should remain authoritative.
+6. How does a later recorded cause select the matching earlier expectation
+   receipt when several steers touched the same tag or invoked the same writer?
+   Exact epoch, occurrence ordinal, dynamic writer address, and source world
+   must fail closed on ambiguity.
+7. When several requirements target one steer, which are intersected, unioned,
+   ordered, superseded, or rejected as incompatible? Execution may meld them
+   into one composite, but provenance and lifetime must remain separate.
+8. What replay proof is sufficient to say the composite both neutralized the
+   later cause and preserved the original steer expectation, rather than merely
+   masking the failure or deleting useful work?
+9. Which existing empirical nogoods are really attempt receipts, and which
+   callers currently rely on their stronger exclusion semantics?
+
+Resolving these questions is part of the design work. The implementation
+sequence below should be revised as their owners become concrete.
 
 ## What the two fixtures prove today
 
@@ -142,6 +273,21 @@ specific value/writer whose execution is being tested.
 
 For the startup coast there is no operator action. Its expectation is the
 target and the target-relevant route nodes found in the one executed scan.
+
+When an expectation survives and the steer commits, retain an expectation
+receipt with the committed operation:
+
+```text
+ExpectationReceipt
+    source anchor and world key
+    physical act and active PilotRungs
+    expected effect and selected writer
+    exact occurrence which satisfied the expectation
+    boundary at which it was accepted
+```
+
+This is not a promise to execute a future suffix. It makes the historical
+decision causally addressable if a later departure traces back through it.
 
 ### Effect observation
 
@@ -270,6 +416,41 @@ This is the common entry into `corrections.py` and `investigate.py`. Committed
 channel departures still use `progress.py`; failed trial effects and startup
 landings should build the same `DeviationIncident`/replay evidence without
 first pretending the endpoint was useful progress.
+
+## Delayed consequences across committed steers
+
+A locally successful steer can create a delayed hazard:
+
+```text
+steer 3: Start=True -> Running appears and survives
+...
+steer 8: coast -> Alarm
+cause(Alarm) -> Watchdog.Done -> timer enabled during steer 3
+```
+
+`Start=True` worked and must not become a nogood. The later causal chain says
+that steer 3 was incomplete: it also needed the timer disabled, a safe preset,
+or another replay-proven condition before its deadline.
+
+Recovery origin is therefore selected by the exact causal occurrence, not by
+the most recent steer or checkpoint:
+
+1. `progress.py` detects the later departure or loss of target-relative work.
+2. Recorded `cause()` crosses committed operation boundaries and identifies
+   the earlier implicated occurrence.
+3. The matching expectation receipt identifies the decision and source world
+   which established it.
+4. `investigate.py` derives and replay-tests one additional requirement.
+5. `retained.py` re-anchors at the latest boundary before that occurrence and
+   replays the retained physical suffix under the correction.
+6. The outer loop discards the old reading and orients again from the corrected
+   landing.
+
+The correction may change an old steer without denying its original useful
+effect. Replay must prove both that the delayed cause was neutralized and that
+the steer still earns or preserves the target-relative work for which it was
+accepted. Existing investigation distinctions such as neutralization versus
+masking, continuation evidence, and correction self-defeat remain authoritative.
 
 ## Timer and counter deadline synthesis
 
@@ -435,6 +616,10 @@ frontier. It must not report that the route is impossible.
 - Route false guards back through the ordinary trace reader.
 - Build overwrite incidents from the exact expected and overwriting
   occurrences.
+- Store a committed expectation receipt so later `cause()` chains can identify
+  the earlier steer which established a delayed cause.
+- Select replay origin from that causal occurrence rather than defaulting to
+  the newest checkpoint.
 - Let `investigate.py` nest one correction into the selected steer using the
   existing bounded `compose_corrections` transaction.
 - Extend semantic attempt identity before enabling retries.
@@ -515,6 +700,20 @@ Given `~Timer.Done` contributing to a write while `Done` has never been true:
   retained consequence;
 - a prevention attempt replays from before that read; and
 - a current-state recovery separately clears any committed consequence.
+
+### Delayed consequence from an earlier successful steer
+
+Given a steer which reaches and preserves its immediate boundary but enables a
+timer or other delayed producer that causes a later departure:
+
+- the original steer remains locally successful and is not made a nogood;
+- the later departure's recorded cause crosses back to the exact earlier
+  occurrence and expectation receipt;
+- Pilot re-anchors before that earlier decision and adds the newly discovered
+  requirement to it;
+- replay preserves the original useful effect while neutralizing the delayed
+  cause; and
+- ordinary orientation resumes from the corrected replay landing.
 
 ### Exhausted search
 
