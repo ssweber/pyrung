@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+from pyrung import Bool, Int, Program, copy, rung
+from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
@@ -16,6 +18,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Reachable,
     StaticEdgeExclusionReason,
 )
+from pyrung.core.analysis.pilot.effects import EffectPathStep, expectation_from_writer
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
@@ -28,6 +31,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.options import (
     PrerequisiteRead,
+    RouteRead,
     WaitPrescription,
     WaitRead,
     _admit_trace_details,
@@ -37,15 +41,21 @@ from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _compass_route_actions,
     _compass_route_plan,
+    _LearnedAction,
     _LearnedWait,
     _PrerequisiteSeparation,
+    _prescribe_wait,
+    _read_learned_fallback,
     _RouteAndCompletionRead,
     _select_wait,
     _separate_prerequisites,
     _TraceAdmission,
+    _unique_learned_expectation,
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.pipeline_graph import (
+    StaticPath,
+    StaticTransitionEdge,
     StaticTransitionGraph,
     _best_static_path,
     _build_action_lookup,
@@ -1088,6 +1098,546 @@ def test_candidate_assembly_consumes_awaited_action_without_rereading(
     assert read.options[0].awaited_action_note == "program awaits Acknowledge"
 
 
+def test_awaited_required_shape_uses_exact_live_multivalue_guard(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.awaited_actions as awaited
+
+    transition = awaited._Transition(
+        to_value=12,
+        command_guards={"Written": frozenset({1}), "Live": frozenset({3, 5})},
+        target_tag="Request",
+        writer_node=7,
+    )
+    world = SimpleNamespace(
+        snapshot={"Channel": 11, "Live": 5, "Push": False},
+        steerable=frozenset({"Push"}),
+    )
+    monkeypatch.setattr(awaited, "_state_transitions", lambda *_args: [transition])
+    monkeypatch.setattr(awaited, "_button_writes", lambda *_args: {"Written": 1})
+
+    readings = awaited.awaited_actions(world, "Channel", ())
+
+    assert len(readings) == 1
+    assert readings[0].required_shape == (("Written", 1), ("Live", 5))
+
+    missing = SimpleNamespace(
+        snapshot={"Channel": 11, "Push": False},
+        steerable=world.steerable,
+    )
+    assert awaited.awaited_actions(missing, "Channel", ()) == ()
+
+
+def test_awaited_same_action_multiple_writers_is_order_independent_ambiguity(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.awaited_actions as awaited
+    from pyrung.core.analysis.pilot.compass import unique_legal_awaited_action
+
+    first = awaited._Transition(12, {"Command": frozenset({1})}, "RequestA", 7)
+    second = awaited._Transition(13, {"Command": frozenset({1})}, "RequestB", 3)
+    world = SimpleNamespace(
+        snapshot={"Channel": 11, "Push": False},
+        steerable=frozenset({"Push"}),
+    )
+    monkeypatch.setattr(awaited, "_button_writes", lambda *_args: {"Command": 1})
+
+    for transitions in ((first, second), (second, first)):
+        monkeypatch.setattr(
+            awaited,
+            "_state_transitions",
+            lambda *_args, _transitions=transitions: list(_transitions),
+        )
+        assert (
+            unique_legal_awaited_action(
+                world,
+                "Channel",
+                (),
+                action_avoided=lambda _action: False,
+            )
+            is None
+        )
+
+
+def _effect_collision_fixture():
+    action = Bool("ReceiptCollisionAction", external=True)
+    route_effect = Int("ReceiptRouteRequest")
+    trace_effect = Int("ReceiptTraceEffect")
+    program_effect = Int("ReceiptProgramEffect")
+    with Program() as program:
+        with rung(action):
+            copy(7, route_effect)
+        with rung(action):
+            copy(9, trace_effect)
+        with rung(action):
+            copy(11, program_effect)
+    return action, route_effect, trace_effect, program_effect, program, build_program_graph(program)
+
+
+def _collision_context(program, pdg):
+    return SimpleNamespace(
+        blocked_actions=frozenset(),
+        edge_tags=frozenset(),
+        pdg=pdg,
+        program=program,
+        target=TargetSpec("State", 17),
+    )
+
+
+def test_route_request_candidate_owns_route_writer_not_same_pair_trace() -> None:
+    action, request, trace_effect, _program_effect, program, pdg = _effect_collision_fixture()
+    pair = (action.name, True)
+    trace_detail = TraceAction(
+        *pair,
+        effect_path=(EffectPathStep(1, trace_effect.name, 9),),
+    )
+    admission = _TraceAdmission(
+        active_actions=(pair,),
+        actions=(pair,),
+        details=(trace_detail,),
+        detail_by_pair={pair: trace_detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    role = PipelineRoles("State", request_tags=frozenset({request.name}))
+    route = TransitionRoute(
+        destination_tag=request.name,
+        destination_value=7,
+        request_tag=request.name,
+        request_value=7,
+        source_constraints=(("State", 6),),
+        enablers=(pair,),
+        action_tags=frozenset({action.name}),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(6,),
+    )
+    edge = StaticTransitionEdge(
+        role=role,
+        from_value=6,
+        to_value=17,
+        action=pair,
+        request_tag=request.name,
+        request_value=7,
+        source_constraints=(("State", 6),),
+        enablers=(pair,),
+        route=route,
+    )
+    plan = StaticPath("State", 17, role, 17, (edge,))
+    separated = _PrerequisiteSeparation(admission, PrerequisiteRead(), None)
+
+    read = _assemble_candidate_read(
+        _RouteAndCompletionRead(admission, RouteRead(plan, (pair,)), None),
+        separated,
+        None,
+        None,
+        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+        _collision_context(program, pdg),
+        set(),
+    )
+
+    obligation = read.options[0].expectation.obligations[0]
+    assert obligation.tag == request.name
+    assert obligation.producer == (None, 0, ())
+    assert obligation.producer != (None, 1, ())
+
+
+def test_awaited_candidate_owns_awaited_writer_not_same_pair_trace() -> None:
+    action, _request, trace_effect, program_effect, program, pdg = _effect_collision_fixture()
+    pair = (action.name, True)
+    trace_detail = TraceAction(
+        *pair,
+        effect_path=(EffectPathStep(1, trace_effect.name, 9),),
+    )
+    admission = _TraceAdmission(
+        active_actions=(),
+        actions=(),
+        details=(trace_detail,),
+        detail_by_pair={pair: trace_detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    awaited = AwaitedAction(
+        pair,
+        "Command",
+        True,
+        (("Command", True),),
+        6,
+        17,
+        "await exact writer",
+        target_tag=program_effect.name,
+        writer_node=2,
+        required_shape=(("Command", True),),
+    )
+
+    read = _assemble_candidate_read(
+        _RouteAndCompletionRead(admission, None, None),
+        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+        None,
+        awaited,
+        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+        _collision_context(program, pdg),
+        set(),
+    )
+
+    obligation = read.options[0].expectation.obligations[0]
+    assert obligation.tag == program_effect.name
+    assert obligation.producer == (None, 2, ())
+    assert obligation.required_shape == (("Command", True),)
+    assert obligation.boundary == (program_effect.name, 17)
+    assert read.options[0].bearing_channel_tag == program_effect.name
+
+
+def test_program_input_candidate_owns_required_input_path_and_broad_paths_survive() -> None:
+    action, _request, trace_effect, program_effect, program, pdg = _effect_collision_fixture()
+    pair = (action.name, True)
+    program_detail = TraceAction(
+        *pair,
+        effect_path=(EffectPathStep(2, program_effect.name, 11),),
+    )
+    trace_detail = TraceAction(
+        *pair,
+        effect_path=(EffectPathStep(1, trace_effect.name, 9),),
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        pdg.rung_nodes[2],
+        None,
+        None,
+        required_inputs=(program_detail,),
+        input_handoffs=(
+            ProgramInputHandoff(pair, Eq(program_effect.name, frozenset({11})), "State"),
+        ),
+    )
+    admission = _TraceAdmission(
+        active_actions=(pair,),
+        actions=(pair,),
+        details=(trace_detail,),
+        detail_by_pair={pair: trace_detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    wait = WaitRead(None, program_step=step)
+    read = _assemble_candidate_read(
+        _RouteAndCompletionRead(admission, None, wait),
+        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+        None,
+        None,
+        SimpleNamespace(snap={action.name: False}, tree=TraceNode("State", 17)),
+        _collision_context(program, pdg),
+        set(),
+    )
+    obligation = read.options[0].expectation.obligations[0]
+    assert obligation.tag == program_effect.name
+    assert obligation.producer == (None, 2, ())
+
+    broad = ("BroadReceipt", True)
+    low_a = ("LowReceiptA", True)
+    low_b = ("LowReceiptB", True)
+    first = TraceAction(*broad, effect_path=(EffectPathStep(0, "First", 1),))
+    second = TraceAction(*broad, effect_path=(EffectPathStep(1, "Second", 1),))
+    broad_admission = replace(
+        admission,
+        active_actions=(broad, low_a, low_b),
+        actions=(broad, low_a, low_b),
+        details=(first, second),
+        detail_by_pair={broad: first},
+    )
+    broad_ctx = SimpleNamespace(
+        **{
+            **vars(_collision_context(program, pdg)),
+            "pdg": SimpleNamespace(
+                rung_nodes=pdg.rung_nodes,
+                downstream_slice=lambda tag, **_kwargs: (
+                    tuple(range(100)) if tag == broad[0] else ()
+                ),
+            ),
+        }
+    )
+    broad_read = _assemble_candidate_read(
+        _RouteAndCompletionRead(broad_admission, None, None),
+        _PrerequisiteSeparation(broad_admission, PrerequisiteRead(), None),
+        None,
+        None,
+        SimpleNamespace(snap={}, tree=TraceNode("Target", True)),
+        broad_ctx,
+        set(),
+    )
+    broad_options = [option for option in broad_read.options if option.pair == broad]
+    assert [option.expectation.obligations[0].producer for option in broad_options] == [
+        (None, 0, ()),
+        (None, 1, ()),
+    ]
+
+
+def test_widening_expectation_is_scoped_to_exact_artifact_primary_path() -> None:
+    action_a = Bool("WidenA", external=True)
+    action_b = Bool("WidenB", external=True)
+    action_c = Bool("WidenC", external=True)
+    effect_a = Int("WidenEffectA")
+    effect_alt = Int("WidenEffectAlt")
+    effect_c = Int("WidenEffectC")
+    with Program() as program:
+        with rung(action_a):
+            copy(1, effect_a)
+        with rung(action_a):
+            copy(2, effect_alt)
+        with rung(action_c):
+            copy(3, effect_c)
+    pdg = build_program_graph(program)
+    active = ((action_a.name, True), (action_b.name, True), (action_c.name, True))
+    detail_a = TraceAction(*active[0], effect_path=(EffectPathStep(0, effect_a.name, 1),))
+    detail_alt = TraceAction(*active[0], effect_path=(EffectPathStep(1, effect_alt.name, 2),))
+    detail_c = TraceAction(*active[2], effect_path=(EffectPathStep(2, effect_c.name, 3),))
+
+    def assemble(details):
+        admission = _TraceAdmission(
+            active_actions=active,
+            actions=active,
+            details=details,
+            detail_by_pair={detail.pair: detail for detail in details},
+            managed_boolean_rungs=(),
+            establish_pending=False,
+        )
+        return _assemble_candidate_read(
+            _RouteAndCompletionRead(admission, None, None),
+            _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+            None,
+            None,
+            SimpleNamespace(snap={}, tree=TraceNode("Target", True)),
+            _collision_context(program, pdg),
+            set(),
+        )
+
+    # A later member's path cannot become the width-2 artifact's promise.
+    assert assemble((detail_c,)).widening_expectations == ()
+    # Same-pair producer alternatives are ambiguity, not iteration-order choice.
+    assert assemble((detail_a, detail_alt, detail_c)).widening_expectations == ()
+
+    exact = assemble((detail_a, detail_c)).widening_expectations
+    assert tuple(artifact for artifact, _expectation in exact) == (active[:2], active[:3])
+    assert all(
+        expectation.obligations[0].producer == (None, 0, ()) for _artifact, expectation in exact
+    )
+
+
+def test_two_hop_learned_path_retains_first_edge_expectation() -> None:
+    first_action = ("FirstHop", True)
+    second_action = ("SecondHop", True)
+    _action, request, trace_effect, _program_effect, program, pdg = _effect_collision_fixture()
+    first_expectation = expectation_from_writer(
+        pdg, program, writer_node=0, tag=request.name, value=7
+    )
+    second_expectation = expectation_from_writer(
+        pdg, program, writer_node=1, tag=trace_effect.name, value=9
+    )
+    assert first_expectation is not None and second_expectation is not None
+    compass = Compass()
+    compass, _changed = compass.apply(
+        (
+            CompassObservation(
+                "edge",
+                "LearnedState",
+                first_action,
+                0,
+                1,
+                None,
+                (),
+                (first_action,),
+                first_expectation,
+            ),
+            CompassObservation(
+                "edge",
+                "LearnedState",
+                second_action,
+                1,
+                2,
+                None,
+                (),
+                (second_action,),
+                second_expectation,
+            ),
+        )
+    )
+    admission = _TraceAdmission((), (), (), {}, (), False)
+    frame = SimpleNamespace(
+        key=("learned",),
+        snap={"LearnedState": 0},
+        tree=TraceNode("LearnedState", 2),
+    )
+    ctx = SimpleNamespace(
+        compass=compass,
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+    )
+
+    learned = _read_learned_fallback(
+        _RouteAndCompletionRead(admission, None, None),
+        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+        frame,
+        SimpleNamespace(),
+        ctx,
+        set(),
+    )
+
+    assert isinstance(learned, _LearnedAction)
+    assert learned.action == first_action
+    assert learned.expectation is first_expectation
+
+
+def test_learned_first_edge_requires_one_semantic_expectation_regardless_of_order() -> None:
+    _action, request, trace_effect, _program_effect, program, pdg = _effect_collision_fixture()
+    cause = ("SharedCause", True)
+    first = expectation_from_writer(
+        pdg,
+        program,
+        writer_node=0,
+        tag=request.name,
+        value=7,
+    )
+    second = expectation_from_writer(
+        pdg,
+        program,
+        writer_node=1,
+        tag=trace_effect.name,
+        value=9,
+    )
+    repeated = expectation_from_writer(
+        pdg,
+        program,
+        writer_node=0,
+        tag=request.name,
+        value=7,
+    )
+    assert first is not None and second is not None and repeated is not None
+
+    def entry(expectation):
+        return (0, cause, SimpleNamespace(to_val=1, expectation=expectation))
+
+    for entries in ((entry(first), entry(second)), (entry(second), entry(first))):
+        assert (
+            _unique_learned_expectation(
+                entries,
+                source=0,
+                cause=cause,
+                destination=1,
+            )
+            is None
+        )
+
+    retained = _unique_learned_expectation(
+        (entry(first), entry(repeated)),
+        source=0,
+        cause=cause,
+        destination=1,
+    )
+    assert retained is first
+
+
+def test_program_owned_coasts_promise_command_producer_for_every_status(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.program_step as program_step
+
+    automatic = Bool("ProgramCoastAutomatic", external=True)
+    command = Int("ProgramCoastCommand")
+    state_tag = Int("ProgramCoastState")
+    first_guard = Int("ProgramCoastFirstGuard", default=1)
+    last_guard = Int("ProgramCoastLastGuard", default=2)
+    input_action = Bool("ProgramCoastInput", external=True)
+    with Program() as program:
+        with rung(automatic):
+            copy(7, command)
+        # Deliberately disagrees with edge category/tag order and repeats the
+        # command read.  The promise must follow consumer evaluation order.
+        with rung(last_guard == 2, command == 7, first_guard == 1, command == 7):
+            copy(17, state_tag)
+    pdg = build_program_graph(program)
+    producer = Producer(0, "program", frozenset({automatic.name}), frozenset(), command.name, 7)
+    role = PipelineRoles(state_tag.name)
+    route = TransitionRoute(
+        destination_tag=state_tag.name,
+        destination_value=17,
+        request_tag=None,
+        request_value=None,
+        source_constraints=((first_guard.name, 1), (command.name, 7)),
+        enablers=((last_guard.name, 2),),
+        action_tags=frozenset(),
+        writer_node=1,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(6,),
+    )
+    edge = StaticTransitionEdge(
+        role=role,
+        from_value=6,
+        to_value=17,
+        action=None,
+        request_tag=None,
+        request_value=None,
+        source_constraints=((first_guard.name, 1), (command.name, 7)),
+        enablers=((last_guard.name, 2),),
+        route=route,
+        program_producers=(producer,),
+    )
+    boundary = Eq(state_tag.name, frozenset({17}))
+    base = dict(
+        producer=producer,
+        boundary=boundary,
+        channel=state_tag.name,
+    )
+    steps = (
+        ProgramStep(ProgramStepStatus.KEEP_RUNNING, **base),
+        ProgramStep(
+            ProgramStepStatus.NEEDS_INPUT,
+            **base,
+            required_inputs=(TraceAction(input_action.name, True),),
+            input_handoffs=(
+                ProgramInputHandoff((input_action.name, True), boundary, state_tag.name),
+            ),
+        ),
+        ProgramStep(ProgramStepStatus.INTERRUPTED, **base),
+    )
+    ctx = SimpleNamespace(
+        pdg=pdg,
+        program=program,
+        steerable=frozenset({input_action.name}),
+        opaque_loop=frozenset(),
+        domain_prior=None,
+        clear_only=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        pipeline_roles=(),
+        avoid_pred=None,
+        resting={input_action.name: False},
+    )
+    frame = SimpleNamespace(
+        snap={
+            state_tag.name: 6,
+            command.name: 0,
+            first_guard.name: 1,
+            last_guard.name: 2,
+        }
+    )
+    state = SimpleNamespace(work=SimpleNamespace(), pilot_rungs=())
+
+    for step in steps:
+        monkeypatch.setattr(
+            program_step, "read_program_step", lambda *_args, _step=step, **_kw: _step
+        )
+        read = _prescribe_wait(edge, frame, state, ctx)
+        assert read.prescription is not None
+        expectation = read.prescription.expectation
+        assert expectation is not None
+        obligation = expectation.obligations[0]
+        assert obligation.tag == command.name
+        assert obligation.value == 7
+        assert obligation.producer == (None, 0, ())
+        assert obligation.consumer == (None, 1, ())
+        assert obligation.required_shape == (
+            (last_guard.name, 2),
+            (command.name, 7),
+            (first_guard.name, 1),
+            (command.name, 7),
+        )
+
+
 def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None:
     admission = _TraceAdmission(
         active_actions=(),
@@ -1169,6 +1719,29 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
     assert [batch.actions for batch in admitted.crossing_batches] == [(("A", 1), ("B", 1))]
     assert blocked.crossing_batches == ()
     assert invalidated.crossing_batches == ()
+
+
+def test_crossing_effect_shape_excludes_heuristic_and_relational_children() -> None:
+    from pyrung.core.analysis.pilot.trace import _crossing_at_node
+
+    branch = TraceCrossingBranch(
+        actions=(TraceAction("Action", True),),
+        fidelity=CrossingFidelity((), "cross", True, True, False),
+    )
+    node = TraceNode(
+        "Effect",
+        1,
+        writer_rung=4,
+        children=[
+            TraceNode("Concrete", 7),
+            TraceNode("Heuristic", 8, heuristic=True),
+            TraceNode("Relational", 9, relational=True),
+        ],
+    )
+
+    receipt = _crossing_at_node(node, branch)
+
+    assert receipt.effect_path[0].local_requirements == (("Concrete", 7),)
 
 
 def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:

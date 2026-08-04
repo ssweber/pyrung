@@ -16,6 +16,7 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.effects import EffectExpectation
     from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.trace import TraceChoice
@@ -103,6 +104,14 @@ class ActSource(StrEnum):
     TERMINAL = "terminal"
 
 
+class ExpectationExemption(StrEnum):
+    """Why an act deliberately makes no producer promise."""
+
+    AMBIENT_TERMINAL = "ambient_terminal"
+    LEGACY_RETAINED_REPLAY = "legacy_retained_replay"
+    UNRESOLVED_EFFECT = "unresolved_effect"
+
+
 @dataclass(frozen=True)
 class RouteEdgeContext:
     """The outer chart edge served by an immediate channel heading."""
@@ -142,6 +151,12 @@ class ActPolicy:
     downstream_reach: int | None = None
     note: str = ""
     context_actions: tuple[_ActionPair, ...] = ()
+    expectation: EffectExpectation | None = None
+    expectation_exemption: ExpectationExemption | None = None
+
+    def __post_init__(self) -> None:
+        if self.expectation is not None and self.expectation_exemption is not None:
+            raise ValueError("an act cannot both promise and exempt an effect")
 
     @property
     def primary_action(self) -> _ActionPair | None:
@@ -237,7 +252,11 @@ class Coast:
 class Dwell:
     """One bounded verified dwell after a terminal coast receipt."""
 
-    policy: ActPolicy = ActPolicy(ActSource.TERMINAL, motion=MotionKind.COAST_HOLDING_WORLD)
+    policy: ActPolicy = ActPolicy(
+        ActSource.TERMINAL,
+        motion=MotionKind.COAST_HOLDING_WORLD,
+        expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
+    )
 
 
 @dataclass(frozen=True)
@@ -307,6 +326,12 @@ class Bearing:
     prerequisites: tuple[PilotRung, ...] = ()
     rationale: str = ""
     orientation: OrientationRead | None = None
+
+    @property
+    def expectation(self) -> EffectExpectation | None:
+        """The act-owned obligation, exposed without rebuilding policy."""
+
+        return self.act.policy.expectation
 
 
 @dataclass(frozen=True)

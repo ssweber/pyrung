@@ -30,7 +30,10 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReceipt,
     earned_work_is_useful_motion,
 )
+from pyrung.core.analysis.pilot.effects import observe_execution_window
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    Coast,
+    Dwell,
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
@@ -75,6 +78,29 @@ class _SpinVerdict(Enum):
     PASS = auto()
     SPIN = auto()
     EXCURSION = auto()
+
+
+def _rebind_replay_attempt(
+    attempt: _ExecutedAttempt,
+    replay_trial: _PulseState,
+) -> _ExecutedAttempt:
+    """Replace a replayed fork and recompute, never retain, effect facts."""
+
+    effect_observations = observe_execution_window(
+        attempt.bearing.expectation,
+        replay_trial.fork,
+        scan_before=replay_trial.scan_before,
+        action_scan=(
+            None if isinstance(attempt.bearing.act, (Coast, Dwell)) else replay_trial.action_scan
+        ),
+        coast_receipt=replay_trial.coast_receipt,
+        timeline=replay_trial.timeline,
+    )
+    return replace(
+        attempt,
+        pulse=replay_trial,
+        effect_observations=effect_observations,
+    )
 
 
 def _avoid_names_after_clear(
@@ -167,6 +193,9 @@ def _accepted_trial(
         channel_motion=channel_motion,
         coast_receipt=pulse.coast_receipt,
         timeline=pulse.timeline,
+        effect_observations=tuple(
+            observation.diagnostic_snapshot() for observation in attempt.effect_observations
+        ),
     )
     return _AcceptedTrial(
         attempt=attempt,
@@ -751,7 +780,7 @@ def verify_excursion_replay(
         trial.channel_motion if trial.channel_motion.active else declared_motion,
     )
     replay_trial = replace(replay_trial, channel_motion=channel_motion)
-    replay_attempt = replace(attempt, pulse=replay_trial)
+    replay_attempt = _rebind_replay_attempt(attempt, replay_trial)
     return _verify_after_spin(
         replay_attempt,
         frame,
@@ -926,6 +955,14 @@ def _verify_gates(
         ctx.target.predicate,
     ):
         return _accept_target()
+
+    # Read the selected effect before generic spin/dead-end judgment.  A
+    # proved violation is occurrence evidence, not an action nogood; Phase 4
+    # may turn it into a narrower requirement without changing producers.
+    # ``attempt.effect_observations`` was classified before entry to these
+    # generic gates. Phase 3 carries and records it separately; Phase 4 owns
+    # turning a proved violation into an actionable requirement. It is not a
+    # gate event, rejection, or nogood yet.
 
     spin_verdict = _gate_spin(
         trial,

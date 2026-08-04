@@ -45,6 +45,9 @@ class AwaitedAction:
     from_state: Any
     to_state: Any
     note: str
+    target_tag: str = ""
+    writer_node: int = -1
+    required_shape: tuple[tuple[str, Any], ...] = ()
 
 
 def _rung_condition(ctx: WalkContext, rung_idx: int) -> Any:
@@ -63,6 +66,8 @@ class _Transition:
 
     to_value: Any
     command_guards: dict[str, frozenset[Any]]  # non-channel constraints (Cmd==5, CmdReq==1)
+    target_tag: str
+    writer_node: int
 
 
 def _state_transitions(
@@ -80,8 +85,8 @@ def _state_transitions(
     must produce for the transition to fire.
     """
     transitions: list[_Transition] = []
-    for target in {channel_tag} | set(request_tags):
-        for ri in ctx.pdg.writers_of.get(target, frozenset()):
+    for target in sorted({channel_tag} | set(request_tags)):
+        for ri in sorted(ctx.pdg.writers_of.get(target, frozenset())):
             ro, cond = _rung_condition(ctx, ri)
             if cond is None:
                 continue
@@ -98,7 +103,14 @@ def _state_transitions(
                 continue
             written = _written_value_for_tag(ro, target)
             to_value = written.value if isinstance(written, Literal) else None
-            transitions.append(_Transition(to_value=to_value, command_guards=guards))
+            transitions.append(
+                _Transition(
+                    to_value=to_value,
+                    command_guards=guards,
+                    target_tag=target,
+                    writer_node=ri,
+                )
+            )
     return transitions
 
 
@@ -142,7 +154,7 @@ def _transition_fires(
         if tag in writes:
             if not any(_values_match(writes[tag], v) for v in vals):
                 return False
-        elif not any(_values_match(snapshot.get(tag), v) for v in vals):
+        elif tag not in snapshot or not any(_values_match(snapshot[tag], v) for v in vals):
             return False
     return True
 
@@ -172,10 +184,7 @@ def awaited_actions(
         return ()
 
     candidates: list[AwaitedAction] = []
-    seen_buttons: set[str] = set()
     for button in sorted(ctx.steerable):
-        if button in seen_buttons:
-            continue
         action = (button, True)
         writes = _button_writes(ctx, button, snapshot)
         if not writes:
@@ -188,7 +197,6 @@ def awaited_actions(
             if transition.to_value is not None and _values_match(transition.to_value, state_value):
                 continue
             command_desc = ", ".join(f"{t}={writes[t]!r}" for t in sorted(writes) if t in writes)
-            seen_buttons.add(button)
             command_writes = tuple(
                 sorted((tag, writes[tag]) for tag in transition.command_guards if tag in writes)
             )
@@ -200,13 +208,22 @@ def awaited_actions(
                     command_writes=command_writes,
                     from_state=state_value,
                     to_state=transition.to_value,
+                    target_tag=transition.target_tag,
+                    writer_node=transition.writer_node,
+                    required_shape=tuple(
+                        # The transition check above proved the actual input
+                        # presented to every guard.  Preserve that exact
+                        # occurrence value: choosing one member of a
+                        # multi-value guard would invent a scan-0 read.
+                        (tag, writes[tag] if tag in writes else snapshot[tag])
+                        for tag in transition.command_guards
+                    ),
                     note=(
                         f"program-awaited action: {channel_tag}={state_value!r} awaits "
                         f"{button} ({command_desc}) -> {channel_tag}={transition.to_value!r}"
                     ),
                 )
             )
-            break
 
     return tuple(candidates)
 

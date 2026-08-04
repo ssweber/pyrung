@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     CrossingFidelity,
     Dwell,
+    ExpectationExemption,
     NavigationConstraints,
     NeedProbe,
     OrientationWorld,
@@ -90,6 +91,8 @@ def _options(
     active_trace_actions=(),
     wait=None,
     crossing_batches=(),
+    batch_expectation=None,
+    widening_expectation=None,
 ):
     return CandidateRead(
         trace=_TraceAdmission(
@@ -105,11 +108,130 @@ def _options(
         wait=wait,
         prerequisites=PrerequisiteRead(),
         learned_batch=(
-            LearnedBatchRead(prescribed_batch) if prescribed_batch is not None else None
+            LearnedBatchRead(prescribed_batch, batch_expectation)
+            if prescribed_batch is not None
+            else None
         ),
         crossing_batches=crossing_batches,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
+        widening_expectations=(
+            ((active_trace_actions[:2], widening_expectation),)
+            if widening_expectation is not None
+            else ()
+        ),
     )
+
+
+def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coast(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    expectation = SimpleNamespace(obligations=(SimpleNamespace(tag="Effect"),))
+
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(
+            prescribed_batch=(("A", True), ("B", True)),
+            batch_expectation=expectation,
+        ),
+    )
+    learned = orientation._orient_read(compass, world, TargetSpec("Target", True))
+    assert isinstance(learned, Bearing)
+    assert isinstance(learned.act, BatchPulse)
+    assert learned.act.policy.expectation is expectation
+
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(
+            crossing_batches=(
+                CrossingBatchRead(
+                    (("A", True), ("B", True)),
+                    CrossingFidelity((), "cross", True, True, False),
+                    expectation,
+                ),
+            )
+        ),
+    )
+    crossing = orientation._orient_read(compass, world, TargetSpec("Target", True))
+    assert isinstance(crossing, Bearing)
+    assert crossing.act.policy.expectation is expectation
+
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(
+            active_trace_actions=(("A", True), ("B", True)),
+            widening_expectation=expectation,
+        ),
+    )
+    widening = orientation._orient_read(compass, world, TargetSpec("Target", True))
+    assert isinstance(widening, Bearing)
+    assert widening.act.policy.expectation is expectation
+
+    heading = ChannelHeading("State", 2)
+    monkeypatch.setattr(
+        orientation,
+        "_build_candidates",
+        lambda *_args: _options(
+            wait=WaitRead(WaitPrescription(heading, "program coast", expectation=expectation))
+        ),
+    )
+    coast = orientation._orient_read(compass, world, TargetSpec("Target", True))
+    assert isinstance(coast, Bearing)
+    assert isinstance(coast.act, Coast)
+    assert coast.act.policy.expectation is expectation
+
+
+def test_terminal_orientation_is_explicit_ambient_non_promise(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+
+    terminal = orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert isinstance(terminal, Bearing)
+    assert terminal.act.policy.expectation is None
+    assert terminal.act.policy.expectation_exemption == "ambient_terminal"
+
+
+def test_unresolved_executable_policies_are_explicitly_exempt(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    reads = (
+        _options(_candidate("A")),
+        _options(prescribed_batch=(("A", True), ("B", True))),
+        _options(
+            crossing_batches=(
+                CrossingBatchRead(
+                    (("A", True), ("B", True)),
+                    CrossingFidelity((), "cross", True, True, False),
+                    None,
+                ),
+            )
+        ),
+        _options(active_trace_actions=(("A", True), ("B", True))),
+        _options(wait=WaitRead(WaitPrescription(ChannelHeading("State", 2)))),
+    )
+
+    for candidate_read in reads:
+        monkeypatch.setattr(
+            orientation,
+            "_build_candidates",
+            lambda *_args, _read=candidate_read: _read,
+        )
+        bearing = orientation._orient_read(compass, world, TargetSpec("Target", True))
+        assert isinstance(bearing, Bearing)
+        assert bearing.act.policy.expectation is None
+        assert bearing.act.policy.expectation_exemption is ExpectationExemption.UNRESOLVED_EFFECT
 
 
 def _world(compass: Compass) -> OrientationWorld:
@@ -143,6 +265,7 @@ def _retained_act() -> RetainedReplay:
         policy=ActPolicy(
             source=ActSource.RETAINED,
             action_pairs=(("Guard", True),),
+            expectation_exemption=ExpectationExemption.LEGACY_RETAINED_REPLAY,
         ),
         occurrence=RetainedOccurrence(
             floor_scan=0,
@@ -156,6 +279,15 @@ def _retained_act() -> RetainedReplay:
         ),
         correction=correction,
     )
+
+
+def test_nonpromising_executable_policies_have_typed_exemptions() -> None:
+    retained = _retained_act()
+
+    assert Dwell().policy.expectation is None
+    assert Dwell().policy.expectation_exemption is ExpectationExemption.AMBIENT_TERMINAL
+    assert retained.policy.expectation is None
+    assert retained.policy.expectation_exemption is ExpectationExemption.LEGACY_RETAINED_REPLAY
 
 
 def test_live_continuation_outranks_retained_history_rewrite(monkeypatch) -> None:

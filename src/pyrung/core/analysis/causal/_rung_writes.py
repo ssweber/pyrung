@@ -162,6 +162,16 @@ class ScanRungWriteProjection:
             if read.ordinal < write.ordinal
         )
 
+    def observed_shape(self, consumer_read: RungRead) -> tuple[RungRead, ...]:
+        """All exact direct reads of one selected dynamic consumer occurrence.
+
+        This is factual projection only: it neither filters by nor reconstructs
+        the adjustable required-shape policy. Repeated reads remain distinct
+        occurrence records in ordinal order.
+        """
+
+        return self._reads_by_run.get(consumer_read.run_order, ())
+
     def observe_appeared_handoff(
         self,
         tag_name: str,
@@ -254,7 +264,13 @@ class ScanRungWriteProjection:
             if consumer_runs
             else None
         )
-        consumer_reads = self.reads_for_run(consumer_run) if consumer_run is not None else ()
+        consumer_reads = (
+            self.observed_shape(effect_read)
+            if effect_read is not None
+            else self.reads_for_run(consumer_run)
+            if consumer_run is not None
+            else ()
+        )
         consumer_boundary = (
             effect_read.ordinal
             if effect_read is not None
@@ -317,7 +333,7 @@ class ScanRungWriteProjection:
                     "UNKNOWN",
                     effect_write,
                     consumer_read=effect_read,
-                    observed_reads=tuple(matched_shape),
+                    observed_reads=consumer_reads,
                     detail=f"required consumer read {required_tag!r} did not occur",
                 )
             next_ordinal = observed.ordinal
@@ -345,7 +361,7 @@ class ScanRungWriteProjection:
                     effect_write,
                     consumer_read=effect_read,
                     displaced_read=observed,
-                    observed_reads=tuple(matched_shape),
+                    observed_reads=consumer_reads,
                     detail="required shape mismatch has no exact same-scan displacement",
                 )
             return OrderedEffectObservation(
@@ -354,7 +370,7 @@ class ScanRungWriteProjection:
                 consumer_read=effect_read,
                 displacement=displaced_by,
                 displaced_read=observed,
-                observed_reads=tuple(matched_shape),
+                observed_reads=consumer_reads,
             )
 
         if not effect_read.run.enabled:
@@ -370,7 +386,7 @@ class ScanRungWriteProjection:
             "SURVIVED",
             effect_write,
             consumer_read=effect_read,
-            observed_reads=tuple(matched_shape) or (effect_read,),
+            observed_reads=consumer_reads,
         )
 
     def _read_observes_write(self, read: RungRead, write: RungWrite) -> bool:

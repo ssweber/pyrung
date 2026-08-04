@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     Coast,
     Dwell,
+    ExpectationExemption,
     NavigationConstraints,
     NeedProbe,
     OrientationRead,
@@ -306,6 +307,7 @@ def _assemble_world(
             note=action.note,
             availability=action.availability,
             writer_path=action.writer_path,
+            effect_path=action.effect_path,
         )
         for action in tree.ordered_action_details()
     )
@@ -314,7 +316,7 @@ def _assemble_world(
         tree=tree,
         key=key,
         distance_before=tree.unsatisfied_count(),
-        raw_trace_actions=tuple(detail.pair for detail in details),
+        raw_trace_actions=tuple(dict.fromkeys(detail.pair for detail in details)),
         raw_trace_action_details=details,
     )
     return replace(
@@ -422,6 +424,9 @@ def _bearing(
     unchanged inside :class:`BearingObjective` through execution and
     verification; recovery consumes that receipt.
     """
+    policy = getattr(act, "policy", None)
+    if policy is None or (policy.expectation is None and policy.expectation_exemption is None):
+        raise ValueError("an executable bearing must promise or explicitly exempt an effect")
     orientation_read = OrientationRead(
         world_key=world.world_key,
         world=world,
@@ -449,6 +454,7 @@ def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolic
         if option.bearing_channel_tag is not None
         else None
     )
+    expectation = getattr(option, "expectation", None)
     return ActPolicy(
         source=option.source,
         action_pairs=(option.pair,),
@@ -459,6 +465,10 @@ def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolic
         downstream_reach=option.downstream_reach,
         note=option.awaited_action_note or option.program_note,
         context_actions=option.program_context_actions,
+        expectation=expectation,
+        expectation_exemption=(
+            ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+        ),
     )
 
 
@@ -505,6 +515,7 @@ def _orient_read(
             if wait_channel is not None
             else None
         )
+        expectation = prescription.expectation
         act = Coast(
             "bearing",
             ActPolicy(
@@ -512,6 +523,10 @@ def _orient_read(
                 nogood_pair=wait_nogood,
                 heading=heading,
                 motion=MotionKind.COAST_TO_BEARING,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
             ),
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -525,11 +540,16 @@ def _orient_read(
 
     if candidates.learned_batch is not None:
         actions = candidates.learned_batch.actions
+        expectation = candidates.learned_batch.expectation
         act = BatchPulse(
             ActPolicy(
                 source=ActSource.LEARNED_BATCH,
                 action_pairs=actions,
                 applied=actions,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
             )
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -542,11 +562,16 @@ def _orient_read(
             )
 
     for branch in candidates.crossing_batches:
+        expectation = branch.expectation
         policy = ActPolicy(
             source=ActSource.CROSSING,
             action_pairs=branch.actions,
             applied=branch.actions,
             note=branch.reason,
+            expectation=expectation,
+            expectation_exemption=(
+                ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+            ),
         )
         fidelity = branch.fidelity
         act = (
@@ -592,11 +617,23 @@ def _orient_read(
     active = candidates.trace.active_actions
     for width in range(2, len(active) + 1):
         actions = active[:width]
+        expectation = next(
+            (
+                promised
+                for artifact, promised in candidates.widening_expectations
+                if artifact == actions
+            ),
+            None,
+        )
         act = BatchPulse(
             ActPolicy(
                 source=ActSource.WIDENING,
                 action_pairs=actions,
                 applied=actions,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
             )
         )
         if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
@@ -652,6 +689,7 @@ def _orient_read(
             ActPolicy(
                 source=ActSource.TERMINAL,
                 motion=MotionKind.COAST_HOLDING_WORLD,
+                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
             ),
         )
         rationale = "hold the current macro-state and allow program motion"
@@ -660,6 +698,7 @@ def _orient_read(
             ActPolicy(
                 source=ActSource.TERMINAL,
                 motion=MotionKind.COAST_HOLDING_WORLD,
+                expectation_exemption=ExpectationExemption.AMBIENT_TERMINAL,
             )
         )
         rationale = "terminal coast already observed; run one verified dwell"

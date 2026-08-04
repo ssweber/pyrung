@@ -1264,9 +1264,15 @@ def _pilot_loop_events(
         last_frontier = frontier
         _prepare_oriented_result(state, result, orientation_world, frame)
         state.watch_tags.extend(sorted(frame.tree.pivot_tags() - set(state.watch_tags)))
+        frame_lever_notes: dict[str, str] = {}
         for action in frame.raw_trace_action_details:
             if action.note:
-                state.lever_notes[action.tag] = action.note
+                # Same physical lever may now retain several alternative
+                # producer expectations. Diagnostics keep the established
+                # first selected path rather than letting a later alternative
+                # silently replace its note.
+                frame_lever_notes.setdefault(action.tag, action.note)
+        state.lever_notes.update(frame_lever_notes)
         for branch in frame.tree.ordered_crossing_branches():
             for action in branch.actions:
                 if action.note:

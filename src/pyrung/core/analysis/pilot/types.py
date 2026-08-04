@@ -29,6 +29,10 @@ if TYPE_CHECKING:
         BootstrapEffectSnapshot,
     )
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
+    from pyrung.core.analysis.pilot.effects import (
+        EffectObservation,
+        EffectObservationSnapshot,
+    )
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.navigation_contracts import (
         ActPolicy,
@@ -646,11 +650,13 @@ class _ExecutionEvidence:
     channel_motion: ChannelMotion
     coast_receipt: CoastReceipt | None
     timeline: tuple[CoastTriggerEvent, ...]
+    effect_observations: tuple[EffectObservationSnapshot, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
         object.__setattr__(self, "after_snap", MappingProxyType(dict(self.after_snap)))
         object.__setattr__(self, "timeline", tuple(self.timeline))
+        object.__setattr__(self, "effect_observations", tuple(self.effect_observations))
 
     @property
     def accelerators(self) -> tuple[_ActionPair, ...]:
@@ -991,6 +997,7 @@ class _ExecutedAttempt:
 
     pulse: _PulseState
     bearing: Bearing
+    effect_observations: tuple[EffectObservation, ...] = ()
 
 
 @dataclass(frozen=True)

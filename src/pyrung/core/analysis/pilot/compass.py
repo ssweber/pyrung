@@ -163,6 +163,7 @@ class CompassObservation:
     # verify that the trial actually exercised the guarded artifact.
     context: tuple[ActionPair, ...] = ()
     applied: tuple[ActionPair, ...] = ()
+    expectation: Any = None
 
     def __post_init__(self) -> None:
         if is_action(self.cause) and not self.applied:
@@ -286,6 +287,7 @@ class CompassEntry(PRecord):
     applied = _precord_field(initial=())
     to_val = _precord_field()
     provenance = _precord_field(type=Provenance)
+    expectation = _precord_field(initial=None)
 
     @property
     def is_live(self) -> bool:
@@ -344,6 +346,7 @@ def _table_record(
     provenance: Provenance,
     evidence_scope: EvidenceScope | None,
     applied: tuple[ActionPair, ...],
+    expectation: Any = None,
 ) -> tuple[PMap, bool]:
     """Write a live edge, overwriting only the same exact trial artifact.
 
@@ -372,6 +375,7 @@ def _table_record(
         applied=applied,
         to_val=to_val,
         provenance=provenance,
+        expectation=expectation,
     )
     if entries.get(key) == entry:
         return entries, False
@@ -827,6 +831,7 @@ class CompassKnowledge:
                     Provenance.OBSERVED,
                     evidence_scope,
                     applied,
+                    observation.expectation,
                 )
                 changed |= touched
             elif observation.kind == "contradict":

@@ -90,15 +90,19 @@ the current world.
 `RetainedReplay` on a fork. All modes converge on `verify.py`:
 
 1. Avoid and banked-work gates run before target acceptance.
-2. Spin, cycle, and dead-end gates reject locally provable failures.
-3. `outcome.py` classifies agency, bearing effect, target-relative progress,
+2. `effects.py` observes an act's selected producer-to-consumer obligation over
+   the exact execution window. Proved effect violations are recorded before
+   generic spin/dead-end judgment; Phase 3 alone neither rejects them nor
+   creates action nogoods.
+3. Spin, cycle, and dead-end gates reject locally provable failures.
+4. `outcome.py` classifies agency, bearing effect, target-relative progress,
    and frontier change. Passing makes the fork eligible for commit; it does not
    prove durable progress.
-4. A suspicious excursion is the exceptional branch.
+5. A suspicious excursion is the exceptional branch.
    `pilot.py::_resolve_excursion` invokes `investigate.py` at most once and
    passes the exact replay to `verify.verify_excursion_replay`, which continues
    the remaining gates.
-5. A rejected act records its observations and exact world-scoped nogood, then
+6. A rejected act records its observations and exact world-scoped nogood, then
    returns to orientation. PILOT never advances to a sibling from a retained
    candidate list.
 
@@ -269,6 +273,11 @@ this table only locates the owner.
 - Cold-start selected-path designation: `bootstrap.py::bootstrap_designations`;
   per-appeared-occurrence source, transaction, and consumer classification
   remains owned by `ScanRungWriteProjection.observe_appeared_handoff`
+- Selected steer obligation and window adapter: `effects.py`; `trace.py`
+  retains the exact selected path, `options.py` mints one immutable
+  `EffectExpectation`, and `ActPolicy` carries it unchanged. Required-shape
+  policy stays in `effects.py`; factual `observed_shape` and appeared-write
+  classification stay on `ScanRungWriteProjection`.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Retained occurrence reading and prefix replay: `retained.py`; it adapts
@@ -413,6 +422,8 @@ Static reading and orientation:
 - `program_step.py` — one-producer counterfactual proof
 - `bootstrap.py` — conservative cold-start designation and factual projection
   observation adapter
+- `effects.py` — act-owned effect obligations, required-shape policy, exact
+  execution-window observation, and detached recording snapshots
 - `navigation_contracts.py` — immutable navigation contracts
 - `retained.py` — retained occurrence evidence and one-Bearing prefix replay
 

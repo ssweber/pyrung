@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.avoid import _avoid_violations
 from pyrung.core.analysis.pilot.causal import action_caused_change as _action_caused_change
@@ -31,6 +32,10 @@ from pyrung.core.analysis.pilot.coast import (
     coast_departure_tags,
 )
 from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
+from pyrung.core.analysis.pilot.effects import (
+    expectation_from_writer,
+    observe_execution_window,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
@@ -78,6 +83,23 @@ _LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
 
 class StaleBearingError(RuntimeError):
     """The world changed after orientation and before execution."""
+
+
+def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
+    """Bind one declared expectation to its exact physical scan window."""
+
+    return _ExecutedAttempt(
+        pulse=pulse,
+        bearing=bearing,
+        effect_observations=observe_execution_window(
+            bearing.expectation,
+            pulse.fork,
+            scan_before=pulse.scan_before,
+            action_scan=(None if isinstance(bearing.act, (Coast, Dwell)) else pulse.action_scan),
+            coast_receipt=pulse.coast_receipt,
+            timeline=pulse.timeline,
+        ),
+    )
 
 
 def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, ...]) -> None:
@@ -270,6 +292,41 @@ def _compass_observations(
     """
     action_tag = cause[0] if is_action(cause) else None
     observations: list[CompassObservation] = []
+    learning_writes: list[Any] = []
+    if fork is not None and action_tag is not None:
+        assertion_scan = fork.state.scan_id if scan is None else scan
+        projection = fork._replay_rung_write_projection_at(assertion_scan)
+        if projection is not None:
+            learning_writes.extend(projection.writes)
+
+    def _learned_expectation(tag: str, value: Any) -> Any:
+        if fork is None or not hasattr(ctx, "pdg") or not hasattr(ctx, "program"):
+            return None
+        writer_ids: set[int] = set()
+        for write in learning_writes:
+            if (
+                not write.run.enabled
+                or write.transition.tag_name != tag
+                or not _values_match(write.transition.to_value, value)
+            ):
+                continue
+            matches = [
+                index
+                for index in ctx.pdg.writers_of.get(tag, frozenset())
+                if resolve_rung(ctx.program, ctx.pdg.rung_nodes[index]) is write.run.rung
+            ]
+            writer_ids.update(matches)
+        if len(writer_ids) != 1:
+            return None
+        return expectation_from_writer(
+            ctx.pdg,
+            ctx.program,
+            writer_node=next(iter(writer_ids)),
+            tag=tag,
+            value=value,
+            boundary=(tag, value),
+        )
+
     for n in frame.tree.iter_nodes():
         # pipeline_internal nodes are included: the learned table is the
         # pipeline instrument's own memory, and a live trial is the strongest
@@ -310,6 +367,7 @@ def _compass_observations(
                     world_key,
                     tuple(sorted(before_snap.items())),
                     applied,
+                    _learned_expectation(n.tag, new_v),
                 )
             )
         elif contradict_no_change:
@@ -405,7 +463,7 @@ def _try_action_batch(
         wait_before = wait_after
 
     result = verify_gates(
-        _ExecutedAttempt(pulse=trial, bearing=bearing),
+        _executed_attempt(bearing, trial),
         frame,
         state,
         ctx,
@@ -582,7 +640,7 @@ def _try_bearing_coast(
     )
 
     result = verify_gates(
-        _ExecutedAttempt(pulse=trial, bearing=bearing),
+        _executed_attempt(bearing, trial),
         frame,
         state,
         ctx,
@@ -722,7 +780,7 @@ def _try_terminal_letrun(
     )
 
     result = verify_gates(
-        _ExecutedAttempt(pulse=trial, bearing=bearing),
+        _executed_attempt(bearing, trial),
         frame,
         state,
         ctx,
@@ -827,7 +885,7 @@ def _try_terminal_dwell(
     # the "letrun" observe labels so commit folds the steady holds into the
     # recorded inputs the same way (the coast's driver is the held context).
     result = verify_gates(
-        _ExecutedAttempt(pulse=trial, bearing=bearing),
+        _executed_attempt(bearing, trial),
         frame,
         state,
         ctx,

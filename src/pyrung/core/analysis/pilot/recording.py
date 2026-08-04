@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.graph import PlanStep
+from pyrung.core.analysis.pilot.effects import expectation_snapshot
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -394,8 +395,25 @@ def _candidates_built_payload(
     wait = candidates.wait
     prescription = wait.prescription if wait is not None else None
     prerequisites = candidates.prerequisites.pilot_rungs
+    physical_candidates: list[Any] = []
+    seen_pairs: set[tuple[str, Any]] = set()
+    for candidate in candidates.options:
+        if candidate.pair in seen_pairs:
+            continue
+        seen_pairs.add(candidate.pair)
+        physical_candidates.append(_candidate_read_payload(candidate))
     return {
-        "candidates": tuple(_candidate_read_payload(c) for c in candidates.options),
+        # Keep the established physical option projection compact while the
+        # separate expectation view retains same-pair alternative producers.
+        "candidates": tuple(physical_candidates),
+        "candidate_expectations": tuple(
+            {
+                "pair": candidate.pair,
+                "expectation": expectation_snapshot(candidate.expectation),
+            }
+            for candidate in candidates.options
+            if candidate.expectation is not None
+        ),
         "trace_actions": candidates.trace.actions,
         "trace_action_details": candidates.trace.details,
         "active_trace_actions": candidates.trace.active_actions,
@@ -493,7 +511,17 @@ def _candidate_payload(policy: ActPolicy) -> dict[str, Any]:
         "provenance": policy.provenance,
         "downstream_reach": policy.downstream_reach,
         "prescribed": policy.source is not ActSource.TRACE,
+        "effect_expectation": expectation_snapshot(policy.expectation),
     }
+
+
+def _rejected_effect_observations(
+    attempt: _AttemptResult,
+) -> tuple[Any, ...]:
+    executed = attempt.executed
+    if executed is None:
+        return ()
+    return tuple(observation.diagnostic_snapshot() for observation in executed.effect_observations)
 
 
 def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
@@ -515,6 +543,7 @@ def _candidate_read_payload(candidate: _Candidate) -> dict[str, Any]:
         "provenance": candidate.provenance,
         "downstream_reach": candidate.downstream_reach,
         "prescribed": candidate.source is not ActSource.TRACE,
+        "effect_expectation": expectation_snapshot(candidate.expectation),
     }
 
 
@@ -616,6 +645,7 @@ def _bearing_coast_accepted_payload(trial: _AcceptedTrial) -> dict[str, Any]:
             receipt.timer_quanta_replayed if receipt is not None else None
         ),
         "snapshot": dict(execution.after_snap),
+        "effect_observations": execution.effect_observations,
     }
 
 
@@ -679,6 +709,7 @@ def _accepted_payload(
         "snapshot": dict(execution.after_snap),
         "scan_before": pulse.scan_before,
         "scan_after": pulse.fork.state.scan_id,
+        "effect_observations": execution.effect_observations,
     }
 
 
@@ -766,6 +797,7 @@ def _act_event(
                     {
                         "actions": act.applied,
                         "gates": attempt.gate_events,
+                        "effect_observations": _rejected_effect_observations(attempt),
                         "crossing": crossing,
                     },
                 )
@@ -801,6 +833,7 @@ def _act_event(
                     "applied": act.applied,
                     "co_actions": tuple(pair for pair in act.applied if pair != act.action),
                     "gates": attempt.gate_events,
+                    "effect_observations": _rejected_effect_observations(attempt),
                 },
             )
         assert trial is not None and frame is not None and state is not None
@@ -830,7 +863,14 @@ def _act_event(
             )
         if phase == "rejected":
             assert attempt is not None
-            return PilotEvent("bearing_coast_rejected", scan, {"gates": attempt.gate_events})
+            return PilotEvent(
+                "bearing_coast_rejected",
+                scan,
+                {
+                    "gates": attempt.gate_events,
+                    "effect_observations": _rejected_effect_observations(attempt),
+                },
+            )
         assert trial is not None
         return PilotEvent(
             "bearing_coast_accepted",
@@ -872,6 +912,7 @@ def _act_event(
             {
                 "actions": act.actions,
                 "gates": attempt.gate_events,
+                "effect_observations": _rejected_effect_observations(attempt),
                 "crossing": crossing,
             },
         )

@@ -41,6 +41,7 @@ from pyrung.core.analysis.pilot.availability import (
     _writer_availability,
     _WriterAvailability,
 )
+from pyrung.core.analysis.pilot.effects import EffectPathStep
 from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.overlay import OperationReceipt
 from pyrung.core.analysis.pilot.static_expressions import (
@@ -387,6 +388,9 @@ class TraceAction:
     # a read receipt, not a second route: candidate policy can inspect necessary
     # co-effects of the already-selected program path without retracing it.
     writer_path: tuple[int, ...] = ()
+    # Typed selected-path receipt used to mint the final producer-to-consumer
+    # expectation while candidate selection still knows the exact route.
+    effect_path: tuple[EffectPathStep, ...] = ()
 
     @property
     def pair(self) -> tuple[str, Any]:
@@ -404,6 +408,7 @@ class TraceCrossingBranch:
 
     actions: tuple[TraceAction, ...]
     fidelity: CrossingFidelity
+    effect_path: tuple[EffectPathStep, ...] = ()
 
     @property
     def pairs(self) -> tuple[tuple[str, Any], ...]:
@@ -632,6 +637,7 @@ class TraceNode:
         guard_atoms: tuple[Any, ...] = (),
         operation_boundary: tuple[str, Any] | None = None,
         writer_path: tuple[int, ...] = (),
+        effect_path: tuple[EffectPathStep, ...] = (),
     ) -> None:
         # Stage ordering remains structural: an unsatisfied enable ancestor puts
         # its leaves in stage 0. The exact operation boundary is broader than
@@ -652,6 +658,24 @@ class TraceNode:
         node_availability = max(path_availability, self.writer_availability)
         child_writer_path = (
             (*writer_path, self.writer_rung) if self.writer_rung is not None else writer_path
+        )
+        local_requirements = tuple(
+            (child.tag, child.value)
+            for child in self.children
+            if not child.heuristic and not child.relational
+        )
+        child_effect_path = (
+            (
+                *effect_path,
+                EffectPathStep(
+                    self.writer_rung,
+                    self.tag,
+                    self.value,
+                    local_requirements,
+                ),
+            )
+            if self.writer_rung is not None
+            else effect_path
         )
         # A self-advancing child is the clock/frontier that sibling steering
         # keeps alive.  The nearest such parent owns the action's lifetime.
@@ -704,6 +728,7 @@ class TraceNode:
                 tuple(child_guard_atoms),
                 child_operation_boundary,
                 child_writer_path,
+                child_effect_path,
             )
         if self.is_steerable:
             key = (self.tag, self.value)
@@ -721,10 +746,17 @@ class TraceNode:
                 note=self.note,
                 availability=node_availability,
                 writer_path=writer_path,
+                effect_path=effect_path,
             )
             if key in seen:
                 index = next(i for i, existing in enumerate(out) if existing.pair == key)
                 existing = out[index]
+                if existing.effect_path != detail.effect_path:
+                    # The same physical lever can serve distinct selected
+                    # producer paths. They are alternative expectations, not
+                    # one spliced conjunctive path.
+                    out.append(detail)
+                    return
                 out[index] = replace(
                     existing,
                     until=existing.until if existing.until is not None else detail.until,
@@ -737,6 +769,7 @@ class TraceNode:
                     note=existing.note or detail.note,
                     availability=max(existing.availability, detail.availability),
                     writer_path=tuple(dict.fromkeys((*existing.writer_path, *detail.writer_path))),
+                    effect_path=(existing.effect_path or detail.effect_path),
                 )
             else:
                 seen.add(key)
@@ -874,7 +907,26 @@ def _merge_crossing_branches(
             exact=exact,
             proposed=left.proposed or right.proposed,
         ),
+        effect_path=left.effect_path or right.effect_path,
     )
+
+
+def _crossing_at_node(node: TraceNode, branch: TraceCrossingBranch) -> TraceCrossingBranch:
+    if node.writer_rung is None:
+        return branch
+    step = EffectPathStep(
+        node.writer_rung,
+        node.tag,
+        node.value,
+        tuple(
+            (child.tag, child.value)
+            for child in node.children
+            if not child.heuristic and not child.relational
+        ),
+    )
+    if branch.effect_path and branch.effect_path[0] == step:
+        return branch
+    return replace(branch, effect_path=(step, *branch.effect_path))
 
 
 def _compose_crossing_subtree(
@@ -885,7 +937,7 @@ def _compose_crossing_subtree(
     """Return ``(has_crossing, atomic conjunction alternatives)`` for *node*."""
 
     if node.crossing_branches:
-        return True, node.crossing_branches
+        return True, tuple(_crossing_at_node(node, branch) for branch in node.crossing_branches)
     if node.satisfied:
         constraint = _trace_node_constraint(node)
         return False, (
@@ -939,7 +991,7 @@ def _compose_crossing_subtree(
         if not merged:
             return False, ()
         combined = tuple(merged)
-    return has_crossing, combined
+    return has_crossing, tuple(_crossing_at_node(node, branch) for branch in combined)
 
 
 def frontier_pairs(tree: TraceNode, snap: dict[str, Any]) -> tuple[tuple[str, Any], ...]:

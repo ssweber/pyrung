@@ -35,6 +35,12 @@ from pyrung.core.analysis.pilot.compass import (
     unique_legal_awaited_action,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import NavigationEvidence
+from pyrung.core.analysis.pilot.effects import (
+    EffectExpectation,
+    expectation_from_selected_path,
+    expectation_from_writer,
+    expectation_snapshot,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
@@ -93,6 +99,9 @@ class _Candidate:
     # route/awaited-action evidence and above an unrelated trace action.
     program_note: str = ""
     program_context_actions: tuple[_ActionPair, ...] = ()
+    # The exact consumer-relative reason this candidate was selected.  This is
+    # minted once from the rich trace receipt and must survive every lowering.
+    expectation: EffectExpectation | None = None
 
     @property
     def pair(self) -> _ActionPair:
@@ -128,6 +137,7 @@ class WaitPrescription:
     heading: ChannelHeading | None
     reason: str | None = None
     frontier: tuple[_ActionPair, ...] = ()
+    expectation: EffectExpectation | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +260,7 @@ class LearnedBatchRead:
     """One learned joint action retained as a single executable artifact."""
 
     actions: tuple[_ActionPair, ...]
+    expectation: EffectExpectation | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +269,7 @@ class CrossingBatchRead:
 
     actions: tuple[_ActionPair, ...]
     fidelity: CrossingFidelity
+    expectation: EffectExpectation | None = None
 
     @property
     def constraints(self) -> tuple[Any, ...]:
@@ -300,6 +312,10 @@ class CandidateRead:
     learned_batch: LearnedBatchRead | None = None
     crossing_batches: tuple[CrossingBatchRead, ...] = ()
     diagnosis: CandidateDiagnosis | None = None
+    # Exact widening artifact -> the sole selected primary-path promise.
+    # Missing entries are deliberately unresolved, never an invitation to
+    # borrow another active action's path.
+    widening_expectations: tuple[tuple[tuple[_ActionPair, ...], EffectExpectation], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -340,6 +356,7 @@ class _LearnedAction:
     """A learned transition whose next step is one action."""
 
     action: _ActionPair
+    expectation: EffectExpectation | None = None
 
 
 @dataclass(frozen=True)
@@ -922,6 +939,70 @@ def _boundary_heading(boundary: Any, frame: Any, state: Any) -> ChannelHeading |
     )
 
 
+class _RequirementReadTrace:
+    """Minimal condition context that journals exact direct tag-read order."""
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        self.values = values
+        self.reads: list[tuple[str, Any]] = []
+
+    def get_tag(self, name: str, default: Any = None) -> Any:
+        value = self.values.get(name, default)
+        self.reads.append((name, value))
+        return value
+
+    def get_memory(self, _key: str, _default: Any = None) -> Any:
+        raise RuntimeError("static consumer shape cannot resolve memory reads")
+
+    @property
+    def scan_id(self) -> int:
+        raise RuntimeError("static consumer shape cannot resolve scan-relative reads")
+
+
+def _ordered_consumer_required_shape(
+    consumer_rung: Any,
+    snapshot: Mapping[str, Any],
+    requirements: Sequence[_ActionPair],
+) -> tuple[_ActionPair, ...] | None:
+    """Lower exact guard values in the consumer's real evaluation order.
+
+    The selected edge supplies values, while the rung itself supplies
+    occurrence order.  Evaluating against their overlay also respects normal
+    series/parallel short-circuiting.  Unsupported scan-relative reads and
+    contradictory or unobserved edge facts fail closed.
+    """
+
+    missing = object()
+    known: dict[str, Any] = {}
+    for tag, value in requirements:
+        prior = known.get(tag, missing)
+        if prior is not missing and not _values_match(prior, value):
+            return None
+        known[tag] = value
+    if not known:
+        return ()
+
+    trace = _RequirementReadTrace({**snapshot, **known})
+    try:
+        # Branch runs journal only their local condition slice; inherited
+        # parent contacts belong to the parent run's distinct address.
+        start = getattr(consumer_rung, "_branch_condition_start", 0)
+        for condition in consumer_rung._conditions[start:]:
+            if not condition.evaluate(trace):
+                return None
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+        return None
+
+    ordered = tuple(
+        (tag, value)
+        for tag, value in trace.reads
+        if tag in known and _values_match(value, known[tag])
+    )
+    if set(known) != {tag for tag, _value in ordered}:
+        return None
+    return ordered
+
+
 def _prescribe_wait(
     edge: Any,
     frame: Any,
@@ -957,6 +1038,18 @@ def _prescribe_wait(
         edge.role.channel_tag,
         edge.from_value,
         edge.to_value,
+    )
+    route_expectation = (
+        expectation_from_writer(
+            ctx.pdg,
+            ctx.program,
+            writer_node=edge.route.writer_node,
+            tag=edge.route.destination_tag,
+            value=edge.route.destination_value,
+            boundary=(edge.role.channel_tag, edge.to_value),
+        )
+        if edge.route.destination_value is not None
+        else None
     )
 
     def _read(
@@ -1030,6 +1123,44 @@ def _prescribe_wait(
             state.pilot_rungs,
             resting=ctx.resting,
         )
+        route_writer = ctx.pdg.rung_nodes[edge.route.writer_node]
+        route_writer_reads = (
+            route_writer.condition_reads | route_writer.guard_reads | route_writer.data_reads
+        )
+        command_pair = (step.producer.command_tag, step.producer.command_value)
+        local_shape_requirements = [
+            pair
+            for pair in (*edge.source_constraints, *edge.enablers, *edge.completion)
+            if pair[0] in route_writer_reads
+        ]
+        if command_pair[0] in route_writer_reads:
+            local_shape_requirements.append(command_pair)
+        from pyrung.core.analysis.pdg import resolve_rung
+
+        consumer_rung = resolve_rung(ctx.program, route_writer)
+        local_shape = (
+            _ordered_consumer_required_shape(
+                consumer_rung,
+                frame.snap,
+                local_shape_requirements,
+            )
+            if consumer_rung is not None
+            else None
+        )
+        program_expectation = (
+            expectation_from_writer(
+                ctx.pdg,
+                ctx.program,
+                writer_node=step.producer.rung_index,
+                tag=step.producer.command_tag,
+                value=step.producer.command_value,
+                consumer_node=edge.route.writer_node,
+                required_shape=local_shape,
+                boundary=(edge.role.channel_tag, edge.to_value),
+            )
+            if local_shape is not None
+            else None
+        )
         preferred_channel = (
             edge.role.channel_tag
             if edge.role.channel_tag in step.preserve_channels
@@ -1072,6 +1203,7 @@ def _prescribe_wait(
                             boundary_heading.target_value,
                         ),
                     ),
+                    expectation=program_expectation,
                 ),
                 step=step,
             )
@@ -1094,6 +1226,7 @@ def _prescribe_wait(
                             f"{route_reason}; supply its current input and hand off to "
                             f"{boundary_heading.channel_tag}"
                         ),
+                        expectation=program_expectation,
                         frontier=(
                             (
                                 boundary_heading.channel_tag,
@@ -1119,6 +1252,7 @@ def _prescribe_wait(
                 WaitPrescription(
                     _route_heading(motion_heading),
                     f"{route_reason}; {step.reason}",
+                    expectation=program_expectation,
                 ),
                 step=step,
             )
@@ -1127,6 +1261,7 @@ def _prescribe_wait(
     prescription = WaitPrescription(
         _route_heading(),
         route_reason,
+        expectation=route_expectation,
     )
     details: tuple[TraceAction, ...] = ()
     frontier: tuple[_ActionPair, ...] = ()
@@ -1152,20 +1287,32 @@ def _admit_trace_details(
     """
 
     detail_by_pair: dict[_ActionPair, TraceAction] = {}
-    ordered_pairs: list[_ActionPair] = []
+    ordered_details: list[TraceAction] = []
     for detail in details:
         pair = detail.pair
-        existing = detail_by_pair.get(pair)
-        if existing is None:
-            detail_by_pair[pair] = detail
-            ordered_pairs.append(pair)
-        elif existing.until is None and detail.until is not None:
-            detail_by_pair[pair] = replace(existing, until=detail.until)
+        matching_index = next(
+            (
+                index
+                for index, existing in enumerate(ordered_details)
+                if existing.pair == pair and existing.effect_path == detail.effect_path
+            ),
+            None,
+        )
+        if matching_index is None:
+            ordered_details.append(detail)
+            detail_by_pair.setdefault(pair, detail)
+        else:
+            existing = ordered_details[matching_index]
+            if existing.until is None and detail.until is not None:
+                enriched = replace(existing, until=detail.until)
+                ordered_details[matching_index] = enriched
+                if detail_by_pair.get(pair) is existing:
+                    detail_by_pair[pair] = enriched
 
-    active_trace_actions = tuple(
-        pair
-        for pair in ordered_pairs
-        for detail in (detail_by_pair[pair],)
+    active_details = tuple(
+        detail
+        for detail in ordered_details
+        for pair in (detail.pair,)
         if _action_allowed(ctx, pair)
         and (
             not _values_match(frame.snap.get(pair[0]), pair[1])
@@ -1174,8 +1321,11 @@ def _admit_trace_details(
             or detail.until is not None
         )
     )
-    trace_actions = tuple(pair for pair in active_trace_actions if pair not in key_nogoods)
-    trace_action_details = tuple(detail_by_pair[pair] for pair in trace_actions)
+    trace_action_details = tuple(
+        detail for detail in active_details if detail.pair not in key_nogoods
+    )
+    trace_actions = tuple(dict.fromkeys(detail.pair for detail in trace_action_details))
+    active_trace_actions = tuple(dict.fromkeys(detail.pair for detail in active_details))
 
     managed_boolean_rungs, lowered_rung_pairs = _managed_boolean_rungs(
         trace_action_details, frame, state, ctx
@@ -1494,6 +1644,23 @@ def _read_learned_fallback(
         if not path:
             continue
         first_step = path[0]
+        first_destination = ctx.compass.knowledge.transition_dest(
+            node.tag,
+            current_value,
+            first_step,
+            world_key=frame.key,
+            snapshot=frame.snap,
+        )
+        learned_expectation = _unique_learned_expectation(
+            ctx.compass.knowledge.tag_entries(
+                node.tag,
+                world_key=frame.key,
+                snapshot=frame.snap,
+            ),
+            source=current_value,
+            cause=first_step,
+            destination=first_destination,
+        )
         if not is_action(first_step):
             return _LearnedWait(
                 _prescribe_wait(
@@ -1507,11 +1674,36 @@ def _read_learned_fallback(
         if is_composite_action(first_step):
             members = cast("tuple[_ActionPair, ...]", tuple(first_step))
             if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
-                return _LearnedBatch(LearnedBatchRead(members))
+                return _LearnedBatch(LearnedBatchRead(members, learned_expectation))
             continue
         if first_step not in key_nogoods and _action_allowed(ctx, first_step):
-            return _LearnedAction(first_step)
+            return _LearnedAction(first_step, learned_expectation)
     return None
+
+
+def _unique_learned_expectation(
+    entries: Any,
+    *,
+    source: Any,
+    cause: Any,
+    destination: Any,
+) -> EffectExpectation | None:
+    """Return one semantic first-edge promise, never an artifact-order choice."""
+
+    unique: list[tuple[tuple[Any, ...], EffectExpectation]] = []
+    for entry_source, entry_cause, entry in entries:
+        expectation = entry.expectation
+        if (
+            expectation is None
+            or not _values_match(entry_source, source)
+            or entry_cause != cause
+            or not _values_match(entry.to_val, destination)
+        ):
+            continue
+        snapshot = expectation_snapshot(expectation)
+        if not any(snapshot == existing for existing, _expectation in unique):
+            unique.append((snapshot, expectation))
+    return unique[0][1] if len(unique) == 1 else None
 
 
 def _select_wait(
@@ -1609,6 +1801,9 @@ def _assemble_candidate_read(
         )
 
     learned_action = learned.action if isinstance(learned, _LearnedAction) else None
+    learned_action_expectation = (
+        learned.expectation if isinstance(learned, _LearnedAction) else None
+    )
     program_step = (
         route_and_wait.charted_completion.program_step
         if route_and_wait.charted_completion is not None
@@ -1625,6 +1820,14 @@ def _assemble_candidate_read(
         CrossingBatchRead(
             actions=branch.pairs,
             fidelity=branch.fidelity,
+            expectation=expectation_from_selected_path(
+                branch.effect_path,
+                ctx.pdg,
+                ctx.program,
+                boundary=None,
+            )
+            if branch.effect_path
+            else None,
         )
         for branch in crossing_branch_reads
         # Crossing conjunctions are executable artifacts in their own right.
@@ -1648,8 +1851,23 @@ def _assemble_candidate_read(
     seen_candidates: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
 
-    def _candidate_for(pair: _ActionPair) -> _Candidate:
-        detail = trace.detail_by_pair.get(pair)
+    def _candidate_for(
+        pair: _ActionPair,
+        detail_override: TraceAction | None = None,
+    ) -> _Candidate:
+        source = (
+            ActSource.ROUTE
+            if pair in route_candidate_set
+            else ActSource.LEARNED_ACTION
+            if pair == learned_action
+            else ActSource.PROGRAM
+            if pair in program_pairs
+            else ActSource.TRACE
+        )
+        # A same-pair trace detail is not a receipt for another reader's
+        # selected producer.  Trace alternatives pass their exact detail;
+        # route/program/learned readers must lower their own receipt.
+        detail = detail_override if source is ActSource.TRACE else None
         prescribed_edge = (
             route_plan.first_edge
             if route_plan is not None and pair in route_candidate_set
@@ -1658,15 +1876,7 @@ def _assemble_candidate_read(
         return _Candidate(
             tag=pair[0],
             value=pair[1],
-            source=(
-                ActSource.ROUTE
-                if pair in route_candidate_set
-                else ActSource.LEARNED_ACTION
-                if pair == learned_action
-                else ActSource.PROGRAM
-                if pair in program_pairs
-                else ActSource.TRACE
-            ),
+            source=source,
             provenance=detail.provenance if detail is not None else (),
             downstream_reach=(
                 detail.downstream_reach
@@ -1702,6 +1912,48 @@ def _assemble_candidate_read(
                 if pair in program_pairs and program_step is not None
                 else ()
             ),
+            expectation=(
+                expectation_from_selected_path(
+                    detail.effect_path,
+                    ctx.pdg,
+                    ctx.program,
+                    boundary=detail.operation_boundary,
+                )
+                if detail is not None
+                else (
+                    expectation_from_writer(
+                        ctx.pdg,
+                        ctx.program,
+                        writer_node=prescribed_edge.route.writer_node,
+                        tag=prescribed_edge.route.destination_tag,
+                        value=prescribed_edge.route.destination_value,
+                        boundary=(prescribed_edge.role.channel_tag, prescribed_edge.to_value),
+                    )
+                    if prescribed_edge.route.destination_value is not None
+                    else None
+                )
+                if prescribed_edge is not None
+                else next(
+                    (
+                        expectation_from_selected_path(
+                            required.effect_path,
+                            ctx.pdg,
+                            ctx.program,
+                            boundary=(
+                                program_step.handoff_by_action[pair].channel,
+                                program_step.handoff_by_action[pair].boundary,
+                            ),
+                        )
+                        for required in program_step.required_inputs
+                        if required.pair == pair and required.effect_path
+                    ),
+                    None,
+                )
+                if source is ActSource.PROGRAM and program_step is not None
+                else learned_action_expectation
+                if source is ActSource.LEARNED_ACTION
+                else None
+            ),
         )
 
     for pair in route_candidates:
@@ -1709,9 +1961,15 @@ def _assemble_candidate_read(
             seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
     for pair in trace_actions:
-        if pair not in seen_candidates:
+        for detail in (detail for detail in trace.details if detail.pair == pair):
+            candidate = _candidate_for(pair, detail)
+            if any(
+                existing.pair == pair and existing.expectation == candidate.expectation
+                for existing in candidates
+            ):
+                continue
             seen_candidates.add(pair)
-            candidates.append(_candidate_for(pair))
+            candidates.append(candidate)
     if (
         learned_action is not None
         and _action_allowed(ctx, learned_action)
@@ -1720,9 +1978,15 @@ def _assemble_candidate_read(
         seen_candidates.add(learned_action)
         candidates.append(_candidate_for(learned_action))
     for pair in broad_reach_actions:
-        if pair not in seen_candidates:
+        for detail in (detail for detail in trace.details if detail.pair == pair):
+            candidate = _candidate_for(pair, detail)
+            if any(
+                existing.pair == pair and existing.expectation == candidate.expectation
+                for existing in candidates
+            ):
+                continue
             seen_candidates.add(pair)
-            candidates.append(_candidate_for(pair))
+            candidates.append(candidate)
 
     if awaited_action is not None and not candidates:
         pair = awaited_action.action
@@ -1737,8 +2001,23 @@ def _assemble_candidate_read(
                     _candidate_for(pair),
                     source=ActSource.AWAITED_ACTION,
                     awaited_action_note=awaited_action.note,
-                    bearing_channel_tag=ctx.target.tag,
+                    bearing_channel_tag=awaited_action.target_tag or None,
                     bearing_channel_value=awaited_action.to_state,
+                    expectation=(
+                        expectation_from_writer(
+                            ctx.pdg,
+                            ctx.program,
+                            writer_node=awaited_action.writer_node,
+                            tag=awaited_action.target_tag,
+                            value=awaited_action.to_state,
+                            required_shape=awaited_action.required_shape,
+                            boundary=(awaited_action.target_tag, awaited_action.to_state),
+                        )
+                        if awaited_action.writer_node >= 0
+                        and awaited_action.target_tag
+                        and awaited_action.to_state is not None
+                        else None
+                    ),
                 )
             )
 
@@ -1760,6 +2039,28 @@ def _assemble_candidate_read(
         stuck_reason = _diagnose_stuck_reason(frame, ctx)
 
     final_trace = replace(trace, actions=trace_actions)
+    widening_expectations: list[tuple[tuple[_ActionPair, ...], EffectExpectation]] = []
+    for width in range(2, len(final_trace.active_actions) + 1):
+        artifact = final_trace.active_actions[:width]
+        primary = artifact[0]
+        primary_paths = tuple(
+            detail
+            for detail in final_trace.details
+            if detail.pair == primary and detail.effect_path
+        )
+        # The co-actions make the wider artifact executable; they do not
+        # independently select which producer the artifact promises.  A
+        # primary action with multiple exact paths remains unresolved.
+        if len(primary_paths) != 1:
+            continue
+        expectation = expectation_from_selected_path(
+            primary_paths[0].effect_path,
+            ctx.pdg,
+            ctx.program,
+            boundary=primary_paths[0].operation_boundary,
+        )
+        if expectation is not None:
+            widening_expectations.append((artifact, expectation))
     return CandidateRead(
         trace=final_trace,
         options=tuple(candidates),
@@ -1770,6 +2071,7 @@ def _assemble_candidate_read(
         learned_batch=learned_batch,
         crossing_batches=crossing_batches,
         diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
+        widening_expectations=tuple(widening_expectations),
     )
 
 

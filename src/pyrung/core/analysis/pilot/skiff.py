@@ -16,12 +16,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.causal import empirical_program_writes
 from pyrung.core.analysis.pilot.compass import (
     CompassObservation,
     NavigationObservation,
     _action_sort_key,
 )
+from pyrung.core.analysis.pilot.effects import expectation_from_writer
 from pyrung.core.analysis.pilot.recovery import assert_recovery_inactive
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -423,10 +425,50 @@ def _send_probe(
     applied = tuple(sorted(actions.items()))
     if not _values_match(new_val, cur_val):
         return CompassObservation(
-            "edge", frontier_tag, cause, cur_val, new_val, world_key, before, applied
+            "edge",
+            frontier_tag,
+            cause,
+            cur_val,
+            new_val,
+            world_key,
+            before,
+            applied,
+            _skiff_expectation(result, ctx, frontier_tag, new_val),
         )
     return CompassObservation(
         "no_change", frontier_tag, cause, cur_val, None, world_key, before, applied
+    )
+
+
+def _skiff_expectation(result: SkiffResult, ctx: Any, tag: str, value: Any) -> Any:
+    """Retain a probe effect only when its exact scan window names one writer."""
+
+    writer_ids: set[int] = set()
+    for scan_id in range(result.scan_before + 1, result.scan_after + 1):
+        projection = result.work._replay_rung_write_projection_at(scan_id)
+        if projection is None:
+            continue
+        for write in projection.writes:
+            if (
+                not write.run.enabled
+                or write.transition.tag_name != tag
+                or not _values_match(write.transition.to_value, value)
+            ):
+                continue
+            writer_ids.update(
+                index
+                for index in ctx.pdg.writers_of.get(tag, frozenset())
+                if resolve_rung(ctx.program, ctx.pdg.rung_nodes[index]) is write.run.rung
+            )
+    if len(writer_ids) != 1:
+        return None
+    return expectation_from_writer(
+        ctx.pdg,
+        ctx.program,
+        writer_node=next(iter(writer_ids)),
+        tag=tag,
+        value=value,
+        boundary=(tag, value),
     )
 
 
