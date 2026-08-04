@@ -28,6 +28,10 @@ from pyrung.core.analysis.graph import (
     RouteTaken,
 )
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
+from pyrung.core.analysis.pilot.bootstrap import (
+    bootstrap_designations,
+    observe_bootstrap_effects,
+)
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
@@ -102,6 +106,8 @@ from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _ActionPair,
     _AttemptResult,
+    _BootstrapExecution,
+    _CausalCheckpoint,
     _Checkpoint,
     _CommittedAct,
     _IterationFrame,
@@ -123,6 +129,102 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
+
+
+def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
+    """Retain boundary 0 and execute one observed program-owned scan.
+
+    The old cold-start settle advanced the live runner directly.  This adapter
+    deliberately preserves that landing and search-budget behavior while
+    making the execution truth addressable.  Its pre-scan trace supplies only
+    conservative designations; missing designations are not failed promises,
+    and factual appeared-effect classification does not alter orchestration.
+    """
+
+    if state.work.state.scan_id != 0:
+        return None
+
+    before_snap = dict(state.work.state.tags)
+    key = (
+        _pilot_world_key(before_snap, state.key_config, state.pilot_rungs)
+        if state.key_config is not None
+        else None
+    )
+    checkpoint = _CausalCheckpoint(
+        key=key,
+        world=state.snapshot_world(),
+        objective=BearingObjective(ctx.target),
+    )
+    scan_before = state.work.state.scan_id
+
+    # Designation is derived before execution from the retained source world.
+    # It is best-effort evidence: an unsupported or ambiguous read must preserve
+    # the established scan-1 landing and leave ordinary Orientation to name its
+    # frontier.
+    designations = ()
+    if ctx.target.predicate is None:
+        try:
+            read = TraceReadConstraints.from_context(
+                ctx,
+                state.work,
+                route=ctx.route,
+                avoid_pred=ctx.avoid_pred,
+            )
+            tree = trace_back(
+                ctx.target.tag,
+                ctx.target.value,
+                before_snap,
+                ctx.pdg,
+                ctx.program,
+                ctx.steerable,
+                constraints=read,
+            )
+            channel_tags = frozenset(ctx.opaque_loop) | frozenset(
+                role.channel_tag for role in ctx.pipeline_roles
+            )
+            designations = bootstrap_designations(
+                tree,
+                ctx.pdg,
+                ctx.program,
+                steerable=ctx.steerable,
+                channel_tags=channel_tags,
+            )
+        except Exception:  # noqa: BLE001 - designation is conservative evidence only
+            logger.debug("pilot: bootstrap designation failed closed", exc_info=True)
+
+    # Exactly the normal program scan previously used for the hidden settle:
+    # no Pulse, Coast, temporary rung, or operator patch participates.
+    state.work.step()
+    scan_after = state.work.state.scan_id
+    projection = state.work._replay_rung_write_projection_at(scan_after)
+    if projection is None:
+        raise RuntimeError("bootstrap scan has no exact execution projection")
+    execution_epoch_pair = next(
+        (
+            (epoch, owner)
+            for epoch, owner in state.work._causal_lineage.seal_through(scan_after)
+            if epoch.first_scan <= scan_after <= epoch.last_scan
+        ),
+        None,
+    )
+    if execution_epoch_pair is None:
+        raise RuntimeError("bootstrap scan has no retained execution epoch")
+    execution_epoch, execution_owner = execution_epoch_pair
+    appeared_effects = observe_bootstrap_effects(designations, projection)
+
+    receipt = _BootstrapExecution(
+        checkpoint=checkpoint,
+        scan_before=scan_before,
+        scan_after=scan_after,
+        projection=projection,
+        landing=projection.exit_tags,
+        designations=designations,
+        appeared_effects=appeared_effects,
+        execution_epoch=execution_epoch,
+        execution_owner=execution_owner,
+    )
+    state.bootstrap_execution = receipt
+    return receipt
 
 
 @dataclass(frozen=True)
@@ -1072,11 +1174,12 @@ def _pilot_loop_events(
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: earned-work build failed", exc_info=True)
 
-    # Settle: at scan 0, calc-computed intermediates are still at defaults
-    # and may trivially satisfy conditions that fail once rungs execute
-    # (e.g. PV >= Lower where Lower is calc'd from SetPoint).
-    if state.work.state.scan_id == 0:
-        state.work.step()
+    # At scan 0, calc-computed intermediates are still at defaults and may
+    # trivially satisfy conditions that fail once rungs execute (for example,
+    # PV >= Lower where Lower is calculated from SetPoint). Preserve the
+    # established one-scan landing, but retain its causal source and exact
+    # ordered execution truth instead of hiding the step.
+    bootstrap_execution = _execute_bootstrap_scan(state, ctx)
 
     yield PilotEvent(
         "started",
@@ -1088,6 +1191,11 @@ def _pilot_loop_events(
             "pipeline_roles": ctx.pipeline_roles,
             "pipeline_internal_tags": ctx.pipeline_internal_tags,
             "route": ctx.route,
+            "bootstrap_execution": (
+                bootstrap_execution.diagnostic_snapshot()
+                if bootstrap_execution is not None
+                else None
+            ),
         },
     )
 

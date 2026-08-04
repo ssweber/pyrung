@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .models import Transition
 
@@ -36,6 +36,7 @@ class RungWrite:
     scan_id: int
     ordinal: int
     run_order: int
+    call_invocation: int | None
     rung_id: RungId
     run: RungRun = field(compare=False, repr=False)
     instruction: InstructionRun | None = field(compare=False, repr=False)
@@ -50,10 +51,45 @@ class RungRead:
     scan_id: int
     ordinal: int
     run_order: int
+    call_invocation: int | None
     rung_id: RungId
     run: RungRun = field(compare=False, repr=False)
     instruction: InstructionRun | None = field(compare=False, repr=False)
     occurrence: ReadOccurrence = field(compare=False, repr=False)
+
+
+EffectDisposition = Literal[
+    "OVERWRITTEN",
+    "STRANDED",
+    "DISPLACED",
+    "SURVIVED",
+    "UNKNOWN",
+]
+StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class OrderedEffectObservation:
+    """Factual producer-to-consumer result for one exact appeared write.
+
+    This record deliberately has no ``ABSENT`` arm. Callers receive no record
+    for a designation whose selected producer did not write the designated
+    value.
+
+    ``consumer_read`` is the exact read which consumed the effect, when one
+    exists. ``displacement`` is the first exact later write which defeated the
+    effect or a required consumer-shape read.  ``observed_reads`` retains the
+    exact occurrence-addressed reads relevant to the verdict without flattening
+    repeated reads into a tag dictionary.
+    """
+
+    disposition: EffectDisposition
+    appeared: RungWrite
+    consumer_read: RungRead | None = None
+    displacement: RungWrite | None = None
+    displaced_read: RungRead | None = None
+    observed_reads: tuple[RungRead, ...] = ()
+    detail: str = ""
 
 
 @dataclass
@@ -70,6 +106,7 @@ class ScanRungWriteProjection:
     _writes_by_tag: dict[str, tuple[RungWrite, ...]] = field(init=False, repr=False)
     _reads_by_run: dict[int, tuple[RungRead, ...]] = field(init=False, repr=False)
     _reads_by_tag: dict[str, tuple[RungRead, ...]] = field(init=False, repr=False)
+    _call_invocation_by_run: dict[int, int | None] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         by_run: dict[int, list[RungWrite]] = {}
@@ -86,6 +123,7 @@ class ScanRungWriteProjection:
         self._writes_by_tag = {key: tuple(value) for key, value in by_tag.items()}
         self._reads_by_run = {key: tuple(value) for key, value in reads_by_run.items()}
         self._reads_by_tag = {key: tuple(value) for key, value in reads_by_tag.items()}
+        self._call_invocation_by_run = _dynamic_call_invocations(self.runs)
 
     def writes_for_run(self, run: RungRun) -> tuple[RungWrite, ...]:
         """Exact direct writes attributed to this dynamic run."""
@@ -107,6 +145,305 @@ class ScanRungWriteProjection:
             read
             for read in self._reads_by_run.get(write.run_order, ())
             if read.instruction is write.instruction and read.ordinal < write.ordinal
+        )
+
+    def enabling_reads_observed_by_write(self, write: RungWrite) -> tuple[RungRead, ...]:
+        """Exact direct rung reads observed before one selected write.
+
+        Unlike :meth:`reads_observed_by_write`, this includes the enclosing
+        rung's guard reads.  It is the factual surface needed to explain an
+        overwriter (for example, the ``Done=True`` read which enabled an alarm
+        copy) while still excluding reads owned by nested dynamic rungs.
+        """
+
+        return tuple(
+            read
+            for read in self._reads_by_run.get(write.run_order, ())
+            if read.ordinal < write.ordinal
+        )
+
+    def observe_appeared_handoff(
+        self,
+        tag_name: str,
+        expected_value: Any,
+        *,
+        producer_rung: object,
+        consumer_rung: object | None,
+        producer_address: StaticRungAddress | None = None,
+        consumer_address: StaticRungAddress | None = None,
+        required_shape: tuple[tuple[str, Any], ...] = (),
+    ) -> tuple[OrderedEffectObservation, ...]:
+        """Observe every exact occurrence of one static producer's value.
+
+        ``producer_rung`` and ``consumer_rung`` are the immutable program rung
+        objects selected before execution. Each matching producer write is
+        judged separately. A consumer receives credit only when its recorded
+        ``ReadOccurrence.source`` is that exact write occurrence; a later write
+        of even the same value displaces the earlier producer's identity.
+
+        A consumer-relative success ends at the consumer read: later program
+        motion may legitimately advance the value.  A terminal designation
+        (``consumer_rung is None``) instead requires survival to the scan exit.
+        """
+
+        appeared = tuple(
+            write
+            for write in self._writes_by_tag.get(tag_name, ())
+            if write.run.rung is producer_rung and write.transition.to_value == expected_value
+        )
+        return tuple(
+            self._observe_exact_handoff(
+                write,
+                consumer_rung=consumer_rung,
+                producer_address=producer_address,
+                consumer_address=consumer_address,
+                required_shape=required_shape,
+            )
+            for write in appeared
+        )
+
+    def _observe_exact_handoff(
+        self,
+        effect_write: RungWrite,
+        *,
+        consumer_rung: object | None,
+        producer_address: StaticRungAddress | None,
+        consumer_address: StaticRungAddress | None,
+        required_shape: tuple[tuple[str, Any], ...],
+    ) -> OrderedEffectObservation:
+        tag_name = effect_write.transition.tag_name
+        if consumer_rung is None:
+            displacement = self._first_intervening_write(
+                tag_name,
+                after=effect_write.ordinal,
+            )
+            if displacement is not None:
+                return OrderedEffectObservation(
+                    "OVERWRITTEN",
+                    effect_write,
+                    displacement=displacement,
+                    observed_reads=self.enabling_reads_observed_by_write(displacement),
+                )
+            return OrderedEffectObservation("SURVIVED", effect_write)
+
+        consumer_runs = tuple(
+            run
+            for run in self.runs
+            if run.rung is consumer_rung
+            and any(read.ordinal > effect_write.ordinal for read in self.reads_for_run(run))
+            and self._runs_share_selected_transaction(
+                effect_write.run,
+                run,
+                producer_address,
+                consumer_address,
+            )
+        )
+        sourced_reads = tuple(
+            read
+            for run in consumer_runs
+            for read in self.reads_for_run(run)
+            if read.occurrence.name == tag_name
+            and read.ordinal > effect_write.ordinal
+            and self._read_observes_write(read, effect_write)
+        )
+        effect_read = sourced_reads[0] if sourced_reads else None
+        consumer_run = (
+            effect_read.run
+            if effect_read is not None
+            else consumer_runs[0]
+            if consumer_runs
+            else None
+        )
+        consumer_reads = self.reads_for_run(consumer_run) if consumer_run is not None else ()
+        consumer_boundary = (
+            effect_read.ordinal
+            if effect_read is not None
+            else max((read.ordinal for read in consumer_reads), default=-1) + 1
+            if consumer_reads
+            else None
+        )
+        displacement = self._first_intervening_write(
+            tag_name,
+            after=effect_write.ordinal,
+            before=consumer_boundary,
+        )
+        if displacement is not None:
+            return OrderedEffectObservation(
+                "OVERWRITTEN",
+                effect_write,
+                consumer_read=effect_read,
+                displacement=displacement,
+                observed_reads=self.enabling_reads_observed_by_write(displacement),
+            )
+
+        if effect_read is None:
+            incomplete_source = any(
+                read.occurrence.name == tag_name
+                and read.occurrence.value == effect_write.transition.to_value
+                and self.transition_observed_by_read(read) is None
+                for read in consumer_reads
+            )
+            return OrderedEffectObservation(
+                "UNKNOWN" if incomplete_source else "STRANDED",
+                effect_write,
+                observed_reads=consumer_reads,
+                detail=(
+                    "consumer effect read has incomplete source identity"
+                    if incomplete_source
+                    else "consumer did not observe the appeared write"
+                ),
+            )
+
+        matched_shape: list[RungRead] = []
+        next_ordinal = -1
+        for required_tag, required_value in required_shape:
+            if (
+                required_tag == tag_name
+                and required_value == effect_write.transition.to_value
+                and effect_read.ordinal > next_ordinal
+            ):
+                observed = effect_read
+            else:
+                observed = next(
+                    (
+                        read
+                        for read in consumer_reads
+                        if read.occurrence.name == required_tag and read.ordinal > next_ordinal
+                    ),
+                    None,
+                )
+            if observed is None:
+                return OrderedEffectObservation(
+                    "UNKNOWN",
+                    effect_write,
+                    consumer_read=effect_read,
+                    observed_reads=tuple(matched_shape),
+                    detail=f"required consumer read {required_tag!r} did not occur",
+                )
+            next_ordinal = observed.ordinal
+            matched_shape.append(observed)
+            if observed.occurrence.value == required_value:
+                continue
+            transition = self.transition_observed_by_read(observed)
+            displaced_by = (
+                self.write_at_ordinal(transition.occurrence_ordinal)
+                if transition is not None and transition.occurrence_ordinal is not None
+                else None
+            )
+            if displaced_by is None:
+                if not effect_read.run.enabled:
+                    return OrderedEffectObservation(
+                        "STRANDED",
+                        effect_write,
+                        consumer_read=effect_read,
+                        displaced_read=observed,
+                        observed_reads=consumer_reads,
+                        detail="consumer read the effect but its guard was false",
+                    )
+                return OrderedEffectObservation(
+                    "UNKNOWN",
+                    effect_write,
+                    consumer_read=effect_read,
+                    displaced_read=observed,
+                    observed_reads=tuple(matched_shape),
+                    detail="required shape mismatch has no exact same-scan displacement",
+                )
+            return OrderedEffectObservation(
+                "DISPLACED",
+                effect_write,
+                consumer_read=effect_read,
+                displacement=displaced_by,
+                displaced_read=observed,
+                observed_reads=tuple(matched_shape),
+            )
+
+        if not effect_read.run.enabled:
+            return OrderedEffectObservation(
+                "STRANDED",
+                effect_write,
+                consumer_read=effect_read,
+                observed_reads=consumer_reads,
+                detail="consumer read the effect but its guard was false",
+            )
+
+        return OrderedEffectObservation(
+            "SURVIVED",
+            effect_write,
+            consumer_read=effect_read,
+            observed_reads=tuple(matched_shape) or (effect_read,),
+        )
+
+    def _read_observes_write(self, read: RungRead, write: RungWrite) -> bool:
+        """Whether one read carries this exact write occurrence as its source."""
+
+        if read.occurrence.source is not write.occurrence:
+            return False
+        transition = self.transition_observed_by_read(read)
+        return transition is not None and transition.occurrence_ordinal == write.ordinal
+
+    def _runs_share_selected_transaction(
+        self,
+        producer: RungRun,
+        consumer: RungRun,
+        producer_address: StaticRungAddress | None,
+        consumer_address: StaticRungAddress | None,
+    ) -> bool:
+        """Whether two dynamic runs belong to the selected static transaction.
+
+        Repeated calls reuse the same immutable rung objects. When both sides
+        of a handoff live in one subroutine, caller and call-stack identity must
+        match; an exact source link in a later call is not the selected
+        consumer occurrence. Sibling branches in one static rung additionally
+        require the same enclosing dynamic rung.
+        """
+
+        if producer_address is None or consumer_address is None:
+            return True
+        producer_sub, producer_rung, producer_branch = producer_address
+        consumer_sub, consumer_rung, consumer_branch = consumer_address
+        same_subroutine = producer_sub is not None and producer_sub == consumer_sub
+        same_branched_rung = (
+            producer_sub == consumer_sub
+            and producer_rung == consumer_rung
+            and bool(producer_branch or consumer_branch)
+        )
+        if same_subroutine or same_branched_rung:
+            if (
+                producer.caller_rung != consumer.caller_rung
+                or producer.call_stack != consumer.call_stack
+            ):
+                return False
+        if same_subroutine:
+            producer_invocation = self._call_invocation_by_run.get(id(producer))
+            consumer_invocation = self._call_invocation_by_run.get(id(consumer))
+            if (
+                producer_invocation is None
+                or consumer_invocation is None
+                or producer_invocation != consumer_invocation
+            ):
+                return False
+        if same_branched_rung:
+            producer_parent = self.parent_run(producer)
+            consumer_parent = self.parent_run(consumer)
+            return producer_parent is consumer_parent
+        return True
+
+    def _first_intervening_write(
+        self,
+        tag_name: str,
+        *,
+        after: int,
+        before: int | None = None,
+    ) -> RungWrite | None:
+        """First later write which replaces an appeared producer's identity."""
+
+        return next(
+            (
+                write
+                for write in self._writes_by_tag.get(tag_name, ())
+                if write.ordinal > after and (before is None or write.ordinal < before)
+            ),
+            None,
         )
 
     def parent_run(self, run: RungRun) -> RungRun | None:
@@ -225,6 +562,7 @@ def build_scan_rung_write_projection(
     exit_tags = dict(history.at(scan_id).tags)
     writes: list[RungWrite] = []
     reads: list[RungRead] = []
+    call_invocations = _dynamic_call_invocations(runs)
     for run_order, run in enumerate(runs):
         for instruction, occurrence in _direct_accesses(run):
             if occurrence.domain != "tag":
@@ -235,6 +573,7 @@ def build_scan_rung_write_projection(
                         scan_id=scan_id,
                         ordinal=occurrence.ordinal,
                         run_order=run_order,
+                        call_invocation=call_invocations.get(id(run)),
                         rung_id=run.rung_id,
                         run=run,
                         instruction=instruction,
@@ -254,6 +593,7 @@ def build_scan_rung_write_projection(
                     scan_id=scan_id,
                     ordinal=occurrence.ordinal,
                     run_order=run_order,
+                    call_invocation=call_invocations.get(id(run)),
                     rung_id=run.rung_id,
                     run=run,
                     instruction=instruction,
@@ -273,6 +613,59 @@ def build_scan_rung_write_projection(
         writes=tuple(writes),
         reads=tuple(reads),
     )
+
+
+def _dynamic_call_invocations(runs: tuple[RungRun, ...]) -> dict[int, int | None]:
+    """Map each dynamic rung run to its nearest exact CallInstruction run.
+
+    ``caller_rung`` and ``call_stack`` identify a static call site and nested
+    route, but one caller instruction body may call the same subroutine twice.
+    The immutable recursive execution journal retains those as distinct
+    ``InstructionRun`` objects; numbering them in execution order gives this
+    projection an exact detached invocation identity.
+    """
+
+    from pyrung.core.executor import InstructionRun, LoopIterationRun, RungRun
+    from pyrung.core.instruction.control import CallInstruction
+
+    nested: set[int] = set()
+
+    def _collect_nested(body: tuple[object, ...]) -> None:
+        for item in body:
+            if isinstance(item, RungRun):
+                nested.add(id(item))
+                _collect_nested(item.body)
+            elif isinstance(item, (InstructionRun, LoopIterationRun)):
+                _collect_nested(item.body)
+
+    for run in runs:
+        _collect_nested(run.body)
+
+    result: dict[int, int | None] = {}
+    invocation_ids: dict[int, int] = {}
+
+    def _walk(body: tuple[object, ...], invocation: int | None) -> None:
+        for item in body:
+            if isinstance(item, RungRun):
+                result[id(item)] = invocation
+                _walk(item.body, invocation)
+            elif isinstance(item, InstructionRun):
+                child_invocation = invocation
+                if isinstance(item.instruction, CallInstruction):
+                    child_invocation = invocation_ids.setdefault(
+                        id(item),
+                        len(invocation_ids),
+                    )
+                _walk(item.body, child_invocation)
+            elif isinstance(item, LoopIterationRun):
+                _walk(item.body, invocation)
+
+    for run in runs:
+        if id(run) in nested:
+            continue
+        result[id(run)] = None
+        _walk(run.body, None)
+    return result
 
 
 def _direct_accesses(

@@ -266,6 +266,9 @@ this table only locates the owner.
   `compass.py::Compass.orient` facade; orientation groups live-work
   alternatives ahead of fresh alternatives
 - Target-relative Bearing objective: `orientation.py::_bearing`
+- Cold-start selected-path designation: `bootstrap.py::bootstrap_designations`;
+  per-appeared-occurrence source, transaction, and consumer classification
+  remains owned by `ScanRungWriteProjection.observe_appeared_handoff`
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Retained occurrence reading and prefix replay: `retained.py`; it adapts
@@ -408,6 +411,8 @@ Static reading and orientation:
 - `awaited_actions.py` — program-awaited actions and producer families
 - `advance.py` — instruction-owned channels and boundaries
 - `program_step.py` — one-producer counterfactual proof
+- `bootstrap.py` — conservative cold-start designation and factual projection
+  observation adapter
 - `navigation_contracts.py` — immutable navigation contracts
 - `retained.py` — retained occurrence evidence and one-Bearing prefix replay
 

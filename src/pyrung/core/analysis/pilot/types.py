@@ -20,7 +20,14 @@ from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.analysis.pilot.bootstrap import (
+        BootstrapDesignation,
+        BootstrapDesignationSnapshot,
+        BootstrapEffect,
+        BootstrapEffectSnapshot,
+    )
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -34,7 +41,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.progress import PendingDeparture
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
-    from pyrung.core.runner import PLC
+    from pyrung.core.runner import PLC, Epoch, EpochQuery
 
 # ---------------------------------------------------------------------------
 # Type aliases
@@ -290,6 +297,183 @@ class _RecoveryOrigin:
     checkpoint_owner: _CheckpointOwner
     anchor_scan: int
     before_snap: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _CausalCheckpoint:
+    """A target-owned source boundary retained without a progress judgment.
+
+    Ordinary :class:`_Checkpoint` values are trend checkpoints: their
+    ``trend`` and complete Bearing objective exist only after Orientation has
+    read a world.  The cold-start boundary precedes that read, so retaining it
+    as this narrower causal checkpoint avoids inventing target progress while
+    preserving the exact executable world needed by later occurrence-scoped
+    recovery.
+    """
+
+    # ``None`` is explicit when the prover supplied no pre-orientation key
+    # projection.  The frozen world remains exact; an empty tuple would falsely
+    # claim a valid (and globally colliding) executable-world identity.
+    key: _StateKey | None
+    world: _World
+    objective: BearingObjective
+    owner: _CheckpointOwner = field(
+        default_factory=_CheckpointOwner,
+        compare=False,
+        repr=False,
+    )
+
+
+def _immutable_bootstrap_fact(value: Any) -> Any:
+    """Detach one diagnostic fact from mutable execution-owned objects."""
+
+    if value is None or isinstance(value, bool | int | float | str | bytes):
+        return value
+    if isinstance(value, tuple | list):
+        return tuple(_immutable_bootstrap_fact(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return tuple(sorted((_immutable_bootstrap_fact(item) for item in value), key=repr))
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {
+                _immutable_bootstrap_fact(key): _immutable_bootstrap_fact(member)
+                for key, member in value.items()
+            }
+        )
+    # Tag values are scalar in the execution model. Keep diagnostics inert if
+    # an extension supplies a richer object instead of exposing that object.
+    return repr(value)
+
+
+@dataclass(frozen=True)
+class BootstrapAccessSnapshot:
+    """One deeply detached read or write in bootstrap execution order."""
+
+    scan: int
+    ordinal: int
+    run_order: int
+    rung: tuple[str | None, int]
+    kind: Literal["read", "write"]
+    tag: str
+    values: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class BootstrapExecutionSnapshot:
+    """Safe event view of one internal bootstrap execution receipt.
+
+    No runner, projection, run, instruction, or occurrence object crosses the
+    event boundary. Mapping values and nested composite facts are recursively
+    copied and frozen.
+    """
+
+    source_scan: int
+    landing_scan: int
+    source_world_key: Any
+    objective: tuple[str, Any]
+    objective_frontier: tuple[_ActionPair, ...]
+    source: Mapping[str, Any]
+    landing: Mapping[str, Any]
+    ordered_accesses: tuple[BootstrapAccessSnapshot, ...]
+    designations: tuple[BootstrapDesignationSnapshot, ...]
+    appeared_effects: tuple[BootstrapEffectSnapshot, ...]
+
+
+@dataclass(frozen=True)
+class _BootstrapExecution:
+    """Exact receipt for PILOT's single cold-start program scan.
+
+    This is execution evidence plus factual bootstrap observation; it records
+    no operator action, expectation, progress judgment, or correction.
+    ``projection`` is the executor-owned ordered access journal for
+    ``scan_before -> scan_after``; ``landing`` is copied from that projection's
+    exit boundary.
+    ``execution_epoch`` and its detached ``execution_owner`` retain the runner's
+    existing causal identity and replay surface even after the live world
+    restores the source checkpoint.
+    """
+
+    checkpoint: _CausalCheckpoint
+    scan_before: int
+    scan_after: int
+    projection: ScanRungWriteProjection = field(compare=False, repr=False)
+    landing: Mapping[str, Any]
+    designations: tuple[BootstrapDesignation, ...]
+    appeared_effects: tuple[BootstrapEffect, ...]
+    execution_epoch: Epoch = field(compare=False, repr=False)
+    execution_owner: EpochQuery = field(compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.scan_after != self.scan_before + 1:
+            raise ValueError("bootstrap execution must contain exactly one scan")
+        if self.projection.scan_id != self.scan_after:
+            raise ValueError("bootstrap projection does not match its landing scan")
+        if self.execution_owner.epoch is not self.execution_epoch:
+            raise ValueError("bootstrap execution owner does not match its epoch")
+        if not self.execution_epoch.first_scan <= self.scan_after <= self.execution_epoch.last_scan:
+            raise ValueError("bootstrap execution epoch does not own its landing scan")
+        object.__setattr__(self, "landing", MappingProxyType(dict(self.landing)))
+
+    def diagnostic_snapshot(self) -> BootstrapExecutionSnapshot:
+        """Return a detached immutable event view of this causal evidence."""
+
+        from pyrung.core.analysis.pilot.bootstrap import designation_snapshot
+
+        accesses: list[BootstrapAccessSnapshot] = [
+            BootstrapAccessSnapshot(
+                scan=read.scan_id,
+                ordinal=read.ordinal,
+                run_order=read.run_order,
+                rung=(read.rung_id.subroutine, read.rung_id.rung_index),
+                kind="read",
+                tag=read.occurrence.name,
+                values=(_immutable_bootstrap_fact(read.occurrence.value),),
+            )
+            for read in self.projection.reads
+        ]
+        accesses.extend(
+            BootstrapAccessSnapshot(
+                scan=write.scan_id,
+                ordinal=write.ordinal,
+                run_order=write.run_order,
+                rung=(write.rung_id.subroutine, write.rung_id.rung_index),
+                kind="write",
+                tag=write.transition.tag_name,
+                values=(
+                    _immutable_bootstrap_fact(write.transition.from_value),
+                    _immutable_bootstrap_fact(write.transition.to_value),
+                ),
+            )
+            for write in self.projection.writes
+        )
+        accesses.sort(key=lambda access: access.ordinal)
+        objective = self.checkpoint.objective
+        return BootstrapExecutionSnapshot(
+            source_scan=self.scan_before,
+            landing_scan=self.scan_after,
+            source_world_key=_immutable_bootstrap_fact(self.checkpoint.key),
+            objective=(
+                objective.target.tag,
+                _immutable_bootstrap_fact(objective.target.value),
+            ),
+            objective_frontier=tuple(
+                (tag, _immutable_bootstrap_fact(value)) for tag, value in objective.frontier
+            ),
+            source=MappingProxyType(
+                {
+                    tag: _immutable_bootstrap_fact(value)
+                    for tag, value in self.projection.entry_tags.items()
+                }
+            ),
+            landing=MappingProxyType(
+                {tag: _immutable_bootstrap_fact(value) for tag, value in self.landing.items()}
+            ),
+            ordered_accesses=tuple(accesses),
+            designations=tuple(designation_snapshot(item) for item in self.designations),
+            appeared_effects=tuple(
+                effect.diagnostic_snapshot() for effect in self.appeared_effects
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -585,6 +769,10 @@ class _PilotState:
     seen_keys: set[_StateKey]
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
+    # Execution-only receipt for the optional cold-start ``0 -> 1`` scan.
+    # Knowledge side: later world reverts must not erase the retained causal
+    # source or reinterpret the immutable execution projection.
+    bootstrap_execution: _BootstrapExecution | None = None
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)
