@@ -239,7 +239,12 @@ def _read_route_trees(
     key_config = world.state.key_config
     exclusions = (
         ctx.compass.knowledge.nogood_identities(
-            _pilot_world_key(world.snapshot, key_config, world.state.pilot_rungs)
+            _pilot_world_key(
+                world.snapshot,
+                key_config,
+                world.state.pilot_rungs,
+                getattr(world.state, "active_requirements", ()),
+            )
         )
         if key_config is not None
         else frozenset()
@@ -292,7 +297,12 @@ def _assemble_world(
         context=ctx,
         root_route=selected_route,
     )
-    key = _pilot_world_key(world.snapshot, key_config, state.pilot_rungs)
+    key = _pilot_world_key(
+        world.snapshot,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
     details = tuple(
         TraceAction(
             tag=action.tag,
@@ -799,12 +809,17 @@ def orient(
 
     if world.context.compass is not compass:
         raise ValueError("orientation world is bound to a different Compass value")
-    read_context = replace(
-        world.context,
-        target=target,
-        blocked_actions=constraints.blocked_actions,
-        avoid_pred=constraints.avoid_predicate,
-    )
+    context_changes = {
+        "target": target,
+        "blocked_actions": constraints.blocked_actions,
+        "avoid_pred": constraints.avoid_predicate,
+    }
+    # Orientation also serves narrow structural test/navigation contexts.
+    # Preserve that protocol while passing requirements through every context
+    # which declares the Phase-4 view explicitly.
+    if hasattr(world.context, "active_requirements"):
+        context_changes["active_requirements"] = constraints.active_requirements
+    read_context = replace(world.context, **context_changes)
     seed = replace(world, context=read_context)
     worlds = (seed,) if seed.frame is not None else _read_worlds(seed, target, constraints)
     open_worlds: list[OrientationWorld] = []

@@ -161,6 +161,14 @@ class OnDelayInstruction(Instruction):
             restore_is_pulse=isinstance(
                 self.reset_condition, (RisingEdgeCondition, FallingEdgeCondition)
             ),
+            completion_controls=(
+                ConditionDemand(self.enable_condition, True),
+                *(
+                    (ConditionDemand(self.reset_condition, False),)
+                    if self.reset_condition is not None
+                    else ()
+                ),
+            ),
         )
 
 

@@ -72,6 +72,11 @@ class AdvanceProfile:
     # after this relation already holds, so consumers that reason about
     # preventing/reversing completion need the underlying relation directly.
     completion_boundary: Callable[[Snapshot], Cmp | AffineCmp | None] | None = None
+    # Exact entry-time control demands selecting the branch which computes the
+    # completion channel from ``completion_boundary``. ``None`` means the
+    # owner has not declared enough control-flow semantics for inversion;
+    # ``()`` is an explicitly unconditional comparison branch.
+    completion_controls: tuple[ConditionDemand, ...] | None = None
 
 
 def resolve_snapshot_value(value: Any, snapshot: Snapshot) -> Any:
@@ -214,6 +219,7 @@ def monotone_profile(
     done_at_boundary: bool = True,
     restore: ConditionDemand | None = None,
     restore_is_pulse: bool = False,
+    completion_controls: tuple[ConditionDemand, ...] | None = None,
 ) -> AdvanceProfile:
     """Build the common timer/counter/analog next-operation contract.
 
@@ -356,4 +362,5 @@ def monotone_profile(
             estimate_scans=estimate_scans,
         ),
         completion_boundary=_done_boundary,
+        completion_controls=completion_controls,
     )

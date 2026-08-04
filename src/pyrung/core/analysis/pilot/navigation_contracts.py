@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.effects import EffectExpectation
     from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.overlay import PilotRung
+    from pyrung.core.analysis.pilot.requirements import ActiveRequirement
     from pyrung.core.analysis.pilot.trace import TraceChoice
     from pyrung.core.analysis.pilot.types import _ConfirmedCorrection
 
@@ -65,6 +66,9 @@ class NavigationConstraints:
 
     blocked_actions: frozenset[_ActionPair] = frozenset()
     avoid_predicate: Any = None
+    # Frozen Phase-4 schedule views. Orientation may use them for admissibility
+    # but must never turn them into assignments or executable overlays here.
+    active_requirements: tuple[ActiveRequirement, ...] = ()
 
 
 @dataclass(frozen=True)

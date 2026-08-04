@@ -53,7 +53,7 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match, _writer_for_tag
-from pyrung.core.crossing import AffineCmp, Cmp, Eq
+from pyrung.core.crossing import Eq, complement_scalar_constraint
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import DeviationIncident
@@ -115,41 +115,7 @@ class CorrectionHypothesis:
 
 def _complement_constraint(constraint: Any) -> Any | None:
     """Logical complement of one scalar owner boundary."""
-
-    complements = {
-        "==": "!=",
-        "!=": "==",
-        "<": ">=",
-        "<=": ">",
-        ">": "<=",
-        ">=": "<",
-    }
-    if isinstance(constraint, Cmp):
-        op = complements.get(constraint.op)
-        return (
-            None
-            if op is None
-            else Cmp(
-                constraint.tag,
-                op,
-                constraint.bound,
-                bound_is_tag=constraint.bound_is_tag,
-            )
-        )
-    if isinstance(constraint, AffineCmp):
-        op = complements.get(constraint.op)
-        return (
-            None
-            if op is None
-            else AffineCmp(
-                constraint.tag,
-                op,
-                constraint.bound_tag,
-                scale=constraint.scale,
-                offset=constraint.offset,
-            )
-        )
-    return None
+    return complement_scalar_constraint(constraint)
 
 
 def _authoritative_relational_holds(

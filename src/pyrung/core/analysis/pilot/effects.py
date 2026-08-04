@@ -9,17 +9,16 @@ that policy from the landing.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
+from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import (
         OrderedEffectObservation,
-        RungRead,
-        RungWrite,
         ScanRungWriteProjection,
     )
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -107,6 +106,30 @@ class EffectOccurrenceSnapshot:
     tag: str
     values: tuple[Any, ...]
 
+    @property
+    def dynamic_address(self) -> tuple[Any, ...]:
+        """Stable full address within one exact executed scan projection."""
+
+        return (
+            self.rung,
+            self.execution_kind,
+            self.caller_rung,
+            self.call_stack,
+            self.depth,
+            self.call_invocation,
+            self.run_order,
+            self.ordinal,
+        )
+
+
+@dataclass(frozen=True)
+class EffectEpochSnapshot:
+    """Detached interval metadata for the Epoch which owns an observation."""
+
+    first_scan: int
+    last_scan: int
+    initial_scan_id: int
+
 
 @dataclass(frozen=True)
 class EffectObligationSnapshot:
@@ -130,6 +153,7 @@ class EffectObservationSnapshot:
     displaced_read: EffectOccurrenceSnapshot | None = None
     observed_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
     detail: str = ""
+    execution_epoch: EffectEpochSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -144,23 +168,36 @@ class EffectObservation:
     displaced_read: RungRead | None = field(default=None, compare=False, repr=False)
     observed_reads: tuple[RungRead, ...] = field(default=(), compare=False, repr=False)
     detail: str = ""
+    execution_epoch: Any = field(default=None, compare=False, repr=False)
+    execution_owner: Any = field(default=None, compare=False, repr=False)
 
     def diagnostic_snapshot(self) -> EffectObservationSnapshot:
         return EffectObservationSnapshot(
             disposition=self.disposition,
             obligation=obligation_snapshot(self.obligation),
-            appeared=_write_snapshot(self.appeared) if self.appeared is not None else None,
+            appeared=occurrence_snapshot(self.appeared) if self.appeared is not None else None,
             consumer_read=(
-                _read_snapshot(self.consumer_read) if self.consumer_read is not None else None
+                occurrence_snapshot(self.consumer_read) if self.consumer_read is not None else None
             ),
             displacement=(
-                _write_snapshot(self.displacement) if self.displacement is not None else None
+                occurrence_snapshot(self.displacement) if self.displacement is not None else None
             ),
             displaced_read=(
-                _read_snapshot(self.displaced_read) if self.displaced_read is not None else None
+                occurrence_snapshot(self.displaced_read)
+                if self.displaced_read is not None
+                else None
             ),
-            observed_reads=tuple(_read_snapshot(read) for read in self.observed_reads),
+            observed_reads=tuple(occurrence_snapshot(read) for read in self.observed_reads),
             detail=self.detail,
+            execution_epoch=(
+                EffectEpochSnapshot(
+                    self.execution_epoch.first_scan,
+                    self.execution_epoch.last_scan,
+                    self.execution_epoch.initial_scan_id,
+                )
+                if self.execution_epoch is not None
+                else None
+            ),
         )
 
 
@@ -377,8 +414,16 @@ def observe_execution_window(
     if action_scan is not None:
         projection = fork._replay_rung_write_projection_at(action_scan)
         if projection is not None:
-            return observe_expectation(expectation, (projection,))
-        return _unknown_observations(expectation, "assertion scan projection is unavailable")
+            return _bind_execution_epoch(
+                observe_expectation(expectation, (projection,)),
+                fork,
+                fallback_scan=action_scan,
+            )
+        return _bind_execution_epoch(
+            _unknown_observations(expectation, "assertion scan projection is unavailable"),
+            fork,
+            fallback_scan=action_scan,
+        )
 
     landing_scan = coast_receipt.end_scan if coast_receipt is not None else fork.state.scan_id
     exact_scan_ids = {
@@ -405,11 +450,19 @@ def observe_execution_window(
         and projections[0].scan_id == landing_scan
     )
     if complete_single_scan:
-        return observe_expectation(expectation, projections)
+        return _bind_execution_epoch(
+            observe_expectation(expectation, projections),
+            fork,
+            fallback_scan=landing_scan,
+        )
     if not projections:
-        return _unknown_observations(
-            expectation,
-            "coast has no exact recorded effect scan",
+        return _bind_execution_epoch(
+            _unknown_observations(
+                expectation,
+                "coast has no exact recorded effect scan",
+            ),
+            fork,
+            fallback_scan=landing_scan,
         )
 
     results: list[EffectObservation] = []
@@ -440,7 +493,72 @@ def observe_execution_window(
                         detail="coast corridor contains unobserved or folded scans",
                     )
                 )
-    return tuple(results)
+    return _bind_execution_epoch(tuple(results), fork, fallback_scan=landing_scan)
+
+
+def _bind_execution_epoch(
+    observations: tuple[EffectObservation, ...],
+    fork: Any,
+    *,
+    fallback_scan: int,
+) -> tuple[EffectObservation, ...]:
+    """Attach the immutable Epoch owner of each exact observation.
+
+    A scan number is not an execution identity after forks and replay.  Sealing
+    through the observation gives receipts a stable epoch/query pair rather
+    than the lineage's mutable live-query adapter.
+    """
+
+    observation_scans = tuple(
+        tuple(
+            occurrence.scan_id
+            for occurrence in (
+                observation.appeared,
+                observation.consumer_read,
+                observation.displacement,
+                observation.displaced_read,
+                *observation.observed_reads,
+            )
+            if occurrence is not None
+        )
+        for observation in observations
+    )
+    latest_scan = max(
+        (scan for scans in observation_scans for scan in scans),
+        default=fallback_scan,
+    )
+    sealed = fork._causal_lineage.seal_through(latest_scan)
+
+    result: list[EffectObservation] = []
+    for observation, scans in zip(observations, observation_scans, strict=True):
+        scan = max(scans, default=fallback_scan)
+        owned = next(
+            (
+                (epoch, owner)
+                for epoch, owner in sealed
+                if epoch.first_scan <= scan <= epoch.last_scan
+            ),
+            None,
+        )
+        if owned is None:
+            result.append(
+                replace(
+                    observation,
+                    disposition="UNKNOWN",
+                    detail=(f"{observation.detail}; " if observation.detail else "")
+                    + "exact execution epoch is unavailable",
+                )
+            )
+            continue
+        epoch, owner = owned
+        result.append(
+            replace(
+                observation,
+                execution_epoch=epoch,
+                execution_owner=owner,
+            )
+        )
+    return tuple(result)
 
 
 def _unknown_observations(
@@ -494,7 +612,11 @@ def expectation_snapshot(
     )
 
 
-def _read_snapshot(read: RungRead) -> EffectOccurrenceSnapshot:
+def occurrence_snapshot(read: RungRead | RungWrite) -> EffectOccurrenceSnapshot:
+    """Detach one exact projection-owned occurrence for receipts/events."""
+
+    if isinstance(read, RungWrite):
+        return _write_snapshot(read)
     return EffectOccurrenceSnapshot(
         kind="read",
         ordinal=read.ordinal,

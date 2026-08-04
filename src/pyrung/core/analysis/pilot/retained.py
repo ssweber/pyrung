@@ -887,7 +887,12 @@ def execute_retained_replay(
     snap = dict(replay.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key = _pilot_world_key(snap, key_config, combined)
+    key = _pilot_world_key(
+        snap,
+        key_config,
+        combined,
+        state.active_requirements,
+    )
     pulse = _PulseState(
         fork=replay,
         scan_before=state.work.state.scan_id,

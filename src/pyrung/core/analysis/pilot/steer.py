@@ -234,7 +234,12 @@ def _apply_actions(
         )
 
     post_pulse_snap = dict(fork.state.tags)
-    post_pulse_key = _pilot_world_key(post_pulse_snap, key_config, state.pilot_rungs)
+    post_pulse_key = _pilot_world_key(
+        post_pulse_snap,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
     delayed_receipts: list[CoastReceipt] = []
     if not _reached(post_pulse_snap):
         delayed_receipts = _settle_delayed_effects(
@@ -259,7 +264,12 @@ def _apply_actions(
         post_pulse_snap=post_pulse_snap,
         post_pulse_key=post_pulse_key,
         snap=fork_snap,
-        key=_pilot_world_key(fork_snap, key_config, state.pilot_rungs),
+        key=_pilot_world_key(
+            fork_snap,
+            key_config,
+            state.pilot_rungs,
+            getattr(state, "active_requirements", ()),
+        ),
         coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
         timeline=session.events,
     )
@@ -439,7 +449,12 @@ def _try_action_batch(
                 trial.action_snap,
                 ctx,
                 contradict_no_change=True,
-                world_key=_pilot_world_key(frame.snap, key_config, state.pilot_rungs),
+                world_key=_pilot_world_key(
+                    frame.snap,
+                    key_config,
+                    state.pilot_rungs,
+                    getattr(state, "active_requirements", ()),
+                ),
                 applied=policy.applied,
                 fork=trial.fork,
                 scan=trial.action_scan,
@@ -457,7 +472,12 @@ def _try_action_batch(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
-                world_key=_pilot_world_key(wait_before, key_config, state.pilot_rungs),
+                world_key=_pilot_world_key(
+                    wait_before,
+                    key_config,
+                    state.pilot_rungs,
+                    getattr(state, "active_requirements", ()),
+                ),
             )
         )
         wait_before = wait_after
@@ -490,6 +510,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         dict(state.work.state.tags),
         key_config,
         state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
     )
     if live_key != bearing.world_key:
         raise StaleBearingError(
@@ -591,7 +612,12 @@ def _try_bearing_coast(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.pilot_rungs)
+    key_after = _pilot_world_key(
+        snap_after,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
 
     observations: list[CompassObservation] = []
     wait_before = snap_before
@@ -604,7 +630,12 @@ def _try_bearing_coast(
                 wait_after,
                 ctx,
                 contradict_no_change=False,
-                world_key=_pilot_world_key(wait_before, key_config, state.pilot_rungs),
+                world_key=_pilot_world_key(
+                    wait_before,
+                    key_config,
+                    state.pilot_rungs,
+                    getattr(state, "active_requirements", ()),
+                ),
             )
         )
         wait_before = wait_after
@@ -721,7 +752,12 @@ def _try_terminal_letrun(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.pilot_rungs)
+    key_after = _pilot_world_key(
+        snap_after,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
 
     observations = _compass_observations(
         WAIT,
@@ -730,7 +766,12 @@ def _try_terminal_letrun(
         snap_after,
         ctx,
         contradict_no_change=False,
-        world_key=_pilot_world_key(snap_before, key_config, state.pilot_rungs),
+        world_key=_pilot_world_key(
+            snap_before,
+            key_config,
+            state.pilot_rungs,
+            getattr(state, "active_requirements", ()),
+        ),
     )
 
     # Decide the outcome here — only the let-run knows the macro-state sentinel.
@@ -845,7 +886,12 @@ def _try_terminal_dwell(
     snap_after = dict(fork.state.tags)
     key_config = state.key_config
     assert key_config is not None
-    key_after = _pilot_world_key(snap_after, key_config, state.pilot_rungs)
+    key_after = _pilot_world_key(
+        snap_after,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
 
     observations = _compass_observations(
         WAIT,
@@ -854,7 +900,12 @@ def _try_terminal_dwell(
         snap_after,
         ctx,
         contradict_no_change=False,
-        world_key=_pilot_world_key(snap_before, key_config, state.pilot_rungs),
+        world_key=_pilot_world_key(
+            snap_before,
+            key_config,
+            state.pilot_rungs,
+            getattr(state, "active_requirements", ()),
+        ),
     )
 
     if not _reached(snap_after):

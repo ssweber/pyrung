@@ -331,6 +331,18 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
     "finished": ("reached", "reason", "knowledge", "plan_journal"),
 }
 
+# Exact causal receipts are public diagnostics, not route decisions. Their
+# occurrence/checkpoint identities are deliberately run-local and are covered
+# by focused receipt tests; inserting kind-only markers here would perturb the
+# golden decision record without recording any changed navigation choice.
+_DIAGNOSTIC_EVENT_KINDS = frozenset(
+    {
+        "expectation_committed",
+        "failed_effect_explained",
+        "requirement_activated",
+    }
+)
+
 #: Fallback for event kinds unknown to this extractor: keep only fields with
 #: clearly decision-shaped names, so a new emitter degrades to a partial
 #: record instead of crashing or leaking run-variable data.
@@ -434,6 +446,8 @@ def extract_skeleton(events: Iterable[Any]) -> list[dict[str, Any]]:
     skeleton: list[dict[str, Any]] = []
     for event in events:
         kind = event.kind
+        if kind in _DIAGNOSTIC_EVENT_KINDS:
+            continue
         data = event.data if isinstance(event.data, Mapping) else {}
         entry: dict[str, Any] = {"kind": kind}
 

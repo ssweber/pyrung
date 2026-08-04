@@ -13,6 +13,13 @@ from tests.tumbler.skeleton import _jsonify_dataclass, extract_skeleton
 pytestmark = pytest.mark.tumbler
 
 
+def test_exact_causal_receipts_do_not_change_decision_skeleton() -> None:
+    diagnostic = SimpleNamespace(kind="failed_effect_explained", data={"receipt": object()})
+    finished = SimpleNamespace(kind="finished", data={"reached": True})
+
+    assert extract_skeleton([diagnostic, finished]) == [{"kind": "finished", "reached": True}]
+
+
 def test_coast_trigger_event_uses_exact_skeleton_marker() -> None:
     event = CoastTriggerEvent("target", "target", 17, (("State", 1, 2),))
 

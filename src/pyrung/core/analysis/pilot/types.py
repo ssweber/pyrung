@@ -43,6 +43,11 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.progress import PendingDeparture
+    from pyrung.core.analysis.pilot.requirements import (
+        ActiveRequirement,
+        ExpectationReceipt,
+        FailedEffectReceipt,
+    )
     from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
     from pyrung.core.runner import PLC, Epoch, EpochQuery
@@ -634,6 +639,9 @@ class _PilotContext:
     # Kept off prerequisite holds (options.py) and off preferred init/reset
     # writer selection (trace._rank_writers): a momentary command, never a hold.
     clear_only: frozenset[str] = frozenset()
+    # Phase-4 scheduling knowledge exposed read-only to Orientation.  It is
+    # not an executable overlay and candidate construction must not mutate it.
+    active_requirements: tuple[ActiveRequirement, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -779,6 +787,12 @@ class _PilotState:
     # Knowledge side: later world reverts must not erase the retained causal
     # source or reinterpret the immutable execution projection.
     bootstrap_execution: _BootstrapExecution | None = None
+    # Failed-effect scheduling knowledge is append-only invocation knowledge.
+    # It deliberately sits outside ``_World`` so checkpoint restore cannot
+    # erase or reinterpret an exact execution receipt.
+    active_requirements: list[ActiveRequirement] = field(default_factory=list)
+    expectation_receipts: list[ExpectationReceipt] = field(default_factory=list)
+    failed_effect_receipts: list[FailedEffectReceipt] = field(default_factory=list)
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)

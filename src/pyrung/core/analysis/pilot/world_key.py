@@ -145,7 +145,29 @@ def _pilot_world_key(
     snap: dict[str, Any],
     cfg: _StateKeyConfig,
     pilot_rungs: Any,
+    active_requirements: Any = (),
 ) -> tuple[Any, ...]:
-    """Identity of an executable PILOT world: PLC projection plus PilotRungs."""
+    """Identity of a navigable PILOT world and its active constraints.
+
+    Requirements remain inert in Phase 4, but activating one changes which
+    acts Compass may admit.  Keying only the PLC projection and executable
+    overlays would therefore let requirement-constrained navigation inherit
+    nogoods learned in the unconstrained world.  The empty/default case keeps
+    the established two-part key unchanged for callers with no requirements.
+    """
     rung_key = tuple(_rung_identity(rung) for rung in pilot_rungs)
-    return (_pilot_state_key(snap, cfg), rung_key)
+    base = (_pilot_state_key(snap, cfg), rung_key)
+    # Preserve schedule order. Same-phase normalization belongs to the Phase-5
+    # compiler; release/assert ordering is semantically significant and must
+    # not alias merely because the same requirement set is present.
+    requirement_key = tuple(
+        _semantic_key(
+            getattr(
+                requirement,
+                "navigation_identity",
+                getattr(requirement, "identity", requirement),
+            )
+        )
+        for requirement in active_requirements
+    )
+    return base if not requirement_key else (*base, requirement_key)

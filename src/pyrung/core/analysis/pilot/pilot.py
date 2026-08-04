@@ -27,7 +27,7 @@ from pyrung.core.analysis.graph import (
     RoutePivot,
     RouteTaken,
 )
-from pyrung.core.analysis.pilot.advance import iter_advance_owners
+from pyrung.core.analysis.pilot.advance import build_advance_index, iter_advance_owners
 from pyrung.core.analysis.pilot.bootstrap import (
     bootstrap_designations,
     observe_bootstrap_effects,
@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
     earned_work_is_useful_motion,
 )
+from pyrung.core.analysis.pilot.effects import obligation_snapshot, occurrence_snapshot
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
@@ -82,6 +83,15 @@ from pyrung.core.analysis.pilot.recording import (
 from pyrung.core.analysis.pilot.recovery import (
     assert_recovery_disposable_state,
     assert_recovery_inactive,
+)
+from pyrung.core.analysis.pilot.requirements import (
+    ActiveRequirement,
+    ExpectationReceipt,
+    FailedEffectReceipt,
+    OperandAuthority,
+    classify_bound_operand_authority,
+    derive_advance_requirement_from_effect,
+    derive_guard_requirement_from_effect,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
@@ -131,6 +141,223 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _bound_operand_authorities(
+    projection: Any,
+    checkpoint: _CausalCheckpoint,
+    ctx: _PilotContext,
+) -> dict[str, OperandAuthority]:
+    """Classify exact boundary operands without inventing write permission."""
+
+    source_work = checkpoint.world.work
+    source_tags = source_work.state.tags
+    known = source_work._known_tags_by_name
+    program_written = frozenset(ctx.pdg.writers_of)
+    overrides = source_work._input_overrides
+    configured = frozenset((*overrides.forces, *overrides.pending_patches))
+    result: dict[str, OperandAuthority] = {}
+    for read in projection.reads:
+        tag = read.occurrence.name
+        declared = known.get(tag)
+        result[tag] = classify_bound_operand_authority(
+            tag,
+            source_value=source_tags.get(tag, getattr(declared, "default", None)),
+            declared_default=getattr(declared, "default", None),
+            steerable=ctx.steerable,
+            program_written=program_written,
+            configured=configured,
+        )
+    return result
+
+
+def _retain_active_requirement(
+    state: _PilotState,
+    requirement: ActiveRequirement | None,
+) -> bool:
+    """Append one exact requirement once without changing executable state."""
+
+    if requirement is None or any(
+        current.navigation_identity == requirement.navigation_identity
+        for current in state.active_requirements
+    ):
+        return False
+    state.active_requirements.append(requirement)
+    return True
+
+
+def _derive_bootstrap_requirements(
+    state: _PilotState,
+    ctx: _PilotContext,
+    receipt: _BootstrapExecution,
+) -> None:
+    """Interpret exact appeared bootstrap violations without repairing them."""
+
+    index = build_advance_index(
+        ctx.program,
+        getattr(receipt.checkpoint.world.work, "_harness", None),
+    )
+    authorities = _bound_operand_authorities(receipt.projection, receipt.checkpoint, ctx)
+    for effect in receipt.appeared_effects:
+        derivation = derive_advance_requirement_from_effect(
+            index,
+            receipt.projection,
+            effect.observation,
+            operand_authorities=authorities,
+            execution_epoch=receipt.execution_epoch,
+            execution_owner=receipt.execution_owner,
+            selected_writer=effect.designation.producer,
+            source_world_key=receipt.checkpoint.key,
+            source_checkpoint=receipt.checkpoint,
+            provenance="bootstrap",
+        )
+        _retain_active_requirement(state, derivation.requirement)
+
+
+def _executed_attempt(attempt: _AttemptResult) -> Any:
+    if attempt.trial is not None:
+        return attempt.trial.attempt
+    return attempt.executed or attempt.excursion_attempt
+
+
+def _derive_attempt_requirements(
+    attempt: _AttemptResult,
+    state: _PilotState,
+    ctx: _PilotContext,
+    checkpoint: _CausalCheckpoint | None,
+) -> None:
+    """Retain exact failed-effect requirements from a disposable steer."""
+
+    if checkpoint is None:
+        return
+    executed = _executed_attempt(attempt)
+    if executed is None:
+        return
+    index = None
+    for observation in executed.effect_observations:
+        if observation.disposition == "SURVIVED":
+            continue
+        owner = observation.execution_owner
+        epoch = observation.execution_epoch
+        if owner is None or epoch is None:
+            continue
+        scans = tuple(
+            occurrence.scan_id
+            for occurrence in (
+                observation.appeared,
+                observation.consumer_read,
+                observation.displacement,
+                observation.displaced_read,
+                *observation.observed_reads,
+            )
+            if occurrence is not None
+        )
+        scan = max(
+            scans,
+            default=(
+                executed.pulse.action_scan
+                if executed.pulse.action_scan is not None
+                else (
+                    executed.pulse.coast_receipt.end_scan
+                    if executed.pulse.coast_receipt is not None
+                    else executed.pulse.fork.state.scan_id
+                )
+            ),
+        )
+        projection = owner._runner()._replay_rung_write_projection_at(scan)
+        if projection is None:
+            continue
+        if observation.disposition in {"ABSENT", "STRANDED"}:
+            derivation = derive_guard_requirement_from_effect(
+                observation,
+                projection,
+                execution_epoch=epoch,
+                execution_owner=owner,
+                selected_writer=observation.obligation.producer,
+                source_world_key=checkpoint.key,
+                source_checkpoint=checkpoint,
+                provenance="steer",
+            )
+            explanation = derivation.explanation
+        else:
+            if index is None:
+                index = build_advance_index(
+                    ctx.program,
+                    getattr(checkpoint.world.work, "_harness", None),
+                )
+            authorities = _bound_operand_authorities(projection, checkpoint, ctx)
+            derivation = derive_advance_requirement_from_effect(
+                index,
+                projection,
+                observation,
+                operand_authorities=authorities,
+                execution_epoch=epoch,
+                execution_owner=owner,
+                selected_writer=observation.obligation.producer,
+                source_world_key=checkpoint.key,
+                source_checkpoint=checkpoint,
+                provenance="steer",
+            )
+            explanation = derivation.explanation
+        failed = FailedEffectReceipt(
+            explanation=explanation,
+            observation=observation.diagnostic_snapshot(),
+            selected_writer=observation.obligation.producer,
+            source_world_key=checkpoint.key,
+            checkpoint_owner=checkpoint.owner,
+            execution_epoch=epoch,
+            execution_owner=owner,
+            source_checkpoint=checkpoint,
+        )
+        if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
+            state.failed_effect_receipts.append(failed)
+        _retain_active_requirement(state, derivation.requirement)
+
+
+def _retain_expectation_receipt(
+    trial: _AcceptedTrial,
+    act: Any,
+    state: _PilotState,
+    checkpoint: _CausalCheckpoint | None,
+) -> None:
+    """Journal an accepted whole-shape expectation with exact occurrences."""
+
+    if checkpoint is None:
+        return
+    observations = trial.attempt.effect_observations
+    if not observations or any(item.disposition != "SURVIVED" for item in observations):
+        return
+    epochs = {id(item.execution_epoch) for item in observations}
+    owners = {id(item.execution_owner) for item in observations}
+    if len(epochs) != 1 or len(owners) != 1:
+        return
+    first = observations[0]
+    if first.execution_epoch is None or first.execution_owner is None:
+        return
+    producers = tuple(
+        occurrence_snapshot(item.appeared) for item in observations if item.appeared is not None
+    )
+    consumers = tuple(
+        occurrence_snapshot(item.consumer_read)
+        for item in observations
+        if item.consumer_read is not None
+    )
+    receipt = ExpectationReceipt(
+        source_world_key=checkpoint.key,
+        checkpoint_owner=checkpoint.owner,
+        act_identity=act_identity(act),
+        active_rung_identities=tuple(
+            getattr(rung, "identity", repr(rung)) for rung in state.pilot_rungs
+        ),
+        obligations=tuple(obligation_snapshot(item.obligation) for item in observations),
+        producer_occurrences=producers,
+        consumer_occurrences=consumers,
+        execution_epoch=first.execution_epoch,
+        execution_owner=first.execution_owner,
+        source_checkpoint=checkpoint,
+    )
+    if not any(current.identity == receipt.identity for current in state.expectation_receipts):
+        state.expectation_receipts.append(receipt)
+
+
 def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
     """Retain boundary 0 and execute one observed program-owned scan.
 
@@ -146,7 +373,12 @@ def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _Bootstra
 
     before_snap = dict(state.work.state.tags)
     key = (
-        _pilot_world_key(before_snap, state.key_config, state.pilot_rungs)
+        _pilot_world_key(
+            before_snap,
+            state.key_config,
+            state.pilot_rungs,
+            state.active_requirements,
+        )
         if state.key_config is not None
         else None
     )
@@ -224,6 +456,7 @@ def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _Bootstra
         execution_owner=execution_owner,
     )
     state.bootstrap_execution = receipt
+    _derive_bootstrap_requirements(state, ctx, receipt)
     return receipt
 
 
@@ -797,6 +1030,7 @@ def _adopt_trial(
                     dict(execution.after_snap),
                     state.key_config,
                     state.pilot_rungs,
+                    state.active_requirements,
                 ),
             ),
         )
@@ -1000,8 +1234,23 @@ def _transition_once(
         return _IterationTransition(result=result, frame=frame)
 
     act = result.act
+    expectation_checkpoint = (
+        _CausalCheckpoint(
+            key=frame.key,
+            world=state.snapshot_world(),
+            objective=result.objective,
+        )
+        if result.expectation is not None
+        else None
+    )
     attempt = execute(result, orientation_world)
     attempt = _resolve_excursion(attempt, frame, state, ctx)
+    _derive_attempt_requirements(
+        attempt,
+        state,
+        ctx,
+        expectation_checkpoint,
+    )
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
     if isinstance(act, Coast) and act.mode == "terminal":
@@ -1021,6 +1270,12 @@ def _transition_once(
         return _IterationTransition(result=result, frame=frame, attempt=attempt)
 
     trial = _adopt_trial(attempt.trial, frame, state, ctx)
+    _retain_expectation_receipt(
+        trial,
+        act,
+        state,
+        expectation_checkpoint,
+    )
     return _IterationTransition(
         result=result,
         frame=frame,
@@ -1196,8 +1451,17 @@ def _pilot_loop_events(
                 if bootstrap_execution is not None
                 else None
             ),
+            "active_requirements": tuple(
+                requirement.diagnostic_snapshot() for requirement in state.active_requirements
+            ),
         },
     )
+    for requirement in state.active_requirements:
+        yield PilotEvent(
+            "requirement_activated",
+            requirement.deadline.scan_id,
+            {"requirement": requirement.diagnostic_snapshot()},
+        )
 
     # Each turn reads the current world and builds candidate modes. Every mode
     # executes and verifies on a fork inside steer.py, after which the loop
@@ -1242,7 +1506,10 @@ def _pilot_loop_events(
             key_config=state.key_config,
         )
         target = ctx.target
-        constraints = NavigationConstraints(avoid_predicate=ctx.avoid_pred)
+        constraints = NavigationConstraints(
+            avoid_predicate=ctx.avoid_pred,
+            active_requirements=tuple(state.active_requirements),
+        )
         result = ctx.compass.orient(raw_world, target, constraints)
         if isinstance(result, Bearing) and isinstance(result.act, RetainedReplay):
             from pyrung.core.analysis.pilot.retained import compose_retained_bearing
@@ -1338,6 +1605,9 @@ def _pilot_loop_events(
             yield try_event
 
         seen_keys_before_commit = frozenset(state.seen_keys)
+        requirements_before = len(state.active_requirements)
+        receipts_before = len(state.expectation_receipts)
+        failures_before = len(state.failed_effect_receipts)
         transition = _transition_once(
             state,
             ctx,
@@ -1347,6 +1617,24 @@ def _pilot_loop_events(
         )
         attempt = transition.attempt
         assert attempt is not None
+        for requirement in state.active_requirements[requirements_before:]:
+            yield PilotEvent(
+                "requirement_activated",
+                requirement.deadline.scan_id,
+                {"requirement": requirement.diagnostic_snapshot()},
+            )
+        for receipt in state.expectation_receipts[receipts_before:]:
+            yield PilotEvent(
+                "expectation_committed",
+                state.work.state.scan_id,
+                {"receipt": receipt.diagnostic_snapshot()},
+            )
+        for receipt in state.failed_effect_receipts[failures_before:]:
+            yield PilotEvent(
+                "failed_effect_explained",
+                state.work.state.scan_id,
+                {"receipt": receipt.diagnostic_snapshot()},
+            )
 
         if attempt.trial is None:
             rejected_event = _act_event(

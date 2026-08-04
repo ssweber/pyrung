@@ -591,7 +591,12 @@ def _anchor_frame_receipt(
 ) -> int:
     """Capture the executable source world and its owned target objective."""
     key = (
-        _pilot_world_key(frame.snap, state.key_config, state.pilot_rungs)
+        _pilot_world_key(
+            frame.snap,
+            state.key_config,
+            state.pilot_rungs,
+            state.active_requirements,
+        )
         if state.key_config is not None
         else frame.key
     )
@@ -992,7 +997,14 @@ def _install_confirmed_correction(
         checkpoint_pilot_rungs.extend(
             rung for rung in correction.pilot_rungs if _rung_identity(rung) not in existing_ids
         )
-        banked.append(_checkpoint_with_pilot_rungs(checkpoint, checkpoint_pilot_rungs, key_config))
+        banked.append(
+            _checkpoint_with_pilot_rungs(
+                checkpoint,
+                checkpoint_pilot_rungs,
+                key_config,
+                state.active_requirements,
+            )
+        )
     state.checkpoints = banked
     return receipt
 
@@ -1019,6 +1031,7 @@ def _checkpoint_with_pilot_rungs(
     checkpoint: _Checkpoint,
     pilot_rungs: list[PilotRung],
     key_config: Any,
+    active_requirements: Any = (),
 ) -> _Checkpoint:
     """Return one checkpoint re-keyed around an exact executable overlay."""
     if tuple(pilot_rungs) == tuple(checkpoint.world.pilot_rungs):
@@ -1026,7 +1039,12 @@ def _checkpoint_with_pilot_rungs(
     work = fork_with_pilot_rungs(checkpoint.world.work, pilot_rungs)
     world = checkpoint.world.set(work=work, pilot_rungs=pvector(pilot_rungs))
     key = (
-        _pilot_world_key(dict(work.state.tags), key_config, pilot_rungs)
+        _pilot_world_key(
+            dict(work.state.tags),
+            key_config,
+            pilot_rungs,
+            active_requirements,
+        )
         if key_config is not None
         else checkpoint.key
     )
@@ -1187,7 +1205,12 @@ def _revoke_corrections(
             rung for rung in saved.world.pilot_rungs if _rung_identity(rung) not in revoked_rung_ids
         ]
         cleaned_checkpoints.append(
-            _checkpoint_with_pilot_rungs(saved, saved_pilot_rungs, key_config)
+            _checkpoint_with_pilot_rungs(
+                saved,
+                saved_pilot_rungs,
+                key_config,
+                state.active_requirements,
+            )
         )
     state.checkpoints = cleaned_checkpoints
     return tuple(sorted(receipt_ids))

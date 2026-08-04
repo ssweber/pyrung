@@ -523,7 +523,12 @@ def observe_departure(
     graphs = getattr(getattr(ctx, "compass", None), "graphs", ()) or ()
     settled_snap = dict(fork.state.tags)
     settled_key = (
-        _pilot_world_key(settled_snap, state.key_config, state.pilot_rungs)
+        _pilot_world_key(
+            settled_snap,
+            state.key_config,
+            state.pilot_rungs,
+            state.active_requirements,
+        )
         if state.key_config is not None
         else None
     )

@@ -174,7 +174,12 @@ def _executed_source_world_key(frame: Any, state: Any) -> tuple[Any, ...]:
     key_config = state.key_config
     if key_config is None:
         return frame.key
-    return _pilot_world_key(frame.snap, key_config, state.pilot_rungs)
+    return _pilot_world_key(
+        frame.snap,
+        key_config,
+        state.pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
 
 
 def _accepted_trial(
@@ -399,6 +404,7 @@ def _gate_dead_end(
         NavigationConstraints(
             blocked_actions=ctx.blocked_actions,
             avoid_predicate=ctx.avoid_pred,
+            active_requirements=tuple(getattr(state, "active_requirements", ())),
         ),
         ctx.compass.knowledge,
     )
@@ -741,7 +747,12 @@ def verify_excursion_replay(
                 avoid_names=tuple(avoid_names),
             )
 
-    replay_key = _pilot_world_key(replay_snap, key_config, replay_pilot_rungs)
+    replay_key = _pilot_world_key(
+        replay_snap,
+        key_config,
+        replay_pilot_rungs,
+        getattr(state, "active_requirements", ()),
+    )
     _record_gate(
         "EXCURSION-REPLAY-OK",
         (
@@ -795,6 +806,7 @@ def verify_excursion_replay(
             frame.snap,
             key_config,
             replay_pilot_rungs,
+            getattr(state, "active_requirements", ()),
         ),
         observations=observations,
     )

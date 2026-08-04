@@ -245,6 +245,49 @@ class AffineCmp(Constraint):
     offset: int | float = 0
 
 
+def complement_scalar_constraint(constraint: Constraint) -> Cmp | AffineCmp | None:
+    """Return the exact logical complement of a supported scalar relation.
+
+    Only relations whose complement remains one scalar constraint are
+    supported. Consumers must fail closed for every other algebra member.
+    """
+
+    complements = {
+        "==": "!=",
+        "!=": "==",
+        "<": ">=",
+        "<=": ">",
+        ">": "<=",
+        ">=": "<",
+    }
+    if isinstance(constraint, Cmp):
+        op = complements.get(constraint.op)
+        return (
+            None
+            if op is None
+            else Cmp(
+                constraint.tag,
+                op,
+                constraint.bound,
+                bound_is_tag=constraint.bound_is_tag,
+            )
+        )
+    if isinstance(constraint, AffineCmp):
+        op = complements.get(constraint.op)
+        return (
+            None
+            if op is None
+            else AffineCmp(
+                constraint.tag,
+                op,
+                constraint.bound_tag,
+                scale=constraint.scale,
+                offset=constraint.offset,
+            )
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class Mask(Constraint):
     """``tag & mask == bits`` — a partial constraint on a wide register.
