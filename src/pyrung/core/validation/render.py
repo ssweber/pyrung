@@ -220,6 +220,22 @@ def render_instruction(
         code = f"fill({operand_name(instr.value)}, {operand_name(instr.dest)})"
     elif itype == "CalcInstruction":
         code = f"math({operand_name(instr.dest)}, {render_expr(instr.expression)})"
+    elif itype in (
+        "OnDelayInstruction",
+        "OffDelayInstruction",
+        "CountUpInstruction",
+        "CountDownInstruction",
+    ):
+        verb = {
+            "OnDelayInstruction": "on_delay",
+            "OffDelayInstruction": "off_delay",
+            "CountUpInstruction": "count_up",
+            "CountDownInstruction": "count_down",
+        }[itype]
+        owner = operand_name(instr.accumulator)
+        if owner.endswith(".Acc"):
+            owner = owner[:-4]
+        code = f"{verb}({owner}, preset={operand_name(instr.preset)})"
     else:
         verb = _VERB.get(itype, itype)
         code = f"{verb}({target_name})"

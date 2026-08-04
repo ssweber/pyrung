@@ -1,7 +1,6 @@
-"""Comparison-semantics validators: CMP_EQ_ON_MONOTONE / CMP_TRUE_AT_RESET /
-CMP_STATIC_ON_LEFT.
+"""Comparison-semantics validators: monotone/reset/order/zero operands.
 
-Three rules, one pass over every comparison in every rung condition (main +
+Five rules, one pass over every comparison in every rung condition (main +
 subroutines + branches, both the ``Compare*`` leaf family and the expression-tree
 ``ExprCompare``):
 
@@ -26,6 +25,15 @@ subroutines + branches, both the ``Compare*`` leaf family and the expression-tre
   analyzer) → **advisory**, kept out of the ``errors()`` / ``warnings()`` gate.  A
   monotone register on the right that is true at reset escalates through
   ``CMP_TRUE_AT_RESET`` instead.
+
+* ``CMP_OPERAND_STAYS_ZERO`` — a numeric tag used directly in a comparison has an
+  implicit zero start and no ladder writer, so it stays zero.  Explicit defaults,
+  external inputs, physical inputs, and read-only zero constants are exempt.
+  **warning**.
+
+* ``CMP_PRESET_STAYS_ZERO`` — the same high-confidence check for a tag-valued
+  timer/counter preset.  Literal zero remains an intentional, supported elapsed-
+  accumulator idiom and is exempt.  **warning**.
 
 "Dynamic" (belongs on the left) is any program-written tag, self-advancing register,
 or inline computed expression; "static" is a literal, an ``S.`` constant, or any
@@ -59,10 +67,12 @@ from pyrung.core.expression import (
     TagExpr,
     UnaryExpr,
 )
-from pyrung.core.tag import ImmediateRef, Tag
+from pyrung.core.tag import ImmediateRef, Tag, TagType
 from pyrung.core.validation._common import (
+    _collect_write_sites,
     _resolve_tag_names,
     iter_rungs,
+    site_frame,
     walk_instructions,
 )
 from pyrung.core.validation.display import FindingDisplay, Frame
@@ -86,6 +96,10 @@ if TYPE_CHECKING:
 CMP_EQ_ON_MONOTONE = "CMP_EQ_ON_MONOTONE"
 CMP_TRUE_AT_RESET = "CMP_TRUE_AT_RESET"
 CMP_STATIC_ON_LEFT = "CMP_STATIC_ON_LEFT"
+CMP_OPERAND_STAYS_ZERO = "CMP_OPERAND_STAYS_ZERO"
+CMP_PRESET_STAYS_ZERO = "CMP_PRESET_STAYS_ZERO"
+
+_NUMERIC_TAG_TYPES = frozenset({TagType.INT, TagType.DINT, TagType.REAL, TagType.WORD})
 
 _SYMBOL_BY_CLASS: dict[type, str] = {
     CompareEq: "==",
@@ -307,6 +321,106 @@ def _is_calc(op: _Operand, calc: set[str]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Zero-value establishment
+# ---------------------------------------------------------------------------
+
+
+def _operand_tag(op: _Operand) -> Tag | None:
+    """Return the direct tag represented by *op*, if it is one."""
+    if isinstance(op.raw, Tag):
+        return op.raw
+    if isinstance(op.raw, TagExpr):
+        return op.raw.tag
+    return None
+
+
+def _tag_stays_zero(tag: Tag, graph: Any) -> bool:
+    """Whether *tag* provably remains at numeric zero inside the ladder.
+
+    Pyrung gives every numeric tag a real zero initialization value.  The defect
+    this rule targets is narrower than ordinary "use before initialization": the
+    tag has no ladder writer at all, so that zero never changes.  A configured
+    default, declared external source, physical input, or read-only zero constant
+    carries explicit intent and is left alone.
+    """
+    if (
+        tag.type not in _NUMERIC_TAG_TYPES
+        or tag.default != 0
+        or getattr(tag, "has_explicit_default", False)
+    ):
+        return False
+    if tag.external or tag.readonly or graph.is_physical_input(tag.name):
+        return False
+    return not graph.writers_of.get(tag.name)
+
+
+def _zero_operand(cmp: _Compare, graph: Any) -> tuple[_Operand, Tag] | None:
+    """Prefer the conventional right-hand bound, then check the left operand."""
+    for operand in (cmp.right, cmp.left):
+        tag = _operand_tag(operand)
+        if tag is not None and _tag_stays_zero(tag, graph):
+            return operand, tag
+    return None
+
+
+def _preset_sites(program: Program, graph: Any) -> list[tuple[Any, Tag, Any]]:
+    """``(write_site, preset_tag, instruction)`` for zero timer/counter presets."""
+    from pyrung.core.instruction.counters import CountDownInstruction, CountUpInstruction
+    from pyrung.core.instruction.timers import OffDelayInstruction, OnDelayInstruction
+
+    accumulating = (
+        OnDelayInstruction,
+        OffDelayInstruction,
+        CountUpInstruction,
+        CountDownInstruction,
+    )
+    sites: list[tuple[Any, Tag, Any]] = []
+    seen: set[int] = set()
+    for site in _collect_write_sites(program):
+        instr = site.instruction
+        if not isinstance(instr, accumulating) or id(instr) in seen:
+            continue
+        # _collect_write_sites emits Done and Acc sites.  Keep the accumulator
+        # site as the instruction anchor and discard the duplicate Done site.
+        if site.target_name != instr.accumulator.name:
+            continue
+        preset = instr.preset
+        if isinstance(preset, Tag) and _tag_stays_zero(preset, graph):
+            sites.append((site, preset, instr))
+            seen.add(id(instr))
+    return sites
+
+
+def _preset_display(site: Any, preset: Tag) -> FindingDisplay:
+    name = operand_name(preset)
+    return FindingDisplay(
+        code=CMP_PRESET_STAYS_ZERO,
+        severity="warning",
+        frames=(site_frame(site, caret_token=name, caret_label="preset stays 0"),),
+        hint=f"set {name} to the intended delay or count, or mark it external",
+    )
+
+
+def _zero_operand_display(cmp: _Compare, operand: _Operand, tag: Tag) -> FindingDisplay:
+    header = with_rung_line(cmp.rung_conds)
+    token = _render(operand)
+    span = caret_of(header, token)
+    frame = Frame(
+        location=cmp.loc,
+        lines=(header,),
+        caret=(0, span[0], span[1]) if span else None,
+        caret_label="stays 0" if span else "",
+    )
+    name = operand_name(tag)
+    return FindingDisplay(
+        code=CMP_OPERAND_STAYS_ZERO,
+        severity="warning",
+        frames=(frame,),
+        hint=f"set {name} before using it here, or mark it external",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Findings
 # ---------------------------------------------------------------------------
 
@@ -518,21 +632,37 @@ def _static_on_left_finding(
 
 
 def validate_cmp_conditions(program: Program) -> CmpConditionReport:
-    """Validate comparison semantics: monotone equality, reset-true, operand order.
+    """Validate comparison semantics and zero-valued operands/presets.
 
-    One pass, three codes.  Each comparison is reported at most once: a monotone
-    equality (error) or a reset-true completion check (warning) claims the
-    comparison, and the operand-order convention (info/warning) reports only what
-    those two more specific rules leave uncovered — the escalation the spec calls
-    for, without double-reporting.
+    Each comparison is reported at most once.  The preset rule is instruction-
+    scoped and can coexist with a distinct comparison error, but it owns the usual
+    ``Acc >= same_preset`` completion comparison so the same zero is not reported
+    twice.
     """
+    from pyrung.core.analysis.pdg import build_program_graph
+
     acc = _acc_index(program)
     written = _written_names(program)
     calc = _calc_derived_names(program)
+    graph = build_program_graph(program)
 
     compares = list(_iter_compares(program))
     claimed: set[int] = set()
     findings: list[CmpConditionFinding] = []
+
+    preset_sites = _preset_sites(program, graph)
+    zero_preset_pairs = {
+        (instr.accumulator.name, preset.name) for _site, preset, instr in preset_sites
+    }
+    for site, preset, _instr in preset_sites:
+        findings.append(
+            CmpConditionFinding(
+                CMP_PRESET_STAYS_ZERO,
+                preset.name,
+                _preset_display(site, preset),
+                "warning",
+            )
+        )
 
     # 1. Equality against a self-advancing register (error). The reset-floor check
     #    (== 0 / != 0) is edge-safe and exempt.
@@ -552,7 +682,33 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
         )
         claimed.add(id(cmp.cond))
 
-    # 2. True-at-reset completion check (warning), either operand order.
+    # 2. A numeric operand that has no writer stays at zero.  A comparison that
+    #    simply mirrors a zero timer/counter preset belongs to the preset finding.
+    for cmp in compares:
+        if id(cmp.cond) in claimed:
+            continue
+        zero = _zero_operand(cmp, graph)
+        if zero is None:
+            continue
+        operand, tag = zero
+        operand_names = {
+            op.name for op in (cmp.left, cmp.right) if op.kind == "tag" and op.name is not None
+        }
+        mirrors_zero_preset = any(
+            {acc_name, preset_name} == operand_names for acc_name, preset_name in zero_preset_pairs
+        )
+        if not mirrors_zero_preset:
+            findings.append(
+                CmpConditionFinding(
+                    CMP_OPERAND_STAYS_ZERO,
+                    tag.name,
+                    _zero_operand_display(cmp, operand, tag),
+                    "warning",
+                )
+            )
+        claimed.add(id(cmp.cond))
+
+    # 3. True-at-reset completion check (warning), either operand order.
     for cmp in compares:
         if id(cmp.cond) in claimed or cmp.op not in ("<", "<=", ">", ">="):
             continue
@@ -561,7 +717,7 @@ def validate_cmp_conditions(program: Program) -> CmpConditionReport:
             findings.append(finding)
             claimed.add(id(cmp.cond))
 
-    # 3. Operand-order convention (info/warning) for whatever remains.
+    # 4. Operand-order convention (info/warning) for whatever remains.
     for cmp in compares:
         if id(cmp.cond) in claimed:
             continue

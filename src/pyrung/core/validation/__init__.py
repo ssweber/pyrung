@@ -22,6 +22,8 @@ from pyrung.core.validation.choices_violation import (
 )
 from pyrung.core.validation.cmp_conditions import (
     CMP_EQ_ON_MONOTONE,
+    CMP_OPERAND_STAYS_ZERO,
+    CMP_PRESET_STAYS_ZERO,
     CMP_STATIC_ON_LEFT,
     CMP_TRUE_AT_RESET,
     CmpConditionFinding,
@@ -127,6 +129,8 @@ __all__ = [
     "RUNG_CONTRADICTION",
     "RUNG_TAUTOLOGY",
     "CMP_EQ_ON_MONOTONE",
+    "CMP_OPERAND_STAYS_ZERO",
+    "CMP_PRESET_STAYS_ZERO",
     "CMP_STATIC_ON_LEFT",
     "CMP_TRUE_AT_RESET",
     "STEP_NO_ESCAPE",

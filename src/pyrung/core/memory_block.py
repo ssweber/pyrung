@@ -417,7 +417,7 @@ class Block:
                 retentive, default = self._effective_slot_policy(addr)
                 comment = self._effective_slot_comment(addr)
                 hints = self._effective_slot_hints(addr)
-                self._tag_cache[addr] = self._new_tag_for_slot(
+                tag = self._new_tag_for_slot(
                     addr,
                     retentive=retentive,
                     default=default,
@@ -434,6 +434,16 @@ class Block:
                     max=hints.max,
                     uom=hints.uom,
                 )
+                # A plain block slot receives its type default as a concrete
+                # value before Tag.__post_init__, so preserve whether that value
+                # was actually configured.  Structure factories return None for
+                # an omitted field default and a value for an explicit one.
+                configured_default = self._slot_field(addr, "default", UNSET)
+                default_explicit = default is not None and (
+                    configured_default is not UNSET or self.default_factory is not None
+                )
+                object.__setattr__(tag, "_default_explicit", default_explicit)
+                self._tag_cache[addr] = tag
         # _tag_cache is typed dict[int, LiveTag]; both assignment sites store a
         # LiveTag, so no runtime cast is needed here (this runs on every access).
         return self._tag_cache[addr]

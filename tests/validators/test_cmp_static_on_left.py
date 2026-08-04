@@ -34,7 +34,7 @@ def _codes(report, code):
 
 
 def _eq_info_program() -> Program:
-    lo_limit = Int("LoLimit")  # never written, not external → a static constant
+    lo_limit = Int("LoLimit", default=1, readonly=True)  # explicit static constant
     running = Int("Running")  # program-written below → dynamic
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:
@@ -58,7 +58,7 @@ class TestTier1Info:
 
 
 def _calc_right_program() -> Program:
-    lo_limit = Int("LoLimit")  # static constant
+    lo_limit = Int("LoLimit", default=1, readonly=True)  # explicit static constant
     a = Int("A", external=True)
     b = Int("B", external=True)
     calc_out = Int("CalcOut")
@@ -72,7 +72,7 @@ def _calc_right_program() -> Program:
 
 
 def _computed_right_program() -> Program:
-    lo_limit = Int("LoLimit")  # static constant
+    lo_limit = Int("LoLimit", default=1, readonly=True)  # explicit static constant
     a = Int("A", external=True)
     b = Int("B", external=True)
     out = Bool("Out", external=True)
@@ -120,7 +120,7 @@ def _escalation_program() -> Program:
 
 def _fallback_program() -> Program:
     """``LoLimit < Acc`` — false at reset, so it falls back to the flip warning."""
-    lo_limit = Int("LoLimit")  # static constant, also the preset
+    lo_limit = Int("LoLimit", default=5, readonly=True)  # static constant and preset
     tmr = Timer.clone("Tmr")
     out = Bool("Out", external=True)
     with Program(strict=False) as prog:

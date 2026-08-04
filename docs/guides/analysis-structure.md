@@ -196,6 +196,11 @@ Unknown codes raise `ValueError`.
 | `TAG_RANGE_VIOLATION` | Literal-value write outside the tag's declared `min`/`max` range. |
 | `PHYS_MISSING_PROFILE` | Tag has a `Physical` profile via `link` but the linked tag has no profile defined. |
 | `PHYS_ANTITOGGLE` | Opposing writes to a feedback-linked tag pair within the same scan, risking physical oscillation. |
+| `CMP_EQ_ON_MONOTONE` | Equality against a timer or counter accumulator that can step past the exact value. |
+| `CMP_OPERAND_STAYS_ZERO` | A numeric tag used in a comparison has an implicit zero start and no ladder writer, so it stays zero. Configured defaults, external inputs, and read-only zero constants are left alone. |
+| `CMP_PRESET_STAYS_ZERO` | A tag-valued timer or counter preset has an implicit zero start and no ladder writer, so completion is immediate. Configured and literal zero presets are intentional and left alone. |
+| `CMP_TRUE_AT_RESET` | A timer/counter comparison has the completion test backwards and is already true when the accumulator resets. |
+| `CMP_STATIC_ON_LEFT` | A fixed value appears on the left of a comparison and the changing value on the right. |
 | `STEP_NO_ESCAPE` | A step whose only advance needs something the program cannot supply, with no escape it can fire unaided. The machine can sit there forever. See [wait edges without escape](analysis-coverage.md#wait-edges-without-escape). |
 
 `PTR_DEFAULT_BEFORE_BLOCK_START` is intentionally syntax-level. It checks the actual dereference tag used in `Block[Ptr]`, not whether some earlier rung computed a different intermediate pointer.

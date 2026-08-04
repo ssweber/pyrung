@@ -193,6 +193,8 @@ class TestValidationReport:
             "RUNG_CONTRADICTION",
             "RUNG_TAUTOLOGY",
             "CMP_EQ_ON_MONOTONE",
+            "CMP_OPERAND_STAYS_ZERO",
+            "CMP_PRESET_STAYS_ZERO",
             "CMP_TRUE_AT_RESET",
             "CMP_STATIC_ON_LEFT",
             "STEP_NO_ESCAPE",
