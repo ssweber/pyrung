@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectPathStep,
     observe_execution_window,
     observe_expectation,
+    promote_terminal_target_observation,
     required_shape,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -559,6 +560,41 @@ def test_ordinary_observer_classifies_overwritten_stranded_and_displaced() -> No
         effect.name,
         latch.name,
     ]
+
+
+def test_terminal_target_peels_final_landing_without_changing_first_displacement() -> None:
+    effect = Int("TerminalLandingSelectionEffect")
+    with Program() as program:
+        with rung():
+            copy(1, effect)
+        with rung():
+            copy(2, effect)
+        with rung():
+            copy(0, effect)
+    plc = PLC(program)
+    plc.step()
+    obligation = EffectObligation(
+        effect.name,
+        1,
+        (None, 0, ()),
+        None,
+        (),
+        terminal_target=True,
+        producer_rung=program.rungs[0],
+    )
+
+    ordinary = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        action_scan=1,
+    )[0]
+    promoted = promote_terminal_target_observation((ordinary,))
+
+    assert ordinary.displacement is not None
+    assert ordinary.displacement.transition.to_value == 2
+    assert promoted is not None and promoted.displacement is not None
+    assert promoted.displacement.transition.to_value == 0
 
 
 def test_repeated_producer_occurrences_keep_mixed_per_occurrence_truth() -> None:

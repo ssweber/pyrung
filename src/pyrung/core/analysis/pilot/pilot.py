@@ -48,9 +48,12 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
+    expectation_from_writer,
     fulfilled_expectation_observations,
     obligation_snapshot,
+    observe_execution_window,
     occurrence_snapshot,
+    promote_terminal_target_observation,
 )
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -160,7 +163,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
-from pyrung.core.analysis.pilot.verify import verify_excursion_replay
+from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_gates
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
@@ -355,6 +358,22 @@ def _derive_attempt_requirements(
                 source_checkpoint=checkpoint,
                 provenance="steer",
             )
+            if derivation.requirement is None:
+                derivation = derive_overwriter_guard_requirement_from_effect(
+                    observation,
+                    projection,
+                    execution_epoch=epoch,
+                    execution_owner=owner,
+                    selected_writer=observation.obligation.producer,
+                    source_world_key=checkpoint.key,
+                    source_checkpoint=checkpoint,
+                    provenance="steer-overwriter",
+                    preserved_values=(
+                        ((observation.obligation.tag, observation.obligation.value),)
+                        if observation.obligation.terminal_target
+                        else ()
+                    ),
+                )
             explanation = derivation.explanation
         failed = FailedEffectReceipt(
             explanation=explanation,
@@ -2399,6 +2418,11 @@ def _transition_once(
     if not isinstance(result, Bearing):
         return _IterationTransition(result=result, frame=frame)
 
+    terminal_target_expectation = _selected_terminal_target_expectation(
+        frame,
+        target,
+        ctx,
+    )
     act = result.act
     expectation_checkpoint = (
         _CausalCheckpoint(
@@ -2406,12 +2430,22 @@ def _transition_once(
             world=state.snapshot_world(),
             objective=result.objective,
         )
-        if result.expectation is not None
+        if result.expectation is not None or terminal_target_expectation is not None
         else None
     )
     attempt = execute(result, orientation_world)
     if resolve_excursion:
         attempt = _resolve_excursion(attempt, frame, state, ctx)
+    if terminal_target_expectation is not None:
+        result, attempt = _promote_transient_target_failure(
+            result,
+            attempt,
+            terminal_target_expectation,
+            frame,
+            state,
+            ctx,
+        )
+        act = result.act
     if derive_requirements:
         _derive_attempt_requirements(
             attempt,
@@ -2464,6 +2498,110 @@ def _transition_once(
         frame=frame,
         attempt=attempt,
         trial=trial,
+    )
+
+
+def _selected_terminal_target_expectation(
+    frame: _IterationFrame,
+    target: TargetSpec,
+    ctx: _PilotContext,
+) -> EffectExpectation | None:
+    """Name the exact selected root writer for an equality target.
+
+    This is only a designation until execution proves the writer appeared.
+    Relational targets and unresolved/ambiguous root writers fail closed.
+    """
+
+    if target.predicate is not None:
+        return None
+    root = frame.tree
+    if (
+        root.writer_rung is None
+        or root.tag != target.tag
+        or not _values_match(root.value, target.value)
+    ):
+        return None
+    return expectation_from_writer(
+        ctx.pdg,
+        ctx.program,
+        writer_node=root.writer_rung,
+        tag=target.tag,
+        value=target.value,
+        boundary=(target.tag, target.value),
+        terminal_target=True,
+    )
+
+
+def _promote_transient_target_failure(
+    result: Bearing,
+    attempt: _AttemptResult,
+    target_expectation: EffectExpectation,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> tuple[Bearing, _AttemptResult]:
+    """Re-verify an act only after its selected target appeared and was lost."""
+
+    executed = _executed_attempt(attempt)
+    if executed is None:
+        return result, attempt
+    pulse = executed.pulse
+    target_observations = observe_execution_window(
+        target_expectation,
+        pulse.fork,
+        scan_before=pulse.scan_before,
+        action_scan=(None if result.act.policy.motion.is_coast else pulse.action_scan),
+        coast_receipt=pulse.coast_receipt,
+        timeline=pulse.timeline,
+    )
+    promoted = promote_terminal_target_observation(target_observations)
+    if promoted is None:
+        return result, attempt
+
+    existing = executed.bearing.expectation
+    terminal_obligation = target_expectation.obligations[0]
+    if existing is not None:
+        matching = tuple(
+            obligation
+            for obligation in existing.obligations
+            if obligation.tag == terminal_obligation.tag
+            and _values_match(obligation.value, terminal_obligation.value)
+            and obligation.producer == terminal_obligation.producer
+        )
+        # A consumer-owned target handoff already has the established delayed
+        # recovery semantics. Do not mint a parallel terminal obligation.
+        if any(obligation.consumer is not None for obligation in matching):
+            return result, attempt
+        obligations = (
+            *(obligation for obligation in existing.obligations if obligation not in matching),
+            terminal_obligation,
+        )
+        retained_observations = tuple(
+            observation
+            for observation in executed.effect_observations
+            if observation.obligation not in matching
+        )
+    else:
+        obligations = target_expectation.obligations
+        retained_observations = executed.effect_observations
+    expectation = EffectExpectation(obligations)
+    rebound_policy = replace(
+        result.act.policy,
+        expectation=expectation,
+        expectation_exemption=None,
+    )
+    rebound_act = replace(result.act, policy=rebound_policy)
+    rebound = replace(result, act=rebound_act)
+    rebound_executed = replace(
+        executed,
+        bearing=rebound,
+        effect_observations=(*retained_observations, promoted),
+    )
+    verified = verify_gates(rebound_executed, frame, state, ctx)
+    return rebound, replace(
+        verified,
+        observations=attempt.observations,
+        confirmed_correction=attempt.confirmed_correction,
     )
 
 

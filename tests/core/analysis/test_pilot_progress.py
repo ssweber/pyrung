@@ -72,6 +72,7 @@ from pyrung.core.analysis.pilot.progress import (
     _apply_departure_decision,
     _assess_pending_departure,
     _channel_recovery_origin,
+    _delayed_overwriter_fallback_allowed,
     _departure_event_outcome,
     _handle_channel_departure,
     _investigate_and_revert,
@@ -98,6 +99,16 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.pilot.verify import _gate_revisit
 from pyrung.core.analysis.steerable import compute_steerable
+
+
+def test_delayed_overwriter_fallback_is_terminal_target_only() -> None:
+    ordinary = SimpleNamespace(obligation=SimpleNamespace(terminal_target=False))
+    terminal = SimpleNamespace(obligation=SimpleNamespace(terminal_target=True))
+
+    assert not _delayed_overwriter_fallback_allowed(ordinary)
+    assert _delayed_overwriter_fallback_allowed(terminal)
+
+
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------

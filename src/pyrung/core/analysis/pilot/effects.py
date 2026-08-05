@@ -74,6 +74,11 @@ class EffectObligation:
     consumer: StaticRungAddress | None
     required_shape: tuple[tuple[str, Any], ...]
     boundary: tuple[str, Any] | None = None
+    # True only for the user's exact global target after its selected producer
+    # has actually appeared in an act-owned execution window. Ordinary
+    # terminal effects remain endpoint evidence; this one may veto acceptance
+    # when a later same-scan write displaces it before scan exit.
+    terminal_target: bool = False
     producer_rung: object = field(compare=False, repr=False, default=None)
     consumer_rung: object | None = field(compare=False, repr=False, default=None)
 
@@ -140,6 +145,7 @@ class EffectObligationSnapshot:
     consumer: StaticRungAddress | None
     required_shape: tuple[tuple[str, Any], ...]
     boundary: tuple[str, Any] | None
+    terminal_target: bool = False
 
 
 @dataclass(frozen=True)
@@ -305,6 +311,7 @@ def expectation_from_writer(
     consumer_node: int | None = None,
     required_shape: tuple[tuple[str, Any], ...] = (),
     boundary: tuple[str, Any] | None = None,
+    terminal_target: bool = False,
 ) -> EffectExpectation | None:
     """Mint an expectation from an already-selected static writer receipt.
 
@@ -333,11 +340,149 @@ def expectation_from_writer(
                 ),
                 required_shape=required_shape,
                 boundary=boundary,
+                terminal_target=terminal_target,
                 producer_rung=producer_rung,
                 consumer_rung=consumer_rung,
             ),
         )
     )
+
+
+def exact_last_landing_write(
+    projections: Iterable[ScanRungWriteProjection],
+    *,
+    after: RungRead | RungWrite,
+    tag: str,
+    target_value: Any,
+    landing_value: Any,
+) -> tuple[ScanRungWriteProjection, RungWrite] | None:
+    """Return the final exact later write which owns the window landing.
+
+    Ordered handoff observation deliberately names the first displacement.
+    Terminal recovery has a different question: which later occurrence left
+    the tag at the scan-exit value? Peeling that final writer is exact and
+    deterministic; missing projection identity fails closed.
+    """
+
+    candidates = tuple(
+        (projection, write)
+        for projection in projections
+        for write in projection.writes
+        if (write.scan_id, write.ordinal) > (after.scan_id, after.ordinal)
+        and write.run.enabled
+        and write.transition.tag_name == tag
+        and not _values_match(write.transition.to_value, target_value)
+        and _values_match(write.transition.to_value, landing_value)
+    )
+    return candidates[-1] if candidates else None
+
+
+def promote_terminal_target_observation(
+    observations: Iterable[EffectObservation],
+) -> EffectObservation | None:
+    """Promote one appeared-and-displaced global target, never its absence.
+
+    The current frontier selected the static producer before execution. This
+    adapter grants it terminal authority only after exactly one dynamic target
+    occurrence appears and an exact same-scan projection proves the final
+    landing writer. Multiple appearances or a folded/missing projection are
+    ambiguous and therefore produce no obligation failure.
+    """
+
+    appeared = tuple(
+        observation
+        for observation in observations
+        if observation.obligation.terminal_target and observation.appeared is not None
+    )
+    if len(appeared) != 1:
+        return None
+    observation = appeared[0]
+    projection = observation.execution_projection
+    producer = observation.appeared
+    assert producer is not None
+    if (
+        projection is None
+        or producer.scan_id != projection.scan_id
+        or not any(write is producer for write in projection.writes)
+    ):
+        return None
+    landing_value = projection.exit_tags.get(observation.obligation.tag)
+    if _values_match(landing_value, observation.obligation.value):
+        return None
+    # Non-zero endpoint motion is already owned by channel departure and its
+    # accepted handoff receipt. This promotion exists for the otherwise
+    # invisible zero-net excursion only; taking the ordinary case here would
+    # erase the established producer-to-consumer handoff lifecycle.
+    if not _values_match(
+        projection.entry_tags.get(observation.obligation.tag),
+        landing_value,
+    ):
+        return None
+    landing = exact_last_landing_write(
+        (projection,),
+        after=producer,
+        tag=observation.obligation.tag,
+        target_value=observation.obligation.value,
+        landing_value=landing_value,
+    )
+    if landing is None:
+        return None
+    landing_projection, displacement = landing
+    return replace(
+        observation,
+        disposition="OVERWRITTEN",
+        displacement=displacement,
+        observed_reads=_terminal_landing_causal_reads(
+            landing_projection,
+            displacement,
+            observation.obligation.tag,
+        ),
+        detail="global target appeared but the final same-scan writer replaced it",
+        execution_projection=landing_projection,
+    )
+
+
+def _terminal_landing_causal_reads(
+    projection: ScanRungWriteProjection,
+    landing: RungWrite,
+    tag: str,
+) -> tuple[RungRead, ...]:
+    """Expose the exact predecessor which enabled a nested final rollback.
+
+    A subroutine copy can own the scan landing while its own run has no reads;
+    the caller guard observes the earlier same-tag displacement. Follow only
+    that exact dynamic source once, then include the predecessor writer's
+    enabling reads so existing Advance inversion can reach its completion bit.
+    """
+
+    direct = list(projection.enabling_reads_observed_by_write(landing))
+    parent = projection.parent_run(landing.run)
+    if not direct and parent is not None:
+        direct.extend(
+            read for read in projection.reads_for_run(parent) if read.ordinal < landing.ordinal
+        )
+
+    result = list(direct)
+    predecessor_writes: list[RungWrite] = []
+    for read in direct:
+        if read.occurrence.name != tag:
+            continue
+        transition = projection.transition_observed_by_read(read)
+        if transition is None or transition.occurrence_ordinal is None:
+            continue
+        matches = tuple(
+            write
+            for write in projection.writes
+            if write.ordinal == transition.occurrence_ordinal and write.transition.tag_name == tag
+        )
+        if len(matches) != 1:
+            return ()
+        predecessor_writes.append(matches[0])
+    if len(predecessor_writes) > 1:
+        return ()
+    if predecessor_writes:
+        result.extend(projection.enabling_reads_observed_by_write(predecessor_writes[0]))
+    return tuple(dict.fromkeys(result))
 
 
 def expectation_from_selected_path(
@@ -975,6 +1120,7 @@ def obligation_snapshot(obligation: EffectObligation) -> EffectObligationSnapsho
             if obligation.boundary is not None
             else None
         ),
+        terminal_target=obligation.terminal_target,
     )
 
 

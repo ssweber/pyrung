@@ -105,7 +105,7 @@ def _proved_effect_violations(attempt: _ExecutedAttempt) -> tuple[Any, ...]:
         observation
         for observation in attempt.effect_observations
         if observation.disposition in _PROVED_EFFECT_VIOLATIONS
-        and observation.obligation.consumer is not None
+        and (observation.obligation.consumer is not None or observation.obligation.terminal_target)
         and id(observation.obligation) not in fulfilled_obligations
     )
 

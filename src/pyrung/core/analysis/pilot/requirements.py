@@ -1307,6 +1307,7 @@ def derive_overwriter_guard_requirement_from_effect(
     phase: RequirementPhase = RequirementPhase.STEADY,
     provenance: str = "",
     scope: tuple[Any, ...] = (),
+    preserved_values: tuple[tuple[str, Any], ...] = (),
 ) -> RequirementDerivation:
     """Prevent one exact harmful writer by complementing its observed guard."""
 
@@ -1337,7 +1338,13 @@ def derive_overwriter_guard_requirement_from_effect(
         or not evaluation.supporting_reads
     ):
         return _unknown("harmful overwriter guard has no exact scalar complement")
-    condition = _bind_guard_demanding_rung(evaluation.requirement, run.rung)
+    filtered = _residualize_guard_requirement(
+        evaluation.requirement,
+        preserved_values,
+    )
+    if filtered is None:
+        return _unknown("harmful overwriter guard depends only on excluded channel state")
+    condition = _bind_guard_demanding_rung(filtered, run.rung)
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     explanation_kind = (
         FailureExplanationKind.OVERWRITTEN
@@ -1369,6 +1376,32 @@ def derive_overwriter_guard_requirement_from_effect(
             scope=(*scope, ("overwriter_guard", occurrence_snapshot(displacement))),
         ),
     )
+
+
+def _residualize_guard_requirement(
+    condition: GuardRequirementCondition,
+    preserved_values: tuple[tuple[str, Any], ...],
+) -> GuardRequirementCondition | None:
+    """Remove only alternatives disproved by values the effect must preserve."""
+
+    if isinstance(condition, GuardRequirementAtom):
+        return (
+            None
+            if constraint_holds(condition.condition, dict(preserved_values)) is False
+            else condition
+        )
+    filtered = tuple(
+        member
+        for term in condition.terms
+        if (member := _residualize_guard_requirement(term, preserved_values)) is not None
+    )
+    if len(filtered) == len(condition.terms):
+        return condition
+    if condition.logic is GuardLogic.ALL or not filtered:
+        return None
+    if len(filtered) == 1:
+        return filtered[0]
+    return replace(condition, terms=filtered, exhaustive=False)
 
 
 def derive_advance_operand_requirement(

@@ -28,6 +28,7 @@ from pyrung.core.analysis.pilot.requirements import (
     GuardRequirementAtom,
     GuardRequirementExpr,
     OperandAuthority,
+    _residualize_guard_requirement,
     classify_bound_operand_authority,
     derive_advance_operand_requirement,
     derive_advance_requirement_from_effect,
@@ -57,6 +58,30 @@ class _Evidence:
     epoch: Any
     epoch_owner: Any
     checkpoint: Any
+
+
+def test_target_self_guard_is_removed_only_as_an_independent_or_alternative() -> None:
+    deadline = cast(Any, object())
+    self_guard = GuardRequirementAtom(Cmp("State", "!=", 4), (), deadline, (0,))
+    external_guard = GuardRequirementAtom(Cmp("Permit", "==", False), (), deadline, (1,))
+
+    residual = _residualize_guard_requirement(
+        GuardRequirementExpr(GuardLogic.ANY, (self_guard, external_guard)),
+        (("State", 4),),
+    )
+
+    assert residual is external_guard
+    assert (
+        _residualize_guard_requirement(
+            GuardRequirementExpr(GuardLogic.ALL, (self_guard, external_guard)),
+            (("State", 4),),
+        )
+        is None
+    )
+    compatible_same_tag = GuardRequirementAtom(Cmp("State", ">", 20), (), deadline, (2,))
+    assert (
+        _residualize_guard_requirement(compatible_same_tag, (("State", 81),)) is compatible_same_tag
+    )
 
 
 def _evidence() -> _Evidence:

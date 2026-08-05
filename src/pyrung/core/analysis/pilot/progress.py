@@ -40,6 +40,7 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
+    exact_last_landing_write,
     fulfilled_expectation_observations,
     occurrence_snapshot,
 )
@@ -78,6 +79,7 @@ from pyrung.core.analysis.pilot.requirements import (
     FailedEffectReceipt,
     classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_effect,
     match_expectation_receipt,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
@@ -111,6 +113,12 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
+
+
+def _delayed_overwriter_fallback_allowed(observation: EffectObservation) -> bool:
+    """Only a promoted global-target receipt may widen delayed recovery."""
+
+    return observation.obligation.terminal_target
 
 
 def _regression_expectation_source(
@@ -229,6 +237,17 @@ def _delayed_requirement_from_regression(
         source_checkpoint=receipt.source_checkpoint,
         provenance="delayed-regression",
     )
+    if derivation.requirement is None and _delayed_overwriter_fallback_allowed(observation):
+        derivation = derive_overwriter_guard_requirement_from_effect(
+            observation,
+            projection,
+            execution_epoch=harmful_link.execution_epoch,
+            execution_owner=harmful_link.execution_owner,
+            selected_writer=obligation.producer,
+            source_world_key=receipt.source_world_key,
+            source_checkpoint=receipt.source_checkpoint,
+            provenance="delayed-regression-overwriter",
+        )
     if derivation.requirement is None:
         return None
     failed = FailedEffectReceipt(
@@ -1491,34 +1510,33 @@ def _investigate_and_revert(
             if appeared is None:
                 continue
             start_scan = consumer.scan_id if consumer is not None else appeared.scan_id
-            start_ordinal = consumer.ordinal if consumer is not None else appeared.ordinal
             landing_value = execution.after_snap.get(observation.obligation.tag)
-            links = tuple(
-                (
-                    observation,
-                    BearingDeparture(
-                        observation.obligation.tag,
-                        observation.obligation.value,
-                        scan_id,
-                    ),
-                    write,
-                    projection,
-                )
+            projections = tuple(
+                projection
                 for scan_id in range(start_scan, end_scan + 1)
                 if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
-                for write in projection.writes
-                if (scan_id > start_scan or write.ordinal > start_ordinal)
-                and write.run.enabled
-                and write.transition.tag_name == observation.obligation.tag
-                and not _values_match(
-                    write.transition.to_value,
-                    observation.obligation.value,
-                )
-                and _values_match(write.transition.to_value, landing_value)
             )
-            link = links[-1] if links else None
-            if link is not None:
-                exact_delayed_links.append(link)
+            landing = exact_last_landing_write(
+                projections,
+                after=consumer if consumer is not None else appeared,
+                tag=observation.obligation.tag,
+                target_value=observation.obligation.value,
+                landing_value=landing_value,
+            )
+            if landing is not None:
+                projection, write = landing
+                exact_delayed_links.append(
+                    (
+                        observation,
+                        BearingDeparture(
+                            observation.obligation.tag,
+                            observation.obligation.value,
+                            write.scan_id,
+                        ),
+                        write,
+                        projection,
+                    )
+                )
         exact_delayed_departures = [link[1] for link in exact_delayed_links]
         delayed_bearing = tuple(
             (departure.tag, departure.value) for departure in exact_delayed_departures
