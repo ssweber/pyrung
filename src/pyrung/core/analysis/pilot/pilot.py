@@ -29,6 +29,7 @@ from pyrung.core.analysis.graph import (
 )
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index, iter_advance_owners
+from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 from pyrung.core.analysis.pilot.bootstrap import (
     bootstrap_designations,
     observe_bootstrap_effects,
@@ -78,6 +79,7 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
+from pyrung.core.analysis.pilot.program_step import ProgramStepStatus, read_program_step
 from pyrung.core.analysis.pilot.progress import (
     _anchor_bearing_receipt,
     _anchor_frame_receipt,
@@ -142,6 +144,7 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,
+    WorldView,
     _AcceptedTrial,
     _ActionPair,
     _AttemptResult,
@@ -1130,6 +1133,250 @@ def _repair_bootstrap_requirement(
     )
 
 
+def _repaired_program_continuation(
+    candidate: _PilotState,
+    ctx: _PilotContext,
+    trial: _AcceptedTrial,
+    expectation: EffectExpectation,
+) -> bool:
+    """Prove that a corrected consumer handoff folded only target-path work.
+
+    A pulse may satisfy its exact consumer and then ride several program-owned
+    state writes before the executor returns.  In that case the trial's channel
+    verification still describes a departure from the pulse's requested value,
+    even though the corrected suffix is useful autonomous progress.  Re-read
+    the target path at the exact consumer scan and ask ``ProgramStep`` whether
+    its selected landing writer is reached by an unchanged projection.
+
+    The landing writer must be the unique program-owned writer already selected
+    on that fresh target trace.  A same-tag automatic writer outside the target
+    path therefore cannot turn arbitrary drift into an accepted repair.
+    """
+
+    channel = trial.execution.channel_motion.channel_tag
+    if channel is None:
+        return False
+    observations = fulfilled_expectation_observations(
+        expectation,
+        trial.attempt.effect_observations,
+    )
+    handoffs = tuple(
+        item
+        for item in observations
+        if item.obligation.tag == channel and item.consumer_read is not None
+    )
+    if len(handoffs) != 1:
+        return False
+    handoff = handoffs[0]
+    consumer = handoff.consumer_read
+    consumer_projection = handoff.execution_projection
+    assert consumer is not None
+    if consumer_projection is None or consumer_projection.scan_id != consumer.scan_id:
+        return False
+    consumer_scan = consumer.scan_id
+
+    same_scan_suffix = tuple(
+        write
+        for write in consumer_projection.writes
+        if write.ordinal > consumer.ordinal
+        and write.transition.tag_name == channel
+        and write.run.enabled
+    )
+    consumer_operation_runs = consumer.run.rung_occurrences
+    if any(
+        all(write.run is not operation_run for operation_run in consumer_operation_runs)
+        for write in same_scan_suffix
+    ):
+        # The scan-exit snapshot is a faithful consumer boundary only when any
+        # later channel write belongs to that same dynamic consumer operation,
+        # including its exact nested branch runs. A sibling/outer writer would
+        # already have displaced the handoff before the historical fork on
+        # which ProgramStep projects.
+        return False
+
+    try:
+        handoff_work = fork_with_pilot_rungs(
+            candidate.work,
+            candidate.pilot_rungs,
+            scan_id=consumer_scan,
+        )
+    except KeyError:
+        return False
+
+    handoff_snap = dict(handoff_work.state.tags)
+    landing_value = candidate.work.state.tags.get(channel)
+    if _values_match(handoff_snap.get(channel), landing_value):
+        return False
+
+    probe = _disposable_requirement_state(
+        candidate,
+        _CausalCheckpoint(
+            key=None,
+            world=candidate.world.set(work=handoff_work),
+            objective=trial.attempt.bearing.objective,
+        ),
+    )
+    reading = ctx.compass.orient(
+        OrientationWorld(
+            world_key=(),
+            snapshot=handoff_snap,
+            frame=None,
+            state=probe,
+            context=ctx,
+            key_config=probe.key_config,
+        ),
+        ctx.target,
+        NavigationConstraints(active_requirements=tuple(probe.active_requirements)),
+    )
+    orientation = reading.orientation
+    if orientation is None or orientation.world.frame is None:
+        return False
+    landing_writers = {
+        node.writer_rung
+        for node in orientation.world.frame.tree.iter_nodes()
+        if node.tag == channel
+        and _values_match(node.value, landing_value)
+        and node.writer_rung is not None
+    }
+    if len(landing_writers) != 1:
+        return False
+    landing_writer = next(iter(landing_writers))
+    selected_rung = resolve_rung(ctx.program, ctx.pdg.rung_nodes[landing_writer])
+    if selected_rung is None:
+        return False
+
+    later_writes = list(same_scan_suffix)
+    relevant_projections = [consumer_projection]
+    for scan_id in range(consumer_scan + 1, candidate.work.state.scan_id + 1):
+        projection = candidate.work._replay_rung_write_projection_at(scan_id)
+        if projection is None:
+            return False
+        relevant_projections.append(projection)
+        later_writes.extend(
+            write
+            for write in projection.writes
+            if write.transition.tag_name == channel and write.run.enabled
+        )
+    landing_occurrences = tuple(
+        write for write in later_writes if _values_match(write.transition.to_value, landing_value)
+    )
+    if not landing_occurrences:
+        return False
+    landing_occurrence = max(
+        landing_occurrences,
+        key=lambda write: (write.scan_id, write.ordinal),
+    )
+    if landing_occurrence.run.rung is not selected_rung:
+        return False
+
+    # The whole observed suffix must belong to one retained causal epoch. Scan
+    # numbers alone are not occurrence ownership: a fork can reuse them under
+    # another execution epoch.
+    suffix_owner = candidate.work._causal_lineage.owner_at(consumer_scan)
+    if suffix_owner is None or any(
+        candidate.work._causal_lineage.owner_at(projection.scan_id) is not suffix_owner
+        for projection in relevant_projections
+    ):
+        return False
+
+    selected_node = ctx.pdg.rung_nodes[landing_writer]
+    capture_indices = ctx.pdg.timeline_capture_indices_for_node(landing_writer)
+    if selected_node.subroutine is not None:
+        if len(capture_indices) != 1:
+            return False
+        if landing_occurrence.run.caller_rung != next(iter(capture_indices)):
+            return False
+
+    def dynamic_invocations(projection: Any) -> frozenset[int | None]:
+        return frozenset(
+            occurrence.call_invocation
+            for occurrence in (*projection.reads, *projection.writes)
+            if occurrence.run.rung is selected_rung
+        )
+
+    if any(len(dynamic_invocations(projection)) > 1 for projection in relevant_projections):
+        return False
+
+    world = WorldView(
+        snapshot=handoff_snap,
+        pdg=ctx.pdg,
+        program=ctx.program,
+        steerable=ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        prior=ctx.domain_prior,
+        clear_only=ctx.clear_only,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
+        pipeline_roles=ctx.pipeline_roles,
+        avoid_pred=ctx.avoid_pred,
+        harness=getattr(handoff_work, "_harness", None),
+    )
+    family = sibling_producer_family(world, channel, landing_value)
+    producers = (
+        tuple(
+            producer for producer in family.program_owned if producer.rung_index == landing_writer
+        )
+        if family is not None
+        else ()
+    )
+    if len(producers) != 1:
+        return False
+    step = read_program_step(
+        world,
+        producers[0],
+        handoff_work,
+        candidate.pilot_rungs,
+        resting=ctx.resting,
+        projection_scans=4,
+    )
+    motion = step.observable_motion(channel)
+    if not (
+        step.status is ProgramStepStatus.KEEP_RUNNING
+        and motion is not None
+        and _values_match(motion.before_value, handoff_snap.get(channel))
+        and _values_match(motion.target_value, landing_value)
+    ):
+        return False
+
+    # Reproduce ProgramStep's bounded unchanged projection and join its one
+    # selected producer occurrence to the historical landing winner by full
+    # dynamic address. Static rung identity alone aliases repeated subroutine
+    # calls and loop iterations.
+    projected_work = fork_with_pilot_rungs(handoff_work, candidate.pilot_rungs)
+    projected_occurrences = []
+    for _ in range(4):
+        projected_work.step()
+        projection = projected_work._replay_rung_write_projection_at(projected_work.state.scan_id)
+        if projection is None or len(dynamic_invocations(projection)) > 1:
+            return False
+        projected_occurrences.extend(
+            write
+            for write in projection.writes
+            if write.run.rung is selected_rung
+            and write.transition.tag_name == channel
+            and _values_match(write.transition.to_value, landing_value)
+            and write.run.enabled
+        )
+        if _values_match(projected_work.state.tags.get(channel), landing_value):
+            break
+    if len(projected_occurrences) != 1:
+        return False
+    projected_occurrence = projected_occurrences[0]
+
+    def dynamic_address(write: Any) -> tuple[Any, ...]:
+        return (
+            write.scan_id,
+            write.ordinal,
+            write.run_order,
+            write.call_invocation,
+            write.rung_id,
+            write.run.kind,
+            write.run.caller_rung,
+            write.run.call_stack,
+        )
+
+    return dynamic_address(projected_occurrence) == dynamic_address(landing_occurrence)
+
+
 def _repair_failed_requirement(
     requirement: ActiveRequirement,
     state: _PilotState,
@@ -1205,12 +1452,19 @@ def _repair_failed_requirement(
         landing_scan = candidate.work.state.scan_id
         landing_snap = dict(candidate.work.state.tags)
         # A locally repaired obligation is only the first acceptance boundary.
-        # Feed its adopted landing through the ordinary post-commit trend and
-        # departure owner before allowing the disposable world to escape the
-        # transaction. A successive exact hazard can then restore this same
-        # causal source and add a stronger requirement; a pending/unresolved
-        # departure is never mistaken for a settled successful landing.
-        tuple(_monitor_trend(transition.trial, transition.frame, candidate, disposable_ctx))
+        # An exact target-path ProgramStep may prove that the executor merely
+        # folded autonomous continuation after that boundary. Otherwise feed
+        # the landing through ordinary post-commit trend/departure ownership: a
+        # successive hazard can then restore this source and add a stronger
+        # requirement, while unresolved departures remain unadopted.
+        autonomous_continuation = _repaired_program_continuation(
+            candidate,
+            disposable_ctx,
+            transition.trial,
+            expectation,
+        )
+        if not autonomous_continuation:
+            tuple(_monitor_trend(transition.trial, transition.frame, candidate, disposable_ctx))
         learned_requirement = requirements_before_monitor != tuple(
             current.identity for current in candidate.active_requirements
         ) or failed_before_monitor != tuple(
