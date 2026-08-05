@@ -232,6 +232,8 @@ def _make_trial(
         post_pulse_key=("post",),
         snap=fork_snap,
         key=over.pop("new_key", ("k",)),
+        kernel_scan_ids=(),
+        execution_projections={},
         coast_receipt=coast_receipt,
         timeline=timeline,
         channel_motion=pulse_channel_motion,

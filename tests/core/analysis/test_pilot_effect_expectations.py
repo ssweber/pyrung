@@ -1,10 +1,11 @@
 """Phase-3 selected-effect pass-through and factual observation contracts."""
 
+import gc
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Program, calc, call, copy, out, rung, subroutine
+from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.coast import (
@@ -47,8 +48,11 @@ from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
     _ExecutedAttempt,
     _ExecutionEvidence,
+    _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import _owned_channel_motion, _rebind_replay_attempt
+from pyrung.core.context import RungId
+from pyrung.core.rung_firings import RungFiringTimelines
 
 
 def _terminal_obligation(program: Program, tag: str, value: object) -> EffectObligation:
@@ -136,6 +140,7 @@ def test_action_projection_preserves_sparse_nonzero_run_identity() -> None:
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )
 
@@ -183,6 +188,8 @@ def test_route_and_program_coast_observe_the_execution_corridor_not_scan_before(
             fork=plc,
             scan_before=0,
             action_scan=0,
+            kernel_scan_ids=(1,),
+            projection_at=plc._replay_rung_write_projection_at,
             coast_receipt=receipt,
             timeline=(),
         )
@@ -358,6 +365,8 @@ def test_expectation_is_same_object_through_candidate_policy_bearing_and_executi
         fork=plc,
         scan_before=0,
         action_scan=1,
+        kernel_scan_ids=(1,),
+        projection_at=plc._replay_rung_write_projection_at,
         coast_receipt=None,
         timeline=(),
     )
@@ -587,14 +596,596 @@ def test_terminal_target_peels_final_landing_without_changing_first_displacement
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
-    promoted = promote_terminal_target_observation((ordinary,))
+    promoted = promote_terminal_target_observation(
+        (ordinary,),
+        window_entry_value=0,
+        final_landing_value=0,
+    )
 
     assert ordinary.displacement is not None
     assert ordinary.displacement.transition.to_value == 2
     assert promoted is not None and promoted.displacement is not None
     assert promoted.displacement.transition.to_value == 0
+
+
+def test_action_window_includes_later_exact_kernel_scan() -> None:
+    state = Int("TimelineSuccessorState", default=70)
+    advance = Bool("TimelineSuccessorAdvance", external=True)
+    with Program() as program:
+        with rung(state == 30):
+            copy(81, state, oneshot=True)
+        with rung(state == 81):
+            copy(10, state, oneshot=True)
+        with rung(state == 10):
+            copy(30, state, oneshot=True)
+        with rung(state == 50):
+            copy(30, state, oneshot=True)
+        with rung(state == 40):
+            copy(50, state, oneshot=True)
+        with rung(advance, state == 70):
+            copy(40, state, oneshot=True)
+
+    plc = PLC(program)
+    plc.patch({advance.name: True})
+    plc.step()
+    plc.patch({advance.name: False})
+    plc.step()
+    plc.step()
+    assert plc.state.scan_id == 3
+    assert plc.state.tags[state.name] == 30
+    plc.step()
+    assert plc.state.scan_id == 4
+    assert plc.state.tags[state.name] == 30
+
+    obligation = EffectObligation(
+        state.name,
+        81,
+        (None, 0, ()),
+        None,
+        (),
+        terminal_target=True,
+        producer_rung=program.rungs[0],
+    )
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        action_scan=1,
+        kernel_scan_ids=(1, 2, 3, 4),
+    )
+
+    assert len(observations) == 1
+    observation = observations[0]
+    assert observation.appeared is not None
+    assert observation.appeared.scan_id == 4
+    assert observation.displacement is not None
+    assert observation.displacement.transition.to_value == 10
+    promoted = promote_terminal_target_observation(
+        observations,
+        window_entry_value=70,
+        final_landing_value=30,
+    )
+    assert promoted is None
+
+
+def test_claimed_kernel_scan_without_projection_fails_closed(monkeypatch) -> None:
+    effect = Int("MissingExactProjectionEffect")
+    with Program() as program:
+        with rung():
+            copy(1, effect)
+    plc = PLC(program)
+    plc.step()
+    plc.step()
+    original = PLC._replay_rung_write_projection_at
+
+    def without_second_scan(self, scan_id):
+        if scan_id == 2:
+            return None
+        return original(self, scan_id)
+
+    monkeypatch.setattr(PLC, "_replay_rung_write_projection_at", without_second_scan)
+    observations = observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, 1),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2),
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["UNKNOWN"]
+    assert "projection" in observations[0].detail
+
+
+def test_action_scan_absent_from_kernel_stream_fails_closed() -> None:
+    effect = Int("MissingActionKernelScanEffect")
+    with Program() as program:
+        with rung():
+            copy(1, effect)
+    plc = PLC(program)
+    plc.step()
+
+    observations = observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, 1),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(),
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["UNKNOWN"]
+    assert "absent" in observations[0].detail
+
+
+def test_unrelated_long_kernel_stream_projects_only_relevant_write_scans() -> None:
+    effect = Bool("PrefilterRelevantEffect")
+    unrelated = Int("PrefilterUnrelated")
+    command = Bool("PrefilterCommand", external=True)
+    with Program() as program:
+        with rung(command):
+            latch(effect)
+        with rung():
+            calc(unrelated + 1, unrelated)
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    plc.patch({command.name: False})
+    for _ in range(5):
+        plc.step()
+    projected: list[int] = []
+
+    def projection_at(scan_id: int):
+        projected.append(scan_id)
+        return plc._replay_rung_write_projection_at(scan_id)
+
+    observations = observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, True),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=tuple(range(1, 7)),
+        action_scan=1,
+        projection_at=projection_at,
+    )
+
+    assert [item.disposition for item in observations] == ["SURVIVED"]
+    assert projected == [1]
+
+
+def test_stable_repeated_zero_net_writes_remain_relevant_exact_scans() -> None:
+    effect = Bool("PrefilterStableRepeatedEffect")
+    with Program() as program:
+        with rung():
+            out(effect)
+    plc = PLC(program)
+    for _ in range(4):
+        plc.step()
+    projected: list[int] = []
+
+    observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, True),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3, 4),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 2, 3, 4]
+
+
+def test_certified_out_prefilter_skips_false_only_producer_corridor() -> None:
+    command = Bool("CertifiedOutCommand", external=True)
+    effect = Bool("CertifiedOutEffect")
+    with Program() as program:
+        with rung(command):
+            out(effect)
+    plc = PLC(program)
+    values = (*([False] * 32), True, *([False] * 16))
+    for value in values:
+        plc.patch({command.name: value})
+        plc.step()
+    projected: list[int] = []
+
+    observations = observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, True),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=tuple(range(1, len(values) + 1)),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 33]
+    assert [item.disposition for item in observations] == ["SURVIVED"]
+
+
+def test_oneshot_out_prefilter_remains_conservative() -> None:
+    command = Bool("ConservativeOneshotCommand", external=True)
+    effect = Bool("ConservativeOneshotEffect")
+    with Program() as program:
+        with rung(command):
+            out(effect, oneshot=True)
+    plc = PLC(program)
+    for value in (False, True, True, False):
+        plc.patch({command.name: value})
+        plc.step()
+    projected: list[int] = []
+
+    observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, True),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3, 4),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 2, 3, 4]
+
+
+def test_unique_subroutine_out_prefilter_skips_false_only_corridor() -> None:
+    command = Bool("CertifiedSubroutineCommand", external=True)
+    effect = Bool("CertifiedSubroutineEffect")
+
+    @subroutine("CertifiedSubroutineWriter")
+    def writer() -> None:
+        with rung(command):
+            out(effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+    plc = PLC(program)
+    values = (*([False] * 32), True, *([False] * 16))
+    for value in values:
+        plc.patch({command.name: value})
+        plc.step()
+    projected: list[int] = []
+    obligation = EffectObligation(
+        effect.name,
+        True,
+        ("CertifiedSubroutineWriter", 0, ()),
+        None,
+        (),
+        producer_rung=program.subroutines["CertifiedSubroutineWriter"][0],
+    )
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=tuple(range(1, len(values) + 1)),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 33]
+    assert [item.disposition for item in observations] == ["SURVIVED"]
+
+
+def test_duplicate_subroutine_calls_keep_conservative_exact_occurrences() -> None:
+    command = Bool("DuplicateSubroutineCommand", external=True)
+    effect = Bool("DuplicateSubroutineEffect")
+
+    @subroutine("DuplicateSubroutineWriter")
+    def writer() -> None:
+        with rung(command):
+            out(effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+            call(writer)
+    plc = PLC(program)
+    for value in (False, True, False):
+        plc.patch({command.name: value})
+        plc.step()
+    projected: list[int] = []
+    obligation = EffectObligation(
+        effect.name,
+        True,
+        ("DuplicateSubroutineWriter", 0, ()),
+        None,
+        (),
+        producer_rung=program.subroutines["DuplicateSubroutineWriter"][0],
+    )
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    appeared = [item.appeared for item in observations if item.appeared is not None]
+    assert projected == [1, 2, 3]
+    assert len(appeared) == 2
+    assert {item.call_invocation for item in appeared} == {0, 1}
+
+
+def test_multi_obligation_union_preserves_ambiguous_writer_scans() -> None:
+    command = Bool("UnionCertifiedCommand", external=True)
+    certified_effect = Bool("UnionCertifiedEffect")
+    ambiguous_effect = Bool("UnionAmbiguousEffect")
+
+    @subroutine("UnionCertifiedWriter")
+    def writer() -> None:
+        with rung(command):
+            out(certified_effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+        with rung(command):
+            out(ambiguous_effect, oneshot=True)
+    plc = PLC(program)
+    for value in (False, True, False):
+        plc.patch({command.name: value})
+        plc.step()
+    projected: list[int] = []
+    certified = EffectObligation(
+        certified_effect.name,
+        True,
+        ("UnionCertifiedWriter", 0, ()),
+        None,
+        (),
+        producer_rung=program.subroutines["UnionCertifiedWriter"][0],
+    )
+    ambiguous = EffectObligation(
+        ambiguous_effect.name,
+        True,
+        (None, 1, ()),
+        None,
+        (),
+        producer_rung=program.rungs[1],
+    )
+
+    observe_execution_window(
+        EffectExpectation((certified, ambiguous)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 2, 3]
+
+
+def test_subroutine_node_fired_only_mode_keeps_conservative_selection(monkeypatch) -> None:
+    command = Bool("FiredOnlySubroutineCommand", external=True)
+    effect = Bool("FiredOnlySubroutineEffect")
+
+    @subroutine("FiredOnlySubroutineWriter")
+    def writer() -> None:
+        with rung(command):
+            out(effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+    plc = PLC(program)
+    for value in (False, True, False):
+        plc.patch({command.name: value})
+        plc.step()
+    target_node = RungId("FiredOnlySubroutineWriter", 0)
+    original_mode = RungFiringTimelines.mode
+
+    def _mode(self, rung_id):
+        if rung_id == target_node:
+            return "fired_only"
+        return original_mode(self, rung_id)
+
+    monkeypatch.setattr(RungFiringTimelines, "mode", _mode)
+    projected: list[int] = []
+    obligation = EffectObligation(
+        effect.name,
+        True,
+        ("FiredOnlySubroutineWriter", 0, ()),
+        None,
+        (),
+        producer_rung=program.subroutines["FiredOnlySubroutineWriter"][0],
+    )
+
+    observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 2, 3]
+
+
+def test_node_level_overwriter_scan_is_selected_by_prefilter() -> None:
+    phase = Int("PrefilterNodePhase", external=True)
+    effect = Bool("PrefilterNodeEffect")
+
+    @subroutine("PrefilterNodeWriter", strict=False)
+    def writer() -> None:
+        with rung(phase == 3):
+            latch(effect)
+
+    with Program() as program:
+        with rung():
+            call(writer)
+    plc = PLC(program)
+    for value in (0, 0, 3):
+        plc.patch({phase.name: value})
+        plc.step()
+    projected: list[int] = []
+
+    observe_execution_window(
+        EffectExpectation(
+            (
+                EffectObligation(
+                    effect.name,
+                    True,
+                    ("PrefilterNodeWriter", 0, ()),
+                    None,
+                    (),
+                    producer_rung=program.subroutines["PrefilterNodeWriter"][0],
+                ),
+            )
+        ),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 3]
+
+
+def test_incomplete_historical_retention_falls_back_to_full_stream() -> None:
+    effect = Int("PrefilterUnretainedEffect")
+    unrelated = Int("PrefilterRetainedCounter")
+    with Program() as program:
+        with rung():
+            copy(1, effect)
+        with rung():
+            calc(unrelated + 1, unrelated)
+    plc = PLC(program)
+    for _ in range(4):
+        plc.step()
+    projected: list[int] = []
+
+    observe_execution_window(
+        EffectExpectation((_terminal_obligation(program, effect.name, 1),)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2, 3, 4),
+        action_scan=1,
+        projection_at=lambda scan_id: (
+            projected.append(scan_id) or plc._replay_rung_write_projection_at(scan_id)
+        ),
+    )
+
+    assert projected == [1, 2, 3, 4]
+
+
+def test_pulse_projection_cache_is_shared_and_replay_replace_is_fresh(monkeypatch) -> None:
+    effect = Bool("PulseProjectionMemoEffect")
+    with Program() as program:
+        with rung():
+            out(effect)
+    plc = PLC(program)
+    plc.step()
+    snap = dict(plc.state.tags)
+    pulse = _PulseState(
+        fork=plc,
+        scan_before=0,
+        action_scan=1,
+        action_snap=snap,
+        wait_snaps=(),
+        post_pulse_snap=snap,
+        post_pulse_key=("post",),
+        snap=snap,
+        key=("landing",),
+        kernel_scan_ids=(1,),
+        execution_projections={},
+    )
+    original = PLC._replay_pilot_rung_write_projection_at
+    calls: list[tuple[PLC, int]] = []
+
+    def counted(self, scan_id):
+        calls.append((self, scan_id))
+        return original(self, scan_id)
+
+    monkeypatch.setattr(PLC, "_replay_pilot_rung_write_projection_at", counted)
+    expectation = EffectExpectation((_terminal_obligation(program, effect.name, True),))
+    first = observe_execution_window(
+        expectation,
+        plc,
+        scan_before=0,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        action_scan=1,
+        projection_at=pulse.projection_at,
+    )
+    second = observe_execution_window(
+        expectation,
+        plc,
+        scan_before=0,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        action_scan=1,
+        projection_at=pulse.projection_at,
+    )
+
+    assert calls == [(plc, 1)]
+    assert first[0].execution_projection is second[0].execution_projection
+    del first, second
+    gc.collect()
+    assert pulse.projection_at(1) is not None
+    assert calls == [(plc, 1), (plc, 1)]
+    assert pulse.projection_at(2) is None
+    replay = plc.fork()
+    replay_pulse = replace(pulse, fork=replay)
+    assert replay_pulse._projection_cache == {}
+    assert replay_pulse.projection_at(1) is not None
+    assert calls == [(plc, 1), (plc, 1), (replay, 1)]
+
+    pulse.execution_projections[1] = plc._replay_rung_write_projection_at(1)
+    assert pulse._projection_cache
+    pulse.release_execution_projections()
+    assert pulse.execution_projections == {}
+    assert pulse._projection_cache == {}
+
+
+def test_pulse_projection_cache_does_not_replay_without_owner(monkeypatch) -> None:
+    effect = Bool("PulseProjectionNoOwnerEffect")
+    with Program() as program:
+        with rung():
+            out(effect)
+    plc = PLC(program)
+    plc.step()
+    snap = dict(plc.state.tags)
+    pulse = _PulseState(
+        plc,
+        0,
+        1,
+        snap,
+        (),
+        snap,
+        ("post",),
+        snap,
+        ("landing",),
+        (1,),
+        {},
+    )
+    replayed: list[int] = []
+    monkeypatch.setattr(plc._causal_lineage, "owner_at", lambda _scan_id: None)
+    monkeypatch.setattr(
+        plc,
+        "_replay_pilot_rung_write_projection_at",
+        lambda scan_id: replayed.append(scan_id),
+    )
+
+    assert pulse.projection_at(1) is None
+    assert pulse.projection_at(1) is None
+    assert replayed == []
 
 
 def test_repeated_producer_occurrences_keep_mixed_per_occurrence_truth() -> None:
@@ -649,6 +1240,7 @@ def test_release_then_assert_window_observes_one_exact_appeared_occurrence() -> 
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=(2,),
         action_scan=2,
     )
 
@@ -684,6 +1276,7 @@ def test_release_scan_matching_write_cannot_satisfy_assertion_expectation() -> N
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=(2,),
         action_scan=2,
     )
     assert [item.disposition for item in observations] == ["ABSENT"]
@@ -717,6 +1310,7 @@ def test_action_scan_strands_consumer_even_if_a_later_scan_reads_the_value() -> 
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )
 
@@ -757,6 +1351,7 @@ def test_producer_below_consumer_is_due_when_the_scan_wraps() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1, 2),
         action_scan=1,
     )
 
@@ -803,6 +1398,7 @@ def test_ambiguous_consumers_before_producer_fail_closed_at_scan_wrap() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1, 2),
         action_scan=1,
     )
 
@@ -844,6 +1440,7 @@ def test_exact_next_scan_write_overwrites_pending_wrapped_handoff() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1, 2),
         action_scan=1,
     )
 
@@ -870,6 +1467,8 @@ def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> N
         fork=original,
         scan_before=0,
         action_scan=1,
+        kernel_scan_ids=(1,),
+        projection_at=original._replay_rung_write_projection_at,
         coast_receipt=None,
         timeline=(),
     )
@@ -883,6 +1482,8 @@ def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> N
         fork=replay,
         scan_before=0,
         action_scan=1,
+        kernel_scan_ids=(1,),
+        projection_at=replay._replay_rung_write_projection_at,
         coast_receipt=None,
         timeline=(),
     )
@@ -917,6 +1518,8 @@ def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
         fork=original,
         scan_before=0,
         action_scan=0,
+        kernel_scan_ids=(1,),
+        projection_at=original._replay_rung_write_projection_at,
         coast_receipt=original_receipt,
         timeline=(),
     )
@@ -928,6 +1531,8 @@ def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
         fork=replay,
         scan_before=0,
         action_scan=0,
+        kernel_scan_ids=(1,),
+        projection_at=replay._replay_rung_write_projection_at,
         coast_receipt=replay_receipt,
         timeline=(),
     )
@@ -974,6 +1579,7 @@ def test_alarm_reset_action_scan_records_exact_watchdog_overwrite() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )
 
@@ -1005,8 +1611,8 @@ def test_expectation_bearing_coast_keeps_cyclefold_and_gap_is_unknown() -> None:
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=session.kernel_scan_ids,
         coast_receipt=receipt,
-        timeline=session.events,
     )
 
     assert receipt.macro_folds >= 1
@@ -1054,8 +1660,8 @@ def test_consumer_survival_is_final_but_early_terminal_survival_is_unknown() -> 
         EffectExpectation((consumer_obligation, terminal_obligation)),
         plc,
         scan_before=0,
+        kernel_scan_ids=session.kernel_scan_ids,
         coast_receipt=receipt,
-        timeline=session.events,
     )
 
     assert receipt.logical_scans > 1
@@ -1097,8 +1703,8 @@ def test_exact_coast_events_compose_producer_then_later_overwriter() -> None:
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=(1, 2),
         coast_receipt=receipt,
-        timeline=events,
     )
 
     assert [item.disposition for item in observations] == ["OVERWRITTEN"]
@@ -1153,8 +1759,8 @@ def test_coast_preserves_all_repeated_producer_occurrence_results() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1, 2),
         coast_receipt=receipt,
-        timeline=events,
     )
 
     assert [item.disposition for item in observations] == [
@@ -1191,8 +1797,8 @@ def test_coast_landing_writer_is_retained_without_claiming_gap_coverage() -> Non
         expectation,
         plc,
         scan_before=0,
+        kernel_scan_ids=session.kernel_scan_ids,
         coast_receipt=receipt,
-        timeline=session.events,
     )
 
     assert receipt.stop_reason == "reached"
@@ -1235,7 +1841,13 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
     bearing = Bearing((), Pulse(policy), BearingObjective(TargetSpec("Target", True)))
     plc = PLC(program)
     plc.step()
-    raw = observe_execution_window(expectation, plc, scan_before=0, action_scan=1)
+    raw = observe_execution_window(
+        expectation,
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1,),
+        action_scan=1,
+    )
     snapshots = tuple(item.diagnostic_snapshot() for item in raw)
     evidence = _ExecutionEvidence({}, {}, ChannelMotion(), None, (), snapshots)
     pulse = SimpleNamespace(

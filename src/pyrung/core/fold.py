@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.executor import ConditionViewCapture
     from pyrung.core.runner import PLC
     from pyrung.core.state import SystemState
 
@@ -42,6 +43,12 @@ if TYPE_CHECKING:
 _EMPTY_CAP = 20_000
 _MAX_ADVANCE_ITERS = 4_000
 _EPS = 1e-9
+
+_CaptureDecision = bool | Callable[[], bool]
+
+
+def _capture_requested(decision: _CaptureDecision) -> bool:
+    return decision() if callable(decision) else decision
 
 
 # ── 1. Source types ──────────────────────────────────────────────────
@@ -1547,6 +1554,10 @@ def _do_fold(
     ctx: _FoldContext,
     before_tot: dict[str, float],
     after_tot: dict[str, float],
+    *,
+    on_kernel_scan: Callable[[int], None] | None = None,
+    capture_kernel_scan: _CaptureDecision = False,
+    capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
 ) -> tuple[tuple[str, Any], ...]:
     """Fold ``skip`` pure-accumulation scans into one real step.
 
@@ -1563,7 +1574,13 @@ def _do_fold(
         runner.patch(patches)
 
     runner._dt_override_for_next_scan = skip * ctx.normal_dt
-    runner._run_single_scan(consume_pause_request=False)
+    runner._run_single_scan(
+        consume_pause_request=False,
+        capture_execution=_capture_requested(capture_kernel_scan),
+        capture_sink=capture_sink,
+    )
+    if on_kernel_scan is not None:
+        on_kernel_scan(runner._state.scan_id)
 
     runner._state = runner._state.set(scan_id=runner._state.scan_id + skip - 1)
     return tuple(patches.items())
@@ -1753,6 +1770,9 @@ class _OrdinaryFoldStrategy:
         *,
         max_skip: int | None = None,
         min_skip: int = 1,
+        on_kernel_scan: Callable[[int], None] | None = None,
+        capture_kernel_scan: _CaptureDecision = False,
+        capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
     ) -> _FoldAdvance | None:
         """Fold after a completed probe, or return ``None`` if proof declines."""
         harness_scan = _harness_nearest_scan(runner)
@@ -1765,7 +1785,16 @@ class _OrdinaryFoldStrategy:
         )
         if plan is None:
             return None
-        patches = _do_fold(runner, plan.skip, self.ctx, probe.totals, plan.after_totals)
+        patches = _do_fold(
+            runner,
+            plan.skip,
+            self.ctx,
+            probe.totals,
+            plan.after_totals,
+            on_kernel_scan=on_kernel_scan,
+            capture_kernel_scan=capture_kernel_scan,
+            capture_sink=capture_sink,
+        )
         return self.finish(runner._state, probe, plan, patches=patches)
 
 
@@ -1781,6 +1810,9 @@ def fold_run_until(
     extra_comparisons: dict[str, tuple[tuple[str, Any], ...]] | None = None,
     stats: dict[str, int] | None = None,
     advances: list[tuple[str, Any]] | None = None,
+    on_kernel_scan: Callable[[int], None] | None = None,
+    capture_kernel_scans: _CaptureDecision = False,
+    capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
 ) -> SystemState:
     """Fold-aware ``run_until`` loop.
 
@@ -1800,7 +1832,13 @@ def fold_run_until(
         # ── Probe: one normal scan ───────────────────────────────
         runner._consume_pause_request()
         probe = strategy.capture(runner)
-        runner._run_single_scan(consume_pause_request=False)
+        runner._run_single_scan(
+            consume_pause_request=False,
+            capture_execution=_capture_requested(capture_kernel_scans),
+            capture_sink=capture_sink,
+        )
+        if on_kernel_scan is not None:
+            on_kernel_scan(runner._state.scan_id)
         used += 1
         kernel_scans += 1
 
@@ -1811,7 +1849,14 @@ def fold_run_until(
         if used >= max_cycles:
             break
 
-        advance = strategy.try_fold(runner, probe, max_skip=max_cycles - used)
+        advance = strategy.try_fold(
+            runner,
+            probe,
+            max_skip=max_cycles - used,
+            on_kernel_scan=on_kernel_scan,
+            capture_kernel_scan=capture_kernel_scans,
+            capture_sink=capture_sink,
+        )
         if advance is not None:
             used += advance.logical_scans
             kernel_scans += advance.kernel_scans

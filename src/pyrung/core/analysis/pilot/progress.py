@@ -81,6 +81,7 @@ from pyrung.core.analysis.pilot.requirements import (
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
     match_expectation_receipt,
+    resolve_expectation_receipt_producer,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -1620,8 +1621,10 @@ def _investigate_and_revert(
                 (receipt, index, producer)
                 for receipt in state.expectation_receipts
                 if receipt.local_bearing is bearing_owner
-                for index, producer in enumerate(receipt.producer_occurrence_objects)
-                if occurrence_snapshot(producer) == occurrence_snapshot(observation.appeared)
+                for index, snapshot in enumerate(receipt.producer_occurrences)
+                if snapshot == occurrence_snapshot(observation.appeared)
+                for producer in (resolve_expectation_receipt_producer(receipt, index),)
+                if producer is not None
             )
             harmful_owner = next(
                 (

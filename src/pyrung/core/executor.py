@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias, cast
 
@@ -519,9 +520,13 @@ class ConditionViewCapture(_NoopExecutionObserver):
         "_active_iterations",
         "_ordinal",
         "_causal_projection",
+        "entry_tags",
+        "exit_tags",
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+    ) -> None:
         self.views: dict[RungId, ConditionView] = {}
         self.reads: dict[RungId, set[str]] = {}
         self._body: list[object | None] = []
@@ -535,6 +540,8 @@ class ConditionViewCapture(_NoopExecutionObserver):
         # another immutable view of this exact selected-scan journal, so it has
         # the same epoch/scan lifetime as the capture itself.
         self._causal_projection: Any = None
+        self.entry_tags: Mapping[str, Any] | None = None
+        self.exit_tags: Mapping[str, Any] | None = None
 
     @property
     def body(self) -> tuple[ExecutionBodyItem, ...]:
@@ -548,6 +555,8 @@ class ConditionViewCapture(_NoopExecutionObserver):
 
     def attach(self, ctx: ScanContext) -> None:
         """Attach this selected-scan journal before any observable scan phase."""
+        if self.entry_tags is None:
+            self.entry_tags = ctx._state.tags
         ctx._read_sink = self._record_read
         ctx._write_sink = self._record_write
         if ctx._tag_write_sources is None:

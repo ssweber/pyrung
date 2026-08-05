@@ -438,6 +438,7 @@ def investigate_excursion(
     pdg: Any = None,
     program: Any = None,
     ctx: Any = None,
+    capture_execution: bool = False,
 ) -> ExcursionResult:
     """Compatibility facade for replay-backed excursion diagnosis."""
     return _replay.investigate_excursion(
@@ -456,6 +457,7 @@ def investigate_excursion(
         pdg=pdg,
         program=program,
         ctx=ctx,
+        capture_execution=capture_execution,
         hooks=_replay_hooks(),
     )
 

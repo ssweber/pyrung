@@ -622,6 +622,7 @@ class Epoch:
     recent_state_cache_budget: int | float
     checkpoint_interval: int
     record_all_tags: bool
+    firing_retained_tags: frozenset[str] | None
     known_tags_by_name: Mapping[str, Tag]
     edge_tag_names: frozenset[str]
     constrained_tags: Mapping[str, TagConstraint]
@@ -683,6 +684,7 @@ class Epoch:
             recent_state_cache_budget=plc._recent_state_cache_budget,
             checkpoint_interval=plc._checkpoint_interval,
             record_all_tags=plc._record_all_tags,
+            firing_retained_tags=plc._consumed_tags_for_capture(),
             known_tags_by_name=MappingProxyType(dict(plc._known_tags_by_name)),
             edge_tag_names=frozenset(plc._edge_tag_names),
             constrained_tags=MappingProxyType(dict(plc._constrained_tags)),
@@ -767,6 +769,11 @@ class EpochQuery:
     def node_firing_timelines(self) -> RungFiringTimelines[RungId]:
         return self.epoch.node_firing_timelines
 
+    @property
+    def firing_retained_tags(self) -> frozenset[str] | None:
+        """Exact recording-time firing retention policy for this epoch."""
+        return self.epoch.firing_retained_tags
+
     def state_at(self, scan_id: int) -> SystemState:
         return self._runner()._state_at(scan_id)
 
@@ -798,6 +805,10 @@ class EpochQuery:
 
     def replay_capture_at(self, scan_id: int) -> ConditionViewCapture | None:
         return self._runner()._replay_capture_at(scan_id)
+
+    def replay_capture_uncached_at(self, scan_id: int) -> ConditionViewCapture | None:
+        """Reconstruct one disposable capture without retaining it in the raw LRU."""
+        return self._runner()._build_replay_capture_at(scan_id)
 
     def rtc_at(self, state: SystemState) -> datetime:
         return self._runner()._system_runtime._rtc_now(state)
@@ -3022,6 +3033,28 @@ class PLC:
             self._cached_replay_captures.move_to_end(target_scan_id)
             return cached
 
+        capture = self._build_replay_capture_at(target_scan_id)
+        if capture is None:
+            return None
+
+        self._cached_replay_captures[target_scan_id] = capture
+        self._cached_replay_captures.move_to_end(target_scan_id)
+        while len(self._cached_replay_captures) > _REPLAY_CAPTURE_CACHE_SCANS:
+            self._cached_replay_captures.popitem(last=False)
+        return capture
+
+    def _build_replay_capture_at(
+        self,
+        target_scan_id: int,
+    ) -> ConditionViewCapture | None:
+        """Build one exact historical capture without retaining it."""
+        if self._program is None:
+            return None
+        if target_scan_id <= self._initial_scan_id or target_scan_id > self._state.scan_id:
+            return None
+        if target_scan_id < self._scan_log.base_scan:
+            return None
+
         log = self._scan_log.snapshot()
         lifecycle_by_scan: dict[int, list[LifecycleEvent]] = {}
         for event in log.lifecycle_events:
@@ -3062,11 +3095,7 @@ class PLC:
         replay._input_overrides.apply_post_logic(ctx)
         replay._capture_previous_states(ctx, _dt)
         replay._system_runtime.on_scan_end(ctx)
-
-        self._cached_replay_captures[target_scan_id] = capture
-        self._cached_replay_captures.move_to_end(target_scan_id)
-        while len(self._cached_replay_captures) > _REPLAY_CAPTURE_CACHE_SCANS:
-            self._cached_replay_captures.popitem(last=False)
+        capture.exit_tags = ctx.commit(dt=_dt).tags
         return capture
 
     def _replay_node_views_at(self, target_scan_id: int) -> dict[RungId, ConditionView]:
@@ -3096,8 +3125,64 @@ class PLC:
         """Exact read/write projection cached with its immutable scan journal."""
         owner = self._causal_lineage.owner_at(target_scan_id)
         capture = owner.replay_capture_at(target_scan_id) if owner is not None else None
+        return self._projection_from_capture(target_scan_id, capture)
+
+    def _replay_pilot_rung_write_projection_at(self, target_scan_id: int) -> Any:
+        """Pilot guard projection including exact tag and memory reads.
+
+        The public causal projection remains tag-only. Pilot's retained compact
+        stream includes memory-backed guard reads, so its all-or-nothing
+        historical fallback must reconstruct the same broader surface.
+        """
+
+        owner = self._causal_lineage.owner_at(target_scan_id)
+        capture = owner.replay_capture_uncached_at(target_scan_id) if owner is not None else None
+        try:
+            projection = self._projection_from_capture(
+                target_scan_id,
+                capture,
+                include_memory_reads=True,
+            )
+            if projection is None:
+                return None
+
+            from pyrung.core.analysis.causal._rung_writes import (
+                compact_projection_condition_views,
+            )
+
+            compact_projection_condition_views(projection)
+        except ValueError:
+            # A projection that cannot be compacted is unavailable evidence.
+            # Pilot fails closed to UNKNOWN; unexpected implementation faults
+            # remain visible to callers.
+            return None
+        return projection
+
+    def _projection_from_capture(
+        self,
+        target_scan_id: int,
+        capture: ConditionViewCapture | None,
+        *,
+        include_memory_reads: bool = False,
+    ) -> Any:
         if capture is None:
             return None
+        if include_memory_reads:
+            from pyrung.core.analysis.causal._rung_writes import (
+                build_scan_rung_write_projection,
+            )
+
+            # Pilot's transition-local compact views also need exact memory
+            # guard reads. Keep that broader surface out of the capture's
+            # generic tag-only causal cache.
+            return build_scan_rung_write_projection(
+                self.history,
+                target_scan_id,
+                capture.runs,
+                entry_tags=capture.entry_tags,
+                exit_tags=capture.exit_tags,
+                include_memory_reads=True,
+            )
         projection = capture._causal_projection
         if projection is None:
             from pyrung.core.analysis.causal._rung_writes import (
@@ -3108,6 +3193,8 @@ class PLC:
                 self.history,
                 target_scan_id,
                 capture.runs,
+                entry_tags=capture.entry_tags,
+                exit_tags=capture.exit_tags,
             )
             capture._causal_projection = projection
         return projection
@@ -4005,7 +4092,13 @@ class PLC:
             if state_memory.get(prev_key, _SENTINEL) != current:
                 ctx.set_memory(prev_key, current)
 
-    def _commit_scan(self, ctx: ScanContext, dt: float) -> None:
+    def _commit_scan(
+        self,
+        ctx: ScanContext,
+        dt: float,
+        *,
+        before_callbacks: Callable[[], None] | None = None,
+    ) -> None:
         """Finalize one scan and commit all batched writes.
 
         Rung firings are read from ``ctx.rung_firings`` — both the non-debug
@@ -4111,6 +4204,8 @@ class PLC:
         if self._playhead == previous_tip_scan_id:
             self._playhead = self._state.scan_id
 
+        if before_callbacks is not None:
+            before_callbacks()
         if not self._replay_mode:
             self._evaluate_monitors(previous_state=previous_state, current_state=self._state)
             self._evaluate_breakpoints(state=self._state)
@@ -4287,11 +4382,34 @@ class PLC:
         self._ensure_running()
         return self._run_single_scan(consume_pause_request=True)
 
-    def _run_single_scan(self, *, consume_pause_request: bool) -> SystemState:
+    def _run_single_scan(
+        self,
+        *,
+        consume_pause_request: bool,
+        capture_execution: bool = False,
+        execution_capture: ConditionViewCapture | None = None,
+        capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
+    ) -> SystemState:
         self._epoch_caches.on_tip_advanced()
-        ctx, dt = self._prepare_scan(fast_reads=True)
+        if capture_execution and execution_capture is not None:
+            raise ValueError("provide capture_execution or execution_capture, not both")
+        capture = execution_capture
+        if capture is None and capture_execution and self._program is not None:
+            capture = ConditionViewCapture()
+        ctx, dt = self._prepare_scan(
+            fast_reads=True,
+            synthesis_observer=capture,
+        )
         if self._program is not None:
-            execute_program(self._program, ctx, capture_rungs=True)
+            if capture is None:
+                execute_program(self._program, ctx, capture_rungs=True)
+            else:
+                execute_program(
+                    self._program,
+                    ctx,
+                    capture_rungs=True,
+                    observer=capture,
+                )
         else:
             for i, rung in enumerate(self._logic):
                 journal = ctx._begin_capture()
@@ -4299,7 +4417,23 @@ class PLC:
                     rung.evaluate(ctx)
                 finally:
                     ctx._finish_rung_capture(i, journal)
-        self._commit_scan(ctx, dt)
+
+        def _retain_capture_before_callbacks() -> None:
+            assert capture is not None
+            capture.exit_tags = self._state.tags
+            if capture_sink is not None:
+                capture_sink(self._state.scan_id, capture)
+            else:
+                self._cached_replay_captures[self._state.scan_id] = capture
+                self._cached_replay_captures.move_to_end(self._state.scan_id)
+                while len(self._cached_replay_captures) > _REPLAY_CAPTURE_CACHE_SCANS:
+                    self._cached_replay_captures.popitem(last=False)
+
+        self._commit_scan(
+            ctx,
+            dt,
+            before_callbacks=(_retain_capture_before_callbacks if capture is not None else None),
+        )
 
         if consume_pause_request:
             self._consume_pause_request()

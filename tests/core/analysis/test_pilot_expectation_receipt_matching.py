@@ -35,6 +35,20 @@ from pyrung.core.context import RungId
 from pyrung.core.executor import WriteOccurrence
 
 
+class _ReplayOwner:
+    def __init__(self, epoch: object) -> None:
+        self.epoch = epoch
+        self.writes: list[RungWrite] = []
+        self._query_runner = SimpleNamespace(
+            _replay_rung_write_projection_at=lambda _scan: SimpleNamespace(
+                writes=tuple(self.writes)
+            )
+        )
+
+    def _runner(self):
+        return self._query_runner
+
+
 def _write(
     *,
     call_invocation: int,
@@ -71,6 +85,8 @@ def _receipt(
     owner: object,
     source: str,
 ) -> ExpectationReceipt:
+    assert isinstance(owner, _ReplayOwner)
+    owner.writes.append(write)
     obligation = EffectObligation(
         tag="ReceiptEffect",
         value=True,
@@ -111,7 +127,6 @@ def _receipt(
         execution_epoch=epoch,
         execution_owner=owner,
         source_checkpoint=checkpoint,
-        producer_occurrence_objects=(write,),
         local_act=act,
         local_bearing=bearing,
         expectation=expectation,
@@ -132,7 +147,7 @@ def _match(receipts, *, occurrence, epoch, owner):
 
 def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     recorded = _write(call_invocation=1)
     later_invocation = _write(call_invocation=2)
     receipt = _receipt(recorded, epoch=epoch, owner=owner, source="first")
@@ -143,7 +158,7 @@ def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> 
 @pytest.mark.parametrize("foreign_dimension", ["epoch", "owner"])
 def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str) -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="first")
 
@@ -160,7 +175,7 @@ def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str)
 
 def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     selected_write = _write(call_invocation=1)
     sibling_write = _write(call_invocation=2)
     selected = _receipt(selected_write, epoch=epoch, owner=owner, source="selected")
@@ -182,7 +197,7 @@ def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
 
 def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     recorded = _write(call_invocation=1)
     reconstructed = _write(call_invocation=1, rung=recorded.run.rung)
     receipt = _receipt(recorded, epoch=epoch, owner=owner, source="source")
@@ -200,7 +215,7 @@ def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> N
 
 def test_duplicate_exact_receipts_are_ambiguous() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     first = _receipt(write, epoch=epoch, owner=owner, source="same")
     second = _receipt(write, epoch=epoch, owner=owner, source="same")
@@ -211,7 +226,7 @@ def test_duplicate_exact_receipts_are_ambiguous() -> None:
 @pytest.mark.parametrize("corruption", ["checkpoint_owner", "source_world"])
 def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     corrupted = (
@@ -225,7 +240,7 @@ def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
 
 def test_malformed_source_checkpoint_fails_closed() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     malformed = replace(
@@ -238,7 +253,7 @@ def test_malformed_source_checkpoint_fails_closed() -> None:
 
 def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     obligation = replace(
@@ -253,7 +268,7 @@ def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
 
 def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     wrong_obligation = replace(
@@ -280,7 +295,7 @@ def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
 
 def test_progress_handoff_uses_unfiltered_exact_link_without_reading_a_future_suffix() -> None:
     epoch = object()
-    owner = object()
+    owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
     source_link = CausalOccurrence(

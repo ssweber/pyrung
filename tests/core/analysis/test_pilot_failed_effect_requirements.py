@@ -713,6 +713,7 @@ def test_failed_alarm_effect_derives_exact_preset_requirement() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
     assert observation.execution_epoch is not None
@@ -782,6 +783,7 @@ def test_absent_selected_writer_explains_exact_false_guard() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
 
@@ -833,6 +835,7 @@ def test_absent_guard_requirement_preserves_or_and_short_circuit_frontier() -> N
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
     checkpoint = SimpleNamespace(
@@ -907,6 +910,7 @@ def test_false_or_retains_exact_arm_when_sibling_inverse_is_opaque() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
 
@@ -963,6 +967,7 @@ def test_stranded_exact_consumer_guard_becomes_active_requirement() -> None:
         EffectExpectation((obligation,)),
         plc,
         scan_before=0,
+        kernel_scan_ids=(1,),
         action_scan=1,
     )[0]
     assert observation.disposition == "STRANDED"
@@ -1020,6 +1025,7 @@ def test_absent_selected_oneshot_reads_spentness_from_source_checkpoint() -> Non
         EffectExpectation((obligation,)),
         plc,
         scan_before=1,
+        kernel_scan_ids=(2,),
         action_scan=2,
     )[0]
     assert observation.disposition == "ABSENT"

@@ -147,6 +147,7 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,
+    TargetReached,
     WorldView,
     _AcceptedTrial,
     _ActionPair,
@@ -265,6 +266,24 @@ def _executed_attempt(attempt: _AttemptResult) -> Any:
     if attempt.trial is not None:
         return attempt.trial.attempt
     return attempt.executed or attempt.excursion_attempt
+
+
+def _release_attempt_execution_projections(attempt: _AttemptResult | None) -> None:
+    """Release every transition-local journal after its last raw consumer."""
+
+    if attempt is None:
+        return
+    executions = (
+        attempt.executed,
+        attempt.excursion_attempt,
+        attempt.trial.attempt if attempt.trial is not None else None,
+    )
+    released: set[int] = set()
+    for execution in executions:
+        if execution is None or id(execution.pulse) in released:
+            continue
+        released.add(id(execution.pulse))
+        execution.pulse.release_execution_projections()
 
 
 def _derive_attempt_requirements(
@@ -460,12 +479,6 @@ def _retain_expectation_receipt(
         execution_epoch=receipt_epoch,
         execution_owner=receipt_query,
         source_checkpoint=checkpoint,
-        producer_occurrence_objects=tuple(
-            item.appeared for item in observations if item.appeared is not None
-        ),
-        consumer_occurrence_objects=tuple(
-            item.consumer_read for item in observations if item.consumer_read is not None
-        ),
         local_act=act,
         local_bearing=trial.attempt.bearing,
         expectation=trial.attempt.bearing.expectation,
@@ -1157,7 +1170,9 @@ def _repaired_program_continuation(
     ctx: _PilotContext,
     trial: _AcceptedTrial,
     expectation: EffectExpectation,
-) -> bool:
+    *,
+    execution_work: Any | None = None,
+) -> int | None:
     """Prove that a corrected consumer handoff folded only target-path work.
 
     A pulse may satisfy its exact consumer and then ride several program-owned
@@ -1174,7 +1189,8 @@ def _repaired_program_continuation(
 
     channel = trial.execution.channel_motion.channel_tag
     if channel is None:
-        return False
+        return None
+    work = candidate.work if execution_work is None else execution_work
     observations = fulfilled_expectation_observations(
         expectation,
         trial.attempt.effect_observations,
@@ -1182,28 +1198,31 @@ def _repaired_program_continuation(
     handoffs = tuple(
         item
         for item in observations
-        if item.obligation.tag == channel and item.consumer_read is not None
+        if item.obligation.tag == channel and item.appeared is not None
     )
     if len(handoffs) != 1:
-        return False
+        return None
     handoff = handoffs[0]
-    consumer = handoff.consumer_read
-    consumer_projection = handoff.execution_projection
-    assert consumer is not None
-    if consumer_projection is None or consumer_projection.scan_id != consumer.scan_id:
-        return False
-    consumer_scan = consumer.scan_id
+    boundary = handoff.consumer_read or handoff.appeared
+    boundary_projection = handoff.execution_projection
+    assert boundary is not None
+    if boundary_projection is None or boundary_projection.scan_id != boundary.scan_id:
+        return None
+    boundary_scan = boundary.scan_id
+    exact_scan_ids = trial.attempt.pulse.kernel_scan_ids
+    if boundary_scan not in exact_scan_ids:
+        return None
 
     same_scan_suffix = tuple(
         write
-        for write in consumer_projection.writes
-        if write.ordinal > consumer.ordinal
+        for write in boundary_projection.writes
+        if write.ordinal > boundary.ordinal
         and write.transition.tag_name == channel
         and write.run.enabled
     )
-    consumer_operation_runs = consumer.run.rung_occurrences
+    boundary_operation_runs = boundary.run.rung_occurrences
     if any(
-        all(write.run is not operation_run for operation_run in consumer_operation_runs)
+        all(write.run is not operation_run for operation_run in boundary_operation_runs)
         for write in same_scan_suffix
     ):
         # The scan-exit snapshot is a faithful consumer boundary only when any
@@ -1211,21 +1230,21 @@ def _repaired_program_continuation(
         # including its exact nested branch runs. A sibling/outer writer would
         # already have displaced the handoff before the historical fork on
         # which ProgramStep projects.
-        return False
+        return None
 
     try:
         handoff_work = fork_with_pilot_rungs(
-            candidate.work,
+            work,
             candidate.pilot_rungs,
-            scan_id=consumer_scan,
+            scan_id=boundary_scan,
         )
     except KeyError:
-        return False
+        return None
 
     handoff_snap = dict(handoff_work.state.tags)
-    landing_value = candidate.work.state.tags.get(channel)
+    landing_value = work.state.tags.get(channel)
     if _values_match(handoff_snap.get(channel), landing_value):
-        return False
+        return None
 
     probe = _disposable_requirement_state(
         candidate,
@@ -1249,7 +1268,7 @@ def _repaired_program_continuation(
     )
     orientation = reading.orientation
     if orientation is None or orientation.world.frame is None:
-        return False
+        return None
     landing_writers = {
         node.writer_rung
         for node in orientation.world.frame.tree.iter_nodes()
@@ -1258,18 +1277,20 @@ def _repaired_program_continuation(
         and node.writer_rung is not None
     }
     if len(landing_writers) != 1:
-        return False
+        return None
     landing_writer = next(iter(landing_writers))
     selected_rung = resolve_rung(ctx.program, ctx.pdg.rung_nodes[landing_writer])
     if selected_rung is None:
-        return False
+        return None
 
     later_writes = list(same_scan_suffix)
-    relevant_projections = [consumer_projection]
-    for scan_id in range(consumer_scan + 1, candidate.work.state.scan_id + 1):
-        projection = candidate.work._replay_rung_write_projection_at(scan_id)
+    relevant_projections = [boundary_projection]
+    for scan_id in exact_scan_ids:
+        if scan_id <= boundary_scan or scan_id > work.state.scan_id:
+            continue
+        projection = work._replay_rung_write_projection_at(scan_id)
         if projection is None:
-            return False
+            return None
         relevant_projections.append(projection)
         later_writes.extend(
             write
@@ -1280,31 +1301,17 @@ def _repaired_program_continuation(
         write for write in later_writes if _values_match(write.transition.to_value, landing_value)
     )
     if not landing_occurrences:
-        return False
-    landing_occurrence = max(
-        landing_occurrences,
-        key=lambda write: (write.scan_id, write.ordinal),
-    )
-    if landing_occurrence.run.rung is not selected_rung:
-        return False
+        return None
 
     # The whole observed suffix must belong to one retained causal epoch. Scan
     # numbers alone are not occurrence ownership: a fork can reuse them under
     # another execution epoch.
-    suffix_owner = candidate.work._causal_lineage.owner_at(consumer_scan)
+    suffix_owner = work._causal_lineage.owner_at(boundary_scan)
     if suffix_owner is None or any(
-        candidate.work._causal_lineage.owner_at(projection.scan_id) is not suffix_owner
+        work._causal_lineage.owner_at(projection.scan_id) is not suffix_owner
         for projection in relevant_projections
     ):
-        return False
-
-    selected_node = ctx.pdg.rung_nodes[landing_writer]
-    capture_indices = ctx.pdg.timeline_capture_indices_for_node(landing_writer)
-    if selected_node.subroutine is not None:
-        if len(capture_indices) != 1:
-            return False
-        if landing_occurrence.run.caller_rung != next(iter(capture_indices)):
-            return False
+        return None
 
     def dynamic_invocations(projection: Any) -> frozenset[int | None]:
         return frozenset(
@@ -1314,7 +1321,7 @@ def _repaired_program_continuation(
         )
 
     if any(len(dynamic_invocations(projection)) > 1 for projection in relevant_projections):
-        return False
+        return None
 
     world = WorldView(
         snapshot=handoff_snap,
@@ -1338,7 +1345,7 @@ def _repaired_program_continuation(
         else ()
     )
     if len(producers) != 1:
-        return False
+        return None
     step = read_program_step(
         world,
         producers[0],
@@ -1354,7 +1361,7 @@ def _repaired_program_continuation(
         and _values_match(motion.before_value, handoff_snap.get(channel))
         and _values_match(motion.target_value, landing_value)
     ):
-        return False
+        return None
 
     # Reproduce ProgramStep's bounded unchanged projection and join its one
     # selected producer occurrence to the historical landing winner by full
@@ -1366,7 +1373,7 @@ def _repaired_program_continuation(
         projected_work.step()
         projection = projected_work._replay_rung_write_projection_at(projected_work.state.scan_id)
         if projection is None or len(dynamic_invocations(projection)) > 1:
-            return False
+            return None
         projected_occurrences.extend(
             write
             for write in projection.writes
@@ -1378,7 +1385,7 @@ def _repaired_program_continuation(
         if _values_match(projected_work.state.tags.get(channel), landing_value):
             break
     if len(projected_occurrences) != 1:
-        return False
+        return None
     projected_occurrence = projected_occurrences[0]
 
     def dynamic_address(write: Any) -> tuple[Any, ...]:
@@ -1393,7 +1400,66 @@ def _repaired_program_continuation(
             write.run.call_stack,
         )
 
-    return dynamic_address(projected_occurrence) == dynamic_address(landing_occurrence)
+    historical_matches = tuple(
+        occurrence
+        for occurrence in landing_occurrences
+        if dynamic_address(occurrence) == dynamic_address(projected_occurrence)
+    )
+    if len(historical_matches) != 1:
+        return None
+    landing_occurrence = historical_matches[0]
+    selected_node = ctx.pdg.rung_nodes[landing_writer]
+    capture_indices = ctx.pdg.timeline_capture_indices_for_node(landing_writer)
+    if selected_node.subroutine is not None:
+        if len(capture_indices) != 1:
+            return None
+        if landing_occurrence.run.caller_rung != next(iter(capture_indices)):
+            return None
+    if any(
+        write.scan_id == landing_occurrence.scan_id
+        and write.ordinal > landing_occurrence.ordinal
+        and write.transition.tag_name == channel
+        and write.run.enabled
+        for write in later_writes
+    ):
+        # The suffix boundary is a historical scan exit. A later same-scan
+        # channel write would make that boundary unobservable.
+        return None
+    return landing_occurrence.scan_id
+
+
+def _promoted_target_suffix_observation(
+    expectation: EffectExpectation,
+    pulse: Any,
+    checkpoint_scan: int,
+) -> Any:
+    """Promote an exact zero-net target loss after one proven checkpoint."""
+
+    exact_suffix = tuple(
+        scan_id
+        for scan_id in pulse.kernel_scan_ids
+        if checkpoint_scan < scan_id <= pulse.fork.state.scan_id
+    )
+    if not exact_suffix:
+        return None
+    boundary_projection = pulse.projection_at(exact_suffix[0])
+    if boundary_projection is None:
+        return None
+    terminal = expectation.obligations[0]
+    observations = observe_execution_window(
+        expectation,
+        pulse.fork,
+        scan_before=checkpoint_scan,
+        action_scan=None,
+        coast_receipt=pulse.coast_receipt,
+        kernel_scan_ids=exact_suffix,
+        projection_at=pulse.projection_at,
+    )
+    return promote_terminal_target_observation(
+        observations,
+        window_entry_value=boundary_projection.entry_tags.get(terminal.tag),
+        final_landing_value=pulse.fork.state.tags.get(terminal.tag),
+    )
 
 
 def _repair_failed_requirement(
@@ -1451,61 +1517,82 @@ def _repair_failed_requirement(
             oriented=bearing,
             resolve_excursion=False,
             derive_requirements=True,
+            derivation_checkpoint=requirement.source_checkpoint,
         )
-        executed = _executed_attempt(transition.attempt) if transition.attempt is not None else None
-        expectation = local_act.policy.expectation
-        if (
-            transition.trial is None
-            or executed is None
-            or expectation is None
-            or not _whole_expectation_survived(executed, expectation)
-        ):
-            rejection_reasons.append("local expectation did not survive")
-            return Reject(candidate)
-        requirements_before_monitor = tuple(
-            current.identity for current in candidate.active_requirements
-        )
-        failed_before_monitor = tuple(
-            current.identity for current in candidate.failed_effect_receipts
-        )
-        landing_scan = candidate.work.state.scan_id
-        landing_snap = dict(candidate.work.state.tags)
-        # A locally repaired obligation is only the first acceptance boundary.
-        # An exact target-path ProgramStep may prove that the executor merely
-        # folded autonomous continuation after that boundary. Otherwise feed
-        # the landing through ordinary post-commit trend/departure ownership: a
-        # successive hazard can then restore this source and add a stronger
-        # requirement, while unresolved departures remain unadopted.
-        autonomous_continuation = _repaired_program_continuation(
-            candidate,
-            disposable_ctx,
-            transition.trial,
-            expectation,
-        )
-        if not autonomous_continuation:
-            tuple(_monitor_trend(transition.trial, transition.frame, candidate, disposable_ctx))
-        learned_requirement = requirements_before_monitor != tuple(
-            current.identity for current in candidate.active_requirements
-        ) or failed_before_monitor != tuple(
-            current.identity for current in candidate.failed_effect_receipts
-        )
-        if learned_requirement or candidate.pending_departure is not None:
-            rejection_reasons.append(
-                "monitor learned another requirement"
-                if learned_requirement
-                else "monitor retained an unresolved departure"
+        try:
+            executed = (
+                _executed_attempt(transition.attempt) if transition.attempt is not None else None
             )
-            return Reject(candidate)
-        if (
-            candidate.work.state.scan_id != landing_scan
-            or dict(candidate.work.state.tags) != landing_snap
-        ):
-            rejection_reasons.append(
-                "monitor changed the accepted landing "
-                f"to {ctx.target.tag}={candidate.work.state.tags.get(ctx.target.tag)!r}"
+            expectation = local_act.policy.expectation
+            target_reached = transition.trial is not None and isinstance(
+                transition.trial.verification, TargetReached
             )
-            return Reject(candidate)
-        return Succeed(candidate)
+            if (
+                transition.trial is None
+                or executed is None
+                or (expectation is None and not target_reached)
+                or (
+                    expectation is not None
+                    and not _whole_expectation_survived(executed, expectation)
+                )
+            ):
+                rejection_reasons.append("local expectation did not survive")
+                return Reject(candidate)
+            requirements_before_monitor = tuple(
+                current.identity for current in candidate.active_requirements
+            )
+            failed_before_monitor = tuple(
+                current.identity for current in candidate.failed_effect_receipts
+            )
+            landing_scan = candidate.work.state.scan_id
+            landing_snap = dict(candidate.work.state.tags)
+            # A locally repaired obligation is only the first acceptance boundary.
+            # An exact target-path ProgramStep may prove that the executor merely
+            # folded autonomous continuation after that boundary. Otherwise feed
+            # the landing through ordinary post-commit trend/departure ownership: a
+            # successive hazard can then restore this source and add a stronger
+            # requirement, while unresolved departures remain unadopted.
+            if not target_reached:
+                assert expectation is not None
+                autonomous_checkpoint = _repaired_program_continuation(
+                    candidate,
+                    disposable_ctx,
+                    transition.trial,
+                    expectation,
+                )
+                if autonomous_checkpoint is None:
+                    tuple(
+                        _monitor_trend(
+                            transition.trial,
+                            transition.frame,
+                            candidate,
+                            disposable_ctx,
+                        )
+                    )
+            learned_requirement = requirements_before_monitor != tuple(
+                current.identity for current in candidate.active_requirements
+            ) or failed_before_monitor != tuple(
+                current.identity for current in candidate.failed_effect_receipts
+            )
+            if learned_requirement or candidate.pending_departure is not None:
+                rejection_reasons.append(
+                    "monitor learned another requirement"
+                    if learned_requirement
+                    else "monitor retained an unresolved departure"
+                )
+                return Reject(candidate)
+            if (
+                candidate.work.state.scan_id != landing_scan
+                or dict(candidate.work.state.tags) != landing_snap
+            ):
+                rejection_reasons.append(
+                    "monitor changed the accepted landing "
+                    f"to {ctx.target.tag}={candidate.work.state.tags.get(ctx.target.tag)!r}"
+                )
+                return Reject(candidate)
+            return Succeed(candidate)
+        finally:
+            _release_attempt_execution_projections(transition.attempt)
 
     composition = compose_corrections(
         source,
@@ -2134,13 +2221,37 @@ def _record_attempt(
         state.avoid_names.update(attempt.avoid_names)
 
 
+def _prepare_excursion_replay(
+    attempt: _AttemptResult,
+) -> tuple[_AttemptResult, bool]:
+    """Detach the superseded execution before nested replay capture begins."""
+
+    executed = attempt.excursion_attempt
+    if executed is None:
+        return attempt, False
+    pulse = executed.pulse
+    capture_execution = bool(pulse.execution_projections)
+    pulse.release_execution_projections()
+    return (
+        replace(
+            attempt,
+            excursion_attempt=replace(executed, effect_observations=()),
+        ),
+        capture_execution,
+    )
+
+
 def _resolve_excursion(
     attempt: _AttemptResult,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    capture_execution: bool | None = None,
 ) -> _AttemptResult:
     """Investigate one reported excursion and continue verification on its replay."""
+    if capture_execution is None:
+        attempt, capture_execution = _prepare_excursion_replay(attempt)
     executed = attempt.excursion_attempt
     if executed is None:
         return attempt
@@ -2148,24 +2259,31 @@ def _resolve_excursion(
     key_config = state.key_config
     assert key_config is not None
     pulse = executed.pulse
-    result = investigate_excursion(
-        state.work,
-        pulse.fork,
-        frame.snap,
-        pulse.post_pulse_snap,
-        frame.key,
-        executed.bearing.act.policy.applied,
-        cfg=key_config,
-        steerable=ctx.steerable,
-        pilot_rungs=state.pilot_rungs,
-        resting=ctx.resting,
-        edge_tags=ctx.edge_tags,
-        scan_budget=state.remaining_search_scans(ctx.max_scans),
-        pdg=ctx.pdg,
-        program=ctx.program,
-        ctx=ctx,
-    )
-    return verify_excursion_replay(attempt, result, frame, state, ctx)
+    try:
+        result = investigate_excursion(
+            state.work,
+            pulse.fork,
+            frame.snap,
+            pulse.post_pulse_snap,
+            frame.key,
+            executed.bearing.act.policy.applied,
+            cfg=key_config,
+            steerable=ctx.steerable,
+            pilot_rungs=state.pilot_rungs,
+            resting=ctx.resting,
+            edge_tags=ctx.edge_tags,
+            scan_budget=state.remaining_search_scans(ctx.max_scans),
+            pdg=ctx.pdg,
+            program=ctx.program,
+            ctx=ctx,
+            capture_execution=capture_execution,
+        )
+        return verify_excursion_replay(attempt, result, frame, state, ctx)
+    finally:
+        # The returned AttemptResult owns the replay pulse (if any). The
+        # superseded excursion pulse is no longer reachable by the outer
+        # transition finalizer, so release it here on every replay outcome.
+        pulse.release_execution_projections()
 
 
 def _step_context(
@@ -2378,6 +2496,7 @@ def _transition_once(
     oriented: OrientationResult | None = None,
     resolve_excursion: bool = True,
     derive_requirements: bool = True,
+    derivation_checkpoint: _CausalCheckpoint | None = None,
 ) -> _IterationTransition:
     """Orient and locally settle exactly one current-world result.
 
@@ -2433,9 +2552,22 @@ def _transition_once(
         if result.expectation is not None or terminal_target_expectation is not None
         else None
     )
-    attempt = execute(result, orientation_world)
-    if resolve_excursion:
-        attempt = _resolve_excursion(attempt, frame, state, ctx)
+    attempt = execute(
+        result,
+        orientation_world,
+        capture_execution=(
+            result.expectation is not None or terminal_target_expectation is not None
+        ),
+    )
+    if resolve_excursion and attempt.excursion_attempt is not None:
+        attempt, capture_execution = _prepare_excursion_replay(attempt)
+        attempt = _resolve_excursion(
+            attempt,
+            frame,
+            state,
+            ctx,
+            capture_execution=capture_execution,
+        )
     if terminal_target_expectation is not None:
         result, attempt = _promote_transient_target_failure(
             result,
@@ -2451,7 +2583,7 @@ def _transition_once(
             attempt,
             state,
             ctx,
-            expectation_checkpoint,
+            derivation_checkpoint or expectation_checkpoint,
         )
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
@@ -2552,14 +2684,47 @@ def _promote_transient_target_failure(
         scan_before=pulse.scan_before,
         action_scan=(None if result.act.policy.motion.is_coast else pulse.action_scan),
         coast_receipt=pulse.coast_receipt,
-        timeline=pulse.timeline,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        projection_at=pulse.projection_at,
     )
-    promoted = promote_terminal_target_observation(target_observations)
+    exact_scans = tuple(
+        scan_id
+        for scan_id in pulse.kernel_scan_ids
+        if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
+    )
+    if not exact_scans:
+        return result, attempt
+    boundary_projection = pulse.projection_at(exact_scans[0])
+    terminal_obligation = target_expectation.obligations[0]
+    if boundary_projection is None:
+        # Promotion owns only a whole-window zero-net target excursion. A
+        # producer scan may itself be zero-net after earlier scans advanced the
+        # target channel; that non-zero execution-window motion remains with
+        # the ordinary accepted handoff/departure lifecycle.
+        return result, attempt
+    promoted = promote_terminal_target_observation(
+        target_observations,
+        window_entry_value=boundary_projection.entry_tags.get(terminal_obligation.tag),
+        final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
+    )
+    existing = executed.bearing.expectation
+    if promoted is None and attempt.trial is not None and existing is not None:
+        checkpoint_scan = _repaired_program_continuation(
+            state,
+            ctx,
+            attempt.trial,
+            existing,
+            execution_work=pulse.fork,
+        )
+        if checkpoint_scan is not None:
+            promoted = _promoted_target_suffix_observation(
+                target_expectation,
+                pulse,
+                checkpoint_scan,
+            )
     if promoted is None:
         return result, attempt
 
-    existing = executed.bearing.expectation
-    terminal_obligation = target_expectation.obligations[0]
     if existing is not None:
         matching = tuple(
             obligation
@@ -3003,7 +3168,10 @@ def _pilot_loop_events(
                 attempt=attempt,
             )
             assert rejected_event is not None
-            yield rejected_event
+            try:
+                yield rejected_event
+            finally:
+                _release_attempt_execution_projections(attempt)
             continue
 
         trial = transition.trial
@@ -3018,8 +3186,11 @@ def _pilot_loop_events(
             seen_keys=seen_keys_before_commit,
         )
         assert accepted_event is not None
-        yield accepted_event
-        yield from _monitor_committed_trial(trial, frame, state, ctx)
+        try:
+            yield accepted_event
+            yield from _monitor_committed_trial(trial, frame, state, ctx)
+        finally:
+            _release_attempt_execution_projections(attempt)
         state.last_wait_log = None
         continue
 

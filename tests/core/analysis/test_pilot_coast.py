@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import pyrung.core.analysis.pilot.coast as coast_module
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
 from pyrung.core import Counter
 from pyrung.core.analysis.pilot.coast import (
@@ -41,12 +42,18 @@ from pyrung.core.analysis.pilot.coast import (
     predicate_trigger,
     value_trigger,
 )
+from pyrung.core.analysis.pilot.effects import (
+    EffectExpectation,
+    EffectObligation,
+    observe_execution_window,
+)
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.steer import _settle_watched_tags
+from pyrung.core.analysis.pilot.types import _PulseState
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -868,6 +875,16 @@ class TestCyclefoldDispatch:
         assert folded.state.tags[Output.name] == reference.state.tags[Output.name] is False
         assert folded.state.tags[Tmr.Acc.name] == reference.state.tags[Tmr.Acc.name]
         assert session._last_cyclefold_stats["ordinary_folds"] >= 1
+        assert session.kernel_scan_ids == tuple(sorted(set(session.kernel_scan_ids)))
+        assert len(session.kernel_scan_ids) == receipt.kernel_scans
+        assert all(
+            folded._replay_rung_write_projection_at(scan_id) is not None
+            for scan_id in session.kernel_scan_ids
+        )
+        folded_gap = set(range(receipt.start_scan + 1, receipt.end_scan + 1)).difference(
+            session.kernel_scan_ids
+        )
+        assert folded_gap
 
     def test_oscillating_holds_dispatch_to_cyclefold(self):
         plc = PLC(_free_timer_program(), dt=0.010)
@@ -1047,15 +1064,27 @@ class TestDwell:
         plc = PLC(_timer_program(), dt=0.010)
         start = plc.state.scan_id
 
-        receipt = CoastSession(plc, kind="pulse").dwell(4)
+        session = CoastSession(plc, kind="pulse")
+        receipt = session.dwell(4)
 
         assert receipt.stop_reason == "dwell"
         assert receipt.kernel_scans == 4
         assert receipt.end_scan - receipt.start_scan == 4
         assert receipt.end_scan == start + 4
         assert receipt.fired == ()
+        assert session.kernel_scan_ids == tuple(range(start + 1, start + 5))
         # dwell is not a settle — it carries no per-scan trajectory.
         assert receipt.trajectory == ()
+
+    def test_kernel_scan_stream_rejects_out_of_order_ids(self):
+        plc = PLC(_timer_program(), dt=0.010)
+        plc.step()
+        plc.step()
+        session = CoastSession(plc, kind="pulse")
+        session.note_kernel_scan(2)
+
+        with pytest.raises(ValueError, match="strictly increasing"):
+            session.note_kernel_scan(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1275,6 +1304,86 @@ class TestSettleLandingFolds:
         assert receipt.advances
         assert receipt.advances == tuple(sorted(receipt.advances, key=lambda edit: edit[1]))
         assert {tag for tag, _value in receipt.advances} == {Ctr.Acc.name}
+
+
+class TestExecutionCaptureStream:
+    def test_session_retains_only_actual_kernel_scans_across_fold(self):
+        plc = PLC(_static_channel_long_timer_program(), dt=0.010)
+        plc.patch({"Enable": True})
+        session = CoastSession(plc, kind="capture-stream", capture_execution=True)
+
+        receipt = session.settle_landing("Chan", confirm_scans=200)
+
+        captured = set(session._execution_projections)
+        assert receipt.macro_folds >= 1
+        assert captured == set(session.kernel_scan_ids)
+        assert captured
+        assert set(range(receipt.start_scan + 1, receipt.end_scan + 1)) - captured
+
+    def test_capture_overflow_discards_whole_stream_and_replays_exactly(self, monkeypatch):
+        effect = Int("OverflowCaptureEffect")
+        with Program() as program:
+            with Rung():
+                copy(1, effect)
+        plc = PLC(program)
+        monkeypatch.setattr(coast_module, "_MAX_EXECUTION_PROJECTION_SCANS", 2)
+        session = CoastSession(plc, kind="capture-overflow", capture_execution=True)
+
+        for _ in range(3):
+            session.step_kernel()
+
+        assert session.execution_capture_overflowed
+        assert not session.capture_execution
+        assert session._execution_projections == {}
+        assert session.kernel_scan_ids == (1, 2, 3)
+
+        snap = dict(plc.state.tags)
+        pulse = _PulseState(
+            fork=plc,
+            scan_before=0,
+            action_scan=1,
+            action_snap=snap,
+            wait_snaps=(),
+            post_pulse_snap=snap,
+            post_pulse_key=("post",),
+            snap=snap,
+            key=("landing",),
+            kernel_scan_ids=session.kernel_scan_ids,
+            execution_projections=session._execution_projections,
+        )
+        replayed = []
+        replay_projection = plc._replay_pilot_rung_write_projection_at
+
+        def _record_replay(scan_id):
+            replayed.append(scan_id)
+            return replay_projection(scan_id)
+
+        monkeypatch.setattr(plc, "_replay_pilot_rung_write_projection_at", _record_replay)
+        observations = observe_execution_window(
+            EffectExpectation(
+                (
+                    EffectObligation(
+                        effect.name,
+                        1,
+                        (None, 0, ()),
+                        None,
+                        (),
+                        terminal_target=True,
+                        producer_rung=program.rungs[0],
+                    ),
+                )
+            ),
+            plc,
+            scan_before=0,
+            action_scan=1,
+            kernel_scan_ids=pulse.kernel_scan_ids,
+            projection_at=pulse.projection_at,
+        )
+
+        assert replayed
+        assert observations
+        assert all(observation.appeared is not None for observation in observations)
+        assert "UNKNOWN" not in {observation.disposition for observation in observations}
 
 
 # ---------------------------------------------------------------------------

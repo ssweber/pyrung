@@ -8,7 +8,7 @@ that policy from the landing.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.write_sites import (
+    instruction_write_targets,
+    static_write_target_names,
+)
+from pyrung.core.context import RungId
+from pyrung.core.instruction.coils import OutInstruction
+from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import (
@@ -379,6 +386,9 @@ def exact_last_landing_write(
 
 def promote_terminal_target_observation(
     observations: Iterable[EffectObservation],
+    *,
+    window_entry_value: Any,
+    final_landing_value: Any,
 ) -> EffectObservation | None:
     """Promote one appeared-and-displaced global target, never its absence.
 
@@ -397,6 +407,8 @@ def promote_terminal_target_observation(
     if len(appeared) != 1:
         return None
     observation = appeared[0]
+    if not _values_match(window_entry_value, final_landing_value):
+        return None
     projection = observation.execution_projection
     producer = observation.appeared
     assert producer is not None
@@ -407,17 +419,14 @@ def promote_terminal_target_observation(
     ):
         return None
     landing_value = projection.exit_tags.get(observation.obligation.tag)
+    if not _values_match(landing_value, final_landing_value):
+        return None
     if _values_match(landing_value, observation.obligation.value):
         return None
     # Non-zero endpoint motion is already owned by channel departure and its
     # accepted handoff receipt. This promotion exists for the otherwise
     # invisible zero-net excursion only; taking the ordinary case here would
     # erase the established producer-to-consumer handoff lifecycle.
-    if not _values_match(
-        projection.entry_tags.get(observation.obligation.tag),
-        landing_value,
-    ):
-        return None
     landing = exact_last_landing_write(
         (projection,),
         after=producer,
@@ -457,7 +466,11 @@ def _terminal_landing_causal_reads(
 
     direct = list(projection.enabling_reads_observed_by_write(landing))
     parent = projection.parent_run(landing.run)
-    if not direct and parent is not None:
+    has_displaced_tag_source = any(
+        read.occurrence.name == tag and projection.transition_observed_by_read(read) is not None
+        for read in direct
+    )
+    if not has_displaced_tag_source and parent is not None:
         direct.extend(
             read for read in projection.reads_for_run(parent) if read.ordinal < landing.ordinal
         )
@@ -477,7 +490,9 @@ def _terminal_landing_causal_reads(
         )
         if len(matches) != 1:
             return ()
-        predecessor_writes.append(matches[0])
+        predecessor = matches[0]
+        if not any(current is predecessor for current in predecessor_writes):
+            predecessor_writes.append(predecessor)
     if len(predecessor_writes) > 1:
         return ()
     if predecessor_writes:
@@ -897,40 +912,251 @@ def _wrapped_runs_share_selected_transaction(
     return True
 
 
+@dataclass(frozen=True)
+class _CertifiedOutProducer:
+    authoritative: int | RungId
+    shadow_root: int | None
+
+
+def _certified_out_producer(
+    obligation: EffectObligation,
+    fork: Any,
+    owners: tuple[Any, ...],
+) -> _CertifiedOutProducer | None:
+    """Return one value-aware OUT producer only when call ownership is exact."""
+
+    subroutine, rung_index, branch_path = obligation.producer
+    if branch_path or obligation.value is not True:
+        return None
+    program = fork._program
+    if program is None:
+        return None
+
+    if subroutine is None:
+        if not 0 <= rung_index < len(program.rungs):
+            return None
+        rung = program.rungs[rung_index]
+    else:
+        subroutine_rungs = program.subroutines.get(subroutine)
+        if subroutine_rungs is None or not 0 <= rung_index < len(subroutine_rungs):
+            return None
+        rung = subroutine_rungs[rung_index]
+    if rung is not obligation.producer_rung or rung._branches:
+        return None
+    if any(isinstance(item, CallInstruction | ForLoopInstruction) for item in rung._instructions):
+        return None
+
+    matching_instructions: list[Any] = []
+    for instruction in rung._instructions:
+        for target in instruction_write_targets(instruction):
+            names = static_write_target_names(target)
+            if not names:
+                return None
+            if obligation.tag in names:
+                matching_instructions.append(instruction)
+    if len(matching_instructions) != 1:
+        return None
+    producer = matching_instructions[0]
+    if not isinstance(producer, OutInstruction) or producer._oneshot:
+        return None
+
+    if subroutine is None:
+        if any(owner.rung_firing_timelines.mode(rung_index) == "fired_only" for owner in owners):
+            return None
+        return _CertifiedOutProducer(rung_index, None)
+
+    pdg = fork._ensure_pdg()
+    matching_nodes = tuple(
+        (node_index, node)
+        for node_index, node in enumerate(pdg.rung_nodes)
+        if (node.subroutine, node.rung_index, node.branch_path) == obligation.producer
+    )
+    if len(matching_nodes) != 1:
+        return None
+    producer_node_index, producer_node = matching_nodes[0]
+    if (
+        producer_node_index not in pdg.writers_of.get(obligation.tag, frozenset())
+        or obligation.tag not in producer_node.ote_writes
+    ):
+        return None
+
+    call_nodes = tuple(
+        node
+        for node in pdg.rung_nodes
+        for called_subroutine in node.calls
+        if called_subroutine == subroutine
+    )
+    if len(call_nodes) != 1:
+        return None
+    caller_node = call_nodes[0]
+    if caller_node.subroutine is not None or caller_node.branch_path:
+        return None
+    caller_index = caller_node.rung_index
+    if not 0 <= caller_index < len(program.rungs):
+        return None
+    caller_rung = program.rungs[caller_index]
+    if caller_rung._conditions or caller_rung._branches or len(caller_rung._instructions) != 1:
+        return None
+    call_instruction = caller_rung._instructions[0]
+    if (
+        not isinstance(call_instruction, CallInstruction)
+        or call_instruction.subroutine_name != subroutine
+    ):
+        return None
+
+    node_key = RungId(subroutine, rung_index)
+    if any(
+        owner.node_firing_timelines.mode(node_key) == "fired_only"
+        or owner.rung_firing_timelines.mode(caller_index) == "fired_only"
+        for owner in owners
+    ):
+        return None
+    return _CertifiedOutProducer(node_key, caller_index)
+
+
+def _effect_projection_scan_ids(
+    expectation: EffectExpectation,
+    fork: Any,
+    exact_scan_ids: Iterable[int],
+    *,
+    mandatory_scan_ids: Iterable[int],
+) -> tuple[int, ...]:
+    """Prefilter reconstruction without weakening exact scan ownership.
+
+    Every carried ID is checked. Any missing owner or incomplete historical
+    retention certificate disables pruning for the whole window.
+    """
+
+    exact = tuple(sorted(set(exact_scan_ids)))
+    if not exact:
+        return ()
+    owners = tuple(fork._causal_lineage.owner_at(scan_id) for scan_id in exact)
+    if any(owner is None for owner in owners):
+        return exact
+    exact_owners = tuple(owner for owner in owners if owner is not None)
+    exact_set = set(exact)
+    firings = tuple(
+        (scan_id, fork.rung_firings(scan_id), fork._node_firings_at(scan_id)) for scan_id in exact
+    )
+    selected = {scan_id for scan_id in mandatory_scan_ids if scan_id in exact}
+    for obligation in expectation.obligations:
+        retention_complete = all(
+            owner.firing_retained_tags is None or obligation.tag in owner.firing_retained_tags
+            for owner in exact_owners
+        )
+        if not retention_complete:
+            selected.update(exact)
+            continue
+        certified = _certified_out_producer(
+            obligation,
+            fork,
+            exact_owners,
+        )
+        if certified is None:
+            obligation_scans = {
+                scan_id
+                for scan_id, root_firings, node_firings in firings
+                if any(
+                    obligation.tag in writes
+                    for writes in (*root_firings.values(), *node_firings.values())
+                )
+            }
+            selected.update(obligation_scans)
+            if obligation.consumer is not None:
+                selected.update(
+                    scan_id + 1 for scan_id in obligation_scans if scan_id + 1 in exact_set
+                )
+            continue
+
+        appeared = False
+        producer_scans: set[int] = set()
+        for scan_id, root_firings, node_firings in firings:
+            if isinstance(certified.authoritative, int):
+                producer_writes = root_firings.get(certified.authoritative)
+            else:
+                producer_writes = node_firings.get(certified.authoritative)
+            produced = producer_writes is not None and producer_writes.get(obligation.tag) is True
+            if produced:
+                appeared = True
+                producer_scans.add(scan_id)
+                selected.add(scan_id)
+                continue
+            if appeared and (
+                any(
+                    rung_index
+                    != (
+                        certified.authoritative
+                        if isinstance(certified.authoritative, int)
+                        else certified.shadow_root
+                    )
+                    and obligation.tag in writes
+                    for rung_index, writes in root_firings.items()
+                )
+                or any(
+                    node_key != certified.authoritative and obligation.tag in writes
+                    for node_key, writes in node_firings.items()
+                )
+            ):
+                selected.add(scan_id)
+        if obligation.consumer is not None:
+            selected.update(scan_id + 1 for scan_id in producer_scans if scan_id + 1 in exact_set)
+    return tuple(sorted(selected))
+
+
 def observe_execution_window(
     expectation: EffectExpectation | None,
     fork: Any,
     *,
     scan_before: int,
+    kernel_scan_ids: Iterable[int],
     action_scan: int | None = None,
     coast_receipt: Any = None,
-    timeline: Iterable[Any] = (),
+    projection_at: Callable[[int], ScanRungWriteProjection | None] | None = None,
 ) -> tuple[EffectObservation, ...]:
     """Observe only exact scans owned by the executed act.
 
     Edge release is execution setup, not the selected producer occurrence. A
     matching release-scan write therefore cannot satisfy or erase the promise
     made by the assertion. Pulse/Batch observations begin at the assertion scan
-    and include the exact next scan when settlement executed it: a producer
-    below its consumer is pending for that next cycle, not proved STRANDED just
-    because the consumer already ran earlier in the assertion scan. Additional
-    exact pen/event scans may classify a later consumer; folded gaps remain
-    ``UNKNOWN`` rather than being replayed as a complete logical corridor.
+    and include only later kernel scans explicitly retained by the execution
+    session. Folded logical gaps remain unobserved rather than being replayed
+    as a complete logical corridor.
     """
 
     if expectation is None:
         return ()
+    project = projection_at or fork._replay_rung_write_projection_at
     if action_scan is not None:
-        exact_scan_ids = {action_scan}
-        if action_scan < fork.state.scan_id:
-            exact_scan_ids.add(action_scan + 1)
-        exact_scan_ids.update(
-            event.scan for event in timeline if action_scan < event.scan <= fork.state.scan_id
+        exact_scan_ids = {
+            scan_id for scan_id in kernel_scan_ids if action_scan <= scan_id <= fork.state.scan_id
+        }
+        if action_scan not in exact_scan_ids:
+            return _bind_execution_epoch(
+                _unknown_observations(
+                    expectation,
+                    "assertion scan is absent from the exact kernel scan stream",
+                ),
+                fork,
+                fallback_scan=action_scan,
+            )
+        selected_scan_ids = _effect_projection_scan_ids(
+            expectation,
+            fork,
+            exact_scan_ids,
+            mandatory_scan_ids=(action_scan,),
         )
+        projections_by_scan = tuple((scan_id, project(scan_id)) for scan_id in selected_scan_ids)
+        if any(projection is None for _scan_id, projection in projections_by_scan):
+            return _bind_execution_epoch(
+                _unknown_observations(
+                    expectation,
+                    "exact kernel scan projection is unavailable",
+                ),
+                fork,
+                fallback_scan=action_scan,
+            )
         projections = tuple(
-            projection
-            for scan_id in sorted(exact_scan_ids)
-            if (projection := fork._replay_rung_write_projection_at(scan_id)) is not None
+            projection for _scan_id, projection in projections_by_scan if projection is not None
         )
         if projections:
             return _bind_execution_epoch(
@@ -946,20 +1172,29 @@ def observe_execution_window(
 
     landing_scan = coast_receipt.end_scan if coast_receipt is not None else fork.state.scan_id
     exact_scan_ids = {
-        event.scan for event in timeline if scan_before < event.scan <= fork.state.scan_id
+        scan_id for scan_id in kernel_scan_ids if scan_before < scan_id <= fork.state.scan_id
     }
-    if coast_receipt is not None:
-        exact_scan_ids.update(
-            event.scan
-            for event in coast_receipt.events
-            if scan_before < event.scan <= fork.state.scan_id
+    mandatory_scan_ids = tuple(
+        scan_id for scan_id in (landing_scan,) if scan_id in exact_scan_ids
+    ) + ((min(exact_scan_ids),) if exact_scan_ids else ())
+    selected_scan_ids = _effect_projection_scan_ids(
+        expectation,
+        fork,
+        exact_scan_ids,
+        mandatory_scan_ids=mandatory_scan_ids,
+    )
+    projections_by_scan = tuple((scan_id, project(scan_id)) for scan_id in selected_scan_ids)
+    if any(projection is None for _scan_id, projection in projections_by_scan):
+        return _bind_execution_epoch(
+            _unknown_observations(
+                expectation,
+                "exact kernel scan projection is unavailable",
+            ),
+            fork,
+            fallback_scan=landing_scan,
         )
-        if scan_before < landing_scan <= fork.state.scan_id:
-            exact_scan_ids.add(landing_scan)
     projections = tuple(
-        projection
-        for scan_id in sorted(exact_scan_ids)
-        if (projection := fork._replay_rung_write_projection_at(scan_id)) is not None
+        projection for _scan_id, projection in projections_by_scan if projection is not None
     )
     complete_single_scan = (
         coast_receipt is not None

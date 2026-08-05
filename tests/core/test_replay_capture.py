@@ -30,6 +30,96 @@ from pyrung.core.executor import (
 from pyrung.core.instruction import Instruction
 
 
+def test_execution_capture_is_opt_in_and_preserves_zero_net_reassertion() -> None:
+    state = Int("CaptureState")
+
+    with Program(strict=False) as program:
+        with Rung():
+            copy(1, state)
+            copy(0, state)
+            copy(0, state)
+
+    plc = PLC(program)
+    plc.step()
+
+    assert plc._cached_replay_captures == {}
+
+    captures = {}
+    plc._run_single_scan(
+        consume_pause_request=True,
+        capture_execution=True,
+        capture_sink=captures.__setitem__,
+    )
+    capture = captures[plc.state.scan_id]
+    writes = [
+        (write.before, write.after)
+        for write in capture.runs[0].write_occurrences
+        if write.name == state.name
+    ]
+
+    assert plc.state.tags[state.name] == 0
+    assert writes == [(0, 1), (1, 0), (0, 0)]
+
+
+def test_execution_capture_is_not_retained_by_a_sealed_epoch() -> None:
+    source = Int("EpochCaptureSource")
+    result = Int("EpochCaptureResult")
+
+    @subroutine("EpochCaptureSubroutine")
+    def transfer() -> None:
+        with Rung():
+            copy(source, result)
+
+    with Program(strict=False) as program:
+        with Rung():
+            copy(7, source)
+            call(transfer)
+
+    parent = PLC(program)
+    captures = {}
+    parent._run_single_scan(
+        consume_pause_request=True,
+        capture_execution=True,
+        capture_sink=captures.__setitem__,
+    )
+    scan_id = parent.state.scan_id
+    retained = captures[scan_id]
+    child = parent.fork(inherit_log=True)
+
+    parent.reboot()
+
+    owner = child._causal_lineage.owner_at(scan_id)
+    assert owner is not None
+    assert [run.kind for run in retained.runs] == ["rung", "subroutine"]
+    assert not any(value is retained for value in vars(owner.epoch).values())
+
+
+def test_capture_sink_runs_before_monitor_callback() -> None:
+    signal = Bool("CallbackCaptureSignal", external=True)
+    observed = Bool("CallbackCaptureObserved")
+    with Program(strict=False) as program:
+        with Rung(signal):
+            out(observed)
+
+    plc = PLC(program)
+    captures = {}
+    callback_observations = []
+
+    def _observe(_current, _previous):
+        capture = captures[plc.state.scan_id]
+        callback_observations.append((capture.exit_tags, plc.state.tags))
+
+    plc.monitor(observed, _observe)
+    plc.patch({signal.name: True})
+    plc._run_single_scan(
+        consume_pause_request=True,
+        capture_execution=True,
+        capture_sink=captures.__setitem__,
+    )
+
+    assert callback_observations == [(plc.state.tags, plc.state.tags)]
+
+
 def test_replay_capture_uses_shared_state_slab_and_restores_force_map(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

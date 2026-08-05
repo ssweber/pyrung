@@ -415,10 +415,6 @@ class ExpectationReceipt:
     execution_epoch: Any = field(compare=False, repr=False)
     execution_owner: Any = field(compare=False, repr=False)
     source_checkpoint: Any = field(compare=False, repr=False)
-    producer_occurrence_objects: tuple[RungWrite, ...] = field(
-        default=(), compare=False, repr=False
-    )
-    consumer_occurrence_objects: tuple[RungRead, ...] = field(default=(), compare=False, repr=False)
     local_act: Any = field(default=None, compare=False, repr=False)
     local_bearing: Any = field(default=None, compare=False, repr=False)
     expectation: Any = field(default=None, compare=False, repr=False)
@@ -459,6 +455,34 @@ class ExpectationReceipt:
         )
 
 
+def resolve_expectation_receipt_producer(
+    receipt: ExpectationReceipt,
+    index: int,
+) -> RungWrite | None:
+    """Rebuild one receipt producer from its owner-bound scan projection.
+
+    Receipts retain detached addresses only.  A missing, ambiguous, or
+    foreign reconstruction is not causal authority and therefore fails closed.
+    """
+
+    if index < 0 or index >= len(receipt.producer_occurrences):
+        return None
+    snapshot = receipt.producer_occurrences[index]
+    if snapshot.kind != "write":
+        return None
+    owner = receipt.execution_owner
+    if getattr(owner, "epoch", None) is not receipt.execution_epoch:
+        return None
+    runner_factory = getattr(owner, "_runner", None)
+    if runner_factory is None:
+        return None
+    projection = runner_factory()._replay_rung_write_projection_at(snapshot.scan_id)
+    if projection is None:
+        return None
+    matches = tuple(write for write in projection.writes if occurrence_snapshot(write) == snapshot)
+    return matches[0] if len(matches) == 1 else None
+
+
 def match_expectation_receipt(
     receipts: tuple[ExpectationReceipt, ...] | list[ExpectationReceipt],
     *,
@@ -469,11 +493,10 @@ def match_expectation_receipt(
     """Return the unique accepted expectation owning one exact causal write.
 
     The detached receipt view is recording material, not causal authority.  A
-    match therefore requires the retained projection occurrence's complete
-    dynamic address (including its scan), the same immutable Epoch/query
-    objects, and an intact local expectation source.  Reconstructed occurrence
-    objects are allowed because epoch-owned projection queries may rebuild
-    them; equal-looking evidence from another epoch is not.
+    match therefore reconstructs the receipt's complete dynamic occurrence
+    from its immutable Epoch/query owner, then requires the same owner and an
+    intact local expectation source. Equal-looking evidence from another epoch
+    is not authority.
     """
 
     observed = occurrence_snapshot(occurrence)
@@ -485,7 +508,7 @@ def match_expectation_receipt(
             or receipt.local_act is None
             or receipt.local_bearing is None
             or receipt.expectation is None
-            or len(receipt.producer_occurrence_objects) != len(receipt.obligations)
+            or len(receipt.producer_occurrences) != len(receipt.obligations)
             or receipt.act_identity != act_identity(receipt.local_act)
             or receipt.local_bearing.act is not receipt.local_act
             or receipt.local_bearing.expectation is not receipt.expectation
@@ -497,25 +520,22 @@ def match_expectation_receipt(
             continue
         owned = tuple(
             index
-            for index, producer in enumerate(receipt.producer_occurrence_objects)
-            if occurrence_snapshot(producer) == observed
+            for index, producer in enumerate(receipt.producer_occurrences)
+            if producer == observed
         )
         if len(owned) != 1:
             continue
         index = owned[0]
-        if (
-            occurrence_snapshot(receipt.producer_occurrence_objects[index])
-            != (receipt.producer_occurrences[index])
-        ):
+        producer = resolve_expectation_receipt_producer(receipt, index)
+        if producer is None:
             continue
         obligation = receipt.obligations[index]
         local_obligation = receipt.expectation.obligations[index]
         if (
-            obligation.tag != occurrence.transition.tag_name
-            or obligation.value != occurrence.transition.to_value
-            or obligation.producer[:2]
-            != (occurrence.rung_id.subroutine, occurrence.rung_id.rung_index)
-            or local_obligation.producer_rung is not occurrence.run.rung
+            obligation.tag != producer.transition.tag_name
+            or obligation.value != producer.transition.to_value
+            or obligation.producer[:2] != (producer.rung_id.subroutine, producer.rung_id.rung_index)
+            or local_obligation.producer_rung is not producer.run.rung
         ):
             continue
         matches.append(receipt)
@@ -1327,7 +1347,7 @@ def derive_overwriter_guard_requirement_from_effect(
     displacement = getattr(observation, "displacement", None)
     if displacement is None or not _contains_identity(projection.writes, displacement):
         return _unknown("harmful overwriter is not owned by the exact projection")
-    run = displacement.run
+    run = _exact_guard_cause_run(displacement.run, projection)
     if not run.enabled:
         return _unknown("harmful overwriter run was not enabled")
     evaluation = _evaluate_run_guard_complement(run, projection)
@@ -1345,18 +1365,32 @@ def derive_overwriter_guard_requirement_from_effect(
     if filtered is None:
         return _unknown("harmful overwriter guard depends only on excluded channel state")
     condition = _bind_guard_demanding_rung(filtered, run.rung)
+    condition = _refine_preserved_tag_deadlines(
+        condition,
+        projection,
+        preserved_values,
+    )
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     explanation_kind = (
         FailureExplanationKind.OVERWRITTEN
         if disposition == "OVERWRITTEN"
         else FailureExplanationKind.DISPLACED
     )
+    refined_support: list[EffectOccurrenceSnapshot] = [
+        occurrence_snapshot(read) for read in evaluation.supporting_reads
+    ]
+    for atom in _guard_atoms(condition):
+        for occurrence in (*atom.supporting_occurrences, atom.deadline):
+            if occurrence not in refined_support:
+                refined_support.append(occurrence)
     explanation = FailureExplanation(
         explanation_kind,
         detail="exact harmful overwriter guard was complemented",
-        supporting_occurrences=tuple(
-            occurrence_snapshot(read) for read in evaluation.supporting_reads
-        ),
+        # Deadline refinement may replace the final overwriter guard with an
+        # exact earlier predecessor guard. The failed receipt must carry that
+        # refined atom's proof surface, otherwise exact source matching cannot
+        # find the requirement it derived and local recovery churns forever.
+        supporting_occurrences=tuple(refined_support),
     )
     return RequirementDerivation(
         explanation=explanation,
@@ -1402,6 +1436,115 @@ def _residualize_guard_requirement(
     if len(filtered) == 1:
         return filtered[0]
     return replace(condition, terms=filtered, exhaustive=False)
+
+
+def _refine_preserved_tag_deadlines(
+    condition: GuardRequirementCondition,
+    projection: ScanRungWriteProjection,
+    preserved_values: tuple[tuple[str, Any], ...],
+) -> GuardRequirementCondition:
+    """Trace compatible same-tag deadlines through exact earlier writers.
+
+    A final harmful writer may read a protected channel only after another
+    same-scan writer has displaced its required value.  When one guard atom was
+    true at the protected value and became false solely across the exact write
+    observed by that atom's deadline read, preventing that predecessor is a
+    sufficient way to satisfy the later atom on time.  Substitute only the
+    exact complemented predecessor guard; every missing identity, ambiguity,
+    or non-decreasing hop keeps the original atom.
+    """
+
+    protected = dict(preserved_values)
+
+    def refine(
+        item: GuardRequirementCondition,
+        *,
+        remaining_hops: int,
+        visited: frozenset[tuple[int, int, str, int]],
+    ) -> GuardRequirementCondition:
+        if isinstance(item, GuardRequirementExpr):
+            terms = tuple(
+                refine(term, remaining_hops=remaining_hops, visited=visited) for term in item.terms
+            )
+            return item if terms == item.terms else replace(item, terms=terms)
+        if remaining_hops <= 0 or not isinstance(item.condition, Cmp):
+            return item
+        constraint = item.condition
+        if constraint.bound_is_tag or constraint.tag not in protected:
+            return item
+        protected_view = dict(protected)
+        if constraint_holds(constraint, protected_view) is not True:
+            return item
+
+        reads = tuple(
+            read for read in projection.reads if occurrence_snapshot(read) == item.deadline
+        )
+        if len(reads) != 1:
+            return item
+        read = reads[0]
+        observed_view = {**protected_view, constraint.tag: read.occurrence.value}
+        if constraint_holds(constraint, observed_view) is not False:
+            return item
+        transition = projection.transition_observed_by_read(read)
+        if transition is None or transition.occurrence_ordinal is None:
+            return item
+        definitions = tuple(
+            write
+            for write in projection.writes
+            if write.scan_id == read.scan_id
+            and write.ordinal == transition.occurrence_ordinal
+            and write.transition.tag_name == constraint.tag
+            and write.transition.from_value == transition.from_value
+            and write.transition.to_value == transition.to_value
+        )
+        if len(definitions) != 1:
+            return item
+        definition = definitions[0]
+        if not definition.run.enabled or not definition.ordinal < read.ordinal:
+            return item
+        before_view = {**protected_view, constraint.tag: definition.transition.from_value}
+        after_view = {**protected_view, constraint.tag: definition.transition.to_value}
+        if (
+            constraint_holds(constraint, before_view) is not True
+            or constraint_holds(constraint, after_view) is not False
+        ):
+            return item
+
+        visit = (read.scan_id, read.ordinal, constraint.tag, definition.ordinal)
+        if visit in visited:
+            return item
+        evaluation = _evaluate_run_guard_complement(definition.run, projection)
+        if (
+            not evaluation.value
+            or not evaluation.exact
+            or evaluation.requirement is None
+            or not evaluation.supporting_reads
+        ):
+            return item
+        substitute = _residualize_guard_requirement(
+            evaluation.requirement,
+            preserved_values,
+        )
+        if substitute is None:
+            return item
+        substitute = _bind_guard_demanding_rung(substitute, definition.run.rung)
+        substitute_atoms = _guard_atoms(substitute)
+        if not substitute_atoms or any(
+            atom.deadline.scan_id != read.scan_id or atom.deadline.ordinal >= read.ordinal
+            for atom in substitute_atoms
+        ):
+            return item
+        return refine(
+            substitute,
+            remaining_hops=remaining_hops - 1,
+            visited=visited | {visit},
+        )
+
+    return refine(
+        condition,
+        remaining_hops=len(projection.writes),
+        visited=frozenset(),
+    )
 
 
 def derive_advance_operand_requirement(

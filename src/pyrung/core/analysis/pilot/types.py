@@ -12,6 +12,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from weakref import ReferenceType, ref
 
 from pyrsistent import PRecord, PVector, pvector
 from pyrsistent import field as _precord_field
@@ -990,6 +991,17 @@ class _PulseState:
     post_pulse_key: _StateKey
     snap: dict[str, Any]
     key: _StateKey
+    # Ordered actual interpreter scans owned by this execution fork. Logical
+    # scan IDs skipped by a fold are deliberately absent.
+    kernel_scan_ids: tuple[int, ...]
+    execution_projections: dict[int, ScanRungWriteProjection]
+    # Observation-local memo. The immutable epoch owner is retained beside
+    # each value so a scan ID cannot reuse a projection from another fork.
+    # init=False makes dataclasses.replace() start replay forks fresh.
+    _projection_cache: dict[
+        int,
+        tuple[Any, ReferenceType[ScanRungWriteProjection]],
+    ] = field(default_factory=dict, init=False, repr=False)
     # The CoastReceipt of the trial's coast (bearing / terminal let-run), when the
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
@@ -1006,6 +1018,52 @@ class _PulseState:
     # its ActPolicy, but only a physical coast can identify a terminal
     # departure or choose between an inner boundary and its outer route edge.
     channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
+
+    def __post_init__(self) -> None:
+        if any(
+            scan_id <= self.scan_before or scan_id > self.fork.state.scan_id
+            for scan_id in self.kernel_scan_ids
+        ):
+            raise ValueError("kernel scan ID lies outside the trial execution window")
+        if any(
+            later <= earlier
+            for earlier, later in zip(
+                self.kernel_scan_ids,
+                self.kernel_scan_ids[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("kernel scan IDs must be strictly increasing")
+
+    def projection_at(self, scan_id: int) -> ScanRungWriteProjection | None:
+        """Return one exact projection, memoized only for its epoch owner."""
+        if scan_id not in self.kernel_scan_ids:
+            return None
+        projection = self.execution_projections.get(scan_id)
+        if projection is not None:
+            return projection
+        owner = self.fork._causal_lineage.owner_at(scan_id)
+        cached = self._projection_cache.get(scan_id)
+        if cached is not None and cached[0] is owner:
+            retained = cached[1]()
+            if retained is not None:
+                return retained
+        if owner is None:
+            return None
+        projection = self.fork._replay_pilot_rung_write_projection_at(scan_id)
+        if projection is not None:
+            # Observations that select this projection retain it strongly and
+            # therefore preserve exact occurrence identity across consumers.
+            # Unselected fallback replays disappear immediately instead of
+            # rebuilding an unbudgeted full execution stream after capture
+            # overflow.
+            self._projection_cache[scan_id] = (owner, ref(projection))
+        return projection
+
+    def release_execution_projections(self) -> None:
+        """Release transition-local projections after every raw consumer finishes."""
+        self.execution_projections.clear()
+        self._projection_cache.clear()
 
 
 @dataclass(frozen=True)

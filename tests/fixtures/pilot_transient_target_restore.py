@@ -47,7 +47,9 @@ with Program() as logic:
     with rung(LaterWatchdog.Done):
         copy(INTERMEDIATE, State, oneshot=True)
 
-    with rung(State == INTERMEDIATE):
+    # Two exact reads observe the same predecessor write; causal ambiguity is
+    # about distinct sources, not the number of guard reads.
+    with rung(State == INTERMEDIATE, State >= INTERMEDIATE):
         call("TransientRestoreRollback")
 
     with rung(State == QUALIFIED):
@@ -83,7 +85,7 @@ with Program() as without_target_logic:
     with rung(LaterWatchdog.Done):
         copy(INTERMEDIATE, State, oneshot=True)
 
-    with rung(State == INTERMEDIATE):
+    with rung(State == INTERMEDIATE, State >= INTERMEDIATE):
         call("TransientRestoreControlRollback")
 
     with rung(State == QUALIFIED):

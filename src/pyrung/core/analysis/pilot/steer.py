@@ -32,10 +32,7 @@ from pyrung.core.analysis.pilot.coast import (
     coast_departure_tags,
 )
 from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
-from pyrung.core.analysis.pilot.effects import (
-    expectation_from_writer,
-    observe_execution_window,
-)
+from pyrung.core.analysis.pilot.effects import expectation_from_writer, observe_execution_window
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
@@ -96,7 +93,8 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
             scan_before=pulse.scan_before,
             action_scan=(None if isinstance(bearing.act, (Coast, Dwell)) else pulse.action_scan),
             coast_receipt=pulse.coast_receipt,
-            timeline=pulse.timeline,
+            kernel_scan_ids=pulse.kernel_scan_ids,
+            projection_at=pulse.projection_at,
         ),
     )
 
@@ -189,6 +187,8 @@ def _apply_actions(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    capture_execution: bool = False,
 ) -> _PulseState:
     key_config = state.key_config
     assert key_config is not None
@@ -199,6 +199,7 @@ def _apply_actions(
         fork,
         kind="pulse",
         kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+        capture_execution=capture_execution,
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -209,11 +210,11 @@ def _apply_actions(
         release = {t: ctx.resting.get(t, False) for t in patch if t in ctx.edge_tags}
         if release:
             fork.patch(release)
-            fork.step()
+            session.step_kernel()
             session.note_pens()
 
     fork.patch(patch)
-    fork.step()
+    session.step_kernel()
     session.note_pens()
     action_snap = dict(fork.state.tags)
     action_scan = fork.state.scan_id
@@ -271,6 +272,8 @@ def _apply_actions(
         ),
         coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
         timeline=session.events,
+        kernel_scan_ids=session.kernel_scan_ids,
+        execution_projections=session._execution_projections,
     )
 
 
@@ -411,6 +414,7 @@ def _try_action_batch(
     ctx: _PilotContext,
     *,
     observation_action: ActionPair | None = None,
+    capture_execution: bool = False,
 ) -> _AttemptResult:
     policy = bearing.act.policy
     # ── Action gate (avoid=) ──────────────────────────────────────────────
@@ -434,7 +438,13 @@ def _try_action_batch(
             avoid_names=tuple(avoid_names),
         )
 
-    trial = _apply_actions(policy.applied, frame, state, ctx)
+    trial = _apply_actions(
+        policy.applied,
+        frame,
+        state,
+        ctx,
+        capture_execution=capture_execution,
+    )
     key_config = state.key_config
     assert key_config is not None
 
@@ -490,7 +500,12 @@ def _try_action_batch(
     return replace(result, observations=tuple(observations))
 
 
-def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
+def execute(
+    bearing: Bearing,
+    world: OrientationWorld,
+    *,
+    capture_execution: bool = False,
+) -> _AttemptResult:
     """Execute exactly the act declared by a current-world bearing.
 
     This is deliberately narrower than orientation: it validates the world
@@ -527,6 +542,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
             state,
             ctx,
             observation_action=act.action,
+            capture_execution=capture_execution,
         )
     if isinstance(act, BatchPulse):
         return _try_action_batch(
@@ -534,6 +550,7 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
             frame,
             state,
             ctx,
+            capture_execution=capture_execution,
         )
     if isinstance(act, Coast):
         if act.mode == "bearing":
@@ -542,10 +559,23 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
                 frame,
                 state,
                 ctx,
+                capture_execution=capture_execution,
             )
-        return _try_terminal_letrun(bearing, frame, state, ctx)
+        return _try_terminal_letrun(
+            bearing,
+            frame,
+            state,
+            ctx,
+            capture_execution=capture_execution,
+        )
     if isinstance(act, Dwell):
-        return _try_terminal_dwell(bearing, frame, state, ctx)
+        return _try_terminal_dwell(
+            bearing,
+            frame,
+            state,
+            ctx,
+            capture_execution=capture_execution,
+        )
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
@@ -559,6 +589,8 @@ def _try_bearing_coast(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    capture_execution: bool = False,
 ) -> _AttemptResult:
     """Run a bearing coast through the verify pipeline.
 
@@ -591,6 +623,7 @@ def _try_bearing_coast(
         fork,
         kind="bearing_coast",
         kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+        capture_execution=capture_execution,
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -658,6 +691,8 @@ def _try_bearing_coast(
         key=key_after,
         coast_receipt=bearing_coast_receipt,
         timeline=session.events,
+        kernel_scan_ids=session.kernel_scan_ids,
+        execution_projections=session._execution_projections,
         channel_motion=ChannelMotion(
             verify_channel,
             verify_target,
@@ -679,6 +714,8 @@ def _try_terminal_letrun(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    capture_execution: bool = False,
 ) -> _AttemptResult:
     """Generalized terminal let-run — the bottom-of-loop fallback.
 
@@ -731,6 +768,7 @@ def _try_terminal_letrun(
         fork,
         kind="letrun",
         kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+        capture_execution=capture_execution,
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
@@ -812,6 +850,8 @@ def _try_terminal_letrun(
         key=key_after,
         coast_receipt=letrun_receipt,
         timeline=session.events,
+        kernel_scan_ids=session.kernel_scan_ids,
+        execution_projections=session._execution_projections,
         channel_motion=ChannelMotion(chan_tag, chan_val),
     )
 
@@ -829,6 +869,8 @@ def _try_terminal_dwell(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    capture_execution: bool = False,
 ) -> _AttemptResult:
     """Run one bounded repeated dwell through the shared trial gates.
 
@@ -867,6 +909,7 @@ def _try_terminal_dwell(
         fork,
         kind="settle",
         kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+        capture_execution=capture_execution,
     )
     session.arm_pens(_pen_tags(state, ctx))
     dwell = _settle_watched_tags(
@@ -924,6 +967,8 @@ def _try_terminal_dwell(
         snap=snap_after,
         key=key_after,
         timeline=session.events,
+        kernel_scan_ids=session.kernel_scan_ids,
+        execution_projections=session._execution_projections,
     )
 
     # Empty actions, no channel register: the settled fork already reached the

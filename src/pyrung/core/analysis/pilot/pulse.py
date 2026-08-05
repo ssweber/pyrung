@@ -35,11 +35,11 @@ def _apply_pulse(
         release = {t: resting.get(t, False) for t in patch if t in edge_tags}
         if release:
             plc.patch(release)
-            plc.step()
+            session.step_kernel()
             session.note_pens()
 
     plc.patch(patch)
-    plc.step()
+    session.step_kernel()
     session.note_pens()
 
     # Fixed settle window — the one waiting shape with no predicate (an

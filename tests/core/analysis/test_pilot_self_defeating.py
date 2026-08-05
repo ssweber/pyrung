@@ -18,6 +18,7 @@ no writer of a needed register, so it survives.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from pyrsistent import pvector
@@ -568,6 +569,8 @@ def _saboteur_scenario():
         post_pulse_key=("post-pulse",),
         snap=landing_snapshot,
         key=("ejected",),
+        kernel_scan_ids=(),
+        execution_projections={},
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
     )
     trial = _AcceptedTrial(
@@ -771,7 +774,11 @@ def test_excursion_correction_keeps_its_replayed_rung_and_receipt():
     assert state.checkpoints[-1].world.pilot_rungs == state.world.pilot_rungs
 
 
-def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(monkeypatch):
+@pytest.mark.parametrize("accepted", [False, True])
+def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(
+    monkeypatch,
+    accepted,
+):
     """The drive loop owns exactly one runtime investigation per report."""
     state, trial, frame, ctx = _saboteur_scenario()
     state.key_config = _StateKeyConfig((), (), (), frozenset())
@@ -788,18 +795,31 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(mon
             BatchPulse(policy),
             trial.attempt.bearing.objective,
         ),
+        effect_observations=(cast(Any, object()),),
     )
+    original_projections = {executed.pulse.action_scan: cast(Any, object())}
+    executed.pulse.execution_projections.update(original_projections)
+    executed.pulse._projection_cache[executed.pulse.action_scan] = cast(
+        Any,
+        (object(), lambda: None),
+    )
+    replay_captures = {executed.pulse.action_scan: object()}
     detected = _AttemptResult(trial=None, excursion_attempt=executed)
-    investigation = object()
-    resolved = _AttemptResult(trial=trial)
+    investigation = SimpleNamespace(replay_execution_projections=replay_captures)
+    resolved = _AttemptResult(trial=trial if accepted else None)
     calls = []
 
     def investigate(*args, **kwargs):
+        assert kwargs["capture_execution"] is True
+        assert executed.pulse.execution_projections == {}
+        assert executed.pulse._projection_cache == {}
         calls.append((args, kwargs))
         return investigation
 
     def judge(result, replay, got_frame, got_state, got_ctx):
-        assert result is detected
+        assert result is not detected
+        assert result.excursion_attempt is not executed
+        assert result.excursion_attempt.effect_observations == ()
         assert replay is investigation
         assert got_frame is frame
         assert got_state is state
@@ -818,6 +838,9 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(mon
     assert _resolve_excursion(detected, frame, state, ctx) is resolved
     assert len(calls) == 1
     assert calls[0][0][5] == policy.applied
+    assert executed.pulse.execution_projections == {}
+    assert executed.pulse._projection_cache == {}
+    assert investigation.replay_execution_projections == replay_captures
 
 
 def test_correction_installer_rejects_forged_identity():

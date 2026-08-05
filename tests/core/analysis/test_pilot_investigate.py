@@ -3044,6 +3044,7 @@ class TestInvestigateExcursion:
             resting={"Command": False},
             edge_tags={"Command"},
             scan_budget=50,
+            capture_execution=True,
         )
         # Sealing Hold=True keeps Out latched across the edge release — the
         # replay key differs from the (reverted) pre key, so the hold is kept.
@@ -3055,6 +3056,8 @@ class TestInvestigateExcursion:
         assert guard.evaluate(_SnapshotView({"Out": True}, {}))
         assert not guard.evaluate(_SnapshotView({"Out": False}, {}))
         assert result.replay_fork is not None
+        assert result.replay_execution_projections
+        assert set(result.replay_execution_projections) == set(result.replay_kernel_scan_ids)
 
 
 # ---------------------------------------------------------------------------

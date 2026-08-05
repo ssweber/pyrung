@@ -31,10 +31,16 @@ def test_second_delayed_hazard_is_repaired_before_its_landing_is_adopted() -> No
         (fixture.SecondPresetMs.name, ">", 10),
     ]
     # The first corrected retry is disposable because it exposes the second
-    # hazard. Its installed first-preset correction is part of the second
-    # requirement's exact checkpoint, so only the second repair is adopted.
+    # hazard. Both requirements remain owned by the original selected
+    # transaction, so recovery adopts one composed correction from that exact
+    # source rather than treating the disposable retry as a new checkpoint.
+    assert [item.source_scan for item in requirements] == [1, 1]
+    assert requirements[0].source_world_key == requirements[1].source_world_key
     assert [event.data["assignments"] for event in repairs] == [
-        ((fixture.SecondPresetMs.name, 11),),
+        (
+            (fixture.FirstPresetMs.name, 11),
+            (fixture.SecondPresetMs.name, 11),
+        ),
     ]
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

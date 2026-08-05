@@ -29,6 +29,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
     EffectObservation,
+    observe_execution_window,
 )
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -114,6 +115,8 @@ def _target_landing_attempt(
         post_pulse_key=("target-landing",),
         snap=dict(after),
         key=("target-landing",),
+        kernel_scan_ids=(),
+        execution_projections={},
     )
     bearing = Bearing(
         ("source",),
@@ -283,7 +286,7 @@ class TestGateSpin:
         plc = PLC(prog, dt=0.010)
         snap = dict(plc.state.tags)
         key = ("same",)
-        trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key)
+        trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key, (), {})
         gates = []
         verdict = _gate_spin(
             trial,
@@ -331,6 +334,8 @@ class TestGateSpin:
             ("post-pulse",),
             snap,
             frame_key,
+            (),
+            {},
         )
         executed = _ExecutedAttempt(pulse=trial, bearing=bearing)
 
@@ -389,6 +394,8 @@ class TestGateSpin:
             ("post-pulse",),
             snap,
             frame_key,
+            (),
+            {},
         )
         policy = ActPolicy(
             source=ActSource.TRACE,
@@ -433,6 +440,144 @@ class TestGateSpin:
         assert result.observations == (observation,)
         assert result.confirmed_correction is None
 
+    def test_excursion_replay_rebinds_same_scan_to_replay_owned_capture(self, monkeypatch):
+        command = Bool("ReplayCaptureCommand", external=True)
+        effect = Int("ReplayCaptureEffect")
+        with Program() as program:
+            with Rung(command):
+                copy(1, effect)
+
+        original = PLC(program)
+        before = dict(original.state.tags)
+        original.patch({command.name: True})
+        original_captures = {}
+        original._run_single_scan(
+            consume_pause_request=True,
+            capture_execution=True,
+            capture_sink=original_captures.__setitem__,
+        )
+        original_projections = {
+            scan_id: original._projection_from_capture(scan_id, capture)
+            for scan_id, capture in original_captures.items()
+        }
+
+        replay = PLC(program)
+        replay.patch({command.name: False})
+        replay_captures = {}
+        replay._run_single_scan(
+            consume_pause_request=True,
+            capture_execution=True,
+            capture_sink=replay_captures.__setitem__,
+        )
+        replay_projections = {
+            scan_id: replay._projection_from_capture(scan_id, capture)
+            for scan_id, capture in replay_captures.items()
+        }
+        assert original.state.scan_id == replay.state.scan_id == 1
+
+        obligation = EffectObligation(
+            effect.name,
+            1,
+            (None, 0, ()),
+            None,
+            (),
+            terminal_target=True,
+            producer_rung=program.rungs[0],
+        )
+        expectation = EffectExpectation((obligation,))
+        cfg = _StateKeyConfig(
+            stateful_names=(effect.name,),
+            done_specs=(),
+            threshold_vector_specs=(),
+            acc_indices=frozenset(),
+        )
+        frame_key = _pilot_world_key(before, cfg, ())
+        pulse = _PulseState(
+            fork=original,
+            scan_before=0,
+            action_scan=1,
+            action_snap=dict(original.state.tags),
+            wait_snaps=(),
+            post_pulse_snap=dict(original.state.tags),
+            post_pulse_key=("post",),
+            snap=dict(original.state.tags),
+            key=("original",),
+            kernel_scan_ids=(1,),
+            execution_projections=original_projections,
+        )
+        policy = ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=((command.name, True),),
+            applied=((command.name, True),),
+            expectation=expectation,
+        )
+        bearing = Bearing(
+            frame_key,
+            Pulse(policy),
+            BearingObjective(TargetSpec(effect.name, 1)),
+        )
+        original_observations = observe_execution_window(
+            expectation,
+            original,
+            scan_before=0,
+            action_scan=1,
+            kernel_scan_ids=(1,),
+            projection_at=pulse.projection_at,
+        )
+        assert [item.disposition for item in original_observations] == ["SURVIVED"]
+
+        detected = _AttemptResult(
+            trial=None,
+            excursion_attempt=_ExecutedAttempt(
+                pulse=pulse,
+                bearing=bearing,
+                effect_observations=original_observations,
+            ),
+        )
+        correction = _ConfirmedCorrection(
+            identity=("replay-capture",),
+            pilot_rungs=(),
+            sources=(effect.name,),
+            justification="test corrected replay ownership",
+        )
+        rebound = {}
+
+        def _capture_rebound(attempt, *_args, **_kwargs):
+            rebound["attempt"] = attempt
+            return _AttemptResult(trial=None, executed=attempt)
+
+        monkeypatch.setattr(
+            "pyrung.core.analysis.pilot.verify._verify_after_spin",
+            _capture_rebound,
+        )
+        result = verify_excursion_replay(
+            detected,
+            ExcursionResult(
+                reverted=[effect.name],
+                correction=correction,
+                replay_fork=replay,
+                replay_kernel_scan_ids=(1,),
+                replay_execution_projections=replay_projections,
+            ),
+            SimpleNamespace(key=frame_key, snap=before),
+            SimpleNamespace(
+                key_config=cfg,
+                earned_work=None,
+                pilot_rungs=[],
+                active_requirements=(),
+            ),
+            SimpleNamespace(
+                avoid_pred=None,
+                target=TargetSpec(effect.name, 1),
+            ),
+        )
+
+        replay_attempt = rebound["attempt"]
+        assert result.executed is replay_attempt
+        assert replay_attempt.pulse.execution_projections is replay_projections
+        assert replay_attempt.pulse.execution_projections is not original_projections
+        assert [item.disposition for item in replay_attempt.effect_observations] == ["ABSENT"]
+
     def test_pending_effects_bypass_spin(self):
         source = Bool("SpinPendingSource", external=True)
         feedback = Bool(
@@ -462,6 +607,8 @@ class TestGateSpin:
             key,
             snap,
             key,
+            (),
+            {},
         )
 
         verdict = _gate_spin(
@@ -905,6 +1052,8 @@ class TestVerifyGates:
             post_pulse_key=source_key,
             snap=after,
             key=landing_key,
+            kernel_scan_ids=(),
+            execution_projections={},
             channel_motion=ChannelMotion(phase.name, 2, stop_reason="departed"),
         )
         frame = _IterationFrame(
@@ -1009,6 +1158,8 @@ class TestVerifyGates:
             post_pulse_key=("post",),
             snap=after,
             key=("target",),
+            kernel_scan_ids=(),
+            execution_projections={},
             coast_receipt=coast_receipt,
             timeline=timeline,
         )
@@ -1117,6 +1268,8 @@ class TestVerifyGates:
             post_pulse_key=("post",),
             snap=pre_replay,
             key=frame_key,
+            kernel_scan_ids=(),
+            execution_projections={},
         )
         policy = ActPolicy(
             source=ActSource.TRACE,

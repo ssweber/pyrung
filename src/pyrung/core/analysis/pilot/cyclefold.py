@@ -22,9 +22,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeGuard
 
 if TYPE_CHECKING:
+    from pyrung.core.executor import ConditionViewCapture
     from pyrung.core.fold import _FoldContext
     from pyrung.core.runner import PLC
     from pyrung.core.state import SystemState
+
+_CaptureDecision = bool | Callable[[], bool]
+
+
+def _capture_requested(decision: _CaptureDecision) -> bool:
+    return decision() if callable(decision) else decision
 
 
 @dataclass(frozen=True)
@@ -311,6 +318,9 @@ def cycle_fold_until(
     predicate_reads: frozenset[str] | None = None,
     stats: dict[str, int] | None = None,
     advances: list[tuple[str, Any]] | None = None,
+    on_kernel_scan: Callable[[int], None] | None = None,
+    capture_kernel_scans: _CaptureDecision = False,
+    capture_sink: Callable[[int, ConditionViewCapture], None] | None = None,
 ) -> bool:
     """Coast *plc* until *predicate*, folding active-hold limit cycles.
 
@@ -372,6 +382,9 @@ def cycle_fold_until(
             extra_comparisons=extra_comparisons,
             stats=stats,
             advances=advances,
+            on_kernel_scan=on_kernel_scan,
+            capture_kernel_scans=capture_kernel_scans,
+            capture_sink=capture_sink,
         )
         return bool(predicate(plc.state))
 
@@ -497,7 +510,13 @@ def cycle_fold_until(
         probe_ordinary = ordinary_eligible and (since_ordinary_probe >= ordinary_probe_every - 1)
         ordinary_probe = ordinary.capture(plc) if probe_ordinary else None
         plc._consume_pause_request()
-        plc._run_single_scan(consume_pause_request=False)
+        plc._run_single_scan(
+            consume_pause_request=False,
+            capture_execution=_capture_requested(capture_kernel_scans),
+            capture_sink=capture_sink,
+        )
+        if on_kernel_scan is not None:
+            on_kernel_scan(plc._state.scan_id)
         kernel_scans += 1
         since_ordinary_probe = 0 if probe_ordinary else since_ordinary_probe + 1
         paused = plc._consume_pause_request()
@@ -514,6 +533,9 @@ def cycle_fold_until(
                 ordinary_probe,
                 max_skip=logical_room,
                 min_skip=ordinary_min_skip,
+                on_kernel_scan=on_kernel_scan,
+                capture_kernel_scan=capture_kernel_scans,
+                capture_sink=capture_sink,
             )
             if advance is not None:
                 kernel_scans += advance.kernel_scans

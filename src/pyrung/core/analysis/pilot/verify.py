@@ -124,7 +124,8 @@ def _rebind_replay_attempt(
             None if isinstance(attempt.bearing.act, (Coast, Dwell)) else replay_trial.action_scan
         ),
         coast_receipt=replay_trial.coast_receipt,
-        timeline=replay_trial.timeline,
+        kernel_scan_ids=replay_trial.kernel_scan_ids,
+        projection_at=replay_trial.projection_at,
     )
     return replace(
         attempt,
@@ -798,6 +799,8 @@ def verify_excursion_replay(
         key=replay_key,
         coast_receipt=None,
         timeline=investigation_result.replay_timeline,
+        kernel_scan_ids=investigation_result.replay_kernel_scan_ids,
+        execution_projections=investigation_result.replay_execution_projections,
         confirmed_correction=correction,
     )
     earned_work = getattr(state, "earned_work", None)

@@ -9,7 +9,7 @@ reconstructing, grouping, or otherwise changing that execution order.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -97,8 +97,8 @@ class ScanRungWriteProjection:
     """Indexed exact accesses and scan boundaries for one replay."""
 
     scan_id: int
-    entry_tags: dict[str, Any]
-    exit_tags: dict[str, Any]
+    entry_tags: Mapping[str, Any]
+    exit_tags: Mapping[str, Any]
     runs: tuple[RungRun, ...]
     writes: tuple[RungWrite, ...]
     reads: tuple[RungRead, ...]
@@ -562,28 +562,38 @@ def build_scan_rung_write_projection(
     history: History,
     scan_id: int,
     runs: tuple[RungRun, ...],
+    *,
+    entry_tags: Mapping[str, Any] | None = None,
+    exit_tags: Mapping[str, Any] | None = None,
+    include_memory_reads: bool = False,
 ) -> ScanRungWriteProjection | None:
     """Index exact replay occurrences against committed scan boundaries."""
     from pyrung.core.executor import ReadOccurrence
 
-    ids = history.scan_ids()
-    try:
-        scan_index = ids.index(scan_id)
-    except ValueError:
-        return None
-    if scan_index == 0:
-        return None
-
-    entry = dict(history.at(ids[scan_index - 1]).tags)
-    exit_tags = dict(history.at(scan_id).tags)
+    if entry_tags is None or exit_tags is None:
+        ids = history.scan_ids()
+        try:
+            scan_index = ids.index(scan_id)
+        except ValueError:
+            return None
+        if scan_index == 0:
+            return None
+        entry = history.at(ids[scan_index - 1]).tags
+        exit_boundary = history.at(scan_id).tags
+    else:
+        # Captured boundaries are immutable persistent maps. Retain their
+        # structurally shared values instead of copying a full program-sized
+        # dictionary for every selected scan.
+        entry = entry_tags
+        exit_boundary = exit_tags
     writes: list[RungWrite] = []
     reads: list[RungRead] = []
     call_invocations = _dynamic_call_invocations(runs)
     for run_order, run in enumerate(runs):
         for instruction, occurrence in _direct_accesses(run):
-            if occurrence.domain != "tag":
-                continue
             if isinstance(occurrence, ReadOccurrence):
+                if occurrence.domain != "tag" and not include_memory_reads:
+                    continue
                 reads.append(
                     RungRead(
                         scan_id=scan_id,
@@ -596,6 +606,8 @@ def build_scan_rung_write_projection(
                         occurrence=occurrence,
                     )
                 )
+                continue
+            if occurrence.domain != "tag":
                 continue
             transition = Transition(
                 occurrence.name,
@@ -624,11 +636,306 @@ def build_scan_rung_write_projection(
     return ScanRungWriteProjection(
         scan_id=scan_id,
         entry_tags=entry,
-        exit_tags=exit_tags,
+        exit_tags=exit_boundary,
         runs=runs,
         writes=tuple(writes),
         reads=tuple(reads),
     )
+
+
+@dataclass(frozen=True)
+class _CompactConditionState:
+    """Only the scan metadata a detached :class:`ConditionView` exposes."""
+
+    scan_id: int
+    timestamp: float
+
+
+@dataclass(frozen=True)
+class _RecordedResolver:
+    """Replay only values whose captured read origin was ``resolved``."""
+
+    values: Mapping[str, Any]
+
+    def __call__(self, name: str, _view: Any) -> tuple[bool, Any]:
+        try:
+            return True, self.values[name]
+        except KeyError:
+            return False, None
+
+
+@dataclass(frozen=True)
+class CompactProjectionWeight:
+    """Owned-graph measurement for one compact projection addition."""
+
+    owned_bytes: int
+    dynamic_nodes: int
+    occurrences: int
+    views: int
+    view_entries: int
+
+    @property
+    def retained_bytes(self) -> int:
+        """Budget charge including the policy's 25% allocator safety margin."""
+
+        return (self.owned_bytes * 5 + 3) // 4
+
+
+def estimate_compact_projection_weight(
+    projection: ScanRungWriteProjection,
+    *,
+    include_initial_boundary: bool = True,
+) -> CompactProjectionWeight:
+    """Measure only the projection-owned graph using identity-deduped shallow sizes.
+
+    A continued/branch view, nested journal node, occurrence, or immutable tuple
+    reachable through several indexes is charged once within this projection.
+    Projections are conservatively recharged independently, avoiding an
+    unbounded session-wide identity tracker. Static program rungs/instructions,
+    strings, scalar values, and tag values are referenced but not owned and are
+    never traversed.
+
+    Persistent entry/exit tag maps are shared with history rather than owned by
+    the projection. Their possible retention cost is conservatively modeled as
+    ``128 * len(entry_tags)`` for the session's first boundary, plus 8 KiB and
+    256 bytes per distinct written tag for every newly retained projection.
+    """
+
+    import sys
+
+    from pyrung.core.executor import (
+        InstructionRun,
+        LoopIterationRun,
+        ReadOccurrence,
+        RungRun,
+        WriteOccurrence,
+    )
+
+    identities: set[int] = set()
+    owned_bytes = 0
+    dynamic_nodes = 0
+    occurrences = 0
+    views = 0
+    view_entries = 0
+
+    def _charge(value: Any) -> bool:
+        nonlocal owned_bytes
+        key = id(value)
+        if key in identities:
+            return False
+        identities.add(key)
+        owned_bytes += sys.getsizeof(value)
+        namespace = getattr(value, "__dict__", None)
+        if isinstance(namespace, dict):
+            _charge(namespace)
+        return True
+
+    def _charge_occurrence(value: ReadOccurrence | WriteOccurrence) -> None:
+        nonlocal occurrences
+        if _charge(value):
+            occurrences += 1
+        if isinstance(value, ReadOccurrence) and isinstance(value.source, WriteOccurrence):
+            _charge_occurrence(value.source)
+
+    def _walk(items: tuple[Any, ...]) -> None:
+        nonlocal dynamic_nodes, occurrences
+        _charge(items)
+        for item in items:
+            if isinstance(item, ReadOccurrence | WriteOccurrence):
+                _charge_occurrence(item)
+                continue
+            if not isinstance(item, RungRun | InstructionRun | LoopIterationRun):
+                continue
+            if not _charge(item):
+                continue
+            dynamic_nodes += 1
+            if isinstance(item, RungRun):
+                _charge(item.rung_id)
+                _charge(item.call_stack)
+            _walk(item.body)
+
+    projection_is_new = _charge(projection)
+    if not projection_is_new:
+        return CompactProjectionWeight(0, 0, 0, 0, 0)
+    _walk(projection.runs)
+    _charge(projection.reads)
+    _charge(projection.writes)
+    for read in projection.reads:
+        _charge(read)
+        _charge(read.rung_id)
+        _charge_occurrence(read.occurrence)
+    for write in projection.writes:
+        _charge(write)
+        _charge(write.rung_id)
+        _charge_occurrence(write.occurrence)
+        _charge(write.transition)
+    for index in (
+        projection._reads_by_run,
+        projection._reads_by_tag,
+        projection._writes_by_run,
+        projection._writes_by_tag,
+        projection._call_invocation_by_run,
+    ):
+        _charge(index)
+        for indexed in index.values():
+            if isinstance(indexed, tuple):
+                _charge(indexed)
+
+    unique_views: dict[int, Any] = {id(run.view): run.view for run in projection.runs}
+    for view in unique_views.values():
+        if not _charge(view):
+            continue
+        views += 1
+        _charge(view._scope_token)
+        _charge(view._state)
+        for name in (
+            "_tags",
+            "_memory",
+            "_tags_snapshot",
+            "_memory_snapshot",
+            "_tag_source_snapshot",
+            "_memory_source_snapshot",
+        ):
+            mapping = getattr(view, name, None)
+            if mapping is not None:
+                _charge(mapping)
+                view_entries += len(mapping)
+                if name in ("_tag_source_snapshot", "_memory_source_snapshot"):
+                    for source in mapping.values():
+                        if isinstance(source, WriteOccurrence):
+                            _charge_occurrence(source)
+        resolver = getattr(view, "_resolver", None)
+        if resolver is not None:
+            _charge(resolver)
+        resolver_values = getattr(resolver, "values", None)
+        if resolver_values is not None:
+            _charge(resolver_values)
+            view_entries += len(resolver_values)
+
+    # Explicit PMap retention allowance; the persistent maps themselves are
+    # referenced by the projection but not walked into static names/values.
+    if include_initial_boundary:
+        owned_bytes += 128 * len(projection.entry_tags)
+    owned_bytes += 8 * 1024
+    owned_bytes += 256 * len({write.transition.tag_name for write in projection.writes})
+
+    return CompactProjectionWeight(
+        owned_bytes=owned_bytes,
+        dynamic_nodes=dynamic_nodes,
+        occurrences=occurrences,
+        views=views,
+        view_entries=view_entries,
+    )
+
+
+def compact_projection_condition_views(projection: ScanRungWriteProjection) -> None:
+    """Detach full scan state from every condition view in ``projection``.
+
+    The projection's exact direct guard-read occurrences are authoritative.
+    This function deliberately never rereads a live view's tag or memory maps:
+    the runner may already have updated its fast-read cache during commit.
+    Views shared by a parent/branch or continued rung are compacted once from
+    the union of all their direct condition reads.
+
+    Raises ``ValueError`` when one shared view cannot represent its recorded
+    reads with a single frozen value/source surface. The session owner treats
+    that as an all-or-nothing capture-stream failure and falls back to exact
+    historical replay.
+    """
+
+    from pyrung.core.executor import WriteOccurrence
+
+    views: dict[int, Any] = {}
+    reads_by_view: dict[int, list[Any]] = {}
+    for run in projection.runs:
+        key = id(run.view)
+        views[key] = run.view
+        reads_by_view.setdefault(key, [])
+    for read in projection.reads:
+        if read.instruction is not None:
+            continue
+        key = id(read.run.view)
+        if key not in views:
+            raise ValueError("guard read refers to a view outside the projection")
+        reads_by_view[key].append(read.occurrence)
+
+    for key, view in views.items():
+        entry_tags: dict[str, Any] = {}
+        entry_memory: dict[str, Any] = {}
+        pending_tags: dict[str, Any] = {}
+        pending_memory: dict[str, Any] = {}
+        tag_sources: dict[str, WriteOccurrence] = {}
+        memory_sources: dict[str, WriteOccurrence] = {}
+        resolved_tags: dict[str, Any] = {}
+        definitions: dict[tuple[str, str], tuple[str, Any, Any]] = {}
+
+        for occurrence in reads_by_view[key]:
+            source = occurrence.source
+            origin = "pending" if isinstance(source, WriteOccurrence) else source
+            if origin not in {"entry", "pending", "default", "resolved"}:
+                raise ValueError(f"unknown captured read origin: {origin!r}")
+            if occurrence.domain not in {"tag", "memory"}:
+                raise ValueError(f"unknown captured read domain: {occurrence.domain!r}")
+            if occurrence.domain == "memory" and origin == "resolved":
+                raise ValueError("memory reads cannot have resolved origin")
+
+            address = (occurrence.domain, occurrence.name)
+            definition_source = source if isinstance(source, WriteOccurrence) else origin
+            previous = definitions.get(address)
+            if previous is not None:
+                previous_origin, previous_value, previous_source = previous
+                same_value = previous_value is occurrence.value
+                if not same_value:
+                    try:
+                        same_value = previous_value == occurrence.value
+                    except (TypeError, ValueError):
+                        same_value = False
+                same_source = (
+                    previous_source is definition_source
+                    if isinstance(definition_source, WriteOccurrence)
+                    else previous_source == definition_source
+                )
+                if previous_origin != origin or same_value is not True or not same_source:
+                    raise ValueError(
+                        "one captured condition view observed incompatible definitions "
+                        f"for {occurrence.domain} {occurrence.name!r}"
+                    )
+            else:
+                definitions[address] = (origin, occurrence.value, definition_source)
+
+            if origin == "default":
+                # Absence is the compact representation. Re-evaluating the
+                # same condition supplies the same default argument.
+                continue
+            if origin == "resolved":
+                resolved_tags[occurrence.name] = occurrence.value
+                continue
+            if occurrence.domain == "tag":
+                target = pending_tags if origin == "pending" else entry_tags
+                target[occurrence.name] = occurrence.value
+                if isinstance(source, WriteOccurrence):
+                    tag_sources[occurrence.name] = source
+            else:
+                target = pending_memory if origin == "pending" else entry_memory
+                target[occurrence.name] = occurrence.value
+                if isinstance(source, WriteOccurrence):
+                    memory_sources[occurrence.name] = source
+
+        # Preserve only public scan metadata and the opaque scope identity.
+        # Every state/mapping/resolver reference below is replaced, so the
+        # projection cannot pin the captured SystemState or its full maps.
+        compact_state = _CompactConditionState(view.scan_id, view.timestamp)
+        scope_token = view.scope_token
+        view._state = compact_state
+        view._tags = entry_tags
+        view._memory = entry_memory
+        view._tags_snapshot = pending_tags
+        view._memory_snapshot = pending_memory
+        view._resolver = _RecordedResolver(resolved_tags) if resolved_tags else None
+        view._scope_token = scope_token
+        view._read_sink = None
+        view._tag_source_snapshot = tag_sources or None
+        view._memory_source_snapshot = memory_sources or None
 
 
 def _dynamic_call_invocations(runs: tuple[RungRun, ...]) -> dict[int, int | None]:
