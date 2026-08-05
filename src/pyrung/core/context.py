@@ -220,7 +220,9 @@ class ScanContext:
         "_condition_snapshot",
         "_condition_scope_token",
         "_rung_firings",
+        "_rung_firing_varied",
         "_node_firings",
+        "_node_firing_varied",
         "_consumed_tags_getter",
         "_io_submit_staging",
         "_io_drain_staging",
@@ -263,7 +265,10 @@ class ScanContext:
         self._state_memory: PMap = state.memory
         self._tags_pending: dict[str, Any] = {}
         self._memory_pending: dict[str, Any] = {}
-        self._capture_stack: list[dict[str, Any]] = []
+        # Each journal entry is ``[last_attempted_value, varied]``.  The
+        # entry-state value is intentionally absent: varied means two writes
+        # in this scope attempted unequal after-values.
+        self._capture_stack: list[dict[str, list[Any]]] = []
         # Identity of the subroutine rung whose ``capturing_node`` scope is
         # currently open, or ``None`` at main scope.  Read by observers
         # (ConditionViewCapture) so they key subroutine rungs by the same
@@ -291,7 +296,9 @@ class ScanContext:
         self._condition_snapshot: ConditionView | None = None
         self._condition_scope_token = object()
         self._rung_firings: dict[int, dict[str, Any]] = {}
+        self._rung_firing_varied: dict[int, frozenset[str]] = {}
         self._node_firings: dict[RungId, dict[str, Any]] = {}
+        self._node_firing_varied: dict[RungId, frozenset[str]] = {}
         self._consumed_tags_getter = consumed_tags_getter
         self._io_submit_staging: dict[str, IoSubmitRecord] = {}
         self._io_drain_staging: dict[str, IoResultRecord] = {}
@@ -381,28 +388,19 @@ class ScanContext:
     # Write operations (batched)
     # =========================================================================
 
-    def _journal_capture(self, name: str) -> None:
-        """Record *name*'s pre-write pending value in every open capture scope."""
+    def _journal_capture(self, name: str, value: Any) -> None:
+        """Record one attempted value in every open firing scope."""
         stack = self._capture_stack
         if not stack:
             return
-        pending = self._tags_pending
-        stack_len = len(stack)
-        if stack_len == 1:
-            journal = stack[0]
-            if name not in journal:
-                journal[name] = pending.get(name, _MISSING)
-            return
-        if stack_len == 2:
-            outer, inner = stack
-            if name not in outer:
-                outer[name] = pending.get(name, _MISSING)
-            if name not in inner:
-                inner[name] = pending.get(name, _MISSING)
-            return
         for journal in stack:
-            if name not in journal:
-                journal[name] = pending.get(name, _MISSING)
+            summary = journal.get(name)
+            if summary is None:
+                journal[name] = [value, False]
+            else:
+                if summary[0] != value:
+                    summary[1] = True
+                summary[0] = value
 
     def set_tag(self, name: str, value: Any) -> None:
         """Set a tag value (batched, committed at end of scan).
@@ -418,7 +416,7 @@ class ScanContext:
             source = sink("tag", name, self._get_tag_internal(name), value)
             if self._tag_write_sources is not None:
                 self._tag_write_sources[name] = source
-        self._journal_capture(name)
+        self._journal_capture(name, value)
         self._tags_pending[name] = value
 
     def set_tags(self, updates: dict[str, Any]) -> None:
@@ -438,7 +436,7 @@ class ScanContext:
                     self._tag_write_sources[name] = source
         if self._capture_stack:
             for name in updates:
-                self._journal_capture(name)
+                self._journal_capture(name, updates[name])
         self._tags_pending.update(updates)
 
     def _set_tag_internal(self, name: str, value: Any) -> None:
@@ -448,7 +446,7 @@ class ScanContext:
             source = sink("tag", name, self._get_tag_internal(name), value)
             if self._tag_write_sources is not None:
                 self._tag_write_sources[name] = source
-        self._journal_capture(name)
+        self._journal_capture(name, value)
         self._tags_pending[name] = value
 
     def _set_tags_internal(self, updates: dict[str, Any]) -> None:
@@ -461,7 +459,7 @@ class ScanContext:
                     self._tag_write_sources[name] = source
         if self._capture_stack:
             for name in updates:
-                self._journal_capture(name)
+                self._journal_capture(name, updates[name])
         self._tags_pending.update(updates)
 
     def set_memory(self, key: str, value: Any) -> None:
@@ -553,20 +551,23 @@ class ScanContext:
     # Rung-scoped firing capture
     # =========================================================================
 
-    def _begin_capture(self) -> dict[str, Any]:
+    def _begin_capture(self) -> dict[str, list[Any]]:
         """Open a write journal for the interpreter's allocation-sensitive path."""
-        journal: dict[str, Any] = {}
+        journal: dict[str, list[Any]] = {}
         self._capture_stack.append(journal)
         return journal
 
-    def _finish_rung_capture(self, rung_index: int, journal: dict[str, Any]) -> None:
+    def _finish_rung_capture(self, rung_index: int, journal: dict[str, list[Any]]) -> None:
         """Close a hot-path main-rung journal and retain its writes."""
         self._capture_stack.pop()
-        writes = self._finalize_capture(journal)
-        if writes is not None:
+        capture = self._finalize_capture(journal)
+        if capture is not None:
+            writes, varied = capture
             self._rung_firings[rung_index] = writes
+            if varied:
+                self._rung_firing_varied[rung_index] = frozenset(varied)
 
-    def _finish_observed_capture(self, journal: dict[str, Any]) -> dict[str, Any]:
+    def _finish_observed_capture(self, journal: dict[str, list[Any]]) -> dict[str, Any]:
         """Close an observer journal and retain every attempted tag write.
 
         Ordinary firing capture stores the final attempted value per scope. An
@@ -581,7 +582,7 @@ class ScanContext:
         pending = self._tags_pending
         return {name: pending[name] for name in journal}
 
-    def _begin_node_capture(self, rung_id: RungId) -> tuple[dict[str, Any], RungId | None]:
+    def _begin_node_capture(self, rung_id: RungId) -> tuple[dict[str, list[Any]], RungId | None]:
         """Open a hot-path subroutine journal and publish its node identity."""
         journal = self._begin_capture()
         previous_node_id = self._current_node_id
@@ -591,7 +592,7 @@ class ScanContext:
     def _finish_node_capture(
         self,
         rung_id: RungId,
-        journal: dict[str, Any],
+        journal: dict[str, list[Any]],
         previous_node_id: RungId | None,
         *,
         retain_all_writes: bool = False,
@@ -599,16 +600,28 @@ class ScanContext:
         """Close a hot-path subroutine journal and merge repeated calls."""
         self._current_node_id = previous_node_id
         self._capture_stack.pop()
-        writes = self._finalize_capture(journal, retain_all_writes=retain_all_writes)
-        if writes is None:
+        capture = self._finalize_capture(journal, retain_all_writes=retain_all_writes)
+        if capture is None:
             return
+        writes, varied = capture
         previous = self._node_firings.get(rung_id)
         if previous is not None:
+            previous_varied = set(self._node_firing_varied.get(rung_id, ()))
+            previous_varied.update(varied)
+            previous_varied.update(
+                name
+                for name, value in writes.items()
+                if name in previous and previous[name] != value
+            )
             merged = dict(previous)
             merged.update(writes)
             self._node_firings[rung_id] = merged
+            if previous_varied:
+                self._node_firing_varied[rung_id] = frozenset(previous_varied)
         else:
             self._node_firings[rung_id] = writes
+            if varied:
+                self._node_firing_varied[rung_id] = frozenset(varied)
 
     @contextmanager
     def capturing_rung(self, rung_index: int) -> Iterator[None]:
@@ -666,8 +679,8 @@ class ScanContext:
             )
 
     def _finalize_capture(
-        self, journal: dict[str, Any], *, retain_all_writes: bool = False
-    ) -> dict[str, Any] | None:
+        self, journal: dict[str, list[Any]], *, retain_all_writes: bool = False
+    ) -> tuple[dict[str, Any], set[str]] | None:
         """Close a capture scope into its attempted firing writes.
 
         Returns the (PDG-filtered) final ``{tag: attempted_value}`` for the
@@ -679,14 +692,15 @@ class ScanContext:
         """
         if not journal:
             return None
-        pending = self._tags_pending
-        attempted_writes = {name: pending[name] for name in journal}
+        attempted_writes = {name: summary[0] for name, summary in journal.items()}
+        varied = {name for name, summary in journal.items() if summary[1]}
         if retain_all_writes:
-            return attempted_writes
+            return attempted_writes, varied
         consumed = self._consumed_tags_getter() if self._consumed_tags_getter is not None else None
         if consumed is None:
-            return attempted_writes
-        return {name: val for name, val in attempted_writes.items() if name in consumed}
+            return attempted_writes, varied
+        retained = {name: val for name, val in attempted_writes.items() if name in consumed}
+        return retained, varied & retained.keys()
 
     @property
     def rung_firings(self) -> PMap:

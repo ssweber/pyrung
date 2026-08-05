@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pyrsistent import PMap, pmap
 
-from pyrung.core import PLC, Bool, Program, Rung, latch, out, reset
+from pyrung.core import PLC, Bool, Int, Program, Rung, copy, latch, out, reset
 
 
 def test_simple_rung_fires_and_records_write() -> None:
@@ -236,3 +236,37 @@ def test_debug_namespace_exposes_rung_firings() -> None:
 
     assert runner.debug.rung_firings() == runner.rung_firings()
     assert runner.debug.rung_firings(scan_id=1) == runner.rung_firings(scan_id=1)
+
+
+def test_scope_records_unequal_attempts_separately_from_its_final_value() -> None:
+    value = Int("MultiWriteValue")
+    consumed = Bool("MultiWriteConsumed")
+    with Program() as logic:
+        with Rung():
+            copy(1, value)
+            copy(2, value)
+        with Rung(value == 2):
+            out(consumed)
+
+    runner = PLC(logic)
+    runner.step()
+
+    assert runner.rung_firings()[0][value.name] == 2
+    assert runner._rung_firing_timelines.varied_on(0, value.name, 1)
+
+
+def test_reasserting_one_attempted_value_is_not_varied() -> None:
+    value = Int("SameWriteValue")
+    consumed = Bool("SameWriteConsumed")
+    with Program() as logic:
+        with Rung():
+            copy(2, value)
+            copy(2, value)
+        with Rung(value == 2):
+            out(consumed)
+
+    runner = PLC(logic)
+    runner.step()
+
+    assert runner.rung_firings()[0][value.name] == 2
+    assert not runner._rung_firing_timelines.varied_on(0, value.name, 1)

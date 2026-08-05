@@ -313,8 +313,8 @@ def _executed_attempt(attempt: _AttemptResult) -> Any:
     return attempt.executed or attempt.excursion_attempt
 
 
-def _release_attempt_execution_projections(attempt: _AttemptResult | None) -> None:
-    """Release every transition-local journal after its last raw consumer."""
+def _release_attempt_projections(attempt: _AttemptResult | None) -> None:
+    """Release selected-scan replay evidence after its last consumer."""
 
     if attempt is None:
         return
@@ -328,7 +328,7 @@ def _release_attempt_execution_projections(attempt: _AttemptResult | None) -> No
         if execution is None or id(execution.pulse) in released:
             continue
         released.add(id(execution.pulse))
-        execution.pulse.release_execution_projections()
+        execution.pulse.release_projections()
 
 
 def _derive_attempt_requirements(
@@ -2136,7 +2136,7 @@ def _repair_failed_requirement(
             )
             return Succeed(candidate)
         finally:
-            _release_attempt_execution_projections(transition.attempt)
+            _release_attempt_projections(transition.attempt)
 
     composition = compose_corrections(
         source,
@@ -2793,40 +2793,19 @@ def _record_attempt(
         state.avoid_names.update(attempt.avoid_names)
 
 
-def _prepare_excursion_replay(
-    attempt: _AttemptResult,
-) -> tuple[_AttemptResult, bool]:
-    """Detach the superseded execution before nested replay capture begins."""
-
-    executed = attempt.excursion_attempt
-    if executed is None:
-        return attempt, False
-    pulse = executed.pulse
-    capture_execution = bool(pulse.execution_projections)
-    pulse.release_execution_projections()
-    return (
-        replace(
-            attempt,
-            excursion_attempt=replace(executed, effect_observations=()),
-        ),
-        capture_execution,
-    )
-
-
 def _resolve_excursion(
     attempt: _AttemptResult,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
-    *,
-    capture_execution: bool | None = None,
 ) -> _AttemptResult:
     """Investigate one reported excursion and continue verification on its replay."""
-    if capture_execution is None:
-        attempt, capture_execution = _prepare_excursion_replay(attempt)
     executed = attempt.excursion_attempt
     if executed is None:
         return attempt
+    executed.pulse.release_projections()
+    executed = replace(executed, effect_observations=())
+    attempt = replace(attempt, excursion_attempt=executed)
 
     key_config = state.key_config
     assert key_config is not None
@@ -2848,14 +2827,13 @@ def _resolve_excursion(
             pdg=ctx.pdg,
             program=ctx.program,
             ctx=ctx,
-            capture_execution=capture_execution,
         )
         return verify_excursion_replay(attempt, result, frame, state, ctx)
     finally:
         # The returned AttemptResult owns the replay pulse (if any). The
         # superseded excursion pulse is no longer reachable by the outer
         # transition finalizer, so release it here on every replay outcome.
-        pulse.release_execution_projections()
+        pulse.release_projections()
 
 
 def _step_context(
@@ -3279,22 +3257,9 @@ def _transition_once(
         if result.expectation is not None or terminal_target_expectation is not None
         else None
     )
-    attempt = execute(
-        result,
-        orientation_world,
-        capture_execution=(
-            result.expectation is not None or terminal_target_expectation is not None
-        ),
-    )
+    attempt = execute(result, orientation_world)
     if resolve_excursion and attempt.excursion_attempt is not None:
-        attempt, capture_execution = _prepare_excursion_replay(attempt)
-        attempt = _resolve_excursion(
-            attempt,
-            frame,
-            state,
-            ctx,
-            capture_execution=capture_execution,
-        )
+        attempt = _resolve_excursion(attempt, frame, state, ctx)
     prefix_proof = None
     prefix_execution = _executed_attempt(attempt)
     if terminal_target_expectation is not None and prefix_execution is not None:
@@ -3967,7 +3932,7 @@ def _pilot_loop_events(
             try:
                 yield rejected_event
             finally:
-                _release_attempt_execution_projections(attempt)
+                _release_attempt_projections(attempt)
             continue
 
         trial = transition.trial
@@ -3992,7 +3957,7 @@ def _pilot_loop_events(
                 continuation_hop=transition.continuation_hop,
             )
         finally:
-            _release_attempt_execution_projections(attempt)
+            _release_attempt_projections(attempt)
         state.last_wait_log = None
         continue
 

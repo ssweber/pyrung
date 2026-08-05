@@ -116,7 +116,6 @@ def _target_landing_attempt(
         snap=dict(after),
         key=("target-landing",),
         kernel_scan_ids=(),
-        execution_projections={},
     )
     bearing = Bearing(
         ("source",),
@@ -286,7 +285,7 @@ class TestGateSpin:
         plc = PLC(prog, dt=0.010)
         snap = dict(plc.state.tags)
         key = ("same",)
-        trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key, (), {})
+        trial = _PulseState(plc, 0, 0, snap, (), snap, key, snap, key, ())
         gates = []
         verdict = _gate_spin(
             trial,
@@ -335,7 +334,6 @@ class TestGateSpin:
             snap,
             frame_key,
             (),
-            {},
         )
         executed = _ExecutedAttempt(pulse=trial, bearing=bearing)
 
@@ -395,7 +393,6 @@ class TestGateSpin:
             snap,
             frame_key,
             (),
-            {},
         )
         policy = ActPolicy(
             source=ActSource.TRACE,
@@ -440,7 +437,7 @@ class TestGateSpin:
         assert result.observations == (observation,)
         assert result.confirmed_correction is None
 
-    def test_excursion_replay_rebinds_same_scan_to_replay_owned_capture(self, monkeypatch):
+    def test_excursion_replay_rebinds_same_scan_to_replay_owned_projection(self, monkeypatch):
         command = Bool("ReplayCaptureCommand", external=True)
         effect = Int("ReplayCaptureEffect")
         with Program() as program:
@@ -450,29 +447,11 @@ class TestGateSpin:
         original = PLC(program)
         before = dict(original.state.tags)
         original.patch({command.name: True})
-        original_captures = {}
-        original._run_single_scan(
-            consume_pause_request=True,
-            capture_execution=True,
-            capture_sink=original_captures.__setitem__,
-        )
-        original_projections = {
-            scan_id: original._projection_from_capture(scan_id, capture)
-            for scan_id, capture in original_captures.items()
-        }
+        original._run_single_scan(consume_pause_request=True)
 
         replay = PLC(program)
         replay.patch({command.name: False})
-        replay_captures = {}
-        replay._run_single_scan(
-            consume_pause_request=True,
-            capture_execution=True,
-            capture_sink=replay_captures.__setitem__,
-        )
-        replay_projections = {
-            scan_id: replay._projection_from_capture(scan_id, capture)
-            for scan_id, capture in replay_captures.items()
-        }
+        replay._run_single_scan(consume_pause_request=True)
         assert original.state.scan_id == replay.state.scan_id == 1
 
         obligation = EffectObligation(
@@ -503,7 +482,6 @@ class TestGateSpin:
             snap=dict(original.state.tags),
             key=("original",),
             kernel_scan_ids=(1,),
-            execution_projections=original_projections,
         )
         policy = ActPolicy(
             source=ActSource.TRACE,
@@ -557,7 +535,6 @@ class TestGateSpin:
                 correction=correction,
                 replay_fork=replay,
                 replay_kernel_scan_ids=(1,),
-                replay_execution_projections=replay_projections,
             ),
             SimpleNamespace(key=frame_key, snap=before),
             SimpleNamespace(
@@ -574,8 +551,8 @@ class TestGateSpin:
 
         replay_attempt = rebound["attempt"]
         assert result.executed is replay_attempt
-        assert replay_attempt.pulse.execution_projections is replay_projections
-        assert replay_attempt.pulse.execution_projections is not original_projections
+        assert replay_attempt.pulse.fork is replay
+        assert replay_attempt.pulse._projection_cache
         assert [item.disposition for item in replay_attempt.effect_observations] == ["ABSENT"]
 
     def test_pending_effects_bypass_spin(self):
@@ -608,7 +585,6 @@ class TestGateSpin:
             snap,
             key,
             (),
-            {},
         )
 
         verdict = _gate_spin(
@@ -1053,7 +1029,6 @@ class TestVerifyGates:
             snap=after,
             key=landing_key,
             kernel_scan_ids=(),
-            execution_projections={},
             channel_motion=ChannelMotion(phase.name, 2, stop_reason="departed"),
         )
         frame = _IterationFrame(
@@ -1159,7 +1134,6 @@ class TestVerifyGates:
             snap=after,
             key=("target",),
             kernel_scan_ids=(),
-            execution_projections={},
             coast_receipt=coast_receipt,
             timeline=timeline,
         )
@@ -1269,7 +1243,6 @@ class TestVerifyGates:
             snap=pre_replay,
             key=frame_key,
             kernel_scan_ids=(),
-            execution_projections={},
         )
         policy = ActPolicy(
             source=ActSource.TRACE,

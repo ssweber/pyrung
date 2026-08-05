@@ -1009,24 +1009,7 @@ class _CausalRungFiringTimelines(RungFiringTimelines[Any]):
             self._plc._state.scan_id,
         ):
             timelines = epoch.rung_firing_timelines
-            for rung_index, ranges in timelines._timelines.items():
-                for firing_range in ranges:
-                    overlap_start = max(first_scan, firing_range.start_scan_id)
-                    overlap_end = min(last_scan, firing_range.end_scan_id)
-                    if overlap_start > overlap_end:
-                        continue
-                    # A range's key set is stable except for AlternatingRun,
-                    # whose two parities may write disjoint tags. Probe both
-                    # parities when both are owned by this epoch; clipping the
-                    # probes to the interval prevents parent-future leakage.
-                    probes = range(overlap_start, min(overlap_end, overlap_start + 1) + 1)
-                    if any(
-                        (writes := timelines.rung_writes_at(rung_index, probe)) is not None
-                        and tag_name in writes
-                        for probe in probes
-                    ):
-                        writers.add(rung_index)
-                        break
+            writers.update(timelines.observed_writers_of_between(tag_name, first_scan, last_scan))
         return frozenset(writers)
 
     def tag_transition_candidate_scans_before(
@@ -1214,11 +1197,8 @@ class PLC:
         self._history = History(self)
         self._current_rung_traces: dict[int, RungTrace] = {}
         self._current_rung_traces_scan_id: int | None = None
-        # Per-rung range-encoded firing timelines.  Replaces the
-        # ``scan_id -> PMap`` shape that paid one dict entry per scan
-        # for every firing rung; now a stable rung costs one range
-        # regardless of how long it fires, and a period-2 alternator
-        # collapses into a single ``AlternatingRun``.
+        # Independent compressed columns for rung firing, final attempted
+        # values, and sparse within-scope variation.
         self._rung_firing_timelines: RungFiringTimelines[int] = RungFiringTimelines()
         # Authoritative committed tag boundaries. Unlike rung write payloads,
         # these are captured after the complete scan, so same-scan overwrites
@@ -1671,12 +1651,10 @@ class PLC:
                 program.subroutines = {}
             self._pdg_cache = build_program_graph(program)
             consumed = set(self._pdg_cache.readers_of.keys())
-            # Union in every Bool-typed tag the PDG observed.  A mixed
-            # rung (e.g. ``out(BoolFlag) + Timer.acc``) keeps the Bool
-            # write intact while the counter acc still drops — the
-            # intern pool stays small (only Bool patterns) so the rung
-            # never hits the fired-only threshold and causal chains on
-            # the Bool flag remain intact indefinitely.
+            # Union in every Bool-typed tag the PDG observed. A mixed rung
+            # (e.g. ``out(BoolFlag) + Timer.acc``) keeps the Bool write while
+            # the unused accumulator drops, preserving the Bool's exact
+            # causal column indefinitely.
             for name, tag in self._pdg_cache.tags.items():
                 if getattr(tag, "type", None) == TagType.BOOL:
                     consumed.add(name)
@@ -4156,20 +4134,24 @@ class PLC:
             after = self._state.tags.get(name)
             if before != after:
                 self._committed_tag_timelines.append(name, new_scan_id, {name: after})
-        # Per-rung timeline append.  Only rungs that fired this scan
-        # get a timeline update — stable rungs extend the tail range
-        # (no allocation), period-2 oscillators collapse into a single
-        # ``AlternatingRun`` entry.  Rungs that didn't fire contribute
-        # nothing to the timeline for this scan.
-        # Feed the capture dicts directly to the range encoder.  It owns the
-        # canonical immutable PMaps and can extend common stable/arithmetic/
-        # alternating ranges without constructing and hashing fresh PMaps.
+        # Only firing rungs append. Their value columns independently extend
+        # stable, alternating, or arithmetic ranges; varied=true is sparse.
         new_firings = ctx._rung_firings
         for rung_index, writes in new_firings.items():
-            self._rung_firing_timelines.append(rung_index, new_scan_id, writes)
+            self._rung_firing_timelines.append(
+                rung_index,
+                new_scan_id,
+                writes,
+                ctx._rung_firing_varied.get(rung_index, frozenset()),
+            )
         node_firings = ctx._node_firings
         for rung_id, writes in node_firings.items():
-            self._node_firing_timelines.append(rung_id, new_scan_id, writes)
+            self._node_firing_timelines.append(
+                rung_id,
+                new_scan_id,
+                writes,
+                ctx._node_firing_varied.get(rung_id, frozenset()),
+            )
         # Rung traces are per-commit, not per-history. The debug path
         # repopulates _current_rung_traces after commit_scan returns; any
         # other commit path leaves the slot empty for this scan.

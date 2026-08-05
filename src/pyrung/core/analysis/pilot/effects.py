@@ -991,7 +991,10 @@ def _certified_out_producer(
         return None
 
     if subroutine is None:
-        if any(owner.rung_firing_timelines.mode(rung_index) == "fired_only" for owner in owners):
+        if any(
+            not owner.rung_firing_timelines.value_is_known(rung_index, obligation.tag)
+            for owner in owners
+        ):
             return None
         return _CertifiedOutProducer(rung_index, None)
 
@@ -1036,8 +1039,8 @@ def _certified_out_producer(
 
     node_key = RungId(subroutine, rung_index)
     if any(
-        owner.node_firing_timelines.mode(node_key) == "fired_only"
-        or owner.rung_firing_timelines.mode(caller_index) == "fired_only"
+        not owner.node_firing_timelines.value_is_known(node_key, obligation.tag)
+        or not owner.rung_firing_timelines.value_is_known(caller_index, obligation.tag)
         for owner in owners
     ):
         return None
@@ -1065,9 +1068,6 @@ def _effect_projection_scan_ids(
         return exact
     exact_owners = tuple(owner for owner in owners if owner is not None)
     exact_set = set(exact)
-    firings = tuple(
-        (scan_id, fork.rung_firings(scan_id), fork._node_firings_at(scan_id)) for scan_id in exact
-    )
     selected = {scan_id for scan_id in mandatory_scan_ids if scan_id in exact}
     for obligation in expectation.obligations:
         retention_complete = all(
@@ -1085,11 +1085,9 @@ def _effect_projection_scan_ids(
         if certified is None:
             obligation_scans = {
                 scan_id
-                for scan_id, root_firings, node_firings in firings
-                if any(
-                    obligation.tag in writes
-                    for writes in (*root_firings.values(), *node_firings.values())
-                )
+                for scan_id, owner in zip(exact, exact_owners, strict=True)
+                if owner.rung_firing_timelines.any_wrote_on(obligation.tag, scan_id)
+                or owner.node_firing_timelines.any_wrote_on(obligation.tag, scan_id)
             }
             selected.update(obligation_scans)
             if obligation.consumer is not None:
@@ -1100,31 +1098,52 @@ def _effect_projection_scan_ids(
 
         appeared = False
         producer_scans: set[int] = set()
-        for scan_id, root_firings, node_firings in firings:
+        for scan_id, owner in zip(exact, exact_owners, strict=True):
             if isinstance(certified.authoritative, int):
-                producer_writes = root_firings.get(certified.authoritative)
+                authoritative = owner.rung_firing_timelines
             else:
-                producer_writes = node_firings.get(certified.authoritative)
-            produced = producer_writes is not None and producer_writes.get(obligation.tag) is True
+                authoritative = owner.node_firing_timelines
+            produced = (
+                authoritative.value_at(
+                    certified.authoritative,
+                    obligation.tag,
+                    scan_id,
+                )
+                is True
+            )
+            varied = authoritative.varied_on(
+                certified.authoritative,
+                obligation.tag,
+                scan_id,
+            )
             if produced:
                 appeared = True
                 producer_scans.add(scan_id)
                 selected.add(scan_id)
                 continue
+            if varied:
+                # Final value alone cannot say whether the promised value
+                # appeared transiently; selected replay resolves the order.
+                selected.add(scan_id)
+                continue
             if appeared and (
-                any(
-                    rung_index
-                    != (
+                owner.rung_firing_timelines.any_wrote_on(
+                    obligation.tag,
+                    scan_id,
+                    excluding=(
                         certified.authoritative
                         if isinstance(certified.authoritative, int)
                         else certified.shadow_root
-                    )
-                    and obligation.tag in writes
-                    for rung_index, writes in root_firings.items()
+                    ),
                 )
-                or any(
-                    node_key != certified.authoritative and obligation.tag in writes
-                    for node_key, writes in node_firings.items()
+                or owner.node_firing_timelines.any_wrote_on(
+                    obligation.tag,
+                    scan_id,
+                    excluding=(
+                        certified.authoritative
+                        if isinstance(certified.authoritative, RungId)
+                        else None
+                    ),
                 )
             ):
                 selected.add(scan_id)

@@ -968,11 +968,11 @@ def test_multi_obligation_union_preserves_ambiguous_writer_scans() -> None:
     assert projected == [1, 2, 3]
 
 
-def test_subroutine_node_fired_only_mode_keeps_conservative_selection(monkeypatch) -> None:
-    command = Bool("FiredOnlySubroutineCommand", external=True)
-    effect = Bool("FiredOnlySubroutineEffect")
+def test_subroutine_unknown_value_keeps_conservative_selection(monkeypatch) -> None:
+    command = Bool("UnknownSubroutineCommand", external=True)
+    effect = Bool("UnknownSubroutineEffect")
 
-    @subroutine("FiredOnlySubroutineWriter")
+    @subroutine("UnknownSubroutineWriter")
     def writer() -> None:
         with rung(command):
             out(effect)
@@ -984,23 +984,23 @@ def test_subroutine_node_fired_only_mode_keeps_conservative_selection(monkeypatc
     for value in (False, True, False):
         plc.patch({command.name: value})
         plc.step()
-    target_node = RungId("FiredOnlySubroutineWriter", 0)
-    original_mode = RungFiringTimelines.mode
+    target_node = RungId("UnknownSubroutineWriter", 0)
+    original_value_is_known = RungFiringTimelines.value_is_known
 
-    def _mode(self, rung_id):
-        if rung_id == target_node:
-            return "fired_only"
-        return original_mode(self, rung_id)
+    def _value_is_known(self, rung_id, tag_name):
+        if rung_id == target_node and tag_name == effect.name:
+            return False
+        return original_value_is_known(self, rung_id, tag_name)
 
-    monkeypatch.setattr(RungFiringTimelines, "mode", _mode)
+    monkeypatch.setattr(RungFiringTimelines, "value_is_known", _value_is_known)
     projected: list[int] = []
     obligation = EffectObligation(
         effect.name,
         True,
-        ("FiredOnlySubroutineWriter", 0, ()),
+        ("UnknownSubroutineWriter", 0, ()),
         None,
         (),
-        producer_rung=program.subroutines["FiredOnlySubroutineWriter"][0],
+        producer_rung=program.subroutines["UnknownSubroutineWriter"][0],
     )
 
     observe_execution_window(
@@ -1106,7 +1106,6 @@ def test_pulse_projection_cache_is_shared_and_replay_replace_is_fresh(monkeypatc
         snap=snap,
         key=("landing",),
         kernel_scan_ids=(1,),
-        execution_projections={},
     )
     original = PLC._replay_pilot_rung_write_projection_at
     calls: list[tuple[PLC, int]] = []
@@ -1139,18 +1138,16 @@ def test_pulse_projection_cache_is_shared_and_replay_replace_is_fresh(monkeypatc
     del first, second
     gc.collect()
     assert pulse.projection_at(1) is not None
-    assert calls == [(plc, 1), (plc, 1)]
+    assert calls == [(plc, 1)]
     assert pulse.projection_at(2) is None
     replay = plc.fork()
     replay_pulse = replace(pulse, fork=replay)
     assert replay_pulse._projection_cache == {}
     assert replay_pulse.projection_at(1) is not None
-    assert calls == [(plc, 1), (plc, 1), (replay, 1)]
+    assert calls == [(plc, 1), (replay, 1)]
 
-    pulse.execution_projections[1] = plc._replay_rung_write_projection_at(1)
     assert pulse._projection_cache
-    pulse.release_execution_projections()
-    assert pulse.execution_projections == {}
+    pulse.release_projections()
     assert pulse._projection_cache == {}
 
 
@@ -1173,7 +1170,6 @@ def test_pulse_projection_cache_does_not_replay_without_owner(monkeypatch) -> No
         snap,
         ("landing",),
         (1,),
-        {},
     )
     replayed: list[int] = []
     monkeypatch.setattr(plc._causal_lineage, "owner_at", lambda _scan_id: None)

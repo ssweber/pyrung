@@ -63,7 +63,6 @@ from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 from pyrung.core.context import RungId
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
     from pyrung.core.analysis.pilot.types import _PilotContext
     from pyrung.core.runner import PLC
 
@@ -1069,7 +1068,6 @@ class ExcursionResult:
     replay_fork: Any = None
     replay_timeline: tuple[Any, ...] = ()
     replay_kernel_scan_ids: tuple[int, ...] = ()
-    replay_execution_projections: dict[int, ScanRungWriteProjection] = field(default_factory=dict)
 
 
 def investigate_excursion(
@@ -1089,7 +1087,6 @@ def investigate_excursion(
     pdg: Any = None,
     program: Any = None,
     ctx: Any = None,
-    capture_execution: bool = False,
     hooks: ReplayHooks | None = None,
 ) -> ExcursionResult:
     """Diagnose an excursion and replay-validate candidate holds."""
@@ -1193,11 +1190,7 @@ def investigate_excursion(
         for tag, value in candidate_holds
         if tag not in {action_tag for action_tag, _ in applied_actions}
     )
-    session = CoastSession(
-        replay_fork,
-        kind="excursion-replay",
-        capture_execution=capture_execution,
-    )
+    session = CoastSession(replay_fork, kind="excursion-replay")
     if program is not None:
         session.arm_pens(
             owner.profile.done.name
@@ -1221,7 +1214,6 @@ def investigate_excursion(
             replay_fork=replay_fork,
             replay_timeline=session.events,
             replay_kernel_scan_ids=session.kernel_scan_ids,
-            replay_execution_projections=session._execution_projections,
         )
     return ExcursionResult(reverted=reverted)
 

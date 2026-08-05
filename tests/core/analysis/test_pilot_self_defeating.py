@@ -570,7 +570,6 @@ def _saboteur_scenario():
         snap=landing_snapshot,
         key=("ejected",),
         kernel_scan_ids=(),
-        execution_projections={},
         channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
     )
     trial = _AcceptedTrial(
@@ -797,21 +796,16 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(
         ),
         effect_observations=(cast(Any, object()),),
     )
-    original_projections = {executed.pulse.action_scan: cast(Any, object())}
-    executed.pulse.execution_projections.update(original_projections)
     executed.pulse._projection_cache[executed.pulse.action_scan] = cast(
         Any,
-        (object(), lambda: None),
+        (object(), object()),
     )
-    replay_captures = {executed.pulse.action_scan: object()}
     detected = _AttemptResult(trial=None, excursion_attempt=executed)
-    investigation = SimpleNamespace(replay_execution_projections=replay_captures)
+    investigation = SimpleNamespace()
     resolved = _AttemptResult(trial=trial if accepted else None)
     calls = []
 
     def investigate(*args, **kwargs):
-        assert kwargs["capture_execution"] is True
-        assert executed.pulse.execution_projections == {}
         assert executed.pulse._projection_cache == {}
         calls.append((args, kwargs))
         return investigation
@@ -838,9 +832,7 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(
     assert _resolve_excursion(detected, frame, state, ctx) is resolved
     assert len(calls) == 1
     assert calls[0][0][5] == policy.applied
-    assert executed.pulse.execution_projections == {}
     assert executed.pulse._projection_cache == {}
-    assert investigation.replay_execution_projections == replay_captures
 
 
 def test_correction_installer_rejects_forged_identity():

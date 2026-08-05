@@ -77,7 +77,6 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
         snap=dict(plc.state.tags),
         key=("landing",),
         kernel_scan_ids=(1, 2, 3),
-        execution_projections={},
         coast_receipt=None,
     )
     trial = SimpleNamespace(

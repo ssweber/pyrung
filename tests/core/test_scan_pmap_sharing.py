@@ -90,12 +90,12 @@ def test_idle_scan_reuses_rung_firing_timeline_range() -> None:
 
     for _ in range(3):
         runner.step()
-    timeline = runner._rung_firing_timelines._timelines.get(0, [])
+    timeline = runner._rung_firing_timelines._fired_ranges.get(0, [])
     assert len(timeline) == 1
 
     for _ in range(20):
         runner.step()
-        timeline = runner._rung_firing_timelines._timelines[0]
+        timeline = runner._rung_firing_timelines._fired_ranges[0]
         # Still a single range, extended to cover every idle scan.
         assert len(timeline) == 1
         assert timeline[0].end_scan_id == runner.current_state.scan_id

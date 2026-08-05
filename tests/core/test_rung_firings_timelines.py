@@ -1,965 +1,217 @@
-"""Tests for the per-rung range-encoded firing timelines.
-
-The previous ``scan_id -> PMap`` storage was pathological for any
-rung that oscillated (scan-clock toggle, timer acc, cycle
-oscillators).  The new timeline encoding stores one range per stable
-run, collapses period-2 alternation into a single ``AlternatingRun``,
-and falls back to ``FiredOnly`` for rungs whose pattern intern pool
-explodes past ``_FIRED_ONLY_THRESHOLD``.
-
-These tests exercise the module directly where possible (cheap,
-focused) and through the PLC where end-to-end behavior matters
-(lookup shape compatibility, reboot reset, the cycle→fired_only
-threshold).  All PLC-driven programs use ``record_all_tags=True``
-so the assertions pin down the timeline shape — not the interaction
-between PDG filtering and timeline storage.
-"""
-
-from __future__ import annotations
+"""Tests for the independent firing, final-value, and varied columns."""
 
 from pyrsistent import pmap
 
-from pyrung.core import PLC, Bool, Int, Program, Rung, out
 from pyrung.core.context import RungId
 from pyrung.core.rung_firings import (
-    _FIRED_ONLY_THRESHOLD,
-    AlternatingRun,
-    ArithmeticRun,
-    FiredOnly,
-    PatternRef,
+    _VALUE_VARIETY_THRESHOLD,
+    Alternating,
+    Arithmetic,
+    Constant,
     RungFiringTimelines,
+    Unknown,
 )
 
-# ---------------------------------------------------------------------------
-# Direct exercises of the RungFiringTimelines surface
-# ---------------------------------------------------------------------------
 
-
-def test_stable_rung_single_range() -> None:
-    """A rung firing the same pattern for 100 scans is one range, one pattern."""
-    timelines = RungFiringTimelines()
-    pattern = pmap({"Light": True})
+def test_stable_values_and_firing_ranges_are_independent() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
     for scan_id in range(1, 101):
-        timelines.append(rung_index=0, scan_id=scan_id, writes=pattern)
+        timelines.append(0, scan_id, {"A": True, "B": 7})
 
-    assert timelines.mode(0) == "cycle"
-    assert timelines.intern_size(0) == 1
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 100
-    assert isinstance(range_.payload, PatternRef)
-    assert range_.payload.pattern == pattern
+    assert len(timelines._fired_ranges[0]) == 1
+    assert len(timelines._value_timelines[(0, "A")]) == 1
+    assert len(timelines._value_timelines[(0, "B")]) == 1
+    assert isinstance(timelines._value_timelines[(0, "A")][0].payload, Constant)
+    assert timelines.at(50) == pmap({0: pmap({"A": True, "B": 7})})
 
 
-def test_false_synthesis_guard_records_no_node_firing() -> None:
-    """A disabled synthesis rung is not a firing merely because it was scanned."""
-    Guard = Bool("FalseSynthesisGuard")
-    Held = Bool("FalseSynthesisHeld")
-    Seen = Bool("FalseSynthesisSeen")
-    with Program() as program:
-        with Rung(Held):
-            out(Seen)
+def test_empty_write_firing_is_still_recorded() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(2, 4, {})
 
-    plc = PLC(program, record_all_tags=True)
-    from pyrung.core.synthesis import Synthesis, copy_hold_rung
-
-    plc._synthesis = Synthesis(
-        holds=[copy_hold_rung(value=True, dest=Held, guard=Guard)],
-    )
-    plc.step()
-
-    assert RungId("PILOT", 0) not in plc._node_firings_at(plc.state.scan_id)
+    assert timelines.fired_on(4) == {2}
+    assert timelines.rung_writes_at(2, 4) == pmap()
+    assert timelines.rung_writes_at(2, 3) is None
 
 
-def test_mutable_capture_dict_uses_same_stable_range() -> None:
-    """Interpreter capture dicts extend canonical ranges without changing lookup shape."""
-    timelines = RungFiringTimelines()
+def test_columns_compress_different_shapes_independently() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
     for scan_id in range(1, 101):
-        timelines.append(rung_index=0, scan_id=scan_id, writes={"Light": True})
-
-    (range_,) = timelines._timelines[0]
-    assert isinstance(range_.payload, PatternRef)
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 100
-    assert range_.payload.pattern == pmap({"Light": True})
-    assert timelines.at(50) == pmap({0: pmap({"Light": True})})
-
-
-def test_mutable_capture_dict_collapses_alternating_run() -> None:
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 101):
-        timelines.append(0, scan_id, {"Clock": scan_id % 2 == 1})
-
-    (range_,) = timelines._timelines[0]
-    assert isinstance(range_.payload, AlternatingRun)
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 100
-    assert timelines.rung_writes_at(0, 99) == pmap({"Clock": True})
-    assert timelines.rung_writes_at(0, 100) == pmap({"Clock": False})
-
-
-def test_mutable_capture_dict_extends_arithmetic_run() -> None:
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 101):
-        timelines.append(0, scan_id, {"Acc": scan_id, "Done": False})
-
-    (range_,) = timelines._timelines[0]
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 100
-    assert timelines.rung_writes_at(0, 75) == pmap({"Acc": 75, "Done": False})
-
-
-def test_pattern_cycle_interning() -> None:
-    """Three stable runs of A, B, A produce three ranges and two canonical PMaps."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"Signal": True})
-    pat_b = pmap({"Signal": False})
-    # Run A for scans 1-10, B for 11-20, A for 21-30.
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pat_a)
-    for scan_id in range(11, 21):
-        timelines.append(0, scan_id, pat_b)
-    for scan_id in range(21, 31):
-        timelines.append(0, scan_id, pat_a)
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 3
-    assert timelines.intern_size(0) == 2
-
-    # Same PMap instance reused for both A ranges.
-    a_payload_1 = timeline[0].payload
-    a_payload_3 = timeline[2].payload
-    assert isinstance(a_payload_1, PatternRef)
-    assert isinstance(a_payload_3, PatternRef)
-    assert a_payload_1.pattern is a_payload_3.pattern
-
-
-def test_alternating_run_detection() -> None:
-    """A,B,A,B,... for 1000 scans collapses to one AlternatingRun range."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"Clock": True})
-    pat_b = pmap({"Clock": False})
-    for scan_id in range(1, 1001):
-        pattern = pat_a if scan_id % 2 == 1 else pat_b
-        timelines.append(0, scan_id, pattern)
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    range_ = timeline[0]
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 1000
-    assert isinstance(range_.payload, AlternatingRun)
-    # Anchor at scan 1 (odd anchor).  Parity-0 is anchor's pattern (A),
-    # parity-1 is the other (B).
-    assert range_.payload.pattern_on_even == pat_a
-    assert range_.payload.pattern_on_odd == pat_b
-
-
-def test_alternating_run_parity_relative_to_start() -> None:
-    """Parity is anchored at the run's start, not at scan_id itself.
-
-    Guards the off-by-one trap from design doc §"Parity relative to
-    start": a run that begins at an odd scan_id would invert the
-    even/odd slots under a naive ``scan_id % 2`` lookup.
-    """
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"X": 1})
-    pat_b = pmap({"X": 2})
-
-    # Start the run at scan 7 (odd anchor).  Pattern A on the anchor,
-    # B next, A, B, ...
-    for offset in range(20):
-        scan_id = 7 + offset
-        pattern = pat_a if offset % 2 == 0 else pat_b
-        timelines.append(0, scan_id, pattern)
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    range_ = timeline[0]
-    assert isinstance(range_.payload, AlternatingRun)
-    # Anchor at scan 7 holds pat_a in the "even" slot (parity relative
-    # to start).  Under naive scan_id % 2 this would be swapped.
-    assert range_.payload.pattern_on_even == pat_a
-    assert range_.payload.pattern_on_odd == pat_b
-
-    # Lookup uses the same parity rule.
-    assert timelines.at(7) == pmap({0: pat_a})
-    assert timelines.at(8) == pmap({0: pat_b})
-    assert timelines.at(9) == pmap({0: pat_a})
-    assert timelines.at(26) == pmap({0: pat_b})  # offset 19 -> odd -> pat_b
-
-
-def test_alternating_run_breaks_on_third_pattern() -> None:
-    """A,B,A,B,C closes the alternation at the last B; C starts a new range."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"X": "a"})
-    pat_b = pmap({"X": "b"})
-    pat_c = pmap({"X": "c"})
-
-    timelines.append(0, 1, pat_a)
-    timelines.append(0, 2, pat_b)
-    timelines.append(0, 3, pat_a)
-    timelines.append(0, 4, pat_b)
-    timelines.append(0, 5, pat_c)
-
-    timeline = timelines._timelines[0]
-    # The A,B,A collapse at scan 3 produced one AlternatingRun covering
-    # 1-3.  Scan 4 matched the expected parity slot (B) and extended
-    # it to 1-4.  Scan 5 broke the pattern and started a PatternRef.
-    assert len(timeline) == 2
-    first, second = timeline
-    assert isinstance(first.payload, AlternatingRun)
-    assert first.start_scan_id == 1
-    assert first.end_scan_id == 4
-    assert isinstance(second.payload, PatternRef)
-    assert second.start_scan_id == 5
-    assert second.end_scan_id == 5
-    assert second.payload.pattern == pat_c
-
-
-def test_alternating_run_breaks_on_repeat() -> None:
-    """A,B,A,A closes the alternation early when A repeats out of turn."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"X": "a"})
-    pat_b = pmap({"X": "b"})
-
-    timelines.append(0, 1, pat_a)
-    timelines.append(0, 2, pat_b)
-    timelines.append(0, 3, pat_a)
-    # Expected at scan 4: pat_b (per alternation).  Instead we get
-    # pat_a again — should close the run and start a new PatternRef.
-    timelines.append(0, 4, pat_a)
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 2
-    first, second = timeline
-    assert isinstance(first.payload, AlternatingRun)
-    assert first.start_scan_id == 1
-    assert first.end_scan_id == 3
-    assert isinstance(second.payload, PatternRef)
-    assert second.start_scan_id == 4
-    assert second.end_scan_id == 4
-
-
-# ---------------------------------------------------------------------------
-# ArithmeticRun detection and extension
-# ---------------------------------------------------------------------------
-
-
-def test_arithmetic_run_basic_detection() -> None:
-    """Three contiguous scans with constant integer delta collapse to ArithmeticRun."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"Acc": 10}))
-    timelines.append(0, 2, pmap({"Acc": 11}))
-    timelines.append(0, 3, pmap({"Acc": 12}))
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 3
-    assert range_.payload.base_pattern == pmap({"Acc": 10})
-    assert range_.payload.deltas == pmap({"Acc": 1})
-
-
-def test_arithmetic_run_extension() -> None:
-    """Once detected, an ArithmeticRun extends without growing the intern pool."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 1001):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.start_scan_id == 1
-    assert range_.end_scan_id == 1000
-    # Only the initial 3 patterns were interned before collapse.
-    assert timelines.intern_size(0) == 3
-    assert timelines.mode(0) == "cycle"
-
-
-def test_arithmetic_run_lookup() -> None:
-    """Lookups reconstruct correct values at any scan in the range."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 51):
-        timelines.append(0, scan_id, pmap({"Acc": 100 + scan_id * 2}))
-
-    assert timelines.rung_writes_at(0, 1) == pmap({"Acc": 102})
-    assert timelines.rung_writes_at(0, 25) == pmap({"Acc": 150})
-    assert timelines.rung_writes_at(0, 50) == pmap({"Acc": 200})
-
-    full = timelines.at(25)
-    assert full[0] == pmap({"Acc": 150})
-
-
-def test_arithmetic_run_negative_delta() -> None:
-    """Negative deltas (counting down) produce an ArithmeticRun."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pmap({"Acc": 100 - scan_id}))
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.payload.deltas == pmap({"Acc": -1})
-    assert timelines.rung_writes_at(0, 10) == pmap({"Acc": 90})
-
-
-def test_arithmetic_run_mixed_constant_and_delta() -> None:
-    """ArithmeticRun with some tags constant and some incrementing."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 21):
-        timelines.append(0, scan_id, pmap({"Done": False, "Acc": scan_id}))
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.payload.deltas == pmap({"Acc": 1})
-    assert timelines.rung_writes_at(0, 15) == pmap({"Done": False, "Acc": 15})
-
-
-def test_arithmetic_run_multi_delta() -> None:
-    """Multiple tags incrementing by different amounts."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pmap({"A": scan_id, "B": scan_id * 3}))
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.payload.deltas == pmap({"A": 1, "B": 3})
-    assert timelines.rung_writes_at(0, 10) == pmap({"A": 10, "B": 30})
-
-
-def test_arithmetic_run_break_and_restart() -> None:
-    """Breaking an ArithmeticRun starts a new sequence after re-detection."""
-    timelines = RungFiringTimelines()
-    # First run: +1 for scans 1-10
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
-    # Break: reset to 0
-    timelines.append(0, 11, pmap({"Acc": 0}))
-    # New run: 0, 1, 2, ... detected at scan 13
-    timelines.append(0, 12, pmap({"Acc": 1}))
-    timelines.append(0, 13, pmap({"Acc": 2}))
-    # Extend the new run
-    for scan_id in range(14, 21):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id - 11}))
-
-    timeline = timelines._timelines[0]
-    # First ArithmeticRun, then PatternRef (break), then new ArithmeticRun
-    assert isinstance(timeline[0].payload, ArithmeticRun)
-    assert timeline[0].end_scan_id == 10
-    assert isinstance(timeline[-1].payload, ArithmeticRun)
-    assert timeline[-1].start_scan_id == 11
-    assert timeline[-1].end_scan_id == 20
-
-
-def test_arithmetic_run_does_not_trigger_fired_only() -> None:
-    """A long arithmetic run keeps the intern pool small, never promoting to fired-only."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD * 10 + 1):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
-
-    assert timelines.mode(0) == "cycle"
-    assert timelines.intern_size(0) == 3
-    assert len(timelines._timelines[0]) == 1
-
-
-def test_arithmetic_run_last_tag_write_before() -> None:
-    """last_tag_write_before computes correct values for ArithmeticRun ranges."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 51):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id * 5}))
-
-    result = timelines.last_tag_write_before(frozenset({0}), "Acc", 40)
-    assert result is not None
-    scan, value = result
-    assert scan == 39
-    assert value == 195  # 39 * 5
-
-
-def test_transition_candidate_scans_are_compressed_by_range_kind() -> None:
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 51):
-        timelines.append(0, scan_id, pmap({"Stable": True}))
-        timelines.append(1, scan_id, pmap({"Acc": scan_id}))
-        timelines.append(2, scan_id, pmap({"Toggle": scan_id % 2 == 0}))
-
-    assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "Stable", 40) == (1,)
-    assert timelines.tag_transition_candidate_scans_before(frozenset({1}), "Acc", 40) == (39,)
-    assert timelines.tag_transition_candidate_scans_before(frozenset({2}), "Toggle", 40) == (39,)
-
-
-def test_transition_candidate_scans_include_latest_single_parity_write() -> None:
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 11):
-        writes = pmap({"Pulse": True}) if scan_id % 2 == 0 else pmap({})
-        timelines.append(0, scan_id, writes)
-
-    assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "Pulse", 10) == (8, 2)
-
-
-def test_arithmetic_run_non_adjacent_breaks() -> None:
-    """A gap in firings breaks the ArithmeticRun and starts fresh."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"Acc": 1}))
-    timelines.append(0, 2, pmap({"Acc": 2}))
-    timelines.append(0, 3, pmap({"Acc": 3}))
-    # Gap: skip scan 4
-    timelines.append(0, 5, pmap({"Acc": 5}))
-
-    timeline = timelines._timelines[0]
-    # ArithmeticRun for 1-3, then new PatternRef at 5
-    assert isinstance(timeline[0].payload, ArithmeticRun)
-    assert timeline[0].end_scan_id == 3
-    assert isinstance(timeline[-1].payload, PatternRef)
-    assert timeline[-1].start_scan_id == 5
-
-
-def test_arithmetic_run_trim_rebases() -> None:
-    """trim_before rebases ArithmeticRun's base_pattern to the new start."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 101):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id * 2}))
-
-    timelines.trim_before(50)
-
-    # Range should be trimmed to start at 50
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 1
-    (range_,) = timeline
-    assert isinstance(range_.payload, ArithmeticRun)
-    assert range_.start_scan_id == 50
-    assert range_.end_scan_id == 100
-    # Rebased: base value at scan 50 should be 100
-    assert range_.payload.base_pattern == pmap({"Acc": 100})
-    assert range_.payload.deltas == pmap({"Acc": 2})
-    # Lookup at scan 75 still works: 100 + 2*(75-50) = 150
-    assert timelines.rung_writes_at(0, 75) == pmap({"Acc": 150})
-
-
-def test_arithmetic_rejects_bool_values() -> None:
-    """Bool tag changes don't trigger ArithmeticRun (True - False is int in Python)."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"Flag": False}))
-    timelines.append(0, 2, pmap({"Flag": True}))
-    timelines.append(0, 3, pmap({"Flag": False}))
-
-    timeline = timelines._timelines[0]
-    # Should be AlternatingRun, not ArithmeticRun
-    assert len(timeline) == 1
-    assert isinstance(timeline[0].payload, AlternatingRun)
-
-
-def test_arithmetic_rejects_string_values() -> None:
-    """String-valued tags don't trigger ArithmeticRun."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"Msg": "a"}))
-    timelines.append(0, 2, pmap({"Msg": "b"}))
-    timelines.append(0, 3, pmap({"Msg": "c"}))
-
-    timeline = timelines._timelines[0]
-    # Three separate PatternRef ranges (no collapse)
-    assert all(isinstance(r.payload, PatternRef) for r in timeline)
-
-
-def test_arithmetic_fired_on_and_ever_fired() -> None:
-    """ArithmeticRun ranges are visible to fired_on() and ever_fired()."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pmap({"Acc": scan_id}))
-
-    assert timelines.fired_on(5) == {0}
-    assert timelines.fired_on(11) == set()
-    assert timelines.ever_fired() == {0}
-
-
-def test_cycle_to_fired_only_transition() -> None:
-    """Intern pool hitting the threshold flips the rung to fired-only permanently."""
-    timelines = RungFiringTimelines()
-    # Feed _FIRED_ONLY_THRESHOLD distinct patterns, one per scan.
-    # Use quadratic values so ArithmeticRun detection doesn't collapse them.
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"Counter": scan_id**2}))
-
-    assert timelines.mode(0) == "fired_only"
-    assert timelines.intern_size(0) == 0  # pool dropped at promotion
-
-    # Next append lands as a FiredOnly range.
-    next_scan = _FIRED_ONLY_THRESHOLD + 1
-    timelines.append(0, next_scan, pmap({"Counter": next_scan**2}))
-    timeline = timelines._timelines[0]
-    last = timeline[-1]
-    assert isinstance(last.payload, FiredOnly)
-    assert last.start_scan_id == next_scan
-    assert last.end_scan_id == next_scan
-
-
-def test_fired_only_transition_is_one_way() -> None:
-    """Once promoted, even 100 identical patterns don't revert to cycle mode."""
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"C": scan_id**2}))
-    assert timelines.mode(0) == "fired_only"
-
-    stable = pmap({"C": 999})
-    for offset in range(100):
-        timelines.append(0, _FIRED_ONLY_THRESHOLD + 1 + offset, stable)
-
-    assert timelines.mode(0) == "fired_only"
-    assert timelines.intern_size(0) == 0
-    # The 100 identical fired-only appends collapsed into one FiredOnly range.
-    tail = timelines._timelines[0][-1]
-    assert isinstance(tail.payload, FiredOnly)
-    assert tail.end_scan_id == _FIRED_ONLY_THRESHOLD + 100
-
-
-def test_fired_only_lookup_returns_sentinel_pmap() -> None:
-    """FiredOnly lookup returns a PMap keyed by observed-tag names."""
-    timelines = RungFiringTimelines()
-    # Train with enough distinct patterns across varied tag sets to
-    # ensure the observed-tag union at promotion includes A and B.
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        # Alternate between two tag name shapes so both appear.
-        if scan_id % 2 == 0:
-            pattern = pmap({"A": scan_id})
-        else:
-            pattern = pmap({"B": scan_id})
-        timelines.append(0, scan_id, pattern)
-    assert timelines.mode(0) == "fired_only"
-
-    # Append a fired-only scan and look it up.
-    timelines.append(0, _FIRED_ONLY_THRESHOLD + 1, pmap({"A": 42}))
-    firings = timelines.at(_FIRED_ONLY_THRESHOLD + 1)
-    assert set(firings[0].keys()) == {"A", "B"}
-
-
-def test_rung_firings_lookup_matches_prior_dict_shape() -> None:
-    """The public API's shape is stable: PMap[int, PMap[str, Any]]."""
-    Enable = Bool("Enable")
-    Signal = Bool("Signal")
-
-    with Program() as logic:
-        with Rung(Enable):
-            out(Signal)
-        with Rung(Signal):
-            out(Bool("Downstream"))
-
-    runner = PLC(logic, record_all_tags=True)
-    runner.patch({"Enable": True})
-    runner.step()
-
-    firings = runner.rung_firings()
-    # Outer PMap of rung_index -> inner PMap of tag_name -> value.
-    assert isinstance(firings, type(pmap()))
-    assert 0 in firings
-    assert isinstance(firings[0], type(pmap()))
-    assert firings[0]["Signal"] is True
-
-
-def test_timelines_reset_clears_state() -> None:
-    """reset() drops timelines, intern pools, mode, and fired-only caches."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"X": 1}))
-    for scan_id in range(2, _FIRED_ONLY_THRESHOLD + 2):
-        timelines.append(1, scan_id, pmap({"Y": scan_id**2}))
-    assert timelines.mode(1) == "fired_only"
-
-    timelines.reset()
-
-    assert timelines.mode(0) == "cycle"
-    assert timelines.mode(1) == "cycle"
-    assert timelines.intern_size(0) == 0
-    assert timelines.intern_size(1) == 0
-    assert timelines.ever_fired() == set()
-
-
-def test_plc_reboot_resets_timelines() -> None:
-    """PLC.reboot() flushes firing timelines together with the scan log."""
-    Enable = Bool("Enable")
-    Counter = Int("Counter")
-
-    with Program() as logic:
-        with Rung(Enable):
-            out(Counter)
-
-    runner = PLC(logic, record_all_tags=True)
-    runner.patch({"Enable": True})
-    runner.step()
-    assert runner._rung_firing_timelines.ever_fired() == {0}
-
-    runner.reboot()
-    # Post-reboot: timelines cleared, nothing has fired yet.
-    assert runner._rung_firing_timelines.ever_fired() == set()
-    runner.patch({"Enable": True})
-    runner.step()
-    # Firing resumes in fresh storage.
-    assert runner._rung_firing_timelines.ever_fired() == {0}
-
-
-def test_gap_in_firings_starts_new_range() -> None:
-    """Non-adjacent append of the same pattern starts a new range.
-
-    A rung that fires on scans 1-5, skips 6, fires scan 7 with the
-    same pattern should produce two ranges — ``end + 1 == scan_id``
-    is the adjacency condition for range extension.
-    """
-    timelines = RungFiringTimelines()
-    pat = pmap({"X": True})
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pat)
-    # Skip scan 6.
-    timelines.append(0, 7, pat)
-
-    timeline = timelines._timelines[0]
-    assert len(timeline) == 2
-    assert timeline[0].start_scan_id == 1 and timeline[0].end_scan_id == 5
-    assert timeline[1].start_scan_id == 7 and timeline[1].end_scan_id == 7
-    # Same canonical pattern, though.
-    assert timelines.intern_size(0) == 1
-    assert (
-        timeline[0].payload.pattern  # type: ignore[union-attr]
-        is timeline[1].payload.pattern  # type: ignore[union-attr]
+        timelines.append(
+            0,
+            scan_id,
+            {
+                "constant": 9,
+                "alternating": scan_id % 2,
+                "arithmetic": 10 + 3 * scan_id,
+            },
+        )
+
+    assert isinstance(timelines._value_timelines[(0, "constant")][0].payload, Constant)
+    assert isinstance(timelines._value_timelines[(0, "alternating")][0].payload, Alternating)
+    assert isinstance(timelines._value_timelines[(0, "arithmetic")][0].payload, Arithmetic)
+    assert timelines.rung_writes_at(0, 80) == pmap(
+        {"constant": 9, "alternating": 0, "arithmetic": 250}
     )
 
 
-def test_ever_fired_and_fired_on_queries() -> None:
-    """Efficient ``ever_fired`` / ``fired_on`` for query.cold/hot_rungs."""
-    timelines = RungFiringTimelines()
-    timelines.append(0, 1, pmap({"A": 1}))
-    timelines.append(0, 2, pmap({"A": 2}))
-    timelines.append(2, 1, pmap({"B": 1}))
-
-    assert timelines.ever_fired() == {0, 2}
-    assert timelines.fired_on(1) == {0, 2}
-    assert timelines.fired_on(2) == {0}
-    assert timelines.fired_on(3) == set()
-
-
-def test_latest_firing_scan_jumps_across_gaps_and_contiguous_ranges() -> None:
+def test_firing_gap_breaks_value_range_without_inventing_a_write() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
     timelines.append(0, 1, {"A": True})
-    timelines.append(0, 2, {"A": True})
-    timelines.append(0, 5, {"A": False})
-    timelines.append(1, 4, {})
-    timelines.append(1, 7, {})
+    timelines.append(0, 3, {"A": True})
 
-    assert timelines.latest_firing_scan_at_or_before(frozenset({0}), 4) == 2
-    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 6) == 5
-    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 100) == 7
-    assert timelines.latest_firing_scan_at_or_before(frozenset({0, 1}), 0) is None
+    assert len(timelines._fired_ranges[0]) == 2
+    assert len(timelines._value_timelines[(0, "A")]) == 2
+    assert timelines.rung_writes_at(0, 2) is None
 
 
-def test_latest_value_transition_skips_reassertions_and_nonmatching_ranges() -> None:
+def test_alternating_write_and_missing_compresses_without_inventing_writes() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    timelines.append(0, 1, {"A": 1})
-    timelines.append(0, 2, {"A": 2})
-    timelines.append(0, 3, {"A": 3})
-    timelines.append(1, 4, {"A": True})
-    timelines.append(1, 5, {"A": False})
-    timelines.append(1, 6, {"A": True})
+    for scan_id in range(1, 101):
+        timelines.append(0, scan_id, {"A": True} if scan_id % 2 else {})
 
-    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 2, 99) == 2
-    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 4, 99) is None
-    assert timelines.latest_value_transition_scan_at_or_before(frozenset({1}), "A", True, 6) == 6
-    assert timelines.latest_value_transition_scan_at_or_before(frozenset({1}), "A", False, 6) == 5
+    (range_,) = timelines._value_timelines[(0, "A")]
+    assert isinstance(range_.payload, Alternating)
+    assert timelines.rung_writes_at(0, 1) == pmap({"A": True})
+    assert timelines.rung_writes_at(0, 2) == pmap()
+    assert timelines.write_scans(frozenset({0}), "A", (1, 2, 3, 4)) == (1, 3)
+    assert timelines.last_tag_write_before(frozenset({0}), "A", 5) == (3, True)
 
 
-def test_latest_value_transition_keeps_missing_payload_as_unknown() -> None:
+def test_missing_only_interval_is_not_an_observed_writer_interval() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    timelines.append(0, 7, {})
+    timelines.append(0, 1, {"A": True})
+    for scan_id in range(2, 6):
+        timelines.append(0, scan_id, {})
 
-    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 42, 10) == 7
-    assert (
-        timelines.latest_value_transition_scan_at_or_before(
-            frozenset({0}),
-            "A",
-            42,
-            10,
-            missing_is_unknown=False,
-        )
-        is None
+    assert timelines.observed_writers_of_between("A", 1, 1) == frozenset({0})
+    assert timelines.observed_writers_of_between("A", 2, 5) == frozenset()
+    assert not timelines.any_wrote_on("A", 4)
+
+
+def test_varied_is_a_sparse_sticky_true_fact_per_scope_and_tag() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(0, 1, {"A": False, "B": 1}, {"A"})
+    timelines.append(0, 2, {"A": False, "B": 1})
+    timelines.append(0, 3, {"A": True, "B": 1}, {"A"})
+
+    assert timelines.varied_on(0, "A", 1)
+    assert not timelines.varied_on(0, "A", 2)
+    assert timelines.varied_on(0, "A", 3)
+    assert not timelines.varied_on(0, "B", 1)
+    assert len(timelines._varied_ranges[(0, "A")]) == 2
+    assert timelines.varied_scans(frozenset({0}), "A", (1, 2, 3)) == (1, 3)
+
+
+def test_unknown_degrades_only_one_high_complexity_column() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, _VALUE_VARIETY_THRESHOLD + 2):
+        timelines.append(0, scan_id, {"noisy": scan_id * scan_id, "stable": True})
+
+    assert isinstance(timelines._value_timelines[(0, "noisy")][-1].payload, Unknown)
+    assert isinstance(timelines._value_timelines[(0, "stable")][0].payload, Constant)
+    assert timelines.value_at(0, "stable", _VALUE_VARIETY_THRESHOLD + 1) is True
+    assert not timelines.value_is_known(0, "noisy")
+    assert timelines.value_is_known(0, "stable")
+
+    # Missing firings may compact with unknown values, but are not themselves
+    # writes. The unknown side remains a conservative transition candidate.
+    timelines.append(0, _VALUE_VARIETY_THRESHOLD + 2, {"stable": True})
+    timelines.append(
+        0,
+        _VALUE_VARIETY_THRESHOLD + 3,
+        {"noisy": -1, "stable": True},
     )
+    assert timelines.latest_value_transition_scan_at_or_before(
+        frozenset({0}),
+        "noisy",
+        "any possible lost value",
+        _VALUE_VARIETY_THRESHOLD + 3,
+    ) == (_VALUE_VARIETY_THRESHOLD + 3)
 
 
-# ---------------------------------------------------------------------------
-# Sweep-on-log-trim eviction
-# ---------------------------------------------------------------------------
+def test_fragmented_low_cardinality_column_stays_exact() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    # Deliberately aperiodic enough to fragment rather than form one
+    # Alternating run, but it still has only two actual values.
+    for scan_id in range(1, 401):
+        value = (scan_id % 5) in {1, 2}
+        timelines.append(0, scan_id, {"A": value})
+
+    assert not any(
+        isinstance(range_.payload, Unknown) for range_ in timelines._value_timelines[(0, "A")]
+    )
+    assert timelines.value_at(0, "A", 399) is False
+    assert timelines.value_at(0, "A", 400) is False
 
 
-def test_trim_before_drops_ranges_entirely_past() -> None:
-    """Ranges with end_scan_id < N are removed; later ranges stay."""
-    timelines = RungFiringTimelines()
-    pat = pmap({"X": True})
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pat)
-    # Gap at scan 6 -> new range after trim horizon.
-    for scan_id in range(7, 11):
-        timelines.append(0, scan_id, pat)
+def test_observed_writer_and_write_scan_indexes_are_columnar() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    timelines.append(0, 1, {"A": True})
+    timelines.append(1, 2, {"B": True})
+    timelines.append(0, 3, {"A": False})
 
-    # Before trim: two ranges (1-5) and (7-10).
-    assert len(timelines._timelines[0]) == 2
-
-    timelines.trim_before(7)
-    # First range (ends at 5) is fully past the horizon and dropped.
-    remaining = timelines._timelines[0]
-    assert len(remaining) == 1
-    assert remaining[0].start_scan_id == 7
-    assert remaining[0].end_scan_id == 10
+    assert timelines.observed_writers_of("A") == frozenset({0})
+    assert timelines.observed_writers_of_between("A", 2, 3) == frozenset({0})
+    assert timelines.observed_writers_of_between("A", 2, 2) == frozenset()
+    assert timelines.write_scans(frozenset({0, 1}), "A", (1, 2, 3)) == (1, 3)
+    assert timelines.any_wrote_on("B", 2)
+    assert not timelines.any_wrote_on("B", 2, excluding=1)
 
 
-def test_trim_before_advances_straddling_range_start() -> None:
-    """A range straddling N has its start_scan_id pulled forward to N."""
-    timelines = RungFiringTimelines()
-    pat = pmap({"X": True})
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pat)
+def test_transition_queries_use_scalar_ranges() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id, value in enumerate((10, 12, 14, 16), start=1):
+        timelines.append(0, scan_id, {"A": value})
+
+    assert timelines.latest_firing_scan_at_or_before(frozenset({0}), 10) == 4
+    assert timelines.latest_value_transition_scan_at_or_before(frozenset({0}), "A", 14, 10) == 3
+    assert timelines.last_tag_write_before(frozenset({0}), "A", 4) == (3, 14)
+    assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "A", 5) == (4,)
+
+
+def test_trim_before_rebases_alternating_and_arithmetic_columns() -> None:
+    timelines: RungFiringTimelines[int] = RungFiringTimelines()
+    for scan_id in range(1, 8):
+        timelines.append(0, scan_id, {"A": scan_id % 2, "N": scan_id * 2})
 
     timelines.trim_before(4)
-    (range_,) = timelines._timelines[0]
-    assert range_.start_scan_id == 4
-    assert range_.end_scan_id == 10
+
+    assert timelines.rung_writes_at(0, 3) is None
+    assert timelines.rung_writes_at(0, 4) == pmap({"A": 0, "N": 8})
+    assert timelines.rung_writes_at(0, 7) == pmap({"A": 1, "N": 14})
 
 
-def test_sweep_on_log_trim_preserves_alternating_parity() -> None:
-    """Advancing AlternatingRun's start by an odd delta swaps even/odd slots.
-
-    Guards design doc §"Eviction: sweep on log-trim" — parity is
-    anchored at the current ``start_scan_id``, so trimming shifts the
-    anchor and the per-slot patterns must swap when the delta is odd.
-    """
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"C": "a"})
-    pat_b = pmap({"C": "b"})
-    # Build an alternating run from scan 10 to scan 1000 with
-    # pattern_on_even=A (anchor-parity 0 at scan 10) and
-    # pattern_on_odd=B.
-    for offset in range(10, 1001):
-        scan_id = offset
-        pattern = pat_a if (scan_id - 10) % 2 == 0 else pat_b
-        timelines.append(0, scan_id, pattern)
-    (before_trim,) = timelines._timelines[0]
-    assert isinstance(before_trim.payload, AlternatingRun)
-    assert before_trim.payload.pattern_on_even == pat_a
-    assert before_trim.payload.pattern_on_odd == pat_b
-
-    # Trim to N=17.  Delta = 17-10 = 7 (odd) -> slots must swap.
-    timelines.trim_before(17)
-    (after_trim,) = timelines._timelines[0]
-    assert isinstance(after_trim.payload, AlternatingRun)
-    assert after_trim.start_scan_id == 17
-    assert after_trim.end_scan_id == 1000
-    assert after_trim.payload.pattern_on_even == pat_b
-    assert after_trim.payload.pattern_on_odd == pat_a
-    # Lookup at scan 17 must return the same pattern as before the
-    # trim.  Under the old anchor (scan 10), scan 17 had parity
-    # (17-10)%2 = 1 → pat_b.  Under the new anchor (scan 17), parity
-    # (17-17)%2 = 0 → pattern_on_even (which was swapped to pat_b).
-    # The two answers agree — that's the whole point of the swap.
-    assert timelines.at(17) == pmap({0: pat_b})
-
-
-def test_sweep_on_log_trim_alternating_even_delta_preserves_slots() -> None:
-    """Even-delta trim leaves pattern_on_even / pattern_on_odd as-is."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"C": 1})
-    pat_b = pmap({"C": 2})
-    for offset in range(10, 100):
-        scan_id = offset
-        pattern = pat_a if (scan_id - 10) % 2 == 0 else pat_b
-        timelines.append(0, scan_id, pattern)
-
-    # Delta = 18 - 10 = 8 (even) -> no swap.
-    timelines.trim_before(18)
-    (after_trim,) = timelines._timelines[0]
-    assert isinstance(after_trim.payload, AlternatingRun)
-    assert after_trim.payload.pattern_on_even == pat_a
-    assert after_trim.payload.pattern_on_odd == pat_b
-
-
-def test_sweep_drops_unreferenced_intern_patterns() -> None:
-    """After trim, intern pool keeps only patterns still referenced."""
-    timelines = RungFiringTimelines()
-    pat_a = pmap({"T": "a"})
-    pat_b = pmap({"T": "b"})
-    # Two stable runs: A (scans 1-5), B (scans 6-10).  Intern pool
-    # holds both.
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pat_a)
-    for scan_id in range(6, 11):
-        timelines.append(0, scan_id, pat_b)
-    assert timelines.intern_size(0) == 2
-
-    # Trim past the A range.  Only B survives; intern pool shrinks.
-    timelines.trim_before(6)
-    assert timelines.intern_size(0) == 1
-    survivors = set(timelines._intern[0])
-    assert pat_b in survivors
-    assert pat_a not in survivors
-
-
-def test_trim_fully_empty_rung_resets_rung_state() -> None:
-    """A rung whose timeline is fully past N reverts to a fresh state."""
-    timelines = RungFiringTimelines()
-    pat = pmap({"X": 1})
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pat)
-
-    # Trim past every range -> rung is effectively unseen again.
-    timelines.trim_before(20)
-    assert 0 not in timelines._timelines
-    assert 0 not in timelines._intern
-    assert timelines.mode(0) == "cycle"
-    assert timelines.ever_fired() == set()
-
-
-def test_trim_preserves_fired_only_sentinel() -> None:
-    """Trimming a fired-only rung keeps the sentinel and FiredOnly ranges."""
-    timelines = RungFiringTimelines()
-    # Promote the rung to fired-only (quadratic values defeat ArithmeticRun).
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
-    for scan_id in range(_FIRED_ONLY_THRESHOLD + 1, _FIRED_ONLY_THRESHOLD + 50):
-        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
-    assert timelines.mode(0) == "fired_only"
-    pre_sentinel_keys = set(timelines._fired_only_writes[0].keys())
-
-    # Trim in the middle of the fired-only tail range.
-    trim_to = _FIRED_ONLY_THRESHOLD + 10
-    timelines.trim_before(trim_to)
-    assert timelines.mode(0) == "fired_only"
-    # Sentinel PMap survives unchanged.
-    assert set(timelines._fired_only_writes[0].keys()) == pre_sentinel_keys
-
-
-def test_snapshot_clips_future_and_preserves_fired_only_sentinel_identity() -> None:
-    timelines = RungFiringTimelines()
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"N": scan_id**2}))
-    timelines.append(0, _FIRED_ONLY_THRESHOLD + 1, pmap({"N": 999_999}))
-    timelines.append(0, _FIRED_ONLY_THRESHOLD + 2, pmap({"N": 888_888}))
-    sentinel_writes = timelines._fired_only_writes[0]
-
-    snapshot = timelines.snapshot(up_to=_FIRED_ONLY_THRESHOLD + 1)
-
-    assert snapshot._fired_only_writes[0] is sentinel_writes
-    assert snapshot.rung_writes_at(0, _FIRED_ONLY_THRESHOLD + 2) is None
-
-
-# ---------------------------------------------------------------------------
-# Observed-writer reverse index
-# ---------------------------------------------------------------------------
-
-
-def test_observed_writers_of_maps_tags_to_rungs() -> None:
-    """The reverse index names every rung observed to have written a tag."""
+def test_snapshot_and_trim_after_do_not_mutate_source() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    # Rung 0: two PatternRef ranges (A then B), so it writes both "A" and "B".
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pmap({"A": True}))
-    for scan_id in range(6, 11):
-        timelines.append(0, scan_id, pmap({"B": True}))
-    # Rung 1: an ArithmeticRun over "C".
-    for scan_id in range(1, 11):
-        timelines.append(1, scan_id, pmap({"C": scan_id}))
-    # Rung 2: an AlternatingRun toggling "D".
-    for scan_id in range(1, 11):
-        timelines.append(2, scan_id, pmap({"D": scan_id % 2 == 0}))
+    for scan_id in range(1, 7):
+        timelines.append(0, scan_id, {"A": scan_id}, {"A"} if scan_id == 4 else set())
 
-    assert timelines.observed_writers_of("A") == frozenset({0})
-    assert timelines.observed_writers_of("B") == frozenset({0})
-    assert timelines.observed_writers_of("C") == frozenset({1})
-    assert timelines.observed_writers_of("D") == frozenset({2})
-    assert timelines.observed_writers_of("Missing") == frozenset()
+    snapshot = timelines.snapshot(up_to=4)
+    snapshot.trim_after(3)
+
+    assert snapshot.rung_writes_at(0, 4) is None
+    assert timelines.rung_writes_at(0, 6) == pmap({"A": 6})
+    assert not snapshot.varied_on(0, "A", 4)
+    assert timelines.varied_on(0, "A", 4)
 
 
-def test_observed_writers_of_includes_fired_only_sentinel_tags() -> None:
-    """Promoted rungs expose their snapshotted observed-tag union."""
+def test_node_keys_share_the_same_index_implementation() -> None:
+    node = RungId("Sub", 2)
+    timelines: RungFiringTimelines[RungId] = RungFiringTimelines()
+    timelines.append(node, 8, {"A": 1}, {"A"})
+
+    assert timelines.fired_on(8) == {node}
+    assert timelines.value_at(node, "A", 8) == 1
+    assert timelines.varied_on(node, "A", 8)
+
+
+def test_reset_clears_all_three_fact_families() -> None:
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    # Quadratic values defeat ArithmeticRun collapse, forcing promotion.
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
-        timelines.append(0, scan_id, pmap({"Q": scan_id**2}))
-    assert timelines.mode(0) == "fired_only"
-
-    assert timelines.observed_writers_of("Q") == frozenset({0})
-
-
-def test_observed_writers_of_stays_consistent_through_trim() -> None:
-    """Trimming a range removes tags no longer written by any surviving range."""
-    timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pmap({"A": True}))
-    for scan_id in range(6, 11):
-        timelines.append(0, scan_id, pmap({"B": True}))
-    for scan_id in range(1, 11):
-        timelines.append(1, scan_id, pmap({"C": scan_id}))
-
-    assert timelines.observed_writers_of("A") == frozenset({0})
-
-    # Trim past the "A" range (ends at 5): rung 0's first range drops, so
-    # "A" is no longer observed anywhere; "B" and "C" survive.
-    timelines.trim_before(6)
-    assert timelines.observed_writers_of("A") == frozenset()
-    assert timelines.observed_writers_of("B") == frozenset({0})
-    assert timelines.observed_writers_of("C") == frozenset({1})
-
-    # Trim past every range for rung 1: "C" vanishes and the rung is gone.
-    timelines.trim_before(20)
-    assert timelines.observed_writers_of("B") == frozenset()
-    assert timelines.observed_writers_of("C") == frozenset()
-
-
-def test_observed_writers_of_cleared_by_reset() -> None:
-    """reset() invalidates the observed-writer index."""
-    timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, 11):
-        timelines.append(0, scan_id, pmap({"A": scan_id}))
-    assert timelines.observed_writers_of("A") == frozenset({0})
+    timelines.append(0, 1, {"A": True}, {"A"})
 
     timelines.reset()
+
+    assert timelines.ever_fired() == set()
     assert timelines.observed_writers_of("A") == frozenset()
-
-
-def test_observed_writers_of_refreshes_after_new_pattern() -> None:
-    """A newly-interned pattern with a new tag shows up on the next query."""
-    timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, 6):
-        timelines.append(0, scan_id, pmap({"A": True}))
-    assert timelines.observed_writers_of("A") == frozenset({0})
-    assert timelines.observed_writers_of("B") == frozenset()
-
-    # A new pattern introducing tag "B" must invalidate the cached index.
-    timelines.append(0, 6, pmap({"B": True}))
-    assert timelines.observed_writers_of("B") == frozenset({0})
-
-
-def test_plc_trim_history_before_trims_firings() -> None:
-    """_trim_history_before trims rung-firing timelines in lockstep."""
-    Enable = Bool("Enable")
-    Light = Bool("Light")
-
-    with Program() as logic:
-        with Rung(Enable):
-            out(Light)
-
-    runner = PLC(logic, record_all_tags=True, checkpoint_interval=10)
-    runner.patch({"Enable": True})
-    for _ in range(5):
-        runner.step()
-    # No-op: horizon below any recorded scan.
-    runner._trim_history_before(0)
-    assert runner._rung_firing_timelines.ever_fired() == {0}
-
-    # Trim to midway — first half of the range drops.
-    runner._trim_history_before(3)
-    remaining = runner._rung_firing_timelines._timelines[0]
-    assert remaining[0].start_scan_id == 3
+    assert not timelines.varied_on(0, "A", 1)

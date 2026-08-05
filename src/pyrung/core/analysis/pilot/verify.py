@@ -800,7 +800,6 @@ def verify_excursion_replay(
         coast_receipt=None,
         timeline=investigation_result.replay_timeline,
         kernel_scan_ids=investigation_result.replay_kernel_scan_ids,
-        execution_projections=investigation_result.replay_execution_projections,
         confirmed_correction=correction,
     )
     earned_work = getattr(state, "earned_work", None)

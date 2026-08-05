@@ -24,7 +24,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import pyrung.core.analysis.pilot.coast as coast_module
 from pyrung import Bool, Int, Program, Rung, Timer, calc, copy, count_up, on_delay, out
 from pyrung.core import Counter
 from pyrung.core.analysis.pilot.coast import (
@@ -42,18 +41,12 @@ from pyrung.core.analysis.pilot.coast import (
     predicate_trigger,
     value_trigger,
 )
-from pyrung.core.analysis.pilot.effects import (
-    EffectExpectation,
-    EffectObligation,
-    observe_execution_window,
-)
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.steer import _settle_watched_tags
-from pyrung.core.analysis.pilot.types import _PulseState
 from pyrung.core.condition import (
     AllCondition,
     AnyCondition,
@@ -1304,127 +1297,6 @@ class TestSettleLandingFolds:
         assert receipt.advances
         assert receipt.advances == tuple(sorted(receipt.advances, key=lambda edit: edit[1]))
         assert {tag for tag, _value in receipt.advances} == {Ctr.Acc.name}
-
-
-class TestExecutionCaptureStream:
-    def test_scan_count_overflow_mid_coast_replays_the_full_exact_window(
-        self,
-        monkeypatch,
-    ):
-        effect = Int("OverflowCoastEffect")
-        with Program() as program:
-            with Rung():
-                copy(1, effect)
-        plc = PLC(program)
-        monkeypatch.setattr(coast_module, "_MAX_EXECUTION_PROJECTION_SCANS", 2)
-        never = predicate_trigger("never", TARGET, lambda _state: False)
-        session = CoastSession(
-            plc,
-            kind="overflow-coast",
-            capture_execution=True,
-        )
-
-        receipt = session.seek([never], budget=5)
-
-        assert receipt.stop_reason == "timeout"
-        assert receipt.end_scan == 5
-        assert session.execution_capture_overflowed
-        assert session.kernel_scan_ids == (1, 2, 3, 4, 5)
-        assert session._execution_projections == {}
-
-        snap = dict(plc.state.tags)
-        pulse = _PulseState(
-            fork=plc,
-            scan_before=0,
-            action_scan=0,
-            action_snap=snap,
-            wait_snaps=(),
-            post_pulse_snap=snap,
-            post_pulse_key=("post",),
-            snap=snap,
-            key=("landing",),
-            kernel_scan_ids=session.kernel_scan_ids,
-            execution_projections=session._execution_projections,
-        )
-        assert all(pulse.projection_at(scan_id) is not None for scan_id in range(1, 6))
-
-    def test_session_retains_only_actual_kernel_scans_across_fold(self):
-        plc = PLC(_static_channel_long_timer_program(), dt=0.010)
-        plc.patch({"Enable": True})
-        session = CoastSession(plc, kind="capture-stream", capture_execution=True)
-
-        receipt = session.settle_landing("Chan", confirm_scans=200)
-
-        captured = set(session._execution_projections)
-        assert receipt.macro_folds >= 1
-        assert captured == set(session.kernel_scan_ids)
-        assert captured
-        assert set(range(receipt.start_scan + 1, receipt.end_scan + 1)) - captured
-
-    def test_capture_overflow_discards_whole_stream_and_replays_exactly(self, monkeypatch):
-        effect = Int("OverflowCaptureEffect")
-        with Program() as program:
-            with Rung():
-                copy(1, effect)
-        plc = PLC(program)
-        monkeypatch.setattr(coast_module, "_MAX_EXECUTION_PROJECTION_SCANS", 2)
-        session = CoastSession(plc, kind="capture-overflow", capture_execution=True)
-
-        for _ in range(3):
-            session.step_kernel()
-
-        assert session.execution_capture_overflowed
-        assert not session.capture_execution
-        assert session._execution_projections == {}
-        assert session.kernel_scan_ids == (1, 2, 3)
-
-        snap = dict(plc.state.tags)
-        pulse = _PulseState(
-            fork=plc,
-            scan_before=0,
-            action_scan=1,
-            action_snap=snap,
-            wait_snaps=(),
-            post_pulse_snap=snap,
-            post_pulse_key=("post",),
-            snap=snap,
-            key=("landing",),
-            kernel_scan_ids=session.kernel_scan_ids,
-            execution_projections=session._execution_projections,
-        )
-        replayed = []
-        replay_projection = plc._replay_pilot_rung_write_projection_at
-
-        def _record_replay(scan_id):
-            replayed.append(scan_id)
-            return replay_projection(scan_id)
-
-        monkeypatch.setattr(plc, "_replay_pilot_rung_write_projection_at", _record_replay)
-        observations = observe_execution_window(
-            EffectExpectation(
-                (
-                    EffectObligation(
-                        effect.name,
-                        1,
-                        (None, 0, ()),
-                        None,
-                        (),
-                        terminal_target=True,
-                        producer_rung=program.rungs[0],
-                    ),
-                )
-            ),
-            plc,
-            scan_before=0,
-            action_scan=1,
-            kernel_scan_ids=pulse.kernel_scan_ids,
-            projection_at=pulse.projection_at,
-        )
-
-        assert replayed
-        assert observations
-        assert all(observation.appeared is not None for observation in observations)
-        assert "UNKNOWN" not in {observation.disposition for observation in observations}
 
 
 # ---------------------------------------------------------------------------

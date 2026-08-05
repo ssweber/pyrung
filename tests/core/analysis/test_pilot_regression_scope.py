@@ -84,7 +84,6 @@ def test_regression_nogood_uses_action_source_world(monkeypatch) -> None:
         snap={},
         key=("landing",),
         kernel_scan_ids=(),
-        execution_projections={},
     )
     trial = _AcceptedTrial(
         attempt=_ExecutedAttempt(

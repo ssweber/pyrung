@@ -16,7 +16,6 @@ does not classify the observation as progress, regression, or acceptance.
 from __future__ import annotations
 
 import logging
-import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -24,14 +23,9 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
-    from pyrung.core.executor import ConditionViewCapture
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
-
-_EXECUTION_PROJECTION_INDEX_ENTRY_BYTES = 128
-_EMPTY_EXECUTION_PROJECTION_INDEX_BYTES = sys.getsizeof({})
 
 # Coast-trigger kinds are strings, not an enum — the vocabulary grows per cutover phase
 # and consumers match on names they know.
@@ -40,14 +34,6 @@ DEPARTURE = "departure"
 QUIESCENT = "quiescent"
 PEN = "pen"
 AVOID = "avoid"
-
-# Compact execution projections are a transition-local optimization, not
-# required evidence. Bound their conservative retained-structure estimate so
-# a long internal route cannot grow memory without limit. A generous scan count
-# remains a corruption/runaway backstop, not the primary policy. Overflow
-# discards the whole stream and exact historical replay takes over.
-_MAX_EXECUTION_PROJECTION_BYTES = 1024 * 1024 * 1024
-_MAX_EXECUTION_PROJECTION_SCANS = 4_096
 
 
 @dataclass(frozen=True)
@@ -208,10 +194,6 @@ class CoastSession:
     # reactive holds are installed. Recorded incident replay sets ``False``:
     # its window is measured in historical logical scans.
     kernel_budget: bool | None = None
-    # Exact execution journals are expensive on large programs. The bearing
-    # executor opts in only when a declared effect expectation will consume
-    # them; scan IDs remain recorded for every session either way.
-    capture_execution: bool = False
     # Armed pens: tag -> last recorded value.  A pen is a nonterminal,
     # re-arming change recorder — the literal trend-recorder pen.  During a
     # seek the pens ride as one internal nonterminal trigger (their tags are
@@ -223,12 +205,6 @@ class CoastSession:
     _events: list[CoastTriggerEvent] = field(default_factory=list)
     _kernel_scan_ids: list[int] = field(default_factory=list, repr=False)
     _kernel_scan_seen: set[int] = field(default_factory=set, repr=False)
-    _execution_projections: dict[int, ScanRungWriteProjection] = field(
-        default_factory=dict,
-        repr=False,
-    )
-    _execution_capture_overflowed: bool = field(default=False, init=False, repr=False)
-    _execution_projection_owned_bytes: int = field(default=0, init=False, repr=False)
     _last_cyclefold_stats: dict[str, int] = field(default_factory=dict)
     _avoid_triggers: tuple[CoastTrigger, ...] = field(default=(), init=False, repr=False)
 
@@ -241,18 +217,6 @@ class CoastSession:
     def kernel_scan_ids(self) -> tuple[int, ...]:
         """Ordered exact scan IDs produced by genuine kernel executions."""
         return tuple(self._kernel_scan_ids)
-
-    @property
-    def execution_capture_overflowed(self) -> bool:
-        """Whether this session discarded its full all-or-nothing journal stream."""
-
-        return self._execution_capture_overflowed
-
-    @property
-    def execution_projection_bytes(self) -> int:
-        """Conservative retained weight of the all-or-nothing compact stream."""
-
-        return (self._execution_projection_owned_bytes * 5 + 3) // 4
 
     def note_kernel_scan(self, scan_id: int | None = None) -> None:
         """Retain one actual scan once; macro-folded logical skips never call this."""
@@ -269,74 +233,8 @@ class CoastSession:
     def step_kernel(self) -> None:
         """Execute and retain one exact kernel scan for this PILOT session."""
         self.plc._ensure_running()
-        self.plc._run_single_scan(
-            consume_pause_request=True,
-            capture_execution=self.capture_execution,
-            capture_sink=(self._retain_capture if self.capture_execution else None),
-        )
+        self.plc._run_single_scan(consume_pause_request=True)
         self.note_kernel_scan()
-
-    def _retain_capture(self, scan_id: int, capture: ConditionViewCapture) -> None:
-        if self._execution_capture_overflowed:
-            return
-        if scan_id in self._execution_projections:
-            logger.warning("discarding duplicate execution projection scan %s", scan_id)
-            self._disable_execution_capture()
-            return
-        if len(self._execution_projections) >= _MAX_EXECUTION_PROJECTION_SCANS:
-            self._disable_execution_capture(overflowed=True)
-            return
-        try:
-            from pyrung.core.analysis.causal._rung_writes import (
-                compact_projection_condition_views,
-                estimate_compact_projection_weight,
-            )
-
-            projection = self.plc._projection_from_capture(
-                scan_id,
-                capture,
-                include_memory_reads=True,
-            )
-            if projection is None:
-                raise ValueError("captured scan did not produce a causal projection")
-            compact_projection_condition_views(projection)
-            projection_weight = estimate_compact_projection_weight(
-                projection,
-                include_initial_boundary=not self._execution_projections,
-            )
-        except Exception:
-            # The retained stream is all-or-nothing. A partial mix of compact
-            # projections and generic replays could make same-scan identity
-            # fork-dependent, so discard it and let _PulseState replay every
-            # kernel scan through one exact historical path.
-            logger.warning(
-                "discarding incompatible execution projection stream at scan %s",
-                scan_id,
-                exc_info=True,
-            )
-            self._disable_execution_capture()
-            return
-        # The session index is owned alongside its projection graphs. Charge
-        # its shallow base once and a conservative fixed allowance per entry;
-        # this keeps accounting bounded and O(1) on long exact-scan routes.
-        index_growth = _EXECUTION_PROJECTION_INDEX_ENTRY_BYTES
-        if not self._execution_projections:
-            index_growth += _EMPTY_EXECUTION_PROJECTION_INDEX_BYTES
-        owned_bytes = (
-            self._execution_projection_owned_bytes + projection_weight.owned_bytes + index_growth
-        )
-        retained_bytes = (owned_bytes * 5 + 3) // 4
-        if retained_bytes > _MAX_EXECUTION_PROJECTION_BYTES:
-            self._disable_execution_capture(overflowed=True)
-            return
-        self._execution_projections[scan_id] = projection
-        self._execution_projection_owned_bytes = owned_bytes
-
-    def _disable_execution_capture(self, *, overflowed: bool = False) -> None:
-        self._execution_projections.clear()
-        self._execution_projection_owned_bytes = 0
-        self.capture_execution = False
-        self._execution_capture_overflowed = overflowed
 
     def arm_pens(self, tags: Iterable[str]) -> None:
         """Arm a change pen on each tag, baselined at the current value.
@@ -530,8 +428,6 @@ class CoastSession:
                     stats=stats,
                     advances=advances,
                     on_kernel_scan=self.note_kernel_scan,
-                    capture_kernel_scans=lambda: self.capture_execution,
-                    capture_sink=self._retain_capture,
                 )
                 kernel_scans += stats.get("kernel_scans", 0)
                 macro_folds += stats.get("macro_folds", 0)

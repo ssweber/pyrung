@@ -12,10 +12,10 @@ from pyrung.core.analysis.causal.history import (
 )
 from pyrung.core.analysis.causal.models import Transition
 from pyrung.core.rung_firings import (
-    _FIRED_ONLY_THRESHOLD,
-    ArithmeticRun,
-    FiredOnly,
+    _VALUE_VARIETY_THRESHOLD,
+    Arithmetic,
     RungFiringTimelines,
+    Unknown,
 )
 
 
@@ -65,7 +65,7 @@ class _CandidateOrderingHistory:
     def at(self, scan_id: int) -> _State:
         # Reading scan 50 would prove that lookup skipped the next candidate
         # inside the newer arithmetic range and prematurely visited the older
-        # PatternRef range.
+        # Older constant range.
         assert scan_id in {97, 98, 99}, f"unexpected older candidate read at scan {scan_id}"
         self.read_scan_ids.append(scan_id)
         return _State({"Ready": scan_id >= 98})
@@ -79,7 +79,7 @@ class _OpaqueInteriorHistory:
         self.read_scan_ids: list[int] = []
 
     def scan_ids(self) -> range:
-        return range(0, _FIRED_ONLY_THRESHOLD + 6)
+        return range(0, _VALUE_VARIETY_THRESHOLD + 6)
 
     def at(self, scan_id: int) -> _State:
         self.read_scan_ids.append(scan_id)
@@ -183,9 +183,9 @@ def test_rejected_arithmetic_tail_checks_next_scan_before_older_range() -> None:
     for scan_id in range(51, 100):
         timelines.append(0, scan_id, pmap({"Ready": scan_id - 50}))
 
-    ranges = timelines._timelines[0]
+    ranges = timelines._value_timelines[(0, "Ready")]
     assert ranges[0].start_scan_id == ranges[0].end_scan_id == 50
-    assert isinstance(ranges[1].payload, ArithmeticRun)
+    assert isinstance(ranges[1].payload, Arithmetic)
     # Candidate enumeration stays compressed: one tail for the arithmetic
     # range and one boundary for the older range, not every scan in between.
     assert timelines.tag_transition_candidate_scans_before(frozenset({0}), "Ready", 100) == (99, 50)
@@ -216,23 +216,23 @@ def test_rejected_arithmetic_tail_checks_next_scan_before_older_range() -> None:
 def test_fired_only_interior_is_searched_conservatively() -> None:
     """An opaque range cannot turn a real committed transition into a miss."""
     timelines: RungFiringTimelines[int] = RungFiringTimelines()
-    for scan_id in range(1, _FIRED_ONLY_THRESHOLD + 1):
+    for scan_id in range(1, _VALUE_VARIETY_THRESHOLD + 1):
         # Quadratic values defeat stable, alternating, and arithmetic encoding,
-        # naturally promoting this real timeline to fired-only mode.
+        # naturally degrading this value column to unknown.
         timelines.append(0, scan_id, pmap({"Ready": scan_id**2}))
-    for scan_id in range(_FIRED_ONLY_THRESHOLD + 1, _FIRED_ONLY_THRESHOLD + 6):
+    for scan_id in range(_VALUE_VARIETY_THRESHOLD + 1, _VALUE_VARIETY_THRESHOLD + 6):
         timelines.append(0, scan_id, pmap({"Ready": "discarded"}))
 
-    opaque = timelines._timelines[0][-1]
-    assert isinstance(opaque.payload, FiredOnly)
-    transition_scan = _FIRED_ONLY_THRESHOLD + 3
+    opaque = timelines._value_timelines[(0, "Ready")][-1]
+    assert isinstance(opaque.payload, Unknown)
+    transition_scan = _VALUE_VARIETY_THRESHOLD + 3
     history = _OpaqueInteriorHistory(transition_scan)
 
     assert (
         _find_last_transition_scan(
             history,  # type: ignore[arg-type]
             "Ready",
-            _FIRED_ONLY_THRESHOLD + 6,
+            _VALUE_VARIETY_THRESHOLD + 6,
             timelines=timelines,
             pdg=_PDG(),  # type: ignore[arg-type]
         )
