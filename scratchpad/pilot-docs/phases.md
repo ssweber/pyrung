@@ -101,6 +101,31 @@ future PLC prefix.
 their targets through the same checkpoint/local-repair contract, with no
 retained action prefix.
 
+## Phase 5B — Rebase later program guards through retained history
+
+- When an exact failed effect is blocked by a program-owned guard, search the
+  retained writer timelines from the demanding boundary backward. Rank
+  candidate transitions nearest to furthest; scan 1 is an ordinary candidate,
+  not a special recovery destination.
+- Treat the compressed timeline only as an index. Accept a candidate only when
+  its owner-bound scan projection contains one exact good-to-bad writer and an
+  executable retained checkpoint exists before it. Prefer the nearest valid
+  checkpoint for the newest exact candidate.
+- Retain the drive's invocation boundary at every scan number. If a live runner
+  already crossed the guard before `how` began, reconstruct the exact boundary
+  immediately before the newest candidate from retained runner history; a
+  generated launcher's initial settle scan is not special.
+- Complement that writer's exact enabled guard path into an ordinary Compass
+  target. Restore the selected checkpoint, obtain a normal current-world
+  Bearing, and send it through the existing steer, execute, verify, observe,
+  and commit loop.
+- Execute only that prevention Bearing. After it lands, discard the old
+  prediction and return to fresh Orientation for the original target.
+
+**Landed when:** both a scan-1 bootstrap writer and a later writer select their
+nearest retained causal boundaries, locally repair through normal Bearings,
+and reach the target without a program-owned false-impossibility report.
+
 ## Phase 6 — Complete and harden recovery
 
 - Add exact one-shot spent/rearm evidence and reread between ordered

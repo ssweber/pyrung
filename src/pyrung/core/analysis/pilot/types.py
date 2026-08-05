@@ -821,6 +821,10 @@ class _PilotState:
     seen_keys: set[_StateKey]
     checkpoints: list[_Checkpoint]
     watch_tags: list[str]
+    # Exact executable boundary where this drive invocation began. Unlike the
+    # optional bootstrap receipt, this exists at every scan number so a live
+    # DAP/runner invocation can rebase an accepted early transaction.
+    invocation_checkpoint: _CausalCheckpoint | None = None
     # Execution-only receipt for the optional cold-start ``0 -> 1`` scan.
     # Knowledge side: later world reverts must not erase the retained causal
     # source or reinterpret the immutable execution projection.

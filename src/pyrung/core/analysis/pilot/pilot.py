@@ -130,6 +130,7 @@ from pyrung.core.analysis.pilot.requirements import (
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_write,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
@@ -175,6 +176,7 @@ from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_ga
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
+from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.advance import constraint_holds
 
@@ -600,6 +602,7 @@ def _disposable_requirement_state(
         seen_keys=set(state.seen_keys),
         checkpoints=[],
         watch_tags=list(state.watch_tags),
+        invocation_checkpoint=state.invocation_checkpoint,
         bootstrap_execution=state.bootstrap_execution,
         active_requirements=list(state.active_requirements),
         expectation_receipts=list(state.expectation_receipts),
@@ -1137,7 +1140,7 @@ def _record_requirement_correction(
     )
 
 
-def _compile_bootstrap_guard_schedule(
+def _compile_program_guard_schedule(
     requirements: tuple[ActiveRequirement, ...],
     source: _PilotState,
     ctx: _PilotContext,
@@ -1244,7 +1247,7 @@ def _repair_bootstrap_requirement(
     requirements = _source_requirements(requirement, state)
     source = _disposable_requirement_state(state, requirement.source_checkpoint)
     schedule, detail = _compile_source_schedule(requirements, source, ctx)
-    guard_schedule, guard_detail = _compile_bootstrap_guard_schedule(
+    guard_schedule, guard_detail = _compile_program_guard_schedule(
         requirements,
         source,
         ctx,
@@ -1316,6 +1319,414 @@ def _repair_bootstrap_requirement(
         assignments=schedule.assignments,
         detail="bootstrap local transaction repaired" if repaired else "bootstrap repair rejected",
     )
+
+
+def _program_guard_rebase_surfaces(
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> tuple[tuple[_CausalCheckpoint, Any, Any], ...]:
+    """Join retained executable boundaries to their exact execution histories."""
+
+    surfaces: list[tuple[_CausalCheckpoint, Any, Any]] = []
+    checkpoints: list[_CausalCheckpoint] = [
+        _CausalCheckpoint(
+            key=checkpoint.key,
+            world=checkpoint.world,
+            objective=checkpoint.objective,
+            configured_inputs=ctx.configured_inputs
+            | _configured_input_names(checkpoint.world.work),
+            owner=checkpoint.owner,
+        )
+        for checkpoint in state.checkpoints
+    ]
+    if state.invocation_checkpoint is not None:
+        checkpoints.append(state.invocation_checkpoint)
+    bootstrap = state.bootstrap_execution
+    if bootstrap is not None:
+        checkpoints.append(bootstrap.checkpoint)
+        surfaces.append(
+            (bootstrap.checkpoint, bootstrap.execution_epoch, bootstrap.execution_owner)
+        )
+    for receipt in (*state.expectation_receipts, *state.failed_effect_receipts):
+        checkpoints.append(receipt.source_checkpoint)
+        surfaces.append(
+            (receipt.source_checkpoint, receipt.execution_epoch, receipt.execution_owner)
+        )
+    for requirement in state.active_requirements:
+        checkpoints.append(requirement.source_checkpoint)
+        surfaces.append(
+            (
+                requirement.source_checkpoint,
+                requirement.execution_epoch,
+                requirement.execution_owner,
+            )
+        )
+
+    # The live lineage owns accepted program motion even when that motion had
+    # no expectation receipt. Ordinary progress checkpoints retain the exact
+    # executable boundaries on that same lineage.
+    lineage = state.work._causal_lineage
+    for epoch, owner in lineage.seal_through(state.work.state.scan_id):
+        for checkpoint in checkpoints:
+            if checkpoint.world.work.state.scan_id < epoch.first_scan:
+                surfaces.append((checkpoint, epoch, owner))
+
+    unique: list[tuple[_CausalCheckpoint, Any, Any]] = []
+    identities: set[tuple[int, int, int]] = set()
+    for checkpoint, epoch, owner in surfaces:
+        identity = (id(checkpoint), id(epoch), id(owner))
+        if identity in identities or getattr(owner, "epoch", None) is not epoch:
+            continue
+        identities.add(identity)
+        unique.append((checkpoint, epoch, owner))
+    return tuple(unique)
+
+
+def _program_guard_transition_candidates(
+    owner: Any,
+    rung_ids: frozenset[RungId],
+    tag: str,
+    *,
+    before_scan: int,
+) -> tuple[int, ...]:
+    """Use compressed firing columns to rank possible transitions newest first."""
+
+    main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
+    nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
+    candidates: set[int] = set()
+    if main:
+        candidates.update(
+            owner.rung_firing_timelines.tag_transition_candidate_scans_before(
+                main,
+                tag,
+                before_scan,
+            )
+        )
+    if nested:
+        candidates.update(
+            owner.node_firing_timelines.tag_transition_candidate_scans_before(
+                nested,
+                tag,
+                before_scan,
+            )
+        )
+    return tuple(sorted(candidates, reverse=True))
+
+
+def _preinvocation_program_guard_surfaces(
+    state: _PilotState,
+    ctx: _PilotContext,
+    rung_ids: frozenset[RungId],
+    tag: str,
+    *,
+    before_scan: int,
+) -> tuple[tuple[_CausalCheckpoint, Any, Any], ...]:
+    """Reconstruct exact retained boundaries for pre-drive transition candidates."""
+
+    invocation = state.invocation_checkpoint
+    if invocation is None:
+        return ()
+    invocation_work = invocation.world.work
+    invocation_scan = invocation_work.state.scan_id
+    surfaces: list[tuple[_CausalCheckpoint, Any, Any]] = []
+    for epoch, owner in invocation_work._causal_lineage.seal_through(invocation_scan):
+        bounded_before = min(before_scan, invocation_scan + 1, epoch.last_scan + 1)
+        for candidate_scan in _program_guard_transition_candidates(
+            owner,
+            rung_ids,
+            tag,
+            before_scan=bounded_before,
+        ):
+            source_scan = candidate_scan - 1
+            if source_scan < 0:
+                continue
+            try:
+                source_work = fork_with_pilot_rungs(
+                    invocation_work,
+                    tuple(invocation.world.pilot_rungs),
+                    scan_id=source_scan,
+                )
+            except KeyError:
+                continue
+            source_key = (
+                _pilot_world_key(
+                    dict(source_work.state.tags),
+                    state.key_config,
+                    invocation.world.pilot_rungs,
+                    (),
+                )
+                if state.key_config is not None
+                else None
+            )
+            surfaces.append(
+                (
+                    _CausalCheckpoint(
+                        key=source_key,
+                        world=invocation.world.set(work=source_work),
+                        objective=invocation.objective,
+                        configured_inputs=invocation.configured_inputs,
+                    ),
+                    epoch,
+                    owner,
+                )
+            )
+    return tuple(surfaces)
+
+
+def _program_guard_rebase_requirement(
+    blocker: GuardRequirementAtom,
+    parent: ActiveRequirement,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> ActiveRequirement | None:
+    """Trace one false program guard back to the nearest exact harmful writer.
+
+    Range-compressed firing timelines only rank candidates, nearest first.
+    Each candidate still needs an owner-bound scan projection, a unique
+    good-to-bad write, and an executable retained checkpoint before its scan.
+    """
+
+    condition = blocker.condition
+    if not isinstance(condition, Cmp):
+        return None
+    failed_snapshot = dict(parent.source_checkpoint.world.work.state.tags)
+    if (
+        constraint_holds(condition, failed_snapshot) is not False
+        or condition.tag not in failed_snapshot
+    ):
+        return None
+
+    writer_nodes = tuple(
+        ctx.pdg.rung_nodes[index] for index in ctx.pdg.writers_of.get(condition.tag, ())
+    )
+    rung_ids = frozenset(RungId(node.subroutine, node.rung_index) for node in writer_nodes)
+    if not rung_ids:
+        return None
+
+    failed_scan = parent.source_checkpoint.world.work.state.scan_id
+    ranked: list[tuple[int, int, _CausalCheckpoint, Any, Any]] = []
+    surfaces = (
+        *_program_guard_rebase_surfaces(state, ctx),
+        *_preinvocation_program_guard_surfaces(
+            state,
+            ctx,
+            rung_ids,
+            condition.tag,
+            before_scan=failed_scan + 1,
+        ),
+    )
+    for checkpoint, epoch, owner in surfaces:
+        checkpoint_scan = checkpoint.world.work.state.scan_id
+        if (
+            checkpoint_scan >= failed_scan
+            or constraint_holds(condition, checkpoint.world.work.state.tags) is not True
+        ):
+            continue
+        before_scan = min(failed_scan + 1, epoch.last_scan + 1)
+        for candidate_scan in _program_guard_transition_candidates(
+            owner,
+            rung_ids,
+            condition.tag,
+            before_scan=before_scan,
+        ):
+            if checkpoint_scan < candidate_scan:
+                ranked.append((candidate_scan, checkpoint_scan, checkpoint, epoch, owner))
+
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    seen_candidates: set[tuple[int, int, int]] = set()
+    for candidate_scan, _checkpoint_scan, checkpoint, epoch, owner in ranked:
+        candidate_identity = (candidate_scan, id(epoch), id(checkpoint))
+        if candidate_identity in seen_candidates:
+            continue
+        seen_candidates.add(candidate_identity)
+        projection = owner._runner()._replay_rung_write_projection_at(candidate_scan)
+        if projection is None or projection.scan_id != candidate_scan:
+            continue
+        crossings = []
+        for write in projection.writes:
+            if write.transition.tag_name != condition.tag:
+                continue
+            before = dict(projection.entry_tags)
+            before[condition.tag] = write.transition.from_value
+            after = dict(before)
+            after[condition.tag] = write.transition.to_value
+            if (
+                constraint_holds(condition, before) is True
+                and constraint_holds(condition, after) is False
+            ):
+                crossings.append(write)
+        if len(crossings) != 1:
+            continue
+        displacement = crossings[0]
+        exact_nodes = tuple(
+            node
+            for node in writer_nodes
+            if RungId(node.subroutine, node.rung_index) == displacement.rung_id
+            and resolve_rung(ctx.program, node) is displacement.run.rung
+        )
+        if len(exact_nodes) != 1:
+            continue
+        node = exact_nodes[0]
+        selected_writer = (node.subroutine, node.rung_index, node.branch_path)
+        derivation = _bind_guard_derivation_authority(
+            derive_overwriter_guard_requirement_from_write(
+                displacement,
+                projection,
+                execution_epoch=epoch,
+                execution_owner=owner,
+                selected_writer=selected_writer,
+                source_world_key=checkpoint.key,
+                source_checkpoint=checkpoint,
+                provenance="program-guard-rebase",
+                scope=(("program_guard_rebase", condition),),
+            ),
+            checkpoint,
+            ctx,
+        )
+        if derivation.requirement is not None:
+            return derivation.requirement
+    return None
+
+
+def _repair_program_guard_from_history(
+    blocker: GuardRequirementAtom,
+    parent: ActiveRequirement,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _RequirementRepairResult:
+    """Restore the nearest causal checkpoint and steer one ordinary bearing."""
+
+    rebased = _program_guard_rebase_requirement(blocker, parent, state, ctx)
+    if rebased is None:
+        return _RequirementRepairResult()
+    _retain_active_requirement(state, rebased)
+    source = _disposable_requirement_state(state, rebased.source_checkpoint)
+    schedule, detail = _compile_program_guard_schedule((rebased,), source, ctx)
+    if schedule is None:
+        return _RequirementRepairResult(requirement=rebased, detail=detail)
+    if len(schedule.assignments) != 1:
+        return _RequirementRepairResult(
+            requirement=rebased,
+            detail="program guard requires a compound bearing",
+        )
+
+    carried_rungs = tuple(
+        rung
+        for receipt in state.correction_receipts
+        if receipt.status.effective
+        for rung in receipt.pilot_rungs
+    )
+    source.pilot_rungs = _merged_pilot_rungs(carried_rungs, source.pilot_rungs)
+    local_target = TargetSpec(*schedule.assignments[0])
+    local_ctx = replace(ctx, target=local_target, compass=ctx.compass)
+    oriented = local_ctx.compass.orient(
+        OrientationWorld(
+            world_key=(),
+            snapshot=dict(source.work.state.tags),
+            frame=None,
+            state=source,
+            context=local_ctx,
+            key_config=source.key_config,
+        ),
+        local_target,
+        NavigationConstraints(active_requirements=tuple(source.active_requirements)),
+    )
+    if not isinstance(oriented, Bearing):
+        return _RequirementRepairResult(
+            requirement=rebased,
+            detail="program guard target has no current-world bearing",
+        )
+    attempt_identity = (
+        "program-guard-history-rebase",
+        rebased.navigation_identity,
+        act_identity(oriented.act),
+        schedule.identity,
+    )
+    if attempt_identity in state.requirement_repair_attempts:
+        return _RequirementRepairResult(requirement=rebased, detail="repair already attempted")
+    state.requirement_repair_attempts.add(attempt_identity)
+
+    def attempt(candidate: _PilotState, transaction: Any) -> Any:
+        transaction.register_disposable_state(candidate)
+        transition = _transition_once(
+            candidate,
+            local_ctx,
+            local_target,
+            NavigationConstraints(active_requirements=tuple(candidate.active_requirements)),
+            oriented=oriented,
+            resolve_excursion=False,
+            derive_requirements=True,
+            derivation_checkpoint=rebased.source_checkpoint,
+        )
+        try:
+            if (
+                transition.trial is not None
+                and constraint_holds(blocker.condition, candidate.work.state.tags) is True
+            ):
+                return Succeed(candidate)
+            return Reject(candidate)
+        finally:
+            _release_attempt_projections(transition.attempt)
+
+    composition = compose_corrections(
+        source,
+        budget=CompositionBudget(1),
+        attempt=attempt,
+        budget_exhausted=lambda candidate: candidate,
+        initial_identity=attempt_identity,
+        protected_states=(state,),
+    )
+    repaired = composition.termination.value == "success"
+    if repaired:
+        disposable = composition.value
+        _copy_repair_knowledge(disposable, state)
+        state.world = disposable.world
+        state.seen_keys.update(disposable.seen_keys)
+        state.journey.extend(disposable.journey)
+        state.hold_log.extend(disposable.hold_log)
+        state.correction_receipts.extend(disposable.correction_receipts)
+        ctx.compass = local_ctx.compass
+        state.checkpoints.clear()
+        state.pending_departure = None
+        state.recovery_continuation = None
+    return _RequirementRepairResult(
+        attempted=True,
+        repaired=repaired,
+        requirement=rebased,
+        assignments=schedule.assignments,
+        detail=(
+            "program-owned guard rebased through retained history"
+            if repaired
+            else "program-guard history rebase rejected"
+        ),
+    )
+
+
+def _repair_any_program_guard_from_history(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _RequirementRepairResult:
+    """Try every exact program-owned atom against nearest retained crossings."""
+
+    condition = requirement.condition
+    if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
+        return _RequirementRepairResult()
+    atoms = tuple(
+        dict.fromkeys(
+            atom for alternative in guard_alternatives(condition) for atom in alternative
+        )
+    )
+    blocked: _RequirementRepairResult | None = None
+    for atom in atoms:
+        if atom.operand_authority is not OperandAuthority.PROGRAM_WRITTEN:
+            continue
+        repaired = _repair_program_guard_from_history(atom, requirement, state, ctx)
+        if repaired.attempted:
+            return repaired
+        if repaired.detail and blocked is None:
+            blocked = repaired
+    return blocked or _RequirementRepairResult()
 
 
 def _repaired_program_continuation(
@@ -1960,6 +2371,9 @@ def _repair_failed_requirement(
         return _RequirementRepairResult(requirement=requirement, detail=detail)
     if schedule is not None:
         source.pilot_rungs = _merged_pilot_rungs(schedule.pilot_rungs, source.pilot_rungs)
+    history_rebase = _repair_any_program_guard_from_history(requirement, state, ctx)
+    if history_rebase.attempted or history_rebase.detail:
+        return history_rebase
     local_bearing = receipt.local_bearing
     local_act = receipt.local_act
     if isinstance(
@@ -1995,6 +2409,14 @@ def _repair_failed_requirement(
     if local_act is None:
         blocker = _mandatory_guard_blocker(requirements, source.work.state.tags)
         if blocker is not None:
+            rebased = _repair_program_guard_from_history(
+                blocker,
+                requirement,
+                state,
+                ctx,
+            )
+            if rebased.attempted or rebased.detail:
+                return rebased
             return _RequirementRepairResult(
                 declined=True,
                 requirement=requirement,
@@ -2236,22 +2658,9 @@ def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _Bootstra
         return None
 
     before_snap = dict(state.work.state.tags)
-    key = (
-        _pilot_world_key(
-            before_snap,
-            state.key_config,
-            state.pilot_rungs,
-            state.active_requirements,
-        )
-        if state.key_config is not None
-        else None
-    )
-    checkpoint = _CausalCheckpoint(
-        key=key,
-        world=state.snapshot_world(),
-        objective=BearingObjective(ctx.target),
-        configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
-    )
+    checkpoint = state.invocation_checkpoint
+    if checkpoint is None:
+        raise RuntimeError("bootstrap scan has no retained invocation checkpoint")
     scan_before = state.work.state.scan_id
 
     # Designation is derived before execution from the retained source world.
@@ -3637,6 +4046,22 @@ def _pilot_loop_events(
         checkpoints=[],
         watch_tags=[],
         search_start_scan=plc.state.scan_id,
+    )
+    invocation_snapshot = dict(state.work.state.tags)
+    state.invocation_checkpoint = _CausalCheckpoint(
+        key=(
+            _pilot_world_key(
+                invocation_snapshot,
+                state.key_config,
+                state.pilot_rungs,
+                state.active_requirements,
+            )
+            if state.key_config is not None
+            else None
+        ),
+        world=state.snapshot_world(),
+        objective=BearingObjective(ctx.target),
+        configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
     )
     # The target-relative earned-work model (earned_work.py): event-earned
     # ordinals the threshold-masked search key deliberately aliases.  Static

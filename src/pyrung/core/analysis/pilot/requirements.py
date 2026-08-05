@@ -971,8 +971,9 @@ def _evaluate_run_guard(
     projection: ScanRungWriteProjection,
 ) -> _GuardEvaluation:
     conditions = tuple(getattr(run.rung, "_conditions", ()))
-    if run.kind == "branch":
-        conditions = conditions[getattr(run.rung, "_branch_condition_start", 0) :]
+    branch_start = getattr(run.rung, "_branch_condition_start", 0)
+    if run.kind == "branch" or branch_start:
+        conditions = conditions[branch_start:]
     cursor = _GuardReadCursor(projection.reads_for_run(run), run.view)
     supporting: list[RungRead] = []
     for index, condition in enumerate(conditions):
@@ -1074,8 +1075,9 @@ def _evaluate_run_guard_complement(
     """Complement the implicit conjunction which enabled one exact run."""
 
     conditions = tuple(getattr(run.rung, "_conditions", ()))
-    if run.kind == "branch":
-        conditions = conditions[getattr(run.rung, "_branch_condition_start", 0) :]
+    branch_start = getattr(run.rung, "_branch_condition_start", 0)
+    if run.kind == "branch" or branch_start:
+        conditions = conditions[branch_start:]
     cursor = _GuardReadCursor(projection.reads_for_run(run), run.view)
     supporting: list[RungRead] = []
     alternatives: list[GuardRequirementCondition] = []
@@ -1102,6 +1104,110 @@ def _evaluate_run_guard_complement(
         )
     )
     return _GuardEvaluation(True, tuple(supporting), requirement=requirement)
+
+
+def _evaluate_enabling_path_complement(
+    selected: RungRun,
+    projection: ScanRungWriteProjection,
+) -> _GuardEvaluation:
+    """Find exact sufficient ways to disable an enabled nested writer path."""
+
+    ancestors = tuple(
+        sorted(
+            (
+                candidate
+                for candidate in projection.runs
+                if candidate is not selected
+                and candidate.enabled
+                and any(nested is selected for nested in candidate.rung_occurrences)
+            ),
+            key=lambda candidate: candidate.depth,
+            reverse=True,
+        )
+    )
+    alternatives: list[GuardRequirementCondition] = []
+    supporting: list[RungRead] = []
+    exhaustive = True
+    for run in (selected, *ancestors):
+        evaluation = _evaluate_run_guard_complement(run, projection)
+        if not evaluation.exact or evaluation.requirement is None:
+            exhaustive = False
+            for requirement, reads in _unique_scalar_guard_complements(run, projection):
+                alternatives.append(requirement)
+                supporting.extend(reads)
+            continue
+        alternatives.append(evaluation.requirement)
+        supporting.extend(evaluation.supporting_reads)
+    if not alternatives or not supporting:
+        return _GuardEvaluation(True, tuple(supporting), exact=False)
+    requirement = (
+        alternatives[0]
+        if len(alternatives) == 1 and exhaustive
+        else GuardRequirementExpr(
+            GuardLogic.ANY,
+            tuple(alternatives),
+            exhaustive=exhaustive,
+        )
+    )
+    return _GuardEvaluation(True, tuple(supporting), requirement=requirement)
+
+
+def _unique_scalar_guard_complements(
+    run: RungRun,
+    projection: ScanRungWriteProjection,
+) -> tuple[tuple[GuardRequirementAtom, tuple[RungRead, ...]], ...]:
+    """Recover exact scalar alternatives beside an opaque true guard term.
+
+    Re-evaluating a composite condition can fail source-token matching after a
+    short-circuited arm.  A top-level scalar leaf remains independently exact
+    when each of its operands has one projection-owned read in this run.
+    """
+
+    conditions = tuple(getattr(run.rung, "_conditions", ()))
+    branch_start = getattr(run.rung, "_branch_condition_start", 0)
+    if run.kind == "branch" or branch_start:
+        conditions = conditions[branch_start:]
+    run_reads = projection.reads_for_run(run)
+    result: list[tuple[GuardRequirementAtom, tuple[RungRead, ...]]] = []
+    for index, condition in enumerate(conditions):
+        constraint = _guard_leaf_constraint(condition)
+        complement = complement_scalar_constraint(constraint) if constraint is not None else None
+        if constraint is None or complement is None:
+            continue
+        tag = getattr(constraint, "tag", None)
+        if not isinstance(tag, str):
+            continue
+        names = (tag,)
+        if isinstance(constraint, Cmp) and constraint.bound_is_tag:
+            if not isinstance(constraint.bound, str):
+                continue
+            names = (*names, constraint.bound)
+        selected_reads: list[RungRead] = []
+        snapshot: dict[str, Any] = {}
+        exact = True
+        for name in names:
+            matches = tuple(read for read in run_reads if read.occurrence.name == name)
+            if len(matches) != 1:
+                exact = False
+                break
+            selected_reads.append(matches[0])
+            snapshot[name] = matches[0].occurrence.value
+        if not exact or constraint_holds(constraint, snapshot) is not True:
+            continue
+        selected_reads.sort(key=lambda read: read.ordinal)
+        occurrences = tuple(occurrence_snapshot(read) for read in selected_reads)
+        result.append(
+            (
+                GuardRequirementAtom(
+                    condition=complement,
+                    supporting_occurrences=occurrences,
+                    deadline=occurrences[-1],
+                    source_path=(index,),
+                ),
+                tuple(selected_reads),
+            )
+        )
+    return tuple(result)
 
 
 def _unique_static_run(
@@ -1407,6 +1513,45 @@ def derive_overwriter_guard_requirement_from_effect(
 ) -> RequirementDerivation:
     """Prevent one exact harmful writer by complementing its observed guard."""
 
+    return derive_overwriter_guard_requirement_from_write(
+        getattr(observation, "displacement", None),
+        projection,
+        disposition=getattr(observation, "disposition", None),
+        execution_epoch=execution_epoch,
+        execution_owner=execution_owner,
+        selected_writer=selected_writer,
+        source_world_key=source_world_key,
+        source_checkpoint=source_checkpoint,
+        phase=phase,
+        provenance=provenance,
+        scope=scope,
+        preserved_values=preserved_values,
+    )
+
+
+def derive_overwriter_guard_requirement_from_write(
+    displacement: RungWrite | None,
+    projection: ScanRungWriteProjection,
+    *,
+    disposition: str | None = "DISPLACED",
+    execution_epoch: Any,
+    execution_owner: Any,
+    selected_writer: Any,
+    source_world_key: Any,
+    source_checkpoint: Any,
+    phase: RequirementPhase = RequirementPhase.STEADY,
+    provenance: str = "",
+    scope: tuple[Any, ...] = (),
+    preserved_values: tuple[tuple[str, Any], ...] = (),
+) -> RequirementDerivation:
+    """Complement the guard of one projection-owned harmful write.
+
+    Effect recovery normally reaches this proof through an observation.  A
+    causal checkpoint rebase can already possess the exact harmful write, so
+    this narrower seam avoids manufacturing an observation while retaining
+    the same source-identity and guard-exactness checks.
+    """
+
     source_error = _validate_source_identity(
         execution_epoch=execution_epoch,
         execution_owner=execution_owner,
@@ -1417,16 +1562,14 @@ def derive_overwriter_guard_requirement_from_effect(
     )
     if source_error is not None:
         return _unknown(source_error)
-    disposition = getattr(observation, "disposition", None)
     if disposition not in {"OVERWRITTEN", "DISPLACED"}:
         return _unknown("effect has no harmful overwriter guard to complement")
-    displacement = getattr(observation, "displacement", None)
     if displacement is None or not _contains_identity(projection.writes, displacement):
         return _unknown("harmful overwriter is not owned by the exact projection")
     run = _exact_guard_cause_run(displacement.run, projection)
     if not run.enabled:
         return _unknown("harmful overwriter run was not enabled")
-    evaluation = _evaluate_run_guard_complement(run, projection)
+    evaluation = _evaluate_enabling_path_complement(run, projection)
     if (
         not evaluation.value
         or not evaluation.exact

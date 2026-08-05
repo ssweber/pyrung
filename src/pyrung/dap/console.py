@@ -588,6 +588,22 @@ class _PilotProgressFormatter:
             # A retry stays open until its resulting motion is known.
             return None
 
+        if kind == "requirement_locally_repaired":
+            requirement = data.get("requirement")
+            if getattr(requirement, "provenance", None) != "program-guard-rebase":
+                return None
+            # ``Resuming`` is reserved for continuing with correction rungs
+            # installed by investigation. A causal rebase instead restored an
+            # earlier executable world, applied one ordinary Bearing there,
+            # and is about to read the corrected landing from scratch.
+            self._after_correction = False
+            self._last_holds = ()
+            source_scan = getattr(requirement, "source_scan", None)
+            source = f"scan {source_scan}" if source_scan is not None else "retained history"
+            assignments = tuple(data.get("assignments", ()))
+            applied = f" and applied {_pilot_assignments(assignments)}" if assignments else ""
+            return f"  Rewound to {source}{applied}; re-orienting.\n"
+
         if kind == "bearing_coast":
             if self._retry_open:
                 return None

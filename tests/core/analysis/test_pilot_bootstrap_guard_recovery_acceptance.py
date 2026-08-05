@@ -2,11 +2,23 @@
 
 from __future__ import annotations
 
-from pyrung import PLC, Bool, Int, Program, copy, out, rung, system
+from pyrung import PLC, Bool, Int, Program, branch, copy, out, rung, system
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.requirements import GuardRequirementAtom, OperandAuthority
 from tests.fixtures import pilot_bootstrap_guard_overwrite as fixture
 from tests.fixtures import pilot_bootstrap_intermediate_guard as intermediate_fixture
+
+
+def _condition_tags(condition) -> frozenset[str]:
+    tag = getattr(condition, "tag", None)
+    if tag is not None:
+        return frozenset((tag,))
+    nested = getattr(condition, "condition", None)
+    if nested is not None:
+        return _condition_tags(nested)
+    return frozenset(
+        tag for term in getattr(condition, "terms", ()) for tag in _condition_tags(term)
+    )
 
 
 def _events():
@@ -177,6 +189,141 @@ def test_program_written_false_guard_is_authoritative_and_not_assigned() -> None
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is False
+
+
+def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
+    """A later guard can implicate state poisoned by the unselected first scan."""
+
+    source = 0
+    target = 2
+    diverted = 9
+    state = Int("BootstrapRebaseState", default=source)
+    start = Bool("BootstrapRebaseStart", external=True)
+    prevent_poison = Bool("BootstrapRebasePreventPoison", external=True)
+    poisoned = Int("BootstrapRebasePoisoned")
+
+    with Program(strict=False) as logic:
+        # This write is not target-relevant during the pre-scan trace, so its
+        # consequence becomes known only after the later target overwrite.
+        with rung(~prevent_poison):
+            with branch(state == source):
+                copy(1, poisoned, oneshot=True)
+        with rung(start, state == source):
+            copy(target, state, oneshot=True)
+        with rung(state == target, poisoned == 1):
+            copy(diverted, state)
+
+    events = tuple(pilot_events(PLC(logic), state == target, max_scans=30))
+
+    program_guards = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and poisoned.name in _condition_tags(event.data["requirement"].condition)
+    )
+    assert program_guards, tuple(
+        (event.kind, event.scan, event.data.get("reason")) for event in events
+    )
+    program_guard = program_guards[0]
+    assert program_guard.source_scan > 0
+    assert program_guard.operand_authority is OperandAuthority.PROGRAM_WRITTEN
+
+    rebased = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and event.data["requirement"].provenance == "program-guard-rebase"
+    )
+    assert len(rebased) == 1
+    assert rebased[0].source_scan == 0
+    assert prevent_poison.name in _condition_tags(rebased[0].condition)
+
+    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
+    assert any(
+        event.data["assignments"] == ((prevent_poison.name, True),)
+        and event.data["detail"] == "program-owned guard rebased through retained history"
+        for event in repairs
+    )
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
+
+    plan = PLC(logic).how(state == target, max_scans=30)
+    assert plan.reachable, plan.reason
+    assert plan.anchor_scan == 0
+    assert plan.state.tags[state.name] == target
+    assert plan.state.tags[poisoned.name] == 0
+    assert plan.replay().state.tags[state.name] == target
+
+    # ClickNick's generated run.py executes one scan before DAP discovers the
+    # runner. The same transition must remain recoverable from retained runner
+    # history even though Pilot did not own it as a bootstrap execution.
+    warmed = PLC(logic)
+    warmed.step()
+    assert warmed.state.tags[poisoned.name] == 1
+    warm_events = tuple(pilot_events(warmed, state == target, max_scans=30))
+    warm_rebased = tuple(
+        event.data["requirement"]
+        for event in warm_events
+        if event.kind == "requirement_activated"
+        and event.data["requirement"].provenance == "program-guard-rebase"
+    )
+    assert len(warm_rebased) == 1
+    assert (warm_rebased[0].source_scan, warm_rebased[0].deadline.scan_id) == (0, 1)
+    assert warm_events[-1].kind == "finished"
+    assert warm_events[-1].data["reached"] is True
+
+
+def test_program_guard_rebase_uses_nearest_retained_nonbootstrap_writer() -> None:
+    """The same recovery reaches scan 1, not only the cold-start boundary."""
+
+    source = 0
+    armed = 1
+    target = 2
+    diverted = 9
+    state = Int("HistoryRebaseState", default=source)
+    advance = Bool("HistoryRebaseAdvance", external=True)
+    finish = Bool("HistoryRebaseFinish", external=True)
+    prevent_poison = Bool("HistoryRebasePreventPoison", external=True)
+    poisoned = Int("HistoryRebasePoisoned")
+
+    with Program(strict=False) as logic:
+        with rung(advance, state == source):
+            copy(armed, state, oneshot=True)
+        with rung(~prevent_poison, state == armed):
+            copy(1, poisoned, oneshot=True)
+        with rung(finish, state == armed):
+            copy(target, state, oneshot=True)
+        with rung(state == target, poisoned == 1):
+            copy(diverted, state)
+
+    events = tuple(pilot_events(PLC(logic), state == target, max_scans=30))
+    rebased = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and event.data["requirement"].provenance == "program-guard-rebase"
+    )
+    assert len(rebased) == 1, tuple(
+        (event.kind, event.scan, dict(event.data))
+        for event in events
+        if event.kind
+        in {
+            "requirement_activated",
+            "requirement_locally_repaired",
+            "candidate_rejected",
+            "stuck",
+            "finished",
+        }
+    )
+    assert rebased[0].source_scan == 1
+    assert prevent_poison.name in _condition_tags(rebased[0].condition)
+    assert any(
+        event.kind == "requirement_locally_repaired"
+        and event.data["assignments"] == ((prevent_poison.name, True),)
+        for event in events
+    )
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
 
 
 def test_scan_zero_repairs_an_intermediate_then_fresh_orients_to_the_target() -> None:

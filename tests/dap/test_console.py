@@ -617,6 +617,35 @@ class TestCausalVerbs:
             == "\n  Resuming..."
         )
 
+    def test_how_progress_distinguishes_history_rebase_from_pilotrung_resume(self):
+        from types import SimpleNamespace
+
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        progress = _PilotProgressFormatter()
+        progress._after_correction = True
+
+        repaired = progress.format(
+            PilotEvent(
+                "requirement_locally_repaired",
+                1,
+                {
+                    "requirement": SimpleNamespace(
+                        provenance="program-guard-rebase",
+                        source_scan=0,
+                    ),
+                    "assignments": (("HeelBase", True),),
+                },
+            )
+        )
+        coast = progress.format(
+            PilotEvent("bearing_coast", 1, {"channel_tag": "WaitToSettle_2_Done"})
+        )
+
+        assert repaired == "  Rewound to scan 0 and applied HeelBase=True; re-orienting.\n"
+        assert coast == "  Waiting for WaitToSettle_2_Done..."
+
     def test_how_progress_prints_the_exact_self_guarded_correction(self):
         from pyrung import Bool
         from pyrung.core.analysis.pilot.overlay import PilotRung
