@@ -515,7 +515,6 @@ def match_expectation_receipt(
             or expectation_snapshot(receipt.expectation) != receipt.obligations
             or getattr(receipt.source_checkpoint, "owner", None) is not receipt.checkpoint_owner
             or getattr(receipt.source_checkpoint, "key", None) != receipt.source_world_key
-            or receipt.local_bearing.world_key != receipt.source_world_key
         ):
             continue
         owned = tuple(

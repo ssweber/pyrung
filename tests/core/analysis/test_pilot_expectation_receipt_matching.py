@@ -195,6 +195,30 @@ def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
     assert matched.expectation is selected.expectation
 
 
+def test_corrected_overlay_bearing_key_may_differ_from_source_checkpoint() -> None:
+    epoch = object()
+    owner = _ReplayOwner(epoch)
+    write = _write(call_invocation=1)
+    receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
+    corrected_bearing = replace(
+        receipt.local_bearing,
+        world_key=("corrected-overlay",),
+    )
+    corrected = replace(receipt, local_bearing=corrected_bearing)
+
+    matched = _match(
+        (corrected,),
+        occurrence=write,
+        epoch=epoch,
+        owner=owner,
+    )
+
+    assert corrected_bearing.world_key != corrected.source_world_key
+    assert corrected.source_checkpoint.key == corrected.source_world_key
+    assert matched is corrected
+    assert matched.local_bearing is corrected_bearing
+
+
 def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> None:
     epoch = object()
     owner = _ReplayOwner(epoch)

@@ -2623,7 +2623,7 @@ def _transition_once(
         trial,
         act,
         state,
-        expectation_checkpoint,
+        derivation_checkpoint or expectation_checkpoint,
     )
     return _IterationTransition(
         result=result,
