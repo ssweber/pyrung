@@ -25,8 +25,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedProbe,
     OrientationWorld,
     Pulse,
-    RetainedOccurrence,
-    RetainedReplay,
     RouteEdgeContext,
     Stuck,
     TargetSpec,
@@ -44,7 +42,6 @@ from pyrung.core.analysis.pilot.options import (
     _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.recording import _candidate_payload
-from pyrung.core.analysis.pilot.types import _ConfirmedCorrection
 
 
 @dataclass
@@ -61,7 +58,6 @@ class _Context:
     opaque_loop: frozenset = frozenset()
     pipeline_internal_tags: frozenset = frozenset()
     domain_prior: object = None
-    retained_recovery_first: bool = False
 
 
 def _candidate(tag: str) -> SimpleNamespace:
@@ -254,85 +250,9 @@ def _world(compass: Compass) -> OrientationWorld:
     )
 
 
-def _retained_act() -> RetainedReplay:
-    correction = _ConfirmedCorrection(
-        identity=(("Guard", True),),
-        pilot_rungs=(),
-        sources=("Guard",),
-        justification="repair retained writer",
-    )
-    return RetainedReplay(
-        policy=ActPolicy(
-            source=ActSource.RETAINED,
-            action_pairs=(("Guard", True),),
-            expectation_exemption=ExpectationExemption.LEGACY_RETAINED_REPLAY,
-        ),
-        occurrence=RetainedOccurrence(
-            floor_scan=0,
-            scan=1,
-            ordinal=0,
-            tag="Blocked",
-            from_value=False,
-            to_value=True,
-            writer=(None, 0),
-            address=((), None, 0, 0),
-        ),
-        correction=correction,
-    )
-
-
 def test_nonpromising_executable_policies_have_typed_exemptions() -> None:
-    retained = _retained_act()
-
     assert Dwell().policy.expectation is None
     assert Dwell().policy.expectation_exemption is ExpectationExemption.AMBIENT_TERMINAL
-    assert retained.policy.expectation is None
-    assert retained.policy.expectation_exemption is ExpectationExemption.LEGACY_RETAINED_REPLAY
-
-
-def test_live_continuation_outranks_retained_history_rewrite(monkeypatch) -> None:
-    """An executable point-A -> point-B coast owns the live next move."""
-    import pyrung.core.analysis.pilot.orientation as orientation
-    import pyrung.core.analysis.pilot.retained as retained
-
-    compass = Compass()
-    world = _world(compass)
-    reads = 0
-
-    def read_retained(_world):
-        nonlocal reads
-        reads += 1
-        return _retained_act()
-
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
-    monkeypatch.setattr(retained, "read_retained_replay", read_retained)
-
-    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
-
-    assert isinstance(result, Bearing)
-    assert isinstance(result.act, Coast)
-    assert reads == 0
-
-
-def test_bounded_occurrence_closure_may_prefer_next_retained_writer(monkeypatch) -> None:
-    """Local A+B correction composition remains exact and non-route-searching."""
-    import pyrung.core.analysis.pilot.orientation as orientation
-    import pyrung.core.analysis.pilot.retained as retained
-
-    compass = Compass()
-    world = _world(compass)
-    world = replace(
-        world,
-        context=replace(world.context, retained_recovery_first=True),
-    )
-    act = _retained_act()
-    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
-    monkeypatch.setattr(retained, "read_retained_replay", lambda _world: act)
-
-    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
-
-    assert isinstance(result, Bearing)
-    assert result.act is act
 
 
 def test_candidate_read_exposes_only_owned_receipts() -> None:
@@ -642,57 +562,6 @@ def test_dwell_identity_normalizes_applied_overlay_order() -> None:
     second = Dwell(ActPolicy(ActSource.TERMINAL, applied=(("A", 1), ("B", 2))))
 
     assert act_identity(first) == act_identity(second)
-
-
-def test_retained_replay_identity_names_exact_occurrence_and_correction() -> None:
-    """A nogood for one retained corrective replay cannot poison another."""
-
-    policy = ActPolicy(
-        ActSource.RETAINED,
-        action_pairs=(("StartupGuard", True),),
-    )
-    occurrence = RetainedOccurrence(
-        floor_scan=0,
-        scan=1,
-        ordinal=7,
-        tag="TripLatched",
-        from_value=False,
-        to_value=True,
-        writer=(None, 2),
-        address=(("main",), 2, 0, 0),
-    )
-    correction = _ConfirmedCorrection(
-        identity=(("StartupGuard", True, "first-scan"),),
-        pilot_rungs=(),
-        sources=("StartupGuard",),
-        justification="preserve the retained predecessor",
-    )
-    baseline = RetainedReplay(policy, occurrence, correction)
-
-    assert act_identity(baseline) == (
-        "retained-replay",
-        0,
-        1,
-        7,
-        "TripLatched",
-        False,
-        True,
-        (None, 2),
-        (("main",), 2, 0, 0),
-        correction.identity,
-    )
-    assert act_identity(baseline) != act_identity(
-        replace(baseline, occurrence=replace(occurrence, ordinal=8))
-    )
-    assert act_identity(baseline) != act_identity(
-        replace(
-            baseline,
-            correction=replace(
-                correction,
-                identity=(("OtherGuard", True, "first-scan"),),
-            ),
-        )
-    )
 
 
 def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() -> None:

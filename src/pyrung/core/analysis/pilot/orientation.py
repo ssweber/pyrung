@@ -32,6 +32,9 @@ from pyrung.core.analysis.pilot.options import (
     _build_candidates,
     _candidate_applied,
 )
+from pyrung.core.analysis.pilot.requirement_recovery import (
+    actions_preserve_active_requirements,
+)
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
@@ -51,6 +54,31 @@ from pyrung.core.analysis.pilot.world_key import (
 from pyrung.core.analysis.sp_values import _values_match
 
 _PROBE_BUDGET = 2
+
+
+def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
+    """Admit only acts whose declared atomic inputs preserve live constraints."""
+
+    proof_world_key = (
+        _pilot_world_key(
+            world.snapshot,
+            world.key_config,
+            world.state.pilot_rungs,
+            (),
+        )
+        if world.key_config is not None
+        else world.world_key
+    )
+    if (proof_world_key, act_identity(act)) in getattr(world.state, "proof_rejected_acts", ()):
+        return False
+    policy = getattr(act, "policy", None)
+    if policy is None:
+        return True
+    return actions_preserve_active_requirements(
+        tuple(getattr(world.context, "active_requirements", ())),
+        world.snapshot,
+        tuple(policy.applied),
+    )
 
 
 def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
@@ -539,7 +567,9 @@ def _orient_read(
                 ),
             ),
         )
-        if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
             return _bearing(
                 world,
                 act,
@@ -562,7 +592,9 @@ def _orient_read(
                 ),
             )
         )
-        if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
             return _bearing(
                 world,
                 act,
@@ -589,7 +621,9 @@ def _orient_read(
             if len(branch.actions) == 1
             else BatchPulse(policy, crossing=fidelity)
         )
-        if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
             return _bearing(
                 world,
                 act,
@@ -605,7 +639,9 @@ def _orient_read(
     for option in candidates.options:
         applied = _candidate_applied(option, candidates, world.context)
         act = Pulse(_pulse_policy(option, applied))
-        if compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        if not _act_preserves_requirements(world, act) or compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
             continue
         return _bearing(
             world,
@@ -646,7 +682,9 @@ def _orient_read(
                 ),
             )
         )
-        if not compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
             return _bearing(
                 world,
                 act,
@@ -655,42 +693,13 @@ def _orient_read(
                 rationale=f"widen trace context to {width} atomic actions",
             )
 
-    def _retained_fallback() -> Bearing | None:
-        from pyrung.core.analysis.pilot.retained import read_retained_replay
-
-        retained = read_retained_replay(world)
-        if retained is None or compass.knowledge.act_is_nogood(
-            world.world_key,
-            act_identity(retained),
-        ):
-            return None
-        return _bearing(
-            world,
-            retained,
-            candidates,
-            target=target,
-            rationale=(
-                f"replay retained {retained.occurrence.tag} occurrence at "
-                f"scan {retained.occurrence.scan}"
-            ),
-        )
-
-    if getattr(world.context, "retained_recovery_first", False):
-        retained = _retained_fallback()
-        if retained is not None:
-            return retained
-
     if candidates.diagnosis is not None:
-        diagnosed = _probe_or_stuck(
+        return _probe_or_stuck(
             compass,
             world,
             candidates,
             candidates.diagnosis.reason,
         )
-        if isinstance(diagnosed, NeedProbe):
-            return diagnosed
-        retained = _retained_fallback()
-        return retained if retained is not None else diagnosed
 
     terminal: Coast | Dwell
     if compass.knowledge.coast_receipt(world.world_key) is None:
@@ -712,7 +721,9 @@ def _orient_read(
             )
         )
         rationale = "terminal coast already observed; run one verified dwell"
-    if not compass.knowledge.act_is_nogood(world.world_key, act_identity(terminal)):
+    if _act_preserves_requirements(world, terminal) and not compass.knowledge.act_is_nogood(
+        world.world_key, act_identity(terminal)
+    ):
         return _bearing(
             world,
             terminal,
@@ -720,17 +731,6 @@ def _orient_read(
             target=target,
             rationale=rationale,
         )
-
-    # A retained causal occurrence is a recovery from exhausted present-world
-    # motion, not a competitor with it.  In particular, an open operation may
-    # have a perfectly useful coast even though one of its old writer
-    # occurrences admits a counterfactual rewrite.  Prefer the technician's
-    # live point-A -> point-B continuation; only revisit the accumulated causal
-    # past after actions, diagnosis probes, and maintenance have no admissible
-    # next step.  The replay still passes through ordinary execution and verify.
-    retained = _retained_fallback()
-    if retained is not None:
-        return retained
 
     return _probe_or_stuck(compass, world, candidates, "all_rejected")
 

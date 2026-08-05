@@ -692,6 +692,132 @@ def test_action_scan_strands_consumer_even_if_a_later_scan_reads_the_value() -> 
     assert all(read.tag != effect.name for read in snapshot.observed_reads)
 
 
+def test_producer_below_consumer_is_due_when_the_scan_wraps() -> None:
+    """A handoff written after its consumer remains pending until next scan."""
+
+    effect = Int("WrappedHandoffEffect")
+    out = Int("WrappedHandoffOutput")
+    command = Bool("WrappedHandoffCommand")
+    with Program() as program:
+        with rung(effect == 1):
+            copy(1, out)
+        with rung(command):
+            copy(1, effect, oneshot=True)
+    obligation = EffectObligation(
+        tag=effect.name,
+        value=1,
+        producer=(None, 1, ()),
+        consumer=(None, 0, ()),
+        required_shape=((effect.name, 1),),
+        producer_rung=program.rungs[1],
+        consumer_rung=program.rungs[0],
+    )
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    plc.step()
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["SURVIVED"]
+    assert observations[0].appeared is not None
+    assert observations[0].appeared.scan_id == 1
+    assert observations[0].consumer_read is not None
+    assert observations[0].consumer_read.scan_id == 2
+
+
+def test_ambiguous_consumers_before_producer_fail_closed_at_scan_wrap() -> None:
+    """Two possible pre-wrap consumers cannot designate one exact handoff."""
+
+    effect = Int("AmbiguousWrappedEffect")
+    out = Int("AmbiguousWrappedOutput")
+    command = Bool("AmbiguousWrappedCommand")
+
+    @subroutine("AmbiguousWrappedConsumer", strict=False)
+    def consumer() -> None:
+        with rung(effect == 1):
+            copy(1, out)
+
+    with Program() as program:
+        with rung():
+            call(consumer)
+            call(consumer)
+        with rung(command):
+            copy(1, effect, oneshot=True)
+    obligation = EffectObligation(
+        tag=effect.name,
+        value=1,
+        producer=(None, 1, ()),
+        consumer=("AmbiguousWrappedConsumer", 0, ()),
+        required_shape=((effect.name, 1),),
+        producer_rung=program.rungs[1],
+        consumer_rung=program.subroutines["AmbiguousWrappedConsumer"][0],
+    )
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    plc.step()
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["UNKNOWN"]
+    assert "ambiguous" in observations[0].detail
+    assert len(observations[0].observed_reads) == 2
+
+
+def test_exact_next_scan_write_overwrites_pending_wrapped_handoff() -> None:
+    """An exact write before the next consumer is proof, not lost continuity."""
+
+    armed = Int("OverwrittenWrappedArmed")
+    effect = Int("OverwrittenWrappedEffect")
+    out = Int("OverwrittenWrappedOutput")
+    command = Bool("OverwrittenWrappedCommand")
+    with Program() as program:
+        with rung(armed == 1):
+            copy(1, effect)
+        with rung(effect == 1):
+            copy(1, out)
+        with rung(command):
+            copy(1, armed, oneshot=True)
+            copy(1, effect, oneshot=True)
+    obligation = EffectObligation(
+        tag=effect.name,
+        value=1,
+        producer=(None, 2, ()),
+        consumer=(None, 1, ()),
+        required_shape=((effect.name, 1),),
+        producer_rung=program.rungs[2],
+        consumer_rung=program.rungs[1],
+    )
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    plc.step()
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["OVERWRITTEN"]
+    assert observations[0].consumer_read is not None
+    assert observations[0].consumer_read.occurrence.source != "entry"
+    assert observations[0].displacement is not None
+    assert observations[0].displacement.run.rung is program.rungs[0]
+
+
 def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> None:
     enabled = Bool("ReplayExpectationEnabled")
     effect = Int("ReplayExpectationEffect")

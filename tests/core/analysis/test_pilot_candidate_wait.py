@@ -1533,7 +1533,7 @@ def test_learned_first_edge_requires_one_semantic_expectation_regardless_of_orde
     assert retained is first
 
 
-def test_program_owned_coasts_promise_command_producer_for_every_status(monkeypatch) -> None:
+def test_program_owned_coasts_promise_command_producer_only_when_observed(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.program_step as program_step
 
     automatic = Bool("ProgramCoastAutomatic", external=True)
@@ -1584,16 +1584,31 @@ def test_program_owned_coasts_promise_command_producer_for_every_status(monkeypa
         channel=state_tag.name,
     )
     steps = (
-        ProgramStep(ProgramStepStatus.KEEP_RUNNING, **base),
-        ProgramStep(
-            ProgramStepStatus.NEEDS_INPUT,
-            **base,
-            required_inputs=(TraceAction(input_action.name, True),),
-            input_handoffs=(
-                ProgramInputHandoff((input_action.name, True), boundary, state_tag.name),
-            ),
+        (ProgramStep(ProgramStepStatus.KEEP_RUNNING, **base), False),
+        (
+            ProgramStep(ProgramStepStatus.KEEP_RUNNING, **base, producer_observed=True),
+            True,
         ),
-        ProgramStep(ProgramStepStatus.INTERRUPTED, **base),
+        (
+            ProgramStep(
+                ProgramStepStatus.NEEDS_INPUT,
+                **base,
+                producer_observed=True,
+                required_inputs=(TraceAction(input_action.name, True),),
+                input_handoffs=(
+                    ProgramInputHandoff((input_action.name, True), boundary, state_tag.name),
+                ),
+            ),
+            True,
+        ),
+        (
+            ProgramStep(
+                ProgramStepStatus.INTERRUPTED,
+                **base,
+                producer_observed=True,
+            ),
+            True,
+        ),
     )
     ctx = SimpleNamespace(
         pdg=pdg,
@@ -1617,13 +1632,16 @@ def test_program_owned_coasts_promise_command_producer_for_every_status(monkeypa
     )
     state = SimpleNamespace(work=SimpleNamespace(), pilot_rungs=())
 
-    for step in steps:
+    for step, expected in steps:
         monkeypatch.setattr(
             program_step, "read_program_step", lambda *_args, _step=step, **_kw: _step
         )
         read = _prescribe_wait(edge, frame, state, ctx)
         assert read.prescription is not None
         expectation = read.prescription.expectation
+        if not expected:
+            assert expectation is None
+            continue
         assert expectation is not None
         obligation = expectation.obligations[0]
         assert obligation.tag == command.name

@@ -15,7 +15,7 @@ import logging
 import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrsistent import pvector
 
@@ -27,6 +27,7 @@ from pyrung.core.analysis.graph import (
     RoutePivot,
     RouteTaken,
 )
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index, iter_advance_owners
 from pyrung.core.analysis.pilot.bootstrap import (
     bootstrap_designations,
@@ -39,13 +40,21 @@ from pyrung.core.analysis.pilot.compass import (
     NavigationCatalog,
     ProbeExhaustedObservation,
 )
+from pyrung.core.analysis.pilot.correction_candidates import correction_identity
 from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
     earned_work_is_useful_motion,
 )
-from pyrung.core.analysis.pilot.effects import obligation_snapshot, occurrence_snapshot
+from pyrung.core.analysis.pilot.effects import (
+    EffectExpectation,
+    fulfilled_expectation_observations,
+    obligation_snapshot,
+    occurrence_snapshot,
+)
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    ActSource,
+    BatchPulse,
     Bearing,
     BearingObjective,
     Coast,
@@ -53,12 +62,17 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     NeedProbe,
     OrientationResult,
     OrientationWorld,
-    RetainedReplay,
+    Pulse,
     Stuck,
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
+from pyrung.core.analysis.pilot.overlay import (
+    _merged_pilot_rungs,
+    _pilot_rungs_from_proposals,
+    _target_unresolved_condition,
+    fork_with_pilot_rungs,
+)
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
@@ -81,17 +95,32 @@ from pyrung.core.analysis.pilot.recording import (
     _knowledge_payload,
 )
 from pyrung.core.analysis.pilot.recovery import (
+    CompositionBudget,
+    Reject,
+    Succeed,
     assert_recovery_disposable_state,
     assert_recovery_inactive,
+    compose_corrections,
+)
+from pyrung.core.analysis.pilot.requirement_recovery import (
+    RequirementSchedule,
+    compile_scalar_schedule,
+    guard_alternatives,
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     ExpectationReceipt,
     FailedEffectReceipt,
+    GuardRequirementAtom,
+    GuardRequirementCondition,
+    GuardRequirementExpr,
     OperandAuthority,
+    RequirementPhase,
+    RequirementStatus,
     classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
+    derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import execute
@@ -120,6 +149,7 @@ from pyrung.core.analysis.pilot.types import (
     _CausalCheckpoint,
     _Checkpoint,
     _CommittedAct,
+    _ConfirmedCorrection,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -128,9 +158,11 @@ from pyrung.core.analysis.pilot.types import (
     _World,
 )
 from pyrung.core.analysis.pilot.verify import verify_excursion_replay
-from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
+from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity, _StateKeyConfig
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
+from pyrung.core.crossing import Cmp
+from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -209,6 +241,17 @@ def _derive_bootstrap_requirements(
             source_checkpoint=receipt.checkpoint,
             provenance="bootstrap",
         )
+        if derivation.requirement is None:
+            derivation = derive_overwriter_guard_requirement_from_effect(
+                effect.observation,
+                receipt.projection,
+                execution_epoch=receipt.execution_epoch,
+                execution_owner=receipt.execution_owner,
+                selected_writer=effect.designation.producer,
+                source_world_key=receipt.checkpoint.key,
+                source_checkpoint=receipt.checkpoint,
+                provenance="bootstrap-overwriter",
+            )
         _retain_active_requirement(state, derivation.requirement)
 
 
@@ -226,14 +269,25 @@ def _derive_attempt_requirements(
 ) -> None:
     """Retain exact failed-effect requirements from a disposable steer."""
 
-    if checkpoint is None:
+    # An accepted act is locally successful.  Its exact expectation receipt is
+    # retained after adoption for any later causal regression; immediate
+    # failure inversion belongs only to a rejected disposable attempt.
+    if checkpoint is None or attempt.trial is not None:
         return
     executed = _executed_attempt(attempt)
     if executed is None:
         return
+    fulfilled_obligations = {
+        id(item.obligation)
+        for item in executed.effect_observations
+        if item.disposition == "SURVIVED"
+    }
     index = None
     for observation in executed.effect_observations:
-        if observation.disposition == "SURVIVED":
+        if (
+            observation.disposition == "SURVIVED"
+            or id(observation.obligation) in fulfilled_obligations
+        ):
             continue
         owner = observation.execution_owner
         epoch = observation.execution_epoch
@@ -262,7 +316,9 @@ def _derive_attempt_requirements(
                 )
             ),
         )
-        projection = owner._runner()._replay_rung_write_projection_at(scan)
+        projection = observation.execution_projection
+        if projection is None or projection.scan_id != scan:
+            projection = owner._runner()._replay_rung_write_projection_at(scan)
         if projection is None:
             continue
         if observation.disposition in {"ABSENT", "STRANDED"}:
@@ -306,6 +362,10 @@ def _derive_attempt_requirements(
             execution_epoch=epoch,
             execution_owner=owner,
             source_checkpoint=checkpoint,
+            act_identity=act_identity(executed.bearing.act),
+            local_act=executed.bearing.act,
+            local_bearing=executed.bearing,
+            expectation=executed.bearing.expectation,
         )
         if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
             state.failed_effect_receipts.append(failed)
@@ -322,8 +382,14 @@ def _retain_expectation_receipt(
 
     if checkpoint is None:
         return
-    observations = trial.attempt.effect_observations
-    if not observations or any(item.disposition != "SURVIVED" for item in observations):
+    expectation = trial.attempt.bearing.expectation
+    if expectation is None:
+        return
+    observations = fulfilled_expectation_observations(
+        expectation,
+        trial.attempt.effect_observations,
+    )
+    if len(observations) != len(expectation.obligations):
         return
     epochs = {id(item.execution_epoch) for item in observations}
     owners = {id(item.execution_owner) for item in observations}
@@ -340,22 +406,896 @@ def _retain_expectation_receipt(
         for item in observations
         if item.consumer_read is not None
     )
+    producer_scans = tuple(
+        item.appeared.scan_id for item in observations if item.appeared is not None
+    )
+    if not producer_scans:
+        return
+    # Bind the receipt to the adopted live lineage, not the disposable pulse
+    # fork.  Adoption may rebuild the runner overlay while preserving the
+    # exact history; later regression queries fork from ``state.work`` and
+    # therefore share these retained epoch/query objects.
+    sealed = state.work._causal_lineage.seal_through(state.work.state.scan_id)
+    receipt_owner = next(
+        (
+            (epoch, owner)
+            for epoch, owner in sealed
+            if all(epoch.first_scan <= scan <= epoch.last_scan for scan in producer_scans)
+        ),
+        None,
+    )
+    if receipt_owner is None:
+        return
+    receipt_epoch, receipt_query = receipt_owner
     receipt = ExpectationReceipt(
         source_world_key=checkpoint.key,
         checkpoint_owner=checkpoint.owner,
         act_identity=act_identity(act),
-        active_rung_identities=tuple(
-            getattr(rung, "identity", repr(rung)) for rung in state.pilot_rungs
-        ),
+        active_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
         obligations=tuple(obligation_snapshot(item.obligation) for item in observations),
         producer_occurrences=producers,
         consumer_occurrences=consumers,
-        execution_epoch=first.execution_epoch,
-        execution_owner=first.execution_owner,
+        execution_epoch=receipt_epoch,
+        execution_owner=receipt_query,
         source_checkpoint=checkpoint,
+        producer_occurrence_objects=tuple(
+            item.appeared for item in observations if item.appeared is not None
+        ),
+        consumer_occurrence_objects=tuple(
+            item.consumer_read for item in observations if item.consumer_read is not None
+        ),
+        local_act=act,
+        local_bearing=trial.attempt.bearing,
+        expectation=trial.attempt.bearing.expectation,
     )
     if not any(current.identity == receipt.identity for current in state.expectation_receipts):
         state.expectation_receipts.append(receipt)
+
+
+@dataclass(frozen=True)
+class _RequirementRepairResult:
+    """One bounded local-repair handoff to the outer fresh-read loop."""
+
+    attempted: bool = False
+    repaired: bool = False
+    knowledge_changed: bool = False
+    requirement: ActiveRequirement | None = None
+    assignments: tuple[tuple[str, Any], ...] = ()
+    detail: str = ""
+
+
+def _copy_repair_knowledge(source: _PilotState, target: _PilotState) -> bool:
+    """Merge exact receipts and act admissibility from a disposable retry."""
+
+    changed = False
+    expectation_slots = {
+        (item.act_identity, item.obligations): index
+        for index, item in enumerate(target.expectation_receipts)
+    }
+    for item in source.expectation_receipts:
+        slot = expectation_slots.get((item.act_identity, item.obligations))
+        if slot is not None and target.expectation_receipts[slot].identity != item.identity:
+            # A successful local retry supersedes the invalidated future's
+            # receipt for the same whole-shape act.  Keep one journal slot while
+            # updating its exact epoch/source proof to the corrected execution.
+            target.expectation_receipts[slot] = item
+            changed = True
+    for attr, identity in (
+        ("active_requirements", "navigation_identity"),
+        ("failed_effect_receipts", "identity"),
+    ):
+        destination = getattr(target, attr)
+        known = {getattr(item, identity) for item in destination}
+        for item in getattr(source, attr):
+            key = getattr(item, identity)
+            if key not in known:
+                destination.append(item)
+                known.add(key)
+                changed = True
+    rejected_delta = source.proof_rejected_acts - target.proof_rejected_acts
+    if rejected_delta:
+        target.proof_rejected_acts.update(rejected_delta)
+        changed = True
+    return changed
+
+
+def _disposable_requirement_state(
+    state: _PilotState,
+    checkpoint: _CausalCheckpoint,
+) -> _PilotState:
+    """Clone one exact causal world without sharing Phase-5 knowledge lists."""
+
+    clone = _PilotState(
+        world=checkpoint.world,
+        key_config=state.key_config,
+        seen_keys=set(state.seen_keys),
+        checkpoints=[],
+        watch_tags=list(state.watch_tags),
+        bootstrap_execution=state.bootstrap_execution,
+        active_requirements=list(state.active_requirements),
+        expectation_receipts=list(state.expectation_receipts),
+        failed_effect_receipts=list(state.failed_effect_receipts),
+        requirement_repair_attempts=set(state.requirement_repair_attempts),
+        proof_rejected_acts=set(state.proof_rejected_acts),
+        search_start_scan=state.search_start_scan,
+        earned_work=state.earned_work,
+    )
+    clone.load_world(checkpoint.world)
+    return clone
+
+
+def _exact_failed_source(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> FailedEffectReceipt | None:
+    """Match one requirement to its exact failed local transaction."""
+
+    matches = tuple(
+        receipt
+        for receipt in state.failed_effect_receipts
+        if receipt.checkpoint_owner is requirement.checkpoint_owner
+        and receipt.source_world_key == requirement.source_world_key
+        and receipt.selected_writer == requirement.selected_writer
+        and receipt.execution_epoch is requirement.execution_epoch
+        and receipt.execution_owner is requirement.execution_owner
+        and requirement.deadline in receipt.explanation.supporting_occurrences
+        and receipt.local_act is not None
+        and receipt.local_bearing is not None
+        and receipt.expectation is receipt.local_act.policy.expectation
+        and receipt.act_identity == act_identity(receipt.local_act)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _is_exact_bootstrap_source(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> bool:
+    receipt = state.bootstrap_execution
+    if (
+        receipt is None
+        or not requirement.provenance.startswith("bootstrap")
+        or requirement.source_checkpoint is not receipt.checkpoint
+        or requirement.checkpoint_owner is not receipt.checkpoint.owner
+        or requirement.execution_epoch is not receipt.execution_epoch
+        or requirement.execution_owner is not receipt.execution_owner
+    ):
+        return False
+    matches = []
+    for effect in receipt.appeared_effects:
+        if effect.designation.producer != requirement.selected_writer:
+            continue
+        occurrences = (
+            *effect.observation.observed_reads,
+            effect.observation.consumer_read,
+            effect.observation.displaced_read,
+        )
+        if any(
+            occurrence is not None
+            and occurrence_snapshot(occurrence) == requirement.demanding_occurrence
+            for occurrence in occurrences
+        ):
+            matches.append(effect)
+    return len(matches) == 1
+
+
+def _bootstrap_designation_for_requirement(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> Any | None:
+    receipt = state.bootstrap_execution
+    if receipt is None:
+        return None
+    matches = []
+    for effect in receipt.appeared_effects:
+        occurrences = (
+            *effect.observation.observed_reads,
+            effect.observation.consumer_read,
+            effect.observation.displaced_read,
+        )
+        if effect.designation.producer == requirement.selected_writer and any(
+            occurrence is not None
+            and occurrence_snapshot(occurrence) == requirement.demanding_occurrence
+            for occurrence in occurrences
+        ):
+            matches.append(effect.designation)
+    return matches[0] if len(matches) == 1 else None
+
+
+def _whole_expectation_survived(executed: Any, expectation: EffectExpectation) -> bool:
+    observations = executed.effect_observations
+    return len(fulfilled_expectation_observations(expectation, observations)) == len(
+        expectation.obligations
+    )
+
+
+def _bootstrap_local_designation_survived(
+    observations: tuple[Any, ...],
+    designation: Any,
+) -> bool:
+    """Whether one repaired bootstrap scan met its exact local designation."""
+
+    return (
+        len(observations) == 1
+        and observations[0].designation is designation
+        and observations[0].observation.disposition == "SURVIVED"
+    )
+
+
+def _source_requirements(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> tuple[ActiveRequirement, ...]:
+    return tuple(
+        current
+        for current in state.active_requirements
+        if current.status is RequirementStatus.ACTIVE
+        and current.phase is RequirementPhase.STEADY
+        and current.checkpoint_owner is requirement.checkpoint_owner
+        and current.source_world_key == requirement.source_world_key
+    )
+
+
+def _constraint_target_value(plc: Any, condition: Cmp) -> Any | None:
+    """Choose one declared-domain value which satisfies a scalar condition."""
+
+    tag = plc._known_tags_by_name.get(condition.tag)
+    if tag is None or condition.bound_is_tag:
+        return None
+    current = plc.state.tags.get(condition.tag, tag.default)
+    candidates: list[Any] = [current, tag.default]
+    if tag.choices:
+        candidates.extend(tag.choices)
+    bound = condition.bound
+    if condition.op == "==":
+        candidates.append(bound)
+    elif condition.op == "!=":
+        if isinstance(bound, bool):
+            candidates.append(not bound)
+        elif isinstance(bound, int | float) and not isinstance(bound, bool):
+            candidates.extend((bound - 1, bound + 1))
+    elif isinstance(bound, int | float) and not isinstance(bound, bool):
+        candidates.extend(
+            {
+                ">": (bound + 1,),
+                ">=": (bound,),
+                "<": (bound - 1,),
+                "<=": (bound,),
+            }.get(condition.op, ())
+        )
+    for candidate in candidates:
+        if (
+            constraint_holds(
+                condition,
+                {**dict(plc.state.tags), condition.tag: candidate},
+            )
+            is True
+        ):
+            return candidate
+    return None
+
+
+def _nested_guard_act(
+    source_state: _PilotState,
+    ctx: _PilotContext,
+    local_bearing: Bearing,
+    local_act: Any,
+    requirements: tuple[ActiveRequirement, ...],
+) -> Any | None:
+    """Nest only exact prerequisites due in the selected local transaction."""
+
+    guard_requirements = tuple(
+        requirement
+        for requirement in requirements
+        if isinstance(requirement.condition, GuardRequirementAtom | GuardRequirementExpr)
+    )
+    transaction_pairs: list[_ActionPair] = []
+    expectation = local_act.policy.expectation
+    selected_trace = getattr(
+        getattr(local_bearing.orientation, "candidates", None),
+        "trace",
+        None,
+    )
+    trace_actions = dict(getattr(selected_trace, "active_actions", ()))
+    if expectation is not None:
+        for obligation in expectation.obligations:
+            if obligation.consumer is None:
+                continue
+            consumer_sub, consumer_rung, consumer_branch = obligation.consumer
+            for node in ctx.pdg.rung_nodes:
+                branch_path = getattr(node, "branch_path", ())
+                if (
+                    getattr(node, "subroutine", object()) != consumer_sub
+                    or getattr(node, "rung_index", object()) != consumer_rung
+                    or len(branch_path) <= len(consumer_branch)
+                    or branch_path[: len(consumer_branch)] != consumer_branch
+                ):
+                    continue
+                reads = node.condition_reads | node.guard_reads
+                for tag in reads:
+                    if tag not in trace_actions or tag not in ctx.steerable:
+                        continue
+                    pair = (tag, trace_actions[tag])
+                    if (
+                        constraint_holds(
+                            Cmp(tag, "==", trace_actions[tag]),
+                            source_state.work.state.tags,
+                        )
+                        is not True
+                        and pair not in transaction_pairs
+                    ):
+                        transaction_pairs.append(pair)
+
+    transaction_acts: list[Any] = []
+    for tag, value in transaction_pairs:
+        raw_world = OrientationWorld(
+            world_key=(),
+            snapshot=dict(source_state.work.state.tags),
+            frame=None,
+            state=source_state,
+            context=ctx,
+            key_config=source_state.key_config,
+        )
+        oriented = ctx.compass.orient(
+            raw_world,
+            TargetSpec(tag, value),
+            NavigationConstraints(),
+        )
+        if not isinstance(oriented, Bearing) or not oriented.act.policy.applied:
+            return None
+        transaction_acts.append(oriented.act)
+
+    if not guard_requirements and not transaction_acts:
+        return local_act
+
+    nested_acts: list[tuple[Any, ActiveRequirement, GuardRequirementAtom]] = []
+    snap = dict(source_state.work.state.tags)
+    for requirement in guard_requirements:
+        choices: list[tuple[tuple[Any, ...], tuple[Any, ...]]] = []
+        condition_tree = cast(GuardRequirementCondition, requirement.condition)
+        for alternative in guard_alternatives(condition_tree):
+            acts: list[tuple[Any, GuardRequirementAtom]] = []
+            exact = True
+            for atom in alternative:
+                if constraint_holds(atom.condition, snap) is True:
+                    continue
+                condition = atom.condition
+                if not isinstance(condition, Cmp):
+                    exact = False
+                    break
+                target_value = _constraint_target_value(source_state.work, condition)
+                if target_value is None:
+                    exact = False
+                    break
+                target = TargetSpec(condition.tag, target_value)
+                raw_world = OrientationWorld(
+                    world_key=(),
+                    snapshot=dict(snap),
+                    frame=None,
+                    state=source_state,
+                    context=ctx,
+                    key_config=source_state.key_config,
+                )
+                oriented = ctx.compass.orient(raw_world, target, NavigationConstraints())
+                if not isinstance(oriented, Bearing) or not oriented.act.policy.applied:
+                    exact = False
+                    break
+                acts.append((oriented.act, atom))
+            if exact:
+                choices.append(
+                    (
+                        (
+                            sum(
+                                1
+                                for _act, atom in acts
+                                if getattr(atom.condition, "tag", None) not in ctx.steerable
+                            ),
+                            len(acts),
+                            tuple(act_identity(act) for act, _atom in acts),
+                        ),
+                        tuple(acts),
+                    )
+                )
+        selected = min(choices, key=lambda choice: choice[0])[1] if choices else None
+        if selected is None:
+            return None
+        nested_acts.extend((act, requirement, atom) for act, atom in selected)
+
+    ordered_pairs: list[_ActionPair] = []
+    by_tag: dict[str, Any] = {}
+    for act in (
+        local_act,
+        *transaction_acts,
+        *(act for act, _requirement, _atom in nested_acts),
+    ):
+        for tag, value in act.policy.applied:
+            if tag in by_tag and not _values_match(by_tag[tag], value):
+                return None
+            if tag not in by_tag:
+                by_tag[tag] = value
+                ordered_pairs.append((tag, value))
+
+    original_obligations = (
+        local_act.policy.expectation.obligations if local_act.policy.expectation is not None else ()
+    )
+    nested_obligations = [
+        obligation
+        for nested in transaction_acts
+        if nested.policy.expectation is not None
+        for obligation in nested.policy.expectation.obligations
+    ]
+    for nested, requirement, atom in nested_acts:
+        if nested.policy.expectation is None:
+            continue
+        deadline = requirement.demanding_occurrence
+        if deadline.execution_kind != "rung":
+            return None
+        consumer_nodes = tuple(
+            node
+            for node in ctx.pdg.rung_nodes
+            if resolve_rung(ctx.program, node) is atom.demanding_rung
+        )
+        consumer_node = consumer_nodes[0] if len(consumer_nodes) == 1 else None
+        consumer_address = (
+            (
+                consumer_node.subroutine,
+                consumer_node.rung_index,
+                consumer_node.branch_path,
+            )
+            if consumer_node is not None
+            else None
+        )
+        consumer_rung = (
+            resolve_rung(ctx.program, consumer_node) if consumer_node is not None else None
+        )
+        if consumer_rung is None or consumer_address is None:
+            return None
+        for obligation in nested.policy.expectation.obligations:
+            if obligation.consumer is None:
+                obligation = replace(
+                    obligation,
+                    consumer=consumer_address,
+                    consumer_rung=consumer_rung,
+                    required_shape=((obligation.tag, obligation.value),),
+                )
+            nested_obligations.append(obligation)
+    obligations = (*nested_obligations, *original_obligations)
+    expectation = EffectExpectation(obligations) if obligations else local_act.policy.expectation
+    policy = replace(
+        local_act.policy,
+        source=ActSource.LEARNED_BATCH,
+        action_pairs=tuple(ordered_pairs),
+        applied=tuple(ordered_pairs),
+        expectation=expectation,
+        expectation_exemption=None,
+        provenance=(*local_act.policy.provenance, "active guard requirement"),
+    )
+    if len(ordered_pairs) == 1:
+        return Pulse(policy)
+    return BatchPulse(policy)
+
+
+def _rebound_bearing(
+    source_state: _PilotState,
+    ctx: _PilotContext,
+    original: Bearing,
+    act: Any,
+) -> Bearing | None:
+    """Bind the exact retained act to a fresh read of its causal source."""
+
+    raw_world = OrientationWorld(
+        world_key=(),
+        snapshot=dict(source_state.work.state.tags),
+        frame=None,
+        state=source_state,
+        context=ctx,
+        key_config=source_state.key_config,
+    )
+    reading = ctx.compass.orient(
+        raw_world,
+        original.objective.target,
+        NavigationConstraints(active_requirements=tuple(source_state.active_requirements)),
+    )
+    if reading.orientation is None:
+        return None
+    return Bearing(
+        world_key=reading.orientation.world_key,
+        act=act,
+        objective=original.objective,
+        prerequisites=original.prerequisites,
+        rationale=f"causal local repair: {original.rationale}",
+        orientation=reading.orientation,
+    )
+
+
+def _compile_source_schedule(
+    requirements: tuple[ActiveRequirement, ...],
+    source_state: _PilotState,
+    ctx: _PilotContext,
+) -> tuple[RequirementSchedule | None, str]:
+    scalar = tuple(
+        requirement for requirement in requirements if isinstance(requirement.condition, Cmp)
+    )
+    if not scalar:
+        return None, ""
+    guard = _target_unresolved_condition(
+        source_state.work,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    )
+    compilation = compile_scalar_schedule(scalar, source_state.work, guard=guard)
+    return compilation.schedule, compilation.detail
+
+
+def _record_requirement_correction(
+    state: _PilotState,
+    schedule: RequirementSchedule,
+    *,
+    scan: int,
+) -> None:
+    if not schedule.pilot_rungs:
+        return
+    correction = _ConfirmedCorrection(
+        identity=correction_identity(schedule.pilot_rungs),
+        pilot_rungs=schedule.pilot_rungs,
+        sources=tuple(tag for tag, _value in schedule.assignments),
+        justification="active requirement schedule locally repaired its exact expectation",
+    )
+    _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=schedule.source_world_key,
+        scan=scan,
+        source="requirement",
+        adopt_existing=True,
+    )
+
+
+def _compile_bootstrap_guard_schedule(
+    requirements: tuple[ActiveRequirement, ...],
+    source: _PilotState,
+    ctx: _PilotContext,
+) -> tuple[RequirementSchedule | None, str]:
+    guards = tuple(
+        requirement
+        for requirement in requirements
+        if isinstance(requirement.condition, GuardRequirementAtom | GuardRequirementExpr)
+    )
+    if not guards:
+        return None, ""
+    snapshot = dict(source.work.state.tags)
+    proposals: list[_ActionPair] = []
+    known: dict[str, Any] = {}
+    for requirement in guards:
+        choices: list[tuple[tuple[Any, ...], list[_ActionPair]]] = []
+        condition_tree = cast(GuardRequirementCondition, requirement.condition)
+        for alternative in guard_alternatives(condition_tree):
+            candidate: list[_ActionPair] = []
+            exact = True
+            for atom in alternative:
+                if constraint_holds(atom.condition, snapshot) is True:
+                    continue
+                condition = atom.condition
+                if not isinstance(condition, Cmp):
+                    exact = False
+                    break
+                target_value = _constraint_target_value(source.work, condition)
+                if target_value is None:
+                    exact = False
+                    break
+                target = TargetSpec(condition.tag, target_value)
+                oriented = ctx.compass.orient(
+                    OrientationWorld(
+                        world_key=(),
+                        snapshot=dict(snapshot),
+                        frame=None,
+                        state=source,
+                        context=ctx,
+                        key_config=source.key_config,
+                    ),
+                    target,
+                    NavigationConstraints(),
+                )
+                if not isinstance(oriented, Bearing) or not oriented.act.policy.applied:
+                    exact = False
+                    break
+                candidate.extend(oriented.act.policy.applied)
+            if exact:
+                choices.append(
+                    (
+                        (
+                            sum(
+                                1
+                                for atom in alternative
+                                if getattr(atom.condition, "tag", None) not in ctx.steerable
+                            ),
+                            len(candidate),
+                            tuple((tag, repr(value)) for tag, value in candidate),
+                        ),
+                        candidate,
+                    )
+                )
+        selected = min(choices, key=lambda choice: choice[0])[1] if choices else None
+        if selected is None:
+            return None, "bootstrap overwriter guard is not exactly steerable"
+        for tag, value in selected:
+            if tag in known and not _values_match(known[tag], value):
+                return None, "bootstrap guard requirements are incompatible"
+            if tag not in known:
+                known[tag] = value
+                proposals.append((tag, value))
+    scope = _target_unresolved_condition(
+        source.work,
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    )
+    rungs = tuple(_pilot_rungs_from_proposals(proposals, scope))
+    first = guards[0]
+    return (
+        RequirementSchedule(
+            requirements=guards,
+            assignments=tuple(proposals),
+            pilot_rungs=rungs,
+            checkpoint_owner=first.checkpoint_owner,
+            source_world_key=first.source_world_key,
+            phase=first.phase,
+        ),
+        "",
+    )
+
+
+def _repair_bootstrap_requirement(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _RequirementRepairResult:
+    if not _is_exact_bootstrap_source(requirement, state):
+        return _RequirementRepairResult()
+    requirements = _source_requirements(requirement, state)
+    source = _disposable_requirement_state(state, requirement.source_checkpoint)
+    schedule, detail = _compile_source_schedule(requirements, source, ctx)
+    guard_schedule, guard_detail = _compile_bootstrap_guard_schedule(
+        requirements,
+        source,
+        ctx,
+    )
+    if detail or guard_detail:
+        return _RequirementRepairResult(
+            requirement=requirement,
+            detail=detail or guard_detail,
+        )
+    if schedule is None and guard_schedule is None:
+        return _RequirementRepairResult(requirement=requirement, detail=detail)
+    if schedule is None:
+        assert guard_schedule is not None
+        schedule = guard_schedule
+    elif guard_schedule is not None:
+        schedule = replace(
+            schedule,
+            requirements=(*schedule.requirements, *guard_schedule.requirements),
+            assignments=(*schedule.assignments, *guard_schedule.assignments),
+            pilot_rungs=(*schedule.pilot_rungs, *guard_schedule.pilot_rungs),
+        )
+    designation = _bootstrap_designation_for_requirement(requirement, state)
+    if designation is None:
+        return _RequirementRepairResult(
+            requirement=requirement,
+            detail="bootstrap designation is ambiguous",
+        )
+    source.pilot_rungs = _merged_pilot_rungs(schedule.pilot_rungs, source.pilot_rungs)
+    attempt_identity = ("bootstrap", schedule.identity)
+    if attempt_identity in state.requirement_repair_attempts:
+        return _RequirementRepairResult(requirement=requirement, detail="repair already attempted")
+    state.requirement_repair_attempts.add(attempt_identity)
+
+    def attempt(candidate: _PilotState, transaction: Any) -> Any:
+        transaction.register_disposable_state(candidate)
+        candidate.work.step()
+        projection = candidate.work._replay_rung_write_projection_at(candidate.work.state.scan_id)
+        observations = (
+            observe_bootstrap_effects((designation,), projection) if projection is not None else ()
+        )
+        if _bootstrap_local_designation_survived(observations, designation):
+            return Succeed(candidate)
+        return Reject(candidate)
+
+    composition = compose_corrections(
+        source,
+        budget=CompositionBudget(1),
+        attempt=attempt,
+        budget_exhausted=lambda candidate: candidate,
+        initial_identity=attempt_identity,
+        protected_states=(state,),
+    )
+    repaired = composition.termination.value == "success"
+    if repaired:
+        _record_requirement_correction(
+            composition.value,
+            schedule,
+            scan=requirement.source_checkpoint.world.work.state.scan_id,
+        )
+        state.world = composition.value.world
+        state.hold_log.extend(composition.value.hold_log)
+        state.correction_receipts.extend(composition.value.correction_receipts)
+        state.checkpoints.clear()
+        state.pending_departure = None
+    return _RequirementRepairResult(
+        attempted=True,
+        repaired=repaired,
+        requirement=requirement,
+        assignments=schedule.assignments,
+        detail="bootstrap local transaction repaired" if repaired else "bootstrap repair rejected",
+    )
+
+
+def _repair_failed_requirement(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _RequirementRepairResult:
+    receipt = _exact_failed_source(requirement, state)
+    if receipt is None:
+        return _RequirementRepairResult()
+    requirements = _source_requirements(requirement, state)
+    source = _disposable_requirement_state(state, requirement.source_checkpoint)
+    schedule, detail = _compile_source_schedule(requirements, source, ctx)
+    if detail:
+        return _RequirementRepairResult(requirement=requirement, detail=detail)
+    if schedule is not None:
+        source.pilot_rungs = _merged_pilot_rungs(schedule.pilot_rungs, source.pilot_rungs)
+    local_act = _nested_guard_act(
+        source,
+        ctx,
+        receipt.local_bearing,
+        receipt.local_act,
+        requirements,
+    )
+    if local_act is None:
+        return _RequirementRepairResult(requirement=requirement, detail="guard repair is ambiguous")
+    bearing = _rebound_bearing(source, ctx, receipt.local_bearing, local_act)
+    if bearing is None:
+        return _RequirementRepairResult(
+            requirement=requirement, detail="causal source cannot be reread"
+        )
+    assignment_identity = schedule.identity if schedule is not None else ()
+    attempt_identity = (
+        "failed-effect",
+        requirement.source_world_key,
+        requirement.checkpoint_owner,
+        receipt.act_identity,
+        act_identity(local_act),
+        assignment_identity,
+        tuple(current.identity for current in requirements),
+    )
+    if attempt_identity in state.requirement_repair_attempts:
+        return _RequirementRepairResult(requirement=requirement, detail="repair already attempted")
+    state.requirement_repair_attempts.add(attempt_identity)
+    disposable_ctx = replace(ctx, compass=ctx.compass)
+    rejection_reasons: list[str] = []
+
+    def attempt(candidate: _PilotState, transaction: Any) -> Any:
+        transaction.register_disposable_state(candidate)
+        transition = _transition_once(
+            candidate,
+            disposable_ctx,
+            ctx.target,
+            NavigationConstraints(active_requirements=tuple(candidate.active_requirements)),
+            oriented=bearing,
+            resolve_excursion=False,
+            derive_requirements=True,
+        )
+        executed = _executed_attempt(transition.attempt) if transition.attempt is not None else None
+        expectation = local_act.policy.expectation
+        if (
+            transition.trial is None
+            or executed is None
+            or expectation is None
+            or not _whole_expectation_survived(executed, expectation)
+        ):
+            rejection_reasons.append("local expectation did not survive")
+            return Reject(candidate)
+        requirements_before_monitor = tuple(
+            current.identity for current in candidate.active_requirements
+        )
+        failed_before_monitor = tuple(
+            current.identity for current in candidate.failed_effect_receipts
+        )
+        landing_scan = candidate.work.state.scan_id
+        landing_snap = dict(candidate.work.state.tags)
+        # A locally repaired obligation is only the first acceptance boundary.
+        # Feed its adopted landing through the ordinary post-commit trend and
+        # departure owner before allowing the disposable world to escape the
+        # transaction. A successive exact hazard can then restore this same
+        # causal source and add a stronger requirement; a pending/unresolved
+        # departure is never mistaken for a settled successful landing.
+        tuple(_monitor_trend(transition.trial, transition.frame, candidate, disposable_ctx))
+        learned_requirement = requirements_before_monitor != tuple(
+            current.identity for current in candidate.active_requirements
+        ) or failed_before_monitor != tuple(
+            current.identity for current in candidate.failed_effect_receipts
+        )
+        if learned_requirement or candidate.pending_departure is not None:
+            rejection_reasons.append(
+                "monitor learned another requirement"
+                if learned_requirement
+                else "monitor retained an unresolved departure"
+            )
+            return Reject(candidate)
+        if (
+            candidate.work.state.scan_id != landing_scan
+            or dict(candidate.work.state.tags) != landing_snap
+        ):
+            rejection_reasons.append(
+                "monitor changed the accepted landing "
+                f"to {ctx.target.tag}={candidate.work.state.tags.get(ctx.target.tag)!r}"
+            )
+            return Reject(candidate)
+        return Succeed(candidate)
+
+    composition = compose_corrections(
+        source,
+        budget=CompositionBudget(1),
+        attempt=attempt,
+        budget_exhausted=lambda candidate: candidate,
+        initial_identity=attempt_identity,
+        protected_states=(state,),
+    )
+    disposable = composition.value
+    changed = _copy_repair_knowledge(disposable, state)
+    repaired = composition.termination.value == "success"
+    if repaired:
+        if schedule is not None:
+            _record_requirement_correction(
+                disposable,
+                schedule,
+                scan=requirement.source_checkpoint.world.work.state.scan_id,
+            )
+        state.world = disposable.world
+        state.seen_keys.update(disposable.seen_keys)
+        state.journey.extend(disposable.journey)
+        state.hold_log.extend(disposable.hold_log)
+        state.correction_receipts.extend(disposable.correction_receipts)
+        state.checkpoints.clear()
+        state.pending_departure = None
+    return _RequirementRepairResult(
+        attempted=True,
+        repaired=repaired,
+        knowledge_changed=changed,
+        requirement=requirement,
+        assignments=schedule.assignments if schedule is not None else (),
+        detail=(
+            "local transaction repaired"
+            if repaired
+            else (
+                f"local transaction rejected: {rejection_reasons[-1]}"
+                if rejection_reasons
+                else "local transaction rejected"
+            )
+        ),
+    )
+
+
+def _repair_one_active_requirement(
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _RequirementRepairResult:
+    """Attempt one newest exact schedule, then return to the outer fresh read."""
+
+    for requirement in reversed(state.active_requirements):
+        if (
+            requirement.status is not RequirementStatus.ACTIVE
+            or requirement.phase is not RequirementPhase.STEADY
+        ):
+            continue
+        bootstrap = _repair_bootstrap_requirement(requirement, state, ctx)
+        if bootstrap.attempted or bootstrap.detail:
+            return bootstrap
+        failed = _repair_failed_requirement(requirement, state, ctx)
+        if failed.attempted or failed.detail:
+            return failed
+    return _RequirementRepairResult()
 
 
 def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
@@ -907,15 +1847,14 @@ def _record_attempt(
         *(ActionNogoodObservation(frame.key, ("pair", pair)) for pair in attempt.nogood_pairs),
     ]
     ctx.compass, _ = ctx.compass.apply(knowledge_observations)
-    retained = isinstance(act, RetainedReplay)
-    if attempt.confirmed_correction is not None and (not retained or attempt.trial is not None):
+    if attempt.confirmed_correction is not None:
         _anchor_frame_receipt(frame, state, objective)
         _install_confirmed_correction(
             state,
             attempt.confirmed_correction,
             origin_key=frame.key,
             scan=state.work.state.scan_id,
-            source="retained" if retained else "excursion",
+            source="excursion",
         )
     if attempt.avoid_names:
         # Knowledge: which avoid conditions excluded a path, for a naming decline.
@@ -1077,35 +2016,6 @@ def _commit_trial(
     key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
     if isinstance(verified, AssessedMotion):
         state.seen_keys.add(verified.new_key)
-    if isinstance(bearing.act, RetainedReplay):
-        # This act replaced the retained prefix; appending a step whose
-        # scan-before equals the old tip would fabricate an overlapping
-        # operation. The replay fork's scan log is the complete recording.
-        # The replacement replays the complete public scan log, so inputs from
-        # earlier accepted acts remain physical history. Their semantic
-        # contexts described the old causal past, however, and cannot survive
-        # the rebase. Old rollback anchors have the same problem; trend
-        # monitoring will bank the corrected world as the next anchor.
-        state.checkpoints.clear()
-        # Pending departure policy owns rollback receipts from the replaced
-        # prefix. A retained replay is a new causal past, so those receipts and
-        # their policy cannot be carried across the rebase.
-        state.pending_departure = None
-        prepared_world = bearing.act.prepared_world
-        if prepared_world is not None:
-            # Composition already passed this exact corrected epoch through
-            # ordinary execution and verification.  Promote its complete
-            # physical world record; executing or rebuilding it again would
-            # turn a local proof into another route search.
-            state.world = prepared_world
-            if bearing.act.prepared_journey is not None:
-                state.journey = list(bearing.act.prepared_journey)
-        else:
-            state.world = state.world.set(
-                work=pulse.fork,
-                committed_acts=pvector([]),
-            )
-        return
     # Record what was physically applied — the candidate plus its co-actions (the
     # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
     # policy's narrow primary candidate. Replay and live apply must reproduce every input
@@ -1193,6 +2103,8 @@ def _transition_once(
     constraints: NavigationConstraints,
     *,
     oriented: OrientationResult | None = None,
+    resolve_excursion: bool = True,
+    derive_requirements: bool = True,
 ) -> _IterationTransition:
     """Orient and locally settle exactly one current-world result.
 
@@ -1244,13 +2156,15 @@ def _transition_once(
         else None
     )
     attempt = execute(result, orientation_world)
-    attempt = _resolve_excursion(attempt, frame, state, ctx)
-    _derive_attempt_requirements(
-        attempt,
-        state,
-        ctx,
-        expectation_checkpoint,
-    )
+    if resolve_excursion:
+        attempt = _resolve_excursion(attempt, frame, state, ctx)
+    if derive_requirements:
+        _derive_attempt_requirements(
+            attempt,
+            state,
+            ctx,
+            expectation_checkpoint,
+        )
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
     if isinstance(act, Coast) and act.mode == "terminal":
@@ -1266,7 +2180,22 @@ def _transition_once(
         ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
 
     if attempt.trial is None:
-        ctx.compass, _ = ctx.compass.apply((ActionNogoodObservation(frame.key, act_identity(act)),))
+        if attempt.proof_rejection:
+            proof_world_key = (
+                _pilot_world_key(
+                    frame.snap,
+                    state.key_config,
+                    state.pilot_rungs,
+                    (),
+                )
+                if state.key_config is not None
+                else frame.key
+            )
+            state.proof_rejected_acts.add((proof_world_key, act_identity(act)))
+        else:
+            ctx.compass, _ = ctx.compass.apply(
+                (ActionNogoodObservation(frame.key, act_identity(act)),)
+            )
         return _IterationTransition(result=result, frame=frame, attempt=attempt)
 
     trial = _adopt_trial(attempt.trial, frame, state, ctx)
@@ -1496,6 +2425,53 @@ def _pilot_loop_events(
             )
             return
 
+        requirements_before_repair = len(state.active_requirements)
+        receipts_before_repair = len(state.expectation_receipts)
+        failures_before_repair = len(state.failed_effect_receipts)
+        repair = _repair_one_active_requirement(state, ctx)
+        for active in state.active_requirements[requirements_before_repair:]:
+            yield PilotEvent(
+                "requirement_activated",
+                active.deadline.scan_id,
+                {"requirement": active.diagnostic_snapshot()},
+            )
+        for receipt in state.expectation_receipts[receipts_before_repair:]:
+            yield PilotEvent(
+                "expectation_committed",
+                state.work.state.scan_id,
+                {"receipt": receipt.diagnostic_snapshot()},
+            )
+        for receipt in state.failed_effect_receipts[failures_before_repair:]:
+            yield PilotEvent(
+                "failed_effect_explained",
+                state.work.state.scan_id,
+                {"receipt": receipt.diagnostic_snapshot()},
+            )
+        if repair.repaired:
+            yield PilotEvent(
+                "requirement_locally_repaired",
+                (
+                    repair.requirement.deadline.scan_id
+                    if repair.requirement is not None
+                    else state.work.state.scan_id
+                ),
+                {
+                    "requirement": repair.requirement.diagnostic_snapshot()
+                    if repair.requirement is not None
+                    else None,
+                    "assignments": repair.assignments,
+                    "detail": repair.detail,
+                },
+            )
+            # The repaired landing is the new live tip. Re-enter the outer loop
+            # so Orientation reads that world from scratch.
+            continue
+        if repair.attempted and repair.knowledge_changed:
+            # A rejected nested transaction produced stronger exact evidence.
+            # Recalculate its schedule from the same causal source; never keep
+            # the disposable prediction or an old action suffix.
+            continue
+
         # Compass owns the current-world read and returns one world-bound result.
         raw_world = OrientationWorld(
             world_key=(),
@@ -1511,15 +2487,6 @@ def _pilot_loop_events(
             active_requirements=tuple(state.active_requirements),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
-        if isinstance(result, Bearing) and isinstance(result.act, RetainedReplay):
-            from pyrung.core.analysis.pilot.retained import compose_retained_bearing
-
-            composed = compose_retained_bearing(ctx.compass, result, target, constraints)
-            if not ctx.compass.knowledge.act_is_nogood(
-                composed.world_key,
-                act_identity(composed.act),
-            ):
-                result = composed
         orientation_read = result.orientation
         if orientation_read is None:
             raise RuntimeError("Compass orientation omitted its current-world reading")

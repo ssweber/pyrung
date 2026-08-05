@@ -19,7 +19,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
     Pulse,
-    RetainedReplay,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
@@ -196,7 +195,7 @@ def _build_plan_journal(
     acc_names: frozenset[str],
 ) -> tuple[PlanStep, ...]:
     """Build the annotated plan journal from the clean path and hold log."""
-    if not state.committed_acts:
+    if not state.committed_acts and not state.hold_log:
         return ()
 
     def _notes_for(inputs: Any) -> tuple[str, ...]:
@@ -219,6 +218,23 @@ def _build_plan_journal(
         return owner is not None and _values_match(owner.value, value)
 
     entries: list[tuple[int, str, PlanStep]] = []
+
+    if not state.committed_acts:
+        path_start = min(entry.scan for entry in hold_log)
+        path_end = getattr(getattr(fork, "state", None), "scan_id", path_start)
+        entries.append(
+            (
+                path_start,
+                "b_bootstrap",
+                PlanStep(
+                    kind="coast",
+                    scan=path_start,
+                    scans=max(0, path_end - path_start),
+                    inputs=(),
+                    label="bootstrap",
+                ),
+            )
+        )
 
     for act in state.committed_acts:
         sc = act.context
@@ -286,8 +302,9 @@ def _build_plan_journal(
                     )
                 )
 
-    path_start = state.committed_acts[0].steps[0].scan_before
-    path_end = state.committed_acts[-1].steps[-1].scan_after
+    if state.committed_acts:
+        path_start = state.committed_acts[0].steps[0].scan_before
+        path_end = state.committed_acts[-1].steps[-1].scan_after
 
     seen_pilot_rungs: set[tuple[Any, ...]] = set()
     correction_receipts = getattr(state, "correction_receipts", ())
@@ -728,51 +745,6 @@ def _act_event(
     seen_keys: frozenset[Any] | None = None,
 ) -> PilotEvent | None:
     """Render one navigation-act lifecycle event through a single kind dispatch."""
-
-    if isinstance(act, RetainedReplay):
-        occurrence = act.occurrence
-        correction = act.correction
-        retained = {
-            "candidate": _candidate_payload(act.policy),
-            "occurrence": {
-                "floor_scan": occurrence.floor_scan,
-                "scan": occurrence.scan,
-                "ordinal": occurrence.ordinal,
-                "tag": occurrence.tag,
-                "from": occurrence.from_value,
-                "to": occurrence.to_value,
-                "writer": occurrence.writer,
-                "address": occurrence.address,
-            },
-            "correction": {
-                "identity": correction.identity,
-                "pilot_rungs": correction.pilot_rungs,
-                "sources": correction.sources,
-                "justification": correction.justification,
-            },
-        }
-        if phase == "try":
-            return PilotEvent(
-                "retained_replay_try",
-                scan,
-                {**retained, "reason": rationale},
-            )
-        if phase == "rejected":
-            assert attempt is not None
-            return PilotEvent(
-                "retained_replay_rejected",
-                scan,
-                {**retained, "gates": attempt.gate_events},
-            )
-        assert trial is not None and frame is not None and state is not None
-        return PilotEvent(
-            "retained_replay_accepted",
-            scan,
-            {
-                **retained,
-                **_accepted_payload(act.policy, trial, frame, state, seen_keys),
-            },
-        )
 
     if isinstance(act, Pulse):
         if act.crossing is not None:

@@ -43,7 +43,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     OrientationWorld,
     Pulse,
-    RetainedReplay,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -547,10 +546,6 @@ def execute(bearing: Bearing, world: OrientationWorld) -> _AttemptResult:
         return _try_terminal_letrun(bearing, frame, state, ctx)
     if isinstance(act, Dwell):
         return _try_terminal_dwell(bearing, frame, state, ctx)
-    if isinstance(act, RetainedReplay):
-        from pyrung.core.analysis.pilot.retained import execute_retained_replay
-
-        return execute_retained_replay(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 

@@ -65,11 +65,11 @@ The following modules extend that read:
 4. Compass knowledge may supply one empirically learned wait, action, or joint
    action when the current static read has no local bearing. Learned evidence
    still passes the ordinary live-trial gates.
-5. `retained.py` may recognize that an exact writer occurrence already present
-   in public `PLC.history` created the current blocker. It asks the existing
-   deviation investigator for one occurrence-scoped correction, proves that
-   correction by replaying from `history.oldest_scan_id`, and returns one
-   ordinary `RetainedReplay` Bearing. It never drives or commits a world.
+5. `requirements.py` retains an accepted expectation's exact producer and
+   consumer occurrences with its source checkpoint. On a later regression,
+   `progress.py` may match one causal occurrence to that receipt, derive an
+   occurrence-scoped requirement, restore the exact checkpoint, and retry only
+   the local act. The outer loop then performs a fresh current-world read.
 6. Only a genuinely unresolved `NeedProbe` reaches `skiff.py`. Skiff pins
    unrelated state, probes a finite action domain on isolated forks, and
    returns observations without committing or choosing an action. Probe rounds
@@ -86,8 +86,8 @@ the current world.
 
 ### 2. Did the attempted action produce a trustworthy result?
 
-`steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, `Dwell`, or
-`RetainedReplay` on a fork. All modes converge on `verify.py`:
+`steer.py` executes exactly one `Pulse`, `BatchPulse`, `Coast`, or `Dwell` on a
+fork. All modes converge on `verify.py`:
 
 1. Avoid and banked-work gates run before target acceptance.
 2. `effects.py` observes an act's selected producer-to-consumer obligation over
@@ -158,13 +158,14 @@ named frontier rather than silent churn.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
 
-A retained replay is still one pass through steps 2--5: orientation returns
-one Bearing, execution reconstructs its retained prefix with the correction,
-verification judges the landing, and the outer loop alone accepts or rejects
-it. Successive retained corrections therefore compose through successive
-outer iterations. `recovery.py::compose_corrections` owns the bounded
-composition transaction used to construct one candidate Bearing; its module
-contract defines the permitted recovery boundary.
+An expectation repair is one checkpoint-local transaction: exact receipt
+matching selects the causal source, the source checkpoint is restored on a
+disposable state, one corrected local act is executed and verified, and only
+its landing may replace the live world. No later action is stored with that
+receipt. Successive hazards therefore derive successive requirements and
+compose through successive outer iterations, each followed by fresh
+orientation. `recovery.py::compose_corrections` owns the bounded transaction;
+its module contract defines the permitted recovery boundary.
 
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
@@ -280,8 +281,9 @@ this table only locates the owner.
   classification stay on `ScanRungWriteProjection`.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
-- Retained occurrence reading and prefix replay: `retained.py`; it adapts
-  recorded cause evidence into one `RetainedReplay` act and owns no loop
+- Exact expectation receipt creation and matching: `requirements.py`;
+  `progress.py::_regression_expectation_source` selects one exact causal link,
+  restores its source checkpoint, and owns the handoff to local repair
 - Option materialization and ranking: `options.py::_build_candidates`;
   `_select_wait` owns wait-source choice
 - Static chart-edge admission:
@@ -350,19 +352,19 @@ documented on `CompassEntry` and `StaticEdgeObservation`; recovery-floor and
 nogood-identity policy on `PendingDeparture` and `world_key.py::_rung_identity`.
 
 Public `PLC.history` is the sole historical query surface and spans the
-retained execution branch. Each fork boundary seals the epoch that actually
-executed the inherited prefix as an immutable `Epoch`: its inclusive scan
+committed execution lineage. Each fork boundary seals the epoch that actually
+executed the inherited scans as an immutable `Epoch`: its inclusive scan
 interval, synthesis overlay, clipped scan log, checkpoints, state window, and
 firing timelines travel together. `CausalLineage` stores those records behind
 the live runner's current epoch; an `EpochQuery` may lazily construct a private
 disposable replay runner, but neither that runner nor a copied/frozen `PLC` is
-historical identity. Cache residency is only a performance detail: a retained
+historical identity. Cache residency is only a performance detail: a recorded
 state may be returned directly or reconstructed under its owning epoch. Never
 reconstruct an inherited scan under the current overlay; that changes writer
-and occurrence identity. The recorded absolute occurrence ordinal remains
-historical identity, while retained counterfactual matching uses an
-overlay-independent dynamic writer address and fails closed when correspondence
-is ambiguous.
+and occurrence identity. An expectation receipt binds the source world,
+checkpoint owner, act, obligation shape, execution epoch/owner, and exact
+producer occurrence. Regression matching fails closed when any of those
+identities is missing or ambiguous.
 
 ## Soundness and behavior invariants
 
@@ -424,8 +426,11 @@ Static reading and orientation:
   observation adapter
 - `effects.py` — act-owned effect obligations, required-shape policy, exact
   execution-window observation, and detached recording snapshots
+- `requirements.py` — failed-effect explanations, active requirements, and
+  exact expectation receipts
+- `requirement_recovery.py` — active-requirement evaluation and compatible
+  checkpoint-local scalar schedules
 - `navigation_contracts.py` — immutable navigation contracts
-- `retained.py` — retained occurrence evidence and one-Bearing prefix replay
 
 Execution and observation:
 
@@ -506,11 +511,12 @@ plain language on first use.
   tree.
 - **cone** — a region of tags upstream of a requirement.
 - **earned work** — conservative target-relative evidence of completed target work.
-- **retained occurrence** — an exact recorded writer transition whose
-  predecessor and execution epoch remain addressable through `PLC.history`.
-- **retained replay** — one counterfactual Bearing that re-executes the public
-  retained prefix under an occurrence-scoped correction. It is a replay, not a
-  retry or resume: its causal past is deliberately reconstructed and replaced.
+- **expectation receipt** — an accepted local act's exact source checkpoint,
+  selected obligations, producer/consumer occurrences, and execution identity.
+- **checkpoint-local repair** — restore the receipt's exact source on a
+  disposable state, apply compatible active requirements, and execute only the
+  original local act. A successful landing returns to fresh orientation; no
+  action suffix is retained.
 
 Avoid extending the nautical metaphor in technical contracts. Words such as
 captain, vessel, reef, shipyard, and waters add a translation step without

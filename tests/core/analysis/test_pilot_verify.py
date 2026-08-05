@@ -25,6 +25,11 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReading,
     EarnedWorkReceipt,
 )
+from pyrung.core.analysis.pilot.effects import (
+    EffectExpectation,
+    EffectObligation,
+    EffectObservation,
+)
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -39,6 +44,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.requirements import (
+    OperandAuthority,
+    RequirementPhase,
+    RequirementStatus,
+)
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -66,12 +76,129 @@ from pyrung.core.analysis.pilot.verify import (
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.condition import CompareEq
 from pyrung.core.crossing import Cmp
+from pyrung.core.instruction.advance import constraint_holds
 from pyrung.core.physical import Physical, Ramp
 from pyrung.core.runner import PLC
 
 # ---------------------------------------------------------------------------
 # Gate pipeline
 # ---------------------------------------------------------------------------
+
+
+def _target_landing_attempt(
+    *,
+    source: Bool,
+    target: Bool,
+    before: dict[str, object],
+    after: dict[str, object],
+    expectation: EffectExpectation | None = None,
+    observations: tuple[EffectObservation, ...] = (),
+) -> tuple[_ExecutedAttempt, SimpleNamespace]:
+    with Program() as program:
+        with Rung(source):
+            out(target)
+    plc = PLC(program, dt=0.010)
+    policy = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=((source.name, True),),
+        applied=((source.name, True),),
+        expectation=expectation,
+    )
+    pulse = _PulseState(
+        fork=plc,
+        scan_before=0,
+        action_scan=1,
+        action_snap=dict(after),
+        wait_snaps=(),
+        post_pulse_snap=dict(after),
+        post_pulse_key=("target-landing",),
+        snap=dict(after),
+        key=("target-landing",),
+    )
+    bearing = Bearing(
+        ("source",),
+        Pulse(policy),
+        BearingObjective(TargetSpec(target.name, True)),
+    )
+    return (
+        _ExecutedAttempt(pulse, bearing, observations),
+        SimpleNamespace(
+            snap=before,
+            key=("source",),
+            distance_before=1,
+            tree=TraceNode(target.name, True),
+        ),
+    )
+
+
+def test_global_target_from_another_producer_does_not_pardon_selected_effect_failure() -> None:
+    selected = Bool("SelectedProducerCommand", external=True)
+    effect = Bool("SelectedProducerEffect")
+    target = Bool("AlternateProducerTarget")
+    obligation = EffectObligation(
+        effect.name,
+        True,
+        (None, 0, ()),
+        (None, 1, ()),
+        ((effect.name, True),),
+    )
+    expectation = EffectExpectation((obligation,))
+    observation = EffectObservation(obligation, "OVERWRITTEN")
+    before = {selected.name: False, effect.name: False, target.name: False}
+    after = {selected.name: True, effect.name: False, target.name: True}
+    attempt, frame = _target_landing_attempt(
+        source=selected,
+        target=target,
+        before=before,
+        after=after,
+        expectation=expectation,
+        observations=(observation,),
+    )
+
+    result = verify_gates(
+        attempt,
+        frame,
+        SimpleNamespace(earned_work=None, active_requirements=()),
+        SimpleNamespace(avoid_pred=None, target=TargetSpec(target.name, True)),
+    )
+
+    assert result.trial is None
+    assert result.nogood_pairs == frozenset()
+    assert not any(event.event == "target" for event in result.gate_events)
+
+
+def test_selected_work_cannot_break_a_satisfied_authoritative_requirement() -> None:
+    selected = Bool("ConstraintPreservingCommand", external=True)
+    target = Bool("ConstraintPreservingTarget")
+    configured = Int("ConstraintPreservingConfigured", default=20)
+    condition = Cmp(configured.name, ">", 10)
+    requirement = SimpleNamespace(
+        condition=condition,
+        status=RequirementStatus.ACTIVE,
+        phase=RequirementPhase.STEADY,
+        permits_assignment=False,
+        operand_authority=OperandAuthority.CONFIGURED,
+    )
+    before = {selected.name: False, target.name: False, configured.name: 20}
+    after = {selected.name: True, target.name: True, configured.name: 0}
+    attempt, frame = _target_landing_attempt(
+        source=selected,
+        target=target,
+        before=before,
+        after=after,
+    )
+
+    result = verify_gates(
+        attempt,
+        frame,
+        SimpleNamespace(earned_work=None, active_requirements=(requirement,)),
+        SimpleNamespace(avoid_pred=None, target=TargetSpec(target.name, True)),
+    )
+
+    assert result.trial is None
+    assert constraint_holds(condition, before) is True
+    assert constraint_holds(condition, after) is False
+    assert not any(event.event == "target" for event in result.gate_events)
 
 
 def test_outer_owner_rebases_inner_departure_receipt_to_reached():

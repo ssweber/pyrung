@@ -7,9 +7,10 @@ no writer, comparison, or nonzero default, so zero is the only value the
 program gives PILOT to discover.  At zero the watchdog finishes immediately
 and its later writer restores ``ALARMED``.
 
-After that failed attempt, changing the preset is not enough: the continuously
-held ``Reset`` condition has already spent the one-shot that enters
-``RUNNING``.  Recovery must correct the preset *and* release/reassert ``Reset``.
+After that failed attempt on a committed PLC, changing the preset is not
+enough: the continuously held ``Reset`` condition has already spent the
+one-shot that enters ``RUNNING``.  PILOT instead repairs the disposable
+checkpoint and retries that one local transaction with the original command.
 """
 
 from pyrung import (
@@ -77,7 +78,7 @@ def composite_reset() -> int:
 
 
 def manual_recovery() -> tuple[int, ...]:
-    """Demonstrate the missing composite temporal correction."""
+    """Demonstrate why a correction after committing needs a fresh edge."""
 
     plc = PLC(logic, dt=0.010)
     plc.force(Reset, True)
@@ -118,6 +119,8 @@ if __name__ == "__main__":
     print(f"Composite reset step: {clean_recovery}")
     print(f"Manual recovery steps: {recovery}")
 
-    assert not plan.reachable
+    assert plan.reachable, plan.reason
+    assert plan.state.tags[ProcessStep.name] == COMPLETE
+    assert plan.state.tags[WatchdogPresetMs.name] > 10
     assert clean_recovery == COMPLETE
     assert recovery == (ALARMED, ALARMED, ALARMED, COMPLETE)

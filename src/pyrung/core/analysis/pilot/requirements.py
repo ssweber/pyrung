@@ -9,7 +9,7 @@ restores a checkpoint, or executes a repair.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
@@ -23,8 +23,10 @@ from pyrung.core.analysis.pilot.advance import AdvanceIndex, AdvanceOwner
 from pyrung.core.analysis.pilot.effects import (
     EffectObservationSnapshot,
     EffectOccurrenceSnapshot,
+    expectation_snapshot,
     occurrence_snapshot,
 )
+from pyrung.core.analysis.pilot.navigation_contracts import act_identity
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import _condition_to_expr
 from pyrung.core.analysis.write_sites import instruction_writes_tag
@@ -106,6 +108,9 @@ class GuardRequirementAtom:
     supporting_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     deadline: EffectOccurrenceSnapshot
     source_path: tuple[int, ...]
+    # Exact static rung whose dynamic guard read demanded this atom.  The
+    # condition-tree ``source_path`` is not a PDG branch address.
+    demanding_rung: Any = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,7 @@ class FailedEffectReceiptSnapshot:
     source_world_key: Any
     source_scan: int | None
     causal_identity: tuple[int, int, int]
+    act_identity: tuple[Any, ...]
 
 
 @dataclass(frozen=True)
@@ -212,6 +218,13 @@ class FailedEffectReceipt:
     execution_epoch: Any = field(compare=False, repr=False)
     execution_owner: Any = field(compare=False, repr=False)
     source_checkpoint: Any = field(compare=False, repr=False)
+    # The exact local transaction which owned the failed expectation.  Phase 5
+    # may re-execute this designation from its causal checkpoint; it must never
+    # restore and ask Orientation to silently choose a different producer.
+    act_identity: tuple[Any, ...] = ()
+    local_act: Any = field(default=None, compare=False, repr=False)
+    local_bearing: Any = field(default=None, compare=False, repr=False)
+    expectation: Any = field(default=None, compare=False, repr=False)
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -223,6 +236,7 @@ class FailedEffectReceipt:
             self.checkpoint_owner,
             id(self.execution_epoch),
             id(self.execution_owner),
+            self.act_identity,
         )
 
     def diagnostic_snapshot(self) -> FailedEffectReceiptSnapshot:
@@ -242,6 +256,7 @@ class FailedEffectReceipt:
                 id(self.execution_owner),
                 id(self.checkpoint_owner),
             ),
+            act_identity=self.act_identity,
         )
 
 
@@ -400,6 +415,13 @@ class ExpectationReceipt:
     execution_epoch: Any = field(compare=False, repr=False)
     execution_owner: Any = field(compare=False, repr=False)
     source_checkpoint: Any = field(compare=False, repr=False)
+    producer_occurrence_objects: tuple[RungWrite, ...] = field(
+        default=(), compare=False, repr=False
+    )
+    consumer_occurrence_objects: tuple[RungRead, ...] = field(default=(), compare=False, repr=False)
+    local_act: Any = field(default=None, compare=False, repr=False)
+    local_bearing: Any = field(default=None, compare=False, repr=False)
+    expectation: Any = field(default=None, compare=False, repr=False)
 
     def diagnostic_snapshot(self) -> ExpectationReceiptSnapshot:
         checkpoint_work = getattr(
@@ -435,6 +457,69 @@ class ExpectationReceipt:
             id(self.execution_epoch),
             id(self.execution_owner),
         )
+
+
+def match_expectation_receipt(
+    receipts: tuple[ExpectationReceipt, ...] | list[ExpectationReceipt],
+    *,
+    occurrence: RungWrite,
+    execution_epoch: Any,
+    execution_owner: Any,
+) -> ExpectationReceipt | None:
+    """Return the unique accepted expectation owning one exact causal write.
+
+    The detached receipt view is recording material, not causal authority.  A
+    match therefore requires the retained projection occurrence's complete
+    dynamic address (including its scan), the same immutable Epoch/query
+    objects, and an intact local expectation source.  Reconstructed occurrence
+    objects are allowed because epoch-owned projection queries may rebuild
+    them; equal-looking evidence from another epoch is not.
+    """
+
+    observed = occurrence_snapshot(occurrence)
+    matches: list[ExpectationReceipt] = []
+    for receipt in receipts:
+        if (
+            receipt.execution_epoch is not execution_epoch
+            or receipt.execution_owner is not execution_owner
+            or receipt.local_act is None
+            or receipt.local_bearing is None
+            or receipt.expectation is None
+            or len(receipt.producer_occurrence_objects) != len(receipt.obligations)
+            or receipt.act_identity != act_identity(receipt.local_act)
+            or receipt.local_bearing.act is not receipt.local_act
+            or receipt.local_bearing.expectation is not receipt.expectation
+            or expectation_snapshot(receipt.expectation) != receipt.obligations
+            or getattr(receipt.source_checkpoint, "owner", None) is not receipt.checkpoint_owner
+            or getattr(receipt.source_checkpoint, "key", None) != receipt.source_world_key
+            or receipt.local_bearing.world_key != receipt.source_world_key
+        ):
+            continue
+        owned = tuple(
+            index
+            for index, producer in enumerate(receipt.producer_occurrence_objects)
+            if occurrence_snapshot(producer) == observed
+        )
+        if len(owned) != 1:
+            continue
+        index = owned[0]
+        if (
+            occurrence_snapshot(receipt.producer_occurrence_objects[index])
+            != (receipt.producer_occurrences[index])
+        ):
+            continue
+        obligation = receipt.obligations[index]
+        local_obligation = receipt.expectation.obligations[index]
+        if (
+            obligation.tag != occurrence.transition.tag_name
+            or obligation.value != occurrence.transition.to_value
+            or obligation.producer[:2]
+            != (occurrence.rung_id.subroutine, occurrence.rung_id.rung_index)
+            or local_obligation.producer_rung is not occurrence.run.rung
+        ):
+            continue
+        matches.append(receipt)
+    return matches[0] if len(matches) == 1 else None
 
 
 _SWAPPED_OPERATORS = {
@@ -808,6 +893,121 @@ def _evaluate_run_guard(
     return _GuardEvaluation(True, tuple(supporting))
 
 
+def _evaluate_guard_complement(
+    condition: Condition,
+    cursor: _GuardReadCursor,
+    path: tuple[int, ...],
+) -> _GuardEvaluation:
+    """Invert one exactly observed true guard without guessing unread arms."""
+
+    if isinstance(condition, AllCondition):
+        supporting: list[RungRead] = []
+        alternatives: list[GuardRequirementCondition] = []
+        exhaustive = True
+        for index, child in enumerate(condition.conditions):
+            result = _evaluate_guard_complement(child, cursor, (*path, index))
+            supporting.extend(result.supporting_reads)
+            if not result.exact:
+                exhaustive = False
+                continue
+            if not result.value:
+                return _GuardEvaluation(False, tuple(supporting), exact=True)
+            if result.requirement is not None:
+                alternatives.append(result.requirement)
+        if not alternatives:
+            return _GuardEvaluation(True, tuple(supporting), exact=False)
+        requirement = (
+            alternatives[0]
+            if len(alternatives) == 1 and exhaustive
+            else GuardRequirementExpr(
+                GuardLogic.ANY,
+                tuple(alternatives),
+                exhaustive=exhaustive,
+            )
+        )
+        return _GuardEvaluation(True, tuple(supporting), requirement=requirement)
+
+    if isinstance(condition, AnyCondition):
+        supporting: list[RungRead] = []
+        conjuncts: list[GuardRequirementCondition] = []
+        any_true = False
+        for index, child in enumerate(condition.conditions):
+            result = _evaluate_guard_complement(child, cursor, (*path, index))
+            supporting.extend(result.supporting_reads)
+            if not result.exact or result.requirement is None:
+                # A true OR short-circuits.  Its unread suffix cannot be
+                # asserted false merely because the first observed arm was
+                # true, so the exact dual is unavailable.
+                return _GuardEvaluation(any_true, tuple(supporting), exact=False)
+            any_true = any_true or result.value
+            conjuncts.append(result.requirement)
+        if not any_true:
+            return _GuardEvaluation(False, tuple(supporting), exact=True)
+        requirement = (
+            conjuncts[0]
+            if len(conjuncts) == 1
+            else GuardRequirementExpr(GuardLogic.ALL, tuple(conjuncts))
+        )
+        return _GuardEvaluation(True, tuple(supporting), requirement=requirement)
+
+    captured = cursor.evaluate_leaf(condition)
+    if captured is None:
+        return _GuardEvaluation(False, (), exact=False)
+    value, reads = captured
+    constraint = _guard_leaf_constraint(condition)
+    complement = complement_scalar_constraint(constraint) if constraint is not None else None
+    if complement is None or not reads:
+        return _GuardEvaluation(value, reads, exact=False)
+    occurrences = tuple(occurrence_snapshot(read) for read in reads)
+    return _GuardEvaluation(
+        value,
+        reads,
+        requirement=GuardRequirementAtom(
+            condition=complement,
+            supporting_occurrences=occurrences,
+            deadline=occurrences[-1],
+            source_path=path,
+        ),
+    )
+
+
+def _evaluate_run_guard_complement(
+    run: RungRun,
+    projection: ScanRungWriteProjection,
+) -> _GuardEvaluation:
+    """Complement the implicit conjunction which enabled one exact run."""
+
+    conditions = tuple(getattr(run.rung, "_conditions", ()))
+    if run.kind == "branch":
+        conditions = conditions[getattr(run.rung, "_branch_condition_start", 0) :]
+    cursor = _GuardReadCursor(projection.reads_for_run(run), run.view)
+    supporting: list[RungRead] = []
+    alternatives: list[GuardRequirementCondition] = []
+    exhaustive = True
+    for index, condition in enumerate(conditions):
+        result = _evaluate_guard_complement(condition, cursor, (index,))
+        supporting.extend(result.supporting_reads)
+        if not result.exact:
+            exhaustive = False
+            continue
+        if not result.value:
+            return _GuardEvaluation(False, tuple(supporting), exact=True)
+        if result.requirement is not None:
+            alternatives.append(result.requirement)
+    if not alternatives:
+        return _GuardEvaluation(True, tuple(supporting), exact=False)
+    requirement = (
+        alternatives[0]
+        if len(alternatives) == 1 and exhaustive
+        else GuardRequirementExpr(
+            GuardLogic.ANY,
+            tuple(alternatives),
+            exhaustive=exhaustive,
+        )
+    )
+    return _GuardEvaluation(True, tuple(supporting), requirement=requirement)
+
+
 def _unique_static_run(
     projection: ScanRungWriteProjection,
     rung: Any,
@@ -986,6 +1186,18 @@ def _guard_atoms(
     return tuple(atom for term in condition.terms for atom in _guard_atoms(term))
 
 
+def _bind_guard_demanding_rung(
+    condition: GuardRequirementCondition,
+    rung: Any,
+) -> GuardRequirementCondition:
+    if isinstance(condition, GuardRequirementAtom):
+        return replace(condition, demanding_rung=rung)
+    return replace(
+        condition,
+        terms=tuple(_bind_guard_demanding_rung(term, rung) for term in condition.terms),
+    )
+
+
 def derive_guard_requirement_from_effect(
     observation: Any,
     projection: ScanRungWriteProjection,
@@ -1059,10 +1271,11 @@ def derive_guard_requirement_from_effect(
         return RequirementDerivation(explanation)
 
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
+    condition = _bind_guard_demanding_rung(evaluation.requirement, run.rung)
     return RequirementDerivation(
         explanation=explanation,
         requirement=ActiveRequirement(
-            condition=evaluation.requirement,
+            condition=condition,
             demanding_occurrence=demanding,
             # A compound false guard is decided at its final observed read.
             # Each OR arm keeps its own (possibly earlier) actionable deadline;
@@ -1078,6 +1291,82 @@ def derive_guard_requirement_from_effect(
             phase=phase,
             provenance=provenance,
             scope=(*scope, guard_scope),
+        ),
+    )
+
+
+def derive_overwriter_guard_requirement_from_effect(
+    observation: Any,
+    projection: ScanRungWriteProjection,
+    *,
+    execution_epoch: Any,
+    execution_owner: Any,
+    selected_writer: Any,
+    source_world_key: Any,
+    source_checkpoint: Any,
+    phase: RequirementPhase = RequirementPhase.STEADY,
+    provenance: str = "",
+    scope: tuple[Any, ...] = (),
+) -> RequirementDerivation:
+    """Prevent one exact harmful writer by complementing its observed guard."""
+
+    source_error = _validate_source_identity(
+        execution_epoch=execution_epoch,
+        execution_owner=execution_owner,
+        source_world_key=source_world_key,
+        source_checkpoint=source_checkpoint,
+        selected_writer=selected_writer,
+        projection=projection,
+    )
+    if source_error is not None:
+        return _unknown(source_error)
+    disposition = getattr(observation, "disposition", None)
+    if disposition not in {"OVERWRITTEN", "DISPLACED"}:
+        return _unknown("effect has no harmful overwriter guard to complement")
+    displacement = getattr(observation, "displacement", None)
+    if displacement is None or not _contains_identity(projection.writes, displacement):
+        return _unknown("harmful overwriter is not owned by the exact projection")
+    run = displacement.run
+    if not run.enabled:
+        return _unknown("harmful overwriter run was not enabled")
+    evaluation = _evaluate_run_guard_complement(run, projection)
+    if (
+        not evaluation.value
+        or not evaluation.exact
+        or evaluation.requirement is None
+        or not evaluation.supporting_reads
+    ):
+        return _unknown("harmful overwriter guard has no exact scalar complement")
+    condition = _bind_guard_demanding_rung(evaluation.requirement, run.rung)
+    demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
+    explanation_kind = (
+        FailureExplanationKind.OVERWRITTEN
+        if disposition == "OVERWRITTEN"
+        else FailureExplanationKind.DISPLACED
+    )
+    explanation = FailureExplanation(
+        explanation_kind,
+        detail="exact harmful overwriter guard was complemented",
+        supporting_occurrences=tuple(
+            occurrence_snapshot(read) for read in evaluation.supporting_reads
+        ),
+    )
+    return RequirementDerivation(
+        explanation=explanation,
+        requirement=ActiveRequirement(
+            condition=condition,
+            demanding_occurrence=demanding,
+            deadline=demanding,
+            selected_writer=selected_writer,
+            operand_authority=OperandAuthority.UNKNOWN,
+            execution_epoch=execution_epoch,
+            execution_owner=execution_owner,
+            source_world_key=source_world_key,
+            checkpoint_owner=source_checkpoint.owner,
+            source_checkpoint=source_checkpoint,
+            phase=phase,
+            provenance=provenance,
+            scope=(*scope, ("overwriter_guard", occurrence_snapshot(displacement))),
         ),
     )
 
@@ -1302,6 +1591,11 @@ def derive_advance_requirement_from_effect(
         return exact[0]
     if len(exact) > 1:
         return _unknown("failed effect has several exact advance inversions")
+    if len(candidates) == 1:
+        # Preserve the exact owner's fail-closed reason.  The generic fallback
+        # obscures which identity/timing check rejected an otherwise unique
+        # consequential read and makes causal integration impossible to audit.
+        return candidates[0]
     return _unknown("failed effect has no exact advance inversion")
 
 

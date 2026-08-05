@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import Bool
-from pyrung.core.analysis.pilot import correction_candidates, investigate, retained
+from pyrung.core.analysis.pilot import correction_candidates, investigate
 from pyrung.core.analysis.pilot.constrained_reachability import Unknown
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis
 from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -65,14 +65,5 @@ def test_non_executable_candidate_continuation_is_honestly_unknown() -> None:
     )
 
 
-def test_retained_reads_candidate_decisions_without_investigate_indirection() -> None:
-    assert retained._rank_hypotheses is correction_candidates._rank_hypotheses
-    assert retained._exploratory_correction_rungs is (
-        correction_candidates._exploratory_correction_rungs
-    )
-    assert retained._continuation_with_active_correction is (
-        correction_candidates._continuation_with_active_correction
-    )
-    assert retained._active_pilot_rungs_defeat_needed is (
-        correction_candidates._active_pilot_rungs_defeat_needed
-    )
+def test_candidate_selection_exposes_no_historical_replay_entrypoint() -> None:
+    assert not hasattr(correction_candidates, "replay_retained_prefix")

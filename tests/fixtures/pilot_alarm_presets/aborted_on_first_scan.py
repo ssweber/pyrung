@@ -62,4 +62,8 @@ if __name__ == "__main__":
 
     assert initial == INITIAL
     assert endpoint == ABORTED
-    assert not plan.reachable
+    assert plan.reachable, plan.reason
+    assert plan.anchor_scan == 0
+    assert plan.total_scans == 1
+    assert plan.state.tags[ProcessStep.name] == AT_TARGET
+    assert plan.state.tags[WatchdogPresetMs.name] > 10

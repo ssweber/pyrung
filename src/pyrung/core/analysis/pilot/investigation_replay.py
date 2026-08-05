@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -140,6 +140,12 @@ class CausalOccurrence:
     rung: RungId
     tag: str
     value: Any
+    scan_id: int | None = None
+    occurrence_ordinal: int | None = None
+    exact_write: Any = field(default=None, compare=False, repr=False)
+    execution_epoch: Any = field(default=None, compare=False, repr=False)
+    execution_owner: Any = field(default=None, compare=False, repr=False)
+    execution_projection: Any = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -155,6 +161,12 @@ class RegressionWitness:
     causal_spine: frozenset[str]
     causal_roots: tuple[tuple[str, Any], ...] = ()
     owner_snapshot: Mapping[str, Any] | None = None
+    # Full, unfiltered deep-chain occurrences.  ``cause`` intentionally begins
+    # after the incident anchor for replay comparison; accepted expectations
+    # which later participate in a regression can have produced their effect
+    # at or before that anchor.  These links retain the projection/epoch proof
+    # needed to join such a cause back to its expectation receipt.
+    receipt_links: tuple[CausalOccurrence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -235,6 +247,166 @@ def incident_regression_witness(
         or _values_match(effect.from_value, effect.to_value)
     ):
         return None
+    # Keep the lineage's retained tip epoch identity.  Slicing the same epoch
+    # through ``departure.scan`` would mint a new Epoch/query pair and sever an
+    # otherwise exact join to an accepted receipt earlier in that epoch.
+    sealed = plc._causal_lineage.seal_through(plc.state.scan_id)
+
+    def _exact_occurrence(step: Any) -> CausalOccurrence | None:
+        transition = step.transition
+        ordinal = transition.occurrence_ordinal
+        if ordinal is None:
+            return None
+        projection = plc._replay_rung_write_projection_at(transition.scan_id)
+        if projection is None:
+            return None
+        exact = tuple(
+            write
+            for write in projection.writes
+            if write.ordinal == ordinal
+            and write.rung_id == RungId(step.subroutine, step.rung_index)
+            and write.transition.tag_name == transition.tag_name
+            and _values_match(write.transition.to_value, transition.to_value)
+        )
+        owned = next(
+            (
+                (epoch, owner)
+                for epoch, owner in sealed
+                if epoch.first_scan <= transition.scan_id <= epoch.last_scan
+            ),
+            None,
+        )
+        if len(exact) != 1 or owned is None:
+            return None
+        epoch, owner = owned
+        return CausalOccurrence(
+            rung=RungId(step.subroutine, step.rung_index),
+            tag=transition.tag_name,
+            value=transition.to_value,
+            scan_id=transition.scan_id,
+            occurrence_ordinal=ordinal,
+            exact_write=exact[0],
+            execution_epoch=epoch,
+            execution_owner=owner,
+            execution_projection=projection,
+        )
+
+    receipt_links: list[CausalOccurrence] = []
+    for step in chain.steps:
+        transition = step.transition
+        if transition.scan_id > departure.scan or _values_match(
+            transition.from_value, transition.to_value
+        ):
+            continue
+        exact_occurrence = _exact_occurrence(step)
+        if exact_occurrence is not None and not any(
+            prior.scan_id == exact_occurrence.scan_id
+            and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
+            and prior.execution_epoch is exact_occurrence.execution_epoch
+            and prior.execution_owner is exact_occurrence.execution_owner
+            for prior in receipt_links
+        ):
+            receipt_links.append(exact_occurrence)
+
+    # A steady root can have been established by an earlier accepted action.
+    # The deep chain records only its held-since boundary, so recover a link
+    # only when that scan owns one unambiguous changed rung write.
+    for root in chain.roots:
+        held_since = root.held_since_scan
+        if held_since is None or held_since > departure.scan:
+            continue
+        projection = plc._replay_rung_write_projection_at(held_since)
+        owned = next(
+            (
+                (epoch, owner)
+                for epoch, owner in sealed
+                if epoch.first_scan <= held_since <= epoch.last_scan
+            ),
+            None,
+        )
+        candidates = (
+            tuple(
+                write
+                for write in projection.writes
+                if write.transition.tag_name == root.tag_name
+                and _values_match(write.transition.to_value, root.value)
+                and not _values_match(write.transition.from_value, write.transition.to_value)
+            )
+            if projection is not None
+            else ()
+        )
+        if len(candidates) != 1 or owned is None:
+            continue
+        write = candidates[0]
+        epoch, owner = owned
+        exact_occurrence = CausalOccurrence(
+            rung=write.rung_id,
+            tag=write.transition.tag_name,
+            value=write.transition.to_value,
+            scan_id=write.scan_id,
+            occurrence_ordinal=write.ordinal,
+            exact_write=write,
+            execution_epoch=epoch,
+            execution_owner=owner,
+            execution_projection=projection,
+        )
+        if not any(
+            prior.scan_id == exact_occurrence.scan_id
+            and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
+            and prior.execution_epoch is exact_occurrence.execution_epoch
+            and prior.execution_owner is exact_occurrence.execution_owner
+            for prior in receipt_links
+        ):
+            receipt_links.append(exact_occurrence)
+
+    for transition in chain.conjunctive_roots:
+        ordinal = transition.occurrence_ordinal
+        if ordinal is None or transition.scan_id > departure.scan:
+            continue
+        projection = plc._replay_rung_write_projection_at(transition.scan_id)
+        candidates = (
+            tuple(
+                write
+                for write in projection.writes
+                if write.ordinal == ordinal
+                and write.transition.tag_name == transition.tag_name
+                and _values_match(write.transition.to_value, transition.to_value)
+            )
+            if projection is not None
+            else ()
+        )
+        owned = next(
+            (
+                (epoch, owner)
+                for epoch, owner in sealed
+                if epoch.first_scan <= transition.scan_id <= epoch.last_scan
+            ),
+            None,
+        )
+        if len(candidates) != 1 or owned is None:
+            continue
+        write = candidates[0]
+        epoch, owner = owned
+        exact_occurrence = CausalOccurrence(
+            rung=write.rung_id,
+            tag=transition.tag_name,
+            value=transition.to_value,
+            scan_id=transition.scan_id,
+            occurrence_ordinal=ordinal,
+            exact_write=write,
+            execution_epoch=epoch,
+            execution_owner=owner,
+            execution_projection=projection,
+        )
+        if not any(
+            prior.scan_id == exact_occurrence.scan_id
+            and prior.occurrence_ordinal == exact_occurrence.occurrence_ordinal
+            and prior.execution_epoch is exact_occurrence.execution_epoch
+            and prior.execution_owner is exact_occurrence.execution_owner
+            for prior in receipt_links
+        ):
+            receipt_links.append(exact_occurrence)
+
     cause: list[CausalOccurrence] = []
     for step in chain.steps:
         transition = step.transition
@@ -244,11 +416,17 @@ def incident_regression_witness(
             or _values_match(transition.from_value, transition.to_value)
         ):
             continue
-        occurrence = CausalOccurrence(
-            rung=RungId(step.subroutine, step.rung_index),
-            tag=transition.tag_name,
-            value=transition.to_value,
-        )
+        occurrence = _exact_occurrence(step)
+        if occurrence is None:
+            # Generic regression comparison predates exact receipt linking and
+            # remains valid with its coarse rung/tag/value designation.  Only
+            # ``receipt_links`` is exact-only and fails closed when projection
+            # ownership is unavailable.
+            occurrence = CausalOccurrence(
+                rung=RungId(step.subroutine, step.rung_index),
+                tag=transition.tag_name,
+                value=transition.to_value,
+            )
         if not any(
             prior.rung == occurrence.rung
             and prior.tag == occurrence.tag
@@ -277,6 +455,7 @@ def incident_regression_witness(
             if departure.scan > plc.history.oldest_scan_id
             else dict(incident.before_snap)
         ),
+        receipt_links=tuple(receipt_links),
     )
 
 

@@ -30,7 +30,10 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReceipt,
     earned_work_is_useful_motion,
 )
-from pyrung.core.analysis.pilot.effects import observe_execution_window
+from pyrung.core.analysis.pilot.effects import (
+    fulfilled_expectation_observations,
+    observe_execution_window,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
@@ -39,7 +42,14 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.outcome import assess_outcome
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    ProgressEffect,
+    TrialAssessment,
+    assess_outcome,
+)
+from pyrung.core.analysis.pilot.requirement_recovery import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
@@ -78,6 +88,26 @@ class _SpinVerdict(Enum):
     PASS = auto()
     SPIN = auto()
     EXCURSION = auto()
+
+
+_PROVED_EFFECT_VIOLATIONS = frozenset({"ABSENT", "OVERWRITTEN", "STRANDED", "DISPLACED"})
+
+
+def _proved_effect_violations(attempt: _ExecutedAttempt) -> tuple[Any, ...]:
+    """Exact selected-effect failures which must outrank generic acceptance."""
+
+    fulfilled_obligations = {
+        id(item.obligation)
+        for item in attempt.effect_observations
+        if item.disposition == "SURVIVED"
+    }
+    return tuple(
+        observation
+        for observation in attempt.effect_observations
+        if observation.disposition in _PROVED_EFFECT_VIOLATIONS
+        and observation.obligation.consumer is not None
+        and id(observation.obligation) not in fulfilled_obligations
+    )
 
 
 def _rebind_replay_attempt(
@@ -862,6 +892,7 @@ def _verify_gates(
         *,
         nogoods: Any = None,
         avoid_names: Any = None,
+        proof_rejection: bool = False,
     ) -> _AttemptResult:
         return _AttemptResult(
             trial=None,
@@ -869,6 +900,7 @@ def _verify_gates(
             nogood_pairs=frozenset(collected_nogoods if nogoods is None else nogoods),
             confirmed_correction=trial.confirmed_correction,
             avoid_names=tuple(avoid_violations if avoid_names is None else avoid_names),
+            proof_rejection=proof_rejection,
         )
 
     def _accept_target() -> _AttemptResult:
@@ -956,6 +988,54 @@ def _verify_gates(
             nogoods=({nogood_pair} if nogood_pair is not None else policy.regression_nogoods)
         )
 
+    # Exact selected-effect evidence is stronger than an endpoint coincidence.
+    # A proved failed obligation may derive a narrower requirement, but it is
+    # never accepted merely because another write also reached the target and
+    # is never converted into an empirical action nogood. UNKNOWN remains an
+    # ambiguous observation and continues through ordinary verification.
+    effect_violations = _proved_effect_violations(attempt)
+    if effect_violations:
+        gate_events.append(
+            PilotGateEvent(
+                "expectation-violated",
+                "selected effect failed before its obliged consumer",
+                evidence={
+                    "dispositions": tuple(
+                        observation.disposition for observation in effect_violations
+                    )
+                },
+            )
+        )
+        return _reject(nogoods=(), proof_rejection=True)
+
+    # Requirements without an executable overlay (notably configured and
+    # program-written operands) are still real navigation constraints. Verify
+    # the accepted fork did not turn a proved source truth false before target
+    # or generic landing acceptance.
+    requirement_violations = active_requirement_violations(
+        tuple(getattr(state, "active_requirements", ())),
+        dict(frame.snap),
+        dict(trial.snap),
+    )
+    if requirement_violations:
+        gate_events.append(
+            PilotGateEvent(
+                "requirement-violated",
+                "candidate invalidated an active requirement",
+                evidence={
+                    "requirements": tuple(
+                        getattr(
+                            requirement,
+                            "navigation_identity",
+                            getattr(requirement, "condition", None),
+                        )
+                        for requirement in requirement_violations
+                    )
+                },
+            )
+        )
+        return _reject(nogoods=(), proof_rejection=True)
+
     # Reaching the target does not pardon an intervention that got there by
     # erasing already-earned work (for example, calling init so a completion
     # bit momentarily reads true).  The banked-work veto therefore precedes
@@ -975,6 +1055,75 @@ def _verify_gates(
     # generic gates. Phase 3 carries and records it separately; Phase 4 owns
     # turning a proved violation into an actionable requirement. It is not a
     # gate event, rejection, or nogood yet.
+    expectation = bearing.expectation
+    if (
+        expectation is not None
+        and fulfilled_expectation_observations(
+            expectation,
+            attempt.effect_observations,
+        )
+        and any(
+            obligation.boundary is not None
+            and not _values_match(
+                trial.snap.get(obligation.boundary[0]),
+                obligation.boundary[1],
+            )
+            for obligation in expectation.obligations
+        )
+    ):
+        boundaries = tuple(
+            obligation.boundary
+            for obligation in expectation.obligations
+            if obligation.boundary is not None
+        )
+        departed_boundary = (
+            boundaries[0]
+            if len(boundaries) == 1
+            and not _values_match(trial.snap.get(boundaries[0][0]), boundaries[0][1])
+            else None
+        )
+        if departed_boundary is not None:
+            channel_motion = ChannelMotion(
+                departed_boundary[0],
+                departed_boundary[1],
+                departed_boundary,
+                stop_reason="departed",
+            )
+        assessment = TrialAssessment(
+            agency=Agency.PILOT,
+            bearing=(
+                BearingEffect.DEPARTED if channel_motion.departed else BearingEffect.SATISFIED
+            ),
+            progress=(
+                ProgressEffect.BACKWARD if channel_motion.departed else ProgressEffect.UNCHANGED
+            ),
+            new_frontier=False,
+            accepted=True,
+        )
+        gate_events.append(
+            PilotGateEvent(
+                "expectation-survived",
+                "selected whole-shape effect reached its exact obliged consumer",
+            )
+        )
+        return _AttemptResult(
+            trial=_accepted_trial(
+                attempt,
+                frame,
+                gate_events,
+                channel_motion,
+                earned_work_receipt,
+                AssessedMotion(
+                    new_key=trial.key,
+                    trend=frame.distance_before,
+                    assessment=assessment,
+                ),
+            ),
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(collected_nogoods),
+            confirmed_correction=trial.confirmed_correction,
+            avoid_names=tuple(avoid_violations),
+        )
 
     spin_verdict = _gate_spin(
         trial,

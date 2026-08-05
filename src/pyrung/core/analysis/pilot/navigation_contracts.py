@@ -7,7 +7,7 @@ and ``steer.py`` / ``skiff.py`` execute the declared work.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.requirements import ActiveRequirement
     from pyrung.core.analysis.pilot.trace import TraceChoice
-    from pyrung.core.analysis.pilot.types import _ConfirmedCorrection
 
 
 @dataclass(frozen=True)
@@ -104,7 +103,6 @@ class ActSource(StrEnum):
     LEARNED_BATCH = "learned_batch"
     CROSSING = "crossing"
     WIDENING = "widening"
-    RETAINED = "retained"
     TERMINAL = "terminal"
 
 
@@ -112,7 +110,6 @@ class ExpectationExemption(StrEnum):
     """Why an act deliberately makes no producer promise."""
 
     AMBIENT_TERMINAL = "ambient_terminal"
-    LEGACY_RETAINED_REPLAY = "legacy_retained_replay"
     UNRESOLVED_EFFECT = "unresolved_effect"
 
 
@@ -263,42 +260,7 @@ class Dwell:
     )
 
 
-@dataclass(frozen=True)
-class RetainedOccurrence:
-    """Exact retained writer occurrence whose predecessor is still public."""
-
-    floor_scan: int
-    scan: int
-    ordinal: int | None
-    tag: str
-    from_value: Any
-    to_value: Any
-    writer: tuple[str | None, int]
-    address: tuple[Any, ...]
-
-
-@dataclass(frozen=True)
-class RetainedReplay:
-    """Re-execute one retained prefix with one occurrence-scoped correction."""
-
-    policy: ActPolicy
-    occurrence: RetainedOccurrence
-    correction: _ConfirmedCorrection
-    # A composition probe that passed the ordinary execution and verification
-    # gates is already the exact corrected world this act would produce.  Keep
-    # it as execution evidence so the outer loop can promote that tip instead
-    # of replaying the same retained suffix a second time.  It is deliberately
-    # excluded from equality/identity: navigation knowledge is about the act,
-    # not the disposable object that happened to prove it.
-    prepared_world: Any = field(default=None, compare=False, repr=False)
-    prepared_journey: tuple[Any, ...] | None = field(
-        default=None,
-        compare=False,
-        repr=False,
-    )
-
-
-NavigationAct = Pulse | BatchPulse | Coast | Dwell | RetainedReplay
+NavigationAct = Pulse | BatchPulse | Coast | Dwell
 
 
 @dataclass(frozen=True)
@@ -415,18 +377,4 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
                 _semantic_key(route.target_value),
             )
         return identity
-    if isinstance(act, RetainedReplay):
-        occurrence = act.occurrence
-        return (
-            "retained-replay",
-            occurrence.floor_scan,
-            occurrence.scan,
-            occurrence.ordinal,
-            occurrence.tag,
-            _semantic_key(occurrence.from_value),
-            _semantic_key(occurrence.to_value),
-            occurrence.writer,
-            occurrence.address,
-            act.correction.identity,
-        )
     return ("dwell", _applied_identity(act.policy.applied))

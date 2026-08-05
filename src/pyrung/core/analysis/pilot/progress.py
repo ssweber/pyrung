@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from pyrsistent import pvector
 
 import pyrung.core.analysis.pilot.recording as recording
+from pyrung.core.analysis.pilot.advance import build_advance_index
 from pyrung.core.analysis.pilot.coast import coast_departure_tags
 from pyrung.core.analysis.pilot.compass import ActionNogoodObservation
 from pyrung.core.analysis.pilot.departure import (
@@ -35,8 +36,15 @@ from pyrung.core.analysis.pilot.departure import (
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkMovement,
     EarnedWorkReceipt,
+    earned_work_is_useful_motion,
+)
+from pyrung.core.analysis.pilot.effects import (
+    EffectObservation,
+    fulfilled_expectation_observations,
+    occurrence_snapshot,
 )
 from pyrung.core.analysis.pilot.investigate import (
+    CausalOccurrence,
     InvestigationRejection,
     InvestigationResult,
     RegressionWitness,
@@ -61,10 +69,21 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     fork_with_pilot_rungs,
 )
-from pyrung.core.analysis.pilot.recovery import assert_recovery_disposable_state
+from pyrung.core.analysis.pilot.recovery import (
+    assert_recovery_disposable_state,
+    recovery_transaction_active,
+)
+from pyrung.core.analysis.pilot.requirements import (
+    ExpectationReceipt,
+    FailedEffectReceipt,
+    classify_bound_operand_authority,
+    derive_advance_requirement_from_effect,
+    match_expectation_receipt,
+)
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
+    BearingDeparture,
     CorrectionStatus,
     MotionKind,
     PilotEvent,
@@ -92,6 +111,149 @@ if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
+
+
+def _regression_expectation_source(
+    state: _PilotState,
+    witness: RegressionWitness | None,
+) -> tuple[ExpectationReceipt, Any] | None:
+    """Join an unfiltered exact causal link to one accepted expectation."""
+
+    if witness is None:
+        return None
+    matches: list[tuple[ExpectationReceipt, Any]] = []
+    for link in witness.receipt_links:
+        if link.exact_write is None or link.execution_epoch is None or link.execution_owner is None:
+            continue
+        receipt = match_expectation_receipt(
+            state.expectation_receipts,
+            occurrence=link.exact_write,
+            execution_epoch=link.execution_epoch,
+            execution_owner=link.execution_owner,
+        )
+        if receipt is not None:
+            matches.append((receipt, link))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _match_regression_expectation_receipt(
+    state: _PilotState,
+    witness: RegressionWitness | None,
+) -> ExpectationReceipt | None:
+    """Return only a unique exact accepted source; ambiguity fails closed."""
+
+    source = _regression_expectation_source(state, witness)
+    return source[0] if source is not None else None
+
+
+def _delayed_requirement_from_regression(
+    state: _PilotState,
+    ctx: _PilotContext,
+    witness: RegressionWitness | None,
+) -> tuple[ExpectationReceipt, Any, EffectObservation, FailedEffectReceipt] | None:
+    """Adapt a later exact regression into the ordinary failed-effect seam."""
+
+    source = _regression_expectation_source(state, witness)
+    if source is None or witness is None:
+        return None
+    receipt, source_link = source
+    producer_snapshot = occurrence_snapshot(source_link.exact_write)
+    producer_indices = tuple(
+        index
+        for index, occurrence in enumerate(receipt.producer_occurrences)
+        if occurrence == producer_snapshot
+    )
+    harmful = tuple(
+        occurrence
+        for occurrence in witness.cause
+        if occurrence.tag == witness.channel_tag
+        and occurrence.scan_id == witness.departure_scan
+        and _values_match(occurrence.value, witness.departed)
+        and occurrence.exact_write is not None
+        and occurrence.execution_epoch is not None
+        and occurrence.execution_owner is not None
+    )
+    if len(producer_indices) != 1 or len(harmful) != 1:
+        return None
+    index = producer_indices[0]
+    harmful_link = harmful[0]
+    projection = harmful_link.execution_projection
+    if projection is None or not any(
+        write is harmful_link.exact_write for write in projection.writes
+    ):
+        return None
+    obligation = receipt.expectation.obligations[index]
+    observation = EffectObservation(
+        obligation=obligation,
+        disposition="DISPLACED",
+        appeared=source_link.exact_write,
+        displacement=harmful_link.exact_write,
+        observed_reads=projection.enabling_reads_observed_by_write(harmful_link.exact_write),
+        detail="accepted effect participated in a later exact regression cause",
+        execution_epoch=harmful_link.execution_epoch,
+        execution_owner=harmful_link.execution_owner,
+        execution_projection=projection,
+    )
+    source_work = receipt.source_checkpoint.world.work
+    source_tags = source_work.state.tags
+    known = source_work._known_tags_by_name
+    overrides = source_work._input_overrides
+    configured = frozenset((*overrides.forces, *overrides.pending_patches))
+    authorities = {
+        read.occurrence.name: classify_bound_operand_authority(
+            read.occurrence.name,
+            source_value=source_tags.get(
+                read.occurrence.name,
+                getattr(known.get(read.occurrence.name), "default", None),
+            ),
+            declared_default=getattr(known.get(read.occurrence.name), "default", None),
+            steerable=ctx.steerable,
+            program_written=frozenset(ctx.pdg.writers_of),
+            configured=configured,
+        )
+        for read in projection.reads
+    }
+    advance_index = build_advance_index(
+        ctx.program,
+        getattr(source_work, "_harness", None),
+    )
+    derivation = derive_advance_requirement_from_effect(
+        advance_index,
+        projection,
+        observation,
+        operand_authorities=authorities,
+        execution_epoch=harmful_link.execution_epoch,
+        execution_owner=harmful_link.execution_owner,
+        selected_writer=obligation.producer,
+        source_world_key=receipt.source_world_key,
+        source_checkpoint=receipt.source_checkpoint,
+        provenance="delayed-regression",
+    )
+    if derivation.requirement is None:
+        return None
+    failed = FailedEffectReceipt(
+        explanation=derivation.explanation,
+        observation=observation.diagnostic_snapshot(),
+        selected_writer=obligation.producer,
+        source_world_key=receipt.source_world_key,
+        checkpoint_owner=receipt.checkpoint_owner,
+        execution_epoch=harmful_link.execution_epoch,
+        execution_owner=harmful_link.execution_owner,
+        source_checkpoint=receipt.source_checkpoint,
+        act_identity=receipt.act_identity,
+        local_act=receipt.local_act,
+        local_bearing=receipt.local_bearing,
+        expectation=receipt.expectation,
+    )
+    if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
+        state.failed_effect_receipts.append(failed)
+    requirement = derivation.requirement
+    if not any(
+        current.navigation_identity == requirement.navigation_identity
+        for current in state.active_requirements
+    ):
+        state.active_requirements.append(requirement)
+    return receipt, requirement, observation, failed
 
 
 class DepartureAction(Enum):
@@ -480,18 +642,36 @@ def _handle_channel_departure(
             "to_value": execution.after_snap.get(chan),
         },
     )
+    expectation = bearing.expectation
+    fulfilled_observations = (
+        fulfilled_expectation_observations(
+            expectation,
+            attempt.effect_observations,
+        )
+        if expectation is not None
+        else ()
+    )
+    fulfilled_expectation = expectation is not None and len(fulfilled_observations) == len(
+        expectation.obligations
+    )
     # Classify BEFORE investigating (departure.py): program-owned motion may
     # preserve earned work and offer a clean forward route. Reverting
     # it would throw away the whole march, and investigation would honestly
     # confirm nothing. Affirmative clean-route evidence opens bounded pending
     # piloting; regression or unknown evidence follows the conservative
     # investigate-and-revert arm.
+    exact_channel_sources = tuple(
+        item.obligation.value for item in fulfilled_observations if item.obligation.tag == chan
+    )
+    classification_source = (
+        exact_channel_sources[0] if len(exact_channel_sources) == 1 else departed_from
+    )
     observation, settled_work = observe_departure(
         state,
         ctx,
         bearing.objective,
         chan,
-        departed_from,
+        classification_source,
         execution.before_snap,
         occurrence_scan=next(
             (
@@ -499,8 +679,8 @@ def _handle_channel_departure(
                 for event in execution.timeline
                 if any(
                     tag == chan
-                    and _values_match(before, departed_from)
-                    and not _values_match(after, departed_from)
+                    and _values_match(before, classification_source)
+                    and not _values_match(after, classification_source)
                     for tag, before, after in event.transitions
                 )
             ),
@@ -508,6 +688,39 @@ def _handle_channel_departure(
         ),
     )
     departure = classify_departure(observation)
+    if fulfilled_expectation and earned_work_is_useful_motion(trial.earned_work_receipt):
+        departure = replace(
+            departure,
+            classification=DepartureClassification.CLEAN_CONTINUATION,
+            reason="exact handoff accompanied target-relative continuation work",
+        )
+    if (
+        fulfilled_expectation
+        and departure.classification is not DepartureClassification.CLEAN_CONTINUATION
+    ):
+        # An exact handoff does not make every later departure a fault.  First
+        # honor affirmative ProgramStep/earned-work evidence; only regressive
+        # or unresolved motion enters delayed receipt matching.
+        origin = _channel_recovery_origin(
+            state,
+            trial,
+            frame,
+            chan,
+            departed_from,
+        )
+        if policy.chase_regression_causes:
+            yield recording._investigation_started_event(trial, origin)
+        yield from _investigate_and_revert(
+            trial,
+            frame,
+            state,
+            ctx,
+            origin=origin,
+            retain_if_unresolved=departure,
+            settled_if_unresolved=settled_work,
+            occurrence_requirements=observation.reading.external_supports,
+        )
+        return
     if departure.classification is DepartureClassification.CLEAN_CONTINUATION:
         prescribed_departure = (
             policy.route_prescribed and verified.assessment.agency is Agency.PILOT
@@ -942,6 +1155,7 @@ def _install_confirmed_correction(
     origin_key: tuple[Any, ...],
     scan: int,
     source: str,
+    adopt_existing: bool = False,
 ) -> _CorrectionReceipt:
     """Install one locally replay-proven correction on probation.
 
@@ -964,12 +1178,13 @@ def _install_confirmed_correction(
         raise ValueError("a confirmed correction cannot contain duplicate rungs")
     existing = {_rung_identity(rung) for rung in state.pilot_rungs}
     duplicate = tuple(rung for rung in correction.pilot_rungs if _rung_identity(rung) in existing)
-    if duplicate:
+    if duplicate and not (adopt_existing and len(duplicate) == len(correction.pilot_rungs)):
         raise ValueError(
             "confirmed correction cannot claim already-owned rung(s): "
             f"{tuple((rung.dest, rung.value) for rung in duplicate)!r}"
         )
-    state.pilot_rungs = _merged_pilot_rungs(correction.pilot_rungs, state.pilot_rungs)
+    if not duplicate:
+        state.pilot_rungs = _merged_pilot_rungs(correction.pilot_rungs, state.pilot_rungs)
     state.hold_log.append(
         _HoldLogEntry(
             scan=scan,
@@ -1260,12 +1475,61 @@ def _investigate_and_revert(
         # to move it (Heat_CurStep 0->1 en route to 3).  Chasing it spawns
         # corrective holds against the plan itself (lock the enabler of the
         # very advance we wanted).  Only anomalous motion enters the bearing.
-        bearing = _deviation_bearing(
+        expectation = bearing_owner.expectation
+        fulfilled = (
+            fulfilled_expectation_observations(
+                expectation,
+                attempt.effect_observations,
+            )
+            if expectation is not None
+            else ()
+        )
+        exact_delayed_links: list[tuple[Any, BearingDeparture, Any, Any]] = []
+        for observation in fulfilled:
+            consumer = observation.consumer_read
+            appeared = observation.appeared
+            if appeared is None:
+                continue
+            start_scan = consumer.scan_id if consumer is not None else appeared.scan_id
+            start_ordinal = consumer.ordinal if consumer is not None else appeared.ordinal
+            landing_value = execution.after_snap.get(observation.obligation.tag)
+            links = tuple(
+                (
+                    observation,
+                    BearingDeparture(
+                        observation.obligation.tag,
+                        observation.obligation.value,
+                        scan_id,
+                    ),
+                    write,
+                    projection,
+                )
+                for scan_id in range(start_scan, end_scan + 1)
+                if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
+                for write in projection.writes
+                if (scan_id > start_scan or write.ordinal > start_ordinal)
+                and write.run.enabled
+                and write.transition.tag_name == observation.obligation.tag
+                and not _values_match(
+                    write.transition.to_value,
+                    observation.obligation.value,
+                )
+                and _values_match(write.transition.to_value, landing_value)
+            )
+            link = links[-1] if links else None
+            if link is not None:
+                exact_delayed_links.append(link)
+        exact_delayed_departures = [link[1] for link in exact_delayed_links]
+        delayed_bearing = tuple(
+            (departure.tag, departure.value) for departure in exact_delayed_departures
+        )
+        coarse_bearing = _deviation_bearing(
             execution,
             frame,
             state.watch_tags,
             bearing_owner.objective.frontier,
         )
+        bearing = delayed_bearing or coarse_bearing
         # The incident's evidence is the recorded step timelines inside the
         # window — the trend recorder's pen marks — never a history re-diff.
         # Committed acts are world-side, so reverted operations are already gone
@@ -1286,6 +1550,38 @@ def _investigate_and_revert(
             timeline=window_timeline,
             channel_tag=channel_motion.channel_tag,
         )
+        generic_incident = (
+            build_deviation_incident(
+                anchor_scan=origin.anchor_scan,
+                end_scan=end_scan,
+                action=policy.applied,
+                bearing=coarse_bearing,
+                before_snap=origin.before_snap,
+                after_snap=execution.after_snap,
+                timeline=window_timeline,
+                channel_tag=channel_motion.channel_tag,
+            )
+            if delayed_bearing
+            else incident
+        )
+        if exact_delayed_departures:
+            incident = replace(
+                incident,
+                departure_scan=min(
+                    departure.scan
+                    for departure in exact_delayed_departures
+                    if departure.scan is not None
+                ),
+                departures=tuple(exact_delayed_departures),
+                changed_tags=tuple(
+                    sorted(
+                        {
+                            *incident.changed_tags,
+                            *(departure.tag for departure in exact_delayed_departures),
+                        }
+                    )
+                ),
+            )
 
         # Replay re-arms each step's recorded session spec (kind + channel +
         # target) from the committed step context.
@@ -1296,7 +1592,177 @@ def _investigate_and_revert(
             if step.scan_before >= cp_fork.state.scan_id
         )
         role_tags = coast_departure_tags(state, ctx)
-        regression_witness = incident_regression_witness(pulse.fork, incident)
+        # Join later causes on the adopted live lineage.  The disposable pulse
+        # fork can contain equal history under distinct Epoch/query objects;
+        # expectation receipts are intentionally bound to ``state.work``.
+        exact_witnesses: list[RegressionWitness] = []
+        sealed = state.work._causal_lineage.seal_through(end_scan)
+        for observation, departure, harmful_write, projection in exact_delayed_links:
+            source_matches = tuple(
+                (receipt, index, producer)
+                for receipt in state.expectation_receipts
+                if receipt.local_bearing is bearing_owner
+                for index, producer in enumerate(receipt.producer_occurrence_objects)
+                if occurrence_snapshot(producer) == occurrence_snapshot(observation.appeared)
+            )
+            harmful_owner = next(
+                (
+                    (epoch, owner)
+                    for epoch, owner in sealed
+                    if epoch.first_scan <= harmful_write.scan_id <= epoch.last_scan
+                ),
+                None,
+            )
+            if len(source_matches) != 1 or harmful_owner is None or departure.scan is None:
+                continue
+            receipt, _index, producer = source_matches[0]
+            epoch, owner = harmful_owner
+            source_link = CausalOccurrence(
+                rung=producer.rung_id,
+                tag=producer.transition.tag_name,
+                value=producer.transition.to_value,
+                scan_id=producer.scan_id,
+                occurrence_ordinal=producer.ordinal,
+                exact_write=producer,
+                execution_epoch=receipt.execution_epoch,
+                execution_owner=receipt.execution_owner,
+                execution_projection=state.work._replay_rung_write_projection_at(producer.scan_id),
+            )
+            harmful_link = CausalOccurrence(
+                rung=harmful_write.rung_id,
+                tag=harmful_write.transition.tag_name,
+                value=harmful_write.transition.to_value,
+                scan_id=harmful_write.scan_id,
+                occurrence_ordinal=harmful_write.ordinal,
+                exact_write=harmful_write,
+                execution_epoch=epoch,
+                execution_owner=owner,
+                execution_projection=projection,
+            )
+            exact_witnesses.append(
+                RegressionWitness(
+                    channel_tag=departure.tag,
+                    source=departure.value,
+                    departed=harmful_write.transition.to_value,
+                    landing=execution.after_snap.get(departure.tag),
+                    departure_scan=departure.scan,
+                    cause=(harmful_link,),
+                    causal_spine=frozenset(
+                        (
+                            departure.tag,
+                            *(
+                                read.occurrence.name
+                                for read in projection.enabling_reads_observed_by_write(
+                                    harmful_write
+                                )
+                            ),
+                        )
+                    ),
+                    owner_snapshot=dict(projection.entry_tags),
+                    receipt_links=(source_link,),
+                )
+            )
+        regression_witness = (
+            exact_witnesses[0]
+            if len(exact_witnesses) == 1
+            else incident_regression_witness(state.work, incident)
+        )
+        delayed_requirement = _delayed_requirement_from_regression(
+            state,
+            ctx,
+            regression_witness,
+        )
+        if delayed_requirement is None and exact_witnesses:
+            regression_witness = incident_regression_witness(state.work, generic_incident)
+            delayed_requirement = _delayed_requirement_from_regression(
+                state,
+                ctx,
+                regression_witness,
+            )
+        if delayed_requirement is not None:
+            expectation_receipt, requirement, _observation, failed_receipt = delayed_requirement
+            # The matched expectation owns the rollback source.  Its historical
+            # future remains causal evidence on the retained Epoch receipt, but
+            # is not an executable prefix: restore the source world and return
+            # immediately so the outer loop performs one bounded local retry.
+            incident_scan = state.work.state.scan_id
+            state.load_world(expectation_receipt.source_checkpoint.world)
+            state.checkpoints.clear()
+            state.pending_departure = None
+            return (
+                PilotEvent(
+                    "candidate_rejected",
+                    incident_scan,
+                    {
+                        "index": 0,
+                        "candidate": recording._candidate_payload(policy),
+                        "applied": policy.applied,
+                        "co_actions": tuple(
+                            pair for pair in policy.applied if pair != policy.primary_action
+                        ),
+                        "gates": trial.gate_events,
+                        "effect_observations": (failed_receipt.observation,),
+                        "post_commit": True,
+                    },
+                ),
+                PilotEvent(
+                    "failed_effect_explained",
+                    incident_scan,
+                    {"receipt": failed_receipt.diagnostic_snapshot()},
+                ),
+                PilotEvent(
+                    "requirement_activated",
+                    requirement.deadline.scan_id,
+                    {"requirement": requirement.diagnostic_snapshot()},
+                ),
+                PilotEvent(
+                    "trend_regression",
+                    state.work.state.scan_id,
+                    {
+                        "from_trend": verified.trend,
+                        "to_trend": state.best_trend,
+                        "checkpoint_key": expectation_receipt.source_world_key,
+                        "regression_nogoods": frozenset(),
+                        "pilot_rungs": tuple(state.pilot_rungs),
+                        "channel_transitions": (),
+                        "investigation": {
+                            "delayed_expectation": True,
+                            "requirement": requirement.diagnostic_snapshot(),
+                            "receipt": expectation_receipt.diagnostic_snapshot(),
+                            "retained_suffix": False,
+                        },
+                        "revoked_corrections": (),
+                        "revoked_pilot_rungs": (),
+                    },
+                ),
+            )
+        if recovery_transaction_active():
+            # This landing was observed while the already-selected local
+            # repair transaction was being proved.  It may use the existing
+            # exact receipt matcher above, but it may not start the legacy
+            # hypothesis composer recursively. Restore the transaction's
+            # checkpoint and hand the changed causal shape back to the fresh
+            # outer read.
+            state.load_world(cp_world)
+            state.best_trend = cp_trend
+            state.pending_departure = None
+            return (
+                PilotEvent(
+                    "trend_regression",
+                    state.work.state.scan_id,
+                    {
+                        "from_trend": verified.trend,
+                        "to_trend": cp_trend,
+                        "checkpoint_key": cp_key,
+                        "regression_nogoods": frozenset(),
+                        "pilot_rungs": tuple(state.pilot_rungs),
+                        "channel_transitions": (),
+                        "investigation": {"local_repair_handoff": True},
+                        "revoked_corrections": (),
+                        "revoked_pilot_rungs": (),
+                    },
+                ),
+            )
         # A corrective fact belongs to the occurrence that exposed it. The
         # witness carries the scan-entry snapshot for the harmful writer; its
         # Earned-work coordinates distinguish a late fault from earlier useful work

@@ -1,4 +1,4 @@
-"""Observed retained departures enter ordinary PILOT recovery."""
+"""Historical cold blockers are not executable retained action prefixes."""
 
 from __future__ import annotations
 
@@ -44,37 +44,35 @@ def _composed_startup_program() -> tuple[Program, Bool, Bool, Bool, Bool, Bool, 
     return program, guard_a, guard_b, start, fault_a, fault_b, target
 
 
-def test_observed_seed_departure_replays_full_ordinary_drive() -> None:
-    program, enable, guard, start, trip, target = _delayed_startup_program()
+def test_unselected_seed_departure_does_not_start_independent_blocker_search() -> None:
+    """A missing bootstrap designation is not retroactively made a promise."""
+
+    program, _enable, _guard, _start, _trip, target = _delayed_startup_program()
 
     plan = pilot_how(PLC(program), target, max_scans=40)
 
-    assert plan.reachable, plan.reason
-    assert plan.tags[target.name] is True
-    assert plan.tags[trip.name] is False
-    assert plan.tags[enable.name] is True
-    assert plan.tags[guard.name] is True
-    assert plan.tags[start.name] is True
-    replay = plan.replay()
-    assert replay.state.tags[target.name] is True
-    assert replay.state.tags[trip.name] is False
+    assert not plan.reachable
+    assert not plan.ordered_steps
+    assert plan.reason is not None
+    assert "No productive next action" in plan.reason
 
 
-def test_observed_departures_compose_through_successive_outer_loop_rebases() -> None:
-    program, guard_a, guard_b, start, fault_a, fault_b, target = _composed_startup_program()
+def test_unselected_cold_faults_do_not_compose_as_retained_rebases() -> None:
+    """Fresh Orientation never executes a synthesized historical suffix."""
+
+    program, _guard_a, _guard_b, _start, _fault_a, _fault_b, target = _composed_startup_program()
     plan = pilot_how(PLC(program), target, max_scans=60)
 
-    assert plan.reachable, plan.reason
-    assert plan.tags[fault_a.name] is False
-    assert plan.tags[fault_b.name] is False
-    assert plan.tags[guard_a.name] is True
-    assert plan.tags[guard_b.name] is True
-    assert plan.tags[start.name] is True
-    assert plan.replay().state.tags[target.name] is True
+    assert not plan.reachable
+    assert not plan.ordered_steps
+    assert plan.reason is not None
+    assert "No productive next action" in plan.reason
 
 
-def test_post_startup_invocation_uses_earliest_retained_floor() -> None:
-    program, _enable, guard, start, trip, target = _delayed_startup_program()
+def test_post_startup_invocation_does_not_rewind_to_earliest_retained_floor() -> None:
+    """Only a matched expectation receipt authorizes causal checkpoint restore."""
+
+    program, _enable, _guard, _start, trip, target = _delayed_startup_program()
     plc = PLC(program)
     for _ in range(6):
         plc.step()
@@ -82,11 +80,9 @@ def test_post_startup_invocation_uses_earliest_retained_floor() -> None:
 
     plan = pilot_how(plc, target, max_scans=40)
 
-    assert plan.reachable, plan.reason
-    assert plan.tags[target.name] is True
-    assert plan.tags[guard.name] is True
-    assert plan.tags[start.name] is True
-    assert plan.replay().state.tags[target.name] is True
+    assert not plan.reachable
+    assert not plan.ordered_steps
+    assert plc.state.tags[trip.name] is True
 
 
 def test_trimmed_predecessor_does_not_invent_initialization() -> None:

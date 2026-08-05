@@ -97,6 +97,12 @@ def assert_recovery_inactive(operation: str) -> None:
         raise RecoveryInvariantViolation(f"bounded recovery cannot {operation}")
 
 
+def recovery_transaction_active() -> bool:
+    """Whether the caller is already inside the one bounded composition owner."""
+
+    return _ACTIVE_RECOVERY.get() is not None
+
+
 def assert_recovery_disposable_state(state: object, operation: str) -> None:
     """Require transaction-local state for an otherwise permitted local commit."""
 

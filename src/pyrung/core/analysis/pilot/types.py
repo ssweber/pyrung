@@ -630,11 +630,6 @@ class _PilotContext:
     # exposes another retained occurrence. The outer committed attempt owns
     # action-edge learning and its deep causal attribution.
     collect_action_attribution: bool = True
-    # Exact-occurrence closure may prefer the next retained writer while it is
-    # assembling one bounded correction.  The live outer loop leaves this
-    # false so executable present-world continuation always outranks rewriting
-    # older causal history.
-    retained_recovery_first: bool = False
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
     # Kept off prerequisite holds (options.py) and off preferred init/reset
     # writer selection (trace._rank_writers): a momentary command, never a hold.
@@ -793,6 +788,14 @@ class _PilotState:
     active_requirements: list[ActiveRequirement] = field(default_factory=list)
     expectation_receipts: list[ExpectationReceipt] = field(default_factory=list)
     failed_effect_receipts: list[FailedEffectReceipt] = field(default_factory=list)
+    # Exact Phase-5 local schedules already admitted from one causal source.
+    # Attempt identity is knowledge-side so restoring that source cannot turn
+    # the same failed repair into another lap.
+    requirement_repair_attempts: set[tuple[Any, ...]] = field(default_factory=set)
+    # Exact current-world acts rejected by obligation/requirement proof. These
+    # are admissibility receipts, not empirical impossibility/nogood claims;
+    # a changed world or active-requirement identity admits the act anew.
+    proof_rejected_acts: set[tuple[_StateKey, tuple[Any, ...]]] = field(default_factory=set)
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)
@@ -1081,3 +1084,7 @@ class _AttemptResult:
     # was mid-flight when the budget ran out).
     stall_receipt: Any = None
     stall_pending: bool = False
+    # The rejection is backed by exact obligation/requirement evidence rather
+    # than an empirical failed act.  It may establish a narrower requirement,
+    # but it must never become an ActionNogood merely because it was rejected.
+    proof_rejection: bool = False

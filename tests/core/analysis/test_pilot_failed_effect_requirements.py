@@ -1077,11 +1077,11 @@ def test_public_failed_effect_event_keeps_selected_writer_and_source() -> None:
         event.data["receipt"] for event in events if event.kind == "failed_effect_explained"
     ]
 
-    guard_false = next(
+    displaced = next(
         receipt
         for receipt in receipts
-        if receipt.explanation.kind is FailureExplanationKind.GUARD_FALSE
+        if receipt.explanation.kind is FailureExplanationKind.DISPLACED
     )
-    assert guard_false.observation.disposition == "ABSENT"
-    assert guard_false.selected_writer == (None, 1, (0,))
-    assert guard_false.source_scan == 1
+    assert displaced.observation.disposition == "DISPLACED"
+    assert displaced.selected_writer == (None, 0, ())
+    assert displaced.source_scan == 1

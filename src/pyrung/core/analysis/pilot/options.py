@@ -1158,7 +1158,7 @@ def _prescribe_wait(
                 required_shape=local_shape,
                 boundary=(edge.role.channel_tag, edge.to_value),
             )
-            if local_shape is not None
+            if local_shape is not None and step.producer_observed
             else None
         )
         preferred_channel = (
@@ -1825,6 +1825,9 @@ def _assemble_candidate_read(
                 ctx.pdg,
                 ctx.program,
                 boundary=None,
+                selected_pairs=branch.pairs,
+                snapshot=frame.snap,
+                steerable=ctx.steerable,
             )
             if branch.effect_path
             else None,
@@ -1918,6 +1921,9 @@ def _assemble_candidate_read(
                     ctx.pdg,
                     ctx.program,
                     boundary=detail.operation_boundary,
+                    selected_pairs=(pair,),
+                    snapshot=frame.snap,
+                    steerable=getattr(ctx, "steerable", frozenset()),
                 )
                 if detail is not None
                 else (
@@ -1943,6 +1949,9 @@ def _assemble_candidate_read(
                                 program_step.handoff_by_action[pair].channel,
                                 program_step.handoff_by_action[pair].boundary,
                             ),
+                            selected_pairs=(pair, *program_step.context_actions),
+                            snapshot=frame.snap,
+                            steerable=getattr(ctx, "steerable", frozenset()),
                         )
                         for required in program_step.required_inputs
                         if required.pair == pair and required.effect_path
@@ -2058,6 +2067,9 @@ def _assemble_candidate_read(
             ctx.pdg,
             ctx.program,
             boundary=primary_paths[0].operation_boundary,
+            selected_pairs=artifact,
+            snapshot=frame.snap,
+            steerable=getattr(ctx, "steerable", frozenset()),
         )
         if expectation is not None:
             widening_expectations.append((artifact, expectation))

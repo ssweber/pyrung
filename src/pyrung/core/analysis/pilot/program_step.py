@@ -73,6 +73,9 @@ class ProgramStep:
     producer: Any
     boundary: Eq | Cmp | AffineCmp | None
     channel: str | None
+    # Exact evidence that the selected producer ran in the first projected
+    # scan.  Later projected progress must not promise this write early.
+    producer_observed: bool = False
     required_inputs: tuple[TraceAction, ...] = ()
     context_actions: tuple[tuple[str, Any], ...] = ()
     projected_changes: tuple[tuple[str, Any, Any], ...] = ()
@@ -441,6 +444,7 @@ def read_program_step(
                 if step_boundary is not None
                 else producer.command_tag
             ),
+            producer_observed=bool(writer_runs),
             required_inputs=required_inputs,
             context_actions=context,
             input_handoffs=handoffs,

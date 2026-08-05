@@ -493,8 +493,8 @@ def fork_with_pilot_rungs(
     an explicit empty set).  Public ``PLC.fork()`` does not implicitly inherit
     PILOT holds. Historical causal queries delegate scans at and before this
     boundary to ``source``, including synthetic rung resolution. Internal
-    replay of the child's suffix may therefore use its current synthesis
-    without redefining the retained prefix.
+    replay of the child's later scans may therefore use its current synthesis
+    without redefining inherited historical scans.
     """
     fork = source.fork(
         scan_id=scan_id,

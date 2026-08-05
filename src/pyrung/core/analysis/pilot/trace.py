@@ -283,6 +283,9 @@ class TraceReadConstraints:
     prior: DomainPrior | None = None
     avoid_pred: Any = None
     rejected_actions: frozenset[tuple[str, Any]] = frozenset()
+    # Inert recovery constraints participate in the read identity and in
+    # Orientation's action admission. Trace never turns them into assignments.
+    active_requirements: tuple[Any, ...] = ()
     harness: Any = None
 
     @classmethod
@@ -305,6 +308,7 @@ class TraceReadConstraints:
             prior=ctx.domain_prior,
             avoid_pred=avoid_pred,
             rejected_actions=rejected_actions,
+            active_requirements=tuple(getattr(ctx, "active_requirements", ())),
             harness=getattr(work, "_harness", None),
         )
 
