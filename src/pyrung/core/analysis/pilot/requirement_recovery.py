@@ -131,6 +131,19 @@ def actions_preserve_active_requirements(
 
     if not actions or not requirements:
         return True
+    assigned_tags = {tag for tag, _value in actions}
+    for requirement in requirements:
+        if requirement.status is not RequirementStatus.ACTIVE:
+            continue
+        condition = requirement.condition
+        if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
+            continue
+        if any(
+            not atom.permits_assignment and getattr(atom.condition, "tag", None) in assigned_tags
+            for alternative in guard_alternatives(condition)
+            for atom in alternative
+        ):
+            return False
     landing = dict(snapshot)
     landing.update(actions)
     return not active_requirement_violations(requirements, snapshot, landing)

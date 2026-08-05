@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from pyrung import PLC
+from pyrung import PLC, Int, Program, Timer, copy, on_delay, rung, system
+from pyrung.core.analysis.pilot import pilot_events
 from tests.fixtures.pilot_alarm_presets import conditional_negative
 
 
@@ -28,3 +29,38 @@ def test_configured_preset_is_not_mutated_to_prevent_a_committed_consequence() -
     replay = plan.replay()
     assert replay.state.tags[fixture.Consequence.name] is False
     assert replay.state.tags[fixture.PresetMs.name] == fixture.DEFAULT_PRESET_MS
+
+
+def test_unconfigured_external_zero_preset_remains_adjustable() -> None:
+    initial = 0
+    target = 1
+    diverted = 9
+    state = Int("AuthorityExternalZeroState", default=initial)
+    preset = Int("AuthorityExternalZeroPresetMs", external=True)
+    watchdog = Timer.clone("AuthorityExternalZeroWatchdog")
+
+    with Program() as logic:
+        with rung(system.sys.first_scan):
+            copy(target, state)
+        with rung(state == target):
+            on_delay(watchdog, preset)
+        with rung(watchdog.Done):
+            copy(diverted, state, oneshot=True)
+
+    events = tuple(pilot_events(PLC(logic, dt=0.010), state == target, max_scans=20))
+    requirements = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and getattr(event.data["requirement"].condition, "tag", None) == preset.name
+    )
+
+    assert len(requirements) == 1
+    assert requirements[0].operand_authority.value == "adjustable"
+    assert any(
+        event.kind == "requirement_locally_repaired"
+        and (preset.name, 11) in event.data["assignments"]
+        for event in events
+    )
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True

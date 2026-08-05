@@ -206,8 +206,14 @@ def _delayed_requirement_from_regression(
     source_work = receipt.source_checkpoint.world.work
     source_tags = source_work.state.tags
     known = source_work._known_tags_by_name
-    overrides = source_work._input_overrides
-    configured = frozenset((*overrides.forces, *overrides.pending_patches))
+    configured = getattr(receipt.source_checkpoint, "configured_inputs", None)
+    if configured is None:
+        # Lightweight unit-test checkpoints predate the immutable provenance
+        # field; retain their exact manager-backed behavior as a safe fallback.
+        overrides = source_work._input_overrides
+        configured = frozenset((*overrides.forces, *overrides.pending_patches))
+    else:
+        configured = frozenset(configured)
     authorities = {
         read.occurrence.name: classify_bound_operand_authority(
             read.occurrence.name,

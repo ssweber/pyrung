@@ -108,9 +108,16 @@ class GuardRequirementAtom:
     supporting_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     deadline: EffectOccurrenceSnapshot
     source_path: tuple[int, ...]
+    operand_authority: OperandAuthority = OperandAuthority.UNKNOWN
     # Exact static rung whose dynamic guard read demanded this atom.  The
     # condition-tree ``source_path`` is not a PDG branch address.
     demanding_rung: Any = field(default=None, compare=False, repr=False)
+
+    @property
+    def permits_assignment(self) -> bool:
+        """Whether recovery may directly steer this exact guard operand."""
+
+        return self.operand_authority is OperandAuthority.ADJUSTABLE
 
 
 @dataclass(frozen=True)
@@ -139,7 +146,12 @@ def _scheduled_condition_identity(condition: ActiveCondition) -> Any:
     """Constraint identity without receipt-local occurrence evidence."""
 
     if isinstance(condition, GuardRequirementAtom):
-        return ("atom", condition.condition, condition.source_path)
+        return (
+            "atom",
+            condition.condition,
+            condition.source_path,
+            condition.operand_authority,
+        )
     if isinstance(condition, GuardRequirementExpr):
         return (
             "expr",
@@ -180,6 +192,30 @@ def classify_bound_operand_authority(
     if tag in configured:
         return OperandAuthority.CONFIGURED
     if source_value != declared_default or bool(source_value):
+        return OperandAuthority.CONFIGURED
+    if tag in steerable:
+        return OperandAuthority.ADJUSTABLE
+    return OperandAuthority.UNKNOWN
+
+
+def classify_guard_operand_authority(
+    tag: str,
+    *,
+    steerable: frozenset[str],
+    program_written: frozenset[str],
+    configured: frozenset[str] = frozenset(),
+) -> OperandAuthority:
+    """Classify one arbitrary guard read without parameter-value heuristics.
+
+    Guard values are program conditions, not owner-declared completion
+    parameters. A true/nonzero external guard therefore remains an ordinary
+    steerable input unless the program writes it or the caller explicitly
+    patched/forced it at the causal source.
+    """
+
+    if tag in program_written:
+        return OperandAuthority.PROGRAM_WRITTEN
+    if tag in configured:
         return OperandAuthority.CONFIGURED
     if tag in steerable:
         return OperandAuthority.ADJUSTABLE
@@ -373,6 +409,47 @@ class ActiveRequirement:
             self.provenance,
             self.scope,
         )
+
+
+def bind_guard_operand_authorities(
+    requirement: ActiveRequirement | None,
+    *,
+    steerable: frozenset[str],
+    program_written: frozenset[str],
+    configured: frozenset[str] = frozenset(),
+) -> ActiveRequirement | None:
+    """Attach exact per-atom ownership to one derived guard requirement."""
+
+    if requirement is None or not isinstance(
+        requirement.condition,
+        GuardRequirementAtom | GuardRequirementExpr,
+    ):
+        return requirement
+
+    def bind(condition: GuardRequirementCondition) -> GuardRequirementCondition:
+        if isinstance(condition, GuardRequirementExpr):
+            return replace(condition, terms=tuple(bind(term) for term in condition.terms))
+        tag = getattr(condition.condition, "tag", None)
+        authority = (
+            classify_guard_operand_authority(
+                tag,
+                steerable=steerable,
+                program_written=program_written,
+                configured=configured,
+            )
+            if isinstance(tag, str)
+            else OperandAuthority.UNKNOWN
+        )
+        return replace(condition, operand_authority=authority)
+
+    condition = bind(requirement.condition)
+    authorities = {atom.operand_authority for atom in _guard_atoms(condition)}
+    summary = authorities.pop() if len(authorities) == 1 else OperandAuthority.UNKNOWN
+    return replace(
+        requirement,
+        condition=condition,
+        operand_authority=summary,
+    )
 
 
 @dataclass(frozen=True)

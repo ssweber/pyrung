@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.effects import (
         EffectObservation,
         EffectObservationSnapshot,
+        EffectOccurrenceSnapshot,
     )
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -327,6 +328,10 @@ class _CausalCheckpoint:
     key: _StateKey | None
     world: _World
     objective: BearingObjective
+    # Exact external configuration visible at the source boundary. Runner
+    # forks intentionally do not retain mutable patch/force managers, so
+    # requirement authority must travel as immutable checkpoint provenance.
+    configured_inputs: frozenset[str] = frozenset()
     owner: _CheckpointOwner = field(
         default_factory=_CheckpointOwner,
         compare=False,
@@ -638,6 +643,10 @@ class _PilotContext:
     # Phase-4 scheduling knowledge exposed read-only to Orientation.  It is
     # not an executable overlay and candidate construction must not mutate it.
     active_requirements: tuple[ActiveRequirement, ...] = ()
+    # Caller-owned patches/forces present when this drive was prepared. This
+    # survives the initial execution fork only as provenance; every causal
+    # checkpoint freezes its own immutable copy.
+    configured_inputs: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -765,6 +774,40 @@ class _ConfirmedCorrection:
     justification: str
 
 
+@dataclass(frozen=True)
+class _ContinuationCheckpoint:
+    """One already-executed fresh-read boundary in a recovery continuation."""
+
+    scan_id: int
+    world_key: _StateKey
+    kind: Literal["local_repair", "unchanged_coast", "program_input_handoff", "target_prefix"]
+    execution_epoch: Any
+    execution_owner: Any
+    landing_occurrence: EffectOccurrenceSnapshot | None = None
+
+    @property
+    def program_step_certified(self) -> bool:
+        return self.kind != "local_repair"
+
+
+@dataclass(frozen=True)
+class _RecoveryContinuation:
+    """PLC-free authority carried from one locally repaired causal source.
+
+    Checkpoints describe only worlds which ordinary Orientation has already
+    reread and committed.  No future action, ordinal, projection, or predicted
+    snapshot belongs to this receipt.
+    """
+
+    checkpoint_owner: Any
+    source_world_key: _StateKey
+    checkpoints: tuple[_ContinuationCheckpoint, ...]
+
+    @property
+    def tip(self) -> _ContinuationCheckpoint:
+        return self.checkpoints[-1]
+
+
 @dataclass
 class _PilotState:
     # ── The world (reverts) ──
@@ -793,6 +836,9 @@ class _PilotState:
     # Attempt identity is knowledge-side so restoring that source cannot turn
     # the same failed repair into another lap.
     requirement_repair_attempts: set[tuple[Any, ...]] = field(default_factory=set)
+    # A locally repaired source may continue through fresh, exact current-world
+    # reads.  This receipt is knowledge, not retained executable work.
+    recovery_continuation: _RecoveryContinuation | None = None
     # Exact current-world acts rejected by obligation/requirement proof. These
     # are admissibility receipts, not empirical impossibility/nogood claims;
     # a changed world or active-requirement identity admits the act anew.

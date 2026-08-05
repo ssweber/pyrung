@@ -1997,7 +1997,9 @@ def _assemble_candidate_read(
             seen_candidates.add(pair)
             candidates.append(candidate)
 
-    if awaited_action is not None and not candidates:
+    if awaited_action is not None and not any(
+        candidate.source is ActSource.TRACE for candidate in candidates
+    ):
         pair = awaited_action.action
         if (
             _action_allowed(ctx, pair)

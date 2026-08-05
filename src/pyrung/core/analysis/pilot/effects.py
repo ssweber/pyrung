@@ -358,7 +358,7 @@ def expectation_from_writer(
 def exact_last_landing_write(
     projections: Iterable[ScanRungWriteProjection],
     *,
-    after: RungRead | RungWrite,
+    after: RungRead | RungWrite | EffectOccurrenceSnapshot | None,
     tag: str,
     target_value: Any,
     landing_value: Any,
@@ -368,14 +368,15 @@ def exact_last_landing_write(
     Ordered handoff observation deliberately names the first displacement.
     Terminal recovery has a different question: which later occurrence left
     the tag at the scan-exit value? Peeling that final writer is exact and
-    deterministic; missing projection identity fails closed.
+    deterministic; missing projection identity fails closed. ``after=None``
+    makes the supplied projection window itself the exclusive lower bound.
     """
 
     candidates = tuple(
         (projection, write)
         for projection in projections
         for write in projection.writes
-        if (write.scan_id, write.ordinal) > (after.scan_id, after.ordinal)
+        if (after is None or (write.scan_id, write.ordinal) > (after.scan_id, after.ordinal))
         and write.run.enabled
         and write.transition.tag_name == tag
         and not _values_match(write.transition.to_value, target_value)
@@ -399,6 +400,41 @@ def promote_terminal_target_observation(
     ambiguous and therefore produce no obligation failure.
     """
 
+    if not _values_match(window_entry_value, final_landing_value):
+        return None
+    return _promote_displaced_terminal_target(
+        observations,
+        final_landing_value=final_landing_value,
+    )
+
+
+def promote_certified_prefix_target_observation(
+    observations: Iterable[EffectObservation],
+    *,
+    final_landing_value: Any,
+) -> EffectObservation | None:
+    """Promote non-zero terminal loss after an adjacent certified checkpoint.
+
+    The caller owns either the typed ProgramStep/checkpoint proof or an exact
+    local-retry source and full execution window. This adapter owns exactly the
+    same appeared occurrence, projection, and final landing-writer checks as
+    zero-net promotion without pretending the execution window began and ended
+    at the same value.
+    """
+
+    return _promote_displaced_terminal_target(
+        observations,
+        final_landing_value=final_landing_value,
+    )
+
+
+def _promote_displaced_terminal_target(
+    observations: Iterable[EffectObservation],
+    *,
+    final_landing_value: Any,
+) -> EffectObservation | None:
+    """Apply exact terminal occurrence/final-writer checks shared by promoters."""
+
     appeared = tuple(
         observation
         for observation in observations
@@ -407,8 +443,6 @@ def promote_terminal_target_observation(
     if len(appeared) != 1:
         return None
     observation = appeared[0]
-    if not _values_match(window_entry_value, final_landing_value):
-        return None
     projection = observation.execution_projection
     producer = observation.appeared
     assert producer is not None
@@ -423,10 +457,6 @@ def promote_terminal_target_observation(
         return None
     if _values_match(landing_value, observation.obligation.value):
         return None
-    # Non-zero endpoint motion is already owned by channel departure and its
-    # accepted handoff receipt. This promotion exists for the otherwise
-    # invisible zero-net excursion only; taking the ordinary case here would
-    # erase the established producer-to-consumer handoff lifecycle.
     landing = exact_last_landing_write(
         (projection,),
         after=producer,

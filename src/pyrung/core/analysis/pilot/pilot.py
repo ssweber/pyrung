@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 
@@ -48,11 +48,13 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
+    exact_last_landing_write,
     expectation_from_writer,
     fulfilled_expectation_observations,
     obligation_snapshot,
     observe_execution_window,
     occurrence_snapshot,
+    promote_certified_prefix_target_observation,
     promote_terminal_target_observation,
 )
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
@@ -61,6 +63,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
     BearingObjective,
+    ChannelHeading,
     Coast,
     NavigationConstraints,
     NeedProbe,
@@ -122,6 +125,7 @@ from pyrung.core.analysis.pilot.requirements import (
     OperandAuthority,
     RequirementPhase,
     RequirementStatus,
+    bind_guard_operand_authorities,
     classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
@@ -146,6 +150,7 @@ from pyrung.core.analysis.pilot.trace import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
+    MotionKind,
     PilotEvent,
     TargetReached,
     WorldView,
@@ -157,9 +162,11 @@ from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
     _CommittedAct,
     _ConfirmedCorrection,
+    _ContinuationCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
+    _RecoveryContinuation,
     _Step,
     _StepContext,
     _World,
@@ -180,6 +187,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _configured_input_names(plc: Any) -> frozenset[str]:
+    """Snapshot explicit patch/force ownership without retaining its manager."""
+
+    overrides = getattr(plc, "_input_overrides", None)
+    if overrides is None:
+        return frozenset()
+    return frozenset((*overrides.forces, *overrides.pending_patches))
+
+
+def _checkpoint_configured_inputs(checkpoint: Any) -> frozenset[str]:
+    """Read checkpoint provenance, falling back for lightweight test stubs."""
+
+    configured = getattr(checkpoint, "configured_inputs", None)
+    if configured is not None:
+        return frozenset(configured)
+    source_work = checkpoint.world.work
+    return _configured_input_names(source_work)
+
+
 def _bound_operand_authorities(
     projection: Any,
     checkpoint: _CausalCheckpoint,
@@ -191,8 +217,7 @@ def _bound_operand_authorities(
     source_tags = source_work.state.tags
     known = source_work._known_tags_by_name
     program_written = frozenset(ctx.pdg.writers_of)
-    overrides = source_work._input_overrides
-    configured = frozenset((*overrides.forces, *overrides.pending_patches))
+    configured = _checkpoint_configured_inputs(checkpoint)
     result: dict[str, OperandAuthority] = {}
     for read in projection.reads:
         tag = read.occurrence.name
@@ -206,6 +231,22 @@ def _bound_operand_authorities(
             configured=configured,
         )
     return result
+
+
+def _bind_guard_derivation_authority(
+    derivation: Any,
+    checkpoint: _CausalCheckpoint,
+    ctx: _PilotContext,
+) -> Any:
+    """Bind arbitrary guard atoms without completion-parameter heuristics."""
+
+    requirement = bind_guard_operand_authorities(
+        derivation.requirement,
+        steerable=ctx.steerable,
+        program_written=frozenset(ctx.pdg.writers_of),
+        configured=_checkpoint_configured_inputs(checkpoint),
+    )
+    return replace(derivation, requirement=requirement)
 
 
 def _retain_active_requirement(
@@ -249,15 +290,19 @@ def _derive_bootstrap_requirements(
             provenance="bootstrap",
         )
         if derivation.requirement is None:
-            derivation = derive_overwriter_guard_requirement_from_effect(
-                effect.observation,
-                receipt.projection,
-                execution_epoch=receipt.execution_epoch,
-                execution_owner=receipt.execution_owner,
-                selected_writer=effect.designation.producer,
-                source_world_key=receipt.checkpoint.key,
-                source_checkpoint=receipt.checkpoint,
-                provenance="bootstrap-overwriter",
+            derivation = _bind_guard_derivation_authority(
+                derive_overwriter_guard_requirement_from_effect(
+                    effect.observation,
+                    receipt.projection,
+                    execution_epoch=receipt.execution_epoch,
+                    execution_owner=receipt.execution_owner,
+                    selected_writer=effect.designation.producer,
+                    source_world_key=receipt.checkpoint.key,
+                    source_checkpoint=receipt.checkpoint,
+                    provenance="bootstrap-overwriter",
+                ),
+                receipt.checkpoint,
+                ctx,
             )
         _retain_active_requirement(state, derivation.requirement)
 
@@ -347,15 +392,19 @@ def _derive_attempt_requirements(
         if projection is None:
             continue
         if observation.disposition in {"ABSENT", "STRANDED"}:
-            derivation = derive_guard_requirement_from_effect(
-                observation,
-                projection,
-                execution_epoch=epoch,
-                execution_owner=owner,
-                selected_writer=observation.obligation.producer,
-                source_world_key=checkpoint.key,
-                source_checkpoint=checkpoint,
-                provenance="steer",
+            derivation = _bind_guard_derivation_authority(
+                derive_guard_requirement_from_effect(
+                    observation,
+                    projection,
+                    execution_epoch=epoch,
+                    execution_owner=owner,
+                    selected_writer=observation.obligation.producer,
+                    source_world_key=checkpoint.key,
+                    source_checkpoint=checkpoint,
+                    provenance="steer",
+                ),
+                checkpoint,
+                ctx,
             )
             explanation = derivation.explanation
         else:
@@ -378,20 +427,24 @@ def _derive_attempt_requirements(
                 provenance="steer",
             )
             if derivation.requirement is None:
-                derivation = derive_overwriter_guard_requirement_from_effect(
-                    observation,
-                    projection,
-                    execution_epoch=epoch,
-                    execution_owner=owner,
-                    selected_writer=observation.obligation.producer,
-                    source_world_key=checkpoint.key,
-                    source_checkpoint=checkpoint,
-                    provenance="steer-overwriter",
-                    preserved_values=(
-                        ((observation.obligation.tag, observation.obligation.value),)
-                        if observation.obligation.terminal_target
-                        else ()
+                derivation = _bind_guard_derivation_authority(
+                    derive_overwriter_guard_requirement_from_effect(
+                        observation,
+                        projection,
+                        execution_epoch=epoch,
+                        execution_owner=owner,
+                        selected_writer=observation.obligation.producer,
+                        source_world_key=checkpoint.key,
+                        source_checkpoint=checkpoint,
+                        provenance="steer-overwriter",
+                        preserved_values=(
+                            ((observation.obligation.tag, observation.obligation.value),)
+                            if observation.obligation.terminal_target
+                            else ()
+                        ),
                     ),
+                    checkpoint,
+                    ctx,
                 )
             explanation = derivation.explanation
         failed = FailedEffectReceipt(
@@ -494,6 +547,7 @@ class _RequirementRepairResult:
     attempted: bool = False
     repaired: bool = False
     knowledge_changed: bool = False
+    declined: bool = False
     requirement: ActiveRequirement | None = None
     assignments: tuple[tuple[str, Any], ...] = ()
     detail: str = ""
@@ -551,6 +605,7 @@ def _disposable_requirement_state(
         expectation_receipts=list(state.expectation_receipts),
         failed_effect_receipts=list(state.failed_effect_receipts),
         requirement_repair_attempts=set(state.requirement_repair_attempts),
+        recovery_continuation=state.recovery_continuation,
         proof_rejected_acts=set(state.proof_rejected_acts),
         search_start_scan=state.search_start_scan,
         earned_work=state.earned_work,
@@ -578,6 +633,25 @@ def _exact_failed_source(
         and receipt.local_bearing is not None
         and receipt.expectation is receipt.local_act.policy.expectation
         and receipt.act_identity == act_identity(receipt.local_act)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _continuation_origin_receipt(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> ExpectationReceipt | None:
+    """Resolve the one accepted source transaction behind a later coast loss."""
+
+    matches = tuple(
+        receipt
+        for receipt in state.expectation_receipts
+        if receipt.checkpoint_owner is requirement.checkpoint_owner
+        and receipt.source_world_key == requirement.source_world_key
+        and receipt.local_act is not None
+        and receipt.local_bearing is not None
+        and receipt.expectation is receipt.local_act.policy.expectation
+        and not isinstance(receipt.local_act, Coast)
     )
     return matches[0] if len(matches) == 1 else None
 
@@ -794,6 +868,9 @@ def _nested_guard_act(
             for atom in alternative:
                 if constraint_holds(atom.condition, snap) is True:
                     continue
+                if not atom.permits_assignment:
+                    exact = False
+                    break
                 condition = atom.condition
                 if not isinstance(condition, Cmp):
                     exact = False
@@ -903,11 +980,84 @@ def _nested_guard_act(
         applied=tuple(ordered_pairs),
         expectation=expectation,
         expectation_exemption=None,
+        motion=MotionKind.INTERVENTION,
         provenance=(*local_act.policy.provenance, "active guard requirement"),
     )
     if len(ordered_pairs) == 1:
         return Pulse(policy)
     return BatchPulse(policy)
+
+
+def _mandatory_guard_blocker(
+    requirements: tuple[ActiveRequirement, ...],
+    snapshot: Mapping[str, Any],
+) -> GuardRequirementAtom | None:
+    """Name one exact false program-owned guard for a proved landing overwrite."""
+
+    def exhaustive(condition: GuardRequirementCondition) -> bool:
+        if isinstance(condition, GuardRequirementAtom):
+            return True
+        return condition.exhaustive and all(exhaustive(term) for term in condition.terms)
+
+    for requirement in requirements:
+        condition = requirement.condition
+        if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
+            continue
+        if not any(item and item[0] == "overwriter_guard" for item in requirement.scope):
+            # A producer guard can become true through a still-untried sibling
+            # action (for example a crossing DNF branch).  Only an observed
+            # final landing overwrite proves the local act has reached this
+            # mandatory condition and may safely decline here.
+            continue
+        if not exhaustive(condition):
+            continue
+        blockers: list[GuardRequirementAtom] = []
+        for alternative in guard_alternatives(condition):
+            unsatisfied = tuple(
+                atom
+                for atom in alternative
+                if constraint_holds(atom.condition, snapshot) is not True
+            )
+            if not unsatisfied:
+                break
+            if any(atom.permits_assignment for atom in unsatisfied):
+                break
+            blockers.append(unsatisfied[0])
+        else:
+            if blockers:
+                return blockers[0]
+    return None
+
+
+def _mandatory_guard_decline_reason(
+    blocker: GuardRequirementAtom,
+    snapshot: Mapping[str, Any],
+    target: TargetSpec,
+) -> str:
+    """Describe an exact mandatory guard solely in terms of the machine."""
+
+    condition = blocker.condition
+    if isinstance(condition, Cmp):
+        observed = (
+            blocker.deadline.values[-1]
+            if blocker.deadline.tag == condition.tag and blocker.deadline.values
+            else snapshot.get(condition.tag)
+        )
+        bound = condition.bound if not condition.bound_is_tag else snapshot.get(condition.bound)
+        needed = (
+            f"{condition.tag} {condition.op} {condition.bound}={bound!r}"
+            if condition.bound_is_tag
+            else f"{condition.tag} {condition.op} {bound!r}"
+        )
+        return (
+            f"The machine has {condition.tag}={observed!r}, but "
+            f"{target.tag}={target.value!r} requires {needed}; "
+            f"{condition.tag} is controlled by the program."
+        )
+    return (
+        f"The machine cannot preserve {target.tag}={target.value!r} because its "
+        "required program-controlled condition is false."
+    )
 
 
 def _rebound_bearing(
@@ -1011,6 +1161,9 @@ def _compile_bootstrap_guard_schedule(
             for atom in alternative:
                 if constraint_holds(atom.condition, snapshot) is True:
                     continue
+                if not atom.permits_assignment:
+                    exact = False
+                    break
                 condition = atom.condition
                 if not isinstance(condition, Cmp):
                     exact = False
@@ -1252,6 +1405,7 @@ def _repaired_program_continuation(
             key=None,
             world=candidate.world.set(work=handoff_work),
             objective=trial.attempt.bearing.objective,
+            configured_inputs=ctx.configured_inputs,
         ),
     )
     reading = ctx.compass.orient(
@@ -1462,6 +1616,335 @@ def _promoted_target_suffix_observation(
     )
 
 
+def _continuation_source_checkpoint(
+    state: _PilotState,
+    continuation: _RecoveryContinuation,
+) -> _CausalCheckpoint | None:
+    """Resolve one retained causal source without storing it in the stream."""
+
+    matches = tuple(
+        requirement.source_checkpoint
+        for requirement in state.active_requirements
+        if requirement.checkpoint_owner is continuation.checkpoint_owner
+        and requirement.source_world_key == continuation.source_world_key
+    )
+    unique = {id(checkpoint): checkpoint for checkpoint in matches}
+    return next(iter(unique.values())) if len(unique) == 1 else None
+
+
+def _adjacent_continuation_source(
+    state: _PilotState,
+    pulse: Any,
+    prefix_proof: _ContinuationCheckpoint | None = None,
+) -> _CausalCheckpoint | None:
+    """Return source authority only for one contiguous certified exact window."""
+
+    continuation = state.recovery_continuation
+    if continuation is None:
+        return None
+    tip = continuation.tip
+    assert state.key_config is not None
+    current_key = _pilot_world_key(
+        dict(state.work.state.tags),
+        state.key_config,
+        state.pilot_rungs,
+        state.active_requirements,
+    )
+    ephemeral_prefix = bool(
+        prefix_proof is not None
+        and prefix_proof.kind == "target_prefix"
+        and prefix_proof.scan_id == tip.scan_id
+        and prefix_proof.world_key == tip.world_key
+        and prefix_proof.execution_epoch is tip.execution_epoch
+        and prefix_proof.execution_owner is tip.execution_owner
+        and prefix_proof.landing_occurrence is not None
+    )
+    pulse_epoch_owner = _execution_epoch_owner(pulse.fork, pulse.scan_before)
+    exact_scan_ids = tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
+    if (
+        not (tip.program_step_certified or ephemeral_prefix)
+        or tip.scan_id != pulse.scan_before
+        or tip.world_key != current_key
+        or pulse_epoch_owner is None
+        or pulse_epoch_owner[0] is not tip.execution_epoch
+        or pulse_epoch_owner[1] is not tip.execution_owner
+        or pulse.kernel_scan_ids != exact_scan_ids
+        or any(pulse.projection_at(scan_id) is None for scan_id in exact_scan_ids)
+    ):
+        return None
+    receipt = pulse.coast_receipt
+    if receipt is not None and (
+        receipt.macro_folds
+        or receipt.advances
+        or receipt.timer_quanta_replayed
+        or receipt.skipped_scans
+    ):
+        return None
+    return _continuation_source_checkpoint(state, continuation)
+
+
+def _exact_local_repair_window(
+    checkpoint: _CausalCheckpoint | None,
+    pulse: Any,
+) -> bool:
+    """Whether one rejected retry retains its whole exact source window."""
+
+    if (
+        checkpoint is None
+        or checkpoint.world.work.state.scan_id != pulse.scan_before
+        or pulse.kernel_scan_ids
+        != tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
+        or any(pulse.projection_at(scan_id) is None for scan_id in pulse.kernel_scan_ids)
+    ):
+        return False
+    receipt = pulse.coast_receipt
+    return receipt is None or not (
+        receipt.macro_folds
+        or receipt.advances
+        or receipt.timer_quanta_replayed
+        or receipt.skipped_scans
+    )
+
+
+def _selected_program_step(trial: _AcceptedTrial) -> Any | None:
+    orientation = trial.attempt.bearing.orientation
+    candidates = orientation.candidates if orientation is not None else None
+    wait = candidates.wait if candidates is not None else None
+    return wait.program_step if wait is not None else None
+
+
+def _recovery_anchor_program_step(
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    target: TargetSpec,
+) -> Any | None:
+    """Freshly prove that a repaired anchor should keep running unchanged."""
+
+    continuation = state.recovery_continuation
+    if continuation is None or continuation.tip.scan_id != state.work.state.scan_id:
+        return None
+    if continuation.tip.world_key != frame.key:
+        return None
+    owned = _execution_epoch_owner(state.work, state.work.state.scan_id)
+    if (
+        owned is None
+        or owned[0] is not continuation.tip.execution_epoch
+        or owned[1] is not continuation.tip.execution_owner
+    ):
+        return None
+    expectation = _selected_terminal_target_expectation(frame, target, ctx)
+    if expectation is None:
+        return None
+    terminal = expectation.obligations[0]
+    world = WorldView(
+        snapshot=frame.snap,
+        pdg=ctx.pdg,
+        program=ctx.program,
+        steerable=ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        prior=ctx.domain_prior,
+        clear_only=ctx.clear_only,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
+        pipeline_roles=ctx.pipeline_roles,
+        avoid_pred=ctx.avoid_pred,
+        harness=getattr(state.work, "_harness", None),
+    )
+    family = sibling_producer_family(world, terminal.tag, terminal.value)
+
+    def producer_address(producer: Any) -> tuple[Any, ...]:
+        node = ctx.pdg.rung_nodes[producer.rung_index]
+        return (node.subroutine, node.rung_index, node.branch_path)
+
+    producers = (
+        tuple(
+            producer
+            for producer in family.program_owned
+            if producer_address(producer) == terminal.producer
+        )
+        if family is not None
+        else ()
+    )
+    if len(producers) != 1:
+        return None
+    step = read_program_step(
+        world,
+        producers[0],
+        state.work,
+        state.pilot_rungs,
+        resting=ctx.resting,
+    )
+    if (
+        step.status is not ProgramStepStatus.KEEP_RUNNING
+        or step.required_inputs
+        or step.context_actions
+        or step.observable_motion() is None
+    ):
+        return None
+    return step
+
+
+def _preempt_recovery_action_with_program_coast(
+    result: OrientationResult,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    target: TargetSpec,
+) -> tuple[OrientationResult, Any | None]:
+    """Prefer a proved unchanged program hop over a harmful fresh action."""
+
+    if not isinstance(result, Bearing):
+        return result, None
+    step = _recovery_anchor_program_step(frame, state, ctx, target)
+    if step is None or isinstance(result.act, Coast):
+        return result, step
+    expectation = _selected_terminal_target_expectation(frame, target, ctx)
+    assert expectation is not None
+    motion = step.observable_motion()
+    assert motion is not None
+    act = Coast(
+        "bearing",
+        replace(
+            result.act.policy,
+            source=ActSource.PROGRAM,
+            action_pairs=(),
+            applied=(),
+            nogood_pair=None,
+            heading=ChannelHeading(
+                motion.channel_tag,
+                motion.target_value,
+                boundary=step.boundary,
+            ),
+            motion=MotionKind.COAST_TO_BEARING,
+            expectation=expectation,
+            expectation_exemption=None,
+            provenance=(*result.act.policy.provenance, "recovery ProgramStep keep-running"),
+        ),
+    )
+    orientation = (
+        replace(result.orientation, selected_bearing_id=repr(act_identity(act)))
+        if result.orientation is not None
+        else None
+    )
+    return (
+        replace(
+            result,
+            act=act,
+            rationale=step.reason,
+            orientation=orientation,
+        ),
+        step,
+    )
+
+
+def _execution_epoch_owner(work: Any, scan_id: int) -> tuple[Any, Any] | None:
+    matches = tuple(
+        (epoch, owner)
+        for epoch, owner in work._causal_lineage.seal_through(scan_id)
+        if epoch.first_scan <= scan_id <= epoch.last_scan
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def _advance_recovery_continuation(
+    trial: _AcceptedTrial,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+    program_step: Any | None = None,
+) -> bool:
+    """Append one freshly certified checkpoint for the committed recovery hop."""
+
+    continuation = state.recovery_continuation
+    if continuation is None:
+        return False
+    pulse = trial.attempt.pulse
+    exact_window = (
+        continuation.tip.scan_id == pulse.scan_before
+        and continuation.tip.world_key == frame.key
+        and pulse.kernel_scan_ids
+        == tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
+    )
+    receipt = pulse.coast_receipt
+    exact_window = exact_window and not (
+        receipt is not None
+        and (
+            receipt.macro_folds
+            or receipt.advances
+            or receipt.timer_quanta_replayed
+            or receipt.skipped_scans
+        )
+    )
+    certified = False
+    motion = None
+    if exact_window and isinstance(trial.attempt.bearing.act, Coast):
+        step = program_step or _selected_program_step(trial)
+        physical_channel = trial.execution.channel_motion.channel_tag
+        motion = step.observable_motion(physical_channel) if step is not None else None
+        certified = bool(
+            step is not None
+            and step.status is ProgramStepStatus.KEEP_RUNNING
+            and motion is not None
+            and _values_match(
+                motion.before_value,
+                trial.execution.before_snap.get(motion.channel_tag),
+            )
+            and _values_match(
+                motion.target_value,
+                trial.execution.after_snap.get(motion.channel_tag),
+            )
+        )
+    # Program-input handoffs need the typed NEEDS_INPUT/action/boundary join;
+    # a resting edge and a survived expectation alone are not authority.
+    selected_release = False
+    if not certified and not selected_release:
+        state.recovery_continuation = None
+        return False
+    epoch_owner = _execution_epoch_owner(pulse.fork, state.work.state.scan_id)
+    projections = tuple(pulse.projection_at(scan_id) for scan_id in pulse.kernel_scan_ids)
+    if epoch_owner is None or any(projection is None for projection in projections):
+        state.recovery_continuation = None
+        return False
+    landing_occurrence = None
+    if certified and motion is not None:
+        exact_projections = tuple(
+            projection for projection in projections if projection is not None
+        )
+        landing = exact_last_landing_write(
+            exact_projections,
+            after=None,
+            tag=motion.channel_tag,
+            target_value=motion.before_value,
+            landing_value=motion.target_value,
+        )
+        if landing is None:
+            state.recovery_continuation = None
+            return False
+        landing_occurrence = occurrence_snapshot(landing[1])
+    assert state.key_config is not None
+    key = _pilot_world_key(
+        dict(state.work.state.tags),
+        state.key_config,
+        state.pilot_rungs,
+        state.active_requirements,
+    )
+    state.recovery_continuation = replace(
+        continuation,
+        checkpoints=(
+            *continuation.checkpoints,
+            _ContinuationCheckpoint(
+                scan_id=state.work.state.scan_id,
+                world_key=key,
+                kind="unchanged_coast" if certified else "program_input_handoff",
+                execution_epoch=epoch_owner[0],
+                execution_owner=epoch_owner[1],
+                landing_occurrence=landing_occurrence,
+            ),
+        ),
+    )
+    return True
+
+
 def _repair_failed_requirement(
     requirement: ActiveRequirement,
     state: _PilotState,
@@ -1477,16 +1960,52 @@ def _repair_failed_requirement(
         return _RequirementRepairResult(requirement=requirement, detail=detail)
     if schedule is not None:
         source.pilot_rungs = _merged_pilot_rungs(schedule.pilot_rungs, source.pilot_rungs)
+    local_bearing = receipt.local_bearing
+    local_act = receipt.local_act
+    if isinstance(
+        requirement.condition, GuardRequirementAtom | GuardRequirementExpr
+    ) and isinstance(local_act, Coast):
+        origin = _continuation_origin_receipt(requirement, state)
+        if origin is None or receipt.expectation is None:
+            return _RequirementRepairResult(
+                requirement=requirement,
+                detail="guard continuation has no unique accepted source transaction",
+            )
+        origin_obligations = (
+            origin.expectation.obligations if origin.expectation is not None else ()
+        )
+        obligations = (*origin_obligations, *receipt.expectation.obligations)
+        expectation = EffectExpectation(tuple(dict.fromkeys(obligations)))
+        local_act = replace(
+            origin.local_act,
+            policy=replace(
+                origin.local_act.policy,
+                expectation=expectation,
+                expectation_exemption=None,
+            ),
+        )
+        local_bearing = replace(origin.local_bearing, act=local_act)
     local_act = _nested_guard_act(
         source,
         ctx,
-        receipt.local_bearing,
-        receipt.local_act,
+        local_bearing,
+        local_act,
         requirements,
     )
     if local_act is None:
+        blocker = _mandatory_guard_blocker(requirements, source.work.state.tags)
+        if blocker is not None:
+            return _RequirementRepairResult(
+                declined=True,
+                requirement=requirement,
+                detail=_mandatory_guard_decline_reason(
+                    blocker,
+                    source.work.state.tags,
+                    ctx.target,
+                ),
+            )
         return _RequirementRepairResult(requirement=requirement, detail="guard repair is ambiguous")
-    bearing = _rebound_bearing(source, ctx, receipt.local_bearing, local_act)
+    bearing = _rebound_bearing(source, ctx, local_bearing, local_act)
     if bearing is None:
         return _RequirementRepairResult(
             requirement=requirement, detail="causal source cannot be reread"
@@ -1590,6 +2109,31 @@ def _repair_failed_requirement(
                     f"to {ctx.target.tag}={candidate.work.state.tags.get(ctx.target.tag)!r}"
                 )
                 return Reject(candidate)
+            assert candidate.key_config is not None
+            epoch_owner = _execution_epoch_owner(
+                candidate.work,
+                candidate.work.state.scan_id,
+            )
+            if epoch_owner is None:
+                rejection_reasons.append("locally repaired checkpoint has no exact execution owner")
+                return Reject(candidate)
+            seed = _ContinuationCheckpoint(
+                scan_id=candidate.work.state.scan_id,
+                world_key=_pilot_world_key(
+                    dict(candidate.work.state.tags),
+                    candidate.key_config,
+                    candidate.pilot_rungs,
+                    candidate.active_requirements,
+                ),
+                kind="local_repair",
+                execution_epoch=epoch_owner[0],
+                execution_owner=epoch_owner[1],
+            )
+            candidate.recovery_continuation = _RecoveryContinuation(
+                checkpoint_owner=requirement.checkpoint_owner,
+                source_world_key=requirement.source_world_key,
+                checkpoints=(seed,),
+            )
             return Succeed(candidate)
         finally:
             _release_attempt_execution_projections(transition.attempt)
@@ -1617,6 +2161,8 @@ def _repair_failed_requirement(
         state.journey.extend(disposable.journey)
         state.hold_log.extend(disposable.hold_log)
         state.correction_receipts.extend(disposable.correction_receipts)
+        state.requirement_repair_attempts.update(disposable.requirement_repair_attempts)
+        state.recovery_continuation = disposable.recovery_continuation
         state.checkpoints.clear()
         state.pending_departure = None
     return _RequirementRepairResult(
@@ -1643,19 +2189,37 @@ def _repair_one_active_requirement(
 ) -> _RequirementRepairResult:
     """Attempt one newest exact schedule, then return to the outer fresh read."""
 
-    for requirement in reversed(state.active_requirements):
+    blocked: _RequirementRepairResult | None = None
+    ordered = sorted(
+        enumerate(state.active_requirements),
+        key=lambda item: (
+            item[1].deadline.scan_id,
+            item[1].deadline.ordinal,
+            item[0],
+        ),
+        reverse=True,
+    )
+    for _index, requirement in ordered:
         if (
             requirement.status is not RequirementStatus.ACTIVE
             or requirement.phase is not RequirementPhase.STEADY
         ):
             continue
         bootstrap = _repair_bootstrap_requirement(requirement, state, ctx)
-        if bootstrap.attempted or bootstrap.detail:
+        if bootstrap.attempted:
             return bootstrap
+        if bootstrap.detail and blocked is None:
+            blocked = bootstrap
         failed = _repair_failed_requirement(requirement, state, ctx)
-        if failed.attempted or failed.detail:
+        if failed.attempted:
             return failed
-    return _RequirementRepairResult()
+        if failed.detail and blocked is None:
+            blocked = failed
+    # A newest authoritative/ambiguous guard is mandatory but not executable.
+    # Keep its diagnostic while allowing an earlier exact adjustable
+    # requirement to run; otherwise the unrepairable newest member starves the
+    # correction which can make the whole same-source schedule progress.
+    return blocked or _RequirementRepairResult()
 
 
 def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
@@ -1686,6 +2250,7 @@ def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _Bootstra
         key=key,
         world=state.snapshot_world(),
         objective=BearingObjective(ctx.target),
+        configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
     )
     scan_before = state.work.state.scan_id
 
@@ -1778,6 +2343,7 @@ class _DriveSetup:
     evidence: TransitionEvidence | None
     compass: Compass
     opaque_loop: frozenset[str]
+    configured_inputs: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -1807,6 +2373,7 @@ class _IterationTransition:
     frame: _IterationFrame
     attempt: _AttemptResult | None = None
     trial: _AcceptedTrial | None = None
+    continuation_hop: bool = False
 
 
 @dataclass(frozen=True)
@@ -1889,6 +2456,7 @@ def _make_pilot_context(
     max_scans: int,
     avoid_pred: Any = None,
     target_predicate: Any = None,
+    configured_inputs: frozenset[str] = frozenset(),
 ) -> _PilotContext:
     pipeline_roles = _infer_pipeline_roles_for_context(
         pdg,
@@ -1946,6 +2514,7 @@ def _make_pilot_context(
         blocked_actions=frozenset(),
         max_scans=max_scans,
         avoid_pred=avoid_pred,
+        configured_inputs=configured_inputs,
     )
 
 
@@ -1958,6 +2527,7 @@ def _prepare_drive(
 
     from pyrung.core.analysis.pdg import build_program_graph
 
+    configured_inputs = _configured_input_names(plc)
     work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
     program = plc._program
     pdg = build_program_graph(program)
@@ -1987,6 +2557,7 @@ def _prepare_drive(
         evidence=prover.evidence,
         compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
         opaque_loop=detect_opaque_loop(pdg, program),
+        configured_inputs=configured_inputs,
     )
 
 
@@ -2034,6 +2605,7 @@ def _prepare_target_context(
         max_scans=max_scans,
         avoid_pred=avoid_pred,
         target_predicate=target_predicate,
+        configured_inputs=setup.configured_inputs,
     )
     return ctx, route_taken
 
@@ -2373,6 +2945,8 @@ def _monitor_committed_trial(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    continuation_hop: bool = False,
 ) -> Iterator[PilotEvent]:
     """Emit one adopted trial and apply outer-loop progress policy."""
 
@@ -2388,7 +2962,8 @@ def _monitor_committed_trial(
             "snapshot": dict(state.work.state.tags),
         },
     )
-    yield from _monitor_trend(trial, frame, state, ctx)
+    if not continuation_hop:
+        yield from _monitor_trend(trial, frame, state, ctx)
 
 
 def _commit_trial(
@@ -2487,6 +3062,150 @@ def _prepare_oriented_result(
         state.recorded_root_route = world.root_route
 
 
+def _certify_current_target_prefix(
+    attempt: _AttemptResult,
+    adoption_scan: int,
+    target_expectation: EffectExpectation | None,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _ContinuationCheckpoint | None:
+    """Ephemerally join a fresh ProgramStep to this Pulse's target occurrence."""
+
+    executed = _executed_attempt(attempt)
+    if (
+        executed is None
+        or target_expectation is None
+        or not isinstance(executed.bearing.act, Coast)
+    ):
+        return None
+    pulse = executed.pulse
+    if pulse.kernel_scan_ids != tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1)):
+        return None
+    observations = observe_execution_window(
+        target_expectation,
+        pulse.fork,
+        scan_before=adoption_scan,
+        action_scan=None,
+        coast_receipt=pulse.coast_receipt,
+        kernel_scan_ids=tuple(
+            scan_id for scan_id in pulse.kernel_scan_ids if scan_id > adoption_scan
+        ),
+        projection_at=pulse.projection_at,
+    )
+    appeared = tuple(
+        observation
+        for observation in observations
+        if observation.appeared is not None and observation.obligation.terminal_target
+    )
+    if len(appeared) != 1:
+        return None
+    historical = appeared[0].appeared
+    assert historical is not None
+    if historical.scan_id != adoption_scan + 1:
+        return None
+    try:
+        boundary_work = fork_with_pilot_rungs(
+            pulse.fork,
+            state.pilot_rungs,
+            scan_id=adoption_scan,
+        )
+    except KeyError:
+        return None
+    boundary_snap = dict(boundary_work.state.tags)
+    world = WorldView(
+        snapshot=boundary_snap,
+        pdg=ctx.pdg,
+        program=ctx.program,
+        steerable=ctx.steerable,
+        opaque_loop=ctx.opaque_loop,
+        prior=ctx.domain_prior,
+        clear_only=ctx.clear_only,
+        pipeline_internal_tags=ctx.pipeline_internal_tags,
+        pipeline_roles=ctx.pipeline_roles,
+        avoid_pred=ctx.avoid_pred,
+        harness=getattr(boundary_work, "_harness", None),
+    )
+    terminal = target_expectation.obligations[0]
+    family = sibling_producer_family(world, terminal.tag, terminal.value)
+
+    def producer_address(producer: Any) -> tuple[Any, ...]:
+        node = ctx.pdg.rung_nodes[producer.rung_index]
+        return (node.subroutine, node.rung_index, node.branch_path)
+
+    producers = (
+        tuple(
+            producer
+            for producer in family.program_owned
+            if producer_address(producer) == terminal.producer
+        )
+        if family is not None
+        else ()
+    )
+    if len(producers) != 1:
+        return None
+    step = read_program_step(
+        world,
+        producers[0],
+        boundary_work,
+        state.pilot_rungs,
+        resting=ctx.resting,
+        projection_scans=1,
+    )
+    if not step.producer_observed:
+        return None
+    selected_rung = resolve_rung(ctx.program, ctx.pdg.rung_nodes[producers[0].rung_index])
+    if selected_rung is None:
+        return None
+    projected = fork_with_pilot_rungs(boundary_work, state.pilot_rungs)
+    projected.step()
+    projection = projected._replay_rung_write_projection_at(projected.state.scan_id)
+    if projection is None:
+        return None
+    projected_occurrences = tuple(
+        write
+        for write in projection.writes
+        if write.run.rung is selected_rung
+        and write.run.enabled
+        and write.transition.tag_name == terminal.tag
+        and _values_match(write.transition.to_value, terminal.value)
+    )
+    if len(projected_occurrences) != 1:
+        return None
+
+    def address(write: Any) -> tuple[Any, ...]:
+        return (
+            write.scan_id,
+            write.ordinal,
+            write.run_order,
+            write.call_invocation,
+            write.rung_id,
+            write.run.kind,
+            write.run.caller_rung,
+            write.run.call_stack,
+        )
+
+    if address(projected_occurrences[0]) != address(historical):
+        return None
+    epoch_owner = _execution_epoch_owner(pulse.fork, adoption_scan)
+    if epoch_owner is None:
+        return None
+    assert state.key_config is not None
+    boundary_key = _pilot_world_key(
+        boundary_snap,
+        state.key_config,
+        state.pilot_rungs,
+        state.active_requirements,
+    )
+    return _ContinuationCheckpoint(
+        scan_id=adoption_scan,
+        world_key=boundary_key,
+        kind="target_prefix",
+        execution_epoch=epoch_owner[0],
+        execution_owner=epoch_owner[1],
+        landing_occurrence=occurrence_snapshot(historical),
+    )
+
+
 def _transition_once(
     state: _PilotState,
     ctx: _PilotContext,
@@ -2534,6 +3253,13 @@ def _transition_once(
     )
     frame = orientation_world.frame
     _prepare_oriented_result(state, result, orientation_world, frame)
+    result, recovery_program_step = _preempt_recovery_action_with_program_coast(
+        result,
+        frame,
+        state,
+        ctx,
+        target,
+    )
     if not isinstance(result, Bearing):
         return _IterationTransition(result=result, frame=frame)
 
@@ -2548,6 +3274,7 @@ def _transition_once(
             key=frame.key,
             world=state.snapshot_world(),
             objective=result.objective,
+            configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
         )
         if result.expectation is not None or terminal_target_expectation is not None
         else None
@@ -2568,6 +3295,16 @@ def _transition_once(
             ctx,
             capture_execution=capture_execution,
         )
+    prefix_proof = None
+    prefix_execution = _executed_attempt(attempt)
+    if terminal_target_expectation is not None and prefix_execution is not None:
+        prefix_proof = _certify_current_target_prefix(
+            attempt,
+            prefix_execution.pulse.scan_before,
+            terminal_target_expectation,
+            state,
+            ctx,
+        )
     if terminal_target_expectation is not None:
         result, attempt = _promote_transient_target_failure(
             result,
@@ -2576,14 +3313,24 @@ def _transition_once(
             frame,
             state,
             ctx,
+            prefix_proof,
+            local_repair_checkpoint=derivation_checkpoint,
         )
         act = result.act
+    continuation_checkpoint = None
+    executed_for_derivation = _executed_attempt(attempt)
+    if terminal_target_expectation is not None and executed_for_derivation is not None:
+        continuation_checkpoint = _adjacent_continuation_source(
+            state,
+            executed_for_derivation.pulse,
+            prefix_proof,
+        )
     if derive_requirements:
         _derive_attempt_requirements(
             attempt,
             state,
             ctx,
-            derivation_checkpoint or expectation_checkpoint,
+            continuation_checkpoint or derivation_checkpoint or expectation_checkpoint,
         )
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
@@ -2619,6 +3366,13 @@ def _transition_once(
         return _IterationTransition(result=result, frame=frame, attempt=attempt)
 
     trial = _adopt_trial(attempt.trial, frame, state, ctx)
+    continuation_hop = _advance_recovery_continuation(
+        trial,
+        frame,
+        state,
+        ctx,
+        recovery_program_step,
+    )
     _retain_expectation_receipt(
         trial,
         act,
@@ -2630,6 +3384,7 @@ def _transition_once(
         frame=frame,
         attempt=attempt,
         trial=trial,
+        continuation_hop=continuation_hop,
     )
 
 
@@ -2671,6 +3426,9 @@ def _promote_transient_target_failure(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    prefix_proof: _ContinuationCheckpoint | None = None,
+    *,
+    local_repair_checkpoint: _CausalCheckpoint | None = None,
 ) -> tuple[Bearing, _AttemptResult]:
     """Re-verify an act only after its selected target appeared and was lost."""
 
@@ -2722,6 +3480,26 @@ def _promote_transient_target_failure(
                 pulse,
                 checkpoint_scan,
             )
+        if promoted is None and _exact_local_repair_window(
+            local_repair_checkpoint,
+            pulse,
+        ):
+            # A repaired local transaction may carry useful program-owned
+            # motion all the way to a non-zero target displacement before any
+            # corrected landing is adopted.  The retry's accepted original
+            # expectation and exact source/window grant observation authority;
+            # the target adapter still requires one exact selected occurrence
+            # and its final landing writer.  The supplied checkpoint remains
+            # the causal source for the next requirement.
+            promoted = promote_certified_prefix_target_observation(
+                target_observations,
+                final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
+            )
+    if promoted is None and _adjacent_continuation_source(state, pulse, prefix_proof) is not None:
+        promoted = promote_certified_prefix_target_observation(
+            target_observations,
+            final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
+        )
     if promoted is None:
         return result, attempt
 
@@ -3004,6 +3782,17 @@ def _pilot_loop_events(
                 state.work.state.scan_id,
                 {"receipt": receipt.diagnostic_snapshot()},
             )
+        if repair.declined:
+            yield from _stopped_events(
+                state,
+                ctx,
+                last_frame,
+                repair.detail,
+                journal_channel_tags,
+                journal_acc_names,
+                candidate_count=0,
+            )
+            return
         if repair.repaired:
             yield PilotEvent(
                 "requirement_locally_repaired",
@@ -3050,6 +3839,13 @@ def _pilot_loop_events(
         orientation_world = orientation_read.world
         candidates = orientation_read.candidates
         frame = orientation_world.frame
+        result, _recovery_program_step = _preempt_recovery_action_with_program_coast(
+            result,
+            frame,
+            state,
+            ctx,
+            target,
+        )
         last_frame = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
@@ -3188,7 +3984,13 @@ def _pilot_loop_events(
         assert accepted_event is not None
         try:
             yield accepted_event
-            yield from _monitor_committed_trial(trial, frame, state, ctx)
+            yield from _monitor_committed_trial(
+                trial,
+                frame,
+                state,
+                ctx,
+                continuation_hop=transition.continuation_hop,
+            )
         finally:
             _release_attempt_execution_projections(attempt)
         state.last_wait_log = None

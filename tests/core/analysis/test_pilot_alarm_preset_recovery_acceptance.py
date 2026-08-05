@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import islice
+
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from tests.fixtures.pilot_alarm_presets import (
@@ -173,3 +175,67 @@ def test_disposable_alarm_retry_is_one_corrected_local_transaction() -> None:
     assert replay.state.tags[fixture.WatchdogPresetMs.name] == 11
     assert replay.state.tags[fixture.Reset.name] is True
     assert replay.state.tags[fixture.AtTarget.name] is True
+
+
+def test_forced_zero_bootstrap_preset_remains_authoritative_across_checkpoint_fork() -> None:
+    fixture = aborted_on_first_scan
+    plc = PLC(fixture.logic, dt=0.010)
+    plc.force(fixture.WatchdogPresetMs, 0)
+    events = tuple(
+        islice(
+            pilot_events(
+                plc,
+                fixture.ProcessStep == fixture.AT_TARGET,
+                max_scans=20,
+            ),
+            40,
+        )
+    )
+
+    requirements = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and getattr(event.data["requirement"].condition, "tag", None)
+        == fixture.WatchdogPresetMs.name
+    )
+    assert requirements
+    assert all(item.operand_authority.value == "configured" for item in requirements)
+    assert not any(
+        tag == fixture.WatchdogPresetMs.name
+        for event in events
+        if event.kind == "requirement_locally_repaired"
+        for tag, _value in event.data["assignments"]
+    )
+
+
+def test_pending_zero_preset_remains_authoritative_at_expectation_checkpoint() -> None:
+    fixture = alarmed_at_start
+    plc = PLC(fixture.logic, dt=0.010)
+    plc.patch({fixture.WatchdogPresetMs.name: 0})
+    events = tuple(
+        islice(
+            pilot_events(
+                plc,
+                fixture.ProcessStep == fixture.COMPLETE,
+                max_scans=20,
+            ),
+            50,
+        )
+    )
+
+    requirements = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and getattr(event.data["requirement"].condition, "tag", None)
+        == fixture.WatchdogPresetMs.name
+    )
+    assert requirements
+    assert all(item.operand_authority.value == "configured" for item in requirements)
+    assert not any(
+        tag == fixture.WatchdogPresetMs.name
+        for event in events
+        if event.kind == "requirement_locally_repaired"
+        for tag, _value in event.data["assignments"]
+    )

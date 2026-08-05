@@ -1307,6 +1307,47 @@ class TestSettleLandingFolds:
 
 
 class TestExecutionCaptureStream:
+    def test_scan_count_overflow_mid_coast_replays_the_full_exact_window(
+        self,
+        monkeypatch,
+    ):
+        effect = Int("OverflowCoastEffect")
+        with Program() as program:
+            with Rung():
+                copy(1, effect)
+        plc = PLC(program)
+        monkeypatch.setattr(coast_module, "_MAX_EXECUTION_PROJECTION_SCANS", 2)
+        never = predicate_trigger("never", TARGET, lambda _state: False)
+        session = CoastSession(
+            plc,
+            kind="overflow-coast",
+            capture_execution=True,
+        )
+
+        receipt = session.seek([never], budget=5)
+
+        assert receipt.stop_reason == "timeout"
+        assert receipt.end_scan == 5
+        assert session.execution_capture_overflowed
+        assert session.kernel_scan_ids == (1, 2, 3, 4, 5)
+        assert session._execution_projections == {}
+
+        snap = dict(plc.state.tags)
+        pulse = _PulseState(
+            fork=plc,
+            scan_before=0,
+            action_scan=0,
+            action_snap=snap,
+            wait_snaps=(),
+            post_pulse_snap=snap,
+            post_pulse_key=("post",),
+            snap=snap,
+            key=("landing",),
+            kernel_scan_ids=session.kernel_scan_ids,
+            execution_projections=session._execution_projections,
+        )
+        assert all(pulse.projection_at(scan_id) is not None for scan_id in range(1, 6))
+
     def test_session_retains_only_actual_kernel_scans_across_fold(self):
         plc = PLC(_static_channel_long_timer_program(), dt=0.010)
         plc.patch({"Enable": True})
