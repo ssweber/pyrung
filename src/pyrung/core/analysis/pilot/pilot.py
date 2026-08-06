@@ -1713,9 +1713,7 @@ def _repair_any_program_guard_from_history(
     if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
         return _RequirementRepairResult()
     atoms = tuple(
-        dict.fromkeys(
-            atom for alternative in guard_alternatives(condition) for atom in alternative
-        )
+        dict.fromkeys(atom for alternative in guard_alternatives(condition) for atom in alternative)
     )
     blocked: _RequirementRepairResult | None = None
     for atom in atoms:
@@ -3734,8 +3732,18 @@ def _transition_once(
             )
             state.proof_rejected_acts.add((proof_world_key, act_identity(act)))
         else:
+            rejection_key = (
+                _pilot_world_key(
+                    frame.snap,
+                    state.key_config,
+                    state.pilot_rungs,
+                    state.active_requirements,
+                )
+                if state.key_config is not None
+                else frame.key
+            )
             ctx.compass, _ = ctx.compass.apply(
-                (ActionNogoodObservation(frame.key, act_identity(act)),)
+                (ActionNogoodObservation(rejection_key, act_identity(act)),)
             )
         return _IterationTransition(result=result, frame=frame, attempt=attempt)
 

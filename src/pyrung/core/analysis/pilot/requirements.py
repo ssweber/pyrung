@@ -1129,6 +1129,12 @@ def _evaluate_enabling_path_complement(
     supporting: list[RungRead] = []
     exhaustive = True
     for run in (selected, *ancestors):
+        conditions = tuple(getattr(run.rung, "_conditions", ()))
+        branch_start = getattr(run.rung, "_branch_condition_start", 0)
+        if run.kind == "branch" or branch_start:
+            conditions = conditions[branch_start:]
+        if not conditions:
+            continue
         evaluation = _evaluate_run_guard_complement(run, projection)
         if not evaluation.exact or evaluation.requirement is None:
             exhaustive = False

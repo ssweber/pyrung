@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pyrung.core.analysis.pilot import orientation
+from pyrung import PLC, Bool, Int, Program, Rung, call, copy, subroutine
+from pyrung.core.analysis.pilot import orientation, pilot_events
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     TargetSpec,
@@ -102,3 +103,47 @@ def test_orientation_queries_nogoods_with_active_requirement_world_key(monkeypat
             (requirement,),
         )
     ]
+
+
+def test_rejected_producer_is_not_retried_after_requirement_strengthens_world() -> None:
+    produce = Bool("RequirementKeyProduce", external=True)
+    consume = Bool("RequirementKeyConsume", external=True)
+    channel = Int("RequirementKeyChannel")
+    step = Int("RequirementKeyStep")
+
+    with Program(strict=False) as logic:
+        with subroutine("RequirementKeyConsumer"):
+            with Rung(consume):
+                copy(1, step, oneshot=True)
+            with Rung():
+                copy(0, channel)
+
+        with Rung(produce):
+            copy(1, channel, oneshot=True)
+        with Rung(channel == 1):
+            call("RequirementKeyConsumer")
+
+    events = tuple(pilot_events(PLC(logic), step == 1, max_scans=10))
+    produce_tries = tuple(
+        event
+        for event in events
+        if event.kind == "candidate_try" and (produce.name, True) in tuple(event.data["applied"])
+    )
+    requirement_index = next(
+        index for index, event in enumerate(events) if event.kind == "requirement_activated"
+    )
+    rejection_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "candidate_rejected"
+        and (produce.name, True) in tuple(event.data["applied"])
+    )
+    next_iteration = next(
+        event for event in events[rejection_index + 1 :] if event.kind == "iteration"
+    )
+
+    assert requirement_index < rejection_index
+    assert next_iteration.data["nogoods"] == frozenset({(produce.name, True)})
+    assert len(produce_tries) == 1
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True

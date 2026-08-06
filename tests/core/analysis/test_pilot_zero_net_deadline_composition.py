@@ -57,6 +57,7 @@ def test_public_pilot_composes_the_earlier_guard_and_reaches_target() -> None:
     condition = requirements[0].condition
     assert isinstance(condition, GuardRequirementExpr)
     assert condition.logic is GuardLogic.ANY
+    assert condition.exhaustive is True
     assert all(isinstance(term, GuardRequirementAtom) for term in condition.terms)
     assert [term.condition for term in condition.terms] == [
         Cmp(fixture.LinkHealthy.name, "!=", False),
