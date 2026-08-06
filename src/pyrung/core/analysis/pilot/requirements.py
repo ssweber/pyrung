@@ -459,23 +459,12 @@ def bind_guard_operand_authorities(
     ):
         return requirement
 
-    def bind(condition: GuardRequirementCondition) -> GuardRequirementCondition:
-        if isinstance(condition, GuardRequirementExpr):
-            return replace(condition, terms=tuple(bind(term) for term in condition.terms))
-        tag = getattr(condition.condition, "tag", None)
-        authority = (
-            classify_guard_operand_authority(
-                tag,
-                steerable=steerable,
-                program_written=program_written,
-                configured=configured,
-            )
-            if isinstance(tag, str)
-            else OperandAuthority.UNKNOWN
-        )
-        return replace(condition, operand_authority=authority)
-
-    condition = bind(requirement.condition)
+    condition = bind_guard_condition_operand_authorities(
+        requirement.condition,
+        steerable=steerable,
+        program_written=program_written,
+        configured=configured,
+    )
     authorities = {atom.operand_authority for atom in _guard_atoms(condition)}
     summary = authorities.pop() if len(authorities) == 1 else OperandAuthority.UNKNOWN
     return replace(
@@ -483,6 +472,42 @@ def bind_guard_operand_authorities(
         condition=condition,
         operand_authority=summary,
     )
+
+
+def bind_guard_condition_operand_authorities(
+    condition: GuardRequirementCondition,
+    *,
+    steerable: frozenset[str],
+    program_written: frozenset[str],
+    configured: frozenset[str] = frozenset(),
+) -> GuardRequirementCondition:
+    """Bind every atom in detached transitive guard evidence."""
+
+    if isinstance(condition, GuardRequirementExpr):
+        return replace(
+            condition,
+            terms=tuple(
+                bind_guard_condition_operand_authorities(
+                    term,
+                    steerable=steerable,
+                    program_written=program_written,
+                    configured=configured,
+                )
+                for term in condition.terms
+            ),
+        )
+    tag = getattr(condition.condition, "tag", None)
+    authority = (
+        classify_guard_operand_authority(
+            tag,
+            steerable=steerable,
+            program_written=program_written,
+            configured=configured,
+        )
+        if isinstance(tag, str)
+        else OperandAuthority.UNKNOWN
+    )
+    return replace(condition, operand_authority=authority)
 
 
 @dataclass(frozen=True)

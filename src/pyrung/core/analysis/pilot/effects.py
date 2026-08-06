@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -21,6 +22,7 @@ from pyrung.core.analysis.write_sites import (
     static_write_target_names,
 )
 from pyrung.core.context import RungId
+from pyrung.core.executor import InstructionRun, LoopIterationRun, RungRun
 from pyrung.core.instruction.coils import OutInstruction
 from pyrung.core.instruction.control import CallInstruction, ForLoopInstruction
 
@@ -38,6 +40,8 @@ EffectDisposition = Literal[
     "STRANDED",
     "DISPLACED",
     "SURVIVED",
+    "PREVENTED",
+    "FIRED",
     "UNKNOWN",
 ]
 
@@ -71,6 +75,36 @@ class EffectPathStep:
     local_requirements: tuple[tuple[str, Any], ...] = ()
 
 
+class EffectPolarity(StrEnum):
+    """Whether one exact writer must produce or must not produce its effect."""
+
+    PRODUCE = "produce"
+    PREVENT = "prevent"
+
+
+@dataclass(frozen=True)
+class EffectOccurrenceSelector:
+    """Relocatable identity of one exact access inside a dynamic rung owner.
+
+    Absolute scan ordinals and run order are deliberately absent. Adding a
+    top-of-scan synthetic rung shifts both without changing the selected user
+    occurrence. The static branch, structural instruction path, dynamic call
+    identity, and access index instead relocate that occurrence on an exact
+    candidate projection.
+    """
+
+    kind: Literal["read", "write"]
+    tag: str
+    static_address: StaticRungAddress
+    instruction_path: tuple[int, ...]
+    execution_kind: str
+    caller_rung: int
+    call_stack: tuple[str, ...]
+    depth: int
+    call_invocation: int | None
+    access_index: int
+
+
 @dataclass(frozen=True)
 class EffectObligation:
     """One selected producer/effect promised to one obliged consumer."""
@@ -88,6 +122,8 @@ class EffectObligation:
     terminal_target: bool = False
     producer_rung: object = field(compare=False, repr=False, default=None)
     consumer_rung: object | None = field(compare=False, repr=False, default=None)
+    polarity: EffectPolarity = field(default=EffectPolarity.PRODUCE, repr=False)
+    occurrence_selector: EffectOccurrenceSelector | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -226,6 +262,118 @@ class EffectObservation:
 def _writer_address(pdg: ProgramGraph, node_index: int) -> StaticRungAddress:
     node = pdg.rung_nodes[node_index]
     return (node.subroutine, node.rung_index, node.branch_path)
+
+
+def _run_static_address(
+    projection: ScanRungWriteProjection,
+    run: RungRun,
+) -> StaticRungAddress | None:
+    """Resolve one dynamic run to its immutable user/synthetic branch."""
+
+    def find_branch(root: Any, selected: Any, path: tuple[int, ...] = ()) -> tuple[int, ...] | None:
+        if root is selected:
+            return path
+        for index, branch in enumerate(getattr(root, "_branches", ())):
+            found = find_branch(branch, selected, (*path, index))
+            if found is not None:
+                return found
+        return None
+
+    roots = tuple(
+        candidate
+        for candidate in projection.runs
+        if candidate.rung_id == run.rung_id and candidate.kind != "branch"
+    )
+    paths = tuple(
+        path for candidate in roots if (path := find_branch(candidate.rung, run.rung)) is not None
+    )
+    unique = tuple(dict.fromkeys(paths))
+    if len(unique) != 1:
+        return None
+    return (run.rung_id.subroutine, run.rung_id.rung_index, unique[0])
+
+
+def _instruction_path(
+    run: RungRun,
+    selected: InstructionRun,
+) -> tuple[int, ...] | None:
+    """Return a structural owner path unaffected by recorded read/write count."""
+
+    def find(body: tuple[Any, ...], prefix: tuple[int, ...]) -> tuple[int, ...] | None:
+        owners = tuple(item for item in body if isinstance(item, InstructionRun | LoopIterationRun))
+        for index, item in enumerate(owners):
+            path = (*prefix, index)
+            if item is selected:
+                return path
+            nested = find(item.body, path)
+            if nested is not None:
+                return nested
+        return None
+
+    return find(run.body, ())
+
+
+def _selector_accesses(
+    projection: ScanRungWriteProjection,
+    occurrence: RungRead | RungWrite,
+) -> tuple[RungRead | RungWrite, ...]:
+    if isinstance(occurrence, RungWrite):
+        return tuple(
+            candidate
+            for candidate in projection.writes_for_run(occurrence.run)
+            if candidate.instruction is occurrence.instruction
+            and candidate.transition.tag_name == occurrence.transition.tag_name
+        )
+    return tuple(
+        candidate
+        for candidate in projection.reads_for_run(occurrence.run)
+        if candidate.instruction is occurrence.instruction
+        and candidate.occurrence.name == occurrence.occurrence.name
+    )
+
+
+def occurrence_selector(
+    projection: ScanRungWriteProjection,
+    occurrence: RungRead | RungWrite,
+) -> EffectOccurrenceSelector | None:
+    """Build a relocatable selector from one projection-owned exact access."""
+
+    owned = projection.writes if isinstance(occurrence, RungWrite) else projection.reads
+    if occurrence.scan_id != projection.scan_id or not any(
+        candidate is occurrence for candidate in owned
+    ):
+        return None
+    static_address = _run_static_address(projection, occurrence.run)
+    if static_address is None:
+        return None
+    instruction_path = (
+        ()
+        if occurrence.instruction is None
+        else _instruction_path(occurrence.run, occurrence.instruction)
+    )
+    if instruction_path is None:
+        return None
+    accesses = _selector_accesses(projection, occurrence)
+    matches = tuple(index for index, candidate in enumerate(accesses) if candidate is occurrence)
+    if len(matches) != 1:
+        return None
+    tag = (
+        occurrence.transition.tag_name
+        if isinstance(occurrence, RungWrite)
+        else occurrence.occurrence.name
+    )
+    return EffectOccurrenceSelector(
+        kind="write" if isinstance(occurrence, RungWrite) else "read",
+        tag=tag,
+        static_address=static_address,
+        instruction_path=instruction_path,
+        execution_kind=occurrence.run.kind,
+        caller_rung=occurrence.run.caller_rung,
+        call_stack=occurrence.run.call_stack,
+        depth=occurrence.run.depth,
+        call_invocation=occurrence.call_invocation,
+        access_index=matches[0],
+    )
 
 
 def required_shape(
@@ -601,6 +749,18 @@ def observe_expectation(
     projection_tuple = tuple(projections)
     result: list[EffectObservation] = []
     for obligation in expectation.obligations:
+        if obligation.polarity is EffectPolarity.PREVENT:
+            result.append(
+                EffectObservation(
+                    obligation,
+                    "UNKNOWN",
+                    detail="prevention requires one complete intrascan projection",
+                    execution_projection=(
+                        projection_tuple[0] if len(projection_tuple) == 1 else None
+                    ),
+                )
+            )
+            continue
         appeared: list[tuple[ScanRungWriteProjection, OrderedEffectObservation]] = []
         for projection in projection_tuple:
             appeared.extend(
@@ -684,6 +844,113 @@ def observe_expectation(
                         result.append(wrapped)
                         continue
             result.append(_from_ordered(obligation, observation, projection))
+    return tuple(result)
+
+
+def _selector_runs(
+    projection: ScanRungWriteProjection,
+    obligation: EffectObligation,
+    selector: EffectOccurrenceSelector,
+) -> tuple[RungRun, ...]:
+    return tuple(
+        run
+        for run in projection.runs
+        if _run_static_address(projection, run) == selector.static_address
+        and run.kind == selector.execution_kind
+        and run.caller_rung == selector.caller_rung
+        and run.call_stack == selector.call_stack
+        and run.depth == selector.depth
+        and projection._call_invocation_by_run.get(id(run)) == selector.call_invocation
+        and (obligation.producer_rung is None or run.rung is obligation.producer_rung)
+    )
+
+
+def _observe_prevention(
+    obligation: EffectObligation,
+    projection: ScanRungWriteProjection,
+) -> EffectObservation:
+    """Observe one forbidden exact write in one complete assertion projection."""
+
+    selector = obligation.occurrence_selector
+    if selector is None:
+        return EffectObservation(
+            obligation,
+            "UNKNOWN",
+            detail="prevention obligation has no exact occurrence selector",
+            execution_projection=projection,
+        )
+    if (
+        selector.kind != "write"
+        or selector.tag != obligation.tag
+        or selector.static_address != obligation.producer
+        or not selector.instruction_path
+        or selector.access_index < 0
+    ):
+        return EffectObservation(
+            obligation,
+            "UNKNOWN",
+            detail="prevention selector does not match the forbidden write contract",
+            execution_projection=projection,
+        )
+    runs = _selector_runs(projection, obligation, selector)
+    if len(runs) != 1:
+        return EffectObservation(
+            obligation,
+            "UNKNOWN",
+            detail="prevention writer occurrence is unavailable or ambiguous",
+            execution_projection=projection,
+        )
+    run = runs[0]
+    writes = tuple(
+        write
+        for write in projection.writes_for_run(run)
+        if write.instruction is not None
+        and _instruction_path(run, write.instruction) == selector.instruction_path
+        and write.transition.tag_name == selector.tag
+    )
+    if selector.access_index >= len(writes):
+        return EffectObservation(
+            obligation,
+            "PREVENTED",
+            detail="selected forbidden write did not occur",
+            execution_projection=projection,
+        )
+    write = writes[selector.access_index]
+    if not _values_match(write.transition.to_value, obligation.value):
+        return EffectObservation(
+            obligation,
+            "PREVENTED",
+            detail="selected instruction did not write the forbidden value",
+            execution_projection=projection,
+        )
+    return EffectObservation(
+        obligation,
+        "FIRED",
+        appeared=write,
+        observed_reads=projection.enabling_reads_observed_by_write(write),
+        detail="selected forbidden write occurred",
+        execution_projection=projection,
+    )
+
+
+def observe_intrascan_expectation(
+    expectation: EffectExpectation,
+    projection: ScanRungWriteProjection,
+) -> tuple[EffectObservation, ...]:
+    """Observe a polarized conjunction on one complete exact projection.
+
+    Positive obligations retain the established appeared-handoff semantics.
+    Prevention is intentionally unavailable through ``observe_expectation``:
+    absence over an arbitrary iterable of projections is not evidence that the
+    execution window was complete.
+    """
+
+    result: list[EffectObservation] = []
+    for obligation in expectation.obligations:
+        if obligation.polarity is EffectPolarity.PRODUCE:
+            result.extend(observe_expectation(EffectExpectation((obligation,)), (projection,)))
+        else:
+            result.append(_observe_prevention(obligation, projection))
     return tuple(result)
 
 

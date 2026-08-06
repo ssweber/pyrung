@@ -279,11 +279,17 @@ this table only locates the owner.
   `EffectExpectation`, and `ActPolicy` carries it unchanged. Required-shape
   policy stays in `effects.py`; factual `observed_shape` and appeared-write
   classification stay on `ScanRungWriteProjection`.
-- Report-only one-assertion-scan forensics: `intrascan.py`; execution
-  projection remains the semantic oracle, while `pilot.py` retains receipt
+- One-assertion-scan forensics and bounded closure: `intrascan.py`; its report
+  path interprets an already-executed scan, while its production-inert closure
+  path may enumerate compatible atomic Boolean alternatives and execute a
+  finite number of disposable one-scan forks. The exact execution projection
+  remains the semantic oracle. Closure cannot install a correction, mutate
+  PILOT state, adopt a world, or retain a navigation future, and production
+  Compass/PILOT does not route through it yet. `pilot.py` retains receipt
   creation, deduplication, state mutation, and every subsequent decision.
-  Its Stage-2 source-walk report is inert evidence and may be `INCOMPLETE`;
-  it never chooses among Boolean alternatives.
+- Pure intrascan scalar/guard schedule compilation: `intrascan_schedule.py`;
+  `requirement_recovery.py` remains the production compatibility facade and
+  owns current-world active-requirement admission helpers.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Exact expectation receipt creation and matching: `requirements.py`;
@@ -431,13 +437,16 @@ Static reading and orientation:
   observation adapter
 - `effects.py` — act-owned effect obligations, required-shape policy, exact
   execution-window observation, and detached recording snapshots
-- `intrascan.py` — report-only exact assertion-scan observation and inert
-  failed-effect requirement derivation
+- `intrascan.py` — report-only exact assertion-scan observation, inert
+  failed-effect derivation, and bounded production-inert one-scan closure over
+  disposable forks
+- `intrascan_schedule.py` — pure scalar schedule compilation and lazy Boolean
+  guard-alternative enumeration for one-scan closure
 - `requirements.py` — failed-effect explanations, active requirements, exact
   expectation receipts, and strictly decreasing same-scan occurrence-source
   walks
-- `requirement_recovery.py` — active-requirement evaluation and compatible
-  checkpoint-local scalar schedules
+- `requirement_recovery.py` — production compatibility facade for intrascan
+  schedules plus current-world active-requirement admission and preservation
 - `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:

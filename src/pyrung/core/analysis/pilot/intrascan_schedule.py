@@ -1,0 +1,287 @@
+"""Pure schedule compilation owned by the one-scan closure service.
+
+The functions in this module only normalize Boolean alternatives and compile
+compatible scalar requirements to executable :class:`PilotRung` records. They
+do not execute a PLC, choose a production action, or retain search state.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any, cast
+
+from pyrung.core.analysis.pilot.overlay import PilotRung
+from pyrung.core.analysis.pilot.requirements import (
+    ActiveRequirement,
+    GuardLogic,
+    GuardRequirementAtom,
+    GuardRequirementCondition,
+    RequirementPhase,
+    RequirementStatus,
+)
+from pyrung.core.analysis.pilot.world_key import _rung_identity
+from pyrung.core.crossing import Cmp
+from pyrung.core.fold import _extract_condition_reads
+from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.tag import Tag, TagType
+
+
+@dataclass(frozen=True)
+class RequirementSchedule:
+    """One simultaneous assignment phase at one exact causal source."""
+
+    requirements: tuple[ActiveRequirement, ...]
+    assignments: tuple[tuple[str, Any], ...]
+    pilot_rungs: tuple[PilotRung, ...]
+    checkpoint_owner: Any
+    source_world_key: Any
+    phase: RequirementPhase
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            self.source_world_key,
+            self.checkpoint_owner,
+            self.phase,
+            tuple(requirement.identity for requirement in self.requirements),
+            self.assignments,
+            tuple(_rung_identity(rung) for rung in self.pilot_rungs),
+        )
+
+
+@dataclass(frozen=True)
+class ScheduleCompilation:
+    """Fail-closed compilation result."""
+
+    schedule: RequirementSchedule | None = None
+    detail: str = ""
+
+
+def iter_guard_alternatives(
+    condition: GuardRequirementCondition,
+) -> Iterator[tuple[GuardRequirementAtom, ...]]:
+    """Yield exact DNF alternatives without eagerly expanding the whole tree."""
+
+    if isinstance(condition, GuardRequirementAtom):
+        yield (condition,)
+        return
+    if condition.logic is GuardLogic.ANY:
+        for term in condition.terms:
+            yield from iter_guard_alternatives(term)
+        return
+    if condition.logic is not GuardLogic.ALL:
+        return
+
+    def combine(
+        index: int,
+        prefix: tuple[GuardRequirementAtom, ...],
+    ) -> Iterator[tuple[GuardRequirementAtom, ...]]:
+        if index == len(condition.terms):
+            yield prefix
+            return
+        for branch in iter_guard_alternatives(condition.terms[index]):
+            yield from combine(index + 1, (*prefix, *branch))
+
+    yield from combine(0, ())
+
+
+def guard_alternatives(
+    condition: GuardRequirementCondition,
+) -> tuple[tuple[GuardRequirementAtom, ...], ...]:
+    """Compatibility materialization of :func:`iter_guard_alternatives`."""
+
+    return tuple(iter_guard_alternatives(condition))
+
+
+def _tag_limits(tag: Tag) -> tuple[int | float | None, int | float | None]:
+    limits: dict[TagType, tuple[int | float | None, int | float | None]] = {
+        TagType.INT: (-32768, 32767),
+        TagType.DINT: (-2147483648, 2147483647),
+        TagType.WORD: (0, 65535),
+        TagType.REAL: (None, None),
+    }
+    lower, upper = limits.get(tag.type, (None, None))
+    if tag.min is not None:
+        lower = max(lower, tag.min) if lower is not None else tag.min
+    if tag.max is not None:
+        upper = min(upper, tag.max) if upper is not None else tag.max
+    return lower, upper
+
+
+def _integer_candidates(constraints: tuple[Cmp, ...], tag: Tag, current: Any) -> set[Any]:
+    lower, upper = _tag_limits(tag)
+    values: set[Any] = {current, tag.default}
+    if lower is not None:
+        values.add(math.ceil(lower))
+    if upper is not None:
+        values.add(math.floor(upper))
+    for constraint in constraints:
+        bound = constraint.bound
+        if not isinstance(bound, int | float) or isinstance(bound, bool):
+            continue
+        if constraint.op == ">":
+            values.add(math.floor(bound) + 1)
+        elif constraint.op == ">=":
+            values.add(math.ceil(bound))
+        elif constraint.op == "<":
+            values.add(math.ceil(bound) - 1)
+        elif constraint.op == "<=":
+            values.add(math.floor(bound))
+        elif constraint.op == "==" and float(bound).is_integer():
+            values.add(int(bound))
+        elif constraint.op == "!=":
+            values.update((math.floor(bound) - 1, math.floor(bound) + 1))
+    return values
+
+
+def _real_candidates(constraints: tuple[Cmp, ...], tag: Tag, current: Any) -> set[Any]:
+    lower, upper = _tag_limits(tag)
+    values: set[Any] = {current, tag.default}
+    if lower is not None:
+        values.add(float(lower))
+    if upper is not None:
+        values.add(float(upper))
+    for constraint in constraints:
+        bound = constraint.bound
+        if not isinstance(bound, int | float) or isinstance(bound, bool):
+            continue
+        numeric = float(bound)
+        if constraint.op == ">":
+            values.add(math.nextafter(numeric, math.inf))
+        elif constraint.op == ">=":
+            values.add(numeric)
+        elif constraint.op == "<":
+            values.add(math.nextafter(numeric, -math.inf))
+        elif constraint.op == "<=":
+            values.add(numeric)
+        elif constraint.op == "==":
+            values.add(numeric)
+        elif constraint.op == "!=":
+            values.update((math.nextafter(numeric, -math.inf), math.nextafter(numeric, math.inf)))
+    return values
+
+
+def satisfying_values(
+    tag: Tag,
+    constraints: tuple[Cmp, ...],
+    snapshot: dict[str, Any],
+) -> tuple[Any, ...]:
+    """Return deterministic finite representatives satisfying all constraints."""
+
+    current = snapshot.get(tag.name, tag.default)
+    if tag.choices:
+        candidates = set(tag.choices)
+    elif tag.type in {TagType.INT, TagType.DINT, TagType.WORD}:
+        candidates = _integer_candidates(constraints, tag, current)
+    elif tag.type is TagType.REAL:
+        candidates = _real_candidates(constraints, tag, current)
+    else:
+        candidates = {current, tag.default, False, True}
+        for constraint in constraints:
+            if constraint.op == "==":
+                candidates.add(constraint.bound)
+
+    lower, upper = _tag_limits(tag)
+    valid: list[Any] = []
+    for value in candidates:
+        if lower is not None and (
+            not isinstance(value, int | float) or isinstance(value, bool) or value < lower
+        ):
+            continue
+        if upper is not None and (
+            not isinstance(value, int | float) or isinstance(value, bool) or value > upper
+        ):
+            continue
+        proposed = {**snapshot, tag.name: value}
+        if all(constraint_holds(constraint, proposed) is True for constraint in constraints):
+            valid.append(value)
+
+    def rank(value: Any) -> tuple[Any, ...]:
+        if isinstance(value, int | float) and isinstance(current, int | float):
+            return (0, abs(value - current), value)
+        return (1, repr(value))
+
+    return tuple(sorted(valid, key=rank))
+
+
+def _satisfying_value(
+    tag: Tag,
+    constraints: tuple[Cmp, ...],
+    snapshot: dict[str, Any],
+) -> Any | None:
+    values = satisfying_values(tag, constraints, snapshot)
+    return values[0] if values else None
+
+
+def compile_scalar_schedule(
+    requirements: tuple[ActiveRequirement, ...],
+    plc: Any,
+    *,
+    guard: Any,
+) -> ScheduleCompilation:
+    """Compile one exact source's compatible adjustable scalar requirements."""
+
+    scalar = tuple(
+        requirement for requirement in requirements if isinstance(requirement.condition, Cmp)
+    )
+    if not scalar:
+        return ScheduleCompilation(detail="no scalar requirements to compile")
+    first = scalar[0]
+    if any(
+        requirement.status is not RequirementStatus.ACTIVE
+        or requirement.phase is not RequirementPhase.STEADY
+        for requirement in scalar
+    ):
+        return ScheduleCompilation(detail="only ACTIVE/STEADY requirements may lower")
+    if any(
+        requirement.checkpoint_owner is not first.checkpoint_owner
+        or requirement.source_world_key != first.source_world_key
+        or requirement.phase is not first.phase
+        for requirement in scalar
+    ):
+        return ScheduleCompilation(detail="requirements do not share one exact causal source")
+    snapshot = dict(plc.state.tags)
+    assignable: list[ActiveRequirement] = []
+    for requirement in scalar:
+        if requirement.permits_assignment:
+            assignable.append(requirement)
+            continue
+        condition = cast(Cmp, requirement.condition)
+        if constraint_holds(condition, snapshot) is not True:
+            return ScheduleCompilation(
+                detail="an unsatisfied authoritative operand forbids direct assignment"
+            )
+
+    by_tag: dict[str, list[Cmp]] = {}
+    for requirement in assignable:
+        condition = cast(Cmp, requirement.condition)
+        if condition.bound_is_tag:
+            return ScheduleCompilation(detail="tag-relative scalar lowering is unsupported")
+        by_tag.setdefault(condition.tag, []).append(condition)
+
+    guard_names = _extract_condition_reads(guard)
+    assignments: list[tuple[str, Any]] = []
+    for name, conditions in sorted(by_tag.items()):
+        if name in guard_names:
+            return ScheduleCompilation(detail=f"repair guard self-demands {name!r}")
+        tag = plc._known_tags_by_name.get(name)
+        if tag is None:
+            return ScheduleCompilation(detail=f"unknown assignment destination {name!r}")
+        value = _satisfying_value(tag, tuple(conditions), snapshot)
+        if value is None:
+            return ScheduleCompilation(detail=f"incompatible scalar requirements for {name!r}")
+        assignments.append((name, value))
+
+    pilot_rungs = tuple(PilotRung(tag, value, guard) for tag, value in assignments)
+    return ScheduleCompilation(
+        RequirementSchedule(
+            requirements=scalar,
+            assignments=tuple(assignments),
+            pilot_rungs=pilot_rungs,
+            checkpoint_owner=first.checkpoint_owner,
+            source_world_key=first.source_world_key,
+            phase=first.phase,
+        )
+    )
