@@ -433,6 +433,36 @@ def test_static_path_prefers_exact_edge_over_wildcard_match() -> None:
     assert plan.first_edge.action == ("Exact", True)
 
 
+def test_static_path_can_exclude_an_edge_only_at_the_current_source() -> None:
+    """A failed first Bearing may remain valid after another state transition."""
+
+    role = PipelineRoles("State")
+    graph = StaticTransitionGraph(
+        role,
+        (
+            _wildcard_action_route(2, "Shortcut"),
+            _action_route(0, 1, "Reset"),
+            _route(2, 3),
+        ),
+    )
+
+    preferred = graph.find_path(0, (3,), edge_allowed=lambda _edge: True)
+    assert preferred is not None
+    assert preferred.first_edge.action == ("Shortcut", True)
+
+    shortcut = preferred.first_edge
+    fallback = graph.find_path(
+        0,
+        (3,),
+        edge_allowed=lambda _edge: True,
+        first_edge_allowed=lambda edge: edge.identity != shortcut.identity,
+    )
+
+    assert fallback is not None
+    assert fallback.first_edge.action == ("Reset", True)
+    assert any(edge.identity == shortcut.identity for edge in fallback.edges[1:])
+
+
 def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() -> None:
     """Same-destination BFS visitation must not erase the surviving fallback."""
     role = PipelineRoles("State")

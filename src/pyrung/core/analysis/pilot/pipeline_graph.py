@@ -197,7 +197,16 @@ class StaticTransitionGraph:
         target_values: tuple[Any, ...],
         *,
         edge_allowed: Callable[[StaticTransitionEdge], bool] | None = None,
+        first_edge_allowed: Callable[[StaticTransitionEdge], bool] | None = None,
     ) -> StaticPath | None:
+        """Return the shortest charted path allowed from this world.
+
+        ``first_edge_allowed`` is deliberately narrower than ``edge_allowed``:
+        it describes Bearings disproved at the current source value. Such an
+        edge may still be used later in the path after another transition has
+        changed the world in which its steer will be verified.
+        """
+
         if not target_values:
             return None
         if any(_values_match(from_value, target) for target in target_values):
@@ -209,6 +218,8 @@ class StaticTransitionGraph:
             state, path = queue.popleft()
             for edge in _rank_edges_for_state(self.edges, state):
                 if not _edge_matches(edge, state):
+                    continue
+                if not path and first_edge_allowed is not None and not first_edge_allowed(edge):
                     continue
                 if edge_allowed is not None and not edge_allowed(edge):
                     continue
@@ -298,6 +309,7 @@ def _best_static_path(
     graphs: tuple[StaticTransitionGraph, ...],
     *,
     edge_allowed: Callable[[StaticTransitionEdge], bool],
+    first_edge_allowed: Callable[[StaticTransitionEdge], bool] | None = None,
 ) -> StaticPath | None:
     """Best constrained static path for a need, if any."""
 
@@ -307,7 +319,12 @@ def _best_static_path(
             continue
         current = snapshot.get(graph.role.channel_tag)
         targets = graph.target_values_for_need(needed_tag, needed_value)
-        plan = graph.find_path(current, targets, edge_allowed=edge_allowed)
+        plan = graph.find_path(
+            current,
+            targets,
+            edge_allowed=edge_allowed,
+            first_edge_allowed=first_edge_allowed,
+        )
         if plan is None:
             continue
         plans.append(
