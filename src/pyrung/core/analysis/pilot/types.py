@@ -18,6 +18,7 @@ from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
+from pyrung.core.analysis.pilot.working_theory import TheoryState
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
@@ -835,6 +836,10 @@ class _PilotState:
     active_requirements: list[ActiveRequirement] = field(default_factory=list)
     expectation_receipts: list[ExpectationReceipt] = field(default_factory=list)
     failed_effect_receipts: list[FailedEffectReceipt] = field(default_factory=list)
+    # Immutable shadow-only theory knowledge. It is deliberately not part of
+    # ``_World``: checkpoint restore must not erase observed lifecycle facts,
+    # and the reducer must never participate in adoption or rollback policy.
+    theory_state: TheoryState = field(default_factory=TheoryState)
     # Exact Phase-5 local schedules already admitted from one causal source.
     # Attempt identity is knowledge-side so restoring that source cannot turn
     # the same failed repair into another lap.

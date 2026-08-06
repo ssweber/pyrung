@@ -290,6 +290,15 @@ this table only locates the owner.
 - Pure intrascan scalar/guard schedule compilation: `intrascan_schedule.py`;
   `requirement_recovery.py` remains the production compatibility facade and
   owns current-world active-requirement admission helpers.
+- Shadow-only theory recording: `working_theory.py` owns detached immutable
+  claims, versions, attempt/progress receipts, lifecycle facts, and the pure
+  reducer. `pilot.py::_transition_once` may return a detached shadow
+  observation, but only the live outer loop applies facts to
+  `_PilotState.theory_state`. The ledger is knowledge-side and survives world
+  restore; disposable repair clones receive its immutable source value and do
+  not merge child shadow facts. Shadow theory state cannot change navigation,
+  trial acceptance, adoption, progress, rollback, or public events, and
+  Compass does not consume it yet.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Exact expectation receipt creation and matching: `requirements.py`;
@@ -447,6 +456,9 @@ Static reading and orientation:
   walks
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
+- `working_theory.py` — detached shadow theory records and pure lifecycle
+  reducer; it stores semantic identities only, never navigation reads, acts,
+  checkpoints, worlds, forks, PilotRungs, routes, or callables
 - `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:
