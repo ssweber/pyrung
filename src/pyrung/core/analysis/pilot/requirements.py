@@ -1,9 +1,10 @@
 """Interpret projection-owned failed effects as inert active requirements.
 
 This module is the Phase-4 seam between instruction-owned completion
-semantics and recovery orchestration. It derives relational requirements and
-their exact deadlines; it never chooses an assignment, installs an overlay,
-restores a checkpoint, or executes a repair.
+semantics and recovery orchestration. It derives relational requirements,
+their exact deadlines, and strictly decreasing same-scan occurrence-source
+walks; it never chooses an assignment, installs an overlay, restores a
+checkpoint, or executes a repair.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pyrung.core.analysis.causal._rung_writes import (
     RungRead,
     RungWrite,
     ScanRungWriteProjection,
+    StaticRungAddress,
 )
 from pyrung.core.analysis.pilot.advance import AdvanceIndex, AdvanceOwner
 from pyrung.core.analysis.pilot.effects import (
@@ -100,6 +102,36 @@ class GuardLogic(StrEnum):
     ANY = "any"
 
 
+class RequirementSourceWalkStatus(StrEnum):
+    """Completeness of one exact same-scan occurrence-source walk."""
+
+    COMPLETE = "complete"
+    INCOMPLETE = "incomplete"
+
+
+@dataclass(frozen=True)
+class OccurrenceSourceLink:
+    """Detached proof of one required-read -> exact earlier-writer hop."""
+
+    required_read: EffectOccurrenceSnapshot
+    source_write: EffectOccurrenceSnapshot
+    enabling_reads: tuple[EffectOccurrenceSnapshot, ...]
+    required_address: StaticRungAddress
+    required_instruction_path: tuple[int, ...]
+    source_address: StaticRungAddress
+    instruction_path: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class RequirementSourceWalk:
+    """Report-only result of following exact same-scan definition sources."""
+
+    status: RequirementSourceWalkStatus
+    condition: GuardRequirementCondition
+    links: tuple[OccurrenceSourceLink, ...] = ()
+    detail: str = ""
+
+
 @dataclass(frozen=True)
 class GuardRequirementAtom:
     """One scalar false guard term and the exact reads which demanded it."""
@@ -109,6 +141,7 @@ class GuardRequirementAtom:
     deadline: EffectOccurrenceSnapshot
     source_path: tuple[int, ...]
     operand_authority: OperandAuthority = OperandAuthority.UNKNOWN
+    source_links: tuple[OccurrenceSourceLink, ...] = field(default=(), repr=False)
     # Exact static rung whose dynamic guard read demanded this atom.  The
     # condition-tree ``source_path`` is not a PDG branch address.
     demanding_rung: Any = field(default=None, compare=False, repr=False)
@@ -458,6 +491,7 @@ class RequirementDerivation:
 
     explanation: FailureExplanation
     requirement: ActiveRequirement | None = None
+    source_walk: RequirementSourceWalk | None = None
 
     @property
     def exact(self) -> bool:
@@ -994,6 +1028,8 @@ def _evaluate_guard_complement(
     condition: Condition,
     cursor: _GuardReadCursor,
     path: tuple[int, ...],
+    *,
+    preserve_nested_false: bool = False,
 ) -> _GuardEvaluation:
     """Invert one exactly observed true guard without guessing unread arms."""
 
@@ -1002,13 +1038,42 @@ def _evaluate_guard_complement(
         alternatives: list[GuardRequirementCondition] = []
         exhaustive = True
         for index, child in enumerate(condition.conditions):
-            result = _evaluate_guard_complement(child, cursor, (*path, index))
+            result = _evaluate_guard_complement(
+                child,
+                cursor,
+                (*path, index),
+                preserve_nested_false=preserve_nested_false,
+            )
             supporting.extend(result.supporting_reads)
             if not result.exact:
                 exhaustive = False
                 continue
             if not result.value:
-                return _GuardEvaluation(False, tuple(supporting), exact=True)
+                if not preserve_nested_false:
+                    return _GuardEvaluation(False, tuple(supporting), exact=True)
+                # A false nested AND already keeps an enclosing OR disabled.
+                # Every earlier observed-true child can also be made false;
+                # retain those alternatives as well as this exact false
+                # frontier. An unread suffix makes the list non-exhaustive.
+                if result.requirement is not None:
+                    alternatives.append(result.requirement)
+                exhaustive = exhaustive and index == len(condition.conditions) - 1
+                if not alternatives:
+                    return _GuardEvaluation(False, tuple(supporting), exact=False)
+                requirement = (
+                    alternatives[0]
+                    if len(alternatives) == 1 and exhaustive
+                    else GuardRequirementExpr(
+                        GuardLogic.ANY,
+                        tuple(alternatives),
+                        exhaustive=exhaustive,
+                    )
+                )
+                return _GuardEvaluation(
+                    False,
+                    tuple(supporting),
+                    requirement=requirement,
+                )
             if result.requirement is not None:
                 alternatives.append(result.requirement)
         if not alternatives:
@@ -1029,7 +1094,12 @@ def _evaluate_guard_complement(
         conjuncts: list[GuardRequirementCondition] = []
         any_true = False
         for index, child in enumerate(condition.conditions):
-            result = _evaluate_guard_complement(child, cursor, (*path, index))
+            result = _evaluate_guard_complement(
+                child,
+                cursor,
+                (*path, index),
+                preserve_nested_false=preserve_nested_false,
+            )
             supporting.extend(result.supporting_reads)
             if not result.exact or result.requirement is None:
                 # A true OR short-circuits.  Its unread suffix cannot be
@@ -1039,7 +1109,20 @@ def _evaluate_guard_complement(
             any_true = any_true or result.value
             conjuncts.append(result.requirement)
         if not any_true:
-            return _GuardEvaluation(False, tuple(supporting), exact=True)
+            if not preserve_nested_false:
+                return _GuardEvaluation(False, tuple(supporting), exact=True)
+            if not conjuncts:
+                return _GuardEvaluation(False, tuple(supporting), exact=False)
+            requirement = (
+                conjuncts[0]
+                if len(conjuncts) == 1
+                else GuardRequirementExpr(GuardLogic.ALL, tuple(conjuncts))
+            )
+            return _GuardEvaluation(
+                False,
+                tuple(supporting),
+                requirement=requirement,
+            )
         requirement = (
             conjuncts[0]
             if len(conjuncts) == 1
@@ -1071,6 +1154,8 @@ def _evaluate_guard_complement(
 def _evaluate_run_guard_complement(
     run: RungRun,
     projection: ScanRungWriteProjection,
+    *,
+    preserve_nested_false: bool = False,
 ) -> _GuardEvaluation:
     """Complement the implicit conjunction which enabled one exact run."""
 
@@ -1083,7 +1168,12 @@ def _evaluate_run_guard_complement(
     alternatives: list[GuardRequirementCondition] = []
     exhaustive = True
     for index, condition in enumerate(conditions):
-        result = _evaluate_guard_complement(condition, cursor, (index,))
+        result = _evaluate_guard_complement(
+            condition,
+            cursor,
+            (index,),
+            preserve_nested_false=preserve_nested_false,
+        )
         supporting.extend(result.supporting_reads)
         if not result.exact:
             exhaustive = False
@@ -1109,6 +1199,8 @@ def _evaluate_run_guard_complement(
 def _evaluate_enabling_path_complement(
     selected: RungRun,
     projection: ScanRungWriteProjection,
+    *,
+    preserve_nested_false: bool = False,
 ) -> _GuardEvaluation:
     """Find exact sufficient ways to disable an enabled nested writer path."""
 
@@ -1135,7 +1227,11 @@ def _evaluate_enabling_path_complement(
             conditions = conditions[branch_start:]
         if not conditions:
             continue
-        evaluation = _evaluate_run_guard_complement(run, projection)
+        evaluation = _evaluate_run_guard_complement(
+            run,
+            projection,
+            preserve_nested_false=preserve_nested_false,
+        )
         if not evaluation.exact or evaluation.requirement is None:
             exhaustive = False
             for requirement, reads in _unique_scalar_guard_complements(run, projection):
@@ -1480,9 +1576,12 @@ def derive_guard_requirement_from_effect(
 
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     condition = _bind_guard_demanding_rung(evaluation.requirement, run.rung)
+    source_walk = derive_occurrence_source_requirement(condition, projection)
     return RequirementDerivation(
         explanation=explanation,
         requirement=ActiveRequirement(
+            # The Stage-2 walk is report-only. Production retains the exact
+            # one-hop requirement until bounded closure owns execution.
             condition=condition,
             demanding_occurrence=demanding,
             # A compound false guard is decided at its final observed read.
@@ -1500,6 +1599,7 @@ def derive_guard_requirement_from_effect(
             provenance=provenance,
             scope=(*scope, guard_scope),
         ),
+        source_walk=source_walk,
     )
 
 
@@ -1590,11 +1690,15 @@ def derive_overwriter_guard_requirement_from_write(
     if filtered is None:
         return _unknown("harmful overwriter guard depends only on excluded channel state")
     condition = _bind_guard_demanding_rung(filtered, run.rung)
-    condition = _refine_preserved_tag_deadlines(
+    source_walk = derive_occurrence_source_requirement(
         condition,
         projection,
-        preserved_values,
+        preserved_values=preserved_values,
     )
+    # Preserve the pre-Stage-2 production seam: only protected terminal tags
+    # use the established deadline refinement. The complete transitive walk is
+    # exposed separately as report evidence for later bounded closure.
+    condition = _refine_preserved_tag_deadlines(condition, projection, preserved_values)
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     explanation_kind = (
         FailureExplanationKind.OVERWRITTEN
@@ -1611,10 +1715,9 @@ def derive_overwriter_guard_requirement_from_write(
     explanation = FailureExplanation(
         explanation_kind,
         detail="exact harmful overwriter guard was complemented",
-        # Deadline refinement may replace the final overwriter guard with an
-        # exact earlier predecessor guard. The failed receipt must carry that
-        # refined atom's proof surface, otherwise exact source matching cannot
-        # find the requirement it derived and local recovery churns forever.
+        # Source walking may replace the final overwriter guard with an exact
+        # earlier predecessor guard. The failed receipt must carry that atom's
+        # proof surface so exact source matching can recover the transaction.
         supporting_occurrences=tuple(refined_support),
     )
     return RequirementDerivation(
@@ -1634,12 +1737,15 @@ def derive_overwriter_guard_requirement_from_write(
             provenance=provenance,
             scope=(*scope, ("overwriter_guard", occurrence_snapshot(displacement))),
         ),
+        source_walk=source_walk,
     )
 
 
 def _residualize_guard_requirement(
     condition: GuardRequirementCondition,
     preserved_values: tuple[tuple[str, Any], ...],
+    *,
+    preserve_incomplete: bool = False,
 ) -> GuardRequirementCondition | None:
     """Remove only alternatives disproved by values the effect must preserve."""
 
@@ -1652,13 +1758,20 @@ def _residualize_guard_requirement(
     filtered = tuple(
         member
         for term in condition.terms
-        if (member := _residualize_guard_requirement(term, preserved_values)) is not None
+        if (
+            member := _residualize_guard_requirement(
+                term,
+                preserved_values,
+                preserve_incomplete=preserve_incomplete,
+            )
+        )
+        is not None
     )
     if len(filtered) == len(condition.terms):
         return condition
     if condition.logic is GuardLogic.ALL or not filtered:
         return None
-    if len(filtered) == 1:
+    if len(filtered) == 1 and (condition.exhaustive or not preserve_incomplete):
         return filtered[0]
     return replace(condition, terms=filtered, exhaustive=False)
 
@@ -1668,15 +1781,11 @@ def _refine_preserved_tag_deadlines(
     projection: ScanRungWriteProjection,
     preserved_values: tuple[tuple[str, Any], ...],
 ) -> GuardRequirementCondition:
-    """Trace compatible same-tag deadlines through exact earlier writers.
+    """Preserve the established protected-tag production refinement.
 
-    A final harmful writer may read a protected channel only after another
-    same-scan writer has displaced its required value.  When one guard atom was
-    true at the protected value and became false solely across the exact write
-    observed by that atom's deadline read, preventing that predecessor is a
-    sufficient way to satisfy the later atom on time.  Substitute only the
-    exact complemented predecessor guard; every missing identity, ambiguity,
-    or non-decreasing hop keeps the original atom.
+    The complete Stage-2 occurrence walk is exposed separately as report-only
+    evidence. This compatibility seam deliberately retains the pre-Stage-2
+    exact-run complement, fallback, and identity behavior used by production.
     """
 
     protected = dict(preserved_values)
@@ -1770,6 +1879,350 @@ def _refine_preserved_tag_deadlines(
         remaining_hops=len(projection.writes),
         visited=frozenset(),
     )
+
+
+def derive_occurrence_source_requirement(
+    condition: GuardRequirementCondition,
+    projection: ScanRungWriteProjection,
+    *,
+    preserved_values: tuple[tuple[str, Any], ...] = (),
+) -> RequirementSourceWalk:
+    """Follow false reads through exact earlier same-scan program writes.
+
+    The projection's live occurrence objects are the oracle.  The returned
+    condition is inert evidence; this function never compiles or applies an
+    assignment, chooses an alternative, or executes another scan.
+    """
+
+    return _derive_occurrence_source_requirement(
+        condition,
+        projection,
+        preserved_values=preserved_values,
+    )
+
+
+def _derive_occurrence_source_requirement(
+    condition: GuardRequirementCondition,
+    projection: ScanRungWriteProjection,
+    *,
+    preserved_values: tuple[tuple[str, Any], ...],
+) -> RequirementSourceWalk:
+    result = _walk_requirement_sources(
+        condition,
+        projection,
+        preserved_values=preserved_values,
+        ceiling=None,
+        remaining_hops=len(projection.writes),
+        visited=frozenset(),
+    )
+    normalized = _normalize_guard_requirement(result.condition)
+    return result if normalized is result.condition else replace(result, condition=normalized)
+
+
+def _walk_requirement_sources(
+    condition: GuardRequirementCondition,
+    projection: ScanRungWriteProjection,
+    *,
+    preserved_values: tuple[tuple[str, Any], ...],
+    ceiling: int | None,
+    remaining_hops: int,
+    visited: frozenset[tuple[int, int]],
+) -> RequirementSourceWalk:
+    if isinstance(condition, GuardRequirementExpr):
+        terms: list[GuardRequirementCondition] = []
+        links: list[OccurrenceSourceLink] = []
+        details: list[str] = []
+        complete = True
+        for term in condition.terms:
+            result = _walk_requirement_sources(
+                term,
+                projection,
+                preserved_values=preserved_values,
+                ceiling=ceiling,
+                remaining_hops=remaining_hops,
+                visited=visited,
+            )
+            terms.append(result.condition)
+            _extend_unique(links, result.links)
+            if result.status is RequirementSourceWalkStatus.INCOMPLETE:
+                complete = False
+                if result.detail:
+                    details.append(result.detail)
+        rewritten = (
+            condition if tuple(terms) == condition.terms else replace(condition, terms=tuple(terms))
+        )
+        return RequirementSourceWalk(
+            RequirementSourceWalkStatus.COMPLETE
+            if complete
+            else RequirementSourceWalkStatus.INCOMPLETE,
+            rewritten,
+            tuple(links),
+            "; ".join(dict.fromkeys(details)),
+        )
+    return _walk_requirement_atom(
+        condition,
+        projection,
+        preserved_values=preserved_values,
+        ceiling=ceiling,
+        remaining_hops=remaining_hops,
+        visited=visited,
+    )
+
+
+def _walk_requirement_atom(
+    atom: GuardRequirementAtom,
+    projection: ScanRungWriteProjection,
+    *,
+    preserved_values: tuple[tuple[str, Any], ...],
+    ceiling: int | None,
+    remaining_hops: int,
+    visited: frozenset[tuple[int, int]],
+) -> RequirementSourceWalk:
+    def incomplete(detail: str) -> RequirementSourceWalk:
+        return RequirementSourceWalk(
+            RequirementSourceWalkStatus.INCOMPLETE,
+            atom,
+            detail=detail,
+        )
+
+    if atom.deadline.scan_id != projection.scan_id:
+        return incomplete("requirement deadline belongs to a different projection scan")
+    reads = tuple(read for read in projection.reads if occurrence_snapshot(read) == atom.deadline)
+    if len(reads) != 1:
+        return incomplete("requirement deadline read is unavailable or ambiguous")
+    read = reads[0]
+    condition_tag = getattr(atom.condition, "tag", None)
+    if (
+        read.occurrence.domain != "tag"
+        or not isinstance(condition_tag, str)
+        or condition_tag != read.occurrence.name
+    ):
+        return incomplete("requirement constraint does not match its exact tag read")
+    if ceiling is not None and read.ordinal >= ceiling:
+        return incomplete("requirement deadline does not strictly precede its source ceiling")
+
+    from pyrung.core.executor import WriteOccurrence
+
+    source = read.occurrence.source
+    if not isinstance(source, WriteOccurrence):
+        if source == "pending":
+            return incomplete("requirement read has an unjournaled pending source")
+        return RequirementSourceWalk(RequirementSourceWalkStatus.COMPLETE, atom)
+    if remaining_hops <= 0:
+        return incomplete("occurrence-source walk exhausted its exact write bound")
+    definitions = tuple(write for write in projection.writes if write.occurrence is source)
+    if len(definitions) != 1:
+        return incomplete("requirement read source write is unavailable or ambiguous")
+    definition = definitions[0]
+    if (
+        source.domain != "tag"
+        or source.name != read.occurrence.name
+        or source.after != read.occurrence.value
+        or definition.scan_id != read.scan_id
+        or definition.transition.tag_name != read.occurrence.name
+        or definition.transition.to_value != read.occurrence.value
+    ):
+        return incomplete("requirement read carries inconsistent source-write evidence")
+    if not definition.run.enabled or definition.ordinal >= read.ordinal:
+        return incomplete("requirement source write is disabled or not strictly earlier")
+    if ceiling is not None and definition.ordinal >= ceiling:
+        return incomplete("requirement source write does not strictly decrease")
+    visit = (id(read.occurrence), id(source))
+    if visit in visited:
+        return incomplete("occurrence-source walk repeated an exact source link")
+    if not isinstance(atom.condition, Cmp) or atom.condition.bound_is_tag:
+        return incomplete("same-scan sourced requirement is not an exact scalar constraint")
+    protected = dict(preserved_values)
+    if atom.condition.tag in protected and constraint_holds(atom.condition, protected) is not True:
+        # A terminal effect may require this channel to retain a value which
+        # disproves the guard atom.  Preventing an earlier writer cannot make
+        # that self-conflicting arm a compatible way to preserve the effect.
+        return RequirementSourceWalk(RequirementSourceWalkStatus.COMPLETE, atom)
+    before = {atom.condition.tag: definition.transition.from_value}
+    after = {atom.condition.tag: definition.transition.to_value}
+    if (
+        constraint_holds(atom.condition, before) is not True
+        or constraint_holds(atom.condition, after) is not False
+    ):
+        return incomplete("source write does not exactly cross the required scalar truth")
+
+    evaluation = _evaluate_enabling_path_complement(
+        definition.run,
+        projection,
+        preserve_nested_false=True,
+    )
+    if (
+        not evaluation.value
+        or not evaluation.exact
+        or evaluation.requirement is None
+        or not evaluation.supporting_reads
+    ):
+        return incomplete("source writer enabling path has no exact complement")
+    substitute = _residualize_guard_requirement(
+        evaluation.requirement,
+        preserved_values,
+        preserve_incomplete=True,
+    )
+    if substitute is None:
+        return incomplete("source writer guard depends only on excluded preserved state")
+    substitute = _bind_guard_demanding_rung(substitute, definition.run.rung)
+    substitute_atoms = _guard_atoms(substitute)
+    if not substitute_atoms:
+        return incomplete("source writer complement has no exact scalar atom")
+    if any(
+        candidate.deadline.scan_id != read.scan_id
+        or candidate.deadline.ordinal >= definition.ordinal
+        for candidate in substitute_atoms
+    ):
+        return incomplete("source writer complement has a non-decreasing deadline")
+    required_address = _static_run_address(projection, read.run)
+    required_instruction_path = _read_instruction_path(read)
+    source_address = _static_run_address(projection, definition.run)
+    instruction_path = _instruction_occurrence_path(definition)
+    if (
+        required_address is None
+        or required_instruction_path is None
+        or source_address is None
+        or instruction_path is None
+    ):
+        return incomplete("source writer dynamic branch or instruction identity is unavailable")
+    link = OccurrenceSourceLink(
+        required_read=occurrence_snapshot(read),
+        source_write=occurrence_snapshot(definition),
+        enabling_reads=tuple(occurrence_snapshot(item) for item in evaluation.supporting_reads),
+        required_address=required_address,
+        required_instruction_path=required_instruction_path,
+        source_address=source_address,
+        instruction_path=instruction_path,
+    )
+    substitute = _prepend_source_link(substitute, (*atom.source_links, link))
+    nested = _walk_requirement_sources(
+        substitute,
+        projection,
+        preserved_values=preserved_values,
+        ceiling=definition.ordinal,
+        remaining_hops=remaining_hops - 1,
+        visited=visited | {visit},
+    )
+    links = [link]
+    _extend_unique(links, nested.links)
+    return replace(nested, links=tuple(links))
+
+
+def _prepend_source_link(
+    condition: GuardRequirementCondition,
+    prefix: tuple[OccurrenceSourceLink, ...],
+) -> GuardRequirementCondition:
+    if isinstance(condition, GuardRequirementAtom):
+        return replace(condition, source_links=(*prefix, *condition.source_links))
+    return replace(
+        condition,
+        terms=tuple(_prepend_source_link(term, prefix) for term in condition.terms),
+    )
+
+
+def _static_run_address(
+    projection: ScanRungWriteProjection,
+    run: RungRun,
+) -> StaticRungAddress | None:
+    """Detach the static branch path of one exact dynamic run."""
+
+    def find_branch(root: Any, selected: Any, path: tuple[int, ...] = ()) -> tuple[int, ...] | None:
+        if root is selected:
+            return path
+        for index, branch in enumerate(getattr(root, "_branches", ())):
+            found = find_branch(branch, selected, (*path, index))
+            if found is not None:
+                return found
+        return None
+
+    candidates = tuple(
+        candidate
+        for candidate in projection.runs
+        if candidate.rung_id == run.rung_id and candidate.kind != "branch"
+    )
+    paths = tuple(
+        path
+        for candidate in candidates
+        if (path := find_branch(candidate.rung, run.rung)) is not None
+    )
+    unique = tuple(dict.fromkeys(paths))
+    if len(unique) != 1:
+        return None
+    return (run.rung_id.subroutine, run.rung_id.rung_index, unique[0])
+
+
+def _instruction_run_path(
+    run: RungRun,
+    selected: InstructionRun,
+) -> tuple[int, ...] | None:
+    """Return the exact journal path to one projection-owned instruction."""
+
+    def find(body: tuple[Any, ...], prefix: tuple[int, ...]) -> tuple[int, ...] | None:
+        for index, item in enumerate(body):
+            path = (*prefix, index)
+            if item is selected:
+                return path
+            if isinstance(item, InstructionRun | LoopIterationRun):
+                nested = find(item.body, path)
+                if nested is not None:
+                    return nested
+        return None
+
+    return find(run.body, ())
+
+
+def _read_instruction_path(read: RungRead) -> tuple[int, ...] | None:
+    """Detach a required read's exact instruction owner, or rung guard root."""
+
+    if read.instruction is None:
+        return ()
+    return _instruction_run_path(read.run, read.instruction)
+
+
+def _instruction_occurrence_path(write: RungWrite) -> tuple[int, ...] | None:
+    """Return the exact journal path to a source write's InstructionRun."""
+
+    if write.instruction is None:
+        return None
+    return _instruction_run_path(write.run, write.instruction)
+
+
+def _normalize_guard_requirement(
+    condition: GuardRequirementCondition,
+) -> GuardRequirementCondition:
+    """Flatten only identical Boolean structure without choosing an arm."""
+
+    if isinstance(condition, GuardRequirementAtom):
+        return condition
+    terms: list[GuardRequirementCondition] = []
+    exhaustive = condition.exhaustive
+    for term in condition.terms:
+        normalized = _normalize_guard_requirement(term)
+        if isinstance(normalized, GuardRequirementExpr) and normalized.logic is condition.logic:
+            terms.extend(normalized.terms)
+            exhaustive = exhaustive and normalized.exhaustive
+        else:
+            terms.append(normalized)
+    unique: list[GuardRequirementCondition] = []
+    for term in terms:
+        if not any(term == existing for existing in unique):
+            unique.append(term)
+    if len(unique) == 1 and exhaustive:
+        return unique[0]
+    rewritten = tuple(unique)
+    if rewritten == condition.terms and exhaustive is condition.exhaustive:
+        return condition
+    return GuardRequirementExpr(condition.logic, rewritten, exhaustive=exhaustive)
+
+
+def _extend_unique(
+    target: list[OccurrenceSourceLink],
+    additions: tuple[OccurrenceSourceLink, ...],
+) -> None:
+    for addition in additions:
+        if addition not in target:
+            target.append(addition)
 
 
 def derive_advance_operand_requirement(

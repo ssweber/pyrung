@@ -4,7 +4,9 @@ The execution projection is the semantic oracle.  This module asks what one
 already-executed assertion scan proves about an ``EffectExpectation`` and
 interprets failed observations with the existing requirement derivations.  It
 does not choose an action, install a correction, mutate PILOT state, restore or
-commit a world, execute a retry, or retain navigation state.
+commit a world, execute a retry, or retain navigation state.  Transitive
+same-scan source walks remain typed evidence, including explicit
+``INCOMPLETE`` results; they are never action choices.
 
 ``derive_recorded_observations`` is the compatibility seam for observations
 already captured by steering.  Its filtering, projection selection, and
@@ -31,6 +33,7 @@ from pyrung.core.analysis.pilot.requirements import (
     FailureExplanation,
     OperandAuthority,
     RequirementDerivation,
+    RequirementSourceWalk,
     bind_guard_operand_authorities,
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
@@ -95,6 +98,7 @@ class IntrascanFinding:
                 id(self.observation.execution_owner),
                 id(self.source_checkpoint.owner),
             ),
+            source_walk=self.derivation.source_walk,
         )
 
 
@@ -109,6 +113,7 @@ class IntrascanFindingSnapshot:
     source_world_key: Any
     source_scan: int | None
     causal_identity: tuple[int, int, int]
+    source_walk: RequirementSourceWalk | None
 
 
 @dataclass(frozen=True)

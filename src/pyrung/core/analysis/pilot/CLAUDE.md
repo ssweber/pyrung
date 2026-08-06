@@ -282,6 +282,8 @@ this table only locates the owner.
 - Report-only one-assertion-scan forensics: `intrascan.py`; execution
   projection remains the semantic oracle, while `pilot.py` retains receipt
   creation, deduplication, state mutation, and every subsequent decision.
+  Its Stage-2 source-walk report is inert evidence and may be `INCOMPLETE`;
+  it never chooses among Boolean alternatives.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Exact expectation receipt creation and matching: `requirements.py`;
@@ -431,8 +433,9 @@ Static reading and orientation:
   execution-window observation, and detached recording snapshots
 - `intrascan.py` — report-only exact assertion-scan observation and inert
   failed-effect requirement derivation
-- `requirements.py` — failed-effect explanations, active requirements, and
-  exact expectation receipts
+- `requirements.py` — failed-effect explanations, active requirements, exact
+  expectation receipts, and strictly decreasing same-scan occurrence-source
+  walks
 - `requirement_recovery.py` — active-requirement evaluation and compatible
   checkpoint-local scalar schedules
 - `navigation_contracts.py` — immutable navigation contracts
