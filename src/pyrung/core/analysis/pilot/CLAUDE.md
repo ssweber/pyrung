@@ -279,6 +279,9 @@ this table only locates the owner.
   `EffectExpectation`, and `ActPolicy` carries it unchanged. Required-shape
   policy stays in `effects.py`; factual `observed_shape` and appeared-write
   classification stay on `ScanRungWriteProjection`.
+- Report-only one-assertion-scan forensics: `intrascan.py`; execution
+  projection remains the semantic oracle, while `pilot.py` retains receipt
+  creation, deduplication, state mutation, and every subsequent decision.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Exact expectation receipt creation and matching: `requirements.py`;
@@ -426,6 +429,8 @@ Static reading and orientation:
   observation adapter
 - `effects.py` — act-owned effect obligations, required-shape policy, exact
   execution-window observation, and detached recording snapshots
+- `intrascan.py` — report-only exact assertion-scan observation and inert
+  failed-effect requirement derivation
 - `requirements.py` — failed-effect explanations, active requirements, and
   exact expectation receipts
 - `requirement_recovery.py` — active-requirement evaluation and compatible

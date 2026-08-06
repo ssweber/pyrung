@@ -57,6 +57,10 @@ from pyrung.core.analysis.pilot.effects import (
     promote_certified_prefix_target_observation,
     promote_terminal_target_observation,
 )
+from pyrung.core.analysis.pilot.intrascan import (
+    IntrascanQuestion,
+    derive_recorded_observations,
+)
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
@@ -128,7 +132,6 @@ from pyrung.core.analysis.pilot.requirements import (
     bind_guard_operand_authorities,
     classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
-    derive_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_write,
 )
@@ -349,114 +352,52 @@ def _derive_attempt_requirements(
     executed = _executed_attempt(attempt)
     if executed is None:
         return
-    fulfilled_obligations = {
-        id(item.obligation)
-        for item in executed.effect_observations
-        if item.disposition == "SURVIVED"
-    }
-    index = None
-    for observation in executed.effect_observations:
-        if (
-            observation.disposition == "SURVIVED"
-            or id(observation.obligation) in fulfilled_obligations
-        ):
-            continue
-        owner = observation.execution_owner
-        epoch = observation.execution_epoch
-        if owner is None or epoch is None:
-            continue
-        scans = tuple(
-            occurrence.scan_id
-            for occurrence in (
-                observation.appeared,
-                observation.consumer_read,
-                observation.displacement,
-                observation.displaced_read,
-                *observation.observed_reads,
-            )
-            if occurrence is not None
+    fallback_scan = (
+        executed.pulse.action_scan
+        if executed.pulse.action_scan is not None
+        else (
+            executed.pulse.coast_receipt.end_scan
+            if executed.pulse.coast_receipt is not None
+            else executed.pulse.fork.state.scan_id
         )
-        scan = max(
-            scans,
-            default=(
-                executed.pulse.action_scan
-                if executed.pulse.action_scan is not None
-                else (
-                    executed.pulse.coast_receipt.end_scan
-                    if executed.pulse.coast_receipt is not None
-                    else executed.pulse.fork.state.scan_id
-                )
-            ),
-        )
-        projection = observation.execution_projection
-        if projection is None or projection.scan_id != scan:
-            projection = owner._runner()._replay_rung_write_projection_at(scan)
-        if projection is None:
-            continue
-        if observation.disposition in {"ABSENT", "STRANDED"}:
-            derivation = _bind_guard_derivation_authority(
-                derive_guard_requirement_from_effect(
-                    observation,
-                    projection,
-                    execution_epoch=epoch,
-                    execution_owner=owner,
-                    selected_writer=observation.obligation.producer,
-                    source_world_key=checkpoint.key,
-                    source_checkpoint=checkpoint,
-                    provenance="steer",
-                ),
-                checkpoint,
-                ctx,
-            )
-            explanation = derivation.explanation
-        else:
-            if index is None:
-                index = build_advance_index(
-                    ctx.program,
-                    getattr(checkpoint.world.work, "_harness", None),
-                )
-            authorities = _bound_operand_authorities(projection, checkpoint, ctx)
-            derivation = derive_advance_requirement_from_effect(
-                index,
-                projection,
-                observation,
-                operand_authorities=authorities,
-                execution_epoch=epoch,
-                execution_owner=owner,
-                selected_writer=observation.obligation.producer,
-                source_world_key=checkpoint.key,
-                source_checkpoint=checkpoint,
-                provenance="steer",
-            )
-            if derivation.requirement is None:
-                derivation = _bind_guard_derivation_authority(
-                    derive_overwriter_guard_requirement_from_effect(
-                        observation,
-                        projection,
-                        execution_epoch=epoch,
-                        execution_owner=owner,
-                        selected_writer=observation.obligation.producer,
-                        source_world_key=checkpoint.key,
-                        source_checkpoint=checkpoint,
-                        provenance="steer-overwriter",
-                        preserved_values=(
-                            ((observation.obligation.tag, observation.obligation.value),)
-                            if observation.obligation.terminal_target
-                            else ()
-                        ),
-                    ),
-                    checkpoint,
-                    ctx,
-                )
-            explanation = derivation.explanation
+    )
+    question = IntrascanQuestion(
+        expectation=executed.bearing.expectation,
+        execution=executed.pulse.fork,
+        assertion_scan=fallback_scan,
+        source_checkpoint=checkpoint,
+        advance_index=None,
+        operand_authorities={},
+        steerable=ctx.steerable,
+        program_written=frozenset(ctx.pdg.writers_of),
+        configured_inputs=_checkpoint_configured_inputs(checkpoint),
+        advance_index_factory=lambda: build_advance_index(
+            ctx.program,
+            getattr(checkpoint.world.work, "_harness", None),
+        ),
+        operand_authorities_at=lambda projection: _bound_operand_authorities(
+            projection,
+            checkpoint,
+            ctx,
+        ),
+    )
+    report = derive_recorded_observations(
+        question,
+        executed.effect_observations,
+        fallback_scan=fallback_scan,
+    )
+    for finding in report.findings:
+        observation = finding.observation
+        derivation = finding.derivation
+        diagnostic = finding.diagnostic_snapshot()
         failed = FailedEffectReceipt(
-            explanation=explanation,
-            observation=observation.diagnostic_snapshot(),
-            selected_writer=observation.obligation.producer,
-            source_world_key=checkpoint.key,
+            explanation=diagnostic.explanation,
+            observation=diagnostic.observation,
+            selected_writer=diagnostic.selected_writer,
+            source_world_key=diagnostic.source_world_key,
             checkpoint_owner=checkpoint.owner,
-            execution_epoch=epoch,
-            execution_owner=owner,
+            execution_epoch=observation.execution_epoch,
+            execution_owner=observation.execution_owner,
             source_checkpoint=checkpoint,
             act_identity=act_identity(executed.bearing.act),
             local_act=executed.bearing.act,
