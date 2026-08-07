@@ -120,6 +120,12 @@ class EffectObligation:
     # terminal effects remain endpoint evidence; this one may veto acceptance
     # when a later same-scan write displaces it before scan exit.
     terminal_target: bool = False
+    # The selected trace contains a downstream consumer, but static analysis
+    # cannot name it (for example, across an indirect data lookup).  Only one
+    # exact producer-sourced read before displacement may complete this
+    # obligation; ordinary ``consumer=None`` effects still require scan-exit
+    # survival.
+    projected_consumer: bool = False
     producer_rung: object = field(compare=False, repr=False, default=None)
     consumer_rung: object | None = field(compare=False, repr=False, default=None)
     polarity: EffectPolarity = field(default=EffectPolarity.PRODUCE, repr=False)
@@ -189,6 +195,7 @@ class EffectObligationSnapshot:
     required_shape: tuple[tuple[str, Any], ...]
     boundary: tuple[str, Any] | None
     terminal_target: bool = False
+    projected_consumer: bool = False
 
 
 @dataclass(frozen=True)
@@ -687,20 +694,34 @@ def expectation_from_selected_path(
     selected_pairs: tuple[tuple[str, Any], ...] = (),
     snapshot: Mapping[str, Any] | None = None,
     steerable: frozenset[str] = frozenset(),
+    projected_consumer_tags: frozenset[str] = frozenset(),
+    require_ready: bool = True,
 ) -> EffectExpectation | None:
-    """Mint one final obligation while the exact selected path is available."""
+    """Mint one final obligation while the exact selected path is available.
+
+    ``require_ready=False`` is reserved for detached candidate drafting.  The
+    caller must still prove the missing prerequisites in one exact projected
+    scan before the expectation can become an executable Bearing.
+    """
 
     if not path:
         return None
     producer = path[-1]
     consumer_node_index = _consumer_for_producer(path, pdg)
+    projected_consumer = (
+        consumer_node_index is None and len(path) > 1 and producer.tag in projected_consumer_tags
+    )
     shape = required_shape(path, pdg)
+    if projected_consumer:
+        # A statically opaque consumer is resolved from its exact projected
+        # read rather than from a terminal scan-exit shape.
+        shape = ()
     # Expectations are execution receipts, not forecasts for the rest of a
     # target trace.  Mint one only when this selected artifact makes the exact
     # producer runnable and its selected consumer is due now.  Otherwise a
     # fresh Orientation owns the later stage.  Returning a terminal producer
     # promise here would still reject ordinary prerequisite staging as ABSENT.
-    if snapshot is not None:
+    if snapshot is not None and require_ready:
         selected_state = dict(snapshot)
         selected_state.update(selected_pairs)
         producer_ready = all(
@@ -730,6 +751,7 @@ def expectation_from_selected_path(
         ),
         required_shape=shape,
         boundary=boundary,
+        projected_consumer=projected_consumer,
         producer_rung=producer_rung,
         consumer_rung=consumer_rung,
     )
@@ -788,6 +810,9 @@ def observe_expectation(
             )
             continue
         for projection, observation in appeared:
+            if obligation.projected_consumer:
+                result.append(_observe_projected_consumer(obligation, observation, projection))
+                continue
             later_writes = tuple(
                 (later, write)
                 for later in projection_tuple
@@ -845,6 +870,70 @@ def observe_expectation(
                         continue
             result.append(_from_ordered(obligation, observation, projection))
     return tuple(result)
+
+
+def _observe_projected_consumer(
+    obligation: EffectObligation,
+    observation: OrderedEffectObservation,
+    projection: ScanRungWriteProjection,
+) -> EffectObservation:
+    """Resolve one statically opaque consumer from exact occurrence sources.
+
+    This is deliberately stricter than choosing the first same-tag read.  The
+    read must carry the exact selected write as its source and occur before the
+    first displacement.  More than one such read leaves the intended consumer
+    ambiguous and therefore fails closed.
+    """
+
+    appeared = observation.appeared
+    ceiling = observation.displacement.ordinal if observation.displacement is not None else None
+    sourced = tuple(
+        read
+        for read in projection.reads
+        if read.occurrence.name == obligation.tag
+        and read.ordinal > appeared.ordinal
+        and (ceiling is None or read.ordinal < ceiling)
+        and (
+            (transition := projection.transition_observed_by_read(read)) is not None
+            and transition.occurrence_ordinal == appeared.ordinal
+            and transition.tag_name == obligation.tag
+        )
+    )
+    if len(sourced) != 1:
+        return EffectObservation(
+            obligation,
+            "UNKNOWN",
+            appeared=appeared,
+            displacement=observation.displacement,
+            observed_reads=sourced,
+            detail=(
+                "projected consumer read is unavailable"
+                if not sourced
+                else "projected consumer read is ambiguous"
+            ),
+            execution_projection=projection,
+        )
+    consumer_read = sourced[0]
+    consumer_shape = projection.observed_shape(consumer_read)
+    if not consumer_read.run.enabled:
+        return EffectObservation(
+            obligation,
+            "STRANDED",
+            appeared=appeared,
+            consumer_read=consumer_read,
+            observed_reads=consumer_shape,
+            detail="projected consumer read the effect but its run was disabled",
+            execution_projection=projection,
+        )
+    return EffectObservation(
+        obligation,
+        "SURVIVED",
+        appeared=appeared,
+        consumer_read=consumer_read,
+        observed_reads=consumer_shape,
+        detail="exact projection resolved the selected consumer",
+        execution_projection=projection,
+    )
 
 
 def _selector_runs(
@@ -1672,6 +1761,7 @@ def obligation_snapshot(obligation: EffectObligation) -> EffectObligationSnapsho
             else None
         ),
         terminal_target=obligation.terminal_target,
+        projected_consumer=obligation.projected_consumer,
     )
 
 

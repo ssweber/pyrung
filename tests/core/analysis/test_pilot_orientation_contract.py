@@ -58,6 +58,7 @@ class _Context:
     opaque_loop: frozenset = frozenset()
     pipeline_internal_tags: frozenset = frozenset()
     domain_prior: object = None
+    theory_view: object = None
 
 
 def _candidate(tag: str) -> SimpleNamespace:

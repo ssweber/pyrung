@@ -3,8 +3,11 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
+
 from pyrung import Bool, Int, Program, copy, rung
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
@@ -18,7 +21,10 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
     Reachable,
     StaticEdgeExclusionReason,
 )
-from pyrung.core.analysis.pilot.effects import EffectPathStep, expectation_from_writer
+from pyrung.core.analysis.pilot.effects import (
+    EffectPathStep,
+    expectation_from_writer,
+)
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
@@ -46,6 +52,7 @@ from pyrung.core.analysis.pilot.options import (
     _PrerequisiteSeparation,
     _prescribe_wait,
     _read_learned_fallback,
+    _read_route_and_wait,
     _RouteAndCompletionRead,
     _select_wait,
     _separate_prerequisites,
@@ -66,7 +73,12 @@ from pyrung.core.analysis.pilot.program_step import (
     ProgramStep,
     ProgramStepStatus,
 )
-from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch, TraceNode
+from pyrung.core.analysis.pilot.trace import (
+    TraceAction,
+    TraceCrossingBranch,
+    TraceNode,
+    trace_back,
+)
 from pyrung.core.crossing import Eq
 
 
@@ -461,6 +473,261 @@ def test_static_path_can_exclude_an_edge_only_at_the_current_source() -> None:
     assert fallback is not None
     assert fallback.first_edge.action == ("Reset", True)
     assert any(edge.identity == shortcut.identity for edge in fallback.edges[1:])
+
+
+def test_shadow_theory_does_not_change_static_route_selection() -> None:
+    """Detached theory evidence remains inert in production route selection."""
+
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (
+            _wildcard_action_route(2, "Shortcut"),
+            _action_route(0, 1, "Reset"),
+            _route(2, 3),
+        ),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "Shortcut": False, "Reset": False},
+        tree=TraceNode("State", 3, satisfied=False),
+    )
+    excluded = ("chart-edge", "shortcut")
+    theory_view = SimpleNamespace(
+        claim=SimpleNamespace(
+            objective=SimpleNamespace(target_tag="State", target_value=3, frontier=()),
+            obligations=(),
+        ),
+        requirements=(),
+        excludes_first_edge=lambda artifact: artifact == excluded,
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 3),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        theory_view=theory_view,
+    )
+
+    unmapped = _compass_route_plan(frame, ctx)
+    assert unmapped is None
+
+
+def test_direct_target_chart_is_not_promoted_without_an_opaque_trace_boundary() -> None:
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (_action_route(0, 2, "Advance"),),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "Advance": False},
+        tree=TraceNode("State", 2, satisfied=False),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+    )
+
+    plan = _compass_route_plan(frame, ctx)
+
+    assert plan is None
+
+
+def test_unrouted_chart_does_not_select_a_sibling_read_locally() -> None:
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (
+            _action_route(0, 2, "FirstAdvance"),
+            _action_route(0, 2, "SecondAdvance"),
+        ),
+    )
+    compass = Compass(NavigationCatalog(chart_graphs=(graph,)))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "FirstAdvance": False, "SecondAdvance": False},
+        tree=TraceNode("State", 2, satisfied=False),
+        raw_trace_action_details=(),
+    )
+    state = SimpleNamespace(pilot_rungs=(), earned_work=None, pending_departure=None)
+    ctx = SimpleNamespace(
+        compass=compass,
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        edge_tags=frozenset(),
+        pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
+    )
+
+    first = _read_route_and_wait(frame, state, ctx, set())
+    assert first.route is None
+    assert compass.knowledge.nogood_identities(frame.key) == frozenset()
+
+
+def test_unbanked_broad_trace_keeps_ownership_over_a_shadow_chart() -> None:
+    """A shadow chart cannot steal production ownership from the live trace."""
+
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (_action_route(0, 2, "Advance"),),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={
+            "State": 0,
+            "Advance": False,
+            "Broad": False,
+            "NarrowA": False,
+            "NarrowB": False,
+        },
+        tree=TraceNode("State", 2, satisfied=False),
+        raw_trace_action_details=(
+            TraceAction("Broad", True),
+            TraceAction(
+                "NarrowA",
+                True,
+                availability=_WriterAvailability.UNKNOWN,
+            ),
+            TraceAction(
+                "NarrowB",
+                True,
+                availability=_WriterAvailability.UNKNOWN,
+            ),
+        ),
+    )
+    state = SimpleNamespace(
+        pilot_rungs=(),
+        earned_work=None,
+        pending_departure=None,
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(chart_graphs=(graph,))),
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        edge_tags=frozenset(),
+        pdg=SimpleNamespace(
+            downstream_slice=lambda tag, **_kwargs: range(100 if tag == "Broad" else 1),
+        ),
+    )
+
+    read = _read_route_and_wait(frame, state, ctx, set())
+
+    assert read.trace.actions == (
+        ("Broad", True),
+        ("NarrowA", True),
+        ("NarrowB", True),
+    )
+    assert read.route is None
+
+
+def test_current_non_broad_trace_keeps_ownership_over_a_chart() -> None:
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (_action_route(0, 2, "Advance"),),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "Advance": False, "Focused": False},
+        tree=TraceNode("State", 2, satisfied=False),
+        raw_trace_action_details=(TraceAction("Focused", True),),
+    )
+    state = SimpleNamespace(pilot_rungs=(), earned_work=None, pending_departure=None)
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(chart_graphs=(graph,))),
+        opaque_loop=frozenset(),
+        target=TargetSpec("State", 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        edge_tags=frozenset(),
+        pdg=SimpleNamespace(downstream_slice=lambda *_args, **_kwargs: ()),
+    )
+
+    read = _read_route_and_wait(frame, state, ctx, set())
+
+    assert read.trace.actions == (("Focused", True),)
+    assert read.route is None
+
+
+@pytest.mark.parametrize("relevance", ["frontier", "obligation", "requirement"])
+def test_theory_channel_relevance_does_not_route_production(relevance: str) -> None:
+    theory_target = Bool("TheoryRelevanceTarget", external=True)
+    theory_sink = Int("TheoryRelevanceSink")
+    with Program() as target_program:
+        with rung(theory_target):
+            copy(1, theory_sink)
+    pdg = build_program_graph(target_program)
+    snapshot = {
+        theory_target.name: False,
+        theory_sink.name: 0,
+        "State": 0,
+        "Advance": False,
+    }
+    graph = StaticTransitionGraph(
+        PipelineRoles("State"),
+        (_action_route(0, 2, "Advance"),),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap=snapshot,
+        tree=trace_back(
+            theory_target.name,
+            True,
+            snapshot,
+            pdg,
+            target_program,
+            frozenset((theory_target.name,)),
+        ),
+    )
+    frontier = (("State", 2),) if relevance == "frontier" else ()
+    obligations = (
+        (SimpleNamespace(tag="State", value=2, required_shape=(), boundary=None),)
+        if relevance == "obligation"
+        else ()
+    )
+    requirements = (
+        (
+            SimpleNamespace(
+                demanding_occurrence=("read", "State", 1),
+                deadline_occurrence=("read", "Guard", 0),
+                condition_identity=(
+                    "pyrung.core.crossing",
+                    "Eq",
+                    (("tag", "State"), ("values", (2,))),
+                ),
+            ),
+        )
+        if relevance == "requirement"
+        else ()
+    )
+    theory_view = SimpleNamespace(
+        claim=SimpleNamespace(
+            objective=SimpleNamespace(
+                target_tag=theory_target.name,
+                target_value=True,
+                frontier=frontier,
+            ),
+            obligations=obligations,
+        ),
+        requirements=requirements,
+        excludes_first_edge=lambda _artifact: False,
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(graphs=(graph,))),
+        opaque_loop=frozenset(),
+        target=TargetSpec(theory_target.name, True),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        theory_view=theory_view,
+    )
+
+    plan = _compass_route_plan(frame, ctx)
+
+    assert plan is None
 
 
 def test_static_path_uses_wildcard_when_exact_edge_is_contextually_rejected() -> None:

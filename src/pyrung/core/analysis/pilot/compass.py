@@ -471,10 +471,18 @@ def _table_contradict(
 
 @dataclass(frozen=True)
 class NavigationCatalog:
-    """Immutable static readings for one program."""
+    """Immutable static readings for one program.
+
+    ``graphs`` remains the production-admitted opaque subset.
+    ``chart_graphs`` is the generalized prover-confirmed read-only catalog;
+    merely discovering one of those charts must neither admit it to current
+    navigation nor make one of its inputs an independently Compass-owned
+    action.
+    """
 
     slices: tuple[PipelineSlice, ...] = ()
     graphs: tuple[StaticTransitionGraph, ...] = ()
+    chart_graphs: tuple[StaticTransitionGraph, ...] = ()
 
     @property
     def action_tags(self) -> frozenset[str]:
@@ -889,6 +897,12 @@ class Compass:
     @property
     def graphs(self) -> tuple[StaticTransitionGraph, ...]:
         return self.catalog.graphs
+
+    @property
+    def chart_graphs(self) -> tuple[StaticTransitionGraph, ...]:
+        """Generalized static charts not yet admitted to navigation."""
+
+        return self.catalog.chart_graphs
 
     @property
     def action_tags(self) -> frozenset[str]:

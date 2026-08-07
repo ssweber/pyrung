@@ -6,12 +6,12 @@ canonicalizes pipeline aliases, identifies channel, action, stepping, and
 internal tags, and expands ingress paths into ``TransitionRoute`` values with
 separate source constraints and enablers.
 
-``pilot._infer_pipeline_roles_for_context`` owns the outer admission: it visits
-opaque-loop tags, keeps prover-classified stepping tags when evidence exists,
-and retains only roles with request tags. ``infer_pipeline_roles`` owns the
-inner partition: request tags come from expanded routes, internal guards are
-route/target-writer conditions read only by target writers, and scratch tags
-come from ``TransitionEvidence`` functional dependencies and elisions.
+``pilot._infer_pipeline_roles_for_context`` owns the legacy opaque admission:
+it visits opaque-loop tags and retains only roles with request tags. Static
+chart discovery is separate: :func:`discover_chart_roles` visits every
+prover-confirmed stepping tag which has a program writer, including direct
+literal channels and roles without request tags. ``infer_pipeline_roles`` owns
+the common inner partition.
 
 The result is static evidence consumed by trace and graph construction; no
 program execution or runtime transition learning occurs here.
@@ -496,6 +496,37 @@ def _call_site_conditions(
     return tuple(gates)
 
 
+def selected_chart_producer_guard_rungs(
+    edge: Any,
+    pdg: ProgramGraph,
+    program: Any,
+) -> tuple[Any, ...] | None:
+    """Return the complete uniquely-owned guard surface for one chart edge.
+
+    A main-routine producer owns only its rung guard. A subroutine producer
+    also needs one exact caller guard. Multiple or unavailable callers cannot
+    identify one dynamic producer occurrence and therefore fail closed.
+    """
+
+    from pyrung.core.analysis.pdg import resolve_rung
+
+    node = pdg.rung_nodes[edge.route.writer_node]
+    writer = resolve_rung(program, node)
+    if writer is None:
+        return None
+    if node.subroutine is None:
+        return (writer,)
+    callers = tuple(
+        caller
+        for caller_node in _call_site_nodes(node, pdg)
+        for caller in (resolve_rung(program, caller_node),)
+        if caller is not None
+    )
+    if len(callers) != 1:
+        return None
+    return (writer, callers[0])
+
+
 def _route_edge_gates(
     node: Any,
     pdg: ProgramGraph,
@@ -594,6 +625,43 @@ def infer_pipeline_roles(
         guard_internal_tags=frozenset(guard_candidates),
         scratch_internal_tags=scratch,
     )
+
+
+def discover_chart_roles(
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    opaque_loop: frozenset[str],
+    evidence: TransitionEvidence | None,
+) -> tuple[PipelineRoles, ...]:
+    """Discover deterministic read-only chart owners from prover evidence.
+
+    The prover's stepping classification is the admission receipt. Missing
+    evidence therefore fails closed. Every confirmed stepping dimension gets
+    a role even when static route expansion later yields no graph; discovery
+    must not silently impose the legacy request-tag or opacity filters. This
+    catalog is deliberately separate from ``pipeline_roles`` because only the
+    latter defines Trace opacity and internal tags.
+    """
+
+    if evidence is None:
+        return ()
+
+    roles: list[PipelineRoles] = []
+    seen: set[tuple[Any, ...]] = set()
+    for tag in evidence.stepping_tags():
+        role = infer_pipeline_roles(tag, pdg, program, steerable, opaque_loop, evidence)
+        identity = (
+            role.channel_tag,
+            tuple(sorted(role.request_tags)),
+            tuple(sorted(role.guard_internal_tags)),
+            tuple(sorted(role.scratch_internal_tags)),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        roles.append(role)
+    return tuple(roles)
 
 
 def _target_writer_condition_tags(
@@ -698,6 +766,11 @@ class TransitionEvidence:
     def is_stepping(self, tag: str) -> bool:
         """True for tags known to visit multiple values (real state dims)."""
         return tag in self._stepping
+
+    def stepping_tags(self) -> tuple[str, ...]:
+        """Return prover-confirmed stepping dimensions in stable order."""
+
+        return tuple(sorted(self._stepping))
 
 
 def build_transition_evidence(explore_ctx: Any) -> TransitionEvidence | None:

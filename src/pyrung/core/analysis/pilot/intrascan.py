@@ -60,6 +60,7 @@ from pyrung.core.analysis.pilot.requirements import (
     RequirementSourceWalkStatus,
     bind_guard_condition_operand_authorities,
     bind_guard_operand_authorities,
+    classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
     derive_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
@@ -106,6 +107,35 @@ class IntrascanFinding:
     derivation: RequirementDerivation
     source_checkpoint: Any = field(compare=False, repr=False)
 
+    @property
+    def consumed_before_displacement(self) -> bool:
+        """Whether the promised value reached one exact read before cleanup.
+
+        This remains report-only evidence.  A caller may use it to distinguish
+        an incomplete same-scan handoff from an unconsumed overwrite, but this
+        service does not choose a replacement action or retain a continuation.
+        """
+
+        observation = self.observation
+        requirement = self.derivation.requirement
+        if (
+            observation.disposition != "OVERWRITTEN"
+            or observation.appeared is None
+            or observation.displacement is None
+            or requirement is None
+            or requirement.provenance != "steer-overwriter"
+        ):
+            return False
+        demanding = requirement.demanding_occurrence
+        return (
+            demanding.kind == "read"
+            and demanding.tag == observation.obligation.tag
+            and demanding.values == (observation.obligation.value,)
+            and demanding.scan_id == observation.appeared.scan_id
+            and demanding.scan_id == observation.displacement.scan_id
+            and observation.appeared.ordinal < demanding.ordinal < observation.displacement.ordinal
+        )
+
     def diagnostic_snapshot(self) -> IntrascanFindingSnapshot:
         """Detach observation, derivation, source, and causal identity evidence."""
 
@@ -128,6 +158,7 @@ class IntrascanFinding:
                 id(self.source_checkpoint.owner),
             ),
             source_walk=self.derivation.source_walk,
+            consumed_before_displacement=self.consumed_before_displacement,
         )
 
 
@@ -143,6 +174,7 @@ class IntrascanFindingSnapshot:
     source_scan: int | None
     causal_identity: tuple[int, int, int]
     source_walk: RequirementSourceWalk | None
+    consumed_before_displacement: bool = False
 
 
 @dataclass(frozen=True)
@@ -245,6 +277,8 @@ class IntrascanAttempt:
     requirement_observations: tuple[IntrascanRequirementObservation, ...]
     witnessed: bool
     detail: str = ""
+    execution_owner_token: tuple[Any, ...] = ()
+    findings: tuple[IntrascanFinding, ...] = field(default=(), compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -255,6 +289,24 @@ class IntrascanWitness:
     assertion_scan: int
     observations: tuple[EffectObservationSnapshot, ...]
     requirement_observations: tuple[IntrascanRequirementObservation, ...]
+    added_pilot_rungs: tuple[PilotRung, ...] = ()
+    execution_owner_token: tuple[Any, ...] = ()
+
+
+@dataclass(frozen=True)
+class IntrascanDraftOverlayResult:
+    """One finite draft overlay, or a fail-closed reason for omitting it."""
+
+    assignments: tuple[tuple[str, Any], ...] | None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class IntrascanGuardOverlayResult:
+    """Finite producer-guard alternatives, or one fail-closed reason."""
+
+    overlays: tuple[tuple[tuple[str, Any], ...], ...] | None
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -267,6 +319,12 @@ class IntrascanClosureQuestion:
     requirements: tuple[IntrascanRequirementEvidence, ...] = ()
     draft_assignments: tuple[tuple[str, Any], ...] = ()
     fixed_pilot_rungs: tuple[PilotRung, ...] | None = None
+    proposed_pilot_rungs: tuple[PilotRung, ...] = ()
+    producer_guard_rungs: tuple[Any, ...] = field(default=(), compare=False, repr=False)
+    producer_guard_steerable: frozenset[str] = frozenset()
+    program: Any = field(default=None, compare=False, repr=False)
+    steerable: frozenset[str] = frozenset()
+    program_written: frozenset[str] = frozenset()
     configured_inputs: frozenset[str] = frozenset()
     avoid_predicate: Any = field(default=None, compare=False, repr=False)
     candidate_overlays: tuple[tuple[tuple[str, Any], ...], ...] = ((),)
@@ -287,6 +345,169 @@ class IntrascanClosureResult:
     attempts: tuple[IntrascanAttempt, ...] = ()
     attempted_identities: frozenset[tuple[Any, ...]] = frozenset()
     detail: str = ""
+
+
+def draft_overlay_from_selected_actions(
+    selected_assignments: tuple[tuple[str, Any], ...],
+    expectation: EffectExpectation,
+    *,
+    steerable: frozenset[str],
+    source_snapshot: Mapping[str, Any],
+) -> IntrascanDraftOverlayResult:
+    """Compose one finite action draft with sound steerable shape facts.
+
+    Selected action assignments are already owned by the caller.  Additional
+    ``required_shape`` facts may enter the draft only when their destination is
+    steerable. A non-steerable fact is never synthesized: when the source does
+    not yet supply it, the selected program may still establish it before the
+    exact consumer occurrence in the assertion scan. The execution projection
+    remains the oracle for that internal handoff. Conflicting selected facts
+    and unowned steerable additions omit the whole draft.
+    """
+
+    assignments = _merge_assignments(selected_assignments)
+    if assignments is None:
+        return IntrascanDraftOverlayResult(
+            None,
+            "selected action assignments conflict",
+        )
+
+    selected = dict(assignments)
+    additions: list[tuple[str, Any]] = []
+    for obligation in expectation.obligations:
+        for tag, value in obligation.required_shape:
+            # The handoff value appears in the consumer-local receipt, but it
+            # is the selected producer's promised result, not an input the
+            # draft may synthesize.  The execution projection must witness it.
+            if tag == obligation.tag and _values_match(value, obligation.value):
+                continue
+            if tag in selected:
+                existing = selected[tag]
+                if not _values_match(existing, value):
+                    return IntrascanDraftOverlayResult(
+                        None,
+                        f"required shape conflicts with selected action for {tag!r}",
+                    )
+                continue
+            if tag in source_snapshot and _values_match(source_snapshot[tag], value):
+                continue
+            if tag not in steerable:
+                # Internal values are evidence to observe, not intervention
+                # inputs. The selected action may produce them earlier in this
+                # same scan; only its exact projection can certify that fact.
+                continue
+            selected[tag] = value
+            additions.append((tag, value))
+
+    return IntrascanDraftOverlayResult((*assignments, *additions))
+
+
+def producer_guard_candidate_overlays(
+    rungs: tuple[Any, ...],
+    source: Any,
+    *,
+    selected_assignments: tuple[tuple[str, Any], ...] = (),
+    steerable: frozenset[str],
+    limit: int,
+) -> IntrascanGuardOverlayResult:
+    """Materialize complete local DNF alternatives for exact projection.
+
+    The result is only a finite candidate generator. Unsupported atoms,
+    ambiguous operands, or excessive local alternatives return no overlays;
+    only :func:`close_intrascan` may certify an alternative by executing it.
+    """
+
+    from pyrung.core.analysis.simplified import And, Atom, Const, Or, _sp_to_expr
+
+    if not rungs:
+        return IntrascanGuardOverlayResult(None, "selected producer guard is unavailable")
+    if limit <= 0:
+        return IntrascanGuardOverlayResult(None, "producer guard budget is unavailable")
+
+    expressions: list[Any] = []
+    for rung in rungs:
+        sp = rung.sp_tree()
+        expressions.append(Const(True) if sp is None else _sp_to_expr(sp))
+    expression = expressions[0] if len(expressions) == 1 else And(tuple(expressions))
+    snapshot = dict(source.state.tags)
+    selected = dict(selected_assignments)
+    known = {**snapshot, **selected}
+    tags = source._known_tags_by_name
+
+    forms = {
+        "eq": "==",
+        "ne": "!=",
+        "lt": "<",
+        "le": "<=",
+        "gt": ">",
+        "ge": ">=",
+    }
+
+    def atom_options(atom: Any) -> tuple[tuple[tuple[str, Any], ...], ...] | None:
+        if atom.unsupported is not None or atom.operand_is_tag or atom.tag not in tags:
+            return None
+        if atom.form in {"xic", "rise"}:
+            constraints = (Cmp(atom.tag, "==", True),)
+        elif atom.form in {"xio", "fall"}:
+            constraints = (Cmp(atom.tag, "==", False),)
+        elif atom.form == "truthy":
+            constraints = (Cmp(atom.tag, "!=", 0),)
+        elif atom.form in forms:
+            constraints = (Cmp(atom.tag, forms[atom.form], atom.operand),)
+        else:
+            return None
+
+        # Edge contacts still require the projected executor to witness their
+        # previous-value semantics. Their post level alone is never proof.
+        steady = atom.form not in {"rise", "fall"}
+        if steady and all(constraint_holds(item, known) is True for item in constraints):
+            return ((),)
+        if atom.tag not in steerable:
+            # A selected action may establish an internal producer guard before
+            # the chart writer executes. Do not invent an assignment for it;
+            # retain the branch and require the exact producer/consumer witness.
+            return ((),)
+        values = satisfying_values(tags[atom.tag], constraints, snapshot)
+        if not values:
+            return None
+        return tuple((((atom.tag, value),)) for value in values)
+
+    def alternatives(expr: Any) -> tuple[tuple[tuple[str, Any], ...], ...] | None:
+        if isinstance(expr, Const):
+            return ((),) if expr.value else ()
+        if isinstance(expr, Atom):
+            return atom_options(expr)
+        if isinstance(expr, Or):
+            result: list[tuple[tuple[str, Any], ...]] = []
+            for term in expr.terms:
+                branch = alternatives(term)
+                if branch is None:
+                    return None
+                result.extend(branch)
+                if len(result) > limit:
+                    return None
+            return tuple(result)
+        if not isinstance(expr, And):
+            return None
+        result = [()]
+        for term in expr.terms:
+            branches = alternatives(term)
+            if branches is None:
+                return None
+            result = [(*prefix, *branch) for prefix in result for branch in branches]
+            if len(result) > limit:
+                return None
+        return tuple(result)
+
+    overlays = alternatives(expression)
+    if overlays is None:
+        return IntrascanGuardOverlayResult(
+            None,
+            "selected producer guard is unsupported, ambiguous, or exceeds its local budget",
+        )
+    if not overlays:
+        return IntrascanGuardOverlayResult(None, "selected producer guard has no local alternative")
+    return IntrascanGuardOverlayResult(overlays)
 
 
 def inspect_assertion_scan(question: IntrascanQuestion) -> IntrascanResult:
@@ -630,7 +851,15 @@ def close_intrascan(question: IntrascanClosureQuestion) -> IntrascanClosureResul
         schedule = compilation.schedule
     steady_assignments = schedule.assignments if schedule is not None else ()
     scheduled_rungs = schedule.pilot_rungs if schedule is not None else ()
-    pilot_rungs = tuple(_merged_pilot_rungs(scheduled_rungs, fixed_pilot_rungs))
+    source_rung_identities = frozenset(_rung_identity(rung) for rung in fixed_pilot_rungs)
+    proposed_rungs = _merged_pilot_rungs(
+        question.proposed_pilot_rungs,
+        fixed_pilot_rungs,
+    )
+    pilot_rungs = tuple(_merged_pilot_rungs(scheduled_rungs, proposed_rungs))
+    added_pilot_rungs = tuple(
+        rung for rung in pilot_rungs if _rung_identity(rung) not in source_rung_identities
+    )
 
     attempts: list[IntrascanAttempt] = []
     known = set(question.attempted_identities)
@@ -638,6 +867,26 @@ def close_intrascan(question: IntrascanClosureQuestion) -> IntrascanClosureResul
     configured_inputs = question.configured_inputs | frozenset(
         getattr(question.source_checkpoint, "configured_inputs", frozenset())
     )
+    candidate_overlays = question.candidate_overlays
+    if question.producer_guard_rungs:
+        guard_result = producer_guard_candidate_overlays(
+            question.producer_guard_rungs,
+            source,
+            selected_assignments=question.draft_assignments,
+            steerable=question.producer_guard_steerable - configured_inputs,
+            limit=question.budget,
+        )
+        if guard_result.overlays is None:
+            return IntrascanClosureResult(
+                IntrascanClosureStatus.INCOMPLETE,
+                attempted_identities=question.attempted_identities,
+                detail=guard_result.detail,
+            )
+        candidate_overlays = tuple(
+            (*candidate, *guard)
+            for candidate in candidate_overlays
+            for guard in guard_result.overlays
+        )
     exhausted = False
     generated = False
     for guard_atoms in _iter_requirement_alternatives(question.requirements):
@@ -650,7 +899,7 @@ def close_intrascan(question: IntrascanClosureQuestion) -> IntrascanClosureResul
         if detail:
             continue
         for requirement_assignments in alternatives:
-            for candidate in question.candidate_overlays:
+            for candidate in candidate_overlays:
                 generated = True
                 assignments = _merge_assignments(
                     question.draft_assignments,
@@ -719,6 +968,8 @@ def close_intrascan(question: IntrascanClosureQuestion) -> IntrascanClosureResul
                             else source.state.scan_id + 1,
                             attempt.observations,
                             attempt.requirement_observations,
+                            added_pilot_rungs=added_pilot_rungs,
+                            execution_owner_token=attempt.execution_owner_token,
                         ),
                         tuple(attempts),
                         frozenset(known),
@@ -845,6 +1096,7 @@ def _effect_obligation_identity(obligation: Any) -> tuple[Any, ...]:
         obligation.consumer,
         tuple(obligation.required_shape),
         _semantic_key(obligation.boundary),
+        getattr(obligation, "projected_consumer", False),
         getattr(obligation, "occurrence_selector", None),
     )
 
@@ -905,8 +1157,38 @@ def _execute_closure_attempt(
             False,
             "exact assertion projection is unavailable",
         )
+    owner_matches = tuple(
+        (epoch, owner)
+        for epoch, owner in fork._causal_lineage.seal_through(fork.state.scan_id)
+        if epoch.first_scan <= fork.state.scan_id <= epoch.last_scan
+    )
     observations = observe_intrascan_expectation(overlay.expectation, projection)
+    if len(owner_matches) == 1:
+        epoch, owner = owner_matches[0]
+        observations = tuple(
+            replace(
+                item,
+                execution_epoch=epoch,
+                execution_owner=owner,
+            )
+            for item in observations
+        )
     snapshots = tuple(item.diagnostic_snapshot() for item in observations)
+    owner_pairs = {
+        (id(item.execution_epoch), id(item.execution_owner))
+        for item in observations
+        if item.execution_epoch is not None and item.execution_owner is not None
+    }
+    execution_owner_token = (
+        ("execution-owner", *next(iter(owner_pairs)))
+        if len(observations) > 0
+        and len(owner_pairs) == 1
+        and all(
+            item.execution_epoch is not None and item.execution_owner is not None
+            for item in observations
+        )
+        else ()
+    )
     requirement_observations = tuple(
         _observe_requirement(item, projection) for item in question.requirements
     )
@@ -914,7 +1196,7 @@ def _execute_closure_attempt(
         (
             len(related) == 1 and related[0].disposition == "PREVENTED"
             if obligation.polarity is EffectPolarity.PREVENT
-            else any(item.disposition == "SURVIVED" for item in related)
+            else len(tuple(item for item in related if item.disposition == "SURVIVED")) == 1
         )
         for obligation in overlay.expectation.obligations
         for related in (tuple(item for item in observations if item.obligation is obligation),)
@@ -924,8 +1206,62 @@ def _execute_closure_attempt(
         for item in requirement_observations
     )
     avoid_holds = not _avoid_snap_names(question.avoid_predicate, dict(fork.state.tags))
-    witnessed = effects_hold and requirements_hold and avoid_holds
-    detail = "" if witnessed else "exact projection did not satisfy the complete artifact"
+    witnessed = effects_hold and requirements_hold and avoid_holds and bool(execution_owner_token)
+    detail = (
+        ""
+        if witnessed
+        else "exact execution owner is unavailable or ambiguous"
+        if effects_hold and requirements_hold and avoid_holds
+        else "exact projection did not satisfy the complete artifact"
+    )
+    findings: tuple[IntrascanFinding, ...] = ()
+    if not witnessed and question.program is not None:
+        from pyrung.core.analysis.pilot.advance import build_advance_index
+
+        source_tags = question.source_checkpoint.world.work.state.tags
+        known = question.source_checkpoint.world.work._known_tags_by_name
+        configured = question.configured_inputs | frozenset(
+            getattr(question.source_checkpoint, "configured_inputs", frozenset())
+        )
+
+        def authorities_at(exact_projection: Any) -> Mapping[str, OperandAuthority]:
+            return {
+                read.occurrence.name: classify_bound_operand_authority(
+                    read.occurrence.name,
+                    source_value=source_tags.get(
+                        read.occurrence.name,
+                        getattr(known.get(read.occurrence.name), "default", None),
+                    ),
+                    declared_default=getattr(known.get(read.occurrence.name), "default", None),
+                    steerable=question.steerable,
+                    program_written=question.program_written,
+                    configured=configured,
+                )
+                for read in exact_projection.reads
+            }
+
+        report = derive_recorded_observations(
+            IntrascanQuestion(
+                expectation=overlay.expectation,
+                execution=fork,
+                assertion_scan=projection.scan_id,
+                source_checkpoint=question.source_checkpoint,
+                advance_index=None,
+                operand_authorities={},
+                steerable=question.steerable,
+                program_written=question.program_written,
+                configured_inputs=configured,
+                projection_at=lambda scan_id: projection if scan_id == projection.scan_id else None,
+                advance_index_factory=lambda: build_advance_index(
+                    question.program,
+                    getattr(question.source_checkpoint.world.work, "_harness", None),
+                ),
+                operand_authorities_at=authorities_at,
+            ),
+            observations,
+            fallback_scan=projection.scan_id,
+        )
+        findings = report.findings
     return IntrascanAttempt(
         identity,
         overlay,
@@ -933,6 +1269,8 @@ def _execute_closure_attempt(
         requirement_observations,
         witnessed,
         detail,
+        execution_owner_token,
+        findings,
     )
 
 
@@ -1007,7 +1345,46 @@ def _observe_requirement(
         return None
 
     logical_verdict = evaluate(evidence.condition)
-    verdict = logical_verdict if demanding_read is not None else None
+    # A compound guard can decide before its final historical read.  For
+    # example, the first false term of an AND prevents the remaining terms
+    # from being read, while its complement already proves an ANY prevention
+    # requirement.  Accept that decisive short-circuit proof only when an
+    # exact relocated atom belongs to the same dynamic guard surface as the
+    # demanding occurrence.  A true read from another rung/call remains
+    # insufficient (and therefore UNKNOWN) when the demanding occurrence is
+    # absent.
+    demanding_surface = (
+        (
+            evidence.demanding_selector.static_address,
+            evidence.demanding_selector.instruction_path,
+            evidence.demanding_selector.execution_kind,
+            evidence.demanding_selector.caller_rung,
+            evidence.demanding_selector.call_stack,
+            evidence.demanding_selector.depth,
+            evidence.demanding_selector.call_invocation,
+        )
+        if evidence.demanding_selector is not None
+        else None
+    )
+    exact_deciding_surface = any(
+        read is not None
+        and (
+            atom.selector.static_address,
+            atom.selector.instruction_path,
+            atom.selector.execution_kind,
+            atom.selector.caller_rung,
+            atom.selector.call_stack,
+            atom.selector.depth,
+            atom.selector.call_invocation,
+        )
+        == demanding_surface
+        for atom, _atom_verdict, read in verdicts
+    )
+    verdict = (
+        logical_verdict
+        if demanding_read is not None or (logical_verdict is not None and exact_deciding_surface)
+        else None
+    )
     disposition = (
         IntrascanRequirementDisposition.SATISFIED
         if verdict is True

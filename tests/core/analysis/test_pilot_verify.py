@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     TargetSpec,
 )
+from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.requirements import (
@@ -201,6 +202,44 @@ def test_selected_work_cannot_break_a_satisfied_authoritative_requirement() -> N
     assert constraint_holds(condition, before) is True
     assert constraint_holds(condition, after) is False
     assert not any(event.event == "target" for event in result.gate_events)
+
+
+def test_unconsumed_live_boundary_loss_remains_a_departure() -> None:
+    source = Bool("LiveBoundarySource", external=True)
+    target = Bool("LiveBoundaryLaterTarget")
+    effect = Int("LiveBoundaryEffect")
+    obligation = EffectObligation(
+        effect.name,
+        1,
+        (None, 0, ()),
+        None,
+        (),
+        boundary=(effect.name, 1),
+    )
+    expectation = EffectExpectation((obligation,))
+    before = {source.name: False, effect.name: 0, target.name: False}
+    after = {source.name: True, effect.name: 0, target.name: False}
+    attempt, frame = _target_landing_attempt(
+        source=source,
+        target=target,
+        before=before,
+        after=after,
+        expectation=expectation,
+        observations=(EffectObservation(obligation, "SURVIVED"),),
+    )
+
+    result = verify_gates(
+        attempt,
+        frame,
+        SimpleNamespace(earned_work=None, active_requirements=()),
+        SimpleNamespace(avoid_pred=None, target=TargetSpec(target.name, True)),
+    )
+
+    assert result.trial is not None
+    assert result.trial.execution.channel_motion.departed
+    verification = result.trial.verification
+    assert isinstance(verification, AssessedMotion)
+    assert verification.assessment.bearing is BearingEffect.DEPARTED
 
 
 def test_outer_owner_rebases_inner_departure_receipt_to_reached():

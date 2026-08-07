@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.requirements import ActiveRequirement
     from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.working_theory import TheoryClaim, TheoryView
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,9 @@ class NavigationConstraints:
     # Frozen Phase-4 schedule views. Orientation may use them for admissibility
     # but must never turn them into assignments or executable overlays here.
     active_requirements: tuple[ActiveRequirement, ...] = ()
+    # Detached lifecycle evidence for this read. Compass may consult it but
+    # cannot mutate the theory or retain an executable future through it.
+    theory_view: TheoryView | None = None
 
 
 @dataclass(frozen=True)
@@ -292,6 +296,12 @@ class Bearing:
     prerequisites: tuple[PilotRung, ...] = ()
     rationale: str = ""
     orientation: OrientationRead | None = None
+    # Ambient maintenance may be claim-free. Orientation owns enforcing that
+    # every selected causal Bearing carries this detached producer claim.
+    claim: TheoryClaim | None = None
+    # Detached chart artifact selected as this exact first move. It is scoped
+    # by the attached theory/version/source when recorded, never replayed.
+    first_edge_identity: tuple[Any, ...] | None = None
 
     @property
     def expectation(self) -> EffectExpectation | None:

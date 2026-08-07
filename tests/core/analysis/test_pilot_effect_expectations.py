@@ -571,6 +571,97 @@ def test_ordinary_observer_classifies_overwritten_stranded_and_displaced() -> No
     ]
 
 
+def test_projected_consumer_uses_one_exact_source_read_before_reset() -> None:
+    command = Bool("ProjectedConsumerCommand", external=True)
+    request = Int("ProjectedConsumerRequest")
+    receipt = Int("ProjectedConsumerReceipt")
+
+    @subroutine("ProjectedConsumer")
+    def consume() -> None:
+        with rung():
+            copy(request, receipt)
+            copy(0, request)
+
+    with Program() as program:
+        with rung(command):
+            copy(2, request)
+        with rung():
+            call(consume)
+
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    projection = plc._replay_rung_write_projection_at(1)
+    assert projection is not None
+    obligation = EffectObligation(
+        request.name,
+        2,
+        (None, 0, ()),
+        None,
+        (),
+        projected_consumer=True,
+        producer_rung=program.rungs[0],
+    )
+
+    observation = observe_expectation(EffectExpectation((obligation,)), (projection,))[0]
+
+    assert observation.disposition == "SURVIVED"
+    assert observation.consumer_read is not None
+    assert observation.consumer_read.call_invocation == 0
+    assert observation.consumer_read.run.call_stack == ("ProjectedConsumer",)
+    assert observation.consumer_read.ordinal < next(
+        write.ordinal
+        for write in projection.writes
+        if write.transition.tag_name == request.name and write.transition.to_value == 0
+    )
+
+
+def test_projected_consumer_fails_closed_when_source_read_is_ambiguous() -> None:
+    command = Bool("AmbiguousProjectedCommand", external=True)
+    request = Int("AmbiguousProjectedRequest")
+    first_receipt = Int("AmbiguousProjectedFirst")
+    second_receipt = Int("AmbiguousProjectedSecond")
+
+    @subroutine("AmbiguousProjectedConsumer")
+    def consume() -> None:
+        with rung():
+            copy(request, first_receipt)
+            copy(request, second_receipt)
+            copy(0, request)
+
+    with Program() as program:
+        with rung(command):
+            copy(2, request)
+        with rung():
+            call(consume)
+
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    projection = plc._replay_rung_write_projection_at(1)
+    assert projection is not None
+    obligation = EffectObligation(
+        request.name,
+        2,
+        (None, 0, ()),
+        None,
+        (),
+        projected_consumer=True,
+        producer_rung=program.rungs[0],
+    )
+
+    projected = observe_expectation(EffectExpectation((obligation,)), (projection,))[0]
+    terminal = observe_expectation(
+        EffectExpectation((replace(obligation, projected_consumer=False),)),
+        (projection,),
+    )[0]
+
+    assert projected.disposition == "UNKNOWN"
+    assert projected.detail == "projected consumer read is ambiguous"
+    assert len(projected.observed_reads) == 2
+    assert terminal.disposition == "OVERWRITTEN"
+
+
 def test_terminal_target_peels_final_landing_without_changing_first_displacement() -> None:
     effect = Int("TerminalLandingSelectionEffect")
     with Program() as program:

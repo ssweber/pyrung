@@ -240,6 +240,19 @@ class StaticTransitionGraph:
         return None
 
 
+def _static_graph_identity(graph: StaticTransitionGraph) -> tuple[Any, ...]:
+    """Semantic chart identity, including the role that owns its edges."""
+
+    role = graph.role
+    return (
+        role.channel_tag,
+        tuple(sorted(role.request_tags)),
+        tuple(sorted(role.guard_internal_tags)),
+        tuple(sorted(role.scratch_internal_tags)),
+        tuple(edge.identity for edge in graph.edges),
+    )
+
+
 def build_static_transition_graphs(
     roles: tuple[PipelineRoles, ...],
     pdg: Any,

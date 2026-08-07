@@ -18,7 +18,7 @@ from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
-from pyrung.core.analysis.pilot.working_theory import TheoryState
+from pyrung.core.analysis.pilot.working_theory import TheoryState, TheoryView
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
@@ -647,6 +647,13 @@ class _PilotContext:
     # survives the initial execution fork only as provenance; every causal
     # checkpoint freezes its own immutable copy.
     configured_inputs: frozenset[str] = frozenset()
+    # Read-only static charts discovered from every prover-confirmed stepping
+    # channel. Unlike ``pipeline_roles``, these do not define Trace opacity or
+    # pipeline-internal tags.
+    chart_roles: tuple[PipelineRoles, ...] = ()
+    # Detached lifecycle projection supplied afresh for each orientation read.
+    # It contains no executable world or retained navigation future.
+    theory_view: TheoryView | None = None
 
 
 @dataclass(frozen=True)

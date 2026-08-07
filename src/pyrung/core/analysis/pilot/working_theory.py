@@ -14,6 +14,8 @@ from typing import Any, TypeAlias
 
 from pyrsistent import PMap, pmap
 
+from pyrung.core.analysis.pilot.world_key import _semantic_key
+
 TheoryId: TypeAlias = tuple[Any, ...]
 TheoryVersionId: TypeAlias = tuple[Any, ...]
 TheoryProgressId: TypeAlias = tuple[Any, ...]
@@ -80,6 +82,7 @@ class TheoryObligationSnapshot:
     terminal_target: bool
     polarity: str
     occurrence_selector: tuple[Any, ...] | None
+    projected_consumer: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,10 +113,18 @@ class TheoryClaim:
     objective: TheoryObjectiveSnapshot
     obligations: tuple[TheoryObligationSnapshot, ...]
     selected_boundary: TheoryBoundaryIdentity
+    selected_artifact_identity: tuple[Any, ...] | None = None
 
     @property
     def identity(self) -> tuple[Any, ...]:
-        return ("claim", self.source, self.objective, self.obligations, self.selected_boundary)
+        return (
+            "claim",
+            self.source,
+            self.objective,
+            self.obligations,
+            self.selected_boundary,
+            self.selected_artifact_identity,
+        )
 
 
 @dataclass(frozen=True)
@@ -148,6 +159,47 @@ class TheoryAttemptReceipt:
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     disposition: TheoryAttemptDisposition
     evidence: tuple[Any, ...] = ()
+    first_edge_identity: tuple[Any, ...] | None = None
+
+
+@dataclass(frozen=True)
+class TheoryFirstEdgeExclusion:
+    """One failed artifact scoped to an exact theory version and source."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    artifact_identity: tuple[Any, ...]
+    attempt_id: tuple[Any, ...]
+    disposition: TheoryAttemptDisposition
+
+
+@dataclass(frozen=True)
+class TheoryView:
+    """Detached read-only projection of the active theory for navigation.
+
+    The view contains no executable world or retained navigation decision.  Its
+    attempts and first-edge exclusions are restricted to the current version
+    and exact provisional source, so a failure cannot suppress the same move
+    later in a different world or under a refined version.
+    """
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    root: TheoryBoundaryIdentity
+    claim: TheoryClaim
+    requirements: tuple[TheoryRequirementSnapshot, ...]
+    attempts: tuple[TheoryAttemptReceipt, ...]
+    first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
+
+    def excludes_first_edge(self, artifact_identity: tuple[Any, ...]) -> bool:
+        """Whether this exact theory/version/source already rejected an artifact."""
+
+        return any(
+            exclusion.artifact_identity == artifact_identity
+            for exclusion in self.first_edge_exclusions
+        )
 
 
 @dataclass(frozen=True)
@@ -228,6 +280,414 @@ class TheoryState:
     active_theory_id: TheoryId | None = None
 
 
+def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
+    """Detach one exact current-source checkpoint for a Compass claim."""
+
+    key = getattr(checkpoint, "key", None)
+    work = getattr(getattr(checkpoint, "world", None), "work", None)
+    owner = getattr(checkpoint, "owner", None)
+    if key is None or work is None or owner is None:
+        raise TheoryInvariantError("claim source checkpoint evidence is incomplete")
+    scan_id = work.state.scan_id
+    world_key = tuple(key)
+    owner_token: tuple[Any, ...] = ()
+    lineage = getattr(work, "_causal_lineage", None)
+    if lineage is not None:
+        try:
+            owners = tuple(
+                (epoch, query)
+                for epoch, query in lineage.seal_through(scan_id)
+                if epoch.first_scan <= scan_id <= epoch.last_scan
+            )
+        except Exception as exc:  # noqa: BLE001 - malformed evidence fails closed below
+            raise TheoryInvariantError("claim source execution evidence is unavailable") from exc
+        if len(owners) > 1:
+            raise TheoryInvariantError("claim source execution evidence is ambiguous")
+        if owners:
+            epoch, query = owners[0]
+            owner_token = ("execution-owner", id(epoch), id(query))
+    return TheoryBoundaryIdentity(
+        world_key=world_key,
+        scan_id=scan_id,
+        checkpoint_token=(
+            ("execution-boundary", world_key, scan_id, owner_token)
+            if owner_token
+            else ("checkpoint-owner", id(owner), world_key, scan_id)
+        ),
+        execution_owner_token=owner_token,
+    )
+
+
+def theory_claim(
+    expectation: Any,
+    objective: Any,
+    source: TheoryBoundaryIdentity,
+    *,
+    selected_artifact_identity: tuple[Any, ...] | None = None,
+) -> TheoryClaim:
+    """Detach one selected producer claim without retaining its candidate world."""
+
+    target = objective.target
+    predicate = _semantic_key(target.predicate) if target.predicate is not None else None
+    objective_snapshot = TheoryObjectiveSnapshot(
+        target_tag=target.tag,
+        target_value=_semantic_key(target.value),
+        predicate_identity=(predicate if isinstance(predicate, tuple) else (predicate,))
+        if predicate is not None
+        else None,
+        frontier=tuple((tag, _semantic_key(value)) for tag, value in objective.frontier),
+    )
+    obligations = tuple(
+        TheoryObligationSnapshot(
+            tag=obligation.tag,
+            value=_semantic_key(obligation.value),
+            producer=tuple(obligation.producer),
+            consumer=(tuple(obligation.consumer) if obligation.consumer is not None else None),
+            required_shape=tuple(
+                (tag, _semantic_key(value)) for tag, value in obligation.required_shape
+            ),
+            boundary=(
+                (obligation.boundary[0], _semantic_key(obligation.boundary[1]))
+                if obligation.boundary is not None
+                else None
+            ),
+            terminal_target=obligation.terminal_target,
+            polarity=str(getattr(obligation, "polarity", "produce")),
+            occurrence_selector=(selector if isinstance(selector, tuple) else (selector,))
+            if (selector := _semantic_key(getattr(obligation, "occurrence_selector", None)))
+            is not None
+            else None,
+            projected_consumer=getattr(obligation, "projected_consumer", False),
+        )
+        for obligation in expectation.obligations
+    )
+    claim = TheoryClaim(
+        source=source,
+        objective=objective_snapshot,
+        obligations=obligations,
+        selected_boundary=replace(
+            source,
+            occurrence_identity=(
+                "selected-boundary",
+                tuple(
+                    (
+                        item.producer,
+                        item.consumer,
+                        item.boundary,
+                        item.polarity,
+                        item.occurrence_selector,
+                        item.projected_consumer,
+                    )
+                    for item in obligations
+                ),
+            ),
+        ),
+        selected_artifact_identity=selected_artifact_identity,
+    )
+    assert_detached_theory_value(claim, path="claim")
+    return claim
+
+
+def theory_occurrence_token(
+    occurrence: Any,
+    *,
+    scan_id: int | None = None,
+) -> tuple[Any, ...]:
+    """Detach one exact dynamic read/write occurrence.
+
+    Ordinary effect snapshots carry ``scan_id`` and ``dynamic_address``
+    directly. Bootstrap snapshots share the same dynamic fields but inherit
+    their one exact scan from the bootstrap receipt. Missing address fields
+    fail closed instead of producing a weaker claim identity.
+    """
+
+    occurrence_scan = getattr(occurrence, "scan_id", scan_id)
+    dynamic_address = getattr(occurrence, "dynamic_address", None)
+    if dynamic_address is None:
+        required = (
+            "rung",
+            "execution_kind",
+            "caller_rung",
+            "call_stack",
+            "depth",
+            "call_invocation",
+            "run_order",
+            "ordinal",
+        )
+        if any(not hasattr(occurrence, name) for name in required):
+            raise TheoryInvariantError("dynamic occurrence address is incomplete")
+        dynamic_address = (
+            tuple(occurrence.rung),
+            occurrence.execution_kind,
+            occurrence.caller_rung,
+            tuple(occurrence.call_stack),
+            occurrence.depth,
+            occurrence.call_invocation,
+            occurrence.run_order,
+            occurrence.ordinal,
+        )
+    if (
+        getattr(occurrence, "kind", None) not in {"read", "write"}
+        or not isinstance(getattr(occurrence, "tag", None), str)
+        or not isinstance(occurrence_scan, int)
+        or occurrence_scan < 0
+        or not hasattr(occurrence, "values")
+        or not hasattr(occurrence, "enabled")
+    ):
+        raise TheoryInvariantError("dynamic occurrence evidence is incomplete")
+    token = (
+        "dynamic-occurrence",
+        occurrence.kind,
+        occurrence.tag,
+        tuple(_semantic_key(value) for value in occurrence.values),
+        occurrence_scan,
+        tuple(dynamic_address),
+        occurrence.enabled,
+    )
+    assert_detached_theory_value(token, path="dynamic_occurrence")
+    return token
+
+
+def _claim_occurrence_token(occurrence: Any) -> tuple[Any, ...]:
+    """Compatibility name for intrascan claim binding."""
+
+    return theory_occurrence_token(occurrence)
+
+
+def _observation_matches_claim_obligation(
+    observation: Any,
+    obligation: TheoryObligationSnapshot,
+) -> bool:
+    recorded = observation.obligation
+    return (
+        recorded.tag == obligation.tag
+        and _semantic_key(recorded.value) == obligation.value
+        and tuple(recorded.producer) == obligation.producer
+        and (tuple(recorded.consumer) if recorded.consumer is not None else None)
+        == obligation.consumer
+        and tuple((tag, _semantic_key(value)) for tag, value in recorded.required_shape)
+        == obligation.required_shape
+        and (
+            (recorded.boundary[0], _semantic_key(recorded.boundary[1]))
+            if recorded.boundary is not None
+            else None
+        )
+        == obligation.boundary
+        and recorded.terminal_target == obligation.terminal_target
+        and getattr(recorded, "projected_consumer", False) == obligation.projected_consumer
+    )
+
+
+def theory_claim_from_intrascan_witness(
+    witness: Any,
+    objective: Any,
+    source: TheoryBoundaryIdentity,
+    *,
+    selected_artifact_identity: tuple[Any, ...] | None = None,
+) -> TheoryClaim:
+    """Bind a selected claim to one exact detached disposable execution.
+
+    The witness contributes evidence only: its live fork has already been
+    discarded.  A claim is admitted only when every obligation has one
+    unambiguous satisfying observation owned by the same exact execution.
+    """
+
+    owner_token = tuple(getattr(witness, "execution_owner_token", ()))
+    if len(owner_token) != 3 or owner_token[0] != "execution-owner":
+        raise TheoryInvariantError("intrascan witness execution owner is unavailable")
+    assertion_scan = getattr(witness, "assertion_scan", None)
+    if not isinstance(assertion_scan, int) or assertion_scan <= source.scan_id:
+        raise TheoryInvariantError("intrascan witness assertion boundary is invalid")
+
+    claim = theory_claim(
+        witness.overlay.expectation,
+        objective,
+        source,
+        selected_artifact_identity=selected_artifact_identity,
+    )
+    observations = tuple(witness.observations)
+    selected: list[tuple[Any, ...]] = []
+    for obligation in claim.obligations:
+        related = tuple(
+            observation
+            for observation in observations
+            if _observation_matches_claim_obligation(observation, obligation)
+        )
+        if obligation.polarity == "prevent":
+            satisfying = tuple(
+                observation for observation in related if observation.disposition == "PREVENTED"
+            )
+        else:
+            satisfying = tuple(
+                observation for observation in related if observation.disposition == "SURVIVED"
+            )
+        if len(satisfying) != 1:
+            raise TheoryInvariantError(
+                "intrascan claim requires one unambiguous satisfying occurrence"
+            )
+        observation = satisfying[0]
+        epoch = observation.execution_epoch
+        if (
+            epoch is None
+            or not (epoch.first_scan <= assertion_scan <= epoch.last_scan)
+            or (observation.appeared is not None and observation.appeared.scan_id != assertion_scan)
+            or (
+                observation.consumer_read is not None
+                and observation.consumer_read.scan_id != assertion_scan
+            )
+        ):
+            raise TheoryInvariantError("intrascan claim occurrence boundary is inconsistent")
+        if obligation.polarity != "prevent" and observation.appeared is None:
+            raise TheoryInvariantError("intrascan claim producer occurrence is unavailable")
+        if obligation.consumer is not None and observation.consumer_read is None:
+            raise TheoryInvariantError("intrascan claim consumer occurrence is unavailable")
+        selected.append(
+            (
+                "obligation-occurrence",
+                obligation.producer,
+                obligation.consumer,
+                obligation.occurrence_selector,
+                observation.disposition,
+                (
+                    _claim_occurrence_token(observation.appeared)
+                    if observation.appeared is not None
+                    else None
+                ),
+                (
+                    _claim_occurrence_token(observation.consumer_read)
+                    if observation.consumer_read is not None
+                    else None
+                ),
+                (epoch.first_scan, epoch.last_scan, epoch.initial_scan_id),
+                _semantic_key(observation),
+            )
+        )
+
+    requirement_evidence = tuple(
+        (
+            "requirement-observation",
+            _semantic_key(item.requirement_identity),
+            str(item.disposition),
+            tuple(_claim_occurrence_token(read) for read in item.observed_reads),
+            item.detail,
+        )
+        for item in witness.requirement_observations
+    )
+    bound = replace(
+        claim,
+        selected_boundary=replace(
+            source,
+            scan_id=assertion_scan,
+            execution_owner_token=owner_token,
+            occurrence_identity=(
+                "intrascan-witness",
+                tuple(selected),
+                requirement_evidence,
+            ),
+        ),
+    )
+    assert_detached_theory_value(bound, path="intrascan_claim")
+    return bound
+
+
+def theory_boundary_claim(
+    objective: Any,
+    source: TheoryBoundaryIdentity,
+    boundary: Any,
+    *,
+    selected_artifact_identity: tuple[Any, ...] | None = None,
+) -> TheoryClaim:
+    """Detach an already-owned cross-scan boundary before Stage 7 transfer."""
+
+    if not source.execution_owner_token:
+        raise TheoryInvariantError("cross-scan boundary owner is unavailable")
+
+    target = objective.target
+    predicate = _semantic_key(target.predicate) if target.predicate is not None else None
+    objective_snapshot = TheoryObjectiveSnapshot(
+        target_tag=target.tag,
+        target_value=_semantic_key(target.value),
+        predicate_identity=(predicate if isinstance(predicate, tuple) else (predicate,))
+        if predicate is not None
+        else None,
+        frontier=tuple((tag, _semantic_key(value)) for tag, value in objective.frontier),
+    )
+    heading = getattr(boundary, "boundary", None)
+    selected_boundary = replace(
+        source,
+        occurrence_identity=(
+            "selected-cross-scan-boundary",
+            getattr(boundary, "channel_tag", None),
+            _semantic_key(getattr(boundary, "target_value", None)),
+            _semantic_key(heading),
+        ),
+    )
+    claim = TheoryClaim(
+        source=source,
+        objective=objective_snapshot,
+        obligations=(),
+        selected_boundary=selected_boundary,
+        selected_artifact_identity=selected_artifact_identity,
+    )
+    assert_detached_theory_value(claim, path="boundary_claim")
+    return claim
+
+
+def theory_view(state: TheoryState) -> TheoryView | None:
+    """Return the exact active navigation view, or ``None`` when no theory is open."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return None
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        raise TheoryInvariantError("active theory is missing or closed")
+    claim = state.ledger.claims.get(theory.claim_id)
+    version = state.ledger.versions.get(theory.current_version_id)
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if claim is None or version is None or progress is None:
+        raise TheoryInvariantError("active theory projection is incomplete")
+
+    attempts = tuple(
+        attempt
+        for attempt_id in theory.attempt_ids
+        for attempt in (state.ledger.attempts.get(attempt_id),)
+        if attempt is not None
+        and attempt.version_id == version.version_id
+        and attempt.source == progress.provisional_tip
+    )
+    rejected = frozenset(
+        (
+            TheoryAttemptDisposition.REJECTED_EXACT,
+            TheoryAttemptDisposition.REJECTED_EMPIRICAL,
+        )
+    )
+    exclusions = tuple(
+        TheoryFirstEdgeExclusion(
+            theory_id,
+            version.version_id,
+            attempt.source,
+            attempt.first_edge_identity,
+            attempt.attempt_id,
+            attempt.disposition,
+        )
+        for attempt in attempts
+        if attempt.disposition in rejected and attempt.first_edge_identity is not None
+    )
+    view = TheoryView(
+        theory_id,
+        version.version_id,
+        progress.provisional_tip,
+        version.source,
+        claim,
+        version.requirements,
+        attempts,
+        exclusions,
+    )
+    assert_detached_theory_value(view, path="theory_view")
+    return view
+
+
 @dataclass(frozen=True)
 class OpenTheory:
     claim: TheoryClaim
@@ -247,6 +707,7 @@ class RecordTheoryAttempt:
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     disposition: TheoryAttemptDisposition
     evidence: tuple[Any, ...] = ()
+    first_edge_identity: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -575,6 +1036,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.pilot_rung_identities,
             fact.disposition,
             fact.evidence,
+            fact.first_edge_identity,
         )
         attempts = _put_unique(state.ledger.attempts, fact.attempt_identity, receipt, "attempt")
         if attempts is state.ledger.attempts:

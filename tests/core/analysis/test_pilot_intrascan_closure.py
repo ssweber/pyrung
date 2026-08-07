@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from pyrung import (
     PLC,
+    And,
     Bool,
     Int,
     Or,
@@ -36,6 +39,13 @@ from pyrung.core.analysis.pilot.intrascan import (
     IntrascanWitness,
     build_intrascan_requirement_evidence,
     close_intrascan,
+    draft_overlay_from_selected_actions,
+    producer_guard_candidate_overlays,
+)
+from pyrung.core.analysis.pilot.navigation_contracts import (
+    BearingObjective,
+    ChannelHeading,
+    TargetSpec,
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.requirements import (
@@ -45,6 +55,14 @@ from pyrung.core.analysis.pilot.requirements import (
     GuardRequirementExpr,
     OperandAuthority,
 )
+from pyrung.core.analysis.pilot.working_theory import (
+    TheoryInvariantError,
+    assert_detached_theory_value,
+    theory_boundary_claim,
+    theory_boundary_from_checkpoint,
+    theory_claim_from_intrascan_witness,
+)
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.crossing import Cmp
 
 
@@ -114,6 +132,7 @@ def _guard_evidence(
     *,
     steerable: frozenset[str],
     demanding_occurrence: Any | None = None,
+    pilot_rungs: tuple[PilotRung, ...] = (),
 ):
     atoms: list[GuardRequirementAtom] = []
 
@@ -125,7 +144,7 @@ def _guard_evidence(
                 collect(child)
 
     collect(condition)
-    checkpoint = _checkpoint(source, label)
+    checkpoint = _checkpoint(source, label, pilot_rungs)
     epoch = object()
     requirement = ActiveRequirement(
         condition=condition,
@@ -229,6 +248,113 @@ def test_two_component_produce_prevent_witness_requires_the_joint_overlay() -> N
     assert source.state is before_state
     assert source.state.scan_id == 0
     assert question.fixed_pilot_rungs == fixed
+
+
+def test_failed_disposable_attempt_reports_exact_overwriter_requirement() -> None:
+    source = PLC(two_program)
+    checkpoint = _checkpoint(source, "failed-attempt-report")
+    source_state = source.state
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=EffectExpectation((_produce(two_program, 0, TwoStepper, 1),)),
+            steady_guard=TwoStepper != 1,
+            draft_assignments=((TwoProducerPermit.name, True),),
+            program=two_program,
+            steerable=frozenset(
+                (TwoProducerPermit.name, TwoOverwritePermit.name, TwoFixedInput.name)
+            ),
+            program_written=frozenset((TwoStepper.name,)),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.INCOMPLETE
+    assert result.witness is None
+    assert len(result.attempts) == 1
+    attempt = result.attempts[0]
+    assert attempt.witnessed is False
+    assert [item.disposition for item in attempt.observations] == ["OVERWRITTEN"]
+    assert len(attempt.findings) == 1
+    finding = attempt.findings[0]
+    requirement = finding.derivation.requirement
+    assert requirement is not None
+    assert requirement.source_checkpoint is checkpoint
+    assert requirement.checkpoint_owner is checkpoint.owner
+    assert requirement.execution_epoch is finding.observation.execution_epoch
+    assert requirement.execution_owner is finding.observation.execution_owner
+    assert requirement.demanding_occurrence == requirement.deadline
+    assert requirement.demanding_occurrence == occurrence_snapshot(
+        finding.observation.observed_reads[0]
+    )
+    assert requirement.scope == (
+        ("overwriter_guard", occurrence_snapshot(finding.observation.displacement)),
+    )
+    assert TwoOverwritePermit.name in {
+        atom.condition.tag
+        for atom in getattr(requirement.condition, "terms", (requirement.condition,))
+    }
+    assert source.state is source_state
+    assert source.state.scan_id == 0
+
+
+def test_witness_claim_records_prevention_without_inventing_an_occurrence() -> None:
+    source = PLC(two_program)
+    checkpoint = _checkpoint(source, "prevented-claim")
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=_two_expectation(),
+            steady_guard=TwoStepper != 1,
+            candidate_overlays=(
+                (
+                    (TwoProducerPermit.name, True),
+                    (TwoOverwritePermit.name, False),
+                ),
+            ),
+            budget=1,
+        )
+    )
+
+    assert result.witness is not None
+    claim = theory_claim_from_intrascan_witness(
+        result.witness,
+        BearingObjective(TargetSpec(TwoStepper.name, 1)),
+        theory_boundary_from_checkpoint(checkpoint),
+    )
+    selected = claim.selected_boundary.occurrence_identity[1]
+    produced, prevented = selected
+
+    assert produced[5] is not None
+    assert prevented[3] is not None  # Static relocatable selector.
+    assert prevented[4] == "PREVENTED"
+    assert prevented[5] is None  # Absence proof cannot invent a dynamic write.
+    assert claim.selected_boundary.execution_owner_token == (result.witness.execution_owner_token)
+    assert_detached_theory_value(claim, path="claim")
+
+
+def test_cross_scan_boundary_claim_requires_and_retains_exact_live_owner() -> None:
+    source = PLC(two_program)
+    source.step()
+    boundary = theory_boundary_from_checkpoint(_checkpoint(source, "cross-scan-owner"))
+
+    assert boundary.execution_owner_token[0] == "execution-owner"
+    claim = theory_boundary_claim(
+        BearingObjective(TargetSpec(TwoStepper.name, 1)),
+        boundary,
+        ChannelHeading(TwoStepper.name, 1),
+    )
+
+    assert claim.source.execution_owner_token == boundary.execution_owner_token
+    assert claim.selected_boundary.execution_owner_token == boundary.execution_owner_token
+    assert_detached_theory_value(claim, path="cross_scan_claim")
+    with pytest.raises(TheoryInvariantError, match="owner is unavailable"):
+        theory_boundary_claim(
+            BearingObjective(TargetSpec(TwoStepper.name, 1)),
+            replace(boundary, execution_owner_token=()),
+            ChannelHeading(TwoStepper.name, 1),
+        )
 
 
 ThreeProducerPermit = Bool("IntrascanThreeProducerPermit", external=True)
@@ -578,6 +704,15 @@ def test_requirement_is_satisfied_at_its_exact_read_even_when_exit_is_false() ->
     requirement = result.witness.requirement_observations[0]
     assert requirement.disposition is IntrascanRequirementDisposition.SATISFIED
     assert requirement.observed_reads[0].values == (True,)
+    claim = theory_claim_from_intrascan_witness(
+        result.witness,
+        BearingObjective(TargetSpec(EarlyTrueStepper.name, 1)),
+        theory_boundary_from_checkpoint(checkpoint),
+    )
+    retained_requirement = claim.selected_boundary.occurrence_identity[2][0]
+    assert requirement.requirement_identity == evidence.identity
+    assert retained_requirement[1] == _semantic_key(evidence.identity)
+    assert retained_requirement[3][0][5] == requirement.observed_reads[0].dynamic_address
     landing = source.fork()
     landing.patch(dict(result.witness.overlay.assignments))
     landing.step()
@@ -720,6 +855,77 @@ def test_true_deadline_read_without_the_exact_demanding_occurrence_cannot_witnes
     assert [read.values for read in observation.observed_reads] == [(True,)]
 
 
+ShortCircuitState = Int("IntrascanShortCircuitState", external=True)
+ShortCircuitPoison = Int("IntrascanShortCircuitPoison", external=True)
+ShortCircuitMarker = Int("IntrascanShortCircuitMarker")
+ShortCircuitStepper = Int("IntrascanShortCircuitStepper")
+
+with Program() as short_circuit_program:
+    with rung(ShortCircuitState == 2, ShortCircuitPoison == 1):
+        copy(1, ShortCircuitMarker)
+    with rung():
+        copy(1, ShortCircuitStepper)
+
+
+def test_decisive_same_guard_short_circuit_can_replace_later_demanding_read() -> None:
+    evidence_plc = PLC(short_circuit_program)
+    evidence_plc.patch({ShortCircuitState.name: 2, ShortCircuitPoison.name: 1})
+    evidence_plc.step()
+    projection = _projection(evidence_plc)
+    state_read, poison_read = tuple(
+        read for read in projection.reads if read.run.rung is short_circuit_program.rungs[0]
+    )
+    state_snapshot = occurrence_snapshot(state_read)
+    poison_snapshot = occurrence_snapshot(poison_read)
+    condition = GuardRequirementExpr(
+        GuardLogic.ANY,
+        (
+            GuardRequirementAtom(
+                Cmp(ShortCircuitState.name, "!=", 2),
+                (state_snapshot,),
+                state_snapshot,
+                (0,),
+                demanding_rung=short_circuit_program.rungs[0],
+            ),
+            GuardRequirementAtom(
+                Cmp(ShortCircuitPoison.name, "!=", 1),
+                (poison_snapshot,),
+                poison_snapshot,
+                (1,),
+                demanding_rung=short_circuit_program.rungs[0],
+            ),
+        ),
+    )
+    source = PLC(short_circuit_program)
+    checkpoint, evidence = _guard_evidence(
+        source,
+        evidence_plc,
+        condition,
+        "same-guard-short-circuit",
+        steerable=frozenset(),
+        demanding_occurrence=poison_snapshot,
+    )
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=EffectExpectation(
+                (_produce(short_circuit_program, 1, ShortCircuitStepper, 1),)
+            ),
+            steady_guard=ShortCircuitStepper != 1,
+            requirements=(evidence,),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.WITNESS
+    assert result.witness is not None
+    observation = result.witness.requirement_observations[0]
+    assert observation.disposition is IntrascanRequirementDisposition.SATISFIED
+    assert [read.tag for read in observation.observed_reads] == [ShortCircuitState.name]
+    assert observation.observed_reads[0].values == (0,)
+
+
 SourceHeldPermit = Bool("IntrascanSourceHeldPermit", external=True)
 SourceHeldStepper = Int("IntrascanSourceHeldStepper")
 
@@ -754,6 +960,7 @@ def test_source_checkpoint_pilot_rungs_are_required_and_preserved_automatically(
     assert inherited.status is IntrascanClosureStatus.WITNESS
     assert inherited.witness is not None
     assert inherited.witness.overlay.pilot_rungs == (required,)
+    assert inherited.witness.added_pilot_rungs == ()
     assert inherited.witness.observations[0].disposition == "SURVIVED"
     assert source.state is source_state
 
@@ -777,6 +984,373 @@ def test_source_checkpoint_pilot_rungs_are_required_and_preserved_automatically(
     assert mismatched.witness is None
     assert mismatched.attempts == ()
     assert "source" in mismatched.detail and "PilotRung" in mismatched.detail
+
+
+MergeSourcePermit = Bool("IntrascanMergeSourcePermit", external=True)
+MergeProposedPermit = Bool("IntrascanMergeProposedPermit", external=True)
+MergeScheduledPermit = Bool("IntrascanMergeScheduledPermit", external=True)
+MergeStepper = Int("IntrascanMergeStepper")
+
+with Program() as merge_program:
+    with rung(MergeSourcePermit, MergeProposedPermit, MergeScheduledPermit):
+        copy(1, MergeStepper)
+
+
+def test_proposed_and_scheduled_rungs_extend_exact_source_overlay_and_are_exposed() -> None:
+    evidence_plc = PLC(merge_program)
+    evidence_plc.patch(
+        {
+            MergeSourcePermit.name: True,
+            MergeProposedPermit.name: True,
+            MergeScheduledPermit.name: True,
+        }
+    )
+    evidence_plc.step()
+    projection = _projection(evidence_plc)
+    scheduled_atom = _read_atom(
+        merge_program,
+        projection,
+        0,
+        MergeScheduledPermit,
+        0,
+    )
+    source = PLC(merge_program)
+    source_state = source.state
+    source_rung = PilotRung(MergeSourcePermit.name, True, MergeStepper != 1)
+    proposed_rung = PilotRung(MergeProposedPermit.name, True, MergeStepper != 1)
+    checkpoint, guard_evidence = _guard_evidence(
+        source,
+        evidence_plc,
+        scheduled_atom,
+        "merge-source-proposed-scheduled",
+        steerable=frozenset({MergeScheduledPermit.name}),
+        pilot_rungs=(source_rung,),
+    )
+    scheduled_condition = Cmp(MergeScheduledPermit.name, "==", True)
+    scheduled_requirement = replace(
+        guard_evidence.requirement,
+        condition=scheduled_condition,
+        operand_authority=OperandAuthority.ADJUSTABLE,
+    )
+    scheduled_evidence = replace(
+        guard_evidence,
+        requirement=scheduled_requirement,
+        condition=scheduled_condition,
+    )
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=EffectExpectation((_produce(merge_program, 0, MergeStepper, 1),)),
+            steady_guard=MergeStepper != 1,
+            requirements=(scheduled_evidence,),
+            fixed_pilot_rungs=(source_rung,),
+            proposed_pilot_rungs=(proposed_rung,),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.WITNESS
+    assert result.witness is not None
+    installed = result.witness.overlay.pilot_rungs
+    assert installed[:2] == (source_rung, proposed_rung)
+    assert tuple(rung.dest for rung in installed) == (
+        MergeSourcePermit.name,
+        MergeProposedPermit.name,
+        MergeScheduledPermit.name,
+    )
+    assert installed[2].value is True
+    assert result.witness.added_pilot_rungs == (proposed_rung, installed[2])
+    assert result.witness.observations[0].disposition == "SURVIVED"
+    assert source.state is source_state
+
+
+def test_proposed_rung_cannot_mask_an_exact_source_rung_mismatch() -> None:
+    source = PLC(source_held_program)
+    source_rung = PilotRung(SourceHeldPermit.name, True, SourceHeldStepper != 1)
+    checkpoint = _checkpoint(source, "proposed-does-not-mask-source", (source_rung,))
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=EffectExpectation(
+                (_produce(source_held_program, 0, SourceHeldStepper, 1),)
+            ),
+            steady_guard=SourceHeldStepper != 1,
+            fixed_pilot_rungs=(),
+            proposed_pilot_rungs=(source_rung,),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.INCOMPLETE
+    assert result.witness is None
+    assert result.attempts == ()
+    assert "exact source" in result.detail
+
+
+def test_finite_draft_overlay_adds_only_sound_steerable_shape_facts() -> None:
+    obligation = replace(
+        _produce(two_program, 0, TwoStepper, 1),
+        required_shape=(
+            (TwoProducerPermit.name, True),
+            (TwoOverwritePermit.name, False),
+            (TwoFixedInput.name, True),
+        ),
+    )
+    expectation = EffectExpectation((obligation,))
+
+    draft = draft_overlay_from_selected_actions(
+        ((TwoProducerPermit.name, True),),
+        expectation,
+        steerable=frozenset({TwoOverwritePermit.name}),
+        source_snapshot={TwoFixedInput.name: True},
+    )
+
+    assert draft.assignments == (
+        (TwoProducerPermit.name, True),
+        (TwoOverwritePermit.name, False),
+    )
+    assert draft.detail == ""
+
+
+def test_finite_draft_overlay_defers_internal_shape_but_rejects_conflict() -> None:
+    expectation = EffectExpectation(
+        (
+            replace(
+                _produce(two_program, 0, TwoStepper, 1),
+                required_shape=((TwoOverwritePermit.name, False),),
+            ),
+        )
+    )
+
+    configured_inputs = frozenset((TwoOverwritePermit.name,))
+    unavailable = draft_overlay_from_selected_actions(
+        (),
+        expectation,
+        steerable=frozenset((TwoOverwritePermit.name,)) - configured_inputs,
+        source_snapshot={TwoOverwritePermit.name: True},
+    )
+    conflicting = draft_overlay_from_selected_actions(
+        ((TwoOverwritePermit.name, True),),
+        expectation,
+        steerable=frozenset({TwoOverwritePermit.name}),
+        source_snapshot={},
+    )
+
+    assert unavailable.assignments == ()
+    assert unavailable.detail == ""
+    assert conflicting.assignments is None
+    assert "conflicts" in conflicting.detail
+
+
+InternalGuardAction = Bool("IntrascanInternalGuardAction", external=True)
+InternalGuardReady = Bool("IntrascanInternalGuardReady")
+InternalGuardStepper = Int("IntrascanInternalGuardStepper")
+
+with Program() as internal_guard_program:
+    with rung(InternalGuardAction):
+        latch(InternalGuardReady)
+    with rung(InternalGuardReady):
+        copy(1, InternalGuardStepper)
+
+
+def test_internal_shape_and_guard_are_witnessed_when_produced_earlier_in_scan() -> None:
+    source = PLC(internal_guard_program)
+    expectation = EffectExpectation(
+        (
+            replace(
+                _produce(internal_guard_program, 1, InternalGuardStepper, 1),
+                required_shape=((InternalGuardReady.name, True),),
+            ),
+        )
+    )
+    draft = draft_overlay_from_selected_actions(
+        ((InternalGuardAction.name, True),),
+        expectation,
+        steerable=frozenset((InternalGuardAction.name,)),
+        source_snapshot=dict(source.state.tags),
+    )
+    assert draft.assignments == ((InternalGuardAction.name, True),)
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "internal-guard-produced"),
+            expectation=expectation,
+            steady_guard=None,
+            draft_assignments=draft.assignments,
+            producer_guard_rungs=(internal_guard_program.rungs[1],),
+            producer_guard_steerable=frozenset((InternalGuardAction.name,)),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.WITNESS
+    assert result.witness is not None
+    assert result.witness.overlay.assignments == ((InternalGuardAction.name, True),)
+    assert result.witness.observations[0].disposition == "SURVIVED"
+
+
+def test_missing_internal_shape_and_guard_still_fail_closed_in_projection() -> None:
+    source = PLC(internal_guard_program)
+    expectation = EffectExpectation(
+        (
+            replace(
+                _produce(internal_guard_program, 1, InternalGuardStepper, 1),
+                required_shape=((InternalGuardReady.name, True),),
+            ),
+        )
+    )
+    draft = draft_overlay_from_selected_actions(
+        (),
+        expectation,
+        steerable=frozenset((InternalGuardAction.name,)),
+        source_snapshot=dict(source.state.tags),
+    )
+    assert draft.assignments == ()
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "internal-guard-missing"),
+            expectation=expectation,
+            steady_guard=None,
+            draft_assignments=draft.assignments,
+            producer_guard_rungs=(internal_guard_program.rungs[1],),
+            producer_guard_steerable=frozenset((InternalGuardAction.name,)),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.INCOMPLETE
+    assert result.witness is None
+    assert len(result.attempts) == 1
+    assert result.attempts[0].observations[0].disposition == "ABSENT"
+
+
+ChartGuardFirst = Bool("ChartGuardFirst", external=True)
+ChartGuardSecond = Bool("ChartGuardSecond", external=True)
+ChartGuardThird = Bool("ChartGuardThird", external=True)
+ChartGuardAlternative = Bool("ChartGuardAlternative", external=True)
+ChartGuardStepper = Int("ChartGuardStepper")
+ChartGuardAlternativeStepper = Int("ChartGuardAlternativeStepper")
+
+with Program() as chart_guard_program:
+    with rung(ChartGuardFirst, ChartGuardSecond, ChartGuardThird):
+        copy(1, ChartGuardStepper)
+    with rung(Or(And(ChartGuardFirst, ChartGuardSecond), ChartGuardAlternative)):
+        copy(2, ChartGuardAlternativeStepper)
+
+
+def test_chart_guard_closure_materializes_three_way_and_with_exact_projection() -> None:
+    source = PLC(chart_guard_program)
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "chart-three-way-and"),
+            expectation=EffectExpectation(
+                (_produce(chart_guard_program, 0, ChartGuardStepper, 1),)
+            ),
+            steady_guard=None,
+            producer_guard_rungs=(chart_guard_program.rungs[0],),
+            producer_guard_steerable=frozenset(
+                (ChartGuardFirst.name, ChartGuardSecond.name, ChartGuardThird.name)
+            ),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.WITNESS
+    assert result.witness is not None
+    assert result.witness.overlay.assignments == (
+        (ChartGuardFirst.name, True),
+        (ChartGuardSecond.name, True),
+        (ChartGuardThird.name, True),
+    )
+    assert result.witness.observations[0].disposition == "SURVIVED"
+
+
+def test_chart_guard_closure_tries_or_alternatives_after_conflicting_and() -> None:
+    source = PLC(chart_guard_program)
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "chart-or-alternatives"),
+            expectation=EffectExpectation(
+                (_produce(chart_guard_program, 1, ChartGuardAlternativeStepper, 2),)
+            ),
+            steady_guard=None,
+            draft_assignments=((ChartGuardFirst.name, False),),
+            producer_guard_rungs=(chart_guard_program.rungs[1],),
+            producer_guard_steerable=frozenset(
+                (ChartGuardFirst.name, ChartGuardSecond.name, ChartGuardAlternative.name)
+            ),
+            budget=2,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.WITNESS
+    assert result.witness is not None
+    assert [attempt.witnessed for attempt in result.attempts] == [False, True]
+    assert "conflict" in result.attempts[0].detail
+    assert result.witness.overlay.assignments == (
+        (ChartGuardFirst.name, False),
+        (ChartGuardAlternative.name, True),
+    )
+
+
+def test_chart_guard_conflict_rejects_only_the_composite_attempt() -> None:
+    source = PLC(chart_guard_program)
+    alternatives = producer_guard_candidate_overlays(
+        (chart_guard_program.rungs[0],),
+        source,
+        selected_assignments=((ChartGuardFirst.name, False),),
+        steerable=frozenset((ChartGuardFirst.name, ChartGuardSecond.name, ChartGuardThird.name)),
+        limit=1,
+    )
+    assert alternatives.overlays is not None
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "chart-conflict"),
+            expectation=EffectExpectation(
+                (_produce(chart_guard_program, 0, ChartGuardStepper, 1),)
+            ),
+            steady_guard=None,
+            draft_assignments=((ChartGuardFirst.name, False),),
+            producer_guard_rungs=(chart_guard_program.rungs[0],),
+            producer_guard_steerable=frozenset(
+                (ChartGuardFirst.name, ChartGuardSecond.name, ChartGuardThird.name)
+            ),
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.INCOMPLETE
+    assert result.witness is None
+    assert len(result.attempts) == 1
+    assert result.attempts[0].witnessed is False
+    assert "conflict" in result.attempts[0].detail
+
+
+UnsupportedGuardLeft = Int("IntrascanUnsupportedGuardLeft", external=True)
+UnsupportedGuardRight = Int("IntrascanUnsupportedGuardRight", external=True)
+UnsupportedGuardStepper = Int("IntrascanUnsupportedGuardStepper")
+
+with Program() as unsupported_guard_program:
+    with rung(UnsupportedGuardLeft == UnsupportedGuardRight):
+        copy(1, UnsupportedGuardStepper)
+
+
+def test_chart_guard_with_tag_operand_remains_fail_closed() -> None:
+    source = PLC(unsupported_guard_program)
+
+    result = producer_guard_candidate_overlays(
+        (unsupported_guard_program.rungs[0],),
+        source,
+        steerable=frozenset((UnsupportedGuardLeft.name, UnsupportedGuardRight.name)),
+        limit=1,
+    )
+
+    assert result.overlays is None
+    assert "unsupported" in result.detail
 
 
 RepeatedPositiveStepper = Int("IntrascanRepeatedPositiveStepper")
@@ -828,6 +1402,120 @@ def test_repeated_positive_obligation_is_fulfilled_by_one_surviving_occurrence()
         "SURVIVED",
     ]
     assert [item.appeared.call_invocation for item in result.witness.observations] == [0, 1]
+
+
+def test_witness_claim_selects_exact_surviving_repeated_call() -> None:
+    source = PLC(repeated_positive_program)
+    checkpoint = _checkpoint(source, "repeated-positive-claim")
+    expectation = EffectExpectation(
+        (
+            EffectObligation(
+                RepeatedPositiveStepper.name,
+                1,
+                ("IntrascanRepeatedPositiveProducer", 0, ()),
+                None,
+                (),
+                producer_rung=repeated_positive_program.subroutines[
+                    "IntrascanRepeatedPositiveProducer"
+                ][0],
+            ),
+        )
+    )
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=checkpoint,
+            expectation=expectation,
+            steady_guard=RepeatedPositiveStepper != 1,
+            budget=1,
+        )
+    )
+
+    assert result.witness is not None
+    source_boundary = theory_boundary_from_checkpoint(checkpoint)
+    claim = theory_claim_from_intrascan_witness(
+        result.witness,
+        BearingObjective(TargetSpec(RepeatedPositiveStepper.name, 1)),
+        source_boundary,
+    )
+    occurrence = claim.selected_boundary.occurrence_identity[1][0]
+    producer = occurrence[5]
+
+    assert producer is not None
+    assert producer[5][5] == 1
+    assert claim.source == source_boundary
+    assert claim.selected_boundary.scan_id == result.witness.assertion_scan
+    assert claim.selected_boundary.execution_owner_token == (result.witness.execution_owner_token)
+    assert claim.selected_boundary.execution_owner_token != source_boundary.execution_owner_token
+    assert_detached_theory_value(claim, path="claim")
+
+    survived = next(item for item in result.witness.observations if item.disposition == "SURVIVED")
+    ambiguous = replace(
+        result.witness,
+        observations=(*result.witness.observations, survived),
+    )
+    with pytest.raises(TheoryInvariantError, match="unambiguous"):
+        theory_claim_from_intrascan_witness(
+            ambiguous,
+            BearingObjective(TargetSpec(RepeatedPositiveStepper.name, 1)),
+            source_boundary,
+        )
+
+
+RepeatedConsumerStepper = Int("IntrascanRepeatedConsumerStepper")
+RepeatedConsumerReceipt = Int("IntrascanRepeatedConsumerReceipt")
+
+
+@subroutine("IntrascanRepeatedConsumer", strict=False)
+def repeated_consumer() -> None:
+    with rung():
+        copy(1, RepeatedConsumerStepper)
+    with rung(RepeatedConsumerStepper == 1):
+        copy(1, RepeatedConsumerReceipt)
+
+
+with Program() as repeated_consumer_program:
+    with rung():
+        call(repeated_consumer)
+        copy(0, RepeatedConsumerStepper)
+        call(repeated_consumer)
+
+
+def test_repeated_surviving_consumers_are_incomplete_before_claim_admission() -> None:
+    source = PLC(repeated_consumer_program)
+    producer = repeated_consumer_program.subroutines["IntrascanRepeatedConsumer"][0]
+    consumer = repeated_consumer_program.subroutines["IntrascanRepeatedConsumer"][1]
+    expectation = EffectExpectation(
+        (
+            EffectObligation(
+                RepeatedConsumerStepper.name,
+                1,
+                ("IntrascanRepeatedConsumer", 0, ()),
+                ("IntrascanRepeatedConsumer", 1, ()),
+                ((RepeatedConsumerStepper.name, 1),),
+                producer_rung=producer,
+                consumer_rung=consumer,
+            ),
+        )
+    )
+
+    result = close_intrascan(
+        IntrascanClosureQuestion(
+            source_checkpoint=_checkpoint(source, "repeated-consumer"),
+            expectation=expectation,
+            steady_guard=RepeatedConsumerReceipt != 1,
+            budget=1,
+        )
+    )
+
+    assert result.status is IntrascanClosureStatus.INCOMPLETE
+    assert result.witness is None
+    assert len(result.attempts) == 1
+    assert result.attempts[0].witnessed is False
+    survived = tuple(
+        item for item in result.attempts[0].observations if item.disposition == "SURVIVED"
+    )
+    assert [item.appeared.call_invocation for item in survived] == [0, 1]
+    assert [item.consumer_read.call_invocation for item in survived] == [0, 1]
 
 
 MemoryProducerPermit = Bool("IntrascanMemoryProducerPermit", external=True)

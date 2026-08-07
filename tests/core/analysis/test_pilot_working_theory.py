@@ -29,6 +29,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
     TheoryClaim,
+    TheoryFirstEdgeExclusion,
     TheoryInvariantError,
     TheoryObjectiveSnapshot,
     TheoryObligationSnapshot,
@@ -36,6 +37,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     TheoryTermination,
     reduce_theory,
+    theory_view,
 )
 
 
@@ -112,6 +114,7 @@ def _attempt(
     transition: str,
     actions: tuple[tuple[str, bool], ...],
     disposition: TheoryAttemptDisposition = TheoryAttemptDisposition.REJECTED_EXACT,
+    first_edge_identity: tuple[Any, ...] | None = None,
 ) -> RecordTheoryAttempt:
     source = _boundary("source", 0)
     execution_owner = ("attempt-owner", transition)
@@ -127,6 +130,7 @@ def _attempt(
         pilot_rung_identities=(),
         disposition=disposition,
         evidence=(("scan", 1),),
+        first_edge_identity=first_edge_identity,
     )
 
 
@@ -213,6 +217,115 @@ def test_attempt_preserves_exact_execution_owner_and_occurrence_evidence() -> No
     )
     assert receipt.source.execution_owner_token == ("execution", "source")
     assert receipt.execution_owner_token != receipt.source.execution_owner_token
+
+
+def test_theory_view_projects_only_the_active_version_and_exact_source() -> None:
+    state, theory_id, version_id = _opened()
+    rejected = _attempt(
+        theory_id,
+        version_id,
+        transition="rejected-at-root",
+        actions=(("producer", True),),
+        first_edge_identity=("chart-edge", "producer"),
+    )
+    accepted = _attempt(
+        theory_id,
+        version_id,
+        transition="accepted-at-root",
+        actions=(("alternate", True),),
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    )
+    state = reduce_theory(reduce_theory(state, rejected), accepted)
+
+    root_view = theory_view(state)
+    assert root_view is not None
+    assert root_view.theory_id == theory_id
+    assert root_view.version_id == version_id
+    assert root_view.source == _boundary("source", 0)
+    assert root_view.root == _boundary("source", 0)
+    assert root_view.claim == _claim(target="stepper-complete")
+    assert tuple(item.attempt_id for item in root_view.attempts) == (
+        rejected.attempt_identity,
+        accepted.attempt_identity,
+    )
+    assert root_view.first_edge_exclusions == (
+        TheoryFirstEdgeExclusion(
+            theory_id,
+            version_id,
+            rejected.source,
+            rejected.first_edge_identity,
+            rejected.attempt_identity,
+            TheoryAttemptDisposition.REJECTED_EXACT,
+        ),
+    )
+    assert rejected.first_edge_identity is not None
+    assert root_view.excludes_first_edge(rejected.first_edge_identity)
+    assert not root_view.excludes_first_edge(accepted.act_identity)
+
+    landing = _boundary("landing", 1)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted.attempt_identity,
+            source=accepted.source,
+            boundary=landing,
+            advance_identity=("advance-to-landing",),
+        ),
+    )
+
+    landing_view = theory_view(state)
+    assert landing_view is not None
+    assert landing_view.source == landing
+    assert landing_view.attempts == ()
+    assert landing_view.first_edge_exclusions == ()
+
+
+def test_theory_view_scopes_failures_to_the_current_version() -> None:
+    state, theory_id, version_id = _opened()
+    rejected = _attempt(
+        theory_id,
+        version_id,
+        transition="rejected-before-refinement",
+        actions=(("producer", True),),
+        disposition=TheoryAttemptDisposition.REJECTED_EMPIRICAL,
+    )
+    state = reduce_theory(state, rejected)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=rejected.source,
+            refined_source=rejected.source,
+            requirements=(_requirement("consumer"),),
+            refinement_identity=("refine-after-rejection",),
+        ),
+    )
+
+    view = theory_view(state)
+    assert view is not None
+    assert view.version_id != version_id
+    assert view.requirements == (_requirement("consumer"),)
+    assert view.attempts == ()
+    assert view.first_edge_exclusions == ()
+
+
+def test_theory_view_is_absent_without_an_open_theory() -> None:
+    assert theory_view(TheoryState()) is None
+
+    state, theory_id, version_id = _opened()
+    state = reduce_theory(
+        state,
+        AbandonTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            termination=TheoryTermination.STUCK,
+            abandonment_identity=("close-before-view",),
+        ),
+    )
+    assert theory_view(state) is None
 
 
 @pytest.mark.parametrize("missing", ["owner", "occurrence"])
