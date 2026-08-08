@@ -246,3 +246,35 @@ def test_shadow_reducer_failure_cannot_change_production_result(monkeypatch: Any
     assert observed.ordered_steps == baseline.ordered_steps
     assert observed.total_scans == baseline.total_scans
     assert dict(observed.tags) == dict(baseline.tags)
+
+
+def test_shadow_attempt_adapter_adds_no_projection_replay(monkeypatch: Any) -> None:
+    """Shadow interpretation reuses the projection paid for by the steer."""
+
+    logic, consumer = _direct_producer_program()
+    original_projection = PLC._replay_pilot_rung_write_projection_at
+    projection_calls: list[tuple[PLC, int]] = []
+
+    def counted_projection(plc: PLC, scan_id: int):
+        projection_calls.append((plc, scan_id))
+        return original_projection(plc, scan_id)
+
+    monkeypatch.setattr(
+        PLC,
+        "_replay_pilot_rung_write_projection_at",
+        counted_projection,
+    )
+    with_shadow = PLC(logic).how(consumer, max_scans=30)
+    with_shadow_count = len(projection_calls)
+
+    projection_calls.clear()
+    monkeypatch.setattr(
+        pilot_module,
+        "_shadow_transition_from_attempt",
+        lambda *_args, **_kwargs: None,
+    )
+    without_shadow = PLC(logic).how(consumer, max_scans=30)
+
+    assert with_shadow.reachable and without_shadow.reachable
+    assert with_shadow_count > 0
+    assert len(projection_calls) == with_shadow_count

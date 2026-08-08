@@ -30,7 +30,7 @@ from pyrung.core.analysis.pilot.requirements import (
     derive_guard_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
 )
-from pyrung.core.analysis.pilot.types import _AttemptResult, _ExecutedAttempt
+from pyrung.core.analysis.pilot.types import _AttemptResult, _ExecutedAttempt, _PulseState
 from pyrung.core.crossing import Cmp
 
 
@@ -390,7 +390,7 @@ def test_wrong_assertion_projection_fails_closed() -> None:
     assert result.diagnostic_snapshot() == ()
 
 
-def test_pilot_adapter_overwrite_and_replay_fallback_preserve_exact_evidence() -> None:
+def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> None:
     overwrite_enabled = Bool("AdapterOverwriteEnabled", external=True, default=True)
     effect = Int("AdapterOverwriteValue")
     consumed = Int("AdapterOverwriteConsumed")
@@ -421,9 +421,22 @@ def test_pilot_adapter_overwrite_and_replay_fallback_preserve_exact_evidence() -
         Pulse(policy),
         BearingObjective(TargetSpec(consumed.name, 1)),
     )
-    observations = _direct_window(expectation, plc)
+    landing = dict(plc.state.tags)
+    pulse = _PulseState(
+        fork=plc,
+        scan_before=0,
+        action_scan=1,
+        action_snap=landing,
+        wait_snaps=(),
+        post_pulse_snap=landing,
+        post_pulse_key=("adapter-post-pulse",),
+        snap=landing,
+        key=("adapter-landing",),
+        kernel_scan_ids=(1,),
+    )
+    observations = _direct_window(expectation, plc, projection_at=pulse.projection_at)
     executed = _ExecutedAttempt(
-        pulse=SimpleNamespace(action_scan=1, coast_receipt=None, fork=plc),
+        pulse=pulse,
         bearing=bearing,
         effect_observations=observations,
     )
@@ -440,6 +453,8 @@ def test_pilot_adapter_overwrite_and_replay_fallback_preserve_exact_evidence() -
         context,
         question.source_checkpoint,
     )
+
+    assert pulse.projection_replay_count == 1
 
     assert len(state.failed_effect_receipts) == len(state.active_requirements) == 1
     receipt = state.failed_effect_receipts[0].diagnostic_snapshot()
@@ -468,9 +483,13 @@ def test_pilot_adapter_overwrite_and_replay_fallback_preserve_exact_evidence() -
         question.source_checkpoint,
     )
 
+    assert pulse.projection_replay_count == 1
     assert len(replayed_state.failed_effect_receipts) == 1
-    assert replayed_state.failed_effect_receipts[0].explanation.kind.value == "unknown"
-    assert replayed_state.active_requirements == []
+    assert len(replayed_state.active_requirements) == 1
+    assert (
+        replayed_state.failed_effect_receipts[0].diagnostic_snapshot()
+        == state.failed_effect_receipts[0].diagnostic_snapshot()
+    )
 
 
 def test_pilot_adapter_matches_service_snapshots_order_and_dedupe() -> None:

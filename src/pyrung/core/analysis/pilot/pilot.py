@@ -335,28 +335,11 @@ def _derive_bootstrap_requirements(
         _retain_active_requirement(state, derivation.requirement)
 
 
-def _executed_attempt(attempt: _AttemptResult) -> Any:
-    if attempt.trial is not None:
-        return attempt.trial.attempt
-    return attempt.executed or attempt.excursion_attempt
-
-
 def _release_attempt_projections(attempt: _AttemptResult | None) -> None:
     """Release selected-scan replay evidence after its last consumer."""
 
-    if attempt is None:
-        return
-    executions = (
-        attempt.executed,
-        attempt.excursion_attempt,
-        attempt.trial.attempt if attempt.trial is not None else None,
-    )
-    released: set[int] = set()
-    for execution in executions:
-        if execution is None or id(execution.pulse) in released:
-            continue
-        released.add(id(execution.pulse))
-        execution.pulse.release_projections()
+    if attempt is not None:
+        attempt.release_projections()
 
 
 def _derive_attempt_requirements(
@@ -372,18 +355,10 @@ def _derive_attempt_requirements(
     # failure inversion belongs only to a rejected disposable attempt.
     if checkpoint is None or attempt.trial is not None:
         return
-    executed = _executed_attempt(attempt)
+    executed = attempt.executed_attempt
     if executed is None:
         return
-    fallback_scan = (
-        executed.pulse.action_scan
-        if executed.pulse.action_scan is not None
-        else (
-            executed.pulse.coast_receipt.end_scan
-            if executed.pulse.coast_receipt is not None
-            else executed.pulse.fork.state.scan_id
-        )
-    )
+    fallback_scan = executed.assertion_scan
     question = IntrascanQuestion(
         expectation=executed.bearing.expectation,
         execution=executed.pulse.fork,
@@ -403,6 +378,7 @@ def _derive_attempt_requirements(
             checkpoint,
             ctx,
         ),
+        projection_at=executed.projection_at,
     )
     report = derive_recorded_observations(
         question,
@@ -2425,7 +2401,7 @@ def _repair_failed_requirement(
         )
         try:
             executed = (
-                _executed_attempt(transition.attempt) if transition.attempt is not None else None
+                transition.attempt.executed_attempt if transition.attempt is not None else None
             )
             expectation = local_act.policy.expectation
             target_reached = transition.trial is not None and isinstance(
@@ -2978,6 +2954,56 @@ def _shadow_execution_evidence(execution: Any) -> tuple[tuple[Any, ...], tuple[A
         _semantic_key(observation.diagnostic_snapshot()) for observation in observations
     )
     return ("execution-owner", epoch_id, owner_id), occurrence_evidence
+
+
+def _shadow_transition_from_attempt(
+    state: _PilotState,
+    attempt: _AttemptResult,
+    bearing: Bearing,
+    checkpoint: _CausalCheckpoint | None,
+    *,
+    prior_requirement_identities: frozenset[tuple[Any, ...]],
+) -> _ShadowTheoryTransition | None:
+    """Detach shadow evidence from the already-executed ordinary steer.
+
+    The execution's effect observations already own their exact ordered
+    projections. This adapter never forks, replays, or rebuilds a projection;
+    unavailable shared evidence simply leaves the shadow observation absent.
+    """
+
+    execution = attempt.executed_attempt
+    if execution is None or execution.bearing.expectation is None or checkpoint is None:
+        return None
+    source = _theory_boundary_from_checkpoint(checkpoint)
+    execution_owner, effects = _shadow_execution_evidence(execution)
+    return _ShadowTheoryTransition(
+        claim=_shadow_claim(
+            execution.bearing.expectation,
+            bearing.objective,
+            source,
+        ),
+        source=source,
+        execution_owner_token=execution_owner,
+        occurrence_evidence=effects,
+        act_identity=act_identity(bearing.act),
+        pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+        disposition=(
+            TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            if attempt.trial is not None
+            else TheoryAttemptDisposition.REJECTED_EXACT
+            if attempt.proof_rejection
+            else TheoryAttemptDisposition.REJECTED_EMPIRICAL
+        ),
+        evidence=(
+            ("effects", effects),
+            ("gates", _semantic_key(attempt.gate_events)),
+        ),
+        requirements=tuple(
+            _theory_requirement_snapshot(requirement)
+            for requirement in state.active_requirements
+            if requirement.identity not in prior_requirement_identities
+        ),
+    )
 
 
 def _shadow_bootstrap_transition(
@@ -4098,7 +4124,7 @@ def _certify_current_target_prefix(
 ) -> _ContinuationCheckpoint | None:
     """Ephemerally join a fresh ProgramStep to this Pulse's target occurrence."""
 
-    executed = _executed_attempt(attempt)
+    executed = attempt.executed_attempt
     if (
         executed is None
         or target_expectation is None
@@ -4311,7 +4337,7 @@ def _transition_once(
     if resolve_excursion and attempt.excursion_attempt is not None:
         attempt = _resolve_excursion(attempt, frame, state, ctx)
     prefix_proof = None
-    prefix_execution = _executed_attempt(attempt)
+    prefix_execution = attempt.executed_attempt
     if terminal_target_expectation is not None and prefix_execution is not None:
         prefix_proof = _certify_current_target_prefix(
             attempt,
@@ -4333,7 +4359,7 @@ def _transition_once(
         )
         act = result.act
     continuation_checkpoint = None
-    executed_for_derivation = _executed_attempt(attempt)
+    executed_for_derivation = attempt.executed_attempt
     if terminal_target_expectation is not None and executed_for_derivation is not None:
         continuation_checkpoint = _adjacent_continuation_source(
             state,
@@ -4349,44 +4375,13 @@ def _transition_once(
         )
     shadow_observation = None
     try:
-        shadow_execution = _executed_attempt(attempt)
-        shadow_checkpoint = derivation_checkpoint or expectation_checkpoint
-        if (
-            shadow_execution is not None
-            and shadow_execution.bearing.expectation is not None
-            and shadow_checkpoint is not None
-        ):
-            shadow_source = _theory_boundary_from_checkpoint(shadow_checkpoint)
-            shadow_execution_owner, shadow_effects = _shadow_execution_evidence(shadow_execution)
-            shadow_rungs = tuple(_rung_identity(rung) for rung in state.pilot_rungs)
-            shadow_observation = _ShadowTheoryTransition(
-                claim=_shadow_claim(
-                    shadow_execution.bearing.expectation,
-                    result.objective,
-                    shadow_source,
-                ),
-                source=shadow_source,
-                execution_owner_token=shadow_execution_owner,
-                occurrence_evidence=shadow_effects,
-                act_identity=act_identity(act),
-                pilot_rung_identities=shadow_rungs,
-                disposition=(
-                    TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
-                    if attempt.trial is not None
-                    else TheoryAttemptDisposition.REJECTED_EXACT
-                    if attempt.proof_rejection
-                    else TheoryAttemptDisposition.REJECTED_EMPIRICAL
-                ),
-                evidence=(
-                    ("effects", shadow_effects),
-                    ("gates", _semantic_key(attempt.gate_events)),
-                ),
-                requirements=tuple(
-                    _theory_requirement_snapshot(requirement)
-                    for requirement in state.active_requirements
-                    if requirement.identity not in shadow_requirements_before
-                ),
-            )
+        shadow_observation = _shadow_transition_from_attempt(
+            state,
+            attempt,
+            result,
+            derivation_checkpoint or expectation_checkpoint,
+            prior_requirement_identities=shadow_requirements_before,
+        )
     except Exception:  # noqa: BLE001 - shadow conversion cannot change the drive
         logger.debug("pilot: shadow theory observation failed", exc_info=True)
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
@@ -4513,7 +4508,7 @@ def _promote_transient_target_failure(
 ) -> tuple[Bearing, _AttemptResult]:
     """Re-verify an act only after its selected target appeared and was lost."""
 
-    executed = _executed_attempt(attempt)
+    executed = attempt.executed_attempt
     if executed is None:
         return result, attempt
     pulse = executed.pulse

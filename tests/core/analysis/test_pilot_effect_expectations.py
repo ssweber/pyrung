@@ -1225,6 +1225,7 @@ def test_pulse_projection_cache_is_shared_and_replay_replace_is_fresh(monkeypatc
     )
 
     assert calls == [(plc, 1)]
+    assert pulse.projection_replay_count == 1
     assert first[0].execution_projection is second[0].execution_projection
     del first, second
     gc.collect()
@@ -1236,6 +1237,8 @@ def test_pulse_projection_cache_is_shared_and_replay_replace_is_fresh(monkeypatc
     assert replay_pulse._projection_cache == {}
     assert replay_pulse.projection_at(1) is not None
     assert calls == [(plc, 1), (replay, 1)]
+    assert replay_pulse.projection_replay_count == 1
+    assert pulse.projection_replay_count == 1
 
     assert pulse._projection_cache
     pulse.release_projections()

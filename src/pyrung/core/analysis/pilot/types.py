@@ -1061,6 +1061,10 @@ class _PulseState:
     _projection_cache: dict[int, tuple[Any, ScanRungWriteProjection]] = field(
         default_factory=dict, init=False, repr=False
     )
+    # Count actual ordered-projection replays, not cache reads. This is an
+    # execution-local performance receipt used to prove that effects,
+    # requirements, and intrascan share one already-run steer scan.
+    _projection_replay_count: int = field(default=0, init=False, repr=False, compare=False)
     # The CoastReceipt of the trial's coast (bearing / terminal let-run), when the
     # trial had one — the recorded observation the deciders read instead of
     # re-deriving evidence from snapshots.  None for plain pulses.
@@ -1104,10 +1108,17 @@ class _PulseState:
             return cached[1]
         if owner is None:
             return None
+        self._projection_replay_count += 1
         projection = self.fork._replay_pilot_rung_write_projection_at(scan_id)
         if projection is not None:
             self._projection_cache[scan_id] = (owner, projection)
         return projection
+
+    @property
+    def projection_replay_count(self) -> int:
+        """Number of cache-miss projection replays owned by this execution."""
+
+        return self._projection_replay_count
 
     def release_projections(self) -> None:
         """Release selected-scan replay evidence after its consumers finish."""
@@ -1121,6 +1132,22 @@ class _ExecutedAttempt:
     pulse: _PulseState
     bearing: Bearing
     effect_observations: tuple[EffectObservation, ...] = ()
+
+    @property
+    def assertion_scan(self) -> int:
+        """Exact scan which asserted the selected act, or the physical landing."""
+
+        if self.pulse.action_scan is not None:
+            return self.pulse.action_scan
+        if self.pulse.coast_receipt is not None:
+            return self.pulse.coast_receipt.end_scan
+        return self.pulse.fork.state.scan_id
+
+    def projection_at(self, scan_id: int) -> ScanRungWriteProjection | None:
+        """Reuse this execution's owner-bound projection cache."""
+
+        project = getattr(self.pulse, "projection_at", None)
+        return project(scan_id) if project is not None else None
 
 
 @dataclass(frozen=True)
@@ -1194,3 +1221,26 @@ class _AttemptResult:
     # than an empirical failed act.  It may establish a narrower requirement,
     # but it must never become an ActionNogood merely because it was rejected.
     proof_rejection: bool = False
+
+    @property
+    def executed_attempt(self) -> _ExecutedAttempt | None:
+        """The one physical execution selected for all downstream evidence."""
+
+        if self.trial is not None:
+            return self.trial.attempt
+        return self.executed or self.excursion_attempt
+
+    def release_projections(self) -> None:
+        """Release each physical execution's shared projection cache once."""
+
+        executions = (
+            self.executed,
+            self.excursion_attempt,
+            self.trial.attempt if self.trial is not None else None,
+        )
+        released: set[int] = set()
+        for execution in executions:
+            if execution is None or id(execution.pulse) in released:
+                continue
+            released.add(id(execution.pulse))
+            execution.pulse.release_projections()
