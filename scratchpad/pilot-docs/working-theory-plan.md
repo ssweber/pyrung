@@ -1,4 +1,4 @@
-# WorkingTheory and Intrascan Closure Plan
+# WorkingTheory and Temporal Pulse Forensics Plan
 
 This plan supersedes the former init-constant recovery design and its landing
 phases. The already-landed evidence machinery remains the starting point; the
@@ -6,27 +6,33 @@ remaining recovery-hardening work is folded into the theory lifecycle below.
 
 ## Purpose
 
-Simplify PILOT around one persistent unit of intent:
+Simplify PILOT around one persistent unit of intent without turning that
+intent into a stored plan:
 
 ```text
 observe
--> open or continue one WorkingTheory
--> ask Compass for one complete Bearing
+-> ask Compass for one ordinary Bearing
 -> execute and observe it once
--> advance, refine, prove, or abandon the theory
+-> keep a durable landing and orient again
+   or diagnose why a transient pulse was ineffective
+-> open, advance, refine, prove, or abandon one WorkingTheory when persistence is needed
 -> observe again
 ```
 
-The difficult new capability is one-scan closure: given an exact source and a
-Bearing which appears capable of producing an effect, determine which complete
-top-of-scan overlay makes the selected producer-to-consumer handoff occur while
-all active requirements hold at their exact deadlines.
+The difficult new capability is temporal pulse forensics. Given one exact
+attempt, determine whether its asserted shape persisted for a later scan, had
+to be sustained by an instruction owner, missed a requirement established by
+an earlier scan, or reached an exact same-scan consumer while another required
+leaf was false. Intrascan evidence explains the next experiment; it does not
+prove a composite action before PILOT tries it.
 
-WorkingTheory owns the purpose and cross-scan composition. Compass owns the
-fresh current-world direction. A new intrascan service owns bounded closure of
-one exact assertion scan. Existing effect, causal, departure, progress, and
-investigation modules remain evidence specialists rather than separate
-orchestration loops.
+WorkingTheory owns the purpose, rollback root, provisional progress, unresolved
+temporal obligations, and exact attempt history. Compass owns one fresh
+current-world direction. The intrascan service owns exact pulse-window
+diagnosis and bounded retry-shape nomination. `program_step` and instruction
+profiles own duration and autonomous continuation. Existing effect, causal,
+departure, progress, and investigation modules remain evidence specialists
+rather than separate orchestration loops.
 
 Public `PLC.how()` and `OrientationResult = Bearing | NeedProbe | Stuck` remain
 unchanged.
@@ -51,9 +57,10 @@ The active theory lives on `_PilotState`, not `_World`, `CompassKnowledge`, or
 
 ### One exact claim
 
-A theory is the claim that one selected producer supplies one value and
-consumer-relative shape at one exact program boundary. Its stable identity is
-based on:
+A theory is the claim that one selected producer can make one value and
+consumer-relative shape effective at one exact program boundary. It often
+opens only after an ordinary trial exposes a temporal requirement which must
+survive a detour. Its stable identity is based on:
 
 - source checkpoint owner and source world key;
 - target-relative boundary/objective;
@@ -61,9 +68,10 @@ based on:
 - required effect shape;
 - obligation polarity.
 
-The first action is not part of theory identity. `A`, `A+B`, and `A+B+C` may be
-different attempts to prove the same claim. Selecting another producer or
-charted edge opens a sibling theory.
+The first action is not part of theory identity. `A`, a prior setup phase
+followed by a freshly rediscovered `A`, and a same-scan `A+B` retry may be
+different attempts to make the same claim effective. Selecting another
+producer or charted edge opens a sibling theory.
 
 ### Immutable versions
 
@@ -154,6 +162,36 @@ impossibility proof and no global nogood. `IMPOSSIBLE` is permitted only when a
 complete finite domain was searched under complete dependency and execution
 semantics. Structural ambiguity or an incomplete domain returns `INCOMPLETE`.
 
+### Temporal deadlines, persistence, and retry
+
+No immediate target motion is not itself a failed act. The first question is
+whether the attempted shape remains useful after the assertion scan. If a
+level, latch, state, or newly exposed steerable frontier survives for the next
+scan, PILOT keeps that landing and performs an ordinary fresh orientation. It
+does not revert merely because the final target has not moved yet.
+
+When a pulse is ineffective, its exact evidence classifies each missing
+requirement by deadline:
+
+| Deadline class | Meaning | Next experiment |
+| --- | --- | --- |
+| `BEFORE_ASSERTION` | A prior scan had to arm, clear, select, rearm, or establish the required state before the pulse scan began | Establish that setup as its own phase, keep its proved landing as a provisional tip, then orient freshly |
+| `BEFORE_CONSUMER` | The requirement must be true before one exact consumer occurrence later in the assertion scan | Retry the original pulse with one exact missing consumer shape present at the scan boundary |
+| `LATER_SCAN` | The attempted shape remains conductive or durably useful for a later scan | Keep the landing and move forward; no intrascan retry |
+| `DURATION` | A timer, counter, or program-owned operation requires the level to remain asserted across scans | Hand the duration to its instruction owner and hold/coast; do not flatten it into a composite pulse |
+| `UNKNOWN` | The producer, consumer, prior occurrence, projection, or deadline is missing or ambiguous | Fail closed and retain typed unresolved evidence |
+
+The assertion scan is therefore not always the beginning of the causal window.
+Forensics may follow exact source identities into an earlier scan which armed
+or foreclosed the pulse's effective window. A same-scan co-action cannot repair
+a `BEFORE_ASSERTION` deadline which has already passed.
+
+Intrascan derives retry evidence, not a theorem that the retry will work. The
+normal executable fork trial remains the oracle. For one observed `AND` guard,
+the retry shape contains only its missing steerable leaves. For `OR`, branches
+are nominated lazily and tried one at a time. No trace, chart, and overlay
+budgets may multiply into speculative candidate execution.
+
 ### Recovery lifetime and proof hardening
 
 The final hardening commitments from the old recovery plan become ordinary
@@ -211,15 +249,15 @@ under WorkingTheory:
 | --- | --- |
 | WorkingTheory reducer | Open/advance/refine/prove/abandon; choose root versus tip; promote or restore worlds |
 | Theory ledger | Immutable versions, receipts, successors, attempts, and local tombstones |
-| Compass | Freshly read one supplied world and return one complete Bearing, `NeedProbe`, or theory-local `Stuck` |
-| Intrascan service | Bounded one-scan diagnosis, requirement closure, overlay synthesis, and exact witness verification |
+| Compass | Freshly read one supplied world and return one ordinary next Bearing, `NeedProbe`, or theory-local `Stuck` |
+| Intrascan service | Diagnose one exact pulse window, classify temporal deadlines, and nominate one bounded retry shape without executing future candidates |
 | `effects.py` | Factual positive/negative occurrence obligations over exact execution windows |
 | `requirements.py` | Derive exact logical requirements and occurrence deadlines from failed observations |
 | `program_step.py` | Report whether the program will continue autonomously from a provisional tip |
 | `progress.py` | Report landing durability; do not own rollback or recovery orchestration |
 | `departure.py` | Report exact channel motion and its classification |
 | `investigate.py` | Return justified refinements from bounded counterfactual evidence; do not commit/revert/retry the drive |
-| `steer.py` / `verify.py` | Execute and judge one world-bound Bearing exactly once; return a candidate landing fact |
+| `steer.py` / `verify.py` | Execute and judge one world-bound Bearing exactly once; the ordinary trial is the retry oracle and returns a candidate landing fact |
 
 `_transition_once` remains the execution seam. It orients or consumes one
 supplied Bearing, executes it, records observations, and returns the judged
