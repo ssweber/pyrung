@@ -109,7 +109,7 @@ Every action is freshly materialized from the exact current root or provisional
 tip. Proved phase receipts say what has happened; they do not prescribe the
 next action.
 
-### Provisional tips and closure
+### Provisional tips and proof
 
 An open theory has an immutable rollback root and may have a newer provisional
 tip. Intermediate accepted movement is not promoted to an ordinary global
@@ -186,11 +186,13 @@ Forensics may follow exact source identities into an earlier scan which armed
 or foreclosed the pulse's effective window. A same-scan co-action cannot repair
 a `BEFORE_ASSERTION` deadline which has already passed.
 
-Intrascan derives retry evidence, not a theorem that the retry will work. The
-normal executable fork trial remains the oracle. For one observed `AND` guard,
-the retry shape contains only its missing steerable leaves. For `OR`, branches
-are nominated lazily and tried one at a time. No trace, chart, and overlay
-budgets may multiply into speculative candidate execution.
+Intrascan derives retry evidence, not a theorem that the retry will work. A
+narrowed retry is executed once on an exact fork and that same execution passes
+through normal verification; there is no proof-then-replay cycle. For one
+observed `AND` guard, the retry shape contains only its missing steerable
+leaves. For `OR`, branches are nominated lazily and tried one at a time. No
+trace, chart, and retry budgets may multiply into speculative candidate
+execution.
 
 ### Recovery lifetime and proof hardening
 
@@ -250,20 +252,23 @@ under WorkingTheory:
 | WorkingTheory reducer | Open/advance/refine/prove/abandon; choose root versus tip; promote or restore worlds |
 | Theory ledger | Immutable versions, receipts, successors, attempts, and local tombstones |
 | Compass | Freshly read one supplied world and return one ordinary next Bearing, `NeedProbe`, or theory-local `Stuck` |
-| Intrascan service | Diagnose one exact pulse window, classify temporal deadlines, and nominate one bounded retry shape without executing future candidates |
+| Intrascan service | Diagnose one exact pulse window, classify temporal deadlines, execute at most one narrowed same-scan candidate per local alternative, and return the already-executed landing without adopting it |
 | `effects.py` | Factual positive/negative occurrence obligations over exact execution windows |
 | `requirements.py` | Derive exact logical requirements and occurrence deadlines from failed observations |
 | `program_step.py` | Report whether the program will continue autonomously from a provisional tip |
 | `progress.py` | Report landing durability; do not own rollback or recovery orchestration |
 | `departure.py` | Report exact channel motion and its classification |
 | `investigate.py` | Return justified refinements from bounded counterfactual evidence; do not commit/revert/retry the drive |
-| `steer.py` / `verify.py` | Execute and judge one world-bound Bearing exactly once; the ordinary trial is the retry oracle and returns a candidate landing fact |
+| `steer.py` / `verify.py` | Execute an ordinary world-bound Bearing once or continue judgment of an already-executed intrascan candidate; return one judged candidate landing fact |
 
-`_transition_once` remains the execution seam. It orients or consumes one
-supplied Bearing, executes it, records observations, and returns the judged
+`_transition_once` remains the ordinary execution seam. It orients or consumes
+one supplied Bearing, executes it, records observations, and returns the judged
 candidate landing without owning repetition, rollback, provisional-tip
-selection, or global promotion. During migration its current local adoption is
-adapted into that result before ownership transfers to the reducer.
+selection, or global promotion. A sibling verification-continuation seam
+accepts an `ExecutedIntrascanCandidate`, runs the remaining ordinary gates on
+that exact fork, and never pulses it again. During migration current local
+adoption is adapted into those results before ownership transfers to the
+reducer.
 
 ## Core records
 
@@ -353,80 +358,118 @@ writer because one effect from it survived.
 
 ## Intrascan service
 
-Create `intrascan.py` as one semantic owner with replaceable internal search
-strategies.
+`intrascan.py` is the semantic owner for exact pulse-window diagnosis and
+same-scan retry execution. It is entered only after an ordinary attempted
+pulse supplies exact evidence that its effect was transient or ineffective;
+it is never a preflight step for every Compass candidate.
 
 ```text
-IntrascanQuestion
-    exact source checkpoint/world
-    TheoryClaim / fixed EffectExpectation
-    draft complete action artifact
+PulseWindowQuestion
+    exact failed attempt and source checkpoint/world
+    selected act and fixed EffectExpectation
+    before/assertion/after snapshots
+    owner-bound execution projection
     active requirements
-    fixed PilotRungs and configured inputs
-    avoid constraints
-    finite search metadata and budget
+    exact prior-source and consumer occurrences
 
-IntrascanResult
-    WITNESS
-        complete overlay
-        fixed pre-execution EffectExpectation
-        detached occurrence report from exact replay
+PulseWindowDiagnosis
+    PERSISTENT
+        durable landing or later-scan frontier; keep it and orient again
+
+    RETRY_SHAPE
+        BEFORE_CONSUMER deadline
+        exact missing steerable leaves and lazy branch identity
 
     NEEDS_PHASE
-        exact rearm or program-owned boundary receipt
+        BEFORE_ASSERTION or DURATION deadline
+        exact setup/rearm/owner requirement
 
     BUDGET_EXHAUSTED
-        attempted identities and unresolved frontier
+        attempted local identities and unresolved frontier
 
     INCOMPLETE
-        missing domain, ambiguous occurrence, or unsupported construct
+        missing projection, source, consumer, deadline, or supported domain
 
     IMPOSSIBLE
-        complete-domain proof only
+        separate complete finite-domain proof, never retry exhaustion
+
+IntrascanRetryQuestion
+    exact theory root or provisional tip
+    original selected act plus one RETRY_SHAPE
+    fixed expectations, PilotRungs, configured inputs, and avoid constraints
+    finite producer-local alternatives and budget
+
+ExecutedIntrascanCandidate
+    complete physical act
+    exact disposable fork/world which executed it once
+    owner-bound projection and effect observations
+    verification inputs and transient attempt evidence
 ```
 
-The service owns exactly one assertion scan. It cannot commit the live world,
-coast, cross a program boundary, or queue another action. A `NEEDS_PHASE`
-result returns control to WorkingTheory, which retains only the proved phase
-receipt and asks Compass again from the new provisional tip.
+The retry service owns exactly one assertion scan. It cannot commit the live
+world, coast, cross a program boundary, promote a tip, or queue another action.
+A returned executed candidate is not yet a tip. Normal `verify.py` gates judge
+that exact execution without replaying it; only WorkingTheory may adopt an
+accepted landing as its provisional tip. Rejected alternatives discard their
+forks and retain only detached attempt evidence.
 
-### One-scan closure algorithm
+A `NEEDS_PHASE` result returns control to WorkingTheory. An ordinary durable
+setup may be established as one fresh Bearing. Instruction-owned rearm and
+duration phases remain owned by `program_step`, `Crossings`, and
+`AdvanceProfile`. After any accepted phase, WorkingTheory records what happened
+and asks Compass again; it never stores the original pulse as the next action.
 
-1. Restore/fork the exact question source, including hidden memory, forces,
-   configured inputs, and PilotRungs.
-2. Apply the complete candidate overlay at the scan boundary.
-3. Execute exactly the assertion scan and build one owner-bound
-   `ScanRungWriteProjection`.
-4. Observe every positive and negative obligation.
-5. If all obligations and requirements are satisfied, return `WITNESS`.
-6. For `OVERWRITTEN` or `DISPLACED`, inspect the harmful write's exact enabling
-   reads and complement its conductive guard.
-7. For `ABSENT` or `STRANDED`, inspect the selected producer/consumer's exact
-   false guard reads.
-8. When a false required read was supplied by an earlier same-scan program
-   write, follow its exact `ReadOccurrence.source` back to that writer and
-   recursively derive the earlier prevention/guard requirement.
-9. Compile compatible top-of-scan assignments and PilotRungs. Preserve
-   per-alternative deadlines and reject only the exact conflicting composite.
-10. Replay the strengthened overlay from the same exact source. Repeat within
-    the explicit local budget.
-11. Return `BUDGET_EXHAUSTED`, `INCOMPLETE`, or `IMPOSSIBLE` without weakening
-    uncertainty into proof.
+### Pulse-window diagnosis and same-scan retry
 
-The executor projection is the semantic oracle. A prove-style compiled kernel
-may enumerate or rank finite overlays, but endpoint state is never sufficient
-to certify a witness. Every proposed witness must pass the exact ordered
-projection check.
+1. Read the already-executed attempt's exact projection; do not fork or search
+   merely because the final target did not move.
+2. If the selected level, latch, state, or newly exposed steerable frontier
+   survives for a later scan, return `PERSISTENT`. The ordinary trial landing
+   remains eligible for commit and fresh orientation.
+3. If an instruction owner requires sustained assertion, return `DURATION`
+   evidence through `NEEDS_PHASE`; do not widen the pulse.
+4. Follow exact source occurrences backward when the pulse's effective window
+   was armed or foreclosed before the assertion scan. Return a
+   `BEFORE_ASSERTION` setup requirement; a same-scan co-action is too late.
+5. When the selected pulse appeared and reached, or should have reached, one
+   exact same-scan consumer before reset, overwrite, or displacement, inspect
+   that consumer's exact false guard reads.
+6. Derive only the missing steerable leaves whose deadline is
+   `BEFORE_CONSUMER`. If an earlier same-scan program write supplied a false
+   read, follow its exact `ReadOccurrence.source` with strictly decreasing
+   ordinals until the actionable leaf or an ambiguity is reached.
+7. Preserve one observed `AND` branch as a conjunctive retry shape. Nominate
+   `OR` siblings lazily; do not enumerate unrelated candidates or a Cartesian
+   product across consumers.
+8. Restore/fork the theory's exact root or provisional tip, including hidden
+   memory, forces, configured inputs, and PilotRungs. Apply the original act
+   plus one nominated same-scan shape and execute the assertion scan once.
+9. Capture the complete executed act, fork, ordered projection, effect
+   observations, and verification inputs. Stop at the first locally coherent
+   candidate landing and pass that same execution to the ordinary verification
+   continuation.
+10. Never execute the selected composite a second time. If verification
+    accepts it, WorkingTheory may adopt that exact world as its provisional
+    tip; if verification rejects it, discard the fork and record the exact
+    attempt.
+11. Return `BUDGET_EXHAUSTED` or `INCOMPLETE` without weakening uncertainty
+    into proof. `IMPOSSIBLE` still requires a separately recorded complete
+    finite-domain proof.
 
-Search widening is internal to this service:
+The execution projection remains the semantic oracle for explaining the
+failed pulse and binding the retry to exact occurrences. It is not used to
+declare the retry globally successful before verification. Endpoint state is
+never sufficient by itself.
 
-1. selected producer guard inputs;
-2. active requirement operands;
-3. co-actions and upstream definitions;
-4. writers which can interfere before the consumer/deadline;
-5. a wider finite steerable domain only when bounded and necessary.
+Performance is an explicit contract:
 
-This avoids both guard-only incompleteness and unrelated all-input solutions.
+- successful or durably productive ordinary trials invoke no intrascan search;
+- one qualifying failed act opens at most one producer-local retry search;
+- every alternative executes at most one exact assertion scan;
+- the accepted candidate execution is verified and adopted without replay;
+- trace, chart-edge, and retry-shape budgets never multiply;
+- all losing forks are discarded immediately and no runner enters the theory
+  ledger.
 
 ## Compass integration
 
@@ -437,28 +480,47 @@ With no active theory:
 ```text
 read current world
 -> select one causal candidate
--> ask IntrascanService to close it
--> return one complete Bearing carrying a TheoryClaim
--> PILOT opens the theory before execution
+-> return and execute one ordinary Bearing
+-> verify the exact trial
+-> keep durable progress and orient freshly
+   or open a WorkingTheory only when exact temporal evidence requires persistent refinement
 ```
 
-If candidate closure returns `BUDGET_EXHAUSTED` or `INCOMPLETE` before a theory
-exists, Compass retains only candidate/read-local unresolved evidence and
-considers another current-world candidate. There is no theory version to
-tombstone until PILOT has opened the selected complete claim.
+Compass never runs intrascan retry search while ranking candidates and never skips a
+ranked act because a speculative composite could not be proved. A failed
+ordinary trial records its exact observations before another orientation.
+Only an ineffective pulse with actionable temporal evidence opens or refines a
+theory; ordinary rejection and sibling selection keep their existing semantics.
 
 With an active theory, a detached `TheoryView` travels through
 `NavigationConstraints`. Compass uses its claim, requirements, attempts, and
-root/tip choice when materializing the next Bearing. Compass never changes the
-theory.
+root/tip choice when materializing one next experiment. It may freshly expose
+the original steer after a setup phase. WorkingTheory recognizes that steer as
+the same intent under a new version or provisional tip; it is not a duplicate
+attempt. Compass never changes the theory and no selected future survives the
+read.
+
+An identical act at the identical tip, theory version, requirements, and
+deadline evidence is a repeated semantic attempt and is suppressed. The same
+scalar pulse at a new provisional tip or under newly refined temporal evidence
+is a new attempt.
+
+For a `BEFORE_CONSUMER` retry, the intrascan service may execute one bounded
+same-scan composite and return its executed candidate landing directly to the
+normal verification continuation. Verification judges that exact fork; it is
+never re-executed merely to enter the ordinary gates.
 
 An ambient terminal coast with no selected causal claim remains maintenance
 and does not open a refinable theory.
 
-`Stuck` from Compass becomes relative to the supplied theory version. The
-WorkingTheory owner tombstones that version and restores its root; a fresh
-Compass read may select a sibling claim. Public terminal `Stuck` is produced
-only when the broader current-world theory frontier is exhausted.
+`Stuck` from Compass becomes relative to the supplied theory version. If a
+failed retry exposes new exact temporal evidence, WorkingTheory creates a new
+version and continues. If every known obligation is discharged, the original
+steer is still ineffective, and no new requirement, sibling explanation, or
+untried semantic attempt remains, the theory's explanation is falsified and
+the theory is abandoned. Its root is restored and a fresh Compass read may
+select a sibling claim. Public terminal `Stuck` is produced only when the
+broader current-world theory frontier is exhausted.
 
 The recently landed `first_edge_allowed` graph seam is used only after this
 theory-relative distinction exists. An attempt may exclude an edge as the
@@ -490,15 +552,16 @@ separate concern from opaque trace boundaries:
 - current target/TheoryClaim relevance and live requirements admit edges from
   the catalog during fresh orientation; opening a theory does not rebuild the
   static catalog;
-- every proposed first chart edge is converted into an exact occurrence claim
-  and passed through the intrascan service, which composes its full producer
-  guard/overlay before Compass may return it as a Bearing;
+- every proposed first chart edge remains an ordinary executable candidate.
+  Its real trial supplies the exact occurrence claim; only an ineffective
+  transient pulse may invoke temporal forensics and a same-scan retry;
 - structured chart navigation outranks broad raw-trace alternatives for that
   exact claim, while current-world admission can still reject a chart whose
   live producer is unavailable;
-- a failed first move creates only a theory/version/source-local
-  `first_edge_allowed` exclusion. A persistent requirement contradiction may
-  exclude the edge in every position for that constrained read.
+- a failed first move creates only a theory/version/source-local attempt or
+  `first_edge_allowed` exclusion after its exact trial. A persistent
+  requirement contradiction may exclude the edge in every position for that
+  constrained read.
 
 This keeps opaque-chart behavior as a compatibility subset while making direct
 charts principled rather than target-special.
@@ -509,7 +572,7 @@ The reducer consumes typed facts owned by the specialist modules:
 
 ```text
 ADVANCE
-    append an immutable progress snapshot with a provisional tip or phase receipt
+    append an immutable progress snapshot with an accepted provisional tip or phase receipt
     keep the same theory/version
     ask Compass freshly from the tip
 
@@ -525,9 +588,20 @@ PROVED
 
 ABANDON
     restore the theory root
-    freeze the exact version tombstone
+    freeze the exact version tombstone and exhausted explanation
     ask Compass freshly for a sibling claim
 ```
+
+An executed intrascan candidate enters this reducer only after the ordinary
+verification continuation accepts the exact fork. Before that judgment it is a
+candidate landing, not theory progress. Acceptance adopts the already-executed
+world without replay; rejection discards it and records only detached attempt
+evidence.
+
+Establishing a setup requirement is theory progress even when target distance
+does not improve, because it advances the provisional tip and discharges or
+changes an exact temporal obligation. It does not imply that the original
+pulse will run next. Compass rereads the tip and must expose that steer again.
 
 `program_step` decides whether an accepted provisional tip continues under
 program ownership. `KEEP_RUNNING` yields another fresh coast Bearing inside the
@@ -574,15 +648,15 @@ ownership transfer while the current stage has unexplained new failures.
 - Return `INCOMPLETE` on ambiguity, indirect uncertainty, or a non-decreasing
   cycle.
 
-### Stage 3 - Add bounded overlay closure
+### Stage 3 - Add bounded same-scan retry mechanics
 
 - Move scalar/guard schedule compilation behind the intrascan service.
-- Compose complete atomic overlays, steady PilotRungs, and conjunctive
-  expectations.
-- Add exact attempt identities and a bounded closure budget.
+- Materialize producer-local retry shapes, steady PilotRungs, and conjunctive
+  expectations on disposable exact-source forks.
+- Add exact attempt identities and a bounded producer-local retry budget.
 - Add `PREVENT` obligations and occurrence-scoped requirement observations.
-- Use optional finite kernel enumeration only as a candidate generator; exact
-  projection remains the witness.
+- Use optional finite kernel enumeration only to nominate local alternatives;
+  the exact fork projection remains the occurrence oracle.
 - Do not route production Compass through the service yet.
 
 ### Stage 4 - Introduce WorkingTheory in shadow mode
@@ -594,34 +668,83 @@ ownership transfer while the current stage has unexplained new failures.
   enters the ledger.
 - Add deterministic reducer tests for every transition and successor link.
 
-### Stage 5 - Let Compass return theory-owned complete Bearings
+### Stage 5 - Classify temporal pulse deadlines without changing decisions
 
-- Add a detached `TheoryView` to navigation constraints.
-- Attach an explicit TheoryClaim to every non-maintenance causal Bearing.
-- Route candidate completion through the intrascan service.
+- Keep production Compass, Orientation, execution, commit, rollback, and
+  candidate ordering byte-for-byte equivalent to Stage 4.
+- Classify exact attempted pulse windows as `BEFORE_ASSERTION`,
+  `BEFORE_CONSUMER`, `LATER_SCAN`, `DURATION`, or `UNKNOWN`.
+- Prove that a surviving level, latch, state, or newly exposed steerable
+  frontier produces `LATER_SCAN` and never invokes composition merely because
+  the final target did not move.
+- Derive `BEFORE_ASSERTION` only from an exact prior occurrence or owner-bound
+  hidden-state receipt. A same-scan assignment must not masquerade as a phase
+  which had to be established earlier.
+- Derive `BEFORE_CONSUMER` from one exact transient producer/consumer window,
+  including pulse consumption, false consumer leaves, overwrite,
+  displacement, and reset.
+- Classify timer/counter bases and autonomous operations as `DURATION` through
+  their existing instruction owners rather than widening them into pulses.
+- In shadow, nominate only producer-local missing steerable leaves. Keep `AND`
+  shapes conjunctive and `OR` branches lazy; do not execute a Cartesian search
+  or preflight unrelated Compass candidates.
+- Add counters asserting zero intrascan forks for successful/durable ordinary
+  trials and a fixed local bound for one qualifying ineffective pulse.
+- Assert identical production Bearings, events, checkpoints, and worlds with
+  shadow temporal diagnosis enabled or disabled.
+
+### Stage 6 - Give WorkingTheory ownership of temporal pulse refinement
+
+- Add a detached `TheoryView` to navigation constraints, but keep Compass as a
+  fresh reader which returns one ordinary next Bearing rather than a proved
+  composite.
+- Open a controlling theory only when an exact ineffective pulse produces an
+  actionable temporal obligation which must persist across attempts or a
+  setup detour.
+- Give WorkingTheory the exact rollback root, immutable versions, unresolved
+  temporal requirements, one accepted provisional tip, and detached attempt
+  history. It retains why the original steer is being retried, never the steer
+  itself.
+- For `BEFORE_ASSERTION`, restore the exact phase source, let Compass establish
+  one ordinary durable setup, accept it as a provisional tip, and orient
+  freshly. If the original scalar steer is exposed again, treat it as a new
+  semantic attempt because its tip/version/evidence changed.
+- For `BEFORE_CONSUMER`, let the intrascan service execute one bounded
+  producer-local composite on an exact fork. Pass that already-executed
+  candidate landing through the normal verification continuation and, if
+  accepted, adopt that exact world without replay.
+- For `LATER_SCAN`, retain the ordinary landing and move forward without
+  opening a composition theory or reverting useful state.
+- For `DURATION`, retain only the owner-declared phase evidence and ask Compass
+  again; detailed rearm and autonomous-continuation ownership remains Stage 8.
+- Suppress only a byte-identical semantic attempt at the identical root/tip,
+  version, requirements, deadlines, and physical act. A repeated scalar steer
+  under a refined theory or newer tip is not a duplicate.
+- Refine when a failed retry exposes genuinely new exact evidence. When every
+  known requirement is discharged, the steer remains ineffective, and no new
+  requirement, sibling explanation, or untried semantic attempt remains,
+  abandon the falsified theory and restore its root.
 - Split theory-local expectation failures from theory-independent Compass act
-  nogoods.
+  nogoods. Empirical exhaustion or budget exit abandons only the exact theory
+  version and never proves the act globally impossible.
 - Split read-only `chart_roles` discovery from opaque `pipeline_roles`, then
-  split that static discovery from live orientation admission. Discover
-  stepper channels once per drive from `SteppingEvidence`, including direct
-  state writers and roles without request tags; admit relevant edges per target
-  and TheoryClaim without a current-target-only exception or opacity
-  requirement.
-- Materialize each selected chart edge's complete producer guard through the
-  intrascan service before it becomes a Bearing. Preserve structured-chart
-  precedence over broad raw Trace within the selected claim.
-- Activate first-edge-only route exclusion under exact theory/version scope.
-- Retain all-edge rejection only for persistent requirement incompatibility,
-  and prove opaque chart behavior remains unchanged as a subset.
-- Keep the public orientation union unchanged.
+  split static discovery from live admission. Chart edges remain ordinary
+  executable candidates; only their exact failed trials may enter temporal
+  diagnosis. Preserve structured-chart precedence without pre-executing every
+  edge.
+- Activate first-edge-only route exclusion under exact theory/version/source
+  scope after an exact attempted edge, not after speculative preflight.
+- Keep the public orientation union unchanged and add an internal
+  already-executed-candidate verification seam analogous to investigation.
 
-### Stage 6 - Transfer checkpoint-local failed-effect recovery
+### Stage 7 - Transfer checkpoint-local failed-effect recovery
 
-- Transfer minimum root/provisional-tip ownership now: WorkingTheory chooses
-  exact source restoration, accepts or rejects `_transition_once`'s judged
-  landing as its provisional tip, and alone promotes a stable landing.
+- Extend the Stage 6 root/provisional-tip owner to checkpoint-local recovery:
+  WorkingTheory chooses exact source restoration, accepts or rejects
+  `_transition_once`'s judged landing as its provisional tip, and alone
+  promotes a stable landing.
 - Replace `_repair_one_active_requirement` and `_nested_guard_act` with theory
-  refinement plus Compass/Intrascan closure.
+  refinement plus fresh Compass orientation and narrowed intrascan retries.
 - Make `_source_requirements`, receipt replacement, schedules, and dedupe keys
   theory-aware so separate claims at one checkpoint cannot mix.
 - Convert bootstrap and historical program-guard prevention into ordinary
@@ -633,9 +756,9 @@ ownership transfer while the current stage has unexplained new failures.
   composition, current-blocker replay, and any remaining historical suffix
   owner after their evidence contracts pass through the common path.
 
-### Stage 7 - Transfer cross-scan phases and autonomous continuation
+### Stage 8 - Transfer cross-scan phases and autonomous continuation
 
-- Extend the Stage 6 root/tip owner with immutable progress snapshots and
+- Extend the Stage 7 root/tip owner with immutable progress snapshots and
   append-only cross-scan phase receipts.
 - Model one-shot rearm and program-owned boundaries as `NEEDS_PHASE`, followed
   by a fresh Compass read from the proved tip.
@@ -656,7 +779,7 @@ ownership transfer while the current stage has unexplained new failures.
 - Replace `_RecoveryContinuation` with theory phase receipts.
 - Promote only stable proved landings to global checkpoints.
 
-### Stage 8 - Subsume departure, regression, and investigation orchestration
+### Stage 9 - Subsume departure, regression, and investigation orchestration
 
 - Refactor progress/departure/investigation entry points to return typed facts
   or refinements instead of committing, reverting, or recursively retrying.
@@ -667,7 +790,7 @@ ownership transfer while the current stage has unexplained new failures.
 - Delete `_investigate_and_revert` and the remaining special recovery loops only
   after equivalent event and acceptance coverage is green.
 
-### Stage 9 - Harden lifetime, diagnostics, and pruning
+### Stage 10 - Harden lifetime, diagnostics, and pruning
 
 - Add explicit PilotRung supersession/revocation receipts without removing
   rungs merely because a theory closed.
@@ -694,29 +817,56 @@ ownership transfer while the current stage has unexplained new failures.
 
 ### Intrascan contracts
 
-- Later writer overwrites the selected value.
-- Consumer reads the selected value but another guard input has the wrong
-  same-scan source.
-- Selected producer is absent because an earlier writer changed its guard.
+- A persistent level with no edge-sensitive or duration-owned consumer remains
+  useful on the following scan, invokes no retry search, and is not reverted.
+- A newly exposed durable steerable frontier is ordinary forward progress even
+  when target distance is unchanged.
+- A timer/counter base produces `DURATION` and uses hold/coast rather than a
+  widened pulse.
+- A prior scan which armed, cleared, selected, or foreclosed the pulse produces
+  `BEFORE_ASSERTION`; a same-scan co-action is rejected as too late.
+- A consumed pulse whose exact consumer has one false steerable guard leaf
+  produces a `BEFORE_CONSUMER` retry shape.
+- A later writer overwrite, displacement, or reset retains the exact deadline
+  and harmful occurrence.
+- A selected producer made absent by an earlier write follows exact sources to
+  the responsible temporal requirement.
 - Recursive deadline inversion terminates only on strictly earlier ordinals.
-- Two- and three-component overlays are required for one witness.
-- Conflicting assignments reject only that composite attempt.
+- Missing `AND` leaves remain conjunctive; `OR` siblings are tried lazily one
+  at a time without a Cartesian product.
+- Conflicting assignments reject only that exact retry attempt.
 - Repeated subroutine calls and branch occurrences retain dynamic identity.
-- Incomplete projections and folded windows never prove success or prevention.
-- Finite enumeration finds a witness but exact projection is still required.
+- Incomplete projections and folded windows never establish a deadline,
+  success, or prevention.
+- One narrowed composite executes exactly once. Normal verification judges the
+  same fork, and an accepted landing is adopted without replay.
+- A locally coherent candidate rejected by an ordinary avoid, effect, safety,
+  or dead-end gate is discarded and never becomes a provisional tip.
 - Budget exhaustion produces no impossibility proof.
-- Direct and opaque chart edges both require exact producer/consumer witnesses;
-  a statically plausible endpoint is insufficient.
+- Direct and opaque chart edges are tried as ordinary candidates; temporal
+  retry begins only from their exact failed execution evidence.
+- Successful/durable ordinary trials perform zero intrascan forks, and one
+  qualifying failure cannot multiply trace, chart, and retry budgets.
 
 ### Theory lifecycle
 
 - Immutable versions strengthen only on new exact evidence.
 - Different Bearings under one version create attempts, not versions.
 - Only one theory owns the provisional tip.
+- An executed intrascan candidate is not a tip until ordinary verification
+  accepts it; acceptance adopts the already-executed world without replay.
 - Abandon restores the root and tombstones only the exact version.
 - Prove promotes the full `_World`, including PilotRungs.
 - A later regression creates a successor rather than mutating a closed theory.
 - No stale Bearing or action suffix survives a world observation.
+- A freshly rediscovered scalar steer at a newer provisional tip or refined
+  version is a new semantic attempt; the identical steer at the identical
+  tip/version/requirements/deadlines is suppressed.
+- Establishing a prior setup advances the theory but never queues the original
+  pulse; Compass must expose it again from the new tip.
+- If all known requirements are discharged and the steer still fails without
+  new exact evidence or an untried explanation, the theory is abandoned as
+  falsified.
 - Theory-relative failure does not create a global Compass nogood.
 - Exact one-shot identity survives into phase receipts; a proved false rearm
   scan and fresh reread separate release from assertion.
@@ -753,19 +903,21 @@ ownership transfer while the current stage has unexplained new failures.
 - Exhaustion never repeats an identical semantic attempt and never promotes an
   empirical failure to a nogood.
 - Direct target charts and non-target theory-channel charts are admitted by the
-  same rule, compose multi-input guards, preserve chart-over-broad-trace
-  precedence, reject a failed wildcard only as the current first move, and
-  retain parity with the existing opaque chart fixtures.
+  same rule, preserve chart-over-broad-trace precedence, and are tried once
+  before exact temporal evidence nominates a narrowed multi-input retry. A
+  failed wildcard is rejected only as the current first move, with parity to
+  the existing opaque chart fixtures.
 - Motivating external acceptance: from a pristine scan-0 PLC,
-  `how(HeelStep == 81)` reaches 81 by composing the several top-of-scan
-  PRODUCE/PREVENT requirements exposed by the exact execution window,
-  preserving the completion invariant, and following the conductive stepper
-  route. This names the real case only at the end-to-end boundary.
+  `how(HeelStep == 81)` reaches 81 by preserving durable intermediate state,
+  establishing any prior temporal setup as its own phase, and retrying only
+  the exact transient pulse whose same-scan consumer exposes missing
+  PRODUCE/PREVENT requirements. This names the real case only at the
+  end-to-end boundary.
 - Repository acceptance expresses the same mechanics with neutral names and
-  generic stepper semantics. It must require one atomic scan-0 overlay with
-  multiple independent requirements, reject later same-scan overwriters, and
-  continue across timer/program-owned boundaries without any Heel-specific
-  tags or machine concepts.
+  generic stepper/producer/consumer semantics. It must distinguish persistent
+  later-scan progress, prior setup, same-scan retry, and owner-held duration;
+  reject later same-scan overwriters; and contain no customer-specific tags,
+  machine concepts, or external paths.
 - Tumbler golden comparison at every stage which changes orientation ordering
   or event output.
 
@@ -774,14 +926,21 @@ ownership transfer while the current stage has unexplained new failures.
 The migration is complete when:
 
 - `_pilot_loop_events` has one theory-centered repetition path;
-- Compass is the only producer of the next complete Bearing;
-- the intrascan service is the only owner of bounded one-scan closure;
+- Compass is the only producer of one fresh ordinary next Bearing;
+- the intrascan service is the only owner of exact pulse-window diagnosis and
+  bounded same-scan retry execution;
+- ordinary successful/durable trials bypass intrascan search entirely;
+- a narrowed composite is executed once, verified on that exact fork, and
+  adopted without replay only after acceptance;
 - WorkingTheory is the only owner of refinement, provisional tips, restoration,
   promotion, abandonment, and successor creation;
 - progress, departure, investigation, and recovery modules report evidence but
   do not run competing orchestration loops;
 - exact positive/negative occurrences and requirement deadlines determine
   acceptance;
+- useful later-scan state is retained, prior deadlines become separate phases,
+  same-scan deadlines become narrowed retries, and duration remains with its
+  instruction owner;
 - no queued action, retained suffix, or predicted world survives an
   observation;
 - `make lint` and `make test-pilot` pass, including Tumbler and the Heel
