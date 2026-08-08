@@ -40,6 +40,37 @@ These are separate escalation boundaries. Extending a partial trace is not the
 same decision as accepting a trial, and accepting a trial is not the same
 decision as retaining its world.
 
+### The Compass instrument panel
+
+Compass does not replace PILOT's specialized readers with one monolithic
+reasoner. It is the persistent navigation-knowledge facade and the entry point
+for one fresh current-world orientation. Several instruments may contribute to
+that read:
+
+| Question | Evidence owner |
+| --- | --- |
+| Which local condition or lever leads toward the target? | `trace.py`, static expressions, availability |
+| Which charted transition is relevant here? | navigation evidence and pipeline graphs |
+| Can one exact program operation advance under otherwise-unchanged controls? | `program_step.py`, `AdvanceProfile`, `AdvanceIndex` |
+| Is the program genuinely stopped at an external handoff? | `program_step.py`, awaited-action evidence |
+| What has already worked or failed in this executable world? | `CompassKnowledge` |
+| What must the next experiment respect? | avoid, active requirements, holds, and an optional theory view |
+| Is the frontier unreadable without isolated experimentation? | `skiff.py` |
+
+`options.py` materializes these readings into one `CandidateRead`, and
+`orientation.py` applies the explicit current-world precedence to return one
+`Bearing | NeedProbe | Stuck`. The readers contribute facts; none chooses an
+action alone. They need not form a rigid fallback stack, and every complete
+read expires after the next observation.
+
+`program_step.py` asks a narrower question than whether the whole target will
+eventually be reached. For one exact selected producer or instruction-owned
+operation, it reads whether unchanged controls mean `KEEP_RUNNING`,
+`NEEDS_INPUT`, `INTERRUPTED`, or `UNCLEAR`. Its coast, handoff, and interruption
+evidence remains part of every relevant fresh orientation, including one read
+from a WorkingTheory's accepted provisional state. WorkingTheory does not
+privately decide whether to act or let the program run.
+
 ## The three escalation questions
 
 ### 1. Can PILOT read what should happen next?
@@ -105,6 +136,15 @@ fork. All modes converge on `verify.py`:
 6. A rejected act records its observations and exact world-scoped nogood, then
    returns to orientation. PILOT never advances to a sibling from a retained
    candidate list.
+
+The executed steer is the shared evidence source for this judgment. Its
+before/assertion/after snapshots, owner-bound ordered projection, effect
+observations, gate results, and outcome are reused by every reader that needs
+them. A reader does not fork and rerun the steer merely to answer whether a
+producer appeared, a consumer saw it, or a later write overwrote it. If an
+accepted landing needs later scans to establish durability, `progress.py`
+consumes those normal real monitoring observations; it does not replay the
+original steer. Missing shared evidence stays unresolved.
 
 `overlay.py`, `pulse.py`, and `coast.py` implement the executable intervention
 and observation receipts used by this layer. `cyclefold.py` may accelerate a
