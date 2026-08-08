@@ -232,6 +232,7 @@ def _accepted_trial(
         effect_observations=tuple(
             observation.diagnostic_snapshot() for observation in attempt.effect_observations
         ),
+        replay_motion=pulse.replay_motion,
     )
     return _AcceptedTrial(
         attempt=attempt,

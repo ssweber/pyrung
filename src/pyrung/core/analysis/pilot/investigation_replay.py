@@ -26,8 +26,8 @@ from pyrung.core.analysis.pilot.causal import (
 )
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
+    AVOID,
     _coast_holding_state,
-    _coast_to_value,
     _settle_delayed_effects,
 )
 from pyrung.core.analysis.pilot.constrained_reachability import (
@@ -81,6 +81,11 @@ class ReplayStep:
     kind: str
     channel_tag: str | None = None
     channel_target: Any = None
+    channel_boundary: Any = None
+    # Original scan interval, retained so replay can distinguish the committed
+    # prefix from the one physical operation that produced an incident.
+    scan_before: int | None = None
+    scan_after: int | None = None
 
 
 def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
@@ -92,15 +97,29 @@ def _replay_step(step: _Step, context: _StepContext) -> ReplayStep:
         MotionKind.COAST_HOLDING_WORLD: "letrun",
     }[context.policy.motion]
     channel_motion = context.execution.channel_motion
-    if kind == "bearing_coast" and channel_motion.channel_tag is None:
+    replay_motion = context.execution.replay_motion
+    if not replay_motion.active:
+        replay_motion = channel_motion
+    if kind == "bearing_coast" and replay_motion.channel_tag is None:
         kind = "dwell"
     return ReplayStep(
         inputs=tuple(step.inputs.items()),
         scans=step.scans,
         kind=kind,
-        channel_tag=channel_motion.channel_tag,
-        channel_target=channel_motion.target_value,
+        channel_tag=replay_motion.channel_tag,
+        channel_target=replay_motion.target_value,
+        channel_boundary=replay_motion.boundary,
+        scan_before=getattr(step, "scan_before", None),
+        scan_after=getattr(step, "scan_after", None),
     )
+
+
+def _step_owns_departure(step: ReplayStep, witness: RegressionWitness | None) -> bool:
+    """Whether *step*'s recorded operation contains the incident transition."""
+
+    if witness is None or step.scan_before is None or step.scan_after is None:
+        return False
+    return step.scan_before < witness.departure_scan <= step.scan_after
 
 
 def _deviation_bearing(
@@ -747,6 +766,7 @@ def build_replay_fn(
         probe_pilot_rungs.extend(_pilot_rungs_from_proposals(list(holds), scope))
         _set_pilot_rungs(probe, probe_pilot_rungs)
         session = CoastSession(probe, kind="replay", kernel_budget=False)
+        session.arm_avoid(getattr(ctx, "avoid_pred", None))
         eject_receipt: Any = None
         if bearing_channel_tag is not None:
             session.arm_pens((bearing_channel_tag,))
@@ -763,19 +783,43 @@ def build_replay_fn(
                     session=session,
                 )
             elif step.kind == "bearing_coast" and step.channel_tag is not None:
-                eject_receipt = _coast_to_value(
+                # Replay the operation that was physically attempted, not the
+                # semantic channel later selected to own its ejection.  The
+                # incident channel becomes an additional departure trigger
+                # only for the recorded operation that produced it.  Earlier
+                # operations are the committed prefix and must reach their own
+                # boundaries before the incident watch is armed.
+                from pyrung.core.analysis.pilot.steer import (
+                    _coast_to_bearing,
+                    _terminal_target_trigger,
+                )
+
+                _trajectory, eject_receipt = _coast_to_bearing(
                     probe,
                     step.channel_tag,
                     step.channel_target,
-                    budget=(
-                        max(1, step.scans) if regression_witness is not None else _COAST_BUDGET
-                    ),
+                    watched_tags=frozenset(),
                     session=session,
+                    boundary=step.channel_boundary,
+                    terminal_target=_terminal_target_trigger(probe, ctx.target),
+                    departure_tags=(
+                        tuple(replay_watch_roles)
+                        if _step_owns_departure(step, regression_witness)
+                        else ()
+                    ),
+                    budget=(max(1, step.scans) if regression_witness is not None else None),
                 )
             else:
                 session.dwell(max(1, step.scans))
         incident_replay_end = probe.state.scan_id
         snap = dict(probe.state.tags)
+        avoid_fired = any(event.kind == AVOID for event in session.events)
+        terminal_reached = not avoid_fired and target_reached(
+            snap,
+            target_tag,
+            target_value,
+            ctx.target.predicate,
+        )
         proposal_tags = {_candidates._proposal_pair(hold)[0] for hold in holds}
         replacement_incident: DeviationIncident | None = None
         replacement_witness: RegressionWitness | None = None
@@ -821,19 +865,34 @@ def build_replay_fn(
             and earned_work.receipt(regression_progress_floor, snap).movement
             is EarnedWorkMovement.BACKWARD
         )
-        neutralized = ownership is not None and ownership.neutralized and not progress_erased
+        # Equal channel values do not make two departures the same occurrence.
+        # If the replacement writer belongs to a world that has advanced beyond
+        # the recorded incident's earned-work floor, it is a later program
+        # occurrence (for example, the genuine station Hold after a repaired
+        # premature Hold).  Do not recursively compose a correction for it.
+        replacement_after_progress = (
+            replacement_witness is not None
+            and replacement_witness.owner_snapshot is not None
+            and earned_work is not None
+            and regression_progress_floor is not None
+            and earned_work.receipt(
+                regression_progress_floor,
+                replacement_witness.owner_snapshot,
+            ).movement
+            is EarnedWorkMovement.FORWARD
+        )
+        neutralized = (
+            ownership is not None
+            and (ownership.neutralized or replacement_after_progress)
+            and not progress_erased
+        )
         source_preserved = ownership is not None and ownership.source_preserved
         continuation_snapshot = snap
         continuation: FrontierStatus = Unknown(
             "bounded replay did not witness the target",
             ((target_tag, target_value),),
         )
-        if target_reached(
-            snap,
-            target_tag,
-            target_value,
-            ctx.target.predicate,
-        ):
+        if terminal_reached:
             continuation = Reachable(("actual-target-witness",))
         elif neutralized and prove_continuation:
             continuation_receipt = _coast_holding_state(
@@ -887,8 +946,10 @@ def build_replay_fn(
             )
 
         if bearing_channel_tag is not None:
-            reached = terminal_letrun_role_tags is None and _values_match(
-                snap.get(bearing_channel_tag), bearing_target_value
+            reached = (
+                not avoid_fired
+                and terminal_letrun_role_tags is None
+                and _values_match(snap.get(bearing_channel_tag), bearing_target_value)
             )
             neutralized_reason = None
             if neutralized and regression_witness is not None:
@@ -929,7 +990,9 @@ def build_replay_fn(
                 )
             )
             accepted = (
-                earned_work_advanced or (not cause_repeated and (reached or progressed is not None))
+                terminal_reached
+                or earned_work_advanced
+                or (not cause_repeated and (reached or progressed is not None))
             ) and not progress_erased
             return _remember(
                 ReplayOutcome(
@@ -982,13 +1045,14 @@ def build_replay_fn(
                         if ownership is not None
                         and replacement_incident is not None
                         and replacement_witness is not None
+                        and not replacement_after_progress
                         else None
                     ),
                 )
             )
 
         if terminal_letrun_role_tags is not None:
-            reached = _values_match(snap.get(target_tag), target_value)
+            reached = terminal_reached
             return _remember(
                 ReplayOutcome(
                     accepted=reached,

@@ -573,6 +573,31 @@ def execute(
 # ---------------------------------------------------------------------------
 
 
+def _terminal_target_trigger(work: PLC, target: Any) -> CoastTrigger:
+    """Build the exact user-target trigger shared by live and replay coasts."""
+
+    if target.predicate is None:
+        return value_trigger(
+            work,
+            "global-target",
+            TARGET,
+            target.tag,
+            target.value,
+        )
+    return predicate_trigger(
+        "global-target",
+        TARGET,
+        lambda current: target_reached(
+            current.tags,
+            target.tag,
+            target.value,
+            target.predicate,
+        ),
+        condition=_atom_condition(work, target.predicate),
+        watched=(target.tag,),
+    )
+
+
 def _try_bearing_coast(
     bearing: Bearing,
     frame: _IterationFrame,
@@ -599,6 +624,7 @@ def _try_bearing_coast(
     target_value = heading.target_value if heading is not None else None
     boundary = heading.boundary if heading is not None else None
     route_channel_tag = route.channel_tag if route is not None else None
+    replay_motion = ChannelMotion(channel_tag, target_value, boundary)
     fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
@@ -613,27 +639,7 @@ def _try_bearing_coast(
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
-    if ctx.target.predicate is None:
-        global_target_trigger = value_trigger(
-            fork,
-            "global-target",
-            TARGET,
-            ctx.target.tag,
-            ctx.target.value,
-        )
-    else:
-        global_target_trigger = predicate_trigger(
-            "global-target",
-            TARGET,
-            lambda current: target_reached(
-                current.tags,
-                ctx.target.tag,
-                ctx.target.value,
-                ctx.target.predicate,
-            ),
-            condition=_atom_condition(fork, ctx.target.predicate),
-            watched=(ctx.target.tag,),
-        )
+    global_target_trigger = _terminal_target_trigger(fork, ctx.target)
     dwell, bearing_coast_receipt = _coast_to_bearing(
         fork,
         channel_tag,
@@ -722,6 +728,7 @@ def _try_bearing_coast(
             verify_target,
             boundary,
         ),
+        replay_motion=replay_motion,
         source_snap=snap_before,
     )
 
@@ -1014,6 +1021,7 @@ def _coast_to_bearing(
     route_channel_tag: str | None = None,
     terminal_target: CoastTrigger | None = None,
     departure_tags: tuple[str, ...] = (),
+    budget: int | None = None,
 ) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -1041,7 +1049,7 @@ def _coast_to_bearing(
             None,
         )
 
-    budget = _COAST_BUDGET
+    coast_budget = _COAST_BUDGET if budget is None else max(1, budget)
     held_tags = list(dict.fromkeys(departure_tags))
     if route_channel_tag is not None and route_channel_tag not in held_tags:
         held_tags.append(route_channel_tag)
@@ -1055,8 +1063,12 @@ def _coast_to_bearing(
         from pyrung.core.instruction.advance import constraint_holds
 
         estimate = estimate_owned_boundary_scans(work, boundary)
-        if estimate is not None:
-            budget = max(budget, estimate + 2)
+        # Live steering owns a generous seek and may extend it to a statically
+        # estimated boundary. Incident replay supplies its recorded occurrence
+        # horizon explicitly; a counterfactual that makes the distant boundary
+        # unreachable must not turn that bounded proof into a fresh long coast.
+        if estimate is not None and budget is None:
+            coast_budget = max(coast_budget, estimate + 2)
         heading_target = predicate_trigger(
             "target",
             TARGET,
@@ -1076,7 +1088,7 @@ def _coast_to_bearing(
         work,
         heading_target,
         tuple(held_tags),
-        budget=budget,
+        budget=coast_budget,
         session=session,
         extra_triggers=((terminal_target,) if terminal_target is not None else ()),
         departure_excluding=departure_excluding,

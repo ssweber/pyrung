@@ -371,6 +371,37 @@ def test_held_dry_route_chooses_unhold_not_start(tumbler_logic) -> None:
     pytest.fail("PILOT did not produce a HELD/Step101 candidate reading")
 
 
+def test_completed_first_door_incident_replays_the_rotate_boundary(tumbler_logic) -> None:
+    """A route-less Rotate coast still exposes and composes both door causes."""
+
+    plc = PLC(tumbler_logic)
+    plc.step()
+    tags = plc._known_tags_by_name
+    avoid_pred = _compile_avoid(tags["Cmd_State_Complete"])
+    deadline = time.monotonic() + 45.0
+    for event in pilot_events(
+        plc,
+        tags["Sts_State_Completed"],
+        max_scans=INTERNAL_ROUTE_MAX_SCANS,
+        avoid_pred=avoid_pred,
+    ):
+        if event.kind != "trend_regression":
+            assert time.monotonic() <= deadline, "first Completed incident exceeded 45s"
+            continue
+        confirmed = event.data["investigation"]["confirmed_detail"]
+        door = next(
+            hypothesis for hypothesis in confirmed if hypothesis.get("kind") == "latch-exposure"
+        )
+        rungs = tuple(door["holds"])
+        assert {rung.dest for rung in rungs} == {
+            "x_DoorClosed",
+            "x_LintDoorClosed",
+        }
+        assert all("Sts_State_Execute" in repr(rung.guard) for rung in rungs)
+        return
+    pytest.fail("Completed drive produced no first door regression")
+
+
 def test_pilot_internal_route_progress_skeleton(tumbler_logic) -> None:
     """Lock the cold avoided-Complete drive to the real completion signal.
 

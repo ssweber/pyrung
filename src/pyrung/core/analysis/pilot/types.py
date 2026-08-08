@@ -671,6 +671,11 @@ class _ExecutionEvidence:
     coast_receipt: CoastReceipt | None
     timeline: tuple[CoastTriggerEvent, ...]
     effect_observations: tuple[EffectObservationSnapshot, ...] = ()
+    # The coast operation navigation actually executed.  ``channel_motion``
+    # may be rebound to the semantic channel that owned an ejection; replay
+    # must still seek this original boundary while watching that incident
+    # channel for another departure.
+    replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
@@ -1081,6 +1086,9 @@ class _PulseState:
     # its ActPolicy, but only a physical coast can identify a terminal
     # departure or choose between an inner boundary and its outer route edge.
     channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
+    # Original operation boundary for causal replay.  Unlike
+    # ``channel_motion``, this is never rebound to an ejection channel.
+    replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
     # Snapshot immediately before this act's first owned kernel scan.  This is
     # the execution-window entry value needed to distinguish a whole-window
     # zero-net excursion from ordinary non-zero channel motion without replaying

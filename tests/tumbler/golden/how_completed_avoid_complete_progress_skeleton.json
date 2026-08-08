@@ -1518,197 +1518,12 @@
   "reason": "advance Rotate_tmr_Acc to its next boundary 4"
  },
  {
-  "gates": [
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "empty frontier, no pending effects",
-    "event": "dead-end"
-   }
-  ],
-  "kind": "bearing_coast_rejected"
- },
- {
-  "distance": 16,
-  "kind": "iteration",
-  "nogoods": [],
-  "raw_trace_actions": [
-   [
-    "x_BlowerFB",
-    true
-   ],
-   [
-    "x_RotateFB",
-    true
-   ]
-  ],
-  "still_need": [
-   "Sts_State_Completed=True (have False)",
-   "Sts_StateCurrent=17 (have 3)",
-   "Sts_StateRequested=17 (have 0)",
-   "Sts_StateCompleteFlag=True (have False)",
-   "Sts_StateCompleteBool=1 (have 0)",
-   "Blower__init=1 (have 0)",
-   "Rotate__init=1 (have 0)",
-   "Blower_CurStep=2 (have 0)",
-   "Blower__x=1 (have 0)",
-   "Rotate_CurStep=2 (have 1)",
-   "Blower_Trans=1 (have 0)",
-   "Blower_xCall=1 (have 0)",
-   "Rotate_Trans=1 (have 0)",
-   "Blower_CurStep=1 (have 0)",
-   "i_BlowerFB=True (have False)",
-   "i_RotateFB=True (have False)"
-  ],
-  "target": [
-   "Sts_State_Completed",
-   true
-  ],
-  "watch_tags": [
-   "Cmd_UnitMode",
-   "Cmd_UnitModeChgReqBool",
-   "Sts_StateCurrent",
-   "Sts_StateRequested",
-   "Sts_State_Completed",
-   "Sts_UnitModeCurrent",
-   "Blower_CurStep",
-   "Blower_Trans",
-   "Blower__init",
-   "Blower__x",
-   "Blower_xCall",
-   "Rotate_CurStep",
-   "Rotate_Trans",
-   "Rotate__init",
-   "Sts_StateCompleteBool",
-   "Sts_StateCompleteFlag",
-   "i_BlowerFB",
-   "i_RotateFB"
-  ]
- },
- {
-  "active_trace_actions": [],
-  "candidates": [],
-  "completion_frontier": [
-   [
-    "x_BlowerFB",
-    true
-   ],
-   [
-    "x_RotateFB",
-    true
-   ],
-   [
-    "Sts_StateCompleteFlag",
-    true
-   ],
-   [
-    "Sts_StateCompleteBool",
-    1
-   ],
-   [
-    "Blower__init",
-    1
-   ],
-   [
-    "Rotate__init",
-    1
-   ],
-   [
-    "Blower_CurStep",
-    2
-   ],
-   [
-    "Blower__x",
-    1
-   ],
-   [
-    "Rotate_CurStep",
-    2
-   ],
-   [
-    "Blower_Trans",
-    1
-   ],
-   [
-    "Blower_xCall",
-    1
-   ],
-   [
-    "Rotate_Trans",
-    1
-   ],
-   [
-    "Blower_CurStep",
-    1
-   ],
-   [
-    "i_BlowerFB",
-    true
-   ],
-   [
-    "i_RotateFB",
-    true
-   ]
-  ],
-  "kind": "candidates_built",
-  "route_candidates": [],
-  "route_plan": {
-   "channel_tag": "Sts_StateCurrent",
-   "needed": [
-    "Sts_StateCurrent",
-    17
-   ],
-   "path": [
-    {
-     "action": null,
-     "enablers": [],
-     "from": 3,
-     "request": [
-      "Sts_StateRequested",
-      6
-     ],
-     "to": 6
-    },
-    {
-     "action": null,
-     "enablers": [],
-     "from": 6,
-     "request": [
-      "Sts_StateRequested",
-      16
-     ],
-     "to": 16
-    },
-    {
-     "action": null,
-     "enablers": [],
-     "from": 16,
-     "request": [
-      "Sts_StateRequested",
-      17
-     ],
-     "to": 17
-    }
-   ],
-   "target_value": 17
-  },
-  "stuck_reason": null,
-  "trace_actions": [],
-  "wait_prescribed": true,
-  "wait_reason": "let-run Sts_StateCurrent: 3->6"
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "kind": "bearing_coast",
-  "prescribed": true,
-  "reason": "let-run Sts_StateCurrent: 3->6"
- },
- {
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
   "bearing_coast_actual_value": 8,
   "bearing_coast_channel_tag": "Sts_StateCurrent",
-  "bearing_coast_target_value": 6,
+  "bearing_coast_target_value": 3,
   "bearing_stop_reason": "departed",
   "ejected": true,
   "kind": "bearing_coast_accepted",
@@ -1729,7 +1544,7 @@
   "kind": "letrun_ejection",
   "observe_label": "bearing_coast",
   "reason": null,
-  "requested_value": 6,
+  "requested_value": 3,
   "to_value": 8
  },
  {
