@@ -23,13 +23,17 @@ from pyrung.core.analysis.pilot.causal import action_caused_change as _action_ca
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
     LIMITS,
+    TARGET,
     CoastReceipt,
     CoastSession,
+    CoastTrigger,
     _coast_holding_state,
-    _coast_to_value,
+    _coast_until,
     _has_pending_effects,
     _settle_delayed_effects,
     coast_departure_tags,
+    predicate_trigger,
+    value_trigger,
 )
 from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
 from pyrung.core.analysis.pilot.effects import expectation_from_writer, observe_execution_window
@@ -43,6 +47,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
+    _atom_condition,
     _constraint_condition,
     _merged_pilot_rungs,
     fork_with_pilot_rungs,
@@ -193,6 +198,7 @@ def _apply_actions(
 
     fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
+    source_snap = dict(fork.state.tags)
     session = CoastSession(
         fork,
         kind="pulse",
@@ -270,6 +276,7 @@ def _apply_actions(
         coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
+        source_snap=source_snap,
     )
 
 
@@ -606,6 +613,27 @@ def _try_bearing_coast(
     )
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
+    if ctx.target.predicate is None:
+        global_target_trigger = value_trigger(
+            fork,
+            "global-target",
+            TARGET,
+            ctx.target.tag,
+            ctx.target.value,
+        )
+    else:
+        global_target_trigger = predicate_trigger(
+            "global-target",
+            TARGET,
+            lambda current: target_reached(
+                current.tags,
+                ctx.target.tag,
+                ctx.target.value,
+                ctx.target.predicate,
+            ),
+            condition=_atom_condition(fork, ctx.target.predicate),
+            watched=(ctx.target.tag,),
+        )
     dwell, bearing_coast_receipt = _coast_to_bearing(
         fork,
         channel_tag,
@@ -614,6 +642,8 @@ def _try_bearing_coast(
         session=session,
         boundary=boundary,
         route_channel_tag=route_channel_tag,
+        terminal_target=global_target_trigger,
+        departure_tags=coast_departure_tags(state, ctx),
     )
 
     snap_after = dict(fork.state.tags)
@@ -647,16 +677,32 @@ def _try_bearing_coast(
         )
         wait_before = wait_after
 
-    departed_route = (
-        bearing_coast_receipt is not None
-        and bearing_coast_receipt.stop_reason == "departed"
-        and route is not None
-    )
+    departed = bearing_coast_receipt is not None and bearing_coast_receipt.stop_reason == "departed"
     verify_channel = channel_tag
     verify_target = target_value
-    if departed_route and route is not None:
-        verify_channel = route.channel_tag
-        verify_target = route.target_value
+    if departed:
+        departure_transitions = bearing_coast_receipt.departure_transitions
+        # A single scan can move both a table-derived heading and the route's
+        # state register.  Every such move must terminate the coast, but the
+        # route channel is the semantic navigation boundary and therefore owns
+        # verification when it is one of the landing transitions.  Tuple order
+        # is only trigger-registration order; it is not causal precedence.
+        transition = next(
+            (
+                item
+                for item in departure_transitions
+                if route is not None and item[0] == route.channel_tag
+            ),
+            next(iter(departure_transitions), None),
+        )
+        if transition is not None:
+            verify_channel, held_value, _after = transition
+            verify_target = (
+                route.target_value
+                if route is not None and verify_channel == route.channel_tag
+                else held_value
+            )
+            boundary = None
 
     trial = _PulseState(
         fork=fork,
@@ -676,6 +722,7 @@ def _try_bearing_coast(
             verify_target,
             boundary,
         ),
+        source_snap=snap_before,
     )
 
     result = verify_gates(
@@ -827,6 +874,7 @@ def _try_terminal_letrun(
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
         channel_motion=ChannelMotion(chan_tag, chan_val),
+        source_snap=snap_before,
     )
 
     result = verify_gates(
@@ -939,6 +987,7 @@ def _try_terminal_dwell(
         key=key_after,
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
+        source_snap=snap_before,
     )
 
     # Empty actions, no channel register: the settled fork already reached the
@@ -963,6 +1012,8 @@ def _coast_to_bearing(
     *,
     boundary: Any = None,
     route_channel_tag: str | None = None,
+    terminal_target: CoastTrigger | None = None,
+    departure_tags: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], Any]:
     """Coast the live state past timer/step-counter plateaus.
 
@@ -991,28 +1042,43 @@ def _coast_to_bearing(
         )
 
     budget = _COAST_BUDGET
+    held_tags = list(dict.fromkeys(departure_tags))
+    if route_channel_tag is not None and route_channel_tag not in held_tags:
+        held_tags.append(route_channel_tag)
+    departure_excluding: dict[str, Any] = {}
+    if boundary is None and channel_tag not in held_tags:
+        held_tags.append(channel_tag)
+    if boundary is None:
+        departure_excluding[channel_tag] = target_value
+
     if boundary is not None:
         from pyrung.core.instruction.advance import constraint_holds
 
         estimate = estimate_owned_boundary_scans(work, boundary)
         if estimate is not None:
             budget = max(budget, estimate + 2)
-        receipt = _coast_holding_state(
-            work,
-            channel_tag,
-            target_value,
-            ((route_channel_tag,) if route_channel_tag is not None else ()),
-            budget=budget,
-            reached_fn=lambda state: constraint_holds(boundary, state.tags) is True,
-            reached_condition=_constraint_condition(work, boundary),
-            session=session,
+        heading_target = predicate_trigger(
+            "target",
+            TARGET,
+            lambda state: constraint_holds(boundary, state.tags) is True,
+            condition=_constraint_condition(work, boundary),
+            watched=(channel_tag,),
         )
     else:
-        receipt = _coast_to_value(
+        heading_target = value_trigger(
             work,
+            "target",
+            TARGET,
             channel_tag,
             target_value,
-            budget=budget,
-            session=session,
         )
+    receipt = _coast_until(
+        work,
+        heading_target,
+        tuple(held_tags),
+        budget=budget,
+        session=session,
+        extra_triggers=((terminal_target,) if terminal_target is not None else ()),
+        departure_excluding=departure_excluding,
+    )
     return [dict(work.state.tags)], receipt

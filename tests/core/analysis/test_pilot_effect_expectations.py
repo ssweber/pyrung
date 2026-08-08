@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass, replace
 from types import SimpleNamespace
 
-from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, rung, subroutine
+from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.coast import (
@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     observe_expectation,
     promote_terminal_target_observation,
     required_shape,
+    terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -64,6 +65,34 @@ def _terminal_obligation(program: Program, tag: str, value: object) -> EffectObl
         required_shape=(),
         producer_rung=program.rungs[0],
     )
+
+
+def test_terminal_target_replay_nomination_uses_same_scan_varied_evidence() -> None:
+    select_varied = Bool("SelectVariedTargetWrite", external=True)
+    effect = Bool("VariedTargetEffect")
+    with Program() as program:
+        with rung(~select_varied):
+            reset(effect)
+        with rung(select_varied):
+            latch(effect)
+            reset(effect)
+    plc = PLC(program)
+    plc.step()
+    plc.patch({select_varied.name: True})
+    plc.step()
+    expectation = EffectExpectation(
+        (
+            replace(
+                _terminal_obligation(program, effect.name, True),
+                producer=(None, 1, ()),
+                producer_rung=program.rungs[1],
+                terminal_target=True,
+            ),
+        )
+    )
+
+    assert terminal_target_replay_scan_ids(expectation, plc, (1,)) == ()
+    assert terminal_target_replay_scan_ids(expectation, plc, (1, 2)) == (2,)
 
 
 def test_required_shape_preserves_repeated_ordered_handoffs() -> None:

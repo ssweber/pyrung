@@ -146,6 +146,22 @@ class CoastReceipt:
             if event.kind == AVOID and event.scan == self.end_scan
         )
 
+    @property
+    def departure_transitions(self) -> tuple[tuple[str, Any, Any], ...]:
+        """Exact held-channel departures that ended this seek.
+
+        A bearing may hold several coordinates of the current world.  The
+        receipt, rather than navigation policy, owns which one actually moved
+        at the landing scan.
+        """
+
+        return tuple(
+            transition
+            for event in self.events
+            if event.kind == DEPARTURE and event.scan == self.end_scan
+            for transition in event.transitions
+        )
+
 
 def _fold_metadata(
     triggers: Iterable[CoastTrigger],
@@ -843,18 +859,46 @@ def _coast_to_value(
             budget=0,
         )
 
-    start = plc.state.tags.get(channel_tag)
-    triggers = [
+    return _coast_until(
+        plc,
         value_trigger(plc, "target", TARGET, channel_tag, target_value),
-        departure_trigger(
-            plc,
-            "ejected",
-            {channel_tag: start},
-            excluding={channel_tag: target_value},
-        ),
-    ]
+        (channel_tag,),
+        budget=budget,
+        session=session,
+        departure_excluding={channel_tag: target_value},
+    )
+
+
+def _coast_until(
+    plc: PLC,
+    target: CoastTrigger,
+    departure_tags: tuple[str, ...] = (),
+    *,
+    budget: int = _COAST_BUDGET,
+    session: Any = None,
+    extra_triggers: Iterable[CoastTrigger] = (),
+    departure_excluding: dict[str, Any] | None = None,
+) -> CoastReceipt:
+    """The single trigger-driven coast implementation.
+
+    Callers name an immediate target and may add an outer/global target.  All
+    supplied validity coordinates are held from the same start snapshot and
+    armed as one departure trigger in the same folded ``seek``.
+    """
+
+    triggers = [*extra_triggers, target]
+    if departure_tags:
+        start = {tag: plc.state.tags.get(tag) for tag in departure_tags}
+        triggers.append(
+            departure_trigger(
+                plc,
+                "ejected",
+                start,
+                excluding=departure_excluding,
+            )
+        )
     if session is None:
-        session = CoastSession(plc, kind="bearing_coast")
+        session = CoastSession(plc, kind="letrun")
     assert session.plc is plc
     return session.seek(triggers, budget=budget)
 
@@ -869,6 +913,8 @@ def _coast_holding_state(
     reached_fn: Callable[[Any], bool] | None = None,
     reached_condition: Any = None,
     session: Any = None,
+    extra_triggers: Iterable[CoastTrigger] = (),
+    departure_excluding: dict[str, Any] | None = None,
 ) -> CoastReceipt:
     """Coast toward the global target while holding the current macro-state.
 
@@ -901,14 +947,15 @@ def _coast_holding_state(
     else:
         target = value_trigger(plc, "target", TARGET, target_tag, target_value)
 
-    triggers = [target]
-    if role_tags:
-        start = {tag: plc.state.tags.get(tag) for tag in role_tags}
-        triggers.append(departure_trigger(plc, "ejected", start))
-    if session is None:
-        session = CoastSession(plc, kind="letrun")
-    assert session.plc is plc
-    return session.seek(triggers, budget=budget)
+    return _coast_until(
+        plc,
+        target,
+        role_tags,
+        budget=budget,
+        session=session,
+        extra_triggers=extra_triggers,
+        departure_excluding=departure_excluding,
+    )
 
 
 def _settle_delayed_effects(

@@ -1508,6 +1508,66 @@ def _effect_projection_scan_ids(
     return tuple(sorted(selected))
 
 
+def terminal_target_replay_scan_ids(
+    expectation: EffectExpectation,
+    fork: Any,
+    exact_scan_ids: Iterable[int],
+) -> tuple[int, ...]:
+    """Nominate exact scans that may contain a zero-net target appearance.
+
+    Cross-scan target arrival is a coast trigger and needs no reconstruction.
+    This sparse index serves only the remaining case: a writer attempted the
+    target value during one kernel scan but the scan landed elsewhere.  A
+    matching final attempted value nominates the scan directly; ``varied`` is
+    the compact evidence for one writer attempting unequal values (including
+    target-then-reset) in that same scan.
+
+    If causal retention cannot answer the question, fail closed by returning
+    the full exact set.  Soundness is preserved while the normal retained-tag
+    path avoids replaying constant non-target writes on every timer scan.
+    """
+
+    exact = tuple(sorted(set(exact_scan_ids)))
+    if not exact:
+        return ()
+    owners = tuple(fork._causal_lineage.owner_at(scan_id) for scan_id in exact)
+    if any(owner is None for owner in owners):
+        return exact
+    exact_owners = tuple(owner for owner in owners if owner is not None)
+    selected: set[int] = set()
+    for obligation in expectation.obligations:
+        if not obligation.terminal_target:
+            continue
+        retention_complete = all(
+            owner.firing_retained_tags is None or obligation.tag in owner.firing_retained_tags
+            for owner in exact_owners
+        )
+        if not retention_complete:
+            selected.update(exact)
+            continue
+        subroutine, rung_index, _branch_path = obligation.producer
+        if subroutine is None:
+            timeline_name = "rung_firing_timelines"
+            producer: int | RungId = rung_index
+        else:
+            timeline_name = "node_firing_timelines"
+            producer = RungId(subroutine, rung_index)
+        if any(
+            not getattr(owner, timeline_name).value_is_known(producer, obligation.tag)
+            for owner in exact_owners
+        ):
+            selected.update(exact)
+            continue
+        for scan_id, owner in zip(exact, exact_owners, strict=True):
+            timelines = getattr(owner, timeline_name)
+            if _values_match(
+                timelines.value_at(producer, obligation.tag, scan_id),
+                obligation.value,
+            ) or timelines.varied_on(producer, obligation.tag, scan_id):
+                selected.add(scan_id)
+    return tuple(sorted(selected))
+
+
 def observe_execution_window(
     expectation: EffectExpectation | None,
     fork: Any,

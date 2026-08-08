@@ -1081,6 +1081,11 @@ class _PulseState:
     # its ActPolicy, but only a physical coast can identify a terminal
     # departure or choose between an inner boundary and its outer route edge.
     channel_motion: ChannelMotion = field(default_factory=ChannelMotion)
+    # Snapshot immediately before this act's first owned kernel scan.  This is
+    # the execution-window entry value needed to distinguish a whole-window
+    # zero-net excursion from ordinary non-zero channel motion without replaying
+    # a projection merely to recover ``entry_tags``.
+    source_snap: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if any(

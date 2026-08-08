@@ -12,6 +12,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
+from pyrung.core.analysis.pilot.coast import TARGET, value_trigger
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -69,6 +70,26 @@ def _timer_program() -> Program:
             on_delay(Tmr, 100, "ms")
         with Rung(Tmr.Done):
             out(Done)
+    return prog
+
+
+def _competing_coast_program() -> Program:
+    """Global target and world departure both precede a slow heading."""
+    Enable = Bool("CompetingEnable", external=True)
+    GlobalTmr = Timer.clone("CompetingGlobalTmr")
+    DepartureTmr = Timer.clone("CompetingDepartureTmr")
+    HeadingTmr = Timer.clone("CompetingHeadingTmr")
+    Goal = Bool("CompetingGoal")
+    State = Int("CompetingState", default=3)
+    with Program() as prog:
+        with Rung(Enable):
+            on_delay(GlobalTmr, 30, "ms")
+            on_delay(DepartureTmr, 50, "ms")
+            on_delay(HeadingTmr, 100, "ms")
+        with Rung(GlobalTmr.Done):
+            out(Goal)
+        with Rung(DepartureTmr.Done):
+            copy(6, State)
     return prog
 
 
@@ -136,6 +157,49 @@ class TestBearingCoast:
         # Settle fallback returns the per-scan trajectory (>= floor), not the
         # single final snapshot a channel coast returns.
         assert len(snaps) >= 2
+
+    def test_global_target_preempts_the_slower_heading(self):
+        plc = PLC(_competing_coast_program(), dt=0.010)
+        plc.patch({"CompetingEnable": True})
+        plc.step()
+        terminal = value_trigger(
+            plc,
+            "global-target",
+            TARGET,
+            "CompetingGoal",
+            True,
+        )
+
+        _snaps, receipt = _coast_to_bearing(
+            plc,
+            "CompetingHeadingTmr.Done",
+            True,
+            frozenset(),
+            terminal_target=terminal,
+            departure_tags=("CompetingState",),
+        )
+
+        assert receipt.stop_reason == "reached"
+        assert "global-target" in receipt.fired
+        assert plc.state.tags["CompetingGoal"] is True
+        assert receipt.logical_scans < 9
+
+    def test_current_world_departure_preempts_the_slower_heading(self):
+        plc = PLC(_competing_coast_program(), dt=0.010)
+        plc.patch({"CompetingEnable": True})
+        plc.step()
+
+        _snaps, receipt = _coast_to_bearing(
+            plc,
+            "CompetingHeadingTmr.Done",
+            True,
+            frozenset(),
+            departure_tags=("CompetingState",),
+        )
+
+        assert receipt.stop_reason == "departed"
+        assert receipt.departure_transitions == (("CompetingState", 3, 6),)
+        assert receipt.logical_scans < 9
 
 
 class TestTerminalLetrun:

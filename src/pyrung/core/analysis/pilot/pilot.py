@@ -56,6 +56,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     promote_certified_prefix_target_observation,
     promote_terminal_target_observation,
+    terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanQuestion,
@@ -4512,34 +4513,39 @@ def _promote_transient_target_failure(
     if executed is None:
         return result, attempt
     pulse = executed.pulse
-    target_observations = observe_execution_window(
-        target_expectation,
-        pulse.fork,
-        scan_before=pulse.scan_before,
-        action_scan=(None if result.act.policy.motion.is_coast else pulse.action_scan),
-        coast_receipt=pulse.coast_receipt,
-        kernel_scan_ids=pulse.kernel_scan_ids,
-        projection_at=pulse.projection_at,
-    )
+    terminal_obligation = target_expectation.obligations[0]
+    window_entry = pulse.source_snap if pulse.source_snap is not None else pulse.action_snap
+    window_entry_value = window_entry.get(terminal_obligation.tag)
+    final_landing_value = pulse.fork.state.tags.get(terminal_obligation.tag)
     exact_scans = tuple(
         scan_id
         for scan_id in pulse.kernel_scan_ids
         if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
     )
-    if not exact_scans:
+    candidate_scans = terminal_target_replay_scan_ids(
+        target_expectation,
+        pulse.fork,
+        exact_scans,
+    )
+    if not candidate_scans:
         return result, attempt
-    boundary_projection = pulse.projection_at(exact_scans[0])
-    terminal_obligation = target_expectation.obligations[0]
-    if boundary_projection is None:
-        # Promotion owns only a whole-window zero-net target excursion. A
-        # producer scan may itself be zero-net after earlier scans advanced the
-        # target channel; that non-zero execution-window motion remains with
-        # the ordinary accepted handoff/departure lifecycle.
-        return result, attempt
+    target_observations = observe_execution_window(
+        target_expectation,
+        pulse.fork,
+        scan_before=pulse.scan_before,
+        # This observer certifies the selected program-owned terminal writer,
+        # not the intervention assertion.  The act's ordinary expectation owns
+        # assertion-scan evidence separately; requiring that scan here would
+        # defeat sparse target-writer nomination for a later autonomous scan.
+        action_scan=None,
+        coast_receipt=pulse.coast_receipt,
+        kernel_scan_ids=candidate_scans,
+        projection_at=pulse.projection_at,
+    )
     promoted = promote_terminal_target_observation(
         target_observations,
-        window_entry_value=boundary_projection.entry_tags.get(terminal_obligation.tag),
-        final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
+        window_entry_value=window_entry_value,
+        final_landing_value=final_landing_value,
     )
     existing = executed.bearing.expectation
     if promoted is None and attempt.trial is not None and existing is not None:

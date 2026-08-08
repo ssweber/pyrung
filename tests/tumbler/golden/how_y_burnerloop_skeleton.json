@@ -2083,89 +2083,6 @@
   "reason": "advance Heat_tmr_Acc to its next boundary 1"
  },
  {
-  "gates": [
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "empty frontier, no pending effects",
-    "event": "dead-end"
-   }
-  ],
-  "kind": "bearing_coast_rejected"
- },
- {
-  "distance": 5,
-  "kind": "iteration",
-  "nogoods": [
-   [
-    "wait::Heat_tmr_Acc",
-    [
-     0,
-     1
-    ]
-   ]
-  ],
-  "raw_trace_actions": [],
-  "still_need": [
-   "y_BurnerLoop=True (have False)",
-   "o_BurnerLoop=True (have False)",
-   "Heat_CurStep=3 (have 1)",
-   "Heat_CurStep=2 (have 1)",
-   "Heat_Trans=1 (have 0)"
-  ],
-  "target": [
-   "y_BurnerLoop",
-   true
-  ],
-  "watch_tags": [
-   "Blower__x",
-   "Blower_x",
-   "Blower_xCall",
-   "Cmd_UnitMode",
-   "Cmd_UnitModeChgReqBool",
-   "HeatDelay_Tmr_Done",
-   "Heat_CurStep",
-   "Heat_TargetTemp_F",
-   "Heat_Trans",
-   "Heat__x",
-   "Heat_xCall",
-   "S_CurrStep_Dry",
-   "S_ValLowBandTemp_F",
-   "Sts_Mode_Production",
-   "Sts_StateCurrent",
-   "Sts_StateRequested",
-   "Sts_State_Execute",
-   "Sts_State_Starting",
-   "Sts_UnitModeCurrent",
-   "o_BurnerLoop",
-   "y_BurnerLoop",
-   "Blower_CurStep",
-   "Blower_Trans",
-   "Blower__init",
-   "Rotate_CurStep",
-   "Rotate_Trans",
-   "Rotate__init",
-   "Sts_StateCompleteBool",
-   "Sts_StateCompleteFlag"
-  ]
- },
- {
-  "active_trace_actions": [],
-  "candidates": [],
-  "kind": "candidates_built",
-  "route_candidates": [],
-  "route_plan": null,
-  "stuck_reason": null,
-  "trace_actions": [],
-  "wait_prescribed": true,
-  "wait_reason": "advance Heat_tmr_Acc to its next boundary 1"
- },
- {
-  "channel_tag": "y_BurnerLoop",
-  "kind": "bearing_coast",
-  "prescribed": true,
-  "reason": "hold the current macro-state and allow program motion"
- },
- {
   "accepted": true,
   "agency": "program",
   "bearing": "departed",
@@ -2176,7 +2093,7 @@
   "ejected": true,
   "kind": "bearing_coast_accepted",
   "new_frontier": false,
-  "observe_label": "letrun",
+  "observe_label": "bearing_coast",
   "progress": "unchanged",
   "trend": 5
  },
@@ -2190,7 +2107,7 @@
   "from_value": 6,
   "investigated": true,
   "kind": "letrun_ejection",
-  "observe_label": "letrun",
+  "observe_label": "bearing_coast",
   "reason": null,
   "requested_value": 6,
   "to_value": 8
