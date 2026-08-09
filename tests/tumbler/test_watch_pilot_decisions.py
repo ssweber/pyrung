@@ -10,6 +10,7 @@ from typing import Any
 from devtools.watch_pilot_decisions import (
     EXIT_TIMEOUT,
     _decision_lines,
+    _interpretation_line,
     _target,
     _target_condition,
     watch_worker,
@@ -141,6 +142,23 @@ def test_decision_receipt_names_state_step_and_tripwire() -> None:
     assert stopped is True
     assert "scan=42 state=6 step=101" in lines[0]
     assert lines[-1] == "[stop] candidate construction surfaced ('Danger', True)"
+
+
+def test_interpretation_receipt_names_kind_and_projection_reuse() -> None:
+    line = _interpretation_line(
+        {
+            "scan": 17,
+            "kind": "retry_together",
+            "projected_scans": (17,),
+            "assertion_projection_cached": True,
+            "reason": "the pulse and consumer shape belong in one scan",
+            "supporting_identities": (("consumer-read", 17, 42),),
+        }
+    )
+
+    assert "scan=17 kind=retry_together projected_scans=(17,)" in line
+    assert "assertion_projection_cached=True" in line
+    assert "consumer-read" in line
 
 
 def test_parent_kills_a_worker_that_withholds_the_next_event(capsys: Any) -> None:

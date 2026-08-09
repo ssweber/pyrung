@@ -9,6 +9,7 @@ from typing import Any
 
 from pyrung import PLC, Bool, Int, Program, copy, latch, rung, system
 from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot.attempt_interpretation import AttemptInterpretationKind
 from pyrung.core.analysis.pilot.working_theory import (
     AdvanceTheory,
     OpenTheory,
@@ -16,6 +17,10 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
+)
+from tests.fixtures.pilot_alarm_presets import (
+    aborted_on_first_scan,
+    alarmed_at_start,
 )
 
 
@@ -132,10 +137,18 @@ def test_shadow_theory_records_existing_decisions_without_changing_them(
     )
     without_shadow = PLC(logic).how(consumer, max_scans=30, on_event=no_shadow_events.append)
 
-    assert any(isinstance(fact, OpenTheory) for fact in recorded_facts)
-    assert any(isinstance(fact, RecordTheoryAttempt) for fact in recorded_facts)
-    assert any(isinstance(fact, AdvanceTheory) for fact in recorded_facts)
-    assert any(isinstance(fact, ProveTheory) for fact in recorded_facts)
+    interpretations = tuple(
+        fact
+        for fact in recorded_facts
+        if isinstance(fact, RecordUnattributedEvidence)
+        and fact.observation.evidence
+        and fact.observation.evidence[0] == AttemptInterpretationKind.KEEP_AND_REREAD.value
+    )
+    assert len(interpretations) == 1
+    assert not any(isinstance(fact, OpenTheory) for fact in recorded_facts)
+    assert not any(isinstance(fact, RecordTheoryAttempt) for fact in recorded_facts)
+    assert not any(isinstance(fact, AdvanceTheory) for fact in recorded_facts)
+    assert not any(isinstance(fact, ProveTheory) for fact in recorded_facts)
     assert not any("theory" in event.kind for event in recorded_events)
 
     assert _stable_plan_result(with_shadow) == _stable_plan_result(without_shadow)
@@ -278,3 +291,73 @@ def test_shadow_attempt_adapter_adds_no_projection_replay(monkeypatch: Any) -> N
     assert with_shadow.reachable and without_shadow.reachable
     assert with_shadow_count > 0
     assert len(projection_calls) == with_shadow_count
+
+
+def _capture_shadow_transitions(monkeypatch: Any) -> list[Any]:
+    captured: list[Any] = []
+    original = pilot_module._record_shadow_transition
+
+    def record(state: Any, observation: Any, **kwargs: Any) -> None:
+        if observation is not None:
+            captured.append(observation)
+        original(state, observation, **kwargs)
+
+    monkeypatch.setattr(pilot_module, "_record_shadow_transition", record)
+    return captured
+
+
+def _preset_transition(captured: list[Any], preset_name: str) -> Any:
+    matching = tuple(
+        observation
+        for observation in captured
+        if any(
+            requirement.deadline_occurrence[1] == preset_name
+            for requirement in observation.requirements
+        )
+    )
+    assert len(matching) == 1
+    return matching[0]
+
+
+def test_scan_zero_done_overwrite_is_setup_first_from_exact_preset_deadline(
+    monkeypatch: Any,
+) -> None:
+    fixture = aborted_on_first_scan
+    captured = _capture_shadow_transitions(monkeypatch)
+
+    result = PLC(fixture.logic, dt=0.010).how(
+        fixture.ProcessStep == fixture.AT_TARGET,
+        max_scans=100,
+    )
+
+    assert result.reachable
+    observation = _preset_transition(captured, fixture.WatchdogPresetMs.name)
+    assert observation.source.scan_id == 0
+    assert observation.act_identity[0] == "executed-program-scan"
+    assert observation.interpretation.kind is AttemptInterpretationKind.SETUP_FIRST
+    requirement = observation.requirements[0]
+    assert requirement.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
+    assert requirement.demanding_occurrence[1] == fixture.Watchdog.Done.name
+    assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]
+
+
+def test_retained_reset_done_overwrite_is_retry_together_from_same_receipts(
+    monkeypatch: Any,
+) -> None:
+    fixture = alarmed_at_start
+    captured = _capture_shadow_transitions(monkeypatch)
+
+    result = PLC(fixture.logic, dt=0.010).how(
+        fixture.ProcessStep == fixture.COMPLETE,
+        max_scans=100,
+    )
+
+    assert result.reachable
+    observation = _preset_transition(captured, fixture.WatchdogPresetMs.name)
+    assert observation.source.scan_id == 1
+    assert observation.act_identity[0] != "executed-program-scan"
+    assert observation.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
+    requirement = observation.requirements[0]
+    assert requirement.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
+    assert requirement.demanding_occurrence[1] == fixture.Watchdog.Done.name
+    assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]

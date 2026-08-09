@@ -32,7 +32,15 @@ import psutil
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pyrung import PLC
+from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.intrascan import IntrascanResult
+from pyrung.core.analysis.pilot.navigation_contracts import Bearing
+from pyrung.core.analysis.pilot.types import (
+    _AttemptResult,
+    _CausalCheckpoint,
+    _PilotState,
+)
 from pyrung.core.runner import _compile_avoid
 from pyrung.dap.console import _PilotProgressFormatter
 
@@ -166,6 +174,21 @@ def _event_context(event: Any, snapshot: Mapping[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _interpretation_line(message: Mapping[str, Any]) -> str:
+    """Render one shadow diagnosis without turning it into a public event."""
+
+    support = repr(tuple(message["supporting_identities"]))
+    if len(support) > 1200:
+        support = f"{support[:1200]}..."
+    return (
+        "[interpretation] "
+        f"scan={message['scan']} kind={message['kind']} "
+        f"projected_scans={message['projected_scans']} "
+        f"assertion_projection_cached={message['assertion_projection_cached']} "
+        f"reason={message['reason']!r} support={support}"
+    )
+
+
 def _arm_stack_dump(dump_request: Any, dump_ready: Any) -> None:
     """Dump the worker while its drive thread is still at the slow operation."""
 
@@ -193,6 +216,7 @@ def _drive_worker(
     _arm_stack_dump(dump_request, dump_ready)
     started = time.monotonic()
     event_count = 0
+    interpretation_count = 0
     last_snapshot: dict[str, Any] = {}
     last_scan: int | None = None
     try:
@@ -205,6 +229,85 @@ def _drive_worker(
         avoid_conditions = tuple(tags[name] for name in config["avoid"])
         avoid_pred = _compile_avoid(avoid_conditions) if avoid_conditions else None
         formatter = _PilotProgressFormatter()
+        original_interpret = pilot_module._shadow_transition_from_attempt
+        original_record = pilot_module._record_shadow_transition
+        projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
+
+        def observation_key(
+            observation: pilot_module._ShadowTheoryTransition,
+        ) -> tuple[Any, ...]:
+            return (
+                observation.claim.identity,
+                observation.source,
+                observation.execution_owner_token,
+                observation.act_identity,
+            )
+
+        def observe_interpretation(
+            state: _PilotState,
+            attempt: _AttemptResult,
+            bearing: Bearing,
+            checkpoint: _CausalCheckpoint | None,
+            *,
+            prior_requirement_identities: frozenset[tuple[Any, ...]],
+            intrascan_report: IntrascanResult | None = None,
+        ) -> pilot_module._ShadowTheoryTransition | None:
+            observation = original_interpret(
+                state,
+                attempt,
+                bearing,
+                checkpoint,
+                prior_requirement_identities=prior_requirement_identities,
+                intrascan_report=intrascan_report,
+            )
+            if observation is None:
+                return None
+            executed = attempt.executed_attempt
+            projected_scans = (
+                tuple(sorted(executed.pulse._projection_cache)) if executed is not None else ()
+            )
+            if executed is not None:
+                projection_receipts[observation_key(observation)] = (
+                    executed.assertion_scan,
+                    projected_scans,
+                    executed.assertion_scan in projected_scans,
+                )
+            return observation
+
+        def observe_recorded_interpretation(
+            state: _PilotState,
+            observation: pilot_module._ShadowTheoryTransition | None,
+            *,
+            remaining_budget: int,
+        ) -> None:
+            nonlocal interpretation_count
+            if observation is None:
+                original_record(state, observation, remaining_budget=remaining_budget)
+                return
+            scan, projected_scans, assertion_cached = projection_receipts.pop(
+                observation_key(observation),
+                (observation.source.scan_id, (), False),
+            )
+            interpretation_count += 1
+            interpretation = observation.interpretation
+            messages.put(
+                {
+                    "type": "interpretation",
+                    "elapsed": time.monotonic() - started,
+                    "index": interpretation_count,
+                    "scan": scan,
+                    "kind": interpretation.kind.value,
+                    "reason": interpretation.reason,
+                    "supporting_identities": interpretation.supporting_identities,
+                    "projected_scans": projected_scans,
+                    "assertion_projection_cached": assertion_cached,
+                    "stop": interpretation.kind.value == config["stop_interpretation"],
+                }
+            )
+            original_record(state, observation, remaining_budget=remaining_budget)
+
+        vars(pilot_module)["_shadow_transition_from_attempt"] = observe_interpretation
+        vars(pilot_module)["_record_shadow_transition"] = observe_recorded_interpretation
         messages.put(
             {
                 "type": "started",
@@ -425,6 +528,20 @@ def watch_worker(
                     print(line, flush=True)
                     last_visible_at = now
                     last_visible = {"visible": line, "elapsed": message["elapsed"]}
+            elif kind == "interpretation":
+                last_event_at = now
+                line = _interpretation_line(message)
+                print(line, flush=True)
+                last_visible_at = now
+                last_visible = {"visible": line, "elapsed": message["elapsed"]}
+                if message.get("stop"):
+                    _stop_worker(process)
+                    print(
+                        f"[watch] stopped at {message['kind']} after "
+                        f"{message['elapsed']:.2f}s; scan={message['scan']}",
+                        flush=True,
+                    )
+                    return EXIT_STOPPED
             elif kind == "error":
                 print(message["traceback"], file=sys.stderr, flush=True)
                 process.join(timeout=1.0)
@@ -563,6 +680,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="fail fast when candidate construction surfaces TAG or TAG=VALUE",
     )
     parser.add_argument(
+        "--stop-interpretation",
+        choices=(
+            "keep_and_reread",
+            "coast_to_boundary",
+            "setup_first",
+            "retry_together",
+            "unresolved",
+        ),
+        help="stop after printing the first matching Stage 5 interpretation",
+    )
+    parser.add_argument(
         "--history",
         type=int,
         default=8,
@@ -581,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_scans": args.max_scans,
         "dt": args.dt,
         "stop_action": args.stop_action,
+        "stop_interpretation": args.stop_interpretation,
     }
     context = mp.get_context("spawn")
     messages = context.Queue()

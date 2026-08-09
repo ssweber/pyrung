@@ -633,7 +633,30 @@ worker's Python stacks before terminating the worker. Do not replace this with
 a deadline checked inside the `pilot_events` loop: that deadline cannot fire
 while an expensive operation is withholding the next event. Exit status 2
 means a performance budget fired; status 3 means the configured stop-action
-tripwire appeared.
+tripwire or `--stop-interpretation` receipt appeared.
+
+For a cheap Stage-5 check against the real generated program, stop the worker
+at the first named shadow interpretation:
+
+```text
+uv run python devtools/watch_pilot_decisions.py \
+  --target y_BurnerLoop --no-avoid --max-scans 3000 \
+  --wall-budget 30 --stall-budget 15 --output-budget 15 \
+  --stop-interpretation keep_and_reread
+```
+
+The decision line must show the existing mode-request and Production-mode
+actions composed in one Bearing. The interpretation line reports every scan
+whose ordered projection was selected and whether the assertion scan was
+already in that shared cache; it does not build another projection.
+
+Accepted Bearings are only interpreted after ordinary post-commit monitoring.
+This matters for zero-preset timers: a locally accepted step can later be
+displaced by `.Done` and an Alarm writer. The finalized interpretation must
+reuse the retained failed-effect and active-requirement receipts from that
+monitor. `aborted_on_first_scan` pins the scan-0 `SETUP_FIRST` case;
+`alarmed_at_start` pins the retained-steer `RETRY_TOGETHER` case. Never add a
+second projection, intrascan pass, or nested `how(state)` to answer it.
 
 When a Tumbler golden changes during a PILOT refactor, find the first changed
 decision without waiting for the whole golden test:

@@ -7,6 +7,10 @@ from typing import Any
 from pyrung import PLC, Bool, Int, Program, call, copy, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.advance import build_advance_index
+from pyrung.core.analysis.pilot.attempt_interpretation import (
+    AttemptInterpretationKind,
+    interpret_attempt,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
@@ -447,13 +451,21 @@ def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> N
         steerable=steerable,
     )
 
-    _derive_attempt_requirements(
+    report = _derive_attempt_requirements(
         _AttemptResult(trial=None, executed=executed),
         state,
         context,
         question.source_checkpoint,
     )
 
+    assert pulse.projection_replay_count == 1
+    interpretation = interpret_attempt(
+        trial=None,
+        program_step=None,
+        intrascan=report,
+        assertion_scan=executed.assertion_scan,
+    )
+    assert interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert pulse.projection_replay_count == 1
 
     assert len(state.failed_effect_receipts) == len(state.active_requirements) == 1

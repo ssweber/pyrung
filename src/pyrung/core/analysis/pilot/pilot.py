@@ -29,6 +29,12 @@ from pyrung.core.analysis.graph import (
 )
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import build_advance_index, iter_advance_owners
+from pyrung.core.analysis.pilot.attempt_interpretation import (
+    AttemptInterpretation,
+    AttemptInterpretationKind,
+    interpret_attempt,
+    interpret_failed_requirements,
+)
 from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 from pyrung.core.analysis.pilot.bootstrap import (
     bootstrap_designations,
@@ -60,6 +66,7 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanQuestion,
+    IntrascanResult,
     derive_recorded_observations,
 )
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
@@ -348,17 +355,17 @@ def _derive_attempt_requirements(
     state: _PilotState,
     ctx: _PilotContext,
     checkpoint: _CausalCheckpoint | None,
-) -> None:
-    """Retain exact failed-effect requirements from a disposable steer."""
+) -> IntrascanResult | None:
+    """Retain and return one interpretation of a disposable steer's receipts."""
 
     # An accepted act is locally successful.  Its exact expectation receipt is
     # retained after adoption for any later causal regression; immediate
     # failure inversion belongs only to a rejected disposable attempt.
     if checkpoint is None or attempt.trial is not None:
-        return
+        return None
     executed = attempt.executed_attempt
     if executed is None:
-        return
+        return None
     fallback_scan = executed.assertion_scan
     question = IntrascanQuestion(
         expectation=executed.bearing.expectation,
@@ -407,6 +414,7 @@ def _derive_attempt_requirements(
         if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
             state.failed_effect_receipts.append(failed)
         _retain_active_requirement(state, derivation.requirement)
+    return report
 
 
 def _retain_expectation_receipt(
@@ -2057,11 +2065,17 @@ def _exact_local_repair_window(
     )
 
 
-def _selected_program_step(trial: _AcceptedTrial) -> Any | None:
-    orientation = trial.attempt.bearing.orientation
+def _program_step_from_bearing(bearing: Bearing) -> Any | None:
+    """Return Orientation's existing reading without projecting again."""
+
+    orientation = bearing.orientation
     candidates = orientation.candidates if orientation is not None else None
     wait = candidates.wait if candidates is not None else None
     return wait.program_step if wait is not None else None
+
+
+def _selected_program_step(trial: _AcceptedTrial) -> Any | None:
+    return _program_step_from_bearing(trial.attempt.bearing)
 
 
 def _recovery_anchor_program_step(
@@ -2739,6 +2753,7 @@ class _ShadowTheoryTransition:
     disposition: TheoryAttemptDisposition
     evidence: tuple[Any, ...]
     requirements: tuple[TheoryRequirementSnapshot, ...]
+    interpretation: AttemptInterpretation
     adopted_boundary: TheoryBoundaryIdentity | None = None
 
     @property
@@ -2753,6 +2768,7 @@ class _ShadowTheoryTransition:
             self.pilot_rung_identities,
             self.disposition,
             self.evidence,
+            self.interpretation,
         )
 
 
@@ -2948,7 +2964,11 @@ def _shadow_execution_evidence(execution: Any) -> tuple[tuple[Any, ...], tuple[A
         for observation in observations
         if observation.execution_epoch is not None and observation.execution_owner is not None
     }
-    if len(observations) == 0 or len(owner_pairs) != 1:
+    if not owner_pairs:
+        owned = _execution_epoch_owner(execution.pulse.fork, execution.assertion_scan)
+        if owned is not None:
+            owner_pairs.add((id(owned[0]), id(owned[1])))
+    if len(owner_pairs) != 1:
         raise ValueError("shadow attempt requires one exact execution owner")
     epoch_id, owner_id = next(iter(owner_pairs))
     occurrence_evidence = tuple(
@@ -2964,6 +2984,7 @@ def _shadow_transition_from_attempt(
     checkpoint: _CausalCheckpoint | None,
     *,
     prior_requirement_identities: frozenset[tuple[Any, ...]],
+    intrascan_report: IntrascanResult | None = None,
 ) -> _ShadowTheoryTransition | None:
     """Detach shadow evidence from the already-executed ordinary steer.
 
@@ -2977,6 +2998,13 @@ def _shadow_transition_from_attempt(
         return None
     source = _theory_boundary_from_checkpoint(checkpoint)
     execution_owner, effects = _shadow_execution_evidence(execution)
+    program_step = _program_step_from_bearing(bearing)
+    interpretation = interpret_attempt(
+        trial=attempt.trial,
+        program_step=program_step,
+        intrascan=intrascan_report,
+        assertion_scan=execution.assertion_scan,
+    )
     return _ShadowTheoryTransition(
         claim=_shadow_claim(
             execution.bearing.expectation,
@@ -2998,12 +3026,74 @@ def _shadow_transition_from_attempt(
         evidence=(
             ("effects", effects),
             ("gates", _semantic_key(attempt.gate_events)),
+            (
+                "interpretation",
+                interpretation.kind.value,
+                interpretation.reason,
+                interpretation.supporting_identities,
+            ),
         ),
         requirements=tuple(
             _theory_requirement_snapshot(requirement)
             for requirement in state.active_requirements
             if requirement.identity not in prior_requirement_identities
         ),
+        interpretation=interpretation,
+    )
+
+
+def _shadow_transition_after_monitor(
+    state: _PilotState,
+    observation: _ShadowTheoryTransition | None,
+    *,
+    prior_requirement_identities: frozenset[tuple[Any, ...]],
+    assertion_scan: int,
+) -> tuple[_ShadowTheoryTransition | None, frozenset[tuple[Any, ...]]]:
+    """Fold normal post-commit receipts into the attempt's final interpretation."""
+
+    if observation is None:
+        return None, frozenset()
+    novel = tuple(
+        requirement
+        for requirement in state.active_requirements
+        if requirement.identity not in prior_requirement_identities
+    )
+    exact_pairs = tuple(
+        (requirement, failed)
+        for requirement in novel
+        if (failed := _exact_failed_source(requirement, state)) is not None
+        and failed.act_identity == observation.act_identity
+    )
+    if not exact_pairs:
+        return observation, frozenset()
+    interpretation = interpret_failed_requirements(
+        exact_pairs=exact_pairs,
+        assertion_scan=assertion_scan,
+    )
+    evidence = tuple(
+        item
+        for item in observation.evidence
+        if not (isinstance(item, tuple) and item and item[0] == "interpretation")
+    ) + (
+        (
+            "interpretation",
+            interpretation.kind.value,
+            interpretation.reason,
+            interpretation.supporting_identities,
+        ),
+    )
+    requirements = tuple(
+        _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
+    )
+    return (
+        replace(
+            observation,
+            disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+            evidence=evidence,
+            requirements=requirements,
+            interpretation=interpretation,
+        ),
+        frozenset(requirement.identity for requirement, _failed in exact_pairs),
     )
 
 
@@ -3065,6 +3155,23 @@ def _shadow_bootstrap_transition(
         ctx.target.value,
         ctx.target.predicate,
     )
+    interpretation = AttemptInterpretation(
+        (
+            AttemptInterpretationKind.KEEP_AND_REREAD
+            if reached and not requirements
+            else AttemptInterpretationKind.SETUP_FIRST
+            if requirements
+            else AttemptInterpretationKind.UNRESOLVED
+        ),
+        (
+            "the bootstrap landing reached the target"
+            if reached and not requirements
+            else "bootstrap evidence found a condition that must be established first"
+            if requirements
+            else "bootstrap evidence did not identify one actionable temporal requirement"
+        ),
+        (("bootstrap-effects", effects),),
+    )
     return _ShadowTheoryTransition(
         claim=claim,
         source=source,
@@ -3083,8 +3190,17 @@ def _shadow_bootstrap_transition(
             if requirements
             else TheoryAttemptDisposition.INCOMPLETE
         ),
-        evidence=(("effects", effects),),
+        evidence=(
+            ("effects", effects),
+            (
+                "interpretation",
+                interpretation.kind.value,
+                interpretation.reason,
+                interpretation.supporting_identities,
+            ),
+        ),
         requirements=requirements,
+        interpretation=interpretation,
     )
 
 
@@ -3164,6 +3280,23 @@ def _record_shadow_transition(
     if observation is None:
         return
     if state.theory_state.active_theory_id is None:
+        if not observation.interpretation.opens_theory:
+            _record_shadow_theory_fact(
+                state,
+                RecordUnattributedEvidence(
+                    UnattributedTheoryEvidence(
+                        observation_id=("shadow-interpretation", observation.identity),
+                        boundary=observation.source,
+                        evidence=(
+                            observation.interpretation.kind.value,
+                            observation.interpretation.reason,
+                            observation.interpretation.supporting_identities,
+                            observation.claim.identity,
+                        ),
+                    )
+                ),
+            )
+            return
         _record_shadow_theory_fact(
             state,
             OpenTheory(
@@ -4367,8 +4500,9 @@ def _transition_once(
             executed_for_derivation.pulse,
             prefix_proof,
         )
+    intrascan_report = None
     if derive_requirements:
-        _derive_attempt_requirements(
+        intrascan_report = _derive_attempt_requirements(
             attempt,
             state,
             ctx,
@@ -4382,6 +4516,7 @@ def _transition_once(
             result,
             derivation_checkpoint or expectation_checkpoint,
             prior_requirement_identities=shadow_requirements_before,
+            intrascan_report=intrascan_report,
         )
     except Exception:  # noqa: BLE001 - shadow conversion cannot change the drive
         logger.debug("pilot: shadow theory observation failed", exc_info=True)
@@ -5059,12 +5194,13 @@ def _pilot_loop_events(
         )
         attempt = transition.attempt
         assert attempt is not None
-        _run_shadow_hook(
-            _record_shadow_transition,
-            state,
-            transition.shadow_observation,
-            remaining_budget=state.remaining_search_scans(ctx.max_scans),
-        )
+        if attempt.trial is None:
+            _run_shadow_hook(
+                _record_shadow_transition,
+                state,
+                transition.shadow_observation,
+                remaining_budget=state.remaining_search_scans(ctx.max_scans),
+            )
         for requirement in state.active_requirements[requirements_before:]:
             yield PilotEvent(
                 "requirement_activated",
@@ -5100,6 +5236,8 @@ def _pilot_loop_events(
 
         trial = transition.trial
         assert trial is not None
+        executed_attempt = attempt.executed_attempt
+        assert executed_attempt is not None
         accepted_event = _act_event(
             "accepted",
             act,
@@ -5120,10 +5258,22 @@ def _pilot_loop_events(
                 ctx,
                 continuation_hop=transition.continuation_hop,
             )
+            shadow_observation, absorbed_requirement_ids = _shadow_transition_after_monitor(
+                state,
+                transition.shadow_observation,
+                prior_requirement_identities=requirements_before_monitor,
+                assertion_scan=executed_attempt.assertion_scan,
+            )
+            _run_shadow_hook(
+                _record_shadow_transition,
+                state,
+                shadow_observation,
+                remaining_budget=state.remaining_search_scans(ctx.max_scans),
+            )
             _run_shadow_hook(
                 _record_shadow_requirement_delta,
                 state,
-                requirements_before_monitor,
+                requirements_before_monitor | absorbed_requirement_ids,
                 identity=(
                     "post-commit",
                     transition.shadow_observation.identity
@@ -5134,7 +5284,7 @@ def _pilot_loop_events(
             _run_shadow_hook(
                 _record_shadow_advance,
                 state,
-                transition.shadow_observation,
+                shadow_observation,
                 remaining_budget=state.remaining_search_scans(ctx.max_scans),
             )
         finally:

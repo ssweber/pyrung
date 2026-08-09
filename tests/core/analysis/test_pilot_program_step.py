@@ -19,6 +19,10 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.attempt_interpretation import (
+    AttemptInterpretationKind,
+    interpret_attempt,
+)
 from pyrung.core.analysis.pilot.awaited_actions import Producer, sibling_producer_family
 from pyrung.core.analysis.pilot.coast import _settle_delayed_effects
 from pyrung.core.analysis.pilot.evidence import PipelineRoles
@@ -107,6 +111,13 @@ def test_running_timer_proves_progress_at_the_immediate_boundary() -> None:
     assert result.boundary is not None
     assert result.boundary.tag == timer.Acc.name
     assert result.projected_changes
+    interpretation = interpret_attempt(
+        trial=None,
+        program_step=result,
+        intrascan=None,
+        assertion_scan=plc.state.scan_id,
+    )
+    assert interpretation.kind is AttemptInterpretationKind.COAST_TO_BOUNDARY
 
 
 def test_running_timer_reports_progress_while_quantized_accumulator_stays_zero() -> None:

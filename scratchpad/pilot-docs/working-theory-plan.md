@@ -323,13 +323,37 @@ implementation commit named “stage 5 completion.” Current status is therefor
 | 1     | Landed                                                       | Report-only one-scan forensics extracted behind a compatibility adapter                                        |
 | 2     | Landed                                                       | Strictly decreasing same-scan occurrence-source walks implemented                                              |
 | 3     | Mechanics landed; production contract superseded             | Bounded closure laboratory exists, but complete-overlay `WITNESS` search is not the revised production design  |
-| 4     | Reducer prototype landed; lifecycle semantics need reshaping | Detached immutable shadow ledger is production-safe, but opens too broadly and closes around target completion |
-| 5     | Not yet implemented under the revised plan                   | Supporting facts exist; the multi-owner zero-retry interpretation and named outcomes do not                    |
+| 4     | Reducer prototype landed; lifecycle trigger reshaped         | Detached immutable shadow ledger is production-safe; ordinary accepted, program-owned, and unresolved attempts no longer open it |
+| 5     | Landed                                                       | The five-way zero-retry combiner reuses accepted outcome, existing `program_step`, the already-produced intrascan report, and exact delayed-regression receipts without changing decisions |
 | 6+    | Not started                                                  | No WorkingTheory production control or already-executed retry adoption                                         |
 
 `close_intrascan`, `TheoryView`, chart-role discovery, first-edge exclusions,
 and related seams remain useful inert experiments. Their existence does not
-mean the revised Stage 5 lifecycle has landed.
+mean Stage 6 control has landed.
+
+The first real-program check is intentionally cheap: the Burner drive's first
+ordinary Bearing already composes `Cmd_UnitModeChgRequest`,
+`Cmd_Mode_Production`, and the Clear route action through existing candidate
+machinery. The shadow interpreter observes the accepted batch as
+`KEEP_AND_REREAD`; it must not invent a `RETRY_TOGETHER` repair for work that
+already succeeded.
+
+Two timer-alarm reproducers pin the motivating deadline distinction. In
+`aborted_on_first_scan`, the scan-0 preset read precedes `.Done`, and `.Done`
+then enables the Alarm writer which overwrites the useful step result; because
+that deadline precedes any steer, the interpretation is `SETUP_FIRST`. In
+`alarmed_at_start`, Reset is provisionally accepted before post-commit
+monitoring sees the same `.Done` overwrite. Stage 5 defers that accepted
+interpretation, then joins the monitor's retained `ActiveRequirement` and
+`FailedEffectReceipt` back to the original assertion scan and reports
+`RETRY_TOGETHER`. This join consumes the harmful writer's existing ordered
+projection; it must not call Compass, replay a scan, or rebuild `how(state)`.
+
+Diagnostic follow-up, not a Stage-5 blocker: render the retained requirement
+and original act as a direct technician instructionâ€”for example, â€œset
+`WatchdogPresetMs > 10` firstâ€ or â€œretry `Reset=True` together with
+`WatchdogPresetMs > 10`â€â€”instead of leaving that useful answer inside raw
+supporting identities.
 
 ## Migration sequence
 
