@@ -617,6 +617,24 @@ make lint
 make test-pilot
 ```
 
+`make test-pilot` intentionally runs only the bounded core PILOT suite. The
+full generated-program suite remains an explicit `make test-tumbler` because a
+performance regression there can consume minutes or exhaust memory before an
+in-process pytest deadline gets another chance to run.
+
+Before entering a deep Tumbler drive, use `make watch-pilot-burner` or
+`make watch-pilot-completed`. These commands stream the same progress prose as
+the DAP `how` console from a disposable worker. A separate parent enforces the
+total wall budget, maximum silence between structured PILOT events, and
+maximum silence between DAP-visible fragments, plus a worker-tree RSS cap that
+matches pytest's 4 GB default. On timeout it prints the last DAP-visible
+progress, recent event/scan/state receipts, current and peak memory, and the
+worker's Python stacks before terminating the worker. Do not replace this with
+a deadline checked inside the `pilot_events` loop: that deadline cannot fire
+while an expensive operation is withholding the next event. Exit status 2
+means a performance budget fired; status 3 means the configured stop-action
+tripwire appeared.
+
 When a Tumbler golden changes during a PILOT refactor, find the first changed
 decision without waiting for the whole golden test:
 
@@ -631,4 +649,5 @@ different module that exposes `logic`. The tool stops at the first changed
 event and prints the preceding matching events, the expected event, the actual
 event, elapsed time, and the raw scan. Exit status 0 means the complete
 skeleton matches; 1 means it diverged; 2 means setup or the wall budget failed.
-It is a fast diagnosis loop, not a replacement for `make test-pilot`.
+It is a fast decision-parity loop, complementary to the process-isolated
+performance watcher and not a replacement for `make test-pilot`.

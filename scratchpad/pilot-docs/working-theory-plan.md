@@ -333,9 +333,11 @@ mean the revised Stage 5 lifecycle has landed.
 
 ## Migration sequence
 
-Every stage ends with lint, focused tests, `make test-pilot`, and Tumbler parity
-when event or orientation ordering can change. Do not transfer ownership while
-the current stage has unexplained failures.
+Every stage ends with lint and focused `make test-pilot` validation. Tumbler is
+an explicit, process-isolated gate: use `make watch-pilot-burner` or
+`make watch-pilot-completed` before full `make test-tumbler`, and require
+Tumbler parity when event or orientation ordering can change. Do not transfer
+ownership while the current stage has unexplained failures.
 
 ### Stage 4.5 -- Re-ground the contract
 
@@ -505,6 +507,19 @@ demonstrated by a neutral temporal fixture.
 
 ### Performance and evidence reuse
 
+- Responsiveness is part of correctness. A `how()` result that is eventually
+  right but withholds DAP progress for minutes is not shippable.
+- Deep Tumbler drives run in a disposable worker while an outside orchestrator
+  owns a total wall budget, a maximum inter-event silence budget, and a maximum
+  DAP-visible silence budget, plus an explicit worker-tree memory cap. A
+  timeout must retain the last visible fragment, recent structured
+  event/scan/state receipts, current and peak memory, and a live Python stack
+  dump before terminating the worker. A deadline inside the event loop is
+  insufficient because it cannot fire while the next event is withheld.
+- `make test-pilot` excludes the potentially OOM full Tumbler suite. Enter
+  Tumbler through `make watch-pilot-burner` or
+  `make watch-pilot-completed`, then run `make test-tumbler` only after the
+  bounded drive remains responsive.
 - One ordinary outer-loop turn executes only its selected Bearing. Stage 5
   adds zero PLC scans, zero action forks, and zero Compass orientations.
 - One assertion execution has at most one owner-bound projection build.
@@ -524,10 +539,13 @@ demonstrated by a neutral temporal fixture.
 - An accepted Stage 6 retry execution continues verification and adoption on
   the same fork; it is never executed once for intrascan proof and again for
   ordinary gates.
-- Count-based regression tests, rather than wall-clock thresholds, cover a
+- Count-based regression tests cover the algorithmic scaling contract on a
   `how(state)` fixture with multiple irrelevant trace choices, chart edges, and
   retry alternatives. Increasing two independent candidate dimensions must
-  not multiply PLC executions, projection builds, or retry attempts.
+  not multiply PLC executions, projection builds, or retry attempts. The
+  outside-process wall and silence budgets separately gate user-visible
+  end-to-end responsiveness without pretending that machine time explains the
+  algorithmic cause.
 
 ### Same-scan execution
 
