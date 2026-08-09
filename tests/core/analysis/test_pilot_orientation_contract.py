@@ -10,6 +10,7 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     ProbeExhaustedObservation,
 )
+from pyrung.core.analysis.pilot.effects import EffectPathStep
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -42,6 +43,12 @@ from pyrung.core.analysis.pilot.options import (
     _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.recording import _candidate_payload
+from pyrung.core.analysis.pilot.trace import TraceAction
+from pyrung.core.analysis.pilot.working_theory import (
+    TheoryBoundaryIdentity,
+    TheoryRetryArtifact,
+    TheoryTemporalIntent,
+)
 
 
 @dataclass
@@ -59,6 +66,7 @@ class _Context:
     pipeline_internal_tags: frozenset = frozenset()
     domain_prior: object = None
     theory_view: object = None
+    active_requirements: tuple = ()
 
 
 def _candidate(tag: str) -> SimpleNamespace:
@@ -182,6 +190,99 @@ def test_orientation_threads_one_expectation_for_batch_crossing_widening_and_coa
     assert isinstance(coast, Bearing)
     assert isinstance(coast.act, Coast)
     assert coast.act.policy.expectation is expectation
+
+
+def test_theory_retry_reads_rejected_trigger_evidence_but_requires_admitted_companion(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    primary = ("Request", True)
+    companion = ("Production", True)
+    path = (
+        EffectPathStep(11, "Target", True),
+        EffectPathStep(7, "Joined", True, (("RequestBool", True), ("Mode", 1))),
+    )
+    primary_detail = TraceAction("Request", True, effect_path=path)
+    companion_detail = TraceAction("Production", True)
+    artifact = TheoryRetryArtifact(
+        action_pairs=(primary, companion),
+        local_boundary=("Joined", True),
+        selected_writer_node=7,
+        path_identity=((11, "Target", True), (7, "Joined", True)),
+        missing_occurrence=("read", "Production", False),
+    )
+    boundary = TheoryBoundaryIdentity(
+        world_key=("world", "with-requirement"),
+        scan_id=3,
+        checkpoint_token=("checkpoint", 3),
+        execution_owner_token=("execution", 3),
+    )
+    condition = ("condition", "Production", True)
+    requirement = SimpleNamespace(condition=condition)
+    view = SimpleNamespace(
+        temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+        retry_artifact=artifact,
+        root=boundary,
+        requirements=(SimpleNamespace(condition_identity=condition),),
+    )
+    compass = Compass()
+    base = _world(compass)
+    context = replace(
+        base.context,
+        theory_view=view,
+        active_requirements=(requirement,),
+    )
+    world = replace(
+        base,
+        world_key=boundary.world_key,
+        snapshot={"Target": False, "Request": False, "Production": False},
+        state=SimpleNamespace(
+            **{
+                **vars(base.state),
+                "work": SimpleNamespace(state=SimpleNamespace(scan_id=boundary.scan_id)),
+            }
+        ),
+        context=context,
+    )
+    candidates = CandidateRead(
+        trace=_TraceAdmission(
+            active_actions=(companion,),
+            actions=(companion,),
+            details=(companion_detail,),
+            detail_by_pair={primary: primary_detail, companion: companion_detail},
+            managed_boolean_rungs=(),
+            establish_pending=False,
+            read_details=(primary_detail, companion_detail),
+        ),
+        options=(),
+        downstream_reach_cap=20,
+    )
+    expectation = SimpleNamespace(obligations=(SimpleNamespace(tag="Joined"),))
+    monkeypatch.setattr(orientation, "expectation_from_writer", lambda *_args, **_kw: expectation)
+    monkeypatch.setattr(orientation, "_avoid_forces", lambda *_args, **_kw: False)
+
+    bearing = orientation._theory_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(bearing, Bearing)
+    assert isinstance(bearing.act, BatchPulse)
+    assert bearing.act.actions == (primary, companion)
+    assert bearing.act.policy.expectation is expectation
+
+    without_companion = replace(
+        candidates,
+        trace=replace(candidates.trace, active_actions=(), actions=()),
+    )
+    with pytest.raises(ValueError, match="companion is absent"):
+        orientation._theory_retry_bearing(
+            world,
+            without_companion,
+            TargetSpec("Target", True),
+        )
 
 
 def test_terminal_orientation_is_explicit_ambient_non_promise(monkeypatch) -> None:

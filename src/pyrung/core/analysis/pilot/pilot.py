@@ -192,15 +192,20 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
+    RetryTogetherRequest,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
     TheoryClaim,
     TheoryObjectiveSnapshot,
     TheoryObligationSnapshot,
     TheoryRequirementSnapshot,
+    TheoryRetryArtifact,
+    TheoryTemporalIntent,
     TheoryTermination,
     UnattributedTheoryEvidence,
     reduce_theory,
+    retry_together_request,
+    theory_view,
 )
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
@@ -2565,6 +2570,13 @@ def _repair_one_active_requirement(
 ) -> _RequirementRepairResult:
     """Attempt one newest exact schedule, then return to the outer fresh read."""
 
+    # A typed current-version request has transferred ownership to ordinary
+    # Orientation. Generic recovery must not execute the same retained source
+    # first and leave the controlling retry as a second, hidden transaction.
+    # Malformed typed requests raise here rather than falling through.
+    if retry_together_request(state.theory_state) is not None:
+        return _RequirementRepairResult()
+
     blocked: _RequirementRepairResult | None = None
     ordered = sorted(
         enumerate(state.active_requirements),
@@ -2738,6 +2750,7 @@ class _IterationTransition:
     trial: _AcceptedTrial | None = None
     continuation_hop: bool = False
     shadow_observation: _ShadowTheoryTransition | None = None
+    adoption_checkpoint: _CausalCheckpoint | None = None
 
 
 @dataclass(frozen=True)
@@ -2754,6 +2767,7 @@ class _ShadowTheoryTransition:
     evidence: tuple[Any, ...]
     requirements: tuple[TheoryRequirementSnapshot, ...]
     interpretation: AttemptInterpretation
+    retry_artifact: TheoryRetryArtifact | None = None
     adopted_boundary: TheoryBoundaryIdentity | None = None
 
     @property
@@ -2769,6 +2783,7 @@ class _ShadowTheoryTransition:
             self.disposition,
             self.evidence,
             self.interpretation,
+            self.retry_artifact,
         )
 
 
@@ -2924,6 +2939,99 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
     )
 
 
+def _retry_artifact_from_existing_read(
+    bearing: Bearing,
+    report: IntrascanResult | None,
+) -> TheoryRetryArtifact | None:
+    """Join one failed transient with its already-read sibling trace producer.
+
+    The ordinary Compass read owns the selected effect paths and the executed
+    scan owns the exact false sibling read. This adapter only joins those two
+    receipts; it does not trace, project, nominate alternatives, or execute.
+    """
+
+    pairs = bearing.act.policy.action_pairs
+    orientation = bearing.orientation
+    candidates = orientation.candidates if orientation is not None else None
+    if len(pairs) != 1 or candidates is None or report is None or len(report.findings) != 1:
+        return None
+    finding = report.findings[0]
+    observation = finding.observation
+    appeared = observation.appeared
+    displacement = observation.displacement
+    projection = observation.execution_projection
+    primary = pairs[0]
+    primary_boundary = (
+        (bearing.act.policy.heading.channel_tag, bearing.act.policy.heading.target_value)
+        if bearing.act.policy.heading is not None
+        else None
+    )
+    if (
+        observation.disposition != "OVERWRITTEN"
+        or appeared is None
+        or displacement is None
+        or projection is None
+        or primary_boundary is None
+        or observation.obligation.tag != primary_boundary[0]
+        or not _values_match(observation.obligation.value, primary_boundary[1])
+    ):
+        return None
+
+    def contains(requirements: tuple[tuple[str, Any], ...], pair: tuple[str, Any]) -> bool:
+        return any(tag == pair[0] and _values_match(value, pair[1]) for tag, value in requirements)
+
+    artifacts: dict[tuple[Any, ...], TheoryRetryArtifact] = {}
+    primary_details = tuple(detail for detail in candidates.trace.details if detail.pair == primary)
+    for companion in candidates.trace.details:
+        companion_pair = companion.pair
+        companion_boundary = companion.operation_boundary
+        if companion_pair == primary or companion_boundary is None or not companion.effect_path:
+            continue
+        if not contains(companion.effect_path[-1].local_requirements, companion_pair):
+            continue
+        missing_reads = tuple(
+            read
+            for read in projection.reads
+            if read.occurrence.domain == "tag"
+            and read.occurrence.name == companion_pair[0]
+            and not _values_match(read.occurrence.value, companion_pair[1])
+            and appeared.scan_id == read.scan_id == displacement.scan_id
+            and appeared.ordinal < read.ordinal < displacement.ordinal
+        )
+        if len(missing_reads) != 1:
+            continue
+        missing = occurrence_snapshot(missing_reads[0])
+        for primary_detail in primary_details:
+            joins = tuple(
+                step
+                for step in primary_detail.effect_path
+                if contains(step.local_requirements, primary_boundary)
+                and contains(step.local_requirements, companion_boundary)
+            )
+            if len(joins) != 1:
+                continue
+            join = joins[0]
+            join_index = primary_detail.effect_path.index(join)
+            artifact = TheoryRetryArtifact(
+                action_pairs=(primary, companion_pair),
+                local_boundary=(join.tag, _semantic_key(join.value)),
+                selected_writer_node=join.node_index,
+                path_identity=tuple(
+                    (step.node_index, step.tag, _semantic_key(step.value))
+                    for step in primary_detail.effect_path[: join_index + 1]
+                ),
+                missing_occurrence=_theory_occurrence_identity(missing),
+                supporting_evidence=(
+                    "existing-compass-read",
+                    _semantic_key(primary_boundary),
+                    _semantic_key(companion_boundary),
+                    _semantic_key(finding.diagnostic_snapshot()),
+                ),
+            )
+            artifacts[artifact.identity] = artifact
+    return next(iter(artifacts.values())) if len(artifacts) == 1 else None
+
+
 def _shadow_claim(
     expectation: EffectExpectation,
     objective: BearingObjective,
@@ -3005,12 +3113,48 @@ def _shadow_transition_from_attempt(
         intrascan=intrascan_report,
         assertion_scan=execution.assertion_scan,
     )
+    retry_artifact = None
+    if interpretation.kind is AttemptInterpretationKind.UNRESOLVED:
+        retry_artifact = _retry_artifact_from_existing_read(bearing, intrascan_report)
+        if retry_artifact is not None:
+            interpretation = AttemptInterpretation(
+                AttemptInterpretationKind.RETRY_TOGETHER,
+                "the failed transient and its exact sibling producer belong in one scan",
+                (
+                    ("retry-artifact", retry_artifact.identity),
+                    *interpretation.supporting_identities,
+                ),
+            )
+    claim = _shadow_claim(
+        execution.bearing.expectation,
+        bearing.objective,
+        source,
+    )
+    if retry_artifact is not None:
+        local_tag, local_value = retry_artifact.local_boundary
+        claim = replace(
+            claim,
+            obligations=(
+                TheoryObligationSnapshot(
+                    tag=local_tag,
+                    value=local_value,
+                    producer=("pdg-writer-node", retry_artifact.selected_writer_node),
+                    consumer=None,
+                    required_shape=retry_artifact.action_pairs,
+                    boundary=retry_artifact.local_boundary,
+                    terminal_target=False,
+                    polarity="produce",
+                    occurrence_selector=None,
+                ),
+            ),
+            selected_boundary=replace(
+                source,
+                occurrence_identity=("retry-boundary", retry_artifact.identity),
+            ),
+            selected_artifact_identity=retry_artifact.identity,
+        )
     return _ShadowTheoryTransition(
-        claim=_shadow_claim(
-            execution.bearing.expectation,
-            bearing.objective,
-            source,
-        ),
+        claim=claim,
         source=source,
         execution_owner_token=execution_owner,
         occurrence_evidence=effects,
@@ -3020,7 +3164,7 @@ def _shadow_transition_from_attempt(
             TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
             if attempt.trial is not None
             else TheoryAttemptDisposition.REJECTED_EXACT
-            if attempt.proof_rejection
+            if attempt.proof_rejection or retry_artifact is not None
             else TheoryAttemptDisposition.REJECTED_EMPIRICAL
         ),
         evidence=(
@@ -3039,6 +3183,7 @@ def _shadow_transition_from_attempt(
             if requirement.identity not in prior_requirement_identities
         ),
         interpretation=interpretation,
+        retry_artifact=retry_artifact,
     )
 
 
@@ -3213,6 +3358,12 @@ def _record_shadow_theory_fact(state: _PilotState, fact: Any) -> None:
         logger.debug("pilot: shadow theory reduction failed", exc_info=True)
 
 
+def _record_controlling_theory_fact(state: _PilotState, fact: Any) -> None:
+    """Apply a fact which production control now depends on; fail closed loudly."""
+
+    state.theory_state = reduce_theory(state.theory_state, fact)
+
+
 def _run_shadow_hook(hook: Callable[..., None], *args: Any, **kwargs: Any) -> None:
     """Keep every shadow conversion outside production control flow."""
 
@@ -3271,17 +3422,18 @@ def _shadow_attempt_identity(
     )
 
 
-def _record_shadow_transition(
+def _record_theory_transition(
     state: _PilotState,
     observation: _ShadowTheoryTransition | None,
     *,
     remaining_budget: int,
+    record_fact: Callable[[_PilotState, Any], None],
 ) -> None:
     if observation is None:
         return
     if state.theory_state.active_theory_id is None:
         if not observation.interpretation.opens_theory:
-            _record_shadow_theory_fact(
+            record_fact(
                 state,
                 RecordUnattributedEvidence(
                     UnattributedTheoryEvidence(
@@ -3297,7 +3449,7 @@ def _record_shadow_transition(
                 ),
             )
             return
-        _record_shadow_theory_fact(
+        record_fact(
             state,
             OpenTheory(
                 claim=observation.claim,
@@ -3306,7 +3458,7 @@ def _record_shadow_transition(
             ),
         )
     elif not _shadow_claim_correlates(state, observation.claim):
-        _record_shadow_theory_fact(
+        record_fact(
             state,
             RecordUnattributedEvidence(
                 UnattributedTheoryEvidence(
@@ -3321,12 +3473,13 @@ def _record_shadow_transition(
     theory = _active_shadow_theory(state)
     if theory is None:
         return
-    _record_shadow_theory_fact(
+    attempt_identity = _shadow_attempt_identity(theory.theory_id, observation)
+    record_fact(
         state,
         RecordTheoryAttempt(
             theory_id=theory.theory_id,
             version_id=theory.current_version_id,
-            attempt_identity=_shadow_attempt_identity(theory.theory_id, observation),
+            attempt_identity=attempt_identity,
             source=observation.source,
             execution_owner_token=observation.execution_owner_token,
             occurrence_evidence=observation.occurrence_evidence,
@@ -3336,10 +3489,16 @@ def _record_shadow_transition(
             evidence=observation.evidence,
         ),
     )
-    if observation.requirements:
+    if observation.requirements or observation.retry_artifact is not None:
         theory = _active_shadow_theory(state)
         assert theory is not None
-        _record_shadow_theory_fact(
+        controlling_intent = (
+            TheoryTemporalIntent(observation.interpretation.kind.value)
+            if observation.interpretation.opens_theory
+            and observation.disposition is TheoryAttemptDisposition.REJECTED_EXACT
+            else None
+        )
+        record_fact(
             state,
             RefineTheory(
                 theory_id=theory.theory_id,
@@ -3352,8 +3511,228 @@ def _record_shadow_transition(
                     observation.identity,
                     tuple(item.semantic_identity for item in observation.requirements),
                 ),
+                temporal_intent=controlling_intent,
+                trigger_attempt_id=(attempt_identity if controlling_intent is not None else None),
+                retry_artifact=(
+                    observation.retry_artifact
+                    if controlling_intent is TheoryTemporalIntent.RETRY_TOGETHER
+                    else None
+                ),
             ),
         )
+
+
+def _record_shadow_transition(
+    state: _PilotState,
+    observation: _ShadowTheoryTransition | None,
+    *,
+    remaining_budget: int,
+) -> None:
+    if _records_controlling_retry(observation):
+        assert observation is not None
+        _record_controlling_transition(
+            state,
+            observation,
+            remaining_budget=remaining_budget,
+        )
+    else:
+        _record_theory_transition(
+            state,
+            observation,
+            remaining_budget=remaining_budget,
+            record_fact=_record_shadow_theory_fact,
+        )
+
+
+def _record_controlling_transition(
+    state: _PilotState,
+    observation: _ShadowTheoryTransition,
+    *,
+    remaining_budget: int,
+) -> None:
+    """Establish one exact controlling theory without a fail-open shadow seam."""
+
+    if (
+        observation.disposition is not TheoryAttemptDisposition.REJECTED_EXACT
+        or observation.interpretation.kind is not AttemptInterpretationKind.RETRY_TOGETHER
+        or observation.retry_artifact is None
+    ):
+        raise ValueError("controlling transition lacks an exact retry-together artifact")
+    _record_theory_transition(
+        state,
+        observation,
+        remaining_budget=remaining_budget,
+        record_fact=_record_controlling_theory_fact,
+    )
+
+
+def _records_controlling_retry(observation: _ShadowTheoryTransition | None) -> bool:
+    return bool(
+        observation is not None
+        and observation.disposition is TheoryAttemptDisposition.REJECTED_EXACT
+        and observation.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
+        and observation.retry_artifact is not None
+    )
+
+
+@dataclass(frozen=True)
+class _ControlledRetryAttempt:
+    request: RetryTogetherRequest
+    attempt_id: tuple[Any, ...]
+    observation: _ShadowTheoryTransition
+
+
+def _controlling_request_for_result(
+    state: _PilotState,
+    result: OrientationResult,
+) -> RetryTogetherRequest | None:
+    request = retry_together_request(state.theory_state)
+    if request is None:
+        return None
+    if not isinstance(result, Bearing):
+        raise ValueError("retry-together theory did not resolve to a Bearing")
+    policy = result.act.policy
+    if (
+        policy.source is not ActSource.WIDENING
+        or tuple(policy.action_pairs) != tuple(request.artifact.action_pairs)
+        or policy.heading is None
+        or (policy.heading.channel_tag, policy.heading.target_value)
+        != request.artifact.local_boundary
+    ):
+        raise ValueError("fresh Orientation did not return the exact theory artifact")
+    return request
+
+
+def _record_controlled_retry_attempt(
+    state: _PilotState,
+    request: RetryTogetherRequest,
+    transition: _IterationTransition,
+) -> _ControlledRetryAttempt:
+    """Record the semantic attempt before its disposable landing may be adopted."""
+
+    theory = _active_shadow_theory(state)
+    observation = transition.shadow_observation
+    attempt = transition.attempt
+    if (
+        theory is None
+        or theory.theory_id != request.theory_id
+        or theory.current_version_id != request.version_id
+        or observation is None
+        or attempt is None
+    ):
+        raise ValueError("retry-together execution lost its controlling identity")
+    claim = state.theory_state.ledger.claims[theory.claim_id]
+    controlled = replace(
+        observation,
+        claim=claim,
+        source=request.source,
+        requirements=(),
+        retry_artifact=request.artifact,
+        evidence=(
+            *observation.evidence,
+            (
+                "working-theory-control",
+                request.theory_id,
+                request.version_id,
+                request.trigger_attempt_id,
+                request.artifact.identity,
+            ),
+        ),
+    )
+    attempt_id = (
+        "working-theory-retry",
+        request.theory_id,
+        request.version_id,
+        request.source,
+        request.trigger_attempt_id,
+        request.artifact.identity,
+        controlled.act_identity,
+        controlled.pilot_rung_identities,
+    )
+    _record_controlling_theory_fact(
+        state,
+        RecordTheoryAttempt(
+            theory_id=request.theory_id,
+            version_id=request.version_id,
+            attempt_identity=attempt_id,
+            source=request.source,
+            execution_owner_token=controlled.execution_owner_token,
+            occurrence_evidence=controlled.occurrence_evidence,
+            act_identity=controlled.act_identity,
+            pilot_rung_identities=controlled.pilot_rung_identities,
+            disposition=controlled.disposition,
+            evidence=controlled.evidence,
+        ),
+    )
+    return _ControlledRetryAttempt(request, attempt_id, controlled)
+
+
+def _prove_controlled_retry(
+    state: _PilotState,
+    controlled: _ControlledRetryAttempt,
+) -> None:
+    """Close one local theory only while its exact durable boundary is live."""
+
+    theory = _active_shadow_theory(state)
+    request = controlled.request
+    if (
+        theory is None
+        or theory.theory_id != request.theory_id
+        or theory.current_version_id != request.version_id
+    ):
+        raise ValueError("retry-together proof lost its controlling theory version")
+    tag, value = request.artifact.local_boundary
+    if not _values_match(state.work.state.tags.get(tag), value):
+        raise ValueError("retry-together local boundary did not survive monitoring")
+    matched_requirements = tuple(
+        (index, requirement)
+        for index, requirement in enumerate(state.active_requirements)
+        if requirement.status is RequirementStatus.ACTIVE
+        and _theory_requirement_snapshot(requirement).semantic_identity
+        in request.requirement_identities
+    )
+    if len(matched_requirements) != len(request.requirement_identities) or {
+        _theory_requirement_snapshot(requirement).semantic_identity
+        for _index, requirement in matched_requirements
+    } != set(request.requirement_identities):
+        raise ValueError("retry-together proof lost its exact live requirement")
+    requirement_observations = tuple(
+        (
+            "requirement-discharged",
+            _theory_requirement_snapshot(requirement).semantic_identity,
+            _theory_occurrence_identity(requirement.demanding_occurrence),
+            controlled.attempt_id,
+        )
+        for _index, requirement in matched_requirements
+    )
+    for index, requirement in matched_requirements:
+        state.active_requirements[index] = replace(
+            requirement,
+            status=RequirementStatus.DISCHARGED,
+        )
+    boundary = _theory_live_boundary(state)
+    _record_controlling_theory_fact(
+        state,
+        ProveTheory(
+            theory_id=request.theory_id,
+            version_id=request.version_id,
+            promoted_landing=boundary,
+            proof_identity=(
+                "working-theory-retry-proved",
+                request.theory_id,
+                request.version_id,
+                controlled.attempt_id,
+                boundary,
+            ),
+            fulfilled_obligations=(
+                ("local-boundary", request.artifact.local_boundary),
+                *controlled.observation.occurrence_evidence,
+            ),
+            requirement_observations=requirement_observations,
+            retained_pilot_rung_identities=controlled.observation.pilot_rung_identities,
+            accepted_attempt_id=controlled.attempt_id,
+        ),
+    )
 
 
 def _record_shadow_bootstrap(
@@ -4403,6 +4782,8 @@ def _transition_once(
     resolve_excursion: bool = True,
     derive_requirements: bool = True,
     derivation_checkpoint: _CausalCheckpoint | None = None,
+    defer_adoption: bool = False,
+    record_rejection: bool = True,
 ) -> _IterationTransition:
     """Orient and locally settle exactly one current-world result.
 
@@ -4535,7 +4916,9 @@ def _transition_once(
         ctx.compass, _ = ctx.compass.apply((CoastObservation(frame.key, stop_reason),))
 
     if attempt.trial is None:
-        if attempt.proof_rejection:
+        if not record_rejection:
+            pass
+        elif attempt.proof_rejection:
             proof_world_key = (
                 _pilot_world_key(
                     frame.snap,
@@ -4568,6 +4951,16 @@ def _transition_once(
             shadow_observation=shadow_observation,
         )
 
+    if defer_adoption:
+        return _IterationTransition(
+            result=result,
+            frame=frame,
+            attempt=attempt,
+            trial=attempt.trial,
+            shadow_observation=shadow_observation,
+            adoption_checkpoint=derivation_checkpoint or expectation_checkpoint,
+        )
+
     trial = _adopt_trial(attempt.trial, frame, state, ctx)
     continuation_hop = _advance_recovery_continuation(
         trial,
@@ -4597,6 +4990,35 @@ def _transition_once(
         trial=trial,
         continuation_hop=continuation_hop,
         shadow_observation=shadow_observation,
+    )
+
+
+def _adopt_deferred_transition(
+    transition: _IterationTransition,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _IterationTransition:
+    """Adopt the exact fork whose controlling attempt was already recorded."""
+
+    if transition.attempt is None or transition.trial is None:
+        raise ValueError("deferred adoption requires one accepted trial")
+    if not isinstance(transition.result, Bearing):
+        raise ValueError("deferred adoption requires one Bearing")
+    trial = _adopt_trial(transition.trial, transition.frame, state, ctx)
+    _retain_expectation_receipt(
+        trial,
+        transition.result.act,
+        state,
+        transition.adoption_checkpoint,
+    )
+    observation = transition.shadow_observation
+    if observation is not None:
+        observation = replace(observation, adopted_boundary=_theory_live_boundary(state))
+    return replace(
+        transition,
+        trial=trial,
+        shadow_observation=observation,
+        adoption_checkpoint=None,
     )
 
 
@@ -5087,6 +5509,7 @@ def _pilot_loop_events(
         constraints = NavigationConstraints(
             avoid_predicate=ctx.avoid_pred,
             active_requirements=tuple(state.active_requirements),
+            theory_view=theory_view(state.theory_state),
         )
         result = ctx.compass.orient(raw_world, target, constraints)
         orientation_read = result.orientation
@@ -5102,6 +5525,7 @@ def _pilot_loop_events(
             ctx,
             target,
         )
+        controlling_request = _controlling_request_for_result(state, result)
         last_frame = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
@@ -5185,22 +5609,57 @@ def _pilot_loop_events(
         requirements_before = len(state.active_requirements)
         receipts_before = len(state.expectation_receipts)
         failures_before = len(state.failed_effect_receipts)
+        controlling_source_world = (
+            state.snapshot_world() if controlling_request is not None else None
+        )
         transition = _transition_once(
             state,
             ctx,
             target,
             constraints,
             oriented=result,
+            defer_adoption=controlling_request is not None,
+            record_rejection=controlling_request is None,
         )
         attempt = transition.attempt
         assert attempt is not None
+        controlled_attempt = (
+            _record_controlled_retry_attempt(state, controlling_request, transition)
+            if controlling_request is not None
+            else None
+        )
+        if controlled_attempt is not None and attempt.trial is not None:
+            transition = _adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
-            _run_shadow_hook(
-                _record_shadow_transition,
-                state,
-                transition.shadow_observation,
-                remaining_budget=state.remaining_search_scans(ctx.max_scans),
-            )
+            if controlled_attempt is not None:
+                theory = _active_shadow_theory(state)
+                if theory is None:
+                    raise ValueError("rejected retry-together attempt lost its theory")
+                _record_controlling_theory_fact(
+                    state,
+                    AbandonTheory(
+                        theory_id=theory.theory_id,
+                        version_id=theory.current_version_id,
+                        termination=TheoryTermination.BUDGET,
+                        abandonment_identity=(
+                            "working-theory-retry-rejected",
+                            controlled_attempt.attempt_id,
+                        ),
+                    ),
+                )
+            elif _records_controlling_retry(transition.shadow_observation):
+                _record_shadow_transition(
+                    state,
+                    transition.shadow_observation,
+                    remaining_budget=state.remaining_search_scans(ctx.max_scans),
+                )
+            else:
+                _run_shadow_hook(
+                    _record_shadow_transition,
+                    state,
+                    transition.shadow_observation,
+                    remaining_budget=state.remaining_search_scans(ctx.max_scans),
+                )
         for requirement in state.active_requirements[requirements_before:]:
             yield PilotEvent(
                 "requirement_activated",
@@ -5232,6 +5691,19 @@ def _pilot_loop_events(
                 yield rejected_event
             finally:
                 _release_attempt_projections(attempt)
+            if controlled_attempt is not None:
+                assert controlling_source_world is not None
+                state.load_world(controlling_source_world)
+                yield from _stopped_events(
+                    state,
+                    ctx,
+                    frame,
+                    "working theory's exact retry-together artifact was rejected",
+                    journal_channel_tags,
+                    journal_acc_names,
+                    candidate_count=1,
+                )
+                return
             continue
 
         trial = transition.trial
@@ -5264,29 +5736,36 @@ def _pilot_loop_events(
                 prior_requirement_identities=requirements_before_monitor,
                 assertion_scan=executed_attempt.assertion_scan,
             )
-            _run_shadow_hook(
-                _record_shadow_transition,
-                state,
-                shadow_observation,
-                remaining_budget=state.remaining_search_scans(ctx.max_scans),
-            )
-            _run_shadow_hook(
-                _record_shadow_requirement_delta,
-                state,
-                requirements_before_monitor | absorbed_requirement_ids,
-                identity=(
-                    "post-commit",
-                    transition.shadow_observation.identity
-                    if transition.shadow_observation is not None
-                    else (),
-                ),
-            )
-            _run_shadow_hook(
-                _record_shadow_advance,
-                state,
-                shadow_observation,
-                remaining_budget=state.remaining_search_scans(ctx.max_scans),
-            )
+            if controlled_attempt is not None:
+                _prove_controlled_retry(state, controlled_attempt)
+            else:
+                _run_shadow_hook(
+                    _record_shadow_transition,
+                    state,
+                    shadow_observation,
+                    remaining_budget=state.remaining_search_scans(ctx.max_scans),
+                )
+                _run_shadow_hook(
+                    _record_shadow_requirement_delta,
+                    state,
+                    requirements_before_monitor | absorbed_requirement_ids,
+                    identity=(
+                        "post-commit",
+                        transition.shadow_observation.identity
+                        if transition.shadow_observation is not None
+                        else (),
+                    ),
+                )
+                _run_shadow_hook(
+                    _record_shadow_advance,
+                    state,
+                    shadow_observation,
+                    remaining_budget=state.remaining_search_scans(ctx.max_scans),
+                )
+        except Exception:
+            if controlling_source_world is not None:
+                state.load_world(controlling_source_world)
+            raise
         finally:
             _release_attempt_projections(attempt)
         state.last_wait_log = None

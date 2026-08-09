@@ -851,6 +851,7 @@ def _act_event(
         )
 
     assert isinstance(act, BatchPulse)
+    label = "batch" if act.policy.observe_label == "batch" else "widening"
     crossing = (
         {
             "constraints": act.crossing.constraints,
@@ -864,7 +865,18 @@ def _act_event(
     )
     if phase == "try":
         if act.crossing is None:
-            return None
+            primary = act.actions[0] if act.actions else None
+            return PilotEvent(
+                "candidate_try",
+                scan,
+                {
+                    "index": 0,
+                    "total": 1,
+                    "candidate": _candidate_payload(act.policy),
+                    "applied": act.policy.applied,
+                    "co_actions": tuple(pair for pair in act.policy.applied if pair != primary),
+                },
+            )
         return PilotEvent(
             "crossing_try",
             scan,
@@ -873,7 +885,6 @@ def _act_event(
                 "crossing": crossing,
             },
         )
-    label = "batch" if act.policy.observe_label == "batch" else "widening"
     if act.crossing is not None:
         label = "crossing"
     if phase == "rejected":

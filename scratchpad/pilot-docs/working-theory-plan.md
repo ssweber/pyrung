@@ -298,7 +298,6 @@ unresolved evidence.
 | `effects.py`                 | Observe selected positive/negative producer-to-consumer obligations                                |
 | `intrascan.py`               | Explain ordered facts inside one already-executed assertion scan                                   |
 | Stage 5 shadow interpreter   | Combine specialist facts into one readable next-step interpretation without controlling production |
-| Same-scan retry executor     | Execute at most one nominated local alternative per attempt and return its still-live candidate    |
 | `outcome.py` / `progress.py` | Classify useful landing and durability                                                             |
 | `departure.py`               | Classify exact observed channel motion                                                             |
 | `investigate.py`             | Return bounded counterfactual evidence; do not own the outer drive                                 |
@@ -325,18 +324,24 @@ implementation commit named “stage 5 completion.” Current status is therefor
 | 3     | Mechanics landed; production contract superseded             | Bounded closure laboratory exists, but complete-overlay `WITNESS` search is not the revised production design  |
 | 4     | Reducer prototype landed; lifecycle trigger reshaped         | Detached immutable shadow ledger is production-safe; ordinary accepted, program-owned, and unresolved attempts no longer open it |
 | 5     | Landed                                                       | The five-way zero-retry combiner reuses accepted outcome, existing `program_step`, the already-produced intrascan report, and exact delayed-regression receipts without changing decisions |
-| 6+    | Not started                                                  | No WorkingTheory production control or already-executed retry adoption                                         |
+| 6A    | First controlling slice landed                               | A typed `RETRY_TOGETHER` theory turns one failed pulse plus an exact causal sibling into one ordinary visible batch execution   |
+| 6B+   | Not started                                                  | Prior-scan setup, successive hazards, guards, continuations, and broader ownership transfer remain              |
 
 `close_intrascan`, `TheoryView`, chart-role discovery, first-edge exclusions,
 and related seams remain useful inert experiments. Their existence does not
-mean Stage 6 control has landed.
+broaden the deliberately narrow Stage 6A control boundary.
 
-The first real-program check is intentionally cheap: the Burner drive's first
-ordinary Bearing already composes `Cmd_UnitModeChgRequest`,
-`Cmd_Mode_Production`, and the Clear route action through existing candidate
-machinery. The shadow interpreter observes the accepted batch as
-`KEEP_AND_REREAD`; it must not invent a `RETRY_TOGETHER` repair for work that
-already succeeded.
+The first real-program check is intentionally the beginning of the avoided-
+Complete Tumbler drive. PILOT first pulses `Cmd_UnitModeChgRequest=True` and
+observes that its transient request bit appeared but did not reach the selected
+unit-mode boundary. The already-built Compass paths plus the already-executed
+intrascan projection show the exact reason: `Cmd_Mode_Production` was false at
+the sibling producer read, and both intermediates meet at one selected writer.
+WorkingTheory therefore requests the minimal same-scan branch
+`Cmd_UnitModeChgRequest=True + Cmd_Mode_Production=True`. That ordinary
+`BatchPulse` succeeds. Only after the local boundary is proved and its exact
+requirement is discharged does a fresh Compass read surface
+`Cmd_State_Clear=True` as a separate attempt.
 
 Two timer-alarm reproducers pin the motivating deadline distinction. In
 `aborted_on_first_scan`, the scan-0 preset read precedes `.Done`, and `.Done`
@@ -348,6 +353,65 @@ interpretation, then joins the monitor's retained `ActiveRequirement` and
 `FailedEffectReceipt` back to the original assertion scan and reports
 `RETRY_TOGETHER`. This join consumes the harmful writer's existing ordered
 projection; it must not call Compass, replay a scan, or rebuild `how(state)`.
+
+Stage 6A transfers ownership rather than adding an executor. A theory version
+retains typed temporal intent, the exact rejected trigger, the refined source,
+and a detached causal-branch artifact. Fresh Orientation re-resolves the
+selected writer path, permits the exact rejected trigger only through that
+theory receipt, and requires every sibling to survive ordinary current-world
+admission. The outer loop runs the resulting `BatchPulse` once through
+`_transition_once`, verification, adoption, and durability monitoring. Only
+then does it record the accepted theory attempt, discharge the exact
+requirement, prove the local theory, and orient freshly.
+
+This ownership rule is important: an active typed request bypasses generic
+pre-Orientation requirement recovery, and a proved request cannot leave its
+requirement `ACTIVE`. Otherwise the same receipt can drive a hidden disposable
+third execution on the next turn. The acceptance test pins two executions
+before Clear: the rejected singleton and the successful causal branch.
+
+The first slice discovers one sibling, but the durable abstraction is a
+minimal same-scan branch, not permanently a pair. Generalization must collect
+all exact unmet `AND` siblings for one selected writer and keep `OR`
+alternatives as separate lazy branches. It must not enumerate subsets or
+flatten ambiguous alternatives into one oversized pulse. Multi-requirement
+branch formation, cross-scan setup, guards, and successive hazards remain
+later transfer work.
+
+### Stage 6A exit receipt
+
+The first controlling slice is complete at this boundary:
+
+- the visible real-program sequence is request alone, request plus Production
+  together, then Clear separately;
+- exactly two `_transition_once` executions occur before Clear—the rejected
+  singleton and the accepted causal branch;
+- WorkingTheory records the exact rejection, refinement, accepted attempt, and
+  proof, while successful proof discharges only the named live requirement;
+- generic requirement recovery cannot race an active typed request or repeat a
+  proved request on the next turn;
+- non-crossing `BatchPulse` try/accept/reject lifecycle is visible in the DAP
+  stream and decision record;
+- no new Compass trace, intrascan projection, nested `how(state)`, composer, or
+  monitor is created to nominate the branch.
+
+Exit evidence:
+
+- `make lint` passes;
+- `make test-pilot` passes with 1,139 Pilot tests;
+- focused WorkingTheory, Orientation, DAP, and Tumbler-prefix tests pass;
+- the bounded avoided-Complete watcher reaches the separate Clear read in
+  4.46 seconds, with a 3.38-second maximum event gap and 153 MB peak RSS;
+- Execute and Burner goldens remain byte-identical; the two Completed goldens
+  record the earlier mode transaction and separate Clear transaction.
+
+The next boundaries are deliberately still open:
+
+- collect a minimal multi-sibling `AND` branch without subset search;
+- retain ambiguous `OR` producers as separate lazy alternatives;
+- implement Stage 6B prior-scan `SETUP_FIRST` control;
+- in Stage 7, remove generic failed-requirement recovery as an independent
+  execution owner after its remaining shapes migrate through the common loop.
 
 Diagnostic follow-up, not a Stage-5 blocker: render the retained requirement
 and original act as a direct technician instructionâ€”for example, â€œset
@@ -409,19 +473,22 @@ ownership while the current stage has unexplained failures.
   projection builds, intrascan interpretations, `program_step` projections,
   post-commit monitoring scans, and same-scan retry executions.
 
-### Stage 6A -- Control one same-scan missing-permissive slice
+### Stage 6A -- Control one same-scan causal branch
 
-- Start with one neutral `RETRY_TOGETHER` fixture.
+- Start with the cheap avoided-Complete Tumbler prefix.
 - Open one local controlling theory only after the exact ordinary pulse fails.
-- Nominate only the exact missing steerable leaves for one observed consumer.
-- Preserve conjunctive `AND` shape; nominate `OR` branches lazily.
-- Execute one narrowed candidate once on the exact root or accepted provisional
-  source.
-- Pass that same live execution through the ordinary verification continuation.
-- Adopt only after normal acceptance; otherwise discard it and retain detached
-  attempt evidence.
-- Validate or abandon the local theory, then return to ordinary fresh
-  orientation.
+- Join the rejected transient, exact false sibling read, and one unique selected
+  writer from already-owned Compass and intrascan receipts.
+- Re-resolve the detached branch in fresh Orientation. The rejected singleton
+  may come from fresh pre-admission trace evidence; every sibling must remain
+  ordinarily admitted.
+- Execute the branch once through the outer loop's ordinary `_transition_once`.
+- Adopt only after normal acceptance and monitoring; otherwise restore the
+  source and retain the rejected theory attempt.
+- Discharge only the exact requirement named by the successful current version,
+  prove the theory, then return to ordinary fresh orientation.
+- Pin the visible sequence: request alone, request plus Production together,
+  then Clear separately. Pin exactly two executions before Clear.
 - Do not activate chart-role generalization or first-edge theory filtering in
   this slice.
 
@@ -459,8 +526,8 @@ ownership while the current stage has unexplained failures.
   never as a release/assert overlay.
 - Preserve exact one-shot hidden identity and distinguish a disposable armed
   source from a genuinely committed spent source.
-- Introduce explicit requirement lifetime only when the controlling vertical
-  slices demonstrate the need: `ACTIVE | DISCHARGED | INVALIDATED | AMBIGUOUS`.
+- Extend the now-used requirement lifetime deliberately:
+  `ACTIVE | DISCHARGED | INVALIDATED | AMBIGUOUS`.
 - Keep local repair distinct from later occurrence discharge.
 - Replace `_RecoveryContinuation` with accepted phase receipts.
 

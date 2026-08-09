@@ -546,6 +546,10 @@
  {
   "applied": [
    [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
     "Cmd_Mode_Production",
     true
    ]
@@ -553,22 +557,22 @@
   "candidate": {
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
-   "bearing_channel_tag": "Cmd_UnitMode",
+   "bearing_channel_tag": "Sts_UnitModeCurrent",
    "bearing_channel_value": 1,
    "learned_prescribed": false,
-   "pair": [
+   "pair": null,
+   "prescribed": true,
+   "provenance": [],
+   "route_prescribed": false,
+   "tag": null,
+   "value": null
+  },
+  "co_actions": [
+   [
     "Cmd_Mode_Production",
     true
-   ],
-   "prescribed": false,
-   "provenance": [
-    "ModeChange:R200"
-   ],
-   "route_prescribed": false,
-   "tag": "Cmd_Mode_Production",
-   "value": true
-  },
-  "co_actions": [],
+   ]
+  ],
   "index": 0,
   "kind": "candidate_try",
   "total": 1
@@ -576,69 +580,63 @@
  {
   "applied": [
    [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
     "Cmd_Mode_Production",
     true
    ]
   ],
   "candidate": {
-   "awaited_action_note": "",
-   "awaited_action_prescribed": false,
-   "bearing_channel_tag": "Cmd_UnitMode",
-   "bearing_channel_value": 1,
-   "learned_prescribed": false,
-   "pair": [
-    "Cmd_Mode_Production",
-    true
-   ],
-   "prescribed": false,
-   "provenance": [
-    "ModeChange:R200"
-   ],
-   "route_prescribed": false,
-   "tag": "Cmd_Mode_Production",
-   "value": true
+   "Cmd_Mode_Production": true,
+   "Cmd_UnitModeChgRequest": true
   },
-  "co_actions": [],
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "no new frontier, no trend improvement",
-    "event": "lateral"
+    "detail": "channel target reached",
+    "event": "channel-override-dead-end"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 6 -> 3",
+    "event": "satisfied"
    }
   ],
-  "index": 0,
-  "kind": "candidate_rejected"
+  "kind": "widening_accepted",
+  "trend": 3
  },
  {
-  "distance": 6,
+  "applied": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_Mode_Production": true,
+   "Cmd_UnitModeChgRequest": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "kind": "trend_checkpoint",
+  "trend": 3
+ },
+ {
+  "distance": 3,
   "kind": "iteration",
-  "nogoods": [
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
-  "raw_trace_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ]
-  ],
+  "nogoods": [],
+  "raw_trace_actions": [],
   "still_need": [
    "Sts_State_Completed=True (have False)",
    "Sts_StateCurrent=17 (have 9)",
-   "Sts_StateRequested=17 (have 0)",
-   "Sts_UnitModeCurrent=1 (have 3)",
-   "Cmd_UnitModeChgReqBool=1 (have 0)",
-   "Cmd_UnitMode=1 (have 0)"
+   "Sts_StateRequested=17 (have 0)"
   ],
   "target": [
    "Sts_State_Completed",
@@ -654,16 +652,7 @@
   ]
  },
  {
-  "active_trace_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ]
-  ],
+  "active_trace_actions": [],
   "candidates": [
    {
     "awaited_action_note": "",
@@ -798,14 +787,6 @@
    [
     "Cmd_State_Clear",
     true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
    ]
   ],
   "candidate": {
@@ -824,16 +805,7 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ]
-  ],
+  "co_actions": [],
   "index": 0,
   "kind": "candidate_try",
   "total": 1
@@ -848,7 +820,7 @@
     },
     {
      "__type__": "PilotGateEvent",
-     "detail": "distance 6 -> 3",
+     "detail": "distance 3 -> 3",
      "event": "departed"
     }
    ],
@@ -856,19 +828,11 @@
    "state_key_changed": true,
    "target_reached": false,
    "trend_after": 3,
-   "trend_before": 6
+   "trend_before": 3
   },
   "applied": [
    [
     "Cmd_State_Clear",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
     true
    ]
   ],
@@ -888,16 +852,7 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ]
-  ],
+  "co_actions": [],
   "gates": [
    {
     "__type__": "PilotGateEvent",
@@ -906,7 +861,7 @@
    },
    {
     "__type__": "PilotGateEvent",
-    "detail": "distance 6 -> 3",
+    "detail": "distance 3 -> 3",
     "event": "departed"
    }
   ],
@@ -918,12 +873,6 @@
     "after": 2,
     "before": 9,
     "tag": "Sts_StateCurrent"
-   },
-   {
-    "__type__": "TagChange",
-    "after": 1,
-    "before": 3,
-    "tag": "Sts_UnitModeCurrent"
    }
   ]
  },
@@ -931,14 +880,6 @@
   "applied": [
    [
     "Cmd_State_Clear",
-    true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
     true
    ]
   ],
@@ -4423,10 +4364,6 @@
     "accelerators": [],
     "inputs": [
      [
-      "Cmd_State_Clear",
-      true
-     ],
-     [
       "Cmd_UnitModeChgRequest",
       true
      ],
@@ -4436,11 +4373,28 @@
      ]
     ],
     "kind": "pulse",
-    "label": "Cmd_State_Clear",
+    "label": "Cmd_Mode_Production, Cmd_UnitModeChgRequest",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
     "transition": "A_CurDisabledStates_HEX 8191 -> 0",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "Cmd_State_Clear",
+      true
+     ]
+    ],
+    "kind": "pulse",
+    "label": "Cmd_State_Clear",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "Cmd_CtrlCmd 0 -> 9",
     "waiting_for": []
    },
    {
@@ -4813,7 +4767,7 @@
      ],
      [
       "Blower_tmr.Acc",
-      13
+      12
      ],
      [
       "Blower_tmr.Acc",
@@ -4925,7 +4879,7 @@
      ],
      [
       "Rotate_tmr.Acc",
-      18
+      17
      ],
      [
       "Rotate_tmr.Acc",

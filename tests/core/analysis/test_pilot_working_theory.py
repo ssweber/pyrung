@@ -34,9 +34,12 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryObjectiveSnapshot,
     TheoryObligationSnapshot,
     TheoryRequirementSnapshot,
+    TheoryRetryArtifact,
     TheoryState,
+    TheoryTemporalIntent,
     TheoryTermination,
     reduce_theory,
+    retry_together_request,
     theory_view,
 )
 
@@ -89,6 +92,16 @@ def _requirement(label: str) -> TheoryRequirementSnapshot:
         status="active",
         provenance="projection",
         scope=("call", label, 0),
+    )
+
+
+def _retry_artifact() -> TheoryRetryArtifact:
+    return TheoryRetryArtifact(
+        action_pairs=(("producer", True), ("companion", True)),
+        local_boundary=("joined", True),
+        selected_writer_node=7,
+        path_identity=((11, "target", True), (7, "joined", True)),
+        missing_occurrence=("read", "companion", False),
     )
 
 
@@ -310,6 +323,47 @@ def test_theory_view_scopes_failures_to_the_current_version() -> None:
     assert view.requirements == (_requirement("consumer"),)
     assert view.attempts == ()
     assert view.first_edge_exclusions == ()
+
+
+def test_refined_retry_intent_projects_its_exact_trigger_and_requirements() -> None:
+    state, theory_id, version_id = _opened()
+    rejected = _attempt(
+        theory_id,
+        version_id,
+        transition="retry-trigger",
+        actions=(("producer", True),),
+    )
+    state = reduce_theory(state, rejected)
+    refined_source = replace(
+        rejected.source,
+        world_key=("world", "source", ("requirement", "same-scan")),
+        occurrence_identity=("requirements", "same-scan"),
+    )
+    artifact = _retry_artifact()
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=rejected.source,
+            refined_source=refined_source,
+            requirements=(_requirement("same-scan"),),
+            refinement_identity=("retry-together",),
+            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            trigger_attempt_id=rejected.attempt_identity,
+            retry_artifact=artifact,
+        ),
+    )
+
+    request = retry_together_request(state)
+
+    assert request is not None
+    assert request.theory_id == theory_id
+    assert request.trigger_attempt_id == rejected.attempt_identity
+    assert request.act_identity == rejected.act_identity
+    assert request.requirement_identities == (("requirement", "same-scan"),)
+    assert request.source == refined_source
+    assert request.artifact == artifact
 
 
 def test_theory_view_is_absent_without_an_open_theory() -> None:

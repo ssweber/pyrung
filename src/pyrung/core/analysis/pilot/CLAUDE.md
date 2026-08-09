@@ -207,6 +207,23 @@ compose through successive outer iterations, each followed by fresh
 orientation. `recovery.py::compose_corrections` owns the bounded transaction;
 its module contract defines the permitted recovery boundary.
 
+WorkingTheory owns the first narrow `RETRY_TOGETHER` case when an ordinary
+pulse's retained intrascan projection and the existing Compass paths identify
+one exact false sibling producer at one unique selected writer. The theory
+retains typed intent, the rejected trigger, refined source, requirement, and a
+detached causal-branch artifact. Fresh Orientation re-resolves that branch;
+the outer loop executes it once through ordinary `_transition_once`, verify,
+adoption, and monitoring. A proved branch discharges its exact requirement and
+returns to a fresh Compass read.
+
+Do not let generic pre-Orientation requirement recovery execute while a typed
+retry request is active, and do not leave its requirement active after proof;
+either mistake gives the same receipt a second hidden controller. Do not build
+a second projection, composer, monitor, or nested `how(state)`. The current
+formation slice finds one sibling. Generalization must preserve one minimal
+`AND` branch and represent ambiguous `OR` producers as separate lazy branches,
+never by subset enumeration or by pulsing every alternative together.
+
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
 

@@ -572,7 +572,7 @@ class _PilotProgressFormatter:
             pulsed = tuple(action for action in actions if action not in self._last_holds)
             return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
 
-        if kind == "candidate_rejected":
+        if kind in {"candidate_rejected", "batch_rejected", "widening_rejected"}:
             if self._trial_open:
                 self._trial_open = False
                 return " no useful change.\n"
@@ -581,7 +581,7 @@ class _PilotProgressFormatter:
                 return " no useful change.\n"
             return None
 
-        if kind == "candidate_accepted":
+        if kind in {"candidate_accepted", "batch_accepted", "widening_accepted"}:
             if self._trial_open:
                 self._trial_open = False
                 return " done.\n"

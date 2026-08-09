@@ -188,6 +188,10 @@ class _TraceAdmission:
     detail_by_pair: Mapping[_ActionPair, TraceAction]
     managed_boolean_rungs: tuple[PilotRung, ...]
     establish_pending: bool
+    # All current-world trace readings before pair nogoods remove executable
+    # singletons. Typed theory retries may re-resolve their exact rejected
+    # trigger here while every companion still passes ordinary admission.
+    read_details: tuple[TraceAction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1352,6 +1356,7 @@ def _admit_trace_details(
     return _TraceAdmission(
         active_actions=active_trace_actions,
         actions=trace_actions,
+        read_details=tuple(ordered_details),
         details=trace_action_details,
         detail_by_pair=MappingProxyType(detail_by_pair),
         managed_boolean_rungs=managed_boolean_rungs,

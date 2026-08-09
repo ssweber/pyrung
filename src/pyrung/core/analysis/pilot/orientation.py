@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
+from pyrung.core.analysis.pilot.effects import expectation_from_writer
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -46,8 +48,10 @@ from pyrung.core.analysis.pilot.trace import (
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _IterationFrame
+from pyrung.core.analysis.pilot.working_theory import TheoryTemporalIntent
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
+    _semantic_key,
     _StateKeyConfig,
     wait_edge_nogood,
 )
@@ -78,6 +82,110 @@ def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
         tuple(getattr(world.context, "active_requirements", ())),
         world.snapshot,
         tuple(policy.applied),
+    )
+
+
+def _theory_retry_bearing(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+) -> Bearing | None:
+    """Re-resolve one detached theory artifact in the fresh Compass read."""
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None:
+        return None
+    artifact = getattr(view, "retry_artifact", None)
+    intent = getattr(view, "temporal_intent", None)
+    if intent is not TheoryTemporalIntent.RETRY_TOGETHER:
+        return None
+    if artifact is None:
+        raise ValueError("retry-together theory has no detached artifact")
+    version_source = getattr(view, "root", None)
+    if version_source is None:
+        raise ValueError("retry-together theory version has no exact source")
+    if tuple(world.world_key) != tuple(version_source.world_key):
+        raise ValueError("retry-together theory source does not match the current world")
+    if world.state.work.state.scan_id != version_source.scan_id:
+        raise ValueError("retry-together theory source scan is stale")
+    actions = tuple(artifact.action_pairs)
+    if len(actions) != 2:
+        raise ValueError("retry-together slice requires one trigger and one companion")
+    primary, companion = actions
+    if companion not in candidates.trace.actions:
+        raise ValueError(
+            "retry-together companion is absent from fresh Compass admission: "
+            f"requested={actions!r}, admitted={candidates.trace.actions!r}"
+        )
+    primary_paths = tuple(
+        detail
+        for detail in candidates.trace.read_details
+        if detail.pair == primary
+        and tuple(
+            (step.node_index, step.tag, step.value)
+            for step in detail.effect_path[: len(artifact.path_identity)]
+        )
+        == artifact.path_identity
+    )
+    if not primary_paths:
+        raise ValueError("retry-together primary path is unavailable")
+    if any(pair in world.context.blocked_actions for pair in actions) or _avoid_forces(
+        world.context, actions, world.snapshot
+    ):
+        raise ValueError("retry-together artifact violates a live action constraint")
+    local_tag, local_value = artifact.local_boundary
+    local_steps = tuple(
+        step
+        for step in primary_paths[0].effect_path
+        if step.node_index == artifact.selected_writer_node
+        and step.tag == local_tag
+        and _values_match(step.value, local_value)
+    )
+    if len(local_steps) != 1:
+        raise ValueError("retry-together local boundary is unavailable or ambiguous")
+    expectation = expectation_from_writer(
+        world.context.pdg,
+        world.context.program,
+        writer_node=artifact.selected_writer_node,
+        tag=local_tag,
+        value=local_value,
+        boundary=artifact.local_boundary,
+    )
+    if expectation is None:
+        raise ValueError("retry-together local writer has no exact expectation")
+    act = BatchPulse(
+        ActPolicy(
+            source=ActSource.WIDENING,
+            action_pairs=actions,
+            applied=actions,
+            heading=ChannelHeading(local_tag, local_value),
+            note="working theory: retry the failed pulse with its exact sibling producer",
+            expectation=expectation,
+        )
+    )
+    live_requirements = tuple(getattr(world.context, "active_requirements", ()))
+    if len(live_requirements) != 1 or len(view.requirements) != 1:
+        raise ValueError("retry-together slice requires one exact absorbed requirement")
+    if _semantic_key(live_requirements[0].condition) != view.requirements[0].condition_identity:
+        raise ValueError("retry-together requirement does not match its live receipt")
+    admitted_world = replace(
+        world,
+        context=replace(world.context, active_requirements=()),
+    )
+    if not _act_preserves_requirements(
+        admitted_world,
+        act,
+    ) or world.context.compass.knowledge.act_is_nogood(
+        world.world_key,
+        act_identity(act),
+    ):
+        raise ValueError("retry-together artifact is inadmissible in its exact source world")
+    return _bearing(
+        world,
+        act,
+        candidates,
+        target=target,
+        rationale="working theory: retry exact same-scan companion",
     )
 
 
@@ -531,6 +639,10 @@ def _orient_read(
         world.context,
     )
 
+    theory_retry = _theory_retry_bearing(world, candidates, target)
+    if theory_retry is not None:
+        return theory_retry
+
     prescription = candidates.wait.prescription if candidates.wait is not None else None
     if prescription is not None:
         heading = prescription.heading
@@ -813,6 +925,7 @@ def orient(
         "target": target,
         "blocked_actions": constraints.blocked_actions,
         "avoid_pred": constraints.avoid_predicate,
+        "theory_view": constraints.theory_view,
     }
     # Orientation also serves narrow structural test/navigation contexts.
     # Preserve that protocol while passing requirements through every context

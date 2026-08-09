@@ -527,6 +527,19 @@ class TestCausalVerbs:
         assert trying == "\nPulse Start=True..."
         assert accepted == " done.\n"
 
+    def test_how_progress_streams_an_atomic_widening_batch(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        actions = (("ModeRequest", True), ("Production", True))
+        progress = _PilotProgressFormatter()
+
+        trying = progress.format(PilotEvent("candidate_try", 10, {"applied": actions}))
+        accepted = progress.format(PilotEvent("widening_accepted", 11, {"applied": actions}))
+
+        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert accepted == " done.\n"
+
     def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung

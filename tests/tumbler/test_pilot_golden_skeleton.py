@@ -210,11 +210,11 @@ def test_pilot_golden_skeleton_completed(tumbler_logic) -> None:
     # runs through the production SFCs) — the mode-change discovery is part
     # of the locked record.
     accepted = _accepted_tags(skeleton)
-    assert "Cmd_Mode_Production" in accepted or any(
-        "Cmd_Mode_Production" in json.dumps(entry.get("co_actions", ()))
-        for entry in skeleton
-        if entry["kind"] == "candidate_accepted"
-    ), f"COMPLETED drive never discovered the Production mode change: accepted={accepted}"
+    accepted_actions = _all_action_tags(skeleton)
+    assert "Cmd_Mode_Production" in accepted_actions, (
+        "COMPLETED drive never discovered the Production mode change: "
+        f"accepted={accepted}, all accepted actions={sorted(accepted_actions)}"
+    )
 
     if not finished["reached"]:
         # An honest stall is still a lockable skeleton — but the stall must

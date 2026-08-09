@@ -1,9 +1,10 @@
 """Detached, immutable WorkingTheory knowledge and its pure reducer.
 
-Stage 4 records the existing PILOT loop as shadow evidence.  Nothing in this
-module owns a PLC world, chooses an action, or restores or promotes a
-checkpoint.  All identities are supplied as detached semantic values so a
-ledger can survive ordinary world rollback without retaining a future.
+The ledger owns detached knowledge and typed temporal intent. It never owns a
+PLC world, chooses an executable action, or restores or promotes a checkpoint.
+The drive may resolve a typed request back to exact live receipts; all values
+stored here remain semantic so the ledger survives rollback without retaining
+a future.
 """
 
 from __future__ import annotations
@@ -46,6 +47,13 @@ class TheoryTermination(StrEnum):
     BUDGET = "budget"
     CONFLICT = "conflict"
     PROVED_IMPOSSIBLE = "proved-impossible"
+
+
+class TheoryTemporalIntent(StrEnum):
+    """Typed next temporal move justified by one failed theory attempt."""
+
+    SETUP_FIRST = "setup_first"
+    RETRY_TOGETHER = "retry_together"
 
 
 @dataclass(frozen=True)
@@ -106,6 +114,29 @@ class TheoryRequirementSnapshot:
 
 
 @dataclass(frozen=True)
+class TheoryRetryArtifact:
+    """Detached same-scan artifact nominated by existing execution evidence."""
+
+    action_pairs: tuple[tuple[str, Any], ...]
+    local_boundary: tuple[str, Any]
+    selected_writer_node: int
+    path_identity: tuple[tuple[int, str, Any], ...]
+    missing_occurrence: tuple[Any, ...]
+    supporting_evidence: tuple[Any, ...] = ()
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            "retry-artifact",
+            self.action_pairs,
+            self.local_boundary,
+            self.selected_writer_node,
+            self.path_identity,
+            self.missing_occurrence,
+        )
+
+
+@dataclass(frozen=True)
 class TheoryClaim:
     """One selected producer-to-consumer claim at one exact source."""
 
@@ -134,6 +165,9 @@ class TheoryVersion:
     requirements: tuple[TheoryRequirementSnapshot, ...]
     source: TheoryBoundaryIdentity
     parent_version_id: TheoryVersionId | None = None
+    temporal_intent: TheoryTemporalIntent | None = None
+    trigger_attempt_id: tuple[Any, ...] | None = None
+    retry_artifact: TheoryRetryArtifact | None = None
 
 
 @dataclass(frozen=True)
@@ -192,6 +226,9 @@ class TheoryView:
     requirements: tuple[TheoryRequirementSnapshot, ...]
     attempts: tuple[TheoryAttemptReceipt, ...]
     first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
+    temporal_intent: TheoryTemporalIntent | None = None
+    trigger_attempt_id: tuple[Any, ...] | None = None
+    retry_artifact: TheoryRetryArtifact | None = None
 
     def excludes_first_edge(self, artifact_identity: tuple[Any, ...]) -> bool:
         """Whether this exact theory/version/source already rejected an artifact."""
@@ -200,6 +237,19 @@ class TheoryView:
             exclusion.artifact_identity == artifact_identity
             for exclusion in self.first_edge_exclusions
         )
+
+
+@dataclass(frozen=True)
+class RetryTogetherRequest:
+    """Detached current-version request for one exact same-scan retry."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    trigger_attempt_id: tuple[Any, ...]
+    act_identity: tuple[Any, ...]
+    requirement_identities: tuple[tuple[Any, ...], ...]
+    artifact: TheoryRetryArtifact
 
 
 @dataclass(frozen=True)
@@ -212,6 +262,7 @@ class TheoryReceipt:
     fulfilled_obligations: tuple[Any, ...]
     requirement_observations: tuple[Any, ...]
     retained_pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    accepted_attempt_id: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -683,9 +734,41 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         version.requirements,
         attempts,
         exclusions,
+        version.temporal_intent,
+        version.trigger_attempt_id,
+        version.retry_artifact,
     )
     assert_detached_theory_value(view, path="theory_view")
     return view
+
+
+def retry_together_request(state: TheoryState) -> RetryTogetherRequest | None:
+    """Project one typed controlling request without retaining executable state."""
+
+    view = theory_view(state)
+    if view is None or view.temporal_intent is not TheoryTemporalIntent.RETRY_TOGETHER:
+        return None
+    trigger_id = view.trigger_attempt_id
+    trigger = state.ledger.attempts.get(trigger_id) if trigger_id is not None else None
+    if trigger is None:
+        raise TheoryInvariantError("retry-together intent has no triggering attempt")
+    if trigger.theory_id != view.theory_id:
+        raise TheoryInvariantError("retry-together trigger belongs to another theory")
+    if trigger.disposition is not TheoryAttemptDisposition.REJECTED_EXACT:
+        raise TheoryInvariantError("retry-together trigger is not an exact rejection")
+    if view.retry_artifact is None:
+        raise TheoryInvariantError("retry-together intent has no exact artifact")
+    request = RetryTogetherRequest(
+        view.theory_id,
+        view.version_id,
+        view.root,
+        trigger.attempt_id,
+        trigger.act_identity,
+        tuple(requirement.semantic_identity for requirement in view.requirements),
+        view.retry_artifact,
+    )
+    assert_detached_theory_value(request, path="retry_together_request")
+    return request
 
 
 @dataclass(frozen=True)
@@ -730,6 +813,9 @@ class RefineTheory:
     refined_source: TheoryBoundaryIdentity
     requirements: tuple[TheoryRequirementSnapshot, ...]
     refinement_identity: tuple[Any, ...]
+    temporal_intent: TheoryTemporalIntent | None = None
+    trigger_attempt_id: tuple[Any, ...] | None = None
+    retry_artifact: TheoryRetryArtifact | None = None
 
 
 @dataclass(frozen=True)
@@ -741,6 +827,7 @@ class ProveTheory:
     fulfilled_obligations: tuple[Any, ...] = ()
     requirement_observations: tuple[Any, ...] = ()
     retained_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    accepted_attempt_id: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1116,12 +1203,43 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.refined_source.scan_id < fact.source.scan_id:
             raise TheoryInvariantError("refined source cannot precede its source")
         parent = state.ledger.versions[fact.parent_version_id]
+        temporal_intent = fact.temporal_intent
+        trigger_attempt_id = fact.trigger_attempt_id
+        retry_artifact = fact.retry_artifact
+        if (temporal_intent is None) != (trigger_attempt_id is None):
+            raise TheoryInvariantError(
+                "temporal intent and triggering attempt must travel together"
+            )
+        if temporal_intent is TheoryTemporalIntent.RETRY_TOGETHER:
+            if retry_artifact is None:
+                raise TheoryInvariantError("retry-together refinement requires an artifact")
+        elif retry_artifact is not None:
+            raise TheoryInvariantError("only retry-together intent may carry an artifact")
+        if fact.trigger_attempt_id is not None:
+            trigger = state.ledger.attempts.get(fact.trigger_attempt_id)
+            if trigger is None:
+                raise TheoryInvariantError("refinement triggering attempt is missing")
+            if (
+                trigger.theory_id != fact.theory_id
+                or trigger.version_id != parent.version_id
+                or trigger.source != fact.source
+            ):
+                raise TheoryInvariantError(
+                    "refinement triggering attempt does not match its theory version and source"
+                )
+            if trigger.disposition is not TheoryAttemptDisposition.REJECTED_EXACT:
+                raise TheoryInvariantError("temporal refinement requires an exact rejected attempt")
         novel = tuple(
             requirement
             for requirement in fact.requirements
             if requirement not in parent.requirements
         )
-        if not novel:
+        if (
+            not novel
+            and temporal_intent == parent.temporal_intent
+            and trigger_attempt_id == parent.trigger_attempt_id
+            and retry_artifact == parent.retry_artifact
+        ):
             return state
         requirements = (*parent.requirements, *novel)
         version_id: TheoryVersionId = (
@@ -1131,6 +1249,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.source,
             fact.refined_source,
             tuple(item.semantic_identity for item in requirements),
+            temporal_intent,
+            trigger_attempt_id,
+            retry_artifact.identity if retry_artifact is not None else None,
             fact.refinement_identity,
         )
         version = TheoryVersion(
@@ -1139,6 +1260,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             requirements,
             fact.refined_source,
             parent.version_id,
+            temporal_intent,
+            trigger_attempt_id,
+            retry_artifact,
         )
         versions = _put_unique(state.ledger.versions, version_id, version, "version")
         updated = replace(theory, current_version_id=version_id)
@@ -1155,6 +1279,18 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.version_id != theory.current_version_id:
             raise TheoryInvariantError("proof addresses a stale theory version")
         claim = state.ledger.claims[theory.claim_id]
+        if fact.accepted_attempt_id is not None:
+            accepted = state.ledger.attempts.get(fact.accepted_attempt_id)
+            if accepted is None:
+                raise TheoryInvariantError("proof's accepted attempt is missing")
+            if (
+                accepted.theory_id != theory.theory_id
+                or accepted.version_id != fact.version_id
+                or accepted.disposition is not TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            ):
+                raise TheoryInvariantError(
+                    "proof's accepted attempt does not match its current theory version"
+                )
         receipt_id: TheoryReceiptId = ("receipt", fact.theory_id, fact.proof_identity)
         receipt = TheoryReceipt(
             receipt_id,
@@ -1165,6 +1301,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.fulfilled_obligations,
             fact.requirement_observations,
             fact.retained_pilot_rung_identities,
+            fact.accepted_attempt_id,
         )
         receipts = _put_unique(state.ledger.receipts, receipt_id, receipt, "receipt")
         updated = replace(theory, status=TheoryStatus.PROVED)
