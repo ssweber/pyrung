@@ -378,6 +378,24 @@ flatten ambiguous alternatives into one oversized pulse. Multi-requirement
 branch formation, cross-scan setup, guards, and successive hazards remain
 later transfer work.
 
+An important current limitation: Stage 6A can choose the sibling only because
+that steer was already present in the original Compass `CandidateRead`.
+Intrascan proves the temporal relationship—it names the exact false read,
+deadline, and displacement—but it does not currently introduce a new steer.
+The adapter joins that evidence only to an existing Compass effect path, and
+fresh Orientation still requires the sibling to pass ordinary admission.
+
+The general form must preserve that ownership boundary while removing the
+candidate-set limitation. Intrascan should retain an exact missing program
+condition and demanding occurrence. WorkingTheory should carry that unresolved
+local requirement. A bounded supplemental Compass read should then map the
+condition through existing PDG/trace, occurrence-source-walk,
+`program_step.required_inputs`, and guard-alternative machinery to admissible
+steerable producers. Compass—not intrascan—nominates the resulting minimal
+branch. Intrascan must never manufacture or execute an operator action, and the
+supplemental read must not become a recursive `how(state)` or global candidate
+search.
+
 ### Stage 6A exit receipt
 
 The first controlling slice is complete at this boundary:
@@ -407,6 +425,9 @@ Exit evidence:
 
 The next boundaries are deliberately still open:
 
+- allow an exact intrascan requirement to request a bounded supplemental
+  Compass producer read when its steer was absent from the original
+  `CandidateRead`;
 - collect a minimal multi-sibling `AND` branch without subset search;
 - retain ambiguous `OR` producers as separate lazy alternatives;
 - implement Stage 6B prior-scan `SETUP_FIRST` control;
