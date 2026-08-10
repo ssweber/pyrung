@@ -1322,7 +1322,6 @@ class TestClassifyDepartureRefusal:
             stop_reason="timeout",
             fired=(),
             events=(),
-            budget=2000,
         )
         fake_fork = SimpleNamespace(state=SimpleNamespace(tags={"Chan": 7}, scan_id=2000))
         monkeypatch.setattr(

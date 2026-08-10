@@ -212,19 +212,16 @@ class TheoryFirstEdgeExclusion:
 class TheoryView:
     """Detached read-only projection of the active theory for navigation.
 
-    The view contains no executable world or retained navigation decision.  Its
-    attempts and first-edge exclusions are restricted to the current version
-    and exact provisional source, so a failure cannot suppress the same move
-    later in a different world or under a refined version.
+    The view contains no executable world or retained navigation decision. Its
+    first-edge exclusions are restricted to the current version and exact
+    provisional source, so a failure cannot suppress the same move later in a
+    different world or under a refined version.
     """
 
     theory_id: TheoryId
     version_id: TheoryVersionId
-    source: TheoryBoundaryIdentity
     root: TheoryBoundaryIdentity
-    claim: TheoryClaim
     requirements: tuple[TheoryRequirementSnapshot, ...]
-    attempts: tuple[TheoryAttemptReceipt, ...]
     first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
@@ -275,18 +272,6 @@ class TheoryTombstone:
 
 
 @dataclass(frozen=True)
-class NogoodProof:
-    """Proof-level negative evidence; shadow integration never manufactures one."""
-
-    proof_id: tuple[Any, ...]
-    executable_world_identity: tuple[Any, ...]
-    claim_scope: tuple[Any, ...]
-    finite_domain: tuple[Any, ...]
-    completeness_evidence: tuple[Any, ...]
-    rejected_artifacts: tuple[tuple[Any, ...], ...]
-
-
-@dataclass(frozen=True)
 class TheorySuccessor:
     parent_receipt_id: TheoryReceiptId
     successor_theory_id: TheoryId
@@ -320,7 +305,6 @@ class TheoryLedger:
     receipts: PMap[Any, TheoryReceipt] = pmap()
     tombstones: PMap[Any, TheoryTombstone] = pmap()
     successors: PMap[Any, TheorySuccessor] = pmap()
-    nogood_proofs: PMap[Any, NogoodProof] = pmap()
     unattributed: PMap[Any, UnattributedTheoryEvidence] = pmap()
     applied_facts: PMap[Any, TheoryFact] = pmap()
 
@@ -728,11 +712,8 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     view = TheoryView(
         theory_id,
         version.version_id,
-        progress.provisional_tip,
         version.source,
-        claim,
         version.requirements,
-        attempts,
         exclusions,
         version.temporal_intent,
         version.trigger_attempt_id,

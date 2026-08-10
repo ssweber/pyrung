@@ -188,6 +188,7 @@ def test_unreachable_boundary_stops_at_the_recorded_incident_horizon(monkeypatch
     assert plc.state.scan_id == 0
     assert outcome.snapshot[state.name] == 1
     assert len(receipts) == 1
-    assert receipts[0].budget == 4
+    assert receipts[0].stop_reason == "timeout"
+    assert receipts[0].logical_scans == 4
     assert receipts[0].logical_scans == 4
     assert receipts[0].stop_reason == "timeout"

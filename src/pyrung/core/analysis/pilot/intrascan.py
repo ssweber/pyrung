@@ -196,7 +196,6 @@ class IntrascanClosureStatus(StrEnum):
     WITNESS = "witness"
     BUDGET_EXHAUSTED = "budget_exhausted"
     INCOMPLETE = "incomplete"
-    IMPOSSIBLE = "impossible"
 
 
 class IntrascanRequirementDisposition(StrEnum):

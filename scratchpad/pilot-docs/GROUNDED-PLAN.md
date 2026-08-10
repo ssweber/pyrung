@@ -68,9 +68,12 @@ Decision-affecting commits additionally ride golden regeneration +
 2. **Delete provably dead records** (audit 5, cat A — no readers anywhere):
    `NogoodProof` + `ledger.nogood_proofs`, `_PilotState.last_wait_log`,
    `DeviationIncident.occurrence_writer`, `_HoldLogEntry.tags`,
-   `CoastReceipt.budget`, `EarnedWorkReceipt.source_mark`,
-   `_RequirementRepairResult.declined`, `TheoryView.claim/.source/.attempts`,
-   `IntrascanClosureStatus.IMPOSSIBLE`. ~120 lines removed. Gate: test-pilot.
+   `CoastReceipt.budget`, `TheoryView.claim/.source/.attempts`, and
+   `IntrascanClosureStatus.IMPOSSIBLE`. Keep `EarnedWorkReceipt.source_mark`
+   (verification identity/evidence consumes it) and
+   `_RequirementRepairResult.declined` (the drive loop consumes its conflict
+   decision); the audit incorrectly classified both as unread. ~120 lines
+   removed. Gate: test-pilot.
 3. **Evict the `close_intrascan` laboratory** (~400 test-only lines) from
    `intrascan.py` to tests/ or delete; the plan already calls its WITNESS contract
    "not the production target". Takes `IntrascanRequirementObservation`+kin with it.

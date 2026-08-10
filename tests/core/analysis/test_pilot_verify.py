@@ -1159,7 +1159,6 @@ class TestVerifyGates:
             stop_reason="reached",
             fired=("target",),
             events=timeline,
-            budget=1,
             advances=(("VerifyAccumulator", 9),),
         )
         pulse = _PulseState(

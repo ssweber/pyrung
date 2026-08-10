@@ -529,7 +529,6 @@ def test_duplicate_candidate_is_suppressed_and_budget_exhaustion_is_not_impossib
     )
 
     assert result.status is IntrascanClosureStatus.BUDGET_EXHAUSTED
-    assert result.status is not IntrascanClosureStatus.IMPOSSIBLE
     assert result.witness is None
     assert len(result.attempts) == 1
     assert len(result.attempted_identities) == 1
@@ -759,7 +758,6 @@ def test_requirement_is_violated_at_its_exact_read_even_when_exit_is_true() -> N
     )
 
     assert result.status is IntrascanClosureStatus.INCOMPLETE
-    assert result.status is not IntrascanClosureStatus.IMPOSSIBLE
     assert result.witness is None
     assert len(result.attempts) == 1
     attempt = result.attempts[0]

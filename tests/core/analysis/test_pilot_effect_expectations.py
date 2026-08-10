@@ -210,7 +210,6 @@ def test_route_and_program_coast_observe_the_execution_corridor_not_scan_before(
             "reached",
             ("target",),
             (),
-            1,
             kernel_scans=1,
         )
         pulse = SimpleNamespace(
@@ -1632,7 +1631,7 @@ def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
     )
     original = PLC(program)
     original.step()
-    original_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
+    original_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), kernel_scans=1)
     original_pulse = SimpleNamespace(
         fork=original,
         scan_before=0,
@@ -1645,7 +1644,7 @@ def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
     attempt = _executed_attempt(bearing, original_pulse)  # type: ignore[arg-type]
     replay = PLC(program)
     replay.step()
-    replay_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
+    replay_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), kernel_scans=1)
     replay_pulse = SimpleNamespace(
         fork=replay,
         scan_before=0,
@@ -1813,7 +1812,6 @@ def test_exact_coast_events_compose_producer_then_later_overwriter() -> None:
         "departed",
         ("overwriter",),
         events,
-        2,
         kernel_scans=2,
     )
     expectation = EffectExpectation((_terminal_obligation(program, effect.name, 1),))
@@ -1870,7 +1868,6 @@ def test_coast_preserves_all_repeated_producer_occurrence_results() -> None:
         "reached",
         ("second",),
         events,
-        2,
         kernel_scans=2,
     )
 
@@ -1934,7 +1931,6 @@ def test_channel_abort_receipt_remains_authoritative_with_unknown_effect() -> No
         "departed",
         ("ejected",),
         (),
-        20,
         kernel_scans=5,
         macro_folds=1,
     )
