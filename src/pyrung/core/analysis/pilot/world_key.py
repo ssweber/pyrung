@@ -169,5 +169,6 @@ def _pilot_world_key(
             )
         )
         for requirement in active_requirements
+        if getattr(getattr(requirement, "status", None), "value", "active") == "active"
     )
     return base if not requirement_key else (*base, requirement_key)

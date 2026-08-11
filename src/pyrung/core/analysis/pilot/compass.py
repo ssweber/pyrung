@@ -536,6 +536,34 @@ class CompassKnowledge:
     def coast_receipt(self, world_key: tuple[Any, ...]) -> str | None:
         return self.coast_receipts.get(world_key)
 
+    def after_stable_context_change(self, world_key: tuple[Any, ...]) -> CompassKnowledge:
+        """Expire empirical negatives scoped to a pre-setup input context.
+
+        Runtime transition entries retain their full snapshot context. Act
+        nogoods, probe counts, and terminal-coast receipts deliberately use the
+        projected world key, which omits steerable values; an accepted stable
+        setup therefore makes only those negative receipts stale.
+        """
+
+        return replace(
+            self,
+            act_nogoods=(
+                self.act_nogoods.remove(world_key)
+                if world_key in self.act_nogoods
+                else self.act_nogoods
+            ),
+            probe_counts=(
+                self.probe_counts.remove(world_key)
+                if world_key in self.probe_counts
+                else self.probe_counts
+            ),
+            coast_receipts=(
+                self.coast_receipts.remove(world_key)
+                if world_key in self.coast_receipts
+                else self.coast_receipts
+            ),
+        )
+
     def tag_entries(
         self,
         tag: str,

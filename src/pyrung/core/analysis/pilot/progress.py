@@ -1202,6 +1202,32 @@ def _install_confirmed_correction(
     correction_rung_ids = tuple(_rung_identity(rung) for rung in correction.pilot_rungs)
     if len(set(correction_rung_ids)) != len(correction_rung_ids):
         raise ValueError("a confirmed correction cannot contain duplicate rungs")
+    exact_owner = next(
+        (
+            receipt
+            for receipt in state.correction_receipts
+            if receipt.status.effective and receipt.identity == correction.identity
+        ),
+        None,
+    )
+    if exact_owner is not None:
+        # Re-observing the incident can reconfirm the correction before its
+        # first corrected continuation has made progress.  That is evidence
+        # for the existing owner, not authority to append another owner (or
+        # another hold-log installation) for the same executable rungs.
+        if not all(rung in state.pilot_rungs for rung in exact_owner.pilot_rungs):
+            raise RuntimeError("effective correction receipt has lost its owned rung(s)")
+        admitted_origins = exact_owner.admitted_origins or frozenset((exact_owner.origin_key,))
+        if origin_key not in admitted_origins:
+            exact_owner = replace(
+                exact_owner,
+                admitted_origins=admitted_origins | frozenset((origin_key,)),
+            )
+            state.correction_receipts = [
+                exact_owner if receipt.receipt_id == exact_owner.receipt_id else receipt
+                for receipt in state.correction_receipts
+            ]
+        return exact_owner
     existing = {_rung_identity(rung) for rung in state.pilot_rungs}
     duplicate = tuple(rung for rung in correction.pilot_rungs if _rung_identity(rung) in existing)
     if duplicate and not (adopt_existing and len(duplicate) == len(correction.pilot_rungs)):
@@ -1228,6 +1254,7 @@ def _install_confirmed_correction(
         ),
         origin_key=origin_key,
         correction=correction,
+        admitted_origins=frozenset((origin_key,)),
     )
     state.correction_receipts.append(receipt)
     key_config = state.key_config
@@ -1426,7 +1453,8 @@ def _revoke_corrections(
         for receipt in state.correction_receipts
     ]
     for receipt in receipts:
-        state.correction_nogoods.setdefault(receipt.origin_key, set()).add(receipt.identity)
+        for origin_key in receipt.admitted_origins or frozenset((receipt.origin_key,)):
+            state.correction_nogoods.setdefault(origin_key, set()).add(receipt.identity)
         state.hold_log.append(
             _HoldLogEntry(
                 scan=state.work.state.scan_id,
@@ -1491,6 +1519,7 @@ def _investigate_and_revert(
     cp_fork = cp_world.work
     end_scan = state.work.state.scan_id
     confirmed_correction: _ConfirmedCorrection | None = None
+    reused_receipt: _CorrectionReceipt | None = None
     investigation: InvestigationResult | None = None
     revoked_receipts: tuple[_CorrectionReceipt, ...] = ()
     investigation_nogoods: set[_ActionPair] = set()
@@ -1887,6 +1916,24 @@ def _investigate_and_revert(
             )
         }
         revoked_receipts = tuple(revoked_by_id.values())
+        revoked_receipt_ids = {receipt.receipt_id for receipt in revoked_receipts}
+        reused_receipt = next(
+            (
+                receipt
+                for receipt in state.correction_receipts
+                if receipt.status.effective
+                and receipt.receipt_id not in revoked_receipt_ids
+                and confirmed_correction is not None
+                and receipt.identity == confirmed_correction.identity
+            ),
+            None,
+        )
+        if reused_receipt is not None:
+            # The skeleton owns one correction for one exact executable form.
+            # A repeated incident may reconfirm that form before useful work
+            # promotes it, but it must not report or install a second
+            # correction.  The existing receipt remains the sole authority.
+            confirmed_correction = None
 
         def _hyp_detail(h: Any) -> dict[str, Any]:
             return {
@@ -1905,15 +1952,29 @@ def _investigate_and_revert(
 
         investigation_payload = {
             "hypotheses": len(investigation.hypotheses),
-            "confirmed": len(investigation.confirmed),
+            "confirmed": 0 if reused_receipt is not None else len(investigation.confirmed),
             "rejected": len(investigation.rejected),
             "unresolved": investigation.unresolved,
             "hypothesis_detail": tuple(_hyp_detail(h) for h in investigation.hypotheses),
-            "confirmed_detail": tuple(_hyp_detail(h) for h in investigation.confirmed),
+            "confirmed_detail": (
+                ()
+                if reused_receipt is not None
+                else tuple(_hyp_detail(h) for h in investigation.confirmed)
+            ),
             "rejected_detail": tuple(_rejection_detail(r) for r in investigation.rejected),
             "revoked_corrections": tuple(receipt.receipt_id for receipt in revoked_receipts),
+            **(
+                {"reused_correction": reused_receipt.receipt_id}
+                if reused_receipt is not None
+                else {}
+            ),
         }
-    if retain_if_unresolved is not None and confirmed_correction is None and not revoked_receipts:
+    if (
+        retain_if_unresolved is not None
+        and confirmed_correction is None
+        and reused_receipt is None
+        and not revoked_receipts
+    ):
         # The departure earned no target-relative credit, but investigation found no
         # executable correction that preserves the target frontier.  The
         # independently-proven continuation therefore receives the ordinary

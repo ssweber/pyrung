@@ -61,6 +61,7 @@ from pyrung.core.analysis.pilot.progress import (
     _investigate_and_revert,
     _monitor_trend,
     _promote_probationary_corrections,
+    _revoke_corrections,
 )
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
 from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
@@ -881,6 +882,87 @@ def test_correction_installer_rejects_already_owned_rung():
 
     assert state.correction_receipts == []
     assert state.hold_log[-1].source == "prerequisite"
+
+
+def test_correction_installer_reuses_its_exact_effective_owner():
+    """Reconfirmation strengthens one owner; it never creates a second one."""
+    state, _trial, frame, _ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        pilot_rungs=(rung,),
+        sources=("Go",),
+        justification="replay confirmed",
+    )
+    first = _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+
+    second = _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=("later-incident",),
+        scan=state.work.state.scan_id + 1,
+        source="investigation",
+    )
+
+    assert second.receipt_id == first.receipt_id
+    assert state.correction_receipts == [second]
+    assert second.admitted_origins == frozenset((frame.key, ("later-incident",)))
+    assert [entry.source for entry in state.hold_log] == ["investigation"]
+
+    _revoke_corrections(state, (second,))
+
+    assert second.identity in state.correction_nogoods[frame.key]
+    assert second.identity in state.correction_nogoods[("later-incident",)]
+
+
+def test_reconfirmed_correction_reverts_instead_of_opening_unresolved_departure(monkeypatch):
+    """An idempotent install remains a remedy, even though it adds no new owner."""
+    state, trial, frame, ctx = _saboteur_scenario()
+    state_tag = state.work._known_tags_by_name["State"]
+    rung = PilotRung("Go", True, CompareEq(state_tag, 6))
+    correction = _ConfirmedCorrection(
+        identity=correction_identity((rung,)),
+        pilot_rungs=(rung,),
+        sources=("Go",),
+        justification="replay confirmed",
+    )
+    receipt = _install_confirmed_correction(
+        state,
+        correction,
+        origin_key=frame.key,
+        scan=state.work.state.scan_id,
+        source="investigation",
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress.investigate_deviation",
+        _stub_investigation([rung]),
+    )
+    monkeypatch.setattr(
+        "pyrung.core.analysis.pilot.progress._causally_harmful_corrections",
+        lambda *_args, **_kwargs: (),
+    )
+
+    events = _investigate_and_revert(
+        trial,
+        frame,
+        state,
+        ctx,
+        origin=_checkpoint_recovery_origin(state, before_snap=frame.snap),
+        retain_if_unresolved=cast(Any, object()),
+        settled_if_unresolved=state.work,
+    )
+
+    assert [event.kind for event in events] == ["trend_regression"]
+    assert events[0].data["investigation"]["reused_correction"] == receipt.receipt_id
+    assert state.pending_departure is None
+    assert state.correction_receipts == [receipt]
 
 
 def test_prerequisite_reuses_correction_owned_rung_without_claiming_it():

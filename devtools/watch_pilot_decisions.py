@@ -114,6 +114,28 @@ def _decision_lines(
     snapshot: Mapping[str, Any],
     stop_action: tuple[str, Any] | None,
 ) -> tuple[tuple[str, ...], bool]:
+    if event.kind == "bearing_coast_accepted":
+        effects = tuple(
+            (
+                getattr(effect, "disposition", None),
+                getattr(getattr(effect, "obligation", None), "tag", None),
+                getattr(getattr(effect, "appeared", None), "scan_id", None),
+            )
+            for effect in event.data.get("effect_observations") or ()
+        )
+        return (
+            (
+                "[coast-receipt] "
+                f"scan={event.scan} "
+                f"channel={event.data.get('bearing_coast_channel_tag')!r} "
+                f"motion={event.data.get('bearing_coast_before_value')!r}->"
+                f"{event.data.get('bearing_coast_target_value')!r}/"
+                f"{event.data.get('bearing_coast_actual_value')!r} "
+                f"stop={event.data.get('bearing_stop_reason')!r} "
+                f"progress={event.data.get('progress')!r} "
+                f"effects={effects!r}"
+            ),
+        ), False
     if event.kind != "candidates_built":
         return (), False
 
@@ -123,13 +145,23 @@ def _decision_lines(
     prerequisites = tuple(
         (rung.dest, rung.value) for rung in event.data.get("prerequisite_pilot_rungs", ())
     )
+    active_alarms = tuple(
+        name
+        for name, value in snapshot.items()
+        if name.startswith("A_Alm") and name.endswith("_Status") and bool(value)
+    )
     lines = [
         "[decision] "
         f"scan={event.scan} "
         f"state={snapshot.get('Sts_StateCurrent')!r} "
         f"step={snapshot.get('Internal__Step')!r} "
         f"candidates={candidates!r} trace={trace!r} route={route!r} "
-        f"holds={prerequisites!r}"
+        f"holds={prerequisites!r} "
+        f"wait={event.data.get('wait_reason')!r} "
+        f"frontier={tuple(event.data.get('completion_frontier') or ())!r} "
+        f"program_step={event.data.get('program_step')!r} "
+        f"alarm_extent={snapshot.get('A_AlmExtent')!r} "
+        f"active_alarms={active_alarms!r}"
     ]
     stopped = stop_action is not None and (
         stop_action in candidates or stop_action in trace or stop_action in prerequisites
@@ -171,11 +203,29 @@ def _event_context(event: Any, snapshot: Mapping[str, Any]) -> str:
     if reason:
         rendered = str(reason)
         parts.append(f"reason={rendered[:240]!r}")
+    if event.kind == "bearing_coast_accepted":
+        parts.append(
+            "motion="
+            f"{event.data.get('bearing_coast_before_value')!r}->"
+            f"{event.data.get('bearing_coast_target_value')!r}/"
+            f"{event.data.get('bearing_coast_actual_value')!r} "
+            f"stop={event.data.get('bearing_stop_reason')!r}"
+        )
+        effects = tuple(
+            (
+                getattr(effect, "disposition", None),
+                getattr(getattr(effect, "obligation", None), "tag", None),
+                getattr(getattr(effect, "appeared", None), "scan_id", None),
+            )
+            for effect in event.data.get("effect_observations") or ()
+        )
+        if effects:
+            parts.append(f"effects={effects!r}")
     return " ".join(parts)
 
 
 def _interpretation_line(message: Mapping[str, Any]) -> str:
-    """Render one shadow diagnosis without turning it into a public event."""
+    """Render one temporal diagnosis without turning it into a public event."""
 
     support = repr(tuple(message["supporting_identities"]))
     if len(support) > 1200:
@@ -688,7 +738,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "retry_together",
             "unresolved",
         ),
-        help="stop after printing the first matching Stage 5 interpretation",
+        help="stop after printing the first matching temporal interpretation",
     )
     parser.add_argument(
         "--history",

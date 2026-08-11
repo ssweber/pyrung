@@ -26,8 +26,11 @@ read current world -> choose one bearing -> try it on a fork -> verify
 On an uncomplicated turn, `trace.py` exposes a steerable leaf or an owned
 boundary, `options.py` materializes it, orientation returns one `Bearing`,
 `steer.py` executes it, verification accepts it, and progress handling banks a
-checkpoint. The read is then discarded and the loop starts again from the
-committed snapshot.
+checkpoint. Verification may instead mint an exact `ScanProgressReceipt` when
+the assertion scan itself advanced the selected producer or frontier. If the
+retained landing still owns that productive tip, the receipt banks that exact
+landing without asking a second trend calculation to prove the same work. The
+read is then discarded and the loop starts again from the committed snapshot.
 
 The rest of PILOT exists mainly to answer three questions when that path is not
 straightforward:
@@ -57,11 +60,12 @@ that read:
 | What must the next experiment respect? | avoid, active requirements, holds, and an optional theory view |
 | Is the frontier unreadable without isolated experimentation? | `skiff.py` |
 
-`options.py` materializes these readings into one `CandidateRead`, and
-`orientation.py` applies the explicit current-world precedence to return one
-`Bearing | NeedProbe | Stuck`. The readers contribute facts; none chooses an
-action alone. They need not form a rigid fallback stack, and every complete
-read expires after the next observation.
+`options.py` materializes these readings into exactly one `CandidateRead` per
+world, and `orientation.py` applies the explicit current-world precedence to
+return one `Bearing | NeedProbe | Stuck`. Ordinary and WorkingTheory lowering
+consume that same read; neither may rebuild it to obtain a more convenient
+answer. The readers contribute facts, none chooses an action alone, and every
+complete read expires after the next observation.
 
 `program_step.py` asks a narrower question than whether the whole target will
 eventually be reached. For one exact selected producer or instruction-owned
@@ -129,6 +133,9 @@ fork. All modes converge on `verify.py`:
 4. `outcome.py` classifies agency, bearing effect, target-relative progress,
    and frontier change. Passing makes the fork eligible for commit; it does not
    prove durable progress.
+   When the exact execution proves target, selected-producer, frontier,
+   earned-work, or local-conductivity movement, verification records which
+   scan was productive and whether the retained landing still owns that tip.
 5. A suspicious excursion is the exceptional branch.
    `pilot.py::_resolve_excursion` invokes `investigate.py` at most once and
    passes the exact replay to `verify.verify_excursion_replay`, which continues
@@ -146,6 +153,15 @@ accepted landing needs later scans to establish durability, `progress.py`
 consumes those normal real monitoring observations; it does not replay the
 original steer. Missing shared evidence stays unresolved.
 
+For a pulse, call the source S0, the action/assertion scan S1, and the optional
+one-scan look-ahead S2. `PulseHorizon.ASSERTION_SCAN` stops at S1 for temporal
+setup and rearm; ordinary pulses may retain S2. A scan-progress receipt names
+the exact productive scan separately from the retained landing, so an S1 win
+cannot be manufactured by waiting for quiescence and an S2 regression cannot
+erase what S1 taught us. Watched-tag settlement remains an explicit coast or
+diagnostic/recovery operation where those owners need it; it is not a hidden
+`steer(settle=True)` mode and cannot prove scan-level progress.
+
 `overlay.py`, `pulse.py`, and `coast.py` implement the executable intervention
 and observation receipts used by this layer. `cyclefold.py` may accelerate a
 long coast only by skipping a proven cycle and landing back on a real recorded
@@ -155,10 +171,16 @@ scan.
 
 `progress.py` owns this question after a trial has passed verification:
 
-1. A clean target-relative improvement banks or refreshes a checkpoint.
-2. An exposed frontier or satisfied channel bearing may reset the local trend
-   baseline without yet declaring the departure durable.
-3. `departure.py` settles and classifies observed channel motion.
+1. An exact target, selected-producer, or frontier receipt whose landing owns
+   its tip banks the retained fork as the new checkpoint. This is receipt
+   consumption, not a second proof from a newly traversed trace tree.
+2. A productive assertion scan whose look-ahead regressed remains causal
+   evidence, but its landing is not adopted as the new working edge. Local
+   conductivity and earned-work receipts likewise do not bypass the ordinary
+   global regression policy merely because their narrower owner advanced.
+3. Without a receipt-owned landing, an exposed frontier or satisfied channel
+   bearing may reset the local trend baseline without declaring the departure
+   durable. `departure.py` observes and classifies later channel motion;
    `earned_work.py` supplies conservative target-relative evidence for whether
    a pending departure should be promoted, kept pending, regressed, or expired.
 4. A regression or anomalous departure invokes `causal.py` to read recorded
@@ -170,9 +192,10 @@ scan.
    impossible and without creating a nogood.
 
 This third question accounts for most of the recovery machinery: a fork can be
-safe enough to commit while its meaning remains unsettled. Search, probe,
-pending-motion, and coast budgets ensure that an unresolved world ends with a
-named frontier rather than silent churn.
+safe enough to commit before its global meaning is known. A controlling theory
+is not an exemption from this policy. Search, probe, pending-motion, and coast
+budgets ensure that an unresolved world ends with a named frontier rather than
+silent churn.
 
 ## Actual control flow
 
@@ -189,40 +212,52 @@ named frontier rather than silent churn.
    gates after spin.
    `_record_attempt` then applies all observations, including rejected
    attempts, exactly once before any further orientation.
-5. An accepted fork is committed and `progress.py` decides retention,
-   pending continuation, investigation, or revert. Trend monitoring hands a
-   detected channel departure to its terminal `_handle_channel_departure`
-   generator without reconstructing the departure receipt.
+5. An accepted fork is committed. A receipt-owned selected-producer or
+   frontier landing becomes the next checkpoint directly; otherwise
+   `progress.py` decides retention, pending continuation, investigation, or
+   revert. Trend monitoring hands a detected channel departure to its terminal
+   `_handle_channel_departure` generator without reconstructing the departure
+   receipt.
 6. `NeedProbe` is executed only by `skiff.py`; observations or an explicit
    exhaustion mark are applied before orientation runs again.
 7. `Stuck` is terminal. No candidate list or route suffix survives an
    observation.
 
-An expectation repair is one checkpoint-local transaction: exact receipt
-matching selects the causal source, the source checkpoint is restored on a
-disposable state, one corrected local act is executed and verified, and only
-its landing may replace the live world. No later action is stored with that
-receipt. Successive hazards therefore derive successive requirements and
-compose through successive outer iterations, each followed by fresh
-orientation. `recovery.py::compose_corrections` owns the bounded transaction;
-its module contract defines the permitted recovery boundary.
+An expectation correction is checkpoint-local: exact receipt matching selects
+the causal source, the source checkpoint is restored on a disposable state,
+one corrected local act is executed and verified, and only its landing may
+replace the live world. No later action is stored with that receipt.
+`recovery.py::compose_corrections` owns this bounded regression transaction.
 
-WorkingTheory owns the first narrow `RETRY_TOGETHER` case when an ordinary
-pulse's retained intrascan projection and the existing Compass paths identify
-one exact false sibling producer at one unique selected writer. The theory
-retains typed intent, the rejected trigger, refined source, requirement, and a
-detached causal-branch artifact. Fresh Orientation re-resolves that branch;
-the outer loop executes it once through ordinary `_transition_once`, verify,
-adoption, and monitoring. A proved branch discharges its exact requirement and
-returns to a fresh Compass read.
+WorkingTheory handles a different problem: an executed scan can reveal the
+next condition needed to keep the selected producer/frontier conductive. It
+retains only causal facts and lifecycle state: the exact source/provisional
+tip, selected claim, unresolved requirements, attempts, exclusions, and typed
+`SETUP_FIRST` or `RETRY_TOGETHER` intent. It never retains a `Bearing`, action
+suffix, `CandidateRead`, world, checkpoint object, fork, or branch iterator.
 
-Do not let generic pre-Orientation requirement recovery execute while a typed
-retry request is active, and do not leave its requirement active after proof;
-either mistake gives the same receipt a second hidden controller. Do not build
-a second projection, composer, monitor, or nested `how(state)`. The current
-formation slice finds one sibling. Generalization must preserve one minimal
-`AND` branch and represent ambiguous `OR` producers as separate lazy branches,
-never by subset enumeration or by pulsing every alternative together.
+On every iteration Compass performs one fresh read at the theory's current tip
+and lowers the typed need through the readers available in that world. It may
+compose the requirement assignment with the ordinary same-transaction steer,
+or emit the requirement assignment as its own one-scan setup when the prior
+scan already moved past the old producer. Either way the result is one ordinary
+`Bearing`, executed and verified once. The accepted landing becomes the next
+tip only through the exact scan-progress receipt; PILOT never proves a sequence
+and then replays it.
+
+Temporal Boolean structure is lazy. All atoms in one `AND` branch are one
+atomic obligation. `OR` alternatives are yielded depth-first, one complete
+branch at a time, within the current read budget; no power-set or eager branch
+product is retained across reads. Direct assignment is allowed only for
+authority-approved, adjustable operands that are not already configured.
+Program-owned or otherwise non-adjustable requirements stay facts for normal
+availability, tide-table, trace, `AdvanceProfile`, and `program_step` readers
+to navigate rather than being overwritten.
+
+Do not let generic pre-orientation requirement recovery execute while a typed
+temporal request is active, and do not leave its requirement active after exact
+proof. Do not add a second projection, composer, progress monitor, or nested
+`how(state)`: each would create another controller for the same scan evidence.
 
 Passing verification means "eligible to commit and assess", not "durable
 progress". Use distinct language for those two decisions.
@@ -262,7 +297,7 @@ the world after that crossing, not to this one. An input the program is
 genuinely stopped at is still required once its own motion finishes. A
 mid-crossing reading therefore keeps running with the crossing as its immediate
 boundary, so the caller coasts to the landing and the drive loop reads the
-settled world again.
+landed world again.
 
 The line between exact-producer proof and skiff is who may return an action, not
 who may probe: `program_step.py` only reports a reading; skiff may propose one.
@@ -336,26 +371,21 @@ this table only locates the owner.
   `EffectExpectation`, and `ActPolicy` carries it unchanged. Required-shape
   policy stays in `effects.py`; factual `observed_shape` and appeared-write
   classification stay on `ScanRungWriteProjection`.
-- One-assertion-scan forensics and bounded closure: `intrascan.py`; its report
-  path interprets an already-executed scan, while its production-inert closure
-  path may enumerate compatible atomic Boolean alternatives and execute a
-  finite number of disposable one-scan forks. The exact execution projection
-  remains the semantic oracle. Closure cannot install a correction, mutate
-  PILOT state, adopt a world, or retain a navigation future, and production
-  Compass/PILOT does not route through it yet. `pilot.py` retains receipt
-  creation, deduplication, state mutation, and every subsequent decision.
-- Pure intrascan scalar/guard schedule compilation: `intrascan_schedule.py`;
-  `requirement_recovery.py` remains the production compatibility facade and
-  owns current-world active-requirement admission helpers.
-- Shadow-only theory recording: `working_theory.py` owns detached immutable
-  claims, versions, attempt/progress receipts, lifecycle facts, and the pure
-  reducer. `pilot.py::_transition_once` may return a detached shadow
-  observation, but only the live outer loop applies facts to
-  `_PilotState.theory_state`. The ledger is knowledge-side and survives world
-  restore; disposable repair clones receive its immutable source value and do
-  not merge child shadow facts. Shadow theory state cannot change navigation,
-  trial acceptance, adoption, progress, rollback, or public events, and
-  Compass does not consume it yet.
+- Exact assertion-scan observation and bounded diagnostic closure:
+  `intrascan.py`. Its projection is the semantic oracle; diagnostic closure
+  remains disposable and cannot install logic, mutate PILOT state, adopt a
+  world, or retain a navigation future.
+- Lazy temporal Boolean normalization: `temporal_need.py`; one top-level `AND`
+  branch is yielded atomically and `OR` alternatives are visited depth-first.
+- Pure scalar/guard lowering: `intrascan_schedule.py`; it compiles only
+  authority-approved current-world assignments. `requirement_recovery.py`
+  remains the compatibility facade and owns active-requirement admission.
+- Controlling theory knowledge: `working_theory.py` owns detached immutable
+  claims, versions, attempt/progress receipts, temporal intent, lifecycle
+  facts, and the pure reducer. The live outer loop alone applies facts to
+  `_PilotState.theory_state`; Compass consumes a detached `TheoryView` and
+  resolves it through the same current-world `CandidateRead` as ordinary
+  orientation. The ledger survives rollback but owns no executable future.
 - Navigation act policy: `orientation.py::_orient_read` materializes one
   `navigation_contracts.ActPolicy`; `steer.execute` applies it
 - Exact expectation receipt creation and matching: `requirements.py`;
@@ -367,6 +397,9 @@ this table only locates the owner.
   `constrained_reachability.py::NavigationEvidence.static_edge_admission`
 - Local trial gates and accepted execution evidence:
   `verify.py::verify_gates` / `verify_excursion_replay`
+- Exact scan-level progress proof: verification mints
+  `types.py::ScanProgressReceipt`; post-commit handling consumes it without
+  retraversing the trace to re-prove its selected producer/frontier.
 - Verification-time excursion orchestration: `pilot.py::_resolve_excursion`;
   verify reports the exact executed attempt, PILOT invokes
   `investigate.py::investigate_excursion` once, and verify judges that replay
@@ -503,19 +536,18 @@ Static reading and orientation:
   observation adapter
 - `effects.py` — act-owned effect obligations, required-shape policy, exact
   execution-window observation, and detached recording snapshots
-- `intrascan.py` — report-only exact assertion-scan observation, inert
-  failed-effect derivation, and bounded production-inert one-scan closure over
-  disposable forks
-- `intrascan_schedule.py` — pure scalar schedule compilation and lazy Boolean
-  guard-alternative enumeration for one-scan closure
+- `intrascan.py` — exact assertion-scan observation, inert failed-effect
+  derivation, and bounded diagnostic one-scan closure over disposable forks
+- `temporal_need.py` — lazy current-world `AND`/`OR` requirement branches
+- `intrascan_schedule.py` — pure authority-aware scalar schedule compilation
 - `requirements.py` — failed-effect explanations, active requirements, exact
   expectation receipts, and strictly decreasing same-scan occurrence-source
   walks
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
-- `working_theory.py` — detached shadow theory records and pure lifecycle
-  reducer; it stores semantic identities only, never navigation reads, acts,
-  checkpoints, worlds, forks, PilotRungs, routes, or callables
+- `working_theory.py` — controlling theory facts, typed temporal intent, and
+  pure lifecycle reducer; it stores semantic identities only, never navigation
+  reads, acts, checkpoints, worlds, forks, PilotRungs, routes, or callables
 - `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:
@@ -597,6 +629,13 @@ plain language on first use.
   tree.
 - **cone** — a region of tags upstream of a requirement.
 - **earned work** — conservative target-relative evidence of completed target work.
+- **scan progress receipt** — verification's proof that one exact accepted
+  scan advanced the selected producer/frontier (or another explicitly named
+  local owner), including whether the retained landing still owns that tip.
+- **working theory** — rollback-stable causal facts and lifecycle state used to
+  ask Compass what the current tip needs next; never a stored executable plan.
+- **temporal need** — an exact intrascan condition to establish or compose with
+  the next ordinary steer. `AND` atoms are atomic; `OR` branches are lazy.
 - **expectation receipt** — an accepted local act's exact source checkpoint,
   selected obligations, producer/consumer occurrences, and execution identity.
 - **checkpoint-local repair** — restore the receipt's exact source on a
@@ -632,6 +671,7 @@ Run:
 ```text
 make lint
 make test-pilot
+make test-tumbler
 ```
 
 `make test-pilot` intentionally runs only the bounded core PILOT suite. The
@@ -652,28 +692,32 @@ while an expensive operation is withholding the next event. Exit status 2
 means a performance budget fired; status 3 means the configured stop-action
 tripwire or `--stop-interpretation` receipt appeared.
 
-For a cheap Stage-5 check against the real generated program, stop the worker
-at the first named shadow interpretation:
+For a cheap decision-level pass against the generated program, use
+`watch_pilot_decisions.py` before a complete Tumbler drive:
 
 ```text
 uv run python devtools/watch_pilot_decisions.py \
   --target y_BurnerLoop --no-avoid --max-scans 3000 \
   --wall-budget 30 --stall-budget 15 --output-budget 15 \
-  --stop-interpretation keep_and_reread
+  --stop-interpretation retry_together
 ```
 
-The decision line must show the existing mode-request and Production-mode
-actions composed in one Bearing. The interpretation line reports every scan
-whose ordered projection was selected and whether the assertion scan was
-already in that shared cache; it does not build another projection.
+`[decision]` shows the current read's candidates, trace, route, holds,
+`program_step` result, and frontier. `[interpretation]` names the exact scan,
+projection scans, and whether the assertion projection came from the shared
+execution cache. `[receipt]` adds writer and operation provenance when a
+stop-action tripwire fires. Use `--stop-interpretation setup_first` or
+`retry_together` to isolate temporal formation; omit it to watch the journey
+continue. This runner is observational: its private hooks must not become a
+second projection or navigation path.
 
-Accepted Bearings are only interpreted after ordinary post-commit monitoring.
-This matters for zero-preset timers: a locally accepted step can later be
-displaced by `.Done` and an Alarm writer. The finalized interpretation must
-reuse the retained failed-effect and active-requirement receipts from that
-monitor. `aborted_on_first_scan` pins the scan-0 `SETUP_FIRST` case;
-`alarmed_at_start` pins the retained-steer `RETRY_TOGETHER` case. Never add a
-second projection, intrascan pass, or nested `how(state)` to answer it.
+For temporal changes, first run the focused timer-preset and scan-progress
+tests. They must cover setup-first, same-transaction retry, edge rearm, lazy
+`OR`, atomic `AND`, configured/program-owned operands, one `CandidateRead` per
+world, and both values of `landing_owns_tip`. Then run `make test-pilot`; only
+after that cheap pass should `make test-tumbler` validate the generated Burner
+and Completed journeys. Use the watch runners when a fixture stops emitting
+useful work so the last exact scan, receipt, and correction are visible.
 
 When a Tumbler golden changes during a PILOT refactor, find the first changed
 decision without waiting for the whole golden test:

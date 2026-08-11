@@ -105,7 +105,7 @@ def test_orientation_queries_nogoods_with_active_requirement_world_key(monkeypat
     ]
 
 
-def test_rejected_producer_singleton_is_not_retried_after_requirement_strengthens_world() -> None:
+def test_prior_scan_setup_is_retained_when_the_selected_producer_reaches_target() -> None:
     produce = Bool("RequirementKeyProduce", external=True)
     consume = Bool("RequirementKeyConsume", external=True)
     channel = Int("RequirementKeyChannel")
@@ -132,20 +132,26 @@ def test_rejected_producer_singleton_is_not_retried_after_requirement_strengthen
     requirement_index = next(
         index for index, event in enumerate(events) if event.kind == "requirement_activated"
     )
-    rejection_index = next(
+    producer_accept_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "candidate_rejected"
+        if event.kind == "candidate_accepted"
         and (produce.name, True) in tuple(event.data["applied"])
     )
-    next_iteration = next(
-        event for event in events[rejection_index + 1 :] if event.kind == "iteration"
-    )
 
-    assert requirement_index < rejection_index
-    assert next_iteration.data["nogoods"] == frozenset({(produce.name, True)})
+    consume_try_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "candidate_try" and event.data["applied"] == ((consume.name, True),)
+    )
+    produce_try_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "candidate_try" and event.data["applied"] == ((produce.name, True),)
+    )
+    assert consume_try_index < produce_try_index < requirement_index < producer_accept_index
     assert len(singleton_produce_tries) == 1
-    assert any(
+    assert not any(
         event.kind == "candidate_try"
         and set(event.data["applied"]) == {(produce.name, True), (consume.name, True)}
         for event in events

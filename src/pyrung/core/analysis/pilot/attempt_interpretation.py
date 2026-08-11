@@ -13,6 +13,7 @@ from enum import StrEnum
 from typing import Any
 
 from pyrung.core.analysis.pilot.intrascan import IntrascanFinding, IntrascanResult
+from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.program_step import ProgramStep, ProgramStepStatus
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
@@ -121,6 +122,17 @@ def _classify_finding(
     requirement = finding.derivation.requirement
     if requirement is None:
         return AttemptInterpretationKind.UNRESOLVED
+    # A selected value which reached its exact consumer before normal
+    # program-owned cleanup does not authorize assignment of the cleaned-up
+    # internal tag.  It is nevertheless exact proof that the producer belongs
+    # in this scan and needs its remaining live transaction shape alongside
+    # it.  Compass must rediscover that shape; this receipt alone never names
+    # or executes a sibling.
+    if (
+        getattr(finding, "consumed_before_displacement", False)
+        and requirement.deadline.scan_id == assertion_scan
+    ):
+        return AttemptInterpretationKind.RETRY_TOGETHER
     source_walk = finding.derivation.source_walk
     return _classify_requirement(
         requirement,
@@ -147,8 +159,15 @@ def _classify_requirement(
 
     if requirement.deadline.scan_id < assertion_scan:
         return AttemptInterpretationKind.SETUP_FIRST
-    if requirement.deadline.scan_id != assertion_scan:
-        return AttemptInterpretationKind.UNRESOLVED
+    if requirement.deadline.scan_id > assertion_scan:
+        # A retained look-ahead may discover a condition on a later scan than
+        # the original assertion. With an exact owner-bound occurrence this is
+        # actionable prior setup for the next productive edge, not ambiguity.
+        return (
+            AttemptInterpretationKind.SETUP_FIRST
+            if owner_bound or prior_source
+            else AttemptInterpretationKind.UNRESOLVED
+        )
     if source_walk_incomplete:
         return AttemptInterpretationKind.UNRESOLVED
 
@@ -158,9 +177,27 @@ def _classify_requirement(
     if OperandAuthority.UNKNOWN in authorities or OperandAuthority.CONFIGURED in authorities:
         return AttemptInterpretationKind.UNRESOLVED
     if OperandAuthority.PROGRAM_WRITTEN in authorities:
-        # A mixture of program-owned setup and direct same-scan input work is
-        # two phases, not one forced label.
+        # An OR may expose a directly adjustable branch beside a program-owned
+        # branch. The reader will yield those branches lazily, so the mere
+        # presence of the program alternative must not suppress an executable
+        # setup-first theory. AND/mixed atoms within one branch remain
+        # unresolved here.
         if OperandAuthority.ADJUSTABLE in authorities:
+            condition = requirement.condition
+            if not isinstance(condition, (GuardRequirementAtom, GuardRequirementExpr)):
+                return AttemptInterpretationKind.UNRESOLVED
+            if any(
+                alternative
+                and all(
+                    atom.operand_authority is OperandAuthority.ADJUSTABLE for atom in alternative
+                )
+                for alternative in iter_guard_alternatives(condition)
+            ):
+                return (
+                    AttemptInterpretationKind.SETUP_FIRST
+                    if owner_bound or prior_source
+                    else AttemptInterpretationKind.UNRESOLVED
+                )
             return AttemptInterpretationKind.UNRESOLVED
         return (
             AttemptInterpretationKind.SETUP_FIRST

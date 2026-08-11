@@ -111,6 +111,27 @@ class RevisitCredential:
     transition: tuple[Any, ...]
 
 
+@dataclass(frozen=True)
+class ScanProgressReceipt:
+    """Proof that one exact accepted scan advanced the selected working edge.
+
+    ``productive_scan`` identifies S1, while ``landing_scan`` may be the one
+    retained S2 look-ahead.  The receipt is source- and landing-scoped; it is
+    not a general promise that later scans are productive.
+    """
+
+    source_scan: int
+    productive_scan: int
+    landing_scan: int
+    kind: Literal["target", "selected-producer", "frontier", "earned-work", "conductivity"]
+    source_world: _StateKey
+    landing_world: _StateKey
+    selected_act: tuple[Any, ...]
+    distance_before: int
+    distance_after: int | None = None
+    landing_owns_tip: bool = True
+
+
 # ---------------------------------------------------------------------------
 # WalkContext — the read-side seam of a backward trace
 # ---------------------------------------------------------------------------
@@ -654,6 +675,10 @@ class _PilotContext:
     # Detached lifecycle projection supplied afresh for each orientation read.
     # It contains no executable world or retained navigation future.
     theory_view: TheoryView | None = None
+    # Drive-resolved live requirements for one exceptional temporal read.
+    # Ordinary reads leave this empty and pay no temporal-branch cost.
+    temporal_requirements: tuple[ActiveRequirement, ...] = ()
+    temporal_source_anchor: tuple[Any, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -676,6 +701,7 @@ class _ExecutionEvidence:
     # must still seek this original boundary while watching that incident
     # channel for another departure.
     replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
+    scan_progress: ScanProgressReceipt | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
@@ -758,6 +784,7 @@ class _CorrectionReceipt:
     origin_key: _StateKey
     correction: _ConfirmedCorrection
     status: CorrectionStatus = CorrectionStatus.PROBATIONARY
+    admitted_origins: frozenset[_StateKey] = frozenset()
 
     @property
     def identity(self) -> tuple[tuple[Any, ...], ...]:
@@ -848,6 +875,10 @@ class _PilotState:
     active_requirements: list[ActiveRequirement] = field(default_factory=list)
     expectation_receipts: list[ExpectationReceipt] = field(default_factory=list)
     failed_effect_receipts: list[FailedEffectReceipt] = field(default_factory=list)
+    # Exact source scans retained only when a temporal interpretation makes
+    # them a future working edge. They are evidence/checkpoints, never cached
+    # Bearings or executable suffixes.
+    temporal_checkpoints: list[_CausalCheckpoint] = field(default_factory=list)
     # Immutable shadow-only theory knowledge. It is deliberately not part of
     # ``_World``: checkpoint restore must not erase observed lifecycle facts,
     # and the reducer must never participate in adoption or rollback policy.

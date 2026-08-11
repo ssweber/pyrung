@@ -43,7 +43,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.outcome import BearingEffect
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    ProgressEffect,
+    TrialAssessment,
+)
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.physical import install_harness
 from pyrung.core.analysis.pilot.requirements import (
@@ -65,6 +70,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import (
+    _accepted_trial,
     _executed_source_world_key,
     _gate_dead_end,
     _gate_revisit,
@@ -267,6 +273,63 @@ def test_wrong_outer_landing_retains_departure_receipt():
     )
 
     assert _owned_channel_motion(trial, ChannelMotion("State", 6)).departed
+
+
+def test_wrong_channel_landing_cannot_mint_a_frontier_progress_receipt():
+    """A prerequisite reached before an ejection does not own the coast tip."""
+
+    with Program() as program:
+        pass
+    plc = PLC(program, dt=0.010)
+    before = {"State": 3, "Prerequisite": False}
+    after = {"State": 8, "Prerequisite": True}
+    policy = ActPolicy(
+        ActSource.ROUTE,
+        heading=ChannelHeading("State", 6),
+        motion=MotionKind.COAST_TO_BEARING,
+    )
+    pulse = _PulseState(
+        plc,
+        0,
+        0,
+        before,
+        (),
+        before,
+        ("source",),
+        after,
+        ("landing",),
+        (),
+    )
+    attempt = _ExecutedAttempt(
+        pulse,
+        Bearing(
+            ("source",),
+            Coast("bearing", policy),
+            BearingObjective(TargetSpec("Target", True)),
+        ),
+    )
+    verification = AssessedMotion(
+        ("landing",),
+        1,
+        TrialAssessment(
+            Agency.PROGRAM,
+            BearingEffect.DEPARTED,
+            ProgressEffect.FORWARD,
+            new_frontier=True,
+            accepted=True,
+        ),
+    )
+
+    accepted = _accepted_trial(
+        attempt,
+        SimpleNamespace(key=("source",), snap=before, distance_before=2),
+        [],
+        ChannelMotion("State", 6, stop_reason="departed"),
+        EarnedWorkReceipt(),
+        verification,
+    )
+
+    assert accepted.execution.scan_progress is None
 
 
 def test_replay_reclassifies_stale_departure_from_corrected_landing():

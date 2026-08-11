@@ -24,13 +24,11 @@ from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
     LIMITS,
     TARGET,
-    CoastReceipt,
     CoastSession,
     CoastTrigger,
     _coast_holding_state,
     _coast_until,
     _has_pending_effects,
-    _settle_delayed_effects,
     coast_departure_tags,
     predicate_trigger,
     value_trigger,
@@ -44,6 +42,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Dwell,
     OrientationWorld,
     Pulse,
+    PulseHorizon,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -192,6 +191,8 @@ def _apply_actions(
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
+    *,
+    lookahead: bool = False,
 ) -> _PulseState:
     key_config = state.key_config
     assert key_config is not None
@@ -207,7 +208,10 @@ def _apply_actions(
     session.arm_avoid(ctx.avoid_pred)
     session.arm_pens(_pen_tags(state, ctx))
     patch = {t: v for t, v in actions}
-    needs_edge = any(t in ctx.edge_tags for t in patch)
+    needs_edge = any(
+        t in ctx.edge_tags and not _values_match(value, ctx.resting.get(t, False))
+        for t, value in patch.items()
+    )
 
     if needs_edge:
         release = {t: ctx.resting.get(t, False) for t in patch if t in ctx.edge_tags}
@@ -229,12 +233,12 @@ def _apply_actions(
     def _reached(tags: dict[str, Any]) -> bool:
         return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
 
-    if _reached(action_snap):
+    if _reached(action_snap) or not lookahead:
         wait_snaps: list[dict[str, Any]] = []
     else:
-        wait_snaps = _settle_watched_tags(
-            fork, _watched_tags(frame, ctx), floor=2, reached_fn=_reached, session=session
-        )
+        session.step_kernel()
+        session.note_pens()
+        wait_snaps = [dict(fork.state.tags)]
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_world_key(
@@ -243,16 +247,6 @@ def _apply_actions(
         state.pilot_rungs,
         getattr(state, "active_requirements", ()),
     )
-    delayed_receipts: list[CoastReceipt] = []
-    if not _reached(post_pulse_snap):
-        delayed_receipts = _settle_delayed_effects(
-            fork,
-            scan_budget=state.remaining_search_scans(
-                ctx.max_scans,
-                scan_id=fork.state.scan_id,
-            ),
-            session=session,
-        )
     fork_snap = dict(fork.state.tags)
     if wait_snaps and wait_snaps[-1] != fork_snap:
         wait_snaps.append(fork_snap)
@@ -273,7 +267,7 @@ def _apply_actions(
             state.pilot_rungs,
             getattr(state, "active_requirements", ()),
         ),
-        coast_receipt=(delayed_receipts[-1] if delayed_receipts else None),
+        coast_receipt=None,
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
         source_snap=source_snap,
@@ -440,7 +434,13 @@ def _try_action_batch(
             avoid_names=tuple(avoid_names),
         )
 
-    trial = _apply_actions(policy.applied, frame, state, ctx)
+    trial = _apply_actions(
+        policy.applied,
+        frame,
+        state,
+        ctx,
+        lookahead=policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN,
+    )
     key_config = state.key_config
     assert key_config is not None
 
@@ -851,9 +851,41 @@ def _try_terminal_letrun(
         # Hand the stall's receipt + pending flag to the loop: a quiescent
         # stall is trustworthy memo material (skip the re-coast at this world
         # key); a stall with a timer mid-flight must stay re-runnable.
-        return _AttemptResult(
-            trial=None,
-            gate_events=(PilotGateEvent("dead-end", "terminal stall, no ejection"),),
+        stalled = _PulseState(
+            fork=fork,
+            scan_before=scan_before,
+            action_scan=scan_before,
+            action_snap=snap_before,
+            wait_snaps=(snap_after,),
+            post_pulse_snap=snap_before,
+            post_pulse_key=frame.key,
+            snap=snap_after,
+            key=key_after,
+            coast_receipt=letrun_receipt,
+            timeline=session.events,
+            kernel_scan_ids=session.kernel_scan_ids,
+            source_snap=snap_before,
+        )
+        result = verify_gates(
+            _executed_attempt(bearing, stalled),
+            frame,
+            state,
+            ctx,
+        )
+        gate_events = result.gate_events
+        if result.trial is None and gate_events and gate_events[0].event == "spin":
+            first = gate_events[0]
+            gate_events = (
+                replace(
+                    first,
+                    event="dead-end",
+                    detail="terminal stall, no ejection",
+                ),
+                *gate_events[1:],
+            )
+        return replace(
+            result,
+            gate_events=gate_events,
             observations=observations,
             stall_receipt=letrun_receipt,
             stall_pending=_has_pending_effects(fork),

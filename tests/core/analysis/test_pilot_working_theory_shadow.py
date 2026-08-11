@@ -157,7 +157,7 @@ def test_shadow_theory_records_existing_decisions_without_changing_them(
     )
 
 
-def test_bootstrap_overwrite_local_repair_records_shadow_evidence(
+def test_bootstrap_overwrite_retry_records_controlling_theory_evidence(
     monkeypatch: Any,
 ) -> None:
     stepper = Int("shadow_stepper", default=0)
@@ -169,18 +169,22 @@ def test_bootstrap_overwrite_local_repair_records_shadow_evidence(
             copy(9, stepper, oneshot=True)
 
     facts: list[Any] = []
-    original = pilot_module._record_shadow_theory_fact
+    original = pilot_module._record_controlling_theory_fact
 
     def record(state: Any, fact: Any) -> None:
         facts.append(fact)
         original(state, fact)
 
-    monkeypatch.setattr(pilot_module, "_record_shadow_theory_fact", record)
+    monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
     events: list[Any] = []
     result = PLC(logic).how(stepper == 1, max_scans=20, on_event=events.append)
 
     assert result.reachable
-    assert any(event.kind == "requirement_locally_repaired" for event in events)
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    assert any(
+        event.kind == "candidate_try" and event.data["applied"] == ((consumer_guard.name, True),)
+        for event in events
+    )
     lifecycle = tuple(
         fact
         for fact in facts
@@ -189,15 +193,10 @@ def test_bootstrap_overwrite_local_repair_records_shadow_evidence(
             OpenTheory | RecordTheoryAttempt | RefineTheory | AdvanceTheory | ProveTheory,
         )
     )
-    unresolved = tuple(fact for fact in facts if isinstance(fact, RecordUnattributedEvidence))
-    assert lifecycle or any(
-        "exact-source-world-key-unavailable" in fact.observation.evidence for fact in unresolved
-    ), "the bootstrap repair must record lifecycle or explicit unresolved evidence"
+    assert lifecycle, "the bootstrap retry must record its controlling theory lifecycle"
 
 
-def test_requirement_shadow_snapshot_preserves_exact_scan_call_and_deadline(
-    monkeypatch: Any,
-) -> None:
+def test_requirement_event_preserves_exact_scan_call_and_deadline() -> None:
     stepper = Int("identity_stepper", default=0)
     consumer_guard = Bool("identity_consumer_guard", external=True)
     with Program() as logic:
@@ -206,41 +205,22 @@ def test_requirement_shadow_snapshot_preserves_exact_scan_call_and_deadline(
         with rung(~consumer_guard):
             copy(9, stepper, oneshot=True)
 
-    captured: list[Any] = []
-    original = pilot_module._record_shadow_repair_result
-
-    def record_requirement(state: Any, **kwargs: Any) -> None:
-        if kwargs["requirement"] is not None:
-            captured.append(kwargs["requirement"])
-        original(state, **kwargs)
-
-    monkeypatch.setattr(pilot_module, "_record_shadow_repair_result", record_requirement)
-    result = PLC(logic).how(stepper == 1, max_scans=20)
+    events: list[Any] = []
+    result = PLC(logic).how(stepper == 1, max_scans=20, on_event=events.append)
 
     assert result.reachable
+    captured = tuple(
+        event.data["requirement"] for event in events if event.kind == "requirement_activated"
+    )
     assert len(captured) == 1
-    requirement = captured[0]
-    snapshot = pilot_module._theory_requirement_snapshot(requirement)
+    snapshot = captured[0]
     assert snapshot.source_scan == 0
-    assert snapshot.demanding_occurrence == (
-        requirement.demanding_occurrence.kind,
-        requirement.demanding_occurrence.tag,
-        requirement.demanding_occurrence.scan_id,
-        requirement.demanding_occurrence.dynamic_address,
-        requirement.demanding_occurrence.values,
-        requirement.demanding_occurrence.enabled,
-    )
-    assert snapshot.deadline_occurrence == (
-        requirement.deadline.kind,
-        requirement.deadline.tag,
-        requirement.deadline.scan_id,
-        requirement.deadline.dynamic_address,
-        requirement.deadline.values,
-        requirement.deadline.enabled,
-    )
-    assert snapshot.deadline_occurrence[3][5] == requirement.deadline.call_invocation
-    assert snapshot.checkpoint_token
-    assert snapshot.execution_owner_token
+    assert snapshot.demanding_occurrence.kind == "read"
+    assert snapshot.demanding_occurrence.tag == consumer_guard.name
+    assert snapshot.demanding_occurrence.scan_id == 1
+    assert snapshot.deadline == snapshot.demanding_occurrence
+    assert snapshot.deadline.dynamic_address[5] == snapshot.deadline.call_invocation
+    assert snapshot.causal_identity
 
 
 def test_shadow_reducer_failure_cannot_change_production_result(monkeypatch: Any) -> None:

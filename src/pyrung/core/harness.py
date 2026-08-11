@@ -241,18 +241,27 @@ class Harness:
             yield Coupling(c.en_name, c.fb_name, c.physical, c.trigger_value)
 
     def advance_profiles(self) -> Iterator[Any]:
-        """Yield an :class:`AdvanceProfile` per analog profile coupling.
+        """Yield every harness-owned :class:`AdvanceProfile`.
 
         This is the static *reading* of "En drives Fb toward a threshold" that
         PILOT's accumulator resolver consumes exactly like a timer's profile —
         so ``how(Fb >= threshold)`` learns "hold En, coast N scans" without
         running anything.
 
-        Bool couplings are intentionally NOT yielded: under the dwell model they
-        are real on/off-delay timer instructions, walked directly by
-        ``walk_instructions``.  An analog coupling is a per-scan profile tick
-        with no owning instruction, so this adapter is its permanent home.
+        Bool couplings are real synthesized on/off-delay instructions. They do
+        not belong to the user's :class:`Program`, so a program-only walk cannot
+        see them; expose their own profiles here instead of making consumers
+        understand synthesis-private accumulator names. An analog coupling is
+        a per-scan profile tick with no instruction owner, so its adapter also
+        lives here.
         """
+        synthesis = self._plc._synthesis
+        if synthesis is not None:
+            for rung in synthesis.plant:
+                for instruction in rung._instructions:
+                    profile = instruction.advance_profile()
+                    if profile is not None:
+                        yield profile
         for c in self._profile_couplings:
             profile = self._analog_profile(c)
             if profile is not None:

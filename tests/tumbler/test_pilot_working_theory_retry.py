@@ -22,7 +22,7 @@ from pyrung.core.runner import _compile_avoid
 pytestmark = pytest.mark.tumbler
 
 
-def test_mode_request_retries_with_production_before_a_separate_clear(
+def test_mode_request_rebuilds_atomic_retry_before_separate_clear(
     tumbler_logic: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -79,11 +79,11 @@ def test_mode_request_retries_with_production_before_a_separate_clear(
         pytest.fail("PILOT did not surface the separate Clear decision")
 
     request = (("Cmd_UnitModeChgRequest", True),)
-    retry_branch = (
+    retry = (
         ("Cmd_UnitModeChgRequest", True),
         ("Cmd_Mode_Production", True),
     )
-    assert tried == [request, retry_branch]
+    assert tried == [request, retry]
     assert transitions == 2
     assert clear_snapshot is not None
     assert clear_snapshot["Sts_UnitModeCurrent"] == 1
@@ -92,14 +92,14 @@ def test_mode_request_retries_with_production_before_a_separate_clear(
     refinements = tuple(fact for fact in facts if isinstance(fact, RefineTheory))
     attempts = tuple(fact for fact in facts if isinstance(fact, RecordTheoryAttempt))
     proofs = tuple(fact for fact in facts if isinstance(fact, ProveTheory))
-    assert len(refinements) == 1
+    assert len(refinements) == 2
     assert refinements[0].temporal_intent is TheoryTemporalIntent.RETRY_TOGETHER
-    assert refinements[0].retry_artifact is not None
-    assert refinements[0].retry_artifact.action_pairs == retry_branch
+    assert not hasattr(refinements[0], "retry_artifact")
+    assert refinements[1].requirements == ()
+    assert refinements[1].temporal_intent is None
     assert [attempt.disposition for attempt in attempts] == [
         TheoryAttemptDisposition.REJECTED_EXACT,
         TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
     ]
-    assert len(proofs) == 1
-    assert proofs[0].accepted_attempt_id == attempts[1].attempt_identity
-    assert active_after_fact[-1] is None
+    assert proofs == ()
+    assert active_after_fact[-1] is not None

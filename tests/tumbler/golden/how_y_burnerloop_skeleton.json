@@ -388,8 +388,8 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "channel ejected",
-     "event": "channel-override-dead-end"
+     "detail": "exact scan edge improved target-relative distance",
+     "event": "scan-productive-step"
     },
     {
      "__type__": "PilotGateEvent",
@@ -454,8 +454,8 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "channel ejected",
-    "event": "channel-override-dead-end"
+    "detail": "exact scan edge improved target-relative distance",
+    "event": "scan-productive-step"
    },
    {
     "__type__": "PilotGateEvent",
@@ -521,37 +521,6 @@
    "Cmd_State_Clear": true
   },
   "kind": "trial_committed"
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "investigated": true,
-  "kind": "letrun_ejection",
-  "observe_label": "accept",
-  "reason": null,
-  "requested_value": 1,
-  "to_value": 2
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "from_value": 9,
-  "kind": "departure_check_started",
-  "to_value": 2
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "classification": "clean_continuation",
-  "earned_work_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "from_value": 9,
-  "kind": "pending_departure_started",
-  "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
-  "requested_value": 1,
-  "settled_value": 2
  },
  {
   "distance": 18,
@@ -808,6 +777,21 @@
   "to_value": 4
  },
  {
+  "channel_tag": "Sts_StateCurrent",
+  "classification": "clean_continuation",
+  "earned_work_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "from_value": 2,
+  "kind": "pending_departure_started",
+  "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
+  "requested_value": 15,
+  "settled_value": 4
+ },
+ {
   "distance": 18,
   "kind": "iteration",
   "nogoods": [],
@@ -949,8 +933,8 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "channel target reached",
-     "event": "channel-override-dead-end"
+     "detail": "exact scan edge improved target-relative distance",
+     "event": "scan-productive-step"
     },
     {
      "__type__": "PilotGateEvent",
@@ -990,8 +974,8 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "channel target reached",
-    "event": "channel-override-dead-end"
+    "detail": "exact scan edge improved target-relative distance",
+    "event": "scan-productive-step"
    },
    {
     "__type__": "PilotGateEvent",
@@ -1475,8 +1459,8 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "channel target reached",
-     "event": "channel-override-dead-end"
+     "detail": "exact scan edge improved target-relative distance",
+     "event": "scan-productive-step"
     },
     {
      "__type__": "PilotGateEvent",
@@ -1516,8 +1500,8 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "channel target reached",
-    "event": "channel-override-dead-end"
+    "detail": "exact scan edge improved target-relative distance",
+    "event": "scan-productive-step"
    },
    {
     "__type__": "PilotGateEvent",
@@ -1745,7 +1729,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 22
@@ -1906,7 +1890,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 10
@@ -2002,7 +1986,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5
@@ -2261,7 +2245,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5
@@ -2351,7 +2335,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 3
@@ -2457,7 +2441,7 @@
     101
    ]
   ],
-  "from_value": 9,
+  "from_value": 2,
   "kind": "pending_departure_promoted",
   "landing_mark": [
    [

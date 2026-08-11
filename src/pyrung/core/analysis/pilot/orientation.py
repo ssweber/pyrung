@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
 
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
-from pyrung.core.analysis.pilot.effects import expectation_from_writer
+from pyrung.core.analysis.pilot.intrascan_schedule import (
+    RequirementSchedule,
+    compile_scalar_schedule,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -18,6 +22,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
     ExpectationExemption,
+    LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
     OrientationRead,
@@ -25,18 +30,22 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProbeRequest,
     Pulse,
+    PulseHorizon,
     Stuck,
     TargetSpec,
     act_identity,
+    pulse_identity,
 )
 from pyrung.core.analysis.pilot.options import (
     CandidateRead,
     _build_candidates,
     _candidate_applied,
 )
+from pyrung.core.analysis.pilot.overlay import _target_unresolved_condition
 from pyrung.core.analysis.pilot.requirement_recovery import (
     actions_preserve_active_requirements,
 )
+from pyrung.core.analysis.pilot.temporal_need import iter_temporal_need_branches
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
     TraceChoice,
@@ -85,108 +94,471 @@ def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
     )
 
 
-def _theory_retry_bearing(
+def _temporal_transaction_pairs(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+) -> tuple[_ActionPair, ...]:
+    """Read exact same-transaction siblings from the current target trace.
+
+    A theory claim names the consumer branch that lost the promised effect.
+    Its descendants' current trace actions are the inputs that must accompany
+    a retry in that same transaction.  This is the reader-side equivalent of
+    the former recovery executor's nested-guard reconstruction, but it neither
+    retains nor replays the failed act.
+    """
+
+    view = world.context.theory_view
+    if view is None:
+        return ()
+    trace_actions = dict(candidates.trace.active_actions)
+    result: list[_ActionPair] = []
+    for obligation in view.claim.obligations:
+        if obligation.consumer is None:
+            continue
+        consumer_sub, consumer_rung, consumer_branch = obligation.consumer
+        for node in world.context.pdg.rung_nodes:
+            branch_path = getattr(node, "branch_path", ())
+            if (
+                getattr(node, "subroutine", object()) != consumer_sub
+                or getattr(node, "rung_index", object()) != consumer_rung
+                or len(branch_path) <= len(consumer_branch)
+                or branch_path[: len(consumer_branch)] != consumer_branch
+            ):
+                continue
+            for tag in node.condition_reads | node.guard_reads:
+                if tag in trace_actions and tag in world.context.steerable:
+                    pair = (tag, trace_actions[tag])
+                    if pair not in result:
+                        result.append(pair)
+    return tuple(result)
+
+
+def _merge_temporal_actions(
+    *groups: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...] | None:
+    """Merge one conjunctive temporal branch, rejecting conflicting values."""
+
+    result: list[_ActionPair] = []
+    values: dict[str, Any] = {}
+    for group in groups:
+        for tag, value in group:
+            if tag in values and not _values_match(values[tag], value):
+                return None
+            if tag not in values:
+                values[tag] = value
+                result.append((tag, value))
+    return tuple(result)
+
+
+def _iter_temporal_companion_groups(
+    candidates: CandidateRead,
+    base: ActPolicy,
+    structural: tuple[_ActionPair, ...],
+) -> Iterator[tuple[_ActionPair, ...]]:
+    """Yield the smallest fresh same-transaction widening, then grow lazily.
+
+    Exact consumer descendants, when available, form the first required
+    group.  The selected current trace may expose additional siblings which
+    the effect walk cannot name (for example an adjacent mode-selection bit).
+    Those are already reader-admitted actions in this one route, so widen by
+    one deterministic prefix at a time.  No group or cursor survives the
+    Compass read.
+    """
+
+    base_pairs = tuple(base.applied)
+    yielded: list[tuple[_ActionPair, ...]] = []
+    initial = _merge_temporal_actions(structural)
+    if initial is not None:
+        yielded.append(initial)
+        yield initial
+    siblings = tuple(
+        pair
+        for pair in candidates.trace.active_actions
+        if pair not in base_pairs and pair not in structural
+    )
+    for width in range(1, len(siblings) + 1):
+        group = _merge_temporal_actions(structural, siblings[:width])
+        if group is not None and group not in yielded:
+            yielded.append(group)
+            yield group
+
+
+def _temporal_base_matches_trigger(
+    world: OrientationWorld,
+    base: ActPolicy,
+    setup: tuple[_ActionPair, ...],
+) -> bool:
+    """Correlate a fresh base policy with the act that exposed the need.
+
+    The theory retains only the triggering act's canonical identity.  It may
+    identify the source producer, but it may never be lowered back into an
+    executable act.  Instead, compare that receipt with a policy rebuilt by
+    the current readers.  Assignments already present in a later triggering
+    batch are supplied by the newly compiled schedule, so remove that
+    incidental difference while identifying the producer being refined.
+    """
+
+    view = getattr(world.context, "theory_view", None)
+    trigger = getattr(view, "trigger_act_identity", None)
+    if (
+        not isinstance(trigger, tuple)
+        or len(trigger) != 2
+        or trigger[0] != "pulse"
+        or not isinstance(trigger[1], tuple)
+    ):
+        return False
+    trigger_pairs = trigger[1]
+    prior_setup = tuple(
+        (tag, value)
+        for tag, value in setup
+        if any(
+            trigger_tag == tag and trigger_value == _semantic_key(value)
+            for trigger_tag, trigger_value in trigger_pairs
+        )
+    )
+    reconstructed = _merge_temporal_actions(tuple(base.applied), prior_setup)
+    return reconstructed is not None and pulse_identity(reconstructed) == trigger
+
+
+def _theory_temporal_retry_bearing(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+    ordinary: Bearing | None = None,
+) -> Bearing | None:
+    """Lazily compose a fresh ordinary pulse with its exact temporal need."""
+
+    requirements = tuple(getattr(world.context, "temporal_requirements", ()))
+    if not requirements:
+        raise ValueError("retry-together theory has no resolved live requirements")
+    prescription = candidates.wait.prescription if candidates.wait is not None else None
+    if prescription is None:
+        rearm = _theory_rearm_bearing(world, candidates, target)
+        if rearm is not None:
+            return rearm
+    structural_companions = _temporal_transaction_pairs(world, candidates)
+
+    # CandidateRead has already applied availability, tide-table, route,
+    # Crossings, action-block and prerequisite admission.  Iterate its pulse
+    # alternatives afresh; nothing here survives the returned Bearing.
+    alternatives: list[tuple[ActPolicy, Any]] = []
+    if ordinary is not None:
+        ordinary_policy = ordinary.act.policy
+        alternatives.append(
+            (
+                replace(
+                    ordinary_policy,
+                    motion=MotionKind.INTERVENTION,
+                    expectation_exemption=(
+                        ExpectationExemption.UNRESOLVED_EFFECT
+                        if ordinary_policy.expectation is None
+                        else None
+                    ),
+                    local_progress=None,
+                ),
+                getattr(ordinary.act, "crossing", None),
+            )
+        )
+    if candidates.learned_batch is not None:
+        learned = candidates.learned_batch
+        alternatives.append(
+            (
+                ActPolicy(
+                    source=ActSource.LEARNED_BATCH,
+                    action_pairs=learned.actions,
+                    applied=learned.actions,
+                    expectation=learned.expectation,
+                    expectation_exemption=(
+                        ExpectationExemption.UNRESOLVED_EFFECT
+                        if learned.expectation is None
+                        else None
+                    ),
+                ),
+                None,
+            )
+        )
+    for crossing in candidates.crossing_batches:
+        alternatives.append(
+            (
+                ActPolicy(
+                    source=ActSource.CROSSING,
+                    action_pairs=crossing.actions,
+                    applied=crossing.actions,
+                    note=crossing.reason,
+                    expectation=crossing.expectation,
+                    expectation_exemption=(
+                        ExpectationExemption.UNRESOLVED_EFFECT
+                        if crossing.expectation is None
+                        else None
+                    ),
+                ),
+                crossing.fidelity,
+            )
+        )
+    alternatives.extend(
+        (
+            _pulse_policy(
+                option,
+                _candidate_applied(option, candidates, world.context),
+                world,
+            ),
+            None,
+        )
+        for option in candidates.options
+    )
+    if prescription is not None:
+        # A fresh ProgramStep/AdvanceProfile read may say that unchanged
+        # program-owned work is ready to cross the next scan. Lowering the
+        # requirement assignment itself is then the physical intervention;
+        # the program continuation is evidence for that one scan, not a stored
+        # Coast suffix.
+        expectation = prescription.expectation
+        alternatives.append(
+            (
+                ActPolicy(
+                    source=ActSource.PROGRAM,
+                    heading=prescription.heading,
+                    expectation=expectation,
+                    expectation_exemption=(
+                        ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                    ),
+                    note=prescription.reason or "program-owned temporal continuation",
+                ),
+                None,
+            )
+        )
+
+    for schedule in _iter_temporal_schedules(world, target, requirements):
+        setup = tuple(schedule.assignments)
+        matched_live_base = False
+        for base, crossing in alternatives:
+            if not _temporal_base_matches_trigger(world, base, setup):
+                continue
+            matched_live_base = True
+            for companions in _iter_temporal_companion_groups(
+                candidates,
+                base,
+                structural_companions,
+            ):
+                actions = _merge_temporal_actions(setup, tuple(base.applied), companions)
+                if not actions:
+                    continue
+                policy = replace(
+                    base,
+                    source=ActSource.WIDENING,
+                    action_pairs=actions,
+                    applied=actions,
+                    note="working theory: retry current bearing with exact temporal need",
+                    provenance=(*base.provenance, "working-theory temporal retry"),
+                    local_progress=LocalProgressKind.TEMPORAL_EDGE,
+                    pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                )
+                act = (
+                    Pulse(policy, crossing=crossing)
+                    if len(actions) == 1
+                    else BatchPulse(
+                        policy,
+                        crossing=crossing,
+                    )
+                )
+                trigger_identity = getattr(world.context.theory_view, "trigger_act_identity", None)
+                if act_identity(act) == trigger_identity:
+                    # The causal receipt may identify a live base, but a temporal
+                    # retry must add something current. Reissuing the rejected
+                    # singleton would be replay, not augmentation.
+                    continue
+                if _act_preserves_requirements(
+                    world, act
+                ) and not world.context.compass.knowledge.act_is_nogood(
+                    world.world_key,
+                    act_identity(act),
+                ):
+                    return _bearing(
+                        world,
+                        act,
+                        candidates,
+                        target=target,
+                        prerequisites=tuple(schedule.pilot_rungs),
+                        rationale=("working theory: retry fresh bearing with exact same-scan need"),
+                    )
+        if not matched_live_base and setup:
+            # The prior scan may already have advanced the theory tip beyond
+            # its producer while a retained look-ahead exposed the next direct
+            # requirement. There is then no existing steer to augment at this
+            # source: lower the authority-approved assignment as its own setup
+            # edge and let the next Compass read continue from that new tip.
+            policy = ActPolicy(
+                source=ActSource.WIDENING,
+                action_pairs=setup,
+                applied=setup,
+                note="working theory: establish next requirement at productive tip",
+                expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+                provenance=("working-theory temporal tip setup",),
+                local_progress=LocalProgressKind.TEMPORAL_SETUP,
+                pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+            )
+            act = Pulse(policy) if len(setup) == 1 else BatchPulse(policy)
+            if _act_preserves_requirements(
+                world, act
+            ) and not world.context.compass.knowledge.act_is_nogood(
+                world.world_key,
+                act_identity(act),
+            ):
+                return _bearing(
+                    world,
+                    act,
+                    candidates,
+                    target=target,
+                    prerequisites=tuple(schedule.pilot_rungs),
+                    rationale="working theory: establish next requirement from current tip",
+                )
+    return None
+
+
+def _theory_rearm_bearing(
     world: OrientationWorld,
     candidates: CandidateRead,
     target: TargetSpec,
 ) -> Bearing | None:
-    """Re-resolve one detached theory artifact in the fresh Compass read."""
+    """Release spent edge inputs before rereading the temporal retry at its tip."""
 
-    view = getattr(world.context, "theory_view", None)
-    if view is None:
+    view = world.context.theory_view
+    identity = getattr(view, "trigger_act_identity", None)
+    if not identity or len(identity) != 2 or identity[0] != "pulse":
         return None
-    artifact = getattr(view, "retry_artifact", None)
-    intent = getattr(view, "temporal_intent", None)
-    if intent is not TheoryTemporalIntent.RETRY_TOGETHER:
+    trigger_actions = tuple(identity[1])
+    releases = tuple(
+        (tag, world.context.resting.get(tag, False))
+        for tag, value in trigger_actions
+        if (tag in world.context.edge_tags or tag in world.context.clear_only)
+        and _values_match(world.snapshot.get(tag), value)
+        and not _values_match(world.snapshot.get(tag), world.context.resting.get(tag, False))
+    )
+    if not releases:
         return None
-    if artifact is None:
-        raise ValueError("retry-together theory has no detached artifact")
-    version_source = getattr(view, "root", None)
-    if version_source is None:
-        raise ValueError("retry-together theory version has no exact source")
-    if tuple(world.world_key) != tuple(version_source.world_key):
-        raise ValueError("retry-together theory source does not match the current world")
-    if world.state.work.state.scan_id != version_source.scan_id:
-        raise ValueError("retry-together theory source scan is stale")
-    actions = tuple(artifact.action_pairs)
-    if len(actions) != 2:
-        raise ValueError("retry-together slice requires one trigger and one companion")
-    primary, companion = actions
-    if companion not in candidates.trace.actions:
-        raise ValueError(
-            "retry-together companion is absent from fresh Compass admission: "
-            f"requested={actions!r}, admitted={candidates.trace.actions!r}"
-        )
-    primary_paths = tuple(
-        detail
-        for detail in candidates.trace.read_details
-        if detail.pair == primary
-        and tuple(
-            (step.node_index, step.tag, step.value)
-            for step in detail.effect_path[: len(artifact.path_identity)]
-        )
-        == artifact.path_identity
-    )
-    if not primary_paths:
-        raise ValueError("retry-together primary path is unavailable")
-    if any(pair in world.context.blocked_actions for pair in actions) or _avoid_forces(
-        world.context, actions, world.snapshot
+    if any(pair in world.context.blocked_actions for pair in releases) or _avoid_forces(
+        world.context,
+        releases,
+        world.snapshot,
     ):
-        raise ValueError("retry-together artifact violates a live action constraint")
-    local_tag, local_value = artifact.local_boundary
-    local_steps = tuple(
-        step
-        for step in primary_paths[0].effect_path
-        if step.node_index == artifact.selected_writer_node
-        and step.tag == local_tag
-        and _values_match(step.value, local_value)
+        return None
+    policy = ActPolicy(
+        source=ActSource.WIDENING,
+        action_pairs=releases,
+        applied=releases,
+        note="working theory: rearm spent edge before temporal retry",
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        provenance=("working-theory temporal rearm",),
+        local_progress=LocalProgressKind.REARM,
+        pulse_horizon=PulseHorizon.ASSERTION_SCAN,
     )
-    if len(local_steps) != 1:
-        raise ValueError("retry-together local boundary is unavailable or ambiguous")
-    expectation = expectation_from_writer(
-        world.context.pdg,
-        world.context.program,
-        writer_node=artifact.selected_writer_node,
-        tag=local_tag,
-        value=local_value,
-        boundary=artifact.local_boundary,
-    )
-    if expectation is None:
-        raise ValueError("retry-together local writer has no exact expectation")
-    act = BatchPulse(
-        ActPolicy(
-            source=ActSource.WIDENING,
-            action_pairs=actions,
-            applied=actions,
-            heading=ChannelHeading(local_tag, local_value),
-            note="working theory: retry the failed pulse with its exact sibling producer",
-            expectation=expectation,
-        )
-    )
-    live_requirements = tuple(getattr(world.context, "active_requirements", ()))
-    if len(live_requirements) != 1 or len(view.requirements) != 1:
-        raise ValueError("retry-together slice requires one exact absorbed requirement")
-    if _semantic_key(live_requirements[0].condition) != view.requirements[0].condition_identity:
-        raise ValueError("retry-together requirement does not match its live receipt")
-    admitted_world = replace(
-        world,
-        context=replace(world.context, active_requirements=()),
-    )
-    if not _act_preserves_requirements(
-        admitted_world,
-        act,
-    ) or world.context.compass.knowledge.act_is_nogood(
-        world.world_key,
-        act_identity(act),
-    ):
-        raise ValueError("retry-together artifact is inadmissible in its exact source world")
+    act = Pulse(policy) if len(releases) == 1 else BatchPulse(policy)
+    if world.context.compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
+        return None
     return _bearing(
         world,
         act,
         candidates,
         target=target,
-        rationale="working theory: retry exact same-scan companion",
+        rationale="working theory: rearm exact spent edge from provisional tip",
     )
+
+
+def _iter_temporal_schedules(
+    world: OrientationWorld,
+    target: TargetSpec,
+    requirements: tuple[Any, ...],
+) -> Iterator[RequirementSchedule]:
+    """Yield compilable complete Boolean branches, one at a time."""
+
+    guard = _target_unresolved_condition(
+        world.state.work,
+        target.tag,
+        target.value,
+        target.predicate,
+    )
+    causal_anchor = getattr(world.context, "temporal_source_anchor", None)
+    if causal_anchor is None:
+        raise ValueError("temporal read has no exact executable source requirement")
+    for branch in iter_temporal_need_branches(requirements):
+        branch_requirements = tuple(
+            replace(
+                atom.requirement,
+                condition=atom.condition,
+                operand_authority=(
+                    atom.guard_atom.operand_authority
+                    if atom.guard_atom is not None
+                    else atom.requirement.operand_authority
+                ),
+            )
+            for atom in branch.atoms
+        )
+        schedule = compile_scalar_schedule(
+            branch_requirements,
+            world.state.work,
+            guard=guard,
+            causal_anchor=causal_anchor,
+        ).schedule
+        # A program-owned condition can already hold at the restored source
+        # and still be useful causal evidence for RETRY_TOGETHER.  It lowers
+        # to no direct assignment; the fresh transaction-sibling reader must
+        # contribute the physical addition.  SETUP_FIRST ignores this empty
+        # schedule below because it has no standalone act to execute.
+        if schedule is not None:
+            yield schedule
+
+
+def _theory_setup_bearing(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+) -> Bearing | None:
+    """Nominate one direct scalar setup through the ordinary Bearing seam.
+
+    This is the first bounded reader slice: the drive has already resolved the
+    detached requirement identities and restored their exact source.  The pure
+    compiler chooses compatible scalar representatives but performs no PLC
+    execution. Broader producer/availability reads extend this seam.
+    """
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None or view.temporal_intent is not TheoryTemporalIntent.SETUP_FIRST:
+        return None
+    requirements = tuple(getattr(world.context, "temporal_requirements", ()))
+    if not requirements:
+        raise ValueError("setup-first theory has no resolved live requirements")
+    for schedule in _iter_temporal_schedules(world, target, requirements):
+        actions = tuple(schedule.assignments)
+        if not actions:
+            continue
+        act_policy = ActPolicy(
+            source=ActSource.WIDENING,
+            action_pairs=actions,
+            applied=actions,
+            note="working theory: establish exact temporal setup",
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+            local_progress=LocalProgressKind.TEMPORAL_SETUP,
+            pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+        )
+        act = Pulse(act_policy) if len(actions) == 1 else BatchPulse(act_policy)
+        if _act_preserves_requirements(
+            world, act
+        ) and not world.context.compass.knowledge.act_is_nogood(
+            world.world_key,
+            act_identity(act),
+        ):
+            return _bearing(
+                world,
+                act,
+                candidates,
+                target=target,
+                prerequisites=tuple(schedule.pilot_rungs),
+                rationale="working theory: establish exact temporal setup",
+            )
+    # Configured, program-owned, incompatible, or unsupported conditions are
+    # not direct scalar Bearings. Other current-world readers may still return
+    # a coast or upstream act; otherwise the ordinary typed result wins.
+    return None
 
 
 def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
@@ -563,6 +935,7 @@ def _bearing(
     *,
     target: TargetSpec,
     rationale: str,
+    prerequisites: tuple[Any, ...] = (),
 ) -> Bearing:
     """Assemble one Bearing with its target-relative objective.
 
@@ -582,17 +955,24 @@ def _bearing(
         exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
         selected_bearing_id=repr(act_identity(act)),
     )
+    merged_prerequisites = tuple(
+        dict.fromkeys((*candidates.prerequisites.pilot_rungs, *prerequisites))
+    )
     return Bearing(
         world_key=world.world_key,
         act=act,
         objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
-        prerequisites=candidates.prerequisites.pilot_rungs,
+        prerequisites=merged_prerequisites,
         rationale=rationale,
         orientation=orientation_read,
     )
 
 
-def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolicy:
+def _pulse_policy(
+    option: Any,
+    applied: tuple[tuple[str, Any], ...],
+    world: OrientationWorld | None = None,
+) -> ActPolicy:
     """Materialize one private candidate as navigation's durable act policy."""
 
     heading = (
@@ -615,6 +995,36 @@ def _pulse_policy(option: Any, applied: tuple[tuple[str, Any], ...]) -> ActPolic
         expectation_exemption=(
             ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
         ),
+        local_progress=(
+            LocalProgressKind.TRACE_SETUP
+            if world is not None
+            and _is_stable_setup(world, applied)
+            and not _values_match(world.snapshot.get(option.tag), option.value)
+            else None
+        ),
+    )
+
+
+def _is_stable_setup(
+    world: OrientationWorld | None,
+    applied: tuple[tuple[str, Any], ...],
+) -> bool:
+    """Whether an exact pulse batch is a retainable current-world setup.
+
+    This is deliberately lazy: ordinary edge/command bearings pay no setup
+    semantics.  A trace or Crossing batch qualifies only when every applied
+    input is a stable level and at least one level changes in this read.
+    """
+
+    return bool(
+        world is not None
+        and applied
+        and any(not _values_match(world.snapshot.get(tag), value) for tag, value in applied)
+        and all(
+            tag not in getattr(world.context, "edge_tags", ())
+            and tag not in getattr(world.context, "clear_only", ())
+            for tag, _value in applied
+        )
     )
 
 
@@ -622,6 +1032,9 @@ def _orient_read(
     compass: Any,
     world: OrientationWorld,
     target: TargetSpec,
+    *,
+    _allow_theory: bool = True,
+    _candidate_read: CandidateRead | None = None,
 ) -> OrientationResult:
     """Materialize one alternative in act-precedence order.
 
@@ -633,15 +1046,78 @@ def _orient_read(
 
     if world.frame is None:
         raise ValueError("single-alternative orientation requires a complete frame")
-    candidates = _build_candidates(
-        world.frame,
-        world.state,
-        world.context,
+    candidates = (
+        _candidate_read
+        if _candidate_read is not None
+        else _build_candidates(
+            world.frame,
+            world.state,
+            world.context,
+        )
     )
 
-    theory_retry = _theory_retry_bearing(world, candidates, target)
-    if theory_retry is not None:
-        return theory_retry
+    view = getattr(world.context, "theory_view", None)
+    if _allow_theory:
+        if view is not None and view.temporal_intent is TheoryTemporalIntent.RETRY_TOGETHER:
+            ordinary = _orient_read(
+                compass,
+                world,
+                target,
+                _allow_theory=False,
+                _candidate_read=candidates,
+            )
+            composed = _theory_temporal_retry_bearing(
+                world,
+                candidates,
+                target,
+                ordinary=ordinary if isinstance(ordinary, Bearing) else None,
+            )
+            if composed is not None:
+                return composed
+            return _probe_or_stuck(
+                compass,
+                world,
+                candidates,
+                "temporal_retry_unresolved",
+            )
+
+        setup_first = view is not None and view.temporal_intent is TheoryTemporalIntent.SETUP_FIRST
+        prescription = candidates.wait.prescription if candidates.wait is not None else None
+        if setup_first and prescription is None:
+            rearm = _theory_rearm_bearing(world, candidates, target)
+            if rearm is not None:
+                return rearm
+
+        theory_setup = _theory_setup_bearing(world, candidates, target)
+        if theory_setup is not None:
+            return theory_setup
+        if setup_first and prescription is None:
+            return _probe_or_stuck(
+                compass,
+                world,
+                candidates,
+                "temporal_setup_unresolved",
+            )
+
+    # A structural awaited-action reading is the program telling us what input
+    # it needs in this exact world. It outranks an inferred coast prediction:
+    # the coast may be stale by the time its producer is read, while the
+    # handshake is executable now and will be verified like every other Pulse.
+    for option in candidates.options:
+        if option.source is not ActSource.AWAITED_ACTION:
+            continue
+        applied = _candidate_applied(option, candidates, world.context)
+        act = Pulse(_pulse_policy(option, applied, world))
+        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
+            world.world_key, act_identity(act)
+        ):
+            return _bearing(
+                world,
+                act,
+                candidates,
+                target=target,
+                rationale=option.awaited_action_note or "program-awaited action",
+            )
 
     prescription = candidates.wait.prescription if candidates.wait is not None else None
     if prescription is not None:
@@ -750,7 +1226,7 @@ def _orient_read(
 
     for option in candidates.options:
         applied = _candidate_applied(option, candidates, world.context)
-        act = Pulse(_pulse_policy(option, applied))
+        act = Pulse(_pulse_policy(option, applied, world))
         if not _act_preserves_requirements(world, act) or compass.knowledge.act_is_nogood(
             world.world_key, act_identity(act)
         ):
@@ -925,13 +1401,18 @@ def orient(
         "target": target,
         "blocked_actions": constraints.blocked_actions,
         "avoid_pred": constraints.avoid_predicate,
-        "theory_view": constraints.theory_view,
     }
     # Orientation also serves narrow structural test/navigation contexts.
     # Preserve that protocol while passing requirements through every context
     # which declares the Phase-4 view explicitly.
     if hasattr(world.context, "active_requirements"):
         context_changes["active_requirements"] = constraints.active_requirements
+    if hasattr(world.context, "theory_view"):
+        context_changes["theory_view"] = constraints.theory_view
+    if hasattr(world.context, "temporal_requirements"):
+        context_changes["temporal_requirements"] = constraints.temporal_requirements
+    if hasattr(world.context, "temporal_source_anchor"):
+        context_changes["temporal_source_anchor"] = constraints.temporal_source_anchor
     read_context = replace(world.context, **context_changes)
     seed = replace(world, context=read_context)
     worlds = (seed,) if seed.frame is not None else _read_worlds(seed, target, constraints)

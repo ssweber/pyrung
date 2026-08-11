@@ -125,28 +125,33 @@ def test_same_source_requirements_compose_before_adjustable_final_guard() -> Non
         and _condition_tags(event.data["requirement"].condition)
         == frozenset((scenario.FinalGuard.name,))
     )
-    repair_index = next(
-        index for index, event in enumerate(events) if event.kind == "requirement_locally_repaired"
-    )
-
-    assert first_index < second_index < guard_index < repair_index
+    assert first_index < second_index < guard_index
     assert any(
         _condition_tags(requirement.condition) == frozenset((scenario.FinalGuard.name,))
         for requirement in requirements
     )
-    assert [event.data["assignments"] for event in repairs] == [
+    assert repairs == ()
+    temporal_edges = tuple(
+        event.data["applied"]
+        for event in events
+        if event.kind == "candidate_try"
+        and event.data["applied"] != ((scenario.StartCommand.name, True),)
+    )
+    assert temporal_edges == (
         (
             (scenario.FirstPresetMs.name, 11),
-            (scenario.SecondPresetMs.name, 11),
+            (scenario.StartCommand.name, True),
         ),
-    ]
+        ((scenario.SecondPresetMs.name, 11),),
+        ((scenario.FinalGuard.name, True),),
+    )
     assert (
         sum(
             event.kind == "candidate_try"
             and (scenario.StartCommand.name, True) in tuple(event.data["applied"])
             for event in events
         )
-        == 1
+        == 2
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

@@ -1578,10 +1578,10 @@ def _three_step_program() -> tuple[Program, Bool]:
     return prog, s3
 
 
-class TestCheckpointStream:
-    """End-to-end: PILOT banks decreasing-trend checkpoints as it solves."""
+class TestScanProgressStream:
+    """End-to-end: exact scan receipts supersede legacy trend checkpoints."""
 
-    def test_checkpoints_emitted_with_decreasing_trend(self):
+    def test_productive_scans_continue_without_legacy_checkpoint_reproof(self):
         prog, target = _three_step_program()
         plc = PLC(prog, dt=0.010)
         events = list(pilot_events(plc, target))
@@ -1589,13 +1589,14 @@ class TestCheckpointStream:
         assert events[-1].kind == "finished"
         assert events[-1].data["reached"] is True
 
-        checkpoints = [e for e in events if e.kind == "trend_checkpoint"]
-        assert len(checkpoints) >= 2
-
-        trends = [e.data["trend"] for e in checkpoints]
-        assert trends == sorted(trends, reverse=True)  # monotonically improving
-        counts = [e.data["checkpoint_count"] for e in checkpoints]
-        assert counts == sorted(counts)  # checkpoint_count grows
+        committed = [e for e in events if e.kind == "trial_committed"]
+        assert [event.data["applied"] for event in committed] == [
+            (("a", True),),
+            (("b", True),),
+            (("c", True),),
+        ]
+        assert [event.scan for event in committed] == sorted(event.scan for event in committed)
+        assert len([event for event in events if event.kind == "trend_checkpoint"]) < len(committed)
 
 
 # ---------------------------------------------------------------------------

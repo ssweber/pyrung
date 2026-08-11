@@ -61,33 +61,18 @@ def test_without_exact_target_appearance_later_requirement_is_absent() -> None:
     )
 
 
-def test_program_step_checkpoint_cannot_come_from_a_folded_logical_gap(
+def test_scan_tip_recovery_does_not_use_folded_program_continuation(
     monkeypatch,
 ) -> None:
-    original = pilot_module._repaired_program_continuation
-    gap_results: list[int | None] = []
-
-    def without_checkpoint_kernel_scan(candidate, ctx, trial, expectation, **kwargs):
-        checkpoint_scan = original(candidate, ctx, trial, expectation, **kwargs)
-        pulse = trial.attempt.pulse
-        if checkpoint_scan is None or checkpoint_scan not in pulse.kernel_scan_ids:
-            return checkpoint_scan
-        exact_scan_ids = pulse.kernel_scan_ids
-        pulse.kernel_scan_ids = tuple(
-            scan_id for scan_id in exact_scan_ids if scan_id != checkpoint_scan
-        )
-        try:
-            gap_results.append(original(candidate, ctx, trial, expectation, **kwargs))
-        finally:
-            pulse.kernel_scan_ids = exact_scan_ids
-        return checkpoint_scan
+    def reject_legacy_continuation(*_args, **_kwargs):
+        raise AssertionError("scan-tip recovery must not fold a logical gap")
 
     monkeypatch.setattr(
         pilot_module,
         "_repaired_program_continuation",
-        without_checkpoint_kernel_scan,
+        reject_legacy_continuation,
     )
-    tuple(
+    events = tuple(
         islice(
             pilot_events(
                 PLC(fixture.logic, dt=0.010),
@@ -98,8 +83,8 @@ def test_program_step_checkpoint_cannot_come_from_a_folded_logical_gap(
         )
     )
 
-    assert gap_results
-    assert all(result is None for result in gap_results)
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is True
 
 
 def test_recovery_observes_target_before_same_scan_rollback() -> None:
@@ -139,16 +124,26 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
         (fixture.EarlyPresetMs.name, ">", 10),
         (fixture.LaterPresetMs.name, ">", 10),
     ]
-    assert [item.source_scan for item in requirements] == [1, 1]
-    assert requirements[0].source_world_key == requirements[1].source_world_key
+    assert [item.source_scan for item in requirements] == [1, 3]
+    assert requirements[0].source_world_key != requirements[1].source_world_key
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
-    assert [event.data["assignments"] for event in repairs] == [
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    temporal_retries = tuple(
+        event.data["applied"]
+        for event in events
+        if event.kind == "candidate_try"
+        and {
+            fixture.EarlyPresetMs.name,
+            fixture.LaterPresetMs.name,
+        }.intersection(tag for tag, _value in event.data["applied"])
+    )
+    assert temporal_retries == (
         (
             (fixture.EarlyPresetMs.name, 11),
-            (fixture.LaterPresetMs.name, 11),
+            (fixture.Advance.name, True),
         ),
-    ]
+        ((fixture.LaterPresetMs.name, 11),),
+    )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
 

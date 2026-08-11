@@ -9,7 +9,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from tests.fixtures import pilot_progress_then_successive_hazards as fixture
 
 
-def test_later_displacement_is_repaired_after_legitimate_program_progress() -> None:
+def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
     events = tuple(
         islice(
             pilot_events(
@@ -31,11 +31,7 @@ def test_later_displacement_is_repaired_after_legitimate_program_progress() -> N
         (fixture.SecondPresetMs.name, ">", 10),
     ]
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
-    assert [event.data["assignments"] for event in repairs] == [
-        ((fixture.FirstPresetMs.name, 11),),
-        ((fixture.SecondPresetMs.name, 11),),
-    ]
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
 
     selected_actions = [
         tuple(event.data["applied"])
@@ -48,14 +44,22 @@ def test_later_displacement_is_repaired_after_legitimate_program_progress() -> N
     ]
     assert selected_actions == [
         ((fixture.StartCommand.name, True),),
+        (
+            (fixture.FirstPresetMs.name, 11),
+            (fixture.StartCommand.name, True),
+        ),
         ((fixture.ConfirmCommand.name, True),),
     ]
 
-    first_repair_index = next(
+    first_retry_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "requirement_locally_repaired"
-        and event.data["assignments"] == ((fixture.FirstPresetMs.name, 11),)
+        if event.kind == "candidate_try"
+        and event.data["applied"]
+        == (
+            (fixture.FirstPresetMs.name, 11),
+            (fixture.StartCommand.name, True),
+        )
     )
     confirm_try_index = next(
         index
@@ -63,14 +67,17 @@ def test_later_displacement_is_repaired_after_legitimate_program_progress() -> N
         if event.kind == "candidate_try"
         and (fixture.ConfirmCommand.name, True) in tuple(event.data["applied"])
     )
-    assert first_repair_index < confirm_try_index
+    second_retry_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "candidate_try"
+        and event.data["applied"] == ((fixture.SecondPresetMs.name, 11),)
+    )
+    assert first_retry_index < confirm_try_index < second_retry_index
     confirmation_source = next(
         event for event in reversed(events[:confirm_try_index]) if event.kind == "iteration"
     )
-    assert (
-        confirmation_source.data["snapshot"][fixture.SequenceState.name]
-        == fixture.AWAITING_CONFIRMATION
-    )
+    assert confirmation_source.data["snapshot"][fixture.SequenceState.name] == fixture.QUALIFIED
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
 

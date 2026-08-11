@@ -37,6 +37,7 @@ from pyrung.core.analysis.pilot.effects import (
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
+    LocalProgressKind,
     NavigationConstraints,
     OrientationWorld,
     TargetSpec,
@@ -50,13 +51,19 @@ from pyrung.core.analysis.pilot.outcome import (
     assess_outcome,
 )
 from pyrung.core.analysis.pilot.requirement_recovery import active_requirement_violations
-from pyrung.core.analysis.pilot.trace import TraceReadConstraints, target_reached, trace_back
+from pyrung.core.analysis.pilot.trace import (
+    TraceReadConstraints,
+    frontier_pairs,
+    target_reached,
+    trace_back,
+)
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
     MotionKind,
     PilotGateEvent,
     RevisitCredential,
+    ScanProgressReceipt,
     TargetReached,
     _AcceptedTrial,
     _ActionPair,
@@ -66,6 +73,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
+from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.instruction.advance import constraint_holds
 
@@ -80,6 +88,7 @@ class _DeadEndResult:
     tree: Any
     trend: int
     has_new_frontier: bool = False
+    advanced_frontier: tuple[_ActionPair, ...] = ()
 
 
 class _SpinVerdict(Enum):
@@ -220,9 +229,86 @@ def _accepted_trial(
     channel_motion: ChannelMotion,
     earned_work_receipt: EarnedWorkReceipt,
     verification: TargetReached | AssessedMotion,
+    *,
+    exact_frontier_advanced: bool = False,
 ) -> _AcceptedTrial:
     """Preserve the final executed attempt and its PLC-free evidence."""
     pulse = attempt.pulse
+    survived = tuple(
+        observation
+        for observation in attempt.effect_observations
+        if observation.disposition == "SURVIVED" and observation.appeared is not None
+    )
+    selected_producer_landing = any(
+        _values_match(
+            pulse.snap.get(observation.obligation.tag),
+            observation.obligation.value,
+        )
+        or any(
+            node.tag == observation.obligation.tag
+            and not node.satisfied
+            and _values_match(pulse.snap.get(node.tag), node.value)
+            for node in frame.tree.iter_nodes()
+        )
+        for observation in survived
+    )
+    if isinstance(verification, TargetReached):
+        progress_kind = "target"
+    elif earned_work_is_useful_motion(earned_work_receipt):
+        progress_kind = "earned-work"
+    elif survived:
+        progress_kind = "selected-producer"
+    elif (
+        exact_frontier_advanced or verification.assessment.progress is ProgressEffect.FORWARD
+    ) and (
+        not (isinstance(attempt.bearing.act, Coast) and attempt.bearing.act.mode == "bearing")
+        or not channel_motion.active
+        or channel_motion.reached
+    ):
+        # A bearing coast owns its requested channel heading before it owns a
+        # generic target frontier. If that channel ejected somewhere else,
+        # conditions made true earlier in the coast are not evidence that its
+        # retained tip advanced the selected operation. A terminal coast is
+        # deliberately waiting for program-owned ejection, while a pulse's S1
+        # may be productive even when its optional S2 look-ahead departs.
+        # Leave only a wrong bearing-coast landing to post-commit departure
+        # handling, which can inspect and replay the incident from its source.
+        progress_kind = "frontier"
+    elif attempt.bearing.act.policy.local_progress is not None:
+        progress_kind = "conductivity"
+    else:
+        progress_kind = None
+    productive_scan = (
+        min(
+            observation.appeared.scan_id
+            for observation in survived
+            if observation.appeared is not None
+        )
+        if survived
+        else pulse.action_scan
+        if not isinstance(attempt.bearing.act, (Coast, Dwell))
+        else pulse.fork.state.scan_id
+    )
+    scan_progress = (
+        ScanProgressReceipt(
+            source_scan=pulse.scan_before,
+            productive_scan=productive_scan,
+            landing_scan=pulse.fork.state.scan_id,
+            kind=progress_kind,
+            source_world=getattr(frame, "key", attempt.bearing.world_key),
+            landing_world=(
+                verification.new_key if isinstance(verification, AssessedMotion) else pulse.key
+            ),
+            selected_act=act_identity(attempt.bearing.act),
+            distance_before=getattr(frame, "distance_before", 0),
+            distance_after=(verification.trend if isinstance(verification, AssessedMotion) else 0),
+            landing_owns_tip=(
+                selected_producer_landing if progress_kind == "selected-producer" else True
+            ),
+        )
+        if progress_kind is not None
+        else None
+    )
     execution = _ExecutionEvidence(
         before_snap=frame.snap,
         after_snap=pulse.snap,
@@ -233,6 +319,7 @@ def _accepted_trial(
             observation.diagnostic_snapshot() for observation in attempt.effect_observations
         ),
         replay_motion=pulse.replay_motion,
+        scan_progress=scan_progress,
     )
     return _AcceptedTrial(
         attempt=attempt,
@@ -318,6 +405,23 @@ def _gate_revisit(
     """
     if trial.key not in state.seen_keys:
         return True
+    prior_progress = None
+    committed = tuple(getattr(state, "committed_acts", ()))
+    if committed:
+        prior_progress = committed[-1].context.execution.scan_progress
+    if prior_progress is not None and prior_progress.landing_scan == trial.scan_before:
+        _record_gate(
+            "SCAN-FRONTIER",
+            ": adjacent scan follows an exact productive tip",
+            gate_events=gate_events,
+            evidence={
+                "productive_scan": prior_progress.productive_scan,
+                "landing_scan": prior_progress.landing_scan,
+                "kind": prior_progress.kind,
+                "selected_act": prior_progress.selected_act,
+            },
+        )
+        return True
     if (
         earned_work_is_useful_motion(earned_work_receipt)
         and earned_credential is not None
@@ -379,6 +483,7 @@ def _gate_dead_end(
     gate_events: list[PilotGateEvent],
     collected_nogoods: list[_ActionPair],
     channel_motion: ChannelMotion,
+    accept_temporal_progress: bool = False,
 ) -> _DeadEndResult | None:
     """Reject a trial that moved nothing and can prove no pending motion.
 
@@ -397,7 +502,9 @@ def _gate_dead_end(
     # this gate is unchanged for them.)
     channel_reached = channel_motion.reached
     channel_moved = channel_motion.departed
-    accept_override = channel_reached or channel_moved
+    accept_override = (
+        channel_reached or channel_moved or earned_work_is_useful_motion(earned_work_receipt)
+    )
     new_tree = trace_back(
         target.tag,
         target.value,
@@ -420,6 +527,41 @@ def _gate_dead_end(
         ),
     )
     new_trend = new_tree.unsatisfied_count()
+
+    # The scan-level receipt is about the selected target frontier, not the
+    # trace tree's aggregate size. Retracing can grow while a stepper advances,
+    # or shrink because transient table plumbing changed. Count only an exact
+    # current-frontier condition that was false at S0 and is true at the retained
+    # scan tip.
+    def _frontier_holds(pair: _ActionPair) -> bool:
+        expression_verdict = _eval_expr_from_state(pair[1], trial.snap)
+        if expression_verdict is not None:
+            return expression_verdict
+        verdict = constraint_holds(pair[1], trial.snap)
+        return verdict is True or (
+            verdict is None and _values_match(trial.snap.get(pair[0]), pair[1])
+        )
+
+    advanced_frontier = (
+        tuple(pair for pair in frontier_pairs(frame.tree, frame.snap) if _frontier_holds(pair))
+        if hasattr(frame.tree, "iter_nodes")
+        else ()
+    )
+    target_advanced = bool(advanced_frontier)
+    temporal_advanced = (
+        accept_temporal_progress
+        and target_advanced
+        and all(
+            constraint_holds(requirement.condition, trial.snap) is True
+            for requirement in getattr(ctx, "temporal_requirements", ())
+        )
+    )
+    # A bounded pulse needs no invented settle phase when its retained S1/S2
+    # edge has already reduced the current target trace.  This is the common
+    # scan-level conductivity receipt: the exact transaction did useful work,
+    # even when the newly conductive owner exposes no scalar action frontier
+    # until Compass reads the landing again.
+    accept_override = accept_override or target_advanced
     new_actions = set(new_tree.ordered_actions())
     old_actions = set(frame.tree.ordered_actions())
     applied_inputs = set(applied_actions)
@@ -462,11 +604,24 @@ def _gate_dead_end(
                 },
             )
             return None
-        _record_gate(
-            "CHANNEL-OVERRIDE-DEAD-END",
-            ": channel target reached" if channel_reached else ": channel ejected",
-            gate_events,
-        )
+        if target_advanced:
+            _record_gate(
+                "SCAN-PRODUCTIVE-STEP",
+                ": exact scan edge improved target-relative distance",
+                gate_events,
+                evidence={
+                    "trend_before": frame.distance_before,
+                    "trend_after": new_trend,
+                    "temporal": temporal_advanced,
+                    "advanced_frontier": advanced_frontier,
+                },
+            )
+        else:
+            _record_gate(
+                "CHANNEL-OVERRIDE-DEAD-END",
+                ": channel target reached" if channel_reached else ": channel ejected",
+                gate_events,
+            )
     elif (
         new_actions
         and not (new_actions - applied_inputs - old_actions)
@@ -506,8 +661,13 @@ def _gate_dead_end(
     old_unsat = frame.tree.unsatisfied_conditions()
     new_unsat = new_tree.unsatisfied_conditions()
     genuinely_new_conditions = bool(new_unsat - old_unsat)
-    has_new_frontier = genuinely_new_actions or genuinely_new_conditions
-    return _DeadEndResult(tree=new_tree, trend=new_trend, has_new_frontier=has_new_frontier)
+    has_new_frontier = genuinely_new_actions or genuinely_new_conditions or target_advanced
+    return _DeadEndResult(
+        tree=new_tree,
+        trend=new_trend,
+        has_new_frontier=has_new_frontier,
+        advanced_frontier=advanced_frontier,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +741,7 @@ def _verify_after_spin(
         gate_events=gate_events,
         collected_nogoods=collected_nogoods,
         channel_motion=channel_motion,
+        accept_temporal_progress=(policy.local_progress is LocalProgressKind.TEMPORAL_EDGE),
     )
     if dead_end is None:
         return _reject()
@@ -694,6 +855,7 @@ def _verify_after_spin(
                     if credential is not None
                 ),
             ),
+            exact_frontier_advanced=bool(getattr(dead_end, "advanced_frontier", ())),
         ),
         gate_events=tuple(gate_events),
         nogood_pairs=frozenset(collected_nogoods),
@@ -1050,6 +1212,105 @@ def _verify_gates(
         ctx.target.predicate,
     ):
         return _accept_target()
+
+    if policy.local_progress in {
+        LocalProgressKind.TRACE_SETUP,
+        LocalProgressKind.REARM,
+        LocalProgressKind.TEMPORAL_SETUP,
+    }:
+        changed = tuple(
+            (tag, value)
+            for tag, value in applied_actions
+            if not _values_match(frame.snap.get(tag), value)
+            and _values_match(trial.snap.get(tag), value)
+        )
+        assignments_reached = bool(applied_actions) and all(
+            _values_match(trial.snap.get(tag), value) for tag, value in applied_actions
+        )
+        requirements_reached = all(
+            constraint_holds(requirement.condition, trial.snap) is True
+            for requirement in getattr(ctx, "temporal_requirements", ())
+        )
+        expectation_boundaries_preserved = all(
+            obligation.boundary is None
+            or _values_match(
+                trial.snap.get(obligation.boundary[0]),
+                obligation.boundary[1],
+            )
+            for obligation in (
+                bearing.expectation.obligations if bearing.expectation is not None else ()
+            )
+        )
+        declared_boundary_preserved = not (
+            policy.local_progress is LocalProgressKind.TRACE_SETUP
+            and (channel_motion.departed or not expectation_boundaries_preserved)
+        )
+        local_progress_reached = (
+            bool(changed)
+            and assignments_reached
+            and (
+                policy.local_progress in {LocalProgressKind.TRACE_SETUP, LocalProgressKind.REARM}
+                or requirements_reached
+            )
+            and declared_boundary_preserved
+        )
+        if local_progress_reached:
+            gate_events.append(
+                PilotGateEvent(
+                    "theory-local-progress",
+                    "declared inputs reached their local boundary",
+                    evidence={
+                        "kind": policy.local_progress.value,
+                        "changed": changed,
+                        "requirements_reached": requirements_reached,
+                        "expectation_boundaries_preserved": expectation_boundaries_preserved,
+                        "declared_boundary_preserved": declared_boundary_preserved,
+                    },
+                )
+            )
+            assessment = TrialAssessment(
+                agency=Agency.PILOT,
+                bearing=BearingEffect.SATISFIED,
+                progress=ProgressEffect.UNCHANGED,
+                new_frontier=False,
+                accepted=True,
+            )
+            return _AttemptResult(
+                trial=_accepted_trial(
+                    attempt,
+                    frame,
+                    gate_events,
+                    channel_motion,
+                    earned_work_receipt,
+                    AssessedMotion(
+                        new_key=trial.key,
+                        trend=frame.distance_before,
+                        assessment=assessment,
+                    ),
+                ),
+                gate_events=tuple(gate_events),
+                nogood_pairs=frozenset(collected_nogoods),
+                confirmed_correction=trial.confirmed_correction,
+                avoid_names=tuple(avoid_violations),
+            )
+        if not (
+            policy.local_progress is LocalProgressKind.TRACE_SETUP
+            and not declared_boundary_preserved
+        ):
+            gate_events.append(
+                PilotGateEvent(
+                    "theory-local-progress-rejected",
+                    "declared inputs did not reach their local boundary",
+                    evidence={
+                        "kind": policy.local_progress.value,
+                        "changed": changed,
+                        "requirements_reached": requirements_reached,
+                        "expectation_boundaries_preserved": expectation_boundaries_preserved,
+                        "declared_boundary_preserved": declared_boundary_preserved,
+                    },
+                )
+            )
+            return _reject(nogoods=(), proof_rejection=True)
 
     # Read the selected effect before generic spin/dead-end judgment.  A
     # proved violation is occurrence evidence, not an action nogood; Phase 4

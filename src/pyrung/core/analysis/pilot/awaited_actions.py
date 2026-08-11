@@ -45,6 +45,10 @@ class AwaitedAction:
     from_state: Any
     to_state: Any
     note: str
+    # Durable state/channel consumer the request transition is meant to move.
+    # ``target_tag`` below may be an ephemeral request register which is
+    # correctly consumed and cleared in the same scan.
+    channel_tag: str = ""
     target_tag: str = ""
     writer_node: int = -1
     required_shape: tuple[tuple[str, Any], ...] = ()
@@ -208,6 +212,7 @@ def awaited_actions(
                     command_writes=command_writes,
                     from_state=state_value,
                     to_state=transition.to_value,
+                    channel_tag=channel_tag,
                     target_tag=transition.target_tag,
                     writer_node=transition.writer_node,
                     required_shape=tuple(

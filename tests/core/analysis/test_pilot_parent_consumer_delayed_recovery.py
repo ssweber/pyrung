@@ -50,7 +50,7 @@ def test_selected_handoff_names_the_parent_read_as_its_consumer() -> None:
     assert observed.consumer_read.execution_kind == "rung"
 
 
-def test_surviving_parent_handoff_commits_an_exact_expectation_receipt() -> None:
+def test_each_surviving_parent_handoff_commits_an_exact_expectation_receipt() -> None:
     events = _events()
     receipts = tuple(
         event.data["receipt"]
@@ -61,16 +61,16 @@ def test_surviving_parent_handoff_commits_an_exact_expectation_receipt() -> None
         and event.data["receipt"].producer_occurrences[0].values[-1] == fixture.INTERMEDIATE
     )
 
-    assert len(receipts) == 1
-    receipt = receipts[0]
-    assert receipt.source_scan == 1
-    assert receipt.obligations[0].consumer == (None, 1, ())
-    assert receipt.producer_occurrences[0].rung == (None, 0)
-    assert receipt.consumer_occurrences[0].rung == (None, 1)
-    assert receipt.consumer_occurrences[0].execution_kind == "rung"
+    assert len(receipts) == 2
+    assert len({receipt.causal_identity for receipt in receipts}) == 2
+    assert all(receipt.source_scan == 1 for receipt in receipts)
+    assert all(receipt.obligations[0].consumer == (None, 1, ()) for receipt in receipts)
+    assert all(receipt.producer_occurrences[0].rung == (None, 0) for receipt in receipts)
+    assert all(receipt.consumer_occurrences[0].rung == (None, 1) for receipt in receipts)
+    assert all(receipt.consumer_occurrences[0].execution_kind == "rung" for receipt in receipts)
 
 
-def test_delayed_watchdog_departure_repairs_only_the_source_transaction() -> None:
+def test_delayed_watchdog_departure_retries_only_the_source_transaction() -> None:
     events = _events()
     requirements = tuple(
         (index, event.data["requirement"])
@@ -95,10 +95,19 @@ def test_delayed_watchdog_departure_repairs_only_the_source_transaction() -> Non
         requirement.deadline.scan_id,
     ) == (">", 10, "adjustable", 1, 2)
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
-    assert len(repairs) == 1
-    assert repairs[0].data["assignments"] == ((fixture.WatchdogPresetMs.name, 11),)
-    assert repairs[0].data["detail"] == "local transaction repaired"
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    temporal_retries = tuple(
+        event.data["applied"]
+        for event in events
+        if event.kind == "candidate_try"
+        and fixture.WatchdogPresetMs.name in {tag for tag, _value in event.data["applied"]}
+    )
+    assert temporal_retries == (
+        (
+            (fixture.WatchdogPresetMs.name, 11),
+            (fixture.StartCommand.name, True),
+        ),
+    )
     assert not {
         "retained_replay_try",
         "retained_replay_rejected",

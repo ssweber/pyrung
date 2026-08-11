@@ -1925,15 +1925,18 @@ def _advance_frontier(
     if step is None:
         return None
     if (
-        owner.profile.linear is not None
+        owner.instruction is not None
+        and owner.profile.linear is not None
         and owner.profile.done is not None
         and constraint.tag == owner.profile.done.name
         and owner.profile.linear.distance(constraint, env.snapshot) is None
         and step.progress is None
     ):
-        # Restore/clear knowledge is useful to correction handling, but it is
-        # not forward scalar motion and must not make an alternative writer
-        # route look coastable.
+        # An ordinary instruction restore/clear is not forward scalar motion;
+        # correction and regression policy own it. A harness coupling has no
+        # program instruction and its declared upstream demand is the only
+        # semantic route to the physical feedback boundary, so retain that
+        # reader-owned chain.
         return None
     stage_boundary = owner.profile.linear is None
     atom = _constraint_atom(step.until)

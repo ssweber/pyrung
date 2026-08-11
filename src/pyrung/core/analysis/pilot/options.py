@@ -2017,10 +2017,18 @@ def _assemble_candidate_read(
                     _candidate_for(pair),
                     source=ActSource.AWAITED_ACTION,
                     awaited_action_note=awaited_action.note,
-                    bearing_channel_tag=awaited_action.target_tag or None,
+                    bearing_channel_tag=(
+                        awaited_action.channel_tag or awaited_action.target_tag or None
+                    ),
                     bearing_channel_value=awaited_action.to_state,
+                    # The structural reading proves the request -> channel
+                    # handoff, but its selected writer may own an ephemeral
+                    # request register. Verify the durable channel heading;
+                    # do not demand that the consumed request survive S1/S2.
                     expectation=(
-                        expectation_from_writer(
+                        None
+                        if awaited_action.channel_tag
+                        else expectation_from_writer(
                             ctx.pdg,
                             ctx.program,
                             writer_node=awaited_action.writer_node,

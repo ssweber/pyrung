@@ -217,6 +217,19 @@ def assess_outcome(
                 True,
             )
 
+        # A bounded intervention yields at its newly observed working edge. It
+        # need not finish the broader channel heading in the same pulse: exact
+        # target-relative trace improvement is itself productive conductivity.
+        # Empty program coasts retain the stronger owner/earned-work rule below.
+        if applied_actions and progress is ProgressEffect.FORWARD:
+            return TrialAssessment(
+                agency,
+                BearingEffect.UNCHANGED,
+                progress,
+                has_new_frontier,
+                True,
+            )
+
         # The channel did not move.  That is not ambient drift.  Accept only
         # evidence of useful work during the motion: an event-earned
         # credential (earned work) or genuinely new prerequisites.  Otherwise

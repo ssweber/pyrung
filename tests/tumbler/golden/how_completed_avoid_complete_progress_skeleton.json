@@ -368,12 +368,7 @@
  {
   "distance": 6,
   "kind": "iteration",
-  "nogoods": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ]
-  ],
+  "nogoods": [],
   "raw_trace_actions": [
    [
     "Cmd_UnitModeChgRequest",
@@ -408,11 +403,33 @@
  {
   "active_trace_actions": [
    [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
     "Cmd_Mode_Production",
     true
    ]
   ],
   "candidates": [
+   {
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
+    "bearing_channel_value": 1,
+    "learned_prescribed": false,
+    "pair": [
+     "Cmd_UnitModeChgRequest",
+     true
+    ],
+    "prescribed": false,
+    "provenance": [
+     "Main:R22"
+    ],
+    "route_prescribed": false,
+    "tag": "Cmd_UnitModeChgRequest",
+    "value": true
+   },
    {
     "awaited_action_note": "",
     "awaited_action_prescribed": false,
@@ -536,6 +553,10 @@
   "stuck_reason": null,
   "trace_actions": [
    [
+    "Cmd_UnitModeChgRequest",
+    true
+   ],
+   [
     "Cmd_Mode_Production",
     true
    ]
@@ -557,12 +578,15 @@
   "candidate": {
    "awaited_action_note": "",
    "awaited_action_prescribed": false,
-   "bearing_channel_tag": "Sts_UnitModeCurrent",
+   "bearing_channel_tag": "Cmd_UnitModeChgReqBool",
    "bearing_channel_value": 1,
    "learned_prescribed": false,
    "pair": null,
    "prescribed": true,
-   "provenance": [],
+   "provenance": [
+    "Main:R22",
+    "working-theory temporal retry"
+   ],
    "route_prescribed": false,
    "tag": null,
    "value": null
@@ -595,13 +619,13 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "channel target reached",
-    "event": "channel-override-dead-end"
+    "detail": "exact scan edge improved target-relative distance",
+    "event": "scan-productive-step"
    },
    {
     "__type__": "PilotGateEvent",
     "detail": "distance 6 -> 3",
-    "event": "satisfied"
+    "event": "unchanged"
    }
   ],
   "kind": "widening_accepted",
@@ -623,10 +647,6 @@
    "Cmd_UnitModeChgRequest": true
   },
   "kind": "trial_committed"
- },
- {
-  "kind": "trend_checkpoint",
-  "trend": 3
  },
  {
   "distance": 3,
@@ -1894,7 +1914,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 11
@@ -2052,7 +2072,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5
@@ -3562,7 +3582,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 11
@@ -3720,7 +3740,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 8
@@ -3863,7 +3883,7 @@
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
-  "new_frontier": false,
+  "new_frontier": true,
   "observe_label": "bearing_coast",
   "progress": "forward",
   "trend": 5
@@ -4767,7 +4787,7 @@
      ],
      [
       "Blower_tmr.Acc",
-      12
+      13
      ],
      [
       "Blower_tmr.Acc",
@@ -4879,7 +4899,7 @@
      ],
      [
       "Rotate_tmr.Acc",
-      17
+      18
      ],
      [
       "Rotate_tmr.Acc",

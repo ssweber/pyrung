@@ -10,6 +10,7 @@ Python DSL for ladder logic. `with Rung()` maps to a ladder rung — condition o
 - `make test` — pytest, excludes slow markers (ALWAYS use make, not `uv run pytest`)
 - `make test-prove` — prover (verifier) subsystem only
 - `make test-pilot` — pilot (`how()` planner) tests
+- `make test-tumbler` — generated-program PILOT fixtures; run after `make test-pilot`
 - `make test-hypothesis` — property-based tests
 - `make test-soundness` — prove agreement checks (`--prove-agreement`)
 - `make test-fuzz` — fuzzer suite

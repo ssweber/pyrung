@@ -72,6 +72,12 @@ class NavigationConstraints:
     # Detached lifecycle evidence for this read. Compass may consult it but
     # cannot mutate the theory or retain an executable future through it.
     theory_view: TheoryView | None = None
+    # Exact live requirements resolved by the drive for the active detached
+    # temporal request. Empty on every ordinary orientation fast path.
+    temporal_requirements: tuple[ActiveRequirement, ...] = ()
+    # Exact (checkpoint owner, world key) selected as this read's executable
+    # edge. Requirement evidence may come from several later diagnostics.
+    temporal_source_anchor: tuple[Any, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +123,22 @@ class ExpectationExemption(StrEnum):
     UNRESOLVED_EFFECT = "unresolved_effect"
 
 
+class LocalProgressKind(StrEnum):
+    """Theory-scoped physical progress that need not move the global key."""
+
+    TRACE_SETUP = "trace_setup"
+    REARM = "rearm"
+    TEMPORAL_SETUP = "temporal_setup"
+    TEMPORAL_EDGE = "temporal_edge"
+
+
+class PulseHorizon(StrEnum):
+    """How far physical pulse execution may run before yielding to Compass."""
+
+    ASSERTION_SCAN = "assertion_scan"
+    LOOKAHEAD_SCAN = "lookahead_scan"
+
+
 @dataclass(frozen=True)
 class RouteEdgeContext:
     """The outer chart edge served by an immediate channel heading."""
@@ -158,6 +180,8 @@ class ActPolicy:
     context_actions: tuple[_ActionPair, ...] = ()
     expectation: EffectExpectation | None = None
     expectation_exemption: ExpectationExemption | None = None
+    local_progress: LocalProgressKind | None = None
+    pulse_horizon: PulseHorizon = PulseHorizon.LOOKAHEAD_SCAN
 
     def __post_init__(self) -> None:
         if self.expectation is not None and self.expectation_exemption is not None:

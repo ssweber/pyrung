@@ -31,7 +31,7 @@ def _events():
     )
 
 
-def test_scan_zero_guard_overwrite_is_repaired_at_boundary_zero() -> None:
+def test_scan_zero_guard_overwrite_is_retried_at_boundary_zero() -> None:
     events = _events()
     requirements = tuple(
         event.data["requirement"]
@@ -54,10 +54,13 @@ def test_scan_zero_guard_overwrite_is_repaired_at_boundary_zero() -> None:
         requirement.provenance,
     ) == ("!=", False, 0, 1, "bootstrap-overwriter")
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
-    assert len(repairs) == 1
-    assert repairs[0].data["assignments"] == ((fixture.OverwriteInterlock.name, True),)
-    assert repairs[0].data["detail"] == "bootstrap local transaction repaired"
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    assert any(
+        event.kind == "candidate_try"
+        and event.data["applied"] == ((fixture.OverwriteInterlock.name, True),)
+        and event.scan == 0
+        for event in events
+    )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
 
@@ -71,7 +74,7 @@ def test_scan_zero_guard_overwrite_is_repaired_at_boundary_zero() -> None:
     assert plan.state.scan_id == 1
     assert plan.state.tags[fixture.SequenceState.name] == fixture.TARGET
     assert plan.state.tags[fixture.OverwriteInterlock.name] is True
-    assert plan.ordered_steps == []
+    assert plan.ordered_steps == [(1, {fixture.OverwriteInterlock.name: True})]
 
 
 def test_nonzero_external_guard_is_adjustable_without_parameter_heuristics() -> None:
@@ -96,8 +99,9 @@ def test_nonzero_external_guard_is_adjustable_without_parameter_heuristics() -> 
     assert requirement.condition.operand_authority is OperandAuthority.ADJUSTABLE
     assert requirement.operand_authority is OperandAuthority.ADJUSTABLE
     assert any(
-        event.kind == "requirement_locally_repaired"
-        and event.data["assignments"] == ((interlock.name, False),)
+        event.kind == "candidate_try"
+        and event.data["applied"] == ((interlock.name, False),)
+        and event.scan == 0
         for event in events
     )
     assert events[-1].kind == "finished"
@@ -238,11 +242,10 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     assert rebased[0].source_scan == 0
     assert prevent_poison.name in _condition_tags(rebased[0].condition)
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
     assert any(
-        event.data["assignments"] == ((prevent_poison.name, True),)
-        and event.data["detail"] == "program-owned guard rebased through retained history"
-        for event in repairs
+        event.kind == "candidate_try" and event.data["applied"] == ((prevent_poison.name, True),)
+        for event in events
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
@@ -273,8 +276,8 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     assert warm_events[-1].data["reached"] is True
 
 
-def test_program_guard_rebase_uses_nearest_retained_nonbootstrap_writer() -> None:
-    """The same recovery reaches scan 1, not only the cold-start boundary."""
+def test_current_read_can_prevent_poison_before_a_rebase_is_needed() -> None:
+    """Ordinary look-ahead may establish the guard before failure teaches it."""
 
     source = 0
     armed = 1
@@ -303,30 +306,15 @@ def test_program_guard_rebase_uses_nearest_retained_nonbootstrap_writer() -> Non
         if event.kind == "requirement_activated"
         and event.data["requirement"].provenance == "program-guard-rebase"
     )
-    assert len(rebased) == 1, tuple(
-        (event.kind, event.scan, dict(event.data))
-        for event in events
-        if event.kind
-        in {
-            "requirement_activated",
-            "requirement_locally_repaired",
-            "candidate_rejected",
-            "stuck",
-            "finished",
-        }
-    )
-    assert rebased[0].source_scan == 1
-    assert prevent_poison.name in _condition_tags(rebased[0].condition)
-    assert any(
-        event.kind == "requirement_locally_repaired"
-        and event.data["assignments"] == ((prevent_poison.name, True),)
-        for event in events
-    )
+    assert rebased == ()
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
+    assert events[-1].data["work"].state.tags[prevent_poison.name] is True
+    assert events[-1].data["work"].state.tags[poisoned.name] == 0
 
 
-def test_scan_zero_repairs_an_intermediate_then_fresh_orients_to_the_target() -> None:
+def test_scan_zero_retries_an_intermediate_then_fresh_orients_to_the_target() -> None:
     events = tuple(
         pilot_events(
             PLC(intermediate_fixture.logic, dt=0.010),
@@ -335,8 +323,11 @@ def test_scan_zero_repairs_an_intermediate_then_fresh_orients_to_the_target() ->
         )
     )
 
-    repair_index = next(
-        index for index, event in enumerate(events) if event.kind == "requirement_locally_repaired"
+    retry_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "candidate_try"
+        and event.data["applied"] == ((intermediate_fixture.PreserveIntermediate.name, True),)
     )
     finish_index = next(
         index
@@ -345,10 +336,8 @@ def test_scan_zero_repairs_an_intermediate_then_fresh_orients_to_the_target() ->
         and (intermediate_fixture.FinishCommand.name, True) in tuple(event.data["applied"])
     )
 
-    assert repair_index < finish_index
-    assert events[repair_index].data["assignments"] == (
-        (intermediate_fixture.PreserveIntermediate.name, True),
-    )
+    assert retry_index < finish_index
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
 
@@ -362,5 +351,6 @@ def test_scan_zero_repairs_an_intermediate_then_fresh_orients_to_the_target() ->
     assert plan.state.tags[intermediate_fixture.SequenceState.name] == intermediate_fixture.COMPLETE
     assert plan.state.tags[intermediate_fixture.PreserveIntermediate.name] is True
     assert plan.ordered_steps == [
+        (1, {intermediate_fixture.PreserveIntermediate.name: True}),
         (2, {intermediate_fixture.FinishCommand.name: True}),
     ]

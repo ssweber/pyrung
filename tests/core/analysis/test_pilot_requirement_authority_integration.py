@@ -58,9 +58,9 @@ def test_unconfigured_external_zero_preset_remains_adjustable() -> None:
     assert len(requirements) == 1
     assert requirements[0].operand_authority.value == "adjustable"
     assert any(
-        event.kind == "requirement_locally_repaired"
-        and (preset.name, 11) in event.data["assignments"]
+        event.kind == "candidate_try" and (preset.name, 11) in event.data["applied"]
         for event in events
     )
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

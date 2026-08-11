@@ -220,8 +220,15 @@ def compile_scalar_schedule(
     plc: Any,
     *,
     guard: Any,
+    causal_anchor: tuple[Any, Any] | None = None,
 ) -> ScheduleCompilation:
-    """Compile one exact source's compatible adjustable scalar requirements."""
+    """Compile compatible adjustable scalars at one executable source.
+
+    Ordinary closure requires every requirement to carry that same exact
+    source. A working theory may instead supply its explicitly restored causal
+    anchor: accumulated requirements retain the distinct diagnostic owners
+    that taught them to us, while the schedule is placed at the selected root.
+    """
 
     scalar = tuple(
         requirement for requirement in requirements if isinstance(requirement.condition, Cmp)
@@ -235,10 +242,14 @@ def compile_scalar_schedule(
         for requirement in scalar
     ):
         return ScheduleCompilation(detail="only ACTIVE/STEADY requirements may lower")
-    if any(
+    anchor_owner, anchor_key = (
+        (first.checkpoint_owner, first.source_world_key) if causal_anchor is None else causal_anchor
+    )
+    if any(requirement.phase is not first.phase for requirement in scalar):
+        return ScheduleCompilation(detail="requirements do not share one schedule phase")
+    if causal_anchor is None and any(
         requirement.checkpoint_owner is not first.checkpoint_owner
         or requirement.source_world_key != first.source_world_key
-        or requirement.phase is not first.phase
         for requirement in scalar
     ):
         return ScheduleCompilation(detail="requirements do not share one exact causal source")
@@ -280,8 +291,8 @@ def compile_scalar_schedule(
             requirements=scalar,
             assignments=tuple(assignments),
             pilot_rungs=pilot_rungs,
-            checkpoint_owner=first.checkpoint_owner,
-            source_world_key=first.source_world_key,
+            checkpoint_owner=anchor_owner,
+            source_world_key=anchor_key,
             phase=first.phase,
         )
     )

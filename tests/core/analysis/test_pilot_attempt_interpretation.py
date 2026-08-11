@@ -11,7 +11,10 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.program_step import ProgramStepStatus
-from pyrung.core.analysis.pilot.requirements import OperandAuthority
+from pyrung.core.analysis.pilot.requirements import (
+    OperandAuthority,
+    RequirementSourceWalkStatus,
+)
 
 
 class _Finding:
@@ -22,6 +25,8 @@ class _Finding:
         authority: OperandAuthority,
         consumer: bool,
         owner_bound: bool = False,
+        consumed_before_displacement: bool = False,
+        source_walk_incomplete: bool = False,
         label: str,
     ) -> None:
         requirement = SimpleNamespace(
@@ -31,16 +36,27 @@ class _Finding:
         )
         self.derivation = SimpleNamespace(
             requirement=requirement,
-            source_walk=None,
+            source_walk=(
+                SimpleNamespace(status=RequirementSourceWalkStatus.INCOMPLETE, links=())
+                if source_walk_incomplete
+                else None
+            ),
             explanation=SimpleNamespace(
                 supporting_occurrences=(("owner",),) if owner_bound else (),
             ),
         )
         self.observation = SimpleNamespace(
             consumer_read=object() if consumer else None,
-            disposition="STRANDED" if consumer else "ABSENT",
-            displacement=None,
+            disposition=(
+                "OVERWRITTEN"
+                if consumed_before_displacement
+                else "STRANDED"
+                if consumer
+                else "ABSENT"
+            ),
+            displacement=object() if consumed_before_displacement else None,
         )
+        self.consumed_before_displacement = consumed_before_displacement
         self._label = label
 
     def diagnostic_snapshot(self) -> tuple[str, str]:
@@ -87,6 +103,27 @@ def test_owner_bound_program_condition_is_setup_first() -> None:
     )
 
     assert result.kind is AttemptInterpretationKind.SETUP_FIRST
+
+
+def test_consumed_program_cleanup_requests_reader_side_same_scan_augmentation() -> None:
+    result = interpret_attempt(
+        trial=None,
+        program_step=None,
+        intrascan=_report(
+            _Finding(
+                deadline_scan=5,
+                authority=OperandAuthority.PROGRAM_WRITTEN,
+                consumer=False,
+                consumed_before_displacement=True,
+                source_walk_incomplete=True,
+                label="consumed-cleanup",
+            )
+        ),
+        assertion_scan=5,
+    )
+
+    assert result.kind is AttemptInterpretationKind.RETRY_TOGETHER
+    assert result.opens_theory
 
 
 def test_conflicting_exact_findings_fail_closed() -> None:

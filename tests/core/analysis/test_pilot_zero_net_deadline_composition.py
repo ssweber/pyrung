@@ -69,8 +69,12 @@ def test_public_pilot_composes_the_earlier_guard_and_reaches_target() -> None:
     assert condition.terms[1].demanding_rung is fixture.logic.rungs[2]
     assert condition.terms[1].deadline.ordinal < condition.terms[0].deadline.ordinal
 
-    repairs = tuple(event for event in events if event.kind == "requirement_locally_repaired")
-    assert [event.data["assignments"] for event in repairs] == [()]
+    assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    assert any(
+        event.kind == "candidate_try"
+        and event.data["applied"] == ((fixture.KeepTarget.name, True),)
+        for event in events
+    )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
     applied = tuple(pair for step in events[-1].data["steps"] for pair in step.inputs.items())
