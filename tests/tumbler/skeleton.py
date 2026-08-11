@@ -147,7 +147,7 @@ _DATACLASS_KEEP: dict[str, tuple[str, ...]] = {
     "TagChange": ("tag", "before", "after"),
     "PipelineRoles": ("channel_tag", "request_tags"),
     "PilotRung": ("dest", "value", "guard"),
-    "_HoldLogEntry": ("source", "pilot_rungs"),
+    "_HoldLogEntry": ("source", "tags"),
     "PlanStep": (
         "kind",
         "label",
@@ -176,12 +176,8 @@ def _jsonify_dataclass(value: Any) -> Any:
     for field in keep:
         if hasattr(value, field):
             out[field] = _jsonify(getattr(value, field))
-    if name == "_HoldLogEntry" and isinstance(out.get("pilot_rungs"), list):
-        rungs = out.pop("pilot_rungs")
-        out["tags"] = sorted(
-            ([rung.get("dest"), rung.get("value")] for rung in rungs),
-            key=_sort_key,
-        )
+    if name == "_HoldLogEntry" and isinstance(out.get("tags"), list):
+        out["tags"] = sorted(out["tags"], key=_sort_key)
     elif name == "PlanStep":
         for field in ("steady_holds", "pulsing_holds", "accelerators"):
             if isinstance(out.get(field), list):

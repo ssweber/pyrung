@@ -5768,6 +5768,7 @@ def _pilot_loop_events(
             raise
         finally:
             _release_attempt_projections(attempt)
+        state.last_wait_log = None
         continue
 
     # ── This invocation spent its relative search budget ──

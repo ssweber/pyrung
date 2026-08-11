@@ -312,6 +312,7 @@ def _pending_departure(
             stop_reason="quiescent",
             fired=(),
             events=(),
+            budget=0,
         ),
         progress=opening_progress or EarnedWorkReceipt(),
         reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
@@ -349,6 +350,7 @@ def _departure_result(
             stop_reason="quiescent",
             fired=(),
             events=(),
+            budget=settle_scans,
         ),
         progress=progress or EarnedWorkReceipt(),
         reading=DepartureReading(DepartureDisposition.UNKNOWN, None, None),
@@ -432,6 +434,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
         stop_reason="dwell",
         fired=(),
         events=timeline,
+        budget=1,
         advances=(("Acc", 7),),
     )
     earned_occurrence = RevisitCredential(

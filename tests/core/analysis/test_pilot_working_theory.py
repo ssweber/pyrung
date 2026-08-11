@@ -254,7 +254,13 @@ def test_theory_view_projects_only_the_active_version_and_exact_source() -> None
     assert root_view is not None
     assert root_view.theory_id == theory_id
     assert root_view.version_id == version_id
+    assert root_view.source == _boundary("source", 0)
     assert root_view.root == _boundary("source", 0)
+    assert root_view.claim == _claim(target="stepper-complete")
+    assert tuple(item.attempt_id for item in root_view.attempts) == (
+        rejected.attempt_identity,
+        accepted.attempt_identity,
+    )
     assert root_view.first_edge_exclusions == (
         TheoryFirstEdgeExclusion(
             theory_id,
@@ -284,6 +290,8 @@ def test_theory_view_projects_only_the_active_version_and_exact_source() -> None
 
     landing_view = theory_view(state)
     assert landing_view is not None
+    assert landing_view.source == landing
+    assert landing_view.attempts == ()
     assert landing_view.first_edge_exclusions == ()
 
 
@@ -313,6 +321,7 @@ def test_theory_view_scopes_failures_to_the_current_version() -> None:
     assert view is not None
     assert view.version_id != version_id
     assert view.requirements == (_requirement("consumer"),)
+    assert view.attempts == ()
     assert view.first_edge_exclusions == ()
 
 

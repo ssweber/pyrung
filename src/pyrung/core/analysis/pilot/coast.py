@@ -111,6 +111,7 @@ class CoastReceipt:
     stop_reason: str
     fired: tuple[str, ...]
     events: tuple[CoastTriggerEvent, ...]
+    budget: int
     kernel_scans: int = 0
     macro_folds: int = 0
     trajectory: tuple[dict[str, Any], ...] = ()
@@ -520,6 +521,7 @@ class CoastSession:
             stop_reason=stop_reason,
             fired=fired_terminal,
             events=tuple(self._events),
+            budget=budget,
             kernel_scans=kernel_scans,
             macro_folds=macro_folds,
             advances=tuple(advances),
@@ -562,6 +564,7 @@ class CoastSession:
             stop_reason="dwell",
             fired=(),
             events=tuple(self._events),
+            budget=scans,
             kernel_scans=scans,
         )
 
@@ -621,6 +624,7 @@ class CoastSession:
             stop_reason=stop_reason,
             fired=(),
             events=tuple(self._events),
+            budget=cap,
             kernel_scans=kernel_scans,
             macro_folds=macro_folds,
             advances=tuple(advances),
@@ -676,6 +680,7 @@ class CoastSession:
             stop_reason=stop_reason,
             fired=(),
             events=tuple(self._events),
+            budget=ceiling,
             kernel_scans=len(snaps),
             trajectory=tuple(snaps),
         )
@@ -851,6 +856,7 @@ def _coast_to_value(
             stop_reason="skipped",
             fired=(),
             events=(),
+            budget=0,
         )
 
     return _coast_until(

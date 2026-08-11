@@ -152,6 +152,7 @@ def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
         stop_reason="reached",
         fired=(),
         events=(),
+        budget=3,
         advances=(("Acc", 7),),
     )
     context = _StepContext(

@@ -553,6 +553,7 @@ class DeviationIncident:
     # recovery projects only the corrected direct conjuncts out of this tuple;
     # the remaining terms are the correction's executable lifetime.
     occurrence_conditions: tuple[Any, ...] = ()
+    occurrence_writer: tuple[str | None, int] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -730,6 +731,11 @@ class _HoldLogEntry:
     source: str
     pilot_rungs: tuple[PilotRung, ...]
 
+    @property
+    def tags(self) -> tuple[_ActionPair, ...]:
+        """Concise recording view derived from the installed executable form."""
+        return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
+
 
 class CorrectionStatus(Enum):
     """Evidence maturity for an investigation-owned overlay."""
@@ -864,6 +870,7 @@ class _PilotState:
     # relative to this anchor; accepted productive dwell is removed separately
     # by ``dwell_scans`` as the world advances and reverts.
     search_start_scan: int = 0
+    last_wait_log: tuple[Any, ...] | None = None
     # Reporting-only provenance from the most recently selected current-world
     # bearing. It never feeds Orientation or constrains a later read.
     recorded_root_route: TraceChoice | None = None

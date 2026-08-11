@@ -90,8 +90,7 @@ def test_startup_alarm_repairs_checkpoint_zero_in_one_scan() -> None:
     assert tuple(
         pair
         for entry in plan.hold_log
-        for rung in entry.pilot_rungs
-        for pair in ((rung.dest, rung.value),)
+        for pair in entry.tags
         if pair[0] == fixture.WatchdogPresetMs.name
     ) == ((fixture.WatchdogPresetMs.name, 11),)
 
