@@ -9,9 +9,15 @@ from typing import Any
 import pytest
 
 from pyrung import PLC
+from pyrung.core.analysis.pilot.compass import Compass
+from pyrung.core.analysis.pilot.conductivity import (
+    ConductivityProgress,
+    ConductivityReach,
+)
 from pyrung.core.analysis.pilot.effects import (
     EffectObligationSnapshot,
     EffectObservationSnapshot,
+    EffectOccurrenceSnapshot,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
@@ -25,6 +31,7 @@ from pyrung.core.analysis.pilot.types import _Checkpoint, _World
 from pyrung.core.analysis.pilot.working_theory import (
     AbandonTheory,
     AdvanceTheory,
+    ComposeTheoryCorrection,
     OpenSuccessor,
     OpenTheory,
     ProveTheory,
@@ -37,6 +44,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryInvariantError,
     TheoryObjectiveSnapshot,
     TheoryObligationSnapshot,
+    TheoryPhaseKind,
+    TheoryPhaseReceipt,
     TheoryRequirementSnapshot,
     TheoryState,
     TheoryTemporalIntent,
@@ -150,6 +159,32 @@ def test_open_creates_one_active_theory_and_initial_version() -> None:
     assert not state.ledger.attempts
     assert not state.ledger.receipts
     assert not state.ledger.tombstones
+
+
+def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> None:
+    state, theory_id, version_id = _opened()
+    source = _boundary("source", 0)
+    composed = _boundary("source-with-correction", 0)
+    fact = ComposeTheoryCorrection(
+        theory_id=theory_id,
+        version_id=version_id,
+        source=source,
+        composed_source=composed,
+        requirement_identities=(("requirement", "preset"),),
+        pilot_rung_identities=(("PresetMs", 11),),
+        composition_identity=("compose", "preset"),
+    )
+
+    state = reduce_theory(state, fact)
+    view = theory_view(state)
+
+    assert view is not None
+    assert view.source == composed
+    theory = state.ledger.theories[theory_id]
+    progress = state.ledger.progress[theory.current_progress_id]
+    assert progress.provisional_tip == composed
+    assert progress.provisional_tip.scan_id == source.scan_id
+    assert progress.phase_receipts[-1].kind is TheoryPhaseKind.CORRECTION_COMPOSITION
 
 
 def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> None:
@@ -279,6 +314,328 @@ def test_attempt_rejects_live_conductivity_evidence() -> None:
 
     with pytest.raises(TheoryInvariantError, match="unsupported live type object"):
         reduce_theory(state, attempt)
+
+
+def _effect_occurrence(
+    kind: str,
+    ordinal: int,
+    *,
+    scan_id: int = 2,
+    tag: str = "Step",
+    values: tuple[Any, ...] = (40,),
+    rung_index: int | None = None,
+) -> EffectOccurrenceSnapshot:
+    selected_rung = ordinal if rung_index is None else rung_index
+    return EffectOccurrenceSnapshot(
+        kind=kind,  # type: ignore[arg-type]
+        ordinal=ordinal,
+        scan_id=scan_id,
+        run_order=ordinal,
+        call_invocation=None,
+        rung=(None, selected_rung),
+        execution_kind="rung",
+        caller_rung=selected_rung,
+        call_stack=(),
+        depth=0,
+        enabled=True,
+        tag=tag,
+        values=values,
+    )
+
+
+def test_compass_derives_one_consumer_front_from_split_neutral_receipts() -> None:
+    state, theory_id, version_id = _opened()
+    obligation = EffectObligationSnapshot(
+        tag="Step",
+        value=40,
+        producer=(None, 0, ()),
+        consumer=(None, 1, ()),
+        required_shape=(),
+        boundary=None,
+    )
+    appeared = _effect_occurrence("write", 5, values=(91, 40))
+    consumer = _effect_occurrence("read", 6)
+    displacement = _effect_occurrence("write", 21, values=(40, 91))
+    survived = EffectObservationSnapshot(
+        disposition="SURVIVED",
+        obligation=obligation,
+        appeared=appeared,
+        consumer_read=consumer,
+    )
+    overwritten = EffectObservationSnapshot(
+        disposition="OVERWRITTEN",
+        obligation=obligation,
+        appeared=appeared,
+        displacement=displacement,
+    )
+    attempt = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="consumer-then-overwrite",
+            actions=(("Request", True),),
+        ),
+        conductivity_observations=(survived, overwritten),
+    )
+    state = reduce_theory(state, attempt)
+
+    front = Compass().conductivity_front(theory_view(state))
+
+    assert front is not None
+    assert len(front.attempts) == 1
+    assert len(front.flows) == 1
+    flow = front.flows[0]
+    assert flow.reach is ConductivityReach.CONSUMER
+    assert flow.obligations == (obligation,)
+    assert flow.observations[0] is survived
+    assert flow.observations[1] is overwritten
+    assert flow.appeared is appeared
+    assert flow.front_occurrence is consumer
+    assert flow.displacement is displacement
+
+
+def test_conductivity_front_uses_occurrence_order_not_scan_zero() -> None:
+    state, theory_id, version_id = _opened()
+    obligation = EffectObligationSnapshot(
+        tag="Step",
+        value=40,
+        producer=(None, 0, ()),
+        consumer=(None, 1, ()),
+        required_shape=(),
+        boundary=None,
+    )
+    appeared = _effect_occurrence("write", 5, scan_id=19, values=(91, 40))
+    displacement = _effect_occurrence("write", 21, scan_id=19, values=(40, 91))
+    observation = EffectObservationSnapshot(
+        disposition="OVERWRITTEN",
+        obligation=obligation,
+        appeared=appeared,
+        displacement=displacement,
+    )
+    state = reduce_theory(
+        state,
+        replace(
+            _attempt(
+                theory_id,
+                version_id,
+                transition="prestepped-overwrite",
+                actions=(("Request", True),),
+            ),
+            conductivity_observations=(observation,),
+        ),
+    )
+
+    front = Compass().conductivity_front(theory_view(state))
+
+    assert front is not None
+    flow = front.flows[0]
+    assert flow.reach is ConductivityReach.PRODUCER
+    assert flow.front_occurrence is appeared
+    assert flow.displacement is displacement
+
+
+def test_theory_view_retains_conductivity_history_across_refinement() -> None:
+    state, theory_id, version_id = _opened()
+    observation = EffectObservationSnapshot(
+        disposition="ABSENT",
+        obligation=EffectObligationSnapshot(
+            tag="Step",
+            value=40,
+            producer=(None, 0, ()),
+            consumer=None,
+            required_shape=(),
+            boundary=None,
+        ),
+    )
+    first = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="first-intrascan-issue",
+            actions=(("First", True),),
+        ),
+        conductivity_observations=(observation,),
+    )
+    state = reduce_theory(state, first)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=first.source,
+            refined_source=first.source,
+            requirements=(_requirement("first"),),
+            refinement_identity=("first-refinement",),
+            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            trigger_attempt_id=first.attempt_identity,
+        ),
+    )
+    refined_version = state.ledger.theories[theory_id].current_version_id
+    second = replace(
+        _attempt(
+            theory_id,
+            refined_version,
+            transition="second-intrascan-issue",
+            actions=(("Second", True),),
+        ),
+        conductivity_observations=(observation,),
+    )
+    state = reduce_theory(state, second)
+
+    view = theory_view(state)
+    front = Compass().conductivity_front(view)
+
+    assert view is not None
+    assert tuple(item.attempt_id for item in view.attempts) == (second.attempt_identity,)
+    assert tuple(item.attempt_id for item in view.conductivity_attempts) == (
+        first.attempt_identity,
+        second.attempt_identity,
+    )
+    assert front is not None
+    assert tuple(item.attempt_id for item in front.attempts) == (
+        first.attempt_identity,
+        second.attempt_identity,
+    )
+
+
+def test_compass_requests_research_for_same_stop_with_drifting_requirement() -> None:
+    state, theory_id, version_id = _opened()
+    obligation = EffectObligationSnapshot(
+        tag="Step",
+        value=40,
+        producer=(None, 2, ()),
+        consumer=(None, 4, ()),
+        required_shape=(),
+        boundary=None,
+    )
+
+    def stopped_observation(scan_id: int) -> EffectObservationSnapshot:
+        appeared = _effect_occurrence("write", 25, scan_id=scan_id, values=(98, 40))
+        displacement = _effect_occurrence(
+            "write",
+            130,
+            scan_id=scan_id,
+            values=(40, 91),
+        )
+        watchdog_done = _effect_occurrence(
+            "read",
+            127,
+            scan_id=scan_id,
+            tag="Watchdog.Done",
+            values=(True,),
+            rung_index=16,
+        )
+        return EffectObservationSnapshot(
+            disposition="OVERWRITTEN",
+            obligation=obligation,
+            appeared=appeared,
+            displacement=displacement,
+            observed_reads=(watchdog_done,),
+        )
+
+    first = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="watchdog-10",
+            actions=(("Reconnect", True),),
+        ),
+        conductivity_observations=(stopped_observation(4),),
+    )
+    requirement_10 = replace(
+        _requirement("watchdog"),
+        condition_identity=("WatchdogPreset", ">", 10),
+        deadline_occurrence=(
+            "read",
+            "WatchdogPreset",
+            4,
+            ((None, 4), "rung", 4, (), 0, None, 13, 35),
+            (0,),
+            True,
+        ),
+        demanding_occurrence=(
+            "read",
+            "Watchdog.Done",
+            4,
+            ((None, 16), "rung", 16, (), 0, None, 32, 127),
+            (True,),
+            True,
+        ),
+    )
+    state = reduce_theory(state, first)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=first.source,
+            refined_source=first.source,
+            requirements=(requirement_10,),
+            refinement_identity=("watchdog-refine-10",),
+            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            trigger_attempt_id=first.attempt_identity,
+        ),
+    )
+    second_version = state.ledger.theories[theory_id].current_version_id
+    second = replace(
+        _attempt(
+            theory_id,
+            second_version,
+            transition="watchdog-20",
+            actions=(("Checkpoint", True),),
+        ),
+        conductivity_observations=(stopped_observation(5),),
+    )
+    requirement_20 = replace(
+        requirement_10,
+        semantic_identity=("requirement", "watchdog", 20),
+        condition_identity=("WatchdogPreset", ">", 20),
+        deadline_occurrence=(
+            "read",
+            "WatchdogPreset",
+            5,
+            ((None, 4), "rung", 4, (), 0, None, 14, 34),
+            (11,),
+            True,
+        ),
+        demanding_occurrence=(
+            "read",
+            "Watchdog.Done",
+            5,
+            ((None, 16), "rung", 16, (), 0, None, 33, 127),
+            (True,),
+            True,
+        ),
+    )
+    state = reduce_theory(state, second)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=second_version,
+            source=second.source,
+            refined_source=second.source,
+            requirements=(requirement_20,),
+            refinement_identity=("watchdog-refine-20",),
+            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            trigger_attempt_id=second.attempt_identity,
+        ),
+    )
+
+    view = theory_view(state)
+    front = Compass().conductivity_front(view)
+    request = Compass().conductivity_research(view)
+
+    assert front is not None
+    comparison = front.comparisons[-1]
+    assert comparison.progress is ConductivityProgress.SAME_STOP
+    assert len(comparison.requirement_drifts) == 1
+    assert comparison.requirement_drifts[0].earlier is requirement_10
+    assert comparison.requirement_drifts[0].later is requirement_20
+    assert request is not None
+    assert request.comparison == comparison
+    assert request.displacement.tag == "Step"
+    assert tuple(read.tag for read in request.enabling_reads) == ("Watchdog.Done",)
 
 
 def test_theory_view_projects_only_the_active_version_and_exact_source() -> None:
@@ -1196,7 +1553,12 @@ def test_populated_closed_ledger_retains_no_navigation_or_executable_future() ->
             boundary=_boundary("landing", 1),
             advance_identity=("advance",),
             remaining_budget=7,
-            phase_receipts=(("phase", "observed"),),
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.SCAN_PROGRESS,
+                    evidence_identity=("observed",),
+                ),
+            ),
         ),
         RefineTheory(
             theory_id=theory_id,

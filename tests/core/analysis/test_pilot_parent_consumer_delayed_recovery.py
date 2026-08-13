@@ -101,16 +101,30 @@ def test_delayed_watchdog_departure_retries_only_the_source_transaction() -> Non
     ) == (">", 10, "adjustable", 1, 2)
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
-    temporal_retries = tuple(
-        event.data["applied"]
-        for event in events
-        if event.kind == "candidate_try"
-        and fixture.WatchdogPresetMs.name in {tag for tag, _value in event.data["applied"]}
-    )
-    assert temporal_retries == (
+    temporal_decisions = tuple(
         (
+            event.kind,
+            (
+                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                if event.kind == "theory_correction_composed"
+                else tuple(event.data["applied"])
+            ),
+        )
+        for event in events
+        if event.kind in {"candidate_try", "theory_correction_composed"}
+    )
+    assert temporal_decisions == (
+        (
+            "candidate_try",
+            ((fixture.StartCommand.name, True),),
+        ),
+        (
+            "theory_correction_composed",
             (fixture.WatchdogPresetMs.name, 11),
-            (fixture.StartCommand.name, True),
+        ),
+        (
+            "candidate_try",
+            ((fixture.StartCommand.name, True),),
         ),
     )
     assert not {

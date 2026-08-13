@@ -16,6 +16,7 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.conductivity import ConductivityResearchRequest
     from pyrung.core.analysis.pilot.effects import EffectExpectation
     from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -382,6 +383,18 @@ class Bearing:
 
 
 @dataclass(frozen=True)
+class ComposeCorrection:
+    """Install one theory correction without advancing the physical runner."""
+
+    world_key: _StateKey
+    frontier: tuple[_ActionPair, ...]
+    pilot_rung: PilotRung
+    requirements: tuple[ActiveRequirement, ...]
+    rationale: str
+    orientation: OrientationRead | None = None
+
+
+@dataclass(frozen=True)
 class ProbeRequest:
     """Declarative request for an isolated frontier probe."""
 
@@ -402,6 +415,17 @@ class NeedProbe:
 
 
 @dataclass(frozen=True)
+class NeedResearch:
+    """Compass has exact causal evidence requiring focused research before acting."""
+
+    world_key: _StateKey
+    frontier: tuple[_ActionPair, ...]
+    request: ConductivityResearchRequest
+    rationale: str
+    orientation: OrientationRead | None = None
+
+
+@dataclass(frozen=True)
 class Stuck:
     """Structured, evidence-backed terminal navigation diagnosis."""
 
@@ -414,7 +438,7 @@ class Stuck:
     orientation: OrientationRead | None = None
 
 
-OrientationResult = Bearing | NeedProbe | Stuck
+OrientationResult = Bearing | ComposeCorrection | NeedProbe | NeedResearch | Stuck
 
 
 def _applied_identity(applied: tuple[_ActionPair, ...]) -> tuple[_ActionPair, ...]:

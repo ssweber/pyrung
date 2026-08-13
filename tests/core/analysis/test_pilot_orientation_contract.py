@@ -25,6 +25,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
+    NeedResearch,
     OrientationWorld,
     Pulse,
     PulseHorizon,
@@ -523,6 +524,11 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
 
     monkeypatch.setattr(orientation, "_build_candidates", build_once)
     monkeypatch.setattr(
+        Compass,
+        "conductivity_research",
+        lambda _self, _view: None,
+    )
+    monkeypatch.setattr(
         orientation,
         "_iter_temporal_schedules",
         lambda *_args: iter(
@@ -537,6 +543,45 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
     assert result.act.policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
     assert result.act.policy.applied == (("Production", True),)
+
+
+def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    request = SimpleNamespace(reason="same stop with a changed deadline")
+    world = _world(compass)
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+    monkeypatch.setattr(
+        Compass,
+        "conductivity_research",
+        lambda _self, _view: request,
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_theory_correction_composition",
+        lambda *_args: pytest.fail("research must preempt correction composition"),
+    )
+
+    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert isinstance(result, NeedResearch)
+    assert result.request is request
+    assert result.rationale == request.reason
+    assert result.orientation is not None
+    assert result.orientation.candidates.options == ()
 
 
 def test_temporal_rearm_declares_one_assertion_scan() -> None:

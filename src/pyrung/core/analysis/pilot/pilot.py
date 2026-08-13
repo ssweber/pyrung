@@ -1,7 +1,7 @@
 """Public entry points and outer orchestration for PILOT drives.
 
 This module builds static/runtime context, prepares the user-selected trace
-constraint, and dispatches ``Bearing | NeedProbe | Stuck`` results from
+constraint, and dispatches the typed orientation results returned by
 ``Compass``.
 It invokes execution, owns verification-time excursion investigation, applies
 observations, commits eligible forks, delegates post-commit recovery, and
@@ -80,10 +80,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     ChannelHeading,
     Coast,
+    ComposeCorrection,
     LandingReceiptAuthority,
     LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
+    NeedResearch,
     ObserveScan,
     OrientationResult,
     OrientationWorld,
@@ -203,6 +205,7 @@ from pyrung.core.analysis.pilot.verify import (
 from pyrung.core.analysis.pilot.working_theory import (
     AbandonTheory,
     AdvanceTheory,
+    ComposeTheoryCorrection,
     OpenTheory,
     ProveTheory,
     RecordTheoryAttempt,
@@ -214,6 +217,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryClaim,
     TheoryObjectiveSnapshot,
     TheoryObligationSnapshot,
+    TheoryPhaseKind,
+    TheoryPhaseReceipt,
     TheoryRequirementSnapshot,
     TheoryTemporalIntent,
     TheoryTermination,
@@ -4555,6 +4560,81 @@ def _setup_request_for_result(
     return request
 
 
+def _compose_theory_correction(
+    state: _PilotState,
+    request: TemporalNeedRequest,
+    result: ComposeCorrection,
+) -> tuple[ActiveRequirement, ...]:
+    """Persist one exact correction at the restored source without stepping."""
+
+    theory = _active_working_theory(state)
+    if theory is None or theory.theory_id != request.theory_id:
+        raise ValueError("correction composition lost its active working theory")
+    if theory.current_version_id != request.version_id:
+        raise ValueError("correction composition addresses a stale theory version")
+    if _theory_live_boundary(state) != request.source:
+        raise ValueError("correction composition is not at its restored source")
+    matched = tuple(
+        requirement
+        for requirement in result.requirements
+        if requirement in state.active_requirements
+        and requirement.status is RequirementStatus.ACTIVE
+    )
+    if len(matched) != len(result.requirements) or not matched:
+        raise ValueError("correction composition lost its exact live requirements")
+    rung_identity = _rung_identity(result.pilot_rung)
+    composition_identity = (
+        "working-theory-compose",
+        request.theory_id,
+        request.version_id,
+        request.source,
+        tuple(requirement.identity for requirement in matched),
+        rung_identity,
+    )
+    _install_prerequisites(
+        state,
+        (result.pilot_rung,),
+        source="working-theory-composition",
+    )
+    composed_source = _theory_live_boundary(state)
+    _record_controlling_theory_fact(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=request.theory_id,
+            version_id=request.version_id,
+            source=request.source,
+            composed_source=composed_source,
+            requirement_identities=tuple(requirement.identity for requirement in matched),
+            pilot_rung_identities=(rung_identity,),
+            composition_identity=composition_identity,
+        ),
+    )
+    for requirement in matched:
+        index = state.active_requirements.index(requirement)
+        state.active_requirements[index] = replace(
+            requirement,
+            status=RequirementStatus.DISCHARGED,
+        )
+    theory = _active_working_theory(state)
+    assert theory is not None
+    _record_controlling_theory_fact(
+        state,
+        RefineTheory(
+            theory_id=request.theory_id,
+            parent_version_id=theory.current_version_id,
+            source=request.source,
+            # Composition consumes no scan, but it does change the executable
+            # World by installing one pilot rung. Retain that exact same-scan
+            # boundary so the result of the next steer remains attributable to
+            # this theory rather than falling through as unrelated evidence.
+            refined_source=composed_source,
+            requirements=(),
+            refinement_identity=("working-theory-composition-yield", composition_identity),
+        ),
+    )
+    return matched
+
+
 def _record_controlled_setup_attempt(
     state: _PilotState,
     request: TemporalNeedRequest,
@@ -4700,11 +4780,11 @@ def _complete_controlled_setup(
                     boundary,
                 ),
                 phase_receipts=(
-                    (
-                        "temporal-setup-established",
-                        controlled.local_requirement_identities,
-                        controlled.attempt_id,
-                        setup_rung_identities,
+                    TheoryPhaseReceipt(
+                        kind=TheoryPhaseKind.TEMPORAL_SETUP,
+                        evidence_identity=controlled.attempt_id,
+                        requirement_identities=controlled.local_requirement_identities,
+                        pilot_rung_identities=setup_rung_identities,
                     ),
                 ),
                 remaining_budget=min(
@@ -4854,7 +4934,7 @@ def _record_optional_theory_advance(
     observation: _TheoryTransitionEvidence | None,
     *,
     remaining_budget: int,
-    phase_receipts: tuple[tuple[Any, ...], ...] = (),
+    phase_receipts: tuple[TheoryPhaseReceipt, ...] = (),
 ) -> None:
     if observation is None or observation.adopted_boundary is None:
         return
@@ -5818,7 +5898,12 @@ def _record_scan_progress_advance(
             source=source,
             boundary=boundary,
             advance_identity=("scan-progress-advance", attempt_id, boundary),
-            phase_receipts=(("scan-progress", _semantic_key(receipt)),),
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.SCAN_PROGRESS,
+                    evidence_identity=(_semantic_key(receipt),),
+                ),
+            ),
             remaining_budget=min(
                 progress.remaining_budget,
                 state.remaining_search_scans(ctx.max_scans),
@@ -6354,6 +6439,11 @@ def _promote_transient_target_failure(
     window_entry = pulse.source_snap if pulse.source_snap is not None else pulse.action_snap
     window_entry_value = window_entry.get(terminal_obligation.tag)
     final_landing_value = pulse.fork.state.tags.get(terminal_obligation.tag)
+    if _values_match(final_landing_value, terminal_obligation.value):
+        # The selected execution landed on its target. There is no transient
+        # target loss to promote, and recovery-continuation evidence must not
+        # be consulted merely because the target also appeared in projection.
+        return result, attempt
     exact_scans = tuple(
         scan_id
         for scan_id in pulse.kernel_scan_ids
@@ -6829,6 +6919,66 @@ def _pilot_loop_events(
             state.work.state.scan_id,
             _candidates_built_payload(candidates, state.lever_notes),
         )
+
+        if isinstance(result, ComposeCorrection):
+            if temporal_request is None:
+                raise RuntimeError("Compass requested composition without a temporal need")
+            composed = _compose_theory_correction(state, temporal_request, result)
+            yield PilotEvent(
+                "theory_correction_composed",
+                state.work.state.scan_id,
+                {
+                    "pilot_rung": result.pilot_rung,
+                    "conditions": tuple(
+                        _theory_requirement_snapshot(requirement).condition_identity
+                        for requirement in composed
+                    ),
+                    "reason": result.rationale,
+                },
+            )
+            # Composition changes the executable overlay but consumes no PLC
+            # scan. Compass must read that new World before choosing a steer.
+            continue
+
+        if isinstance(result, NeedResearch):
+            request = result.request
+            yield PilotEvent(
+                "conductivity_research_requested",
+                state.work.state.scan_id,
+                {
+                    "displacement": request.displacement,
+                    "enabling_reads": tuple(
+                        {
+                            "tag": read.tag,
+                            "rung": read.rung,
+                            "values": read.values,
+                        }
+                        for read in request.enabling_reads
+                    ),
+                    "requirement_drifts": tuple(
+                        {
+                            "earlier": drift.earlier.condition_identity,
+                            "later": drift.later.condition_identity,
+                        }
+                        for drift in request.comparison.requirement_drifts
+                    ),
+                    "reason": request.reason,
+                },
+            )
+            reason = (
+                "Focused conductivity research is required before another steer: "
+                f"{request.reason}"
+            )
+            yield from _stopped_events(
+                state,
+                ctx,
+                frame,
+                reason,
+                journal_channel_tags,
+                journal_acc_names,
+                candidate_count=len(candidates.options),
+            )
+            return
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)

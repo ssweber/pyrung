@@ -9,6 +9,7 @@ from typing import Any
 
 from devtools.watch_pilot_decisions import (
     EXIT_TIMEOUT,
+    _conductivity_line,
     _decision_lines,
     _interpretation_line,
     _target,
@@ -144,6 +145,59 @@ def test_decision_receipt_names_state_step_and_tripwire() -> None:
     assert lines[-1] == "[stop] candidate construction surfaced ('Danger', True)"
 
 
+def test_composition_receipt_names_no_scan_theory_update() -> None:
+    event = SimpleNamespace(
+        kind="theory_correction_composed",
+        scan=17,
+        data={
+            "pilot_rung": SimpleNamespace(dest="WatchdogPresetMs", value=11),
+            "conditions": (("WatchdogPresetMs", ">", 10),),
+            "reason": "compose one correction, then read Compass again",
+        },
+    )
+
+    lines, stopped = _decision_lines(event, {}, None)
+
+    assert stopped is False
+    assert lines == (
+        "[composition] scan=17 rung=('WatchdogPresetMs', 11) "
+        "conditions=(('WatchdogPresetMs', '>', 10),) "
+        "reason='compose one correction, then read Compass again'",
+    )
+
+
+def test_research_receipt_names_exact_stop_and_requirement_drift() -> None:
+    stop = SimpleNamespace(
+        tag="RouteSequenceStep",
+        rung=16,
+        values=(98, 94),
+    )
+    event = SimpleNamespace(
+        kind="conductivity_research_requested",
+        scan=23,
+        data={
+            "displacement": stop,
+            "enabling_reads": (
+                {"tag": "WatchdogDone", "rung": 16, "values": (False, True)},
+            ),
+            "requirement_drifts": (
+                {
+                    "earlier": ("WatchdogPresetMs", ">", 10),
+                    "later": ("WatchdogPresetMs", ">", 20),
+                },
+            ),
+            "reason": "same stop, later deadline",
+        },
+    )
+
+    lines, stopped = _decision_lines(event, {}, None)
+
+    assert stopped is False
+    assert "[research] scan=23" in lines[0]
+    assert "('RouteSequenceStep', 16, (98, 94))" in lines[0]
+    assert "('WatchdogPresetMs', '>', 20)" in lines[0]
+
+
 def test_interpretation_receipt_names_kind_and_projection_reuse() -> None:
     line = _interpretation_line(
         {
@@ -159,6 +213,26 @@ def test_interpretation_receipt_names_kind_and_projection_reuse() -> None:
     assert "scan=17 kind=retry_together projected_scans=(17,)" in line
     assert "assertion_projection_cached=True" in line
     assert "consumer-read" in line
+
+
+def test_conductivity_receipt_names_attempt_comparison_and_research_state() -> None:
+    line = _conductivity_line(
+        {
+            "attempts": (
+                {
+                    "source_scan": 3,
+                    "stops": (("RouteSequenceStep", (None, 16)),),
+                    "requirement_count": 1,
+                },
+            ),
+            "comparisons": ({"progress": "same_stop", "drifts": 1},),
+            "research": True,
+        }
+    )
+
+    assert "source_scan" in line
+    assert "same_stop" in line
+    assert "research=True" in line
 
 
 def test_parent_kills_a_worker_that_withholds_the_next_event(capsys: Any) -> None:

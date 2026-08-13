@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any, Literal, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeGuard, cast
 
 from pyrsistent import PMap, PRecord, pmap
 from pyrsistent import field as _precord_field
@@ -27,6 +27,13 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     _context_value_key,
 )
 from pyrung.core.analysis.sp_values import _values_match
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.conductivity import (
+        ConductivityFront,
+        ConductivityResearchRequest,
+    )
+    from pyrung.core.analysis.pilot.working_theory import TheoryView
 
 __all__ = [
     "WAIT",
@@ -946,6 +953,23 @@ class Compass:
         from pyrung.core.analysis.pilot.orientation import orient
 
         return orient(self, world, target, constraints)
+
+    def conductivity_front(self, theory_view: TheoryView | None) -> ConductivityFront | None:
+        """Read ordered intrascan propagation without changing navigation knowledge."""
+
+        from pyrung.core.analysis.pilot.conductivity import conductivity_front
+
+        return conductivity_front(theory_view)
+
+    def conductivity_research(
+        self,
+        theory_view: TheoryView | None,
+    ) -> ConductivityResearchRequest | None:
+        """Name repeated stopped conductivity which needs research before steering."""
+
+        from pyrung.core.analysis.pilot.conductivity import conductivity_research_request
+
+        return conductivity_research_request(self.conductivity_front(theory_view))
 
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""

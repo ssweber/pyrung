@@ -33,37 +33,42 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
 
-    selected_actions = [
-        tuple(event.data["applied"])
+    decisions = [
+        (
+            event.kind,
+            (
+                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                if event.kind == "theory_correction_composed"
+                else tuple(event.data["applied"])
+            ),
+        )
         for event in events
-        if event.kind == "candidate_try"
-        and {
-            fixture.StartCommand.name,
-            fixture.ConfirmCommand.name,
-        }.intersection(tag for tag, _value in event.data["applied"])
+        if event.kind in {"candidate_try", "theory_correction_composed"}
     ]
-    assert selected_actions == [
-        ((fixture.StartCommand.name, True),),
+    assert decisions == [
+        ("candidate_try", ((fixture.StartCommand.name, True),)),
         (
+            "theory_correction_composed",
             (fixture.FirstPresetMs.name, 11),
-            (fixture.StartCommand.name, True),
         ),
-        ((fixture.ConfirmCommand.name, True),),
+        ("candidate_try", ((fixture.StartCommand.name, True),)),
+        ("candidate_try", ((fixture.ConfirmCommand.name, True),)),
         (
-            (fixture.FirstPresetMs.name, 11),
+            "theory_correction_composed",
             (fixture.SecondPresetMs.name, 11),
-            (fixture.ConfirmCommand.name, True),
         ),
+        ("candidate_try", ((fixture.ConfirmCommand.name, True),)),
     ]
 
     first_retry_index = next(
         index
         for index, event in enumerate(events)
         if event.kind == "candidate_try"
-        and event.data["applied"]
-        == (
-            (fixture.FirstPresetMs.name, 11),
-            (fixture.StartCommand.name, True),
+        and event.data["applied"] == ((fixture.StartCommand.name, True),)
+        and any(
+            prior.kind == "theory_correction_composed"
+            and prior.data["pilot_rung"].dest == fixture.FirstPresetMs.name
+            for prior in events[:index]
         )
     )
     confirm_try_index = next(
@@ -76,11 +81,11 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
         index
         for index, event in enumerate(events)
         if event.kind == "candidate_try"
-        and event.data["applied"]
-        == (
-            (fixture.FirstPresetMs.name, 11),
-            (fixture.SecondPresetMs.name, 11),
-            (fixture.ConfirmCommand.name, True),
+        and event.data["applied"] == ((fixture.ConfirmCommand.name, True),)
+        and any(
+            prior.kind == "theory_correction_composed"
+            and prior.data["pilot_rung"].dest == fixture.SecondPresetMs.name
+            for prior in events[:index]
         )
     )
     assert first_retry_index < confirm_try_index < second_retry_index

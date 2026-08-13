@@ -239,6 +239,7 @@ def test_recovery_program_coast_keeps_the_full_execution_window(monkeypatch) -> 
     )
     source_world = SimpleNamespace(work=work, pilot_rungs=())
     state = SimpleNamespace(
+        active_requirements=(),
         key_config=None,
         pilot_rungs=(),
         proof_rejected_acts=set(),

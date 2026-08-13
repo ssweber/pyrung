@@ -28,26 +28,36 @@ def test_second_delayed_hazard_refines_the_same_source_before_adoption() -> None
         (fixture.FirstPresetMs.name, ">", 10),
         (fixture.SecondPresetMs.name, ">", 10),
     ]
-    # The first corrected retry is disposable because it exposes the second
-    # hazard. Its scan number remains the same source edge, while its world key
-    # records that the first requirement was already known. The next fresh read
-    # composes both requirements with the original command and adopts only that
-    # exact transaction.
+    # Each correction changes the same-scan World, then Compass rereads that
+    # World and chooses the original command again. The first corrected steer
+    # exposes the second hazard; neither correction is hidden inside the steer.
     assert [item.source_scan for item in requirements] == [1, 1]
     assert requirements[0].source_world_key != requirements[1].source_world_key
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
-    retries = tuple(event.data["applied"] for event in events if event.kind == "candidate_try")
-    assert retries == (
-        ((fixture.CompleteCommand.name, True),),
+    decisions = tuple(
         (
+            event.kind,
+            (
+                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                if event.kind == "theory_correction_composed"
+                else tuple(event.data["applied"])
+            ),
+        )
+        for event in events
+        if event.kind in {"candidate_try", "theory_correction_composed"}
+    )
+    assert decisions == (
+        ("candidate_try", ((fixture.CompleteCommand.name, True),)),
+        (
+            "theory_correction_composed",
             (fixture.FirstPresetMs.name, 11),
-            (fixture.CompleteCommand.name, True),
         ),
+        ("candidate_try", ((fixture.CompleteCommand.name, True),)),
         (
-            (fixture.FirstPresetMs.name, 11),
+            "theory_correction_composed",
             (fixture.SecondPresetMs.name, 11),
-            (fixture.CompleteCommand.name, True),
         ),
+        ("candidate_try", ((fixture.CompleteCommand.name, True),)),
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
 from pyrung.core.analysis.pilot.types import (
@@ -41,12 +42,23 @@ from pyrung.core.analysis.pilot.types import (
     _CausalCheckpoint,
     _PilotState,
 )
+from pyrung.core.analysis.pilot.working_theory import theory_view
 from pyrung.core.runner import _compile_avoid
 from pyrung.dap.console import _PilotProgressFormatter
 
 EXIT_FAILED = 1
 EXIT_TIMEOUT = 2
 EXIT_STOPPED = 3
+
+_DECISION_EVENT_KINDS = frozenset(
+    {
+        "bearing_coast",
+        "candidate_try",
+        "conductivity_research_requested",
+        "skiff",
+        "theory_correction_composed",
+    }
+)
 
 
 def _value(text: str) -> Any:
@@ -95,6 +107,16 @@ def _positive_int(text: str) -> int:
     return value
 
 
+def _nonnegative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected a nonnegative integer") from exc
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be zero or greater")
+    return value
+
+
 def _candidate_pairs(data: Mapping[str, Any]) -> tuple[tuple[str, Any], ...]:
     return tuple((candidate["tag"], candidate["value"]) for candidate in data["candidates"])
 
@@ -114,6 +136,27 @@ def _decision_lines(
     snapshot: Mapping[str, Any],
     stop_action: tuple[str, Any] | None,
 ) -> tuple[tuple[str, ...], bool]:
+    if event.kind == "conductivity_research_requested":
+        stop = event.data["displacement"]
+        return (
+            (
+                "[research] "
+                f"scan={event.scan} stop={(stop.tag, stop.rung, stop.values)!r} "
+                f"enabling_reads={tuple(event.data['enabling_reads'])!r} "
+                f"requirement_drifts={tuple(event.data['requirement_drifts'])!r} "
+                f"reason={event.data.get('reason')!r}"
+            ),
+        ), False
+    if event.kind == "theory_correction_composed":
+        rung = event.data["pilot_rung"]
+        return (
+            (
+                "[composition] "
+                f"scan={event.scan} rung={(rung.dest, rung.value)!r} "
+                f"conditions={tuple(event.data['conditions'])!r} "
+                f"reason={event.data.get('reason')!r}"
+            ),
+        ), False
     if event.kind == "bearing_coast_accepted":
         effects = tuple(
             (
@@ -239,6 +282,17 @@ def _interpretation_line(message: Mapping[str, Any]) -> str:
     )
 
 
+def _conductivity_line(message: Mapping[str, Any]) -> str:
+    """Render the small immutable front receipt captured after theory reduction."""
+
+    return (
+        "[conductivity] "
+        f"attempts={tuple(message['attempts'])!r} "
+        f"comparisons={tuple(message['comparisons'])!r} "
+        f"research={message['research']!r}"
+    )
+
+
 def _arm_stack_dump(dump_request: Any, dump_ready: Any) -> None:
     """Dump the worker while its drive thread is still at the slow operation."""
 
@@ -266,13 +320,15 @@ def _drive_worker(
     _arm_stack_dump(dump_request, dump_ready)
     started = time.monotonic()
     event_count = 0
+    decision_count = 0
     interpretation_count = 0
     last_snapshot: dict[str, Any] = {}
     last_scan: int | None = None
     try:
         fixture = importlib.import_module(config["fixture"])
         plc = PLC(fixture.logic, dt=config["dt"])
-        plc.step()
+        for _ in range(config["entry_steps"]):
+            plc.step()
         tags = plc._known_tags_by_name
         target_tag, target_value = config["target"]
         condition = _target_condition(tags[target_tag], target_value)
@@ -355,6 +411,37 @@ def _drive_worker(
                 }
             )
             original_record(state, observation, remaining_budget=remaining_budget)
+            view = theory_view(state.theory_state)
+            front = Compass().conductivity_front(view)
+            if front is None:
+                return
+            request = Compass().conductivity_research(view)
+            messages.put(
+                {
+                    "type": "conductivity",
+                    "elapsed": time.monotonic() - started,
+                    "attempts": tuple(
+                        {
+                            "source_scan": attempt.source.scan_id,
+                            "stops": tuple(
+                                (flow.displacement.tag, flow.displacement.rung)
+                                for flow in attempt.flows
+                                if flow.displacement is not None
+                            ),
+                            "requirement_count": len(attempt.requirements),
+                        }
+                        for attempt in front.attempts
+                    ),
+                    "comparisons": tuple(
+                        {
+                            "progress": comparison.progress.value,
+                            "drifts": len(comparison.requirement_drifts),
+                        }
+                        for comparison in front.comparisons
+                    ),
+                    "research": request is not None,
+                }
+            )
 
         vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
         vars(pilot_module)["_record_working_theory_transition"] = (
@@ -375,6 +462,8 @@ def _drive_worker(
             avoid_pred=avoid_pred,
         ):
             event_count += 1
+            if event.kind in _DECISION_EVENT_KINDS:
+                decision_count += 1
             last_scan = event.scan
             if event.kind == "iteration":
                 last_snapshot = dict(event.data["snapshot"])
@@ -405,6 +494,24 @@ def _drive_worker(
                         "events": event_count,
                         "scan": last_scan,
                         "reason": f"candidate construction surfaced {config['stop_action']!r}",
+                    }
+                )
+                return
+            if (
+                config["decision_budget"] is not None
+                and decision_count >= config["decision_budget"]
+            ):
+                messages.put(
+                    {
+                        "type": "result",
+                        "status": "stopped",
+                        "elapsed": time.monotonic() - started,
+                        "events": event_count,
+                        "scan": last_scan,
+                        "reason": (
+                            f"decision budget {config['decision_budget']} reached "
+                            f"at {event.kind}"
+                        ),
                     }
                 )
                 return
@@ -594,6 +701,12 @@ def watch_worker(
                         flush=True,
                     )
                     return EXIT_STOPPED
+            elif kind == "conductivity":
+                last_event_at = now
+                line = _conductivity_line(message)
+                print(line, flush=True)
+                last_visible_at = now
+                last_visible = {"visible": line, "elapsed": message["elapsed"]}
             elif kind == "error":
                 print(message["traceback"], file=sys.stderr, flush=True)
                 process.join(timeout=1.0)
@@ -705,6 +818,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="disable the default Cmd_State_Complete avoidance",
     )
     parser.add_argument("--max-scans", type=int, default=1_000_000)
+    parser.add_argument(
+        "--entry-steps",
+        type=_nonnegative_int,
+        default=1,
+        help="ordinary scans to execute before how() (default: 1)",
+    )
+    parser.add_argument(
+        "--decision-budget",
+        type=_positive_int,
+        help=(
+            "terminate immediately after this many action/composition decisions; "
+            "the parent memory and time budgets still guard work between decisions"
+        ),
+    )
     parser.add_argument("--wall-budget", type=_positive_seconds, default=240.0)
     parser.add_argument(
         "--stall-budget",
@@ -738,6 +865,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "coast_to_boundary",
             "setup_first",
             "retry_together",
+            "retry_through_deadline",
             "unresolved",
         ),
         help="stop after printing the first matching temporal interpretation",
@@ -759,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
         "target": args.target,
         "avoid": avoid,
         "max_scans": args.max_scans,
+        "entry_steps": args.entry_steps,
+        "decision_budget": args.decision_budget,
         "dt": args.dt,
         "stop_action": args.stop_action,
         "stop_interpretation": args.stop_interpretation,
@@ -778,6 +908,12 @@ def main(argv: list[str] | None = None) -> int:
         + (
             f"; wall={args.wall_budget:g}s stall={args.stall_budget:g}s "
             f"output={args.output_budget:g}s memory={args.memory_budget_mb}MB"
+        )
+        + f" entry_steps={args.entry_steps}"
+        + (
+            f" decisions={args.decision_budget}"
+            if args.decision_budget is not None
+            else ""
         ),
         flush=True,
     )

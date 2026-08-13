@@ -58,6 +58,24 @@ class TheoryTemporalIntent(StrEnum):
     RETRY_THROUGH_DEADLINE = "retry_through_deadline"
 
 
+class TheoryPhaseKind(StrEnum):
+    """Typed meaning of one immutable progress-phase receipt."""
+
+    SCAN_PROGRESS = "scan_progress"
+    TEMPORAL_SETUP = "temporal_setup"
+    CORRECTION_COMPOSITION = "correction_composition"
+
+
+@dataclass(frozen=True)
+class TheoryPhaseReceipt:
+    """Named evidence retained when a theory phase changes its working world."""
+
+    kind: TheoryPhaseKind
+    evidence_identity: tuple[Any, ...]
+    requirement_identities: tuple[tuple[Any, ...], ...] = ()
+    pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+
+
 @dataclass(frozen=True)
 class TheoryBoundaryIdentity:
     """Detached identity of one exact observed execution boundary."""
@@ -155,7 +173,7 @@ class TheoryProgressSnapshot:
     theory_id: TheoryId
     progress_id: TheoryProgressId
     provisional_tip: TheoryBoundaryIdentity
-    phase_receipts: tuple[tuple[Any, ...], ...]
+    phase_receipts: tuple[TheoryPhaseReceipt, ...]
     remaining_budget: int
     parent_progress_id: TheoryProgressId | None = None
     accepted_attempt_id: tuple[Any, ...] | None = None
@@ -209,7 +227,14 @@ class TheoryView:
     root: TheoryBoundaryIdentity
     claim: TheoryClaim
     requirements: tuple[TheoryRequirementSnapshot, ...]
+    # Root-to-tip immutable version chain. This supplies historical context
+    # for evidence readers without broadening current-version route authority.
+    version_history: tuple[TheoryVersion, ...]
     attempts: tuple[TheoryAttemptReceipt, ...]
+    # Full ordered effect history for this open theory. Unlike ``attempts``,
+    # this is not narrowed to the current version/tip because earlier physical
+    # scans explain how the latest temporal need was reached.
+    conductivity_attempts: tuple[TheoryAttemptReceipt, ...]
     first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
@@ -332,11 +357,12 @@ def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, .
     owned: set[tuple[Any, ...]] = set()
     for progress in state.ledger.progress.values():
         for receipt in progress.phase_receipts:
-            if len(receipt) < 4 or receipt[0] != "temporal-setup-established":
+            if receipt.kind not in {
+                TheoryPhaseKind.TEMPORAL_SETUP,
+                TheoryPhaseKind.CORRECTION_COMPOSITION,
+            }:
                 continue
-            identities = receipt[3]
-            if isinstance(identities, tuple):
-                owned.update(item for item in identities if isinstance(item, tuple))
+            owned.update(receipt.pilot_rung_identities)
     return frozenset(owned)
 
 
@@ -708,13 +734,37 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     if claim is None or version is None or progress is None:
         raise TheoryInvariantError("active theory projection is incomplete")
 
-    attempts = tuple(
+    version_history_reversed: list[TheoryVersion] = []
+    seen_version_ids: set[TheoryVersionId] = set()
+    historical_version: TheoryVersion | None = version
+    while historical_version is not None:
+        if historical_version.version_id in seen_version_ids:
+            raise TheoryInvariantError("active theory version history contains a cycle")
+        seen_version_ids.add(historical_version.version_id)
+        version_history_reversed.append(historical_version)
+        parent_id = historical_version.parent_version_id
+        if parent_id is None:
+            break
+        parent = state.ledger.versions.get(parent_id)
+        if parent is None or parent.theory_id != theory_id:
+            raise TheoryInvariantError("active theory version history is incomplete")
+        historical_version = parent
+    version_history = tuple(reversed(version_history_reversed))
+
+    all_attempts = tuple(
         attempt
         for attempt_id in theory.attempt_ids
         for attempt in (state.ledger.attempts.get(attempt_id),)
         if attempt is not None
-        and attempt.version_id == version.version_id
+    )
+    attempts = tuple(
+        attempt
+        for attempt in all_attempts
+        if attempt.version_id == version.version_id
         and attempt.source == progress.provisional_tip
+    )
+    conductivity_attempts = tuple(
+        attempt for attempt in all_attempts if attempt.conductivity_observations
     )
     rejected = frozenset(
         (
@@ -746,7 +796,9 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         root=version.source,
         claim=claim,
         requirements=version.requirements,
+        version_history=version_history,
         attempts=attempts,
+        conductivity_attempts=conductivity_attempts,
         first_edge_exclusions=exclusions,
         temporal_intent=version.temporal_intent,
         trigger_attempt_id=version.trigger_attempt_id,
@@ -826,9 +878,22 @@ class AdvanceTheory:
     source: TheoryBoundaryIdentity
     boundary: TheoryBoundaryIdentity
     advance_identity: tuple[Any, ...]
-    phase_receipts: tuple[tuple[Any, ...], ...] = ()
+    phase_receipts: tuple[TheoryPhaseReceipt, ...] = ()
     remaining_budget: int | None = None
     execution_source: TheoryBoundaryIdentity | None = None
+
+
+@dataclass(frozen=True)
+class ComposeTheoryCorrection:
+    """Record one no-scan correction composed into the current theory world."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    composed_source: TheoryBoundaryIdentity
+    requirement_identities: tuple[tuple[Any, ...], ...]
+    pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    composition_identity: tuple[Any, ...]
 
 
 @dataclass(frozen=True)
@@ -882,6 +947,7 @@ TheoryFact: TypeAlias = (
     OpenTheory
     | RecordTheoryAttempt
     | AdvanceTheory
+    | ComposeTheoryCorrection
     | RefineTheory
     | ProveTheory
     | AbandonTheory
@@ -1109,6 +1175,8 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
         return ("attempt", fact.attempt_identity)
     if isinstance(fact, AdvanceTheory):
         return ("advance", fact.advance_identity)
+    if isinstance(fact, ComposeTheoryCorrection):
+        return ("compose", fact.composition_identity)
     if isinstance(fact, RefineTheory):
         return ("refine", fact.refinement_identity)
     if isinstance(fact, ProveTheory):
@@ -1258,6 +1326,55 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         if theory.current_progress_id == progress_id:
             return state
+        updated = replace(theory, current_progress_id=progress_id)
+        return replace(
+            state,
+            ledger=replace(
+                state.ledger,
+                progress=progress_map,
+                theories=state.ledger.theories.set(fact.theory_id, updated),
+            ),
+        )
+    if isinstance(fact, ComposeTheoryCorrection):
+        theory = _active(state, fact.theory_id)
+        if fact.version_id != theory.current_version_id:
+            raise TheoryInvariantError("composition addresses a stale theory version")
+        _require_allowed_source(state, theory, fact.source)
+        if not fact.requirement_identities or not fact.pilot_rung_identities:
+            raise TheoryInvariantError("composition lacks its exact requirement or rung identity")
+        parent = state.ledger.progress[theory.current_progress_id]
+        if fact.source != parent.provisional_tip:
+            raise TheoryInvariantError("composition source is not the current progress boundary")
+        if fact.composed_source.scan_id != fact.source.scan_id:
+            raise TheoryInvariantError("no-scan composition advanced the physical scan")
+        if not fact.composed_source.checkpoint_token or (
+            fact.composed_source.scan_id > 0
+            and not fact.composed_source.execution_owner_token
+        ):
+            raise TheoryInvariantError("composition boundary evidence is incomplete")
+        receipt = TheoryPhaseReceipt(
+            kind=TheoryPhaseKind.CORRECTION_COMPOSITION,
+            evidence_identity=fact.composition_identity,
+            requirement_identities=fact.requirement_identities,
+            pilot_rung_identities=fact.pilot_rung_identities,
+        )
+        progress_id: TheoryProgressId = (
+            "progress-compose",
+            fact.theory_id,
+            parent.progress_id,
+            fact.source,
+            fact.composed_source,
+            fact.composition_identity,
+        )
+        progress = TheoryProgressSnapshot(
+            fact.theory_id,
+            progress_id,
+            fact.composed_source,
+            (*parent.phase_receipts, receipt),
+            parent.remaining_budget,
+            parent.progress_id,
+        )
+        progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         updated = replace(theory, current_progress_id=progress_id)
         return replace(
             state,

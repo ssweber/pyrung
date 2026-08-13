@@ -21,11 +21,13 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     ChannelHeading,
     Coast,
+    ComposeCorrection,
     Dwell,
     ExpectationExemption,
     LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
+    NeedResearch,
     ObserveScan,
     OrientationRead,
     OrientationResult,
@@ -611,6 +613,64 @@ def _iter_temporal_schedules(
                 if not any(atom.requirement is source for source in sources):
                     sources.append(atom.requirement)
             yield replace(schedule, requirement_sources=tuple(sources))
+
+
+def _theory_correction_composition(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+) -> ComposeCorrection | None:
+    """Choose one persistent correction without executing a program scan."""
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None or view.temporal_intent not in {
+        TheoryTemporalIntent.RETRY_TOGETHER,
+        TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+    }:
+        return None
+    requirements = tuple(getattr(world.context, "temporal_requirements", ()))
+    if not requirements:
+        raise ValueError("temporal retry has no resolved live requirements")
+    installed = tuple(world.state.pilot_rungs)
+    for schedule in _iter_temporal_schedules(world, target, requirements):
+        for rung in schedule.pilot_rungs:
+            if rung in installed or _avoid_forces(
+                world.context,
+                ((rung.dest, rung.value),),
+                world.snapshot,
+            ):
+                continue
+            sources = tuple(schedule.requirement_sources or schedule.requirements)
+            owned = tuple(
+                requirement
+                for requirement in sources
+                if getattr(getattr(requirement, "condition", None), "tag", None)
+                == rung.dest
+            )
+            if not owned:
+                continue
+            frontier = _frontier(world, candidates)
+            orientation_read = OrientationRead(
+                world_key=world.world_key,
+                world=world,
+                candidates=candidates,
+                considered_paths=(
+                    (candidates.route.plan,) if candidates.route is not None else ()
+                ),
+                rankings=tuple(candidates.options),
+                exclusions=tuple(
+                    world.context.compass.knowledge.nogood_identities(world.world_key)
+                ),
+            )
+            return ComposeCorrection(
+                world_key=world.world_key,
+                frontier=frontier,
+                pilot_rung=rung,
+                requirements=owned,
+                rationale="working theory: compose one correction, then read Compass again",
+                orientation=orientation_read,
+            )
+    return None
 
 
 def _theory_setup_bearing(
@@ -1215,6 +1275,30 @@ def _orient_read(
             TheoryTemporalIntent.RETRY_TOGETHER,
             TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
         }:
+            research = compass.conductivity_research(view)
+            if research is not None:
+                frontier = _frontier(world, candidates)
+                return NeedResearch(
+                    world_key=world.world_key,
+                    frontier=frontier,
+                    request=research,
+                    rationale=research.reason,
+                    orientation=OrientationRead(
+                        world_key=world.world_key,
+                        world=world,
+                        candidates=candidates,
+                        considered_paths=(
+                            (candidates.route.plan,) if candidates.route is not None else ()
+                        ),
+                        rankings=tuple(candidates.options),
+                        exclusions=tuple(
+                            compass.knowledge.nogood_identities(world.world_key)
+                        ),
+                    ),
+                )
+            composition = _theory_correction_composition(world, candidates, target)
+            if composition is not None:
+                return composition
             ordinary = _orient_read(
                 compass,
                 world,
@@ -1512,7 +1596,7 @@ def _read_group(
     for world in worlds:
         result = _orient_read(compass, world, target)
         results.append(result)
-        if isinstance(result, Bearing):
+        if isinstance(result, Bearing | ComposeCorrection | NeedResearch):
             if maintenance_owns or not _is_maintenance(result):
                 return result, tuple(results)
             if maintenance is None:

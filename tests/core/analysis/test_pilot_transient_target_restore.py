@@ -99,16 +99,25 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
         )
     )
 
-    receipts = tuple(
-        event.data["receipt"] for event in events if event.kind == "expectation_committed"
+    later_requirement_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "requirement_activated"
+        and getattr(event.data["requirement"].condition, "tag", None)
+        == fixture.LaterPresetMs.name
     )
-    assert receipts
+    discovery_receipts = tuple(
+        event.data["receipt"]
+        for event in events[:later_requirement_index]
+        if event.kind == "expectation_committed"
+    )
+    assert discovery_receipts
     assert all(
         not any(
             obligation.tag == fixture.State.name and obligation.value == fixture.TARGET
             for obligation in receipt.obligations
         )
-        for receipt in receipts
+        for receipt in discovery_receipts
     )
 
     requirements = tuple(
@@ -128,24 +137,23 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
     assert requirements[0].source_world_key != requirements[1].source_world_key
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
-    temporal_retries = tuple(
-        event.data["applied"]
+    compositions = tuple(
+        (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+        for event in events
+        if event.kind == "theory_correction_composed"
+    )
+    assert compositions == (
+        (fixture.EarlyPresetMs.name, 11),
+        (fixture.LaterPresetMs.name, 11),
+    )
+    advance_tries = tuple(
+        tuple(event.data["applied"])
         for event in events
         if event.kind == "candidate_try"
-        and {
-            fixture.EarlyPresetMs.name,
-            fixture.LaterPresetMs.name,
-        }.intersection(tag for tag, _value in event.data["applied"])
     )
-    assert temporal_retries == (
-        (
-            (fixture.EarlyPresetMs.name, 11),
-            (fixture.Advance.name, True),
-        ),
-        (
-            (fixture.EarlyPresetMs.name, 11),
-            (fixture.LaterPresetMs.name, 11),
-        ),
+    assert advance_tries == (
+        ((fixture.Advance.name, True),),
+        ((fixture.Advance.name, True),),
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

@@ -409,7 +409,12 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
     )
 
 
-def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, ...]) -> None:
+def _install_prerequisites(
+    state: _PilotState,
+    prerequisites: tuple[PilotRung, ...],
+    *,
+    source: str = "prerequisite",
+) -> None:
     """Install only prerequisite rungs that do not already have an owner."""
     existing = {_rung_identity(rung) for rung in state.pilot_rungs}
     new_pilot_rungs = tuple(rung for rung in prerequisites if _rung_identity(rung) not in existing)
@@ -419,7 +424,7 @@ def _install_prerequisites(state: _PilotState, prerequisites: tuple[PilotRung, .
     state.hold_log.append(
         _HoldLogEntry(
             scan=state.work.state.scan_id,
-            source="prerequisite",
+            source=source,
             pilot_rungs=new_pilot_rungs,
         )
     )

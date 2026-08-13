@@ -7,9 +7,16 @@ from dataclasses import fields, is_dataclass
 from enum import Enum
 from typing import Any
 
+import pytest
+
 from pyrung import PLC, Bool, Int, Program, copy, latch, rung, system
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot.attempt_interpretation import AttemptInterpretationKind
+from pyrung.core.analysis.pilot.compass import Compass
+from pyrung.core.analysis.pilot.conductivity import (
+    ConductivityProgress,
+    ConductivityReach,
+)
 from pyrung.core.analysis.pilot.effects import EffectObservationSnapshot
 from pyrung.core.analysis.pilot.working_theory import (
     AdvanceTheory,
@@ -18,6 +25,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
+    theory_view,
 )
 from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
 from tests.fixtures.pilot_alarm_presets import (
@@ -288,6 +296,21 @@ def _capture_theory_transitions(monkeypatch: Any) -> list[Any]:
     return captured
 
 
+def _capture_conductivity_fronts(monkeypatch: Any) -> list[Any]:
+    captured: list[Any] = []
+    original = pilot_module._record_working_theory_transition
+
+    def record(state: Any, transition: Any, **kwargs: Any) -> None:
+        original(state, transition, **kwargs)
+        view = theory_view(state.theory_state)
+        front = Compass().conductivity_front(view)
+        if front is not None:
+            captured.append(front)
+
+    monkeypatch.setattr(pilot_module, "_record_working_theory_transition", record)
+    return captured
+
+
 def _preset_transition(captured: list[Any], preset_name: str) -> Any:
     matching = tuple(
         observation
@@ -350,6 +373,114 @@ def test_retained_reset_done_overwrite_is_retry_together_from_same_receipts(
     assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]
 
 
+def test_neutral_retry_exposes_consumer_then_displacement_front(monkeypatch: Any) -> None:
+    fixture = alarmed_at_start
+    captured = _capture_conductivity_fronts(monkeypatch)
+
+    result = PLC(fixture.logic, dt=0.010).how(
+        fixture.ProcessStep == fixture.COMPLETE,
+        max_scans=100,
+    )
+
+    assert result.reachable
+    assert len(captured) == 1
+    flows = tuple(
+        flow
+        for flow in captured[0].flows
+        if any(
+            obligation.tag == fixture.ProcessStep.name
+            and obligation.value == fixture.RUNNING
+            for obligation in flow.obligations
+        )
+    )
+    assert len(flows) == 1
+    flow = flows[0]
+    assert flow.reach is ConductivityReach.CONSUMER
+    assert len(flow.obligations) == 2
+    assert flow.appeared is not None
+    assert flow.front_occurrence is not None
+    assert flow.displacement is not None
+    assert (
+        flow.appeared.scan_id,
+        flow.appeared.ordinal,
+        flow.front_occurrence.ordinal,
+        flow.displacement.ordinal,
+    ) == (2, 5, 6, 21)
+
+
+def test_extended_watchdog_requests_research_after_same_stop_drifts(
+    monkeypatch: Any,
+) -> None:
+    class ResearchObserved(RuntimeError):
+        pass
+
+    captured: list[Any] = []
+    original = pilot_module._record_working_theory_transition
+
+    def record(state: Any, transition: Any, **kwargs: Any) -> None:
+        original(state, transition, **kwargs)
+        request = Compass().conductivity_research(theory_view(state.theory_state))
+        if request is not None:
+            captured.append(request)
+            raise ResearchObserved
+
+    monkeypatch.setattr(pilot_module, "_record_working_theory_transition", record)
+
+    with pytest.raises(ResearchObserved):
+        PLC(sequence_route.logic, dt=0.010).how(
+            sequence_route.SequenceStep == 81,
+            max_scans=40,
+        )
+
+    assert len(captured) == 1
+    request = captured[0]
+    comparison = request.comparison
+    assert comparison.progress is ConductivityProgress.SAME_STOP
+    assert len(comparison.requirement_drifts) == 1
+    drift = comparison.requirement_drifts[0]
+    assert drift.earlier.condition_identity != drift.later.condition_identity
+    assert request.displacement.rung == (None, 16)
+    assert tuple(read.tag for read in request.enabling_reads) == (
+        sequence_route.FirstWatchdog.Done.name,
+        "_oneshot:i26",
+    )
+
+
+def test_prestepped_watchdog_retains_composed_world_for_followup_research(
+    monkeypatch: Any,
+) -> None:
+    """A same-scan overlay change remains part of the active theory's World."""
+
+    class ResearchObserved(RuntimeError):
+        pass
+
+    class ResearchMissing(RuntimeError):
+        pass
+
+    transition_count = 0
+    original = pilot_module._record_working_theory_transition
+
+    def record(state: Any, transition: Any, **kwargs: Any) -> None:
+        nonlocal transition_count
+        transition_count += 1
+        original(state, transition, **kwargs)
+        request = Compass().conductivity_research(theory_view(state.theory_state))
+        if request is not None:
+            raise ResearchObserved
+        if transition_count >= 7:
+            raise ResearchMissing("bounded run never retained the comparable attempt")
+
+    monkeypatch.setattr(pilot_module, "_record_working_theory_transition", record)
+    plc = PLC(sequence_route.logic, dt=0.010)
+    plc.step()
+
+    with pytest.raises(ResearchObserved):
+        plc.how(
+            sequence_route.SequenceStep == 81,
+            max_scans=40,
+        )
+
+
 def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receipts(
     monkeypatch: Any,
 ) -> None:
@@ -370,21 +501,23 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
         )
     )
     # These are two physical attempts at the same chart edge, not duplicate
-    # recording. The extended route first exposes the watchdog while steering
-    # reconnect, then a fresh checkpoint steer proves that 11 is still
-    # insufficient and refines the same temporal need for the retry.
+    # recording. The first reconnect exposes the watchdog; composition changes
+    # the same-scan World, and a fresh Compass read selects that same reconnect
+    # steer again. Its later displacement proves that 11 is still insufficient.
     assert len(matching) == 2
     initial, refined = matching
     assert initial.source.scan_id == 3
-    assert refined.source.scan_id == 4
+    assert refined.source.scan_id == 3
+    assert initial.source.world_key != refined.source.world_key
     assert initial.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
-    assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
+    assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_THROUGH_DEADLINE
     assert tuple(
         (obligation.tag, obligation.value) for obligation in initial.claim.obligations
     ) == ((sequence_route.SequenceStep.name, 40),)
     assert tuple(
         (obligation.tag, obligation.value) for obligation in refined.claim.obligations
-    ) == ((sequence_route.SequenceStep.name, 41),)
+    ) == ((sequence_route.SequenceStep.name, 40),)
     assert initial.requirements[0].deadline_occurrence[2] == 4
     assert refined.requirements[0].deadline_occurrence[2] == 5
-    assert initial.act_identity != refined.act_identity
+    assert initial.act_identity == refined.act_identity
+    assert initial.pilot_rung_identities != refined.pilot_rung_identities
