@@ -298,6 +298,54 @@ def test_temporal_retry_augments_fresh_trigger_instead_of_requirement_candidate(
     assert act_identity(retry.act) == pulse_identity((("Request", True), ("Production", True)))
 
 
+def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+                trigger_act_identity=pulse_identity((("Request", True),)),
+                claim=SimpleNamespace(obligations=()),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        _candidate("Request"),
+        _candidate("FirstCorrective"),
+        _candidate("SecondCorrective"),
+        active_trace_actions=(
+            ("Request", True),
+            ("FirstCorrective", True),
+            ("SecondCorrective", True),
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
+    )
+
+    result = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, Pulse)
+    assert result.act.policy.applied == (("FirstCorrective", True),)
+    assert result.act.policy.local_progress is LocalProgressKind.THEORY_CORRECTIVE
+    assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+
+
 def test_temporal_retry_lazily_adds_current_trace_sibling_without_assigning_internal(
     monkeypatch,
 ) -> None:
@@ -351,9 +399,7 @@ def test_temporal_retry_continues_past_an_accepted_trace_companion(
         context=replace(
             world.context,
             theory_view=SimpleNamespace(
-                trigger_act_identity=pulse_identity(
-                    (("Request", True), ("Mode", True))
-                ),
+                trigger_act_identity=pulse_identity((("Request", True), ("Mode", True))),
                 claim=SimpleNamespace(obligations=()),
             ),
             temporal_requirements=(object(),),
@@ -1080,10 +1126,7 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     assert result.act.policy.heading.route.channel_tag == "OuterState"
     assert result.act.policy.heading.route.from_value == 6
     assert result.act.policy.heading.route.target_value == 16
-    assert (
-        result.act.policy.landing_receipt_authority
-        is LandingReceiptAuthority.PROGRAM_STEP
-    )
+    assert result.act.policy.landing_receipt_authority is LandingReceiptAuthority.PROGRAM_STEP
     assert result.objective.frontier == (("PressableLever", True),)
     assert result.orientation is not None
     assert result.orientation.world.frame is world.frame

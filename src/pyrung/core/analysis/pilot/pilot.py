@@ -278,9 +278,7 @@ def _bound_operand_authorities(
     configured = _checkpoint_configured_inputs(checkpoint)
     temporal_owned = temporal_setup_rung_identities(state.theory_state)
     provisional = frozenset(
-        rung.dest
-        for rung in state.pilot_rungs
-        if _rung_identity(rung) in temporal_owned
+        rung.dest for rung in state.pilot_rungs if _rung_identity(rung) in temporal_owned
     )
     result: dict[str, OperandAuthority] = {}
     for read in projection.reads:
@@ -423,9 +421,7 @@ def _derive_route_landing_requirements(
     # waiting for the later target steer to fail needlessly turns current-world
     # evidence into a historical rebase.
     accepted_route_step = bool(
-        attempt.trial is not None
-        and policy is not None
-        and policy.heading is not None
+        attempt.trial is not None and policy is not None and policy.heading is not None
     )
     if (
         executed is None
@@ -439,19 +435,14 @@ def _derive_route_landing_requirements(
             and not attempt.proof_rejection
             and not accepted_route_step
         )
-        or (
-            local_progress is LocalProgressKind.TEMPORAL_SETUP
-            and attempt.trial is None
-        )
+        or (local_progress is LocalProgressKind.TEMPORAL_SETUP and attempt.trial is None)
     ):
         return ()
     orientation = executed.bearing.orientation
     if orientation is None:
         return ()
     heading = executed.bearing.act.policy.heading
-    preserved_values = (
-        ((heading.channel_tag, heading.target_value),) if heading is not None else ()
-    )
+    preserved_values = ((heading.channel_tag, heading.target_value),) if heading is not None else ()
     advance_index = build_advance_index(
         ctx.program,
         getattr(checkpoint.world.work, "_harness", None),
@@ -854,9 +845,7 @@ def _retain_expectation_receipt(
     if checkpoint is None:
         return
     progress_landing = (
-        _verified_progress_landing(trial)
-        if trial.attempt.landing_expectation is None
-        else None
+        _verified_progress_landing(trial) if trial.attempt.landing_expectation is None else None
     )
     expectations = (
         (
@@ -892,9 +881,7 @@ def _retain_expectation_receipt(
         if first.execution_epoch is None or first.execution_owner is None:
             continue
         producers = tuple(
-            occurrence_snapshot(item.appeared)
-            for item in observations
-            if item.appeared is not None
+            occurrence_snapshot(item.appeared) for item in observations if item.appeared is not None
         )
         consumers = tuple(
             occurrence_snapshot(item.consumer_read)
@@ -938,9 +925,7 @@ def _retain_expectation_receipt(
             expectation=expectation,
             expectation_role=expectation_role,
         )
-        if not any(
-            current.identity == receipt.identity for current in state.expectation_receipts
-        ):
+        if not any(current.identity == receipt.identity for current in state.expectation_receipts):
             state.expectation_receipts.append(receipt)
 
 
@@ -2366,15 +2351,16 @@ def _refine_active_theory_from_program_guard_rebases(
                 id(failed.execution_epoch),
                 id(failed.execution_owner),
             ),
-            occurrence_evidence=tuple(
-                _semantic_key(item.explanation) for item in failed_receipts
-            ),
+            occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
             act_identity=failed.act_identity,
             pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
             disposition=TheoryAttemptDisposition.REJECTED_EXACT,
-            evidence=(("program-guard-rebases", tuple(
-                requirement.navigation_identity for requirement, _failed in exact_pairs
-            )),),
+            evidence=(
+                (
+                    "program-guard-rebases",
+                    tuple(requirement.navigation_identity for requirement, _failed in exact_pairs),
+                ),
+            ),
         ),
     )
     theory = _active_shadow_theory(state)
@@ -2387,8 +2373,7 @@ def _refine_active_theory_from_program_guard_rebases(
             source=trigger_source,
             refined_source=refined_source,
             requirements=tuple(
-                _theory_requirement_snapshot(requirement)
-                for requirement, _failed in exact_pairs
+                _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
             ),
             refinement_identity=(
                 "program-guard-rebase",
@@ -3377,7 +3362,9 @@ def _entry_execution_receipt(
     )
 
 
-def _import_adjacent_entry_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
+def _import_adjacent_entry_scan(
+    state: _PilotState, ctx: _PilotContext
+) -> _BootstrapExecution | None:
     """Import the runner's exact adjacent history as the same entry receipt.
 
     The runner already owns the rolling history. PILOT retains only the one
@@ -3455,9 +3442,7 @@ def _bind_entry_execution_to_route(
     )
     checkpoint = replace(receipt.checkpoint, objective=objective)
     channel_tags = {ctx.target.tag, *ctx.opaque_loop}
-    channel_tags.update(
-        role.channel_tag for role in (*ctx.pipeline_roles, *ctx.chart_roles)
-    )
+    channel_tags.update(role.channel_tag for role in (*ctx.pipeline_roles, *ctx.chart_roles))
     source_tree = frame.tree
     if ctx.target.predicate is None:
         try:
@@ -3899,10 +3884,7 @@ def _shadow_transition_from_attempt(
     requirements = tuple(
         _theory_requirement_snapshot(requirement) for requirement in novel_requirements
     )
-    if (
-        route_lookahead_requirements
-        and len(route_lookahead_requirements) == len(requirements)
-    ):
+    if route_lookahead_requirements and len(route_lookahead_requirements) == len(requirements):
         interpretation = AttemptInterpretation(
             AttemptInterpretationKind.SETUP_FIRST,
             "the retained look-ahead made a selected-route condition false",
@@ -3990,9 +3972,7 @@ def _shadow_transition_after_monitor(
             id(failed.source_checkpoint): failed.source_checkpoint for failed in failed_receipts
         }
         expectations = tuple(
-            {
-                id(failed.expectation): failed.expectation for failed in failed_receipts
-            }.values()
+            {id(failed.expectation): failed.expectation for failed in failed_receipts}.values()
         )
         act_identities = {failed.act_identity for failed in failed_receipts}
         owner_pairs = {
@@ -4394,6 +4374,7 @@ def _record_controlling_transition(
     if observation.interpretation.kind not in {
         AttemptInterpretationKind.SETUP_FIRST,
         AttemptInterpretationKind.RETRY_TOGETHER,
+        AttemptInterpretationKind.RETRY_THROUGH_DEADLINE,
     }:
         raise ValueError("controlling transition lacks an actionable temporal need")
     _record_theory_transition(
@@ -4412,6 +4393,7 @@ def _records_controlling_need(observation: _ShadowTheoryTransition | None) -> bo
         in {
             AttemptInterpretationKind.SETUP_FIRST,
             AttemptInterpretationKind.RETRY_TOGETHER,
+            AttemptInterpretationKind.RETRY_THROUGH_DEADLINE,
         }
         and observation.requirements
     )
@@ -4446,7 +4428,10 @@ def _resolved_temporal_requirements(
     """
 
     snapshots = tuple(request.requirements)
-    if request.intent is TheoryTemporalIntent.RETRY_TOGETHER:
+    if request.intent in {
+        TheoryTemporalIntent.RETRY_TOGETHER,
+        TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+    }:
         view = theory_view(state.theory_state)
         if (
             view is None
@@ -4587,12 +4572,10 @@ def _record_controlled_setup_attempt(
     )
     action_identity = act_identity(result.act)
     local_sources = (
-        result.act.policy.local_progress_sources
-        or result.act.policy.local_progress_requirements
+        result.act.policy.local_progress_sources or result.act.policy.local_progress_requirements
     )
     local_requirement_identities = tuple(
-        _theory_requirement_snapshot(requirement).semantic_identity
-        for requirement in local_sources
+        _theory_requirement_snapshot(requirement).semantic_identity for requirement in local_sources
     )
     phase = "rearm" if result.act.policy.local_progress is LocalProgressKind.REARM else "need"
     rung_identities = tuple(_rung_identity(rung) for rung in state.pilot_rungs)
@@ -5590,9 +5573,7 @@ def _monitor_committed_trial(
     # handling; neither assertion horizon nor an active theory is an exemption.
     progress = trial.execution.scan_progress
     retained_selected_landing = bool(
-        progress is not None
-        and progress.kind == "selected-producer"
-        and progress.landing_owns_tip
+        progress is not None and progress.kind == "selected-producer" and progress.landing_owns_tip
     )
     if (
         progress is not None
@@ -5604,10 +5585,7 @@ def _monitor_committed_trial(
             "frontier",
         }
         and state.pending_departure is None
-        and (
-            not trial.execution.channel_motion.departed
-            or retained_selected_landing
-        )
+        and (not trial.execution.channel_motion.departed or retained_selected_landing)
     ):
         # A generic frontier crossed before a channel departure is only useful
         # local motion; the missed bearing still enters ordinary departure
@@ -5677,11 +5655,16 @@ def _commit_trial(
         work=work,
         committed_acts=state.committed_acts.append(act),
     )
-    if policy.local_progress is LocalProgressKind.TRACE_SETUP:
-        ctx.compass = replace(
-            ctx.compass,
-            knowledge=ctx.compass.knowledge.after_stable_context_change(frame.key),
-        )
+    if policy.local_progress in {
+        LocalProgressKind.TRACE_SETUP,
+        LocalProgressKind.TEMPORAL_SETUP,
+        LocalProgressKind.THEORY_CORRECTIVE,
+    }:
+        if policy.local_progress is LocalProgressKind.TRACE_SETUP:
+            ctx.compass = replace(
+                ctx.compass,
+                knowledge=ctx.compass.knowledge.after_stable_context_change(frame.key),
+            )
         orientation = bearing.orientation
         trace_details = (
             orientation.candidates.trace.detail_by_pair if orientation is not None else {}
@@ -5694,16 +5677,28 @@ def _commit_trial(
             if lifetime is None:
                 lifetime = getattr(operation, "until", None)
             if (
-                lifetime is None
-                or tag in ctx.edge_tags
+                tag in ctx.edge_tags
                 or tag in ctx.clear_only
                 or not _values_match(state.work.state.tags.get(tag), value)
             ):
                 continue
-            try:
-                guard = _until_unresolved_condition(state.work, lifetime)
-            except (KeyError, ValueError):
-                continue
+            if lifetime is None:
+                if policy.local_progress not in {
+                    LocalProgressKind.TEMPORAL_SETUP,
+                    LocalProgressKind.THEORY_CORRECTIVE,
+                }:
+                    continue
+                guard = _target_unresolved_condition(
+                    state.work,
+                    ctx.target.tag,
+                    ctx.target.value,
+                    ctx.target.predicate,
+                )
+            else:
+                try:
+                    guard = _until_unresolved_condition(state.work, lifetime)
+                except (KeyError, ValueError):
+                    continue
             retained_list.append(PilotRung(tag, value, guard, operation=operation))
         retained = tuple(retained_list)
         _install_prerequisites(state, retained)
@@ -5747,10 +5742,7 @@ def _record_scan_progress_advance(
     progress = state.theory_state.ledger.progress[theory.current_progress_id]
     source = progress.provisional_tip
     boundary = _theory_live_boundary(state)
-    if (
-        receipt.source_scan != source.scan_id
-        or boundary.scan_id <= source.scan_id
-    ):
+    if receipt.source_scan != source.scan_id or boundary.scan_id <= source.scan_id:
         return
 
     recorded_id = (
@@ -6122,9 +6114,7 @@ def _transition_once(
     intrascan_report = None
     causal_checkpoint = continuation_checkpoint or receipt_checkpoint
     crossing = getattr(act, "crossing", None)
-    verification_hypothesis = bool(
-        crossing is not None and crossing.verify_required
-    )
+    verification_hypothesis = bool(crossing is not None and crossing.verify_required)
     # A verification-required crossing is itself the causal hypothesis.  Its
     # failed downstream expectation explains why verification rejected it, but
     # does not authorize turning that explanation into setup work for the same
@@ -6699,9 +6689,8 @@ def _pilot_loop_events(
             _restore_temporal_source(state, temporal_request, temporal_source_checkpoint)
         snap = dict(state.work.state.tags)
         entry_execution = state.bootstrap_execution
-        if (
-            (entry_execution is None or entry_execution.route_bound)
-            and target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate)
+        if (entry_execution is None or entry_execution.route_bound) and target_reached(
+            snap, ctx.target.tag, ctx.target.value, ctx.target.predicate
         ):
             _run_shadow_hook(_record_shadow_proved, state)
             _promote_probationary_corrections(state)

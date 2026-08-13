@@ -4,16 +4,34 @@ This preserves the rung topology and ordering of the field sequence that
 motivated the adjacent-scan lifecycle work.  The names are deliberately
 domain-neutral; the important features are the same-scan cascade, two
 watchdogs, the terminal settling timer, the active-low interruption rung,
-the late error writers, and the unconditional reporting copy which observes
-the structural sequence channel without becoming another route.
+the late error writers, the reconnect repair followed by its adjacent-scan
+status overwrite, and the unconditional reporting copy which observes the
+structural sequence channel without becoming another route.
 """
 
-from pyrung import And, Bool, Int, Or, Program, Timer, branch, copy, latch, on_delay, out, rung
+from pyrung import (
+    And,
+    Bool,
+    Counter,
+    Int,
+    Or,
+    Program,
+    Timer,
+    branch,
+    copy,
+    count_up,
+    latch,
+    on_delay,
+    out,
+    rung,
+    system,
+)
 
 SequenceStep = Int("RouteSequenceStep")
 LocalSequenceStep = Int("RouteLocalSequenceStep")
 ReportedSequenceStep = Int("RouteReportedSequenceStep")
 RouteControl = Int("RouteControl")
+RouteEnabled = Int("RouteEnabled")
 
 ReadyCommand = Bool("RouteReadyCommand", external=True)
 BaseSensor = Bool("RouteBaseSensor", external=True)
@@ -22,6 +40,12 @@ InterruptionInput = Bool("RouteInterruptionInput", external=True)
 SafetyPermit = Bool("RouteSafetyPermit", external=True)
 SimulationMode = Bool("RouteSimulationMode")
 NetworkAvailable = Bool("RouteNetworkAvailable", external=True)
+NetworkPeerReady = Bool("RouteNetworkPeerReady", external=True)
+CommunicationPulse = Bool("RouteCommunicationPulse")
+CommunicationSuccess = Bool("RouteCommunicationSuccess")
+CommunicationError = Bool("RouteCommunicationError", external=True)
+ServiceStatusInput = Int("RouteServiceStatusInput", external=True)
+ServiceStatus = Int("RouteServiceStatus")
 
 FirstWatchdogPresetMs = Int("RouteFirstWatchdogPresetMs", external=True)
 SecondWatchdogPresetMs = Int("RouteSecondWatchdogPresetMs", external=True)
@@ -47,9 +71,18 @@ SecondWatchdog = Timer.clone("RouteSecondWatchdog")
 SecondTransitionDelay = Timer.clone("RouteSecondTransitionDelay")
 SecondDwell = Timer.clone("RouteSecondDwell")
 SettleDelay = Timer.clone("RouteSettleDelay")
+RecoveryCounter = Counter.clone("RouteRecoveryCounter")
 
 
 with Program() as logic:
+    # R7/R9: the pre-route handoff that makes the disconnected-state writer's
+    # <=20 source depend on the communication transaction.
+    with rung(SequenceStep <= 10, RouteEnabled == 1):
+        copy(11, SequenceStep)
+
+    with rung(ReadyCommand, SequenceStep == 11):
+        copy(20, SequenceStep, oneshot=True)
+
     # R16: the ordinary route into the same-scan sequence cascade.
     with rung(
         Or(SequenceStep == 22, And(ReadyCommand, RouteControl == 100)),
@@ -96,9 +129,7 @@ with Program() as logic:
             copy(80, SequenceStep, oneshot=True)
 
     # R24-R27: terminal approach and settling receipt.
-    with rung(
-        Or(SequenceStep == 80, And(SequenceStep >= 90, ~SettleDelay.Done))
-    ):
+    with rung(Or(SequenceStep == 80, And(SequenceStep >= 90, ~SettleDelay.Done))):
         out(MovingNegative)
 
     with rung(Or(SequenceStep == 80, SequenceStep >= 90), BaseSensor):
@@ -152,11 +183,41 @@ with Program() as logic:
     with rung(~NetworkAvailable, SequenceStep <= 20):
         copy(98, SequenceStep, oneshot=True)
 
+    # A durable reconnect first repairs the disconnected state. The sibling
+    # status branch does not see that newly written value until the following
+    # scan, where it can replace the productive 10 unless the program has
+    # advanced beyond the local handoff or one of the program-owned status
+    # alternatives changed. This is the neutral 98 -> 10 -> 94 mechanism.
+    with rung(NetworkAvailable):
+        with branch(SequenceStep == 98):
+            copy(10, SequenceStep, oneshot=True)
+        with branch(SequenceStep <= 20):
+            with branch(RecoveryCounter.Done):
+                copy(97, SequenceStep, oneshot=True)
+            with branch(~RecoveryCounter.Done, ServiceStatus == 0):
+                copy(94, SequenceStep, oneshot=True)
+
     with rung(~SafetyPermit):
         copy(99, SequenceStep, oneshot=True)
 
     with rung(SequenceStep == 99, SafetyPermit):
         copy(0, SequenceStep, oneshot=True)
+
+    # The field communication transaction shares NetworkAvailable with a
+    # peer-ready contact. This relationship is intentionally included even
+    # though CommunicationPulse does not directly drive SequenceStep: it is
+    # what lets ProgramStep attach communication context to the reconnect act.
+    with rung(system.sys.clock_500ms, NetworkPeerReady, NetworkAvailable):
+        out(CommunicationPulse)
+
+    with rung(RouteControl == 0, CommunicationPulse):
+        out(CommunicationSuccess)
+
+    with rung(CommunicationSuccess):
+        copy(10, RouteControl)
+
+    with rung(RouteControl == 10, CommunicationPulse):
+        copy(1, RouteEnabled)
 
     # As in the source program, the simulation override is evaluated after
     # the sequence and error rungs, so its route effect starts next scan.
@@ -165,6 +226,16 @@ with Program() as logic:
 
     with rung(~SimulationMode):
         copy(0, RouteControl, oneshot=True)
+
+    # These writers occur after the recovery reads, matching the field
+    # program's later communication subroutine. They make the counter/status
+    # terms program-owned without turning the recovery chart into action
+    # authority.
+    with rung(CommunicationError):
+        count_up(RecoveryCounter, 60).reset(~CommunicationError)
+
+    with rung():
+        copy(ServiceStatusInput, ServiceStatus)
 
     # The field program copies its live sequence register unconditionally to
     # a later reporting register. This is a one-way observation handoff, not a

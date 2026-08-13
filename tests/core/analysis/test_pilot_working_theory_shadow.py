@@ -18,11 +18,11 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordUnattributedEvidence,
     RefineTheory,
 )
+from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
 from tests.fixtures.pilot_alarm_presets import (
     aborted_on_first_scan,
     alarmed_at_start,
 )
-from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
 
 
 def _direct_producer_program() -> tuple[Program, Bool]:
@@ -364,21 +364,21 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
         )
     )
     # These are two physical attempts at the same chart edge, not duplicate
-    # recording.  The first landing exposes the initial setup; replay from its
-    # exact source then proves that 11 is still insufficient and refines the
-    # same temporal need for the retry.
+    # recording. The extended route first exposes the watchdog while steering
+    # reconnect, then a fresh checkpoint steer proves that 11 is still
+    # insufficient and refines the same temporal need for the retry.
     assert len(matching) == 2
     initial, refined = matching
-    assert initial.source.scan_id == 1
-    assert refined.source.scan_id == 3
-    assert initial.interpretation.kind is AttemptInterpretationKind.SETUP_FIRST
+    assert initial.source.scan_id == 3
+    assert refined.source.scan_id == 4
+    assert initial.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert tuple(
         (obligation.tag, obligation.value) for obligation in initial.claim.obligations
-    ) == ((sequence_route.SequenceStep.name, 41),)
+    ) == ((sequence_route.SequenceStep.name, 40),)
     assert tuple(
         (obligation.tag, obligation.value) for obligation in refined.claim.obligations
     ) == ((sequence_route.SequenceStep.name, 41),)
-    assert initial.requirements[0].deadline_occurrence[2] == 3
-    assert refined.requirements[0].deadline_occurrence[2] == 4
+    assert initial.requirements[0].deadline_occurrence[2] == 4
+    assert refined.requirements[0].deadline_occurrence[2] == 5
     assert initial.act_identity != refined.act_identity

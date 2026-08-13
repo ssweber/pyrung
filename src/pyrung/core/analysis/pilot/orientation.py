@@ -193,7 +193,8 @@ def _iter_temporal_companion_groups(
     siblings = tuple(
         pair
         for pair in candidates.trace.active_actions
-        if pair not in base_pairs and pair not in structural
+        if pair not in base_pairs
+        and pair not in structural
         and not _avoid_forces(world.context, (pair,), world.snapshot)
     )
     for width in range(1, len(siblings) + 1):
@@ -263,6 +264,7 @@ def _theory_temporal_retry_bearing(
         if rearm is not None:
             return rearm
     structural_companions = _temporal_transaction_pairs(world, candidates)
+    temporal_intent = getattr(world.context.theory_view, "temporal_intent", None)
 
     # CandidateRead has already applied availability, tide-table, route,
     # Crossings, action-block and prerequisite admission.  Iterate its pulse
@@ -373,6 +375,42 @@ def _theory_temporal_retry_bearing(
                 base,
                 structural_companions,
             ):
+                if temporal_intent is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE:
+                    additions = tuple(
+                        pair
+                        for pair in (*setup, *companions)
+                        if pair not in tuple(base.applied)
+                    )
+                    if not additions:
+                        continue
+                    actions = (additions[0],)
+                    policy = ActPolicy(
+                        source=ActSource.WIDENING,
+                        action_pairs=actions,
+                        applied=actions,
+                        note="working theory: persist one corrective before fresh steer",
+                        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+                        provenance=("working-theory sequential corrective",),
+                        local_progress=LocalProgressKind.THEORY_CORRECTIVE,
+                        pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                    )
+                    act = Pulse(policy)
+                    if (
+                        _act_preserves_requirements(world, act)
+                        and not _avoid_forces(world.context, actions, world.snapshot)
+                        and not world.context.compass.knowledge.act_is_nogood(
+                            world.world_key,
+                            act_identity(act),
+                        )
+                    ):
+                        return _bearing(
+                            world,
+                            act,
+                            candidates,
+                            target=target,
+                            rationale=("working theory: persist one corrective, then steer again"),
+                        )
+                    continue
                 actions = _merge_temporal_actions(setup, tuple(base.applied), companions)
                 if not actions:
                     continue
@@ -418,15 +456,17 @@ def _theory_temporal_retry_bearing(
                     # has been tried. Only a newly reader-authorized addition is
                     # a temporal continuation; returning the base is replay.
                     continue
-                if _act_preserves_requirements(
-                    world, act
-                ) and not _avoid_forces(
-                    world.context,
-                    actions,
-                    world.snapshot,
-                ) and not world.context.compass.knowledge.act_is_nogood(
-                    world.world_key,
-                    act_identity(act),
+                if (
+                    _act_preserves_requirements(world, act)
+                    and not _avoid_forces(
+                        world.context,
+                        actions,
+                        world.snapshot,
+                    )
+                    and not world.context.compass.knowledge.act_is_nogood(
+                        world.world_key,
+                        act_identity(act),
+                    )
                 ):
                     return _bearing(
                         world,
@@ -604,9 +644,7 @@ def _theory_setup_bearing(
             expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
             local_progress=LocalProgressKind.TEMPORAL_SETUP,
             local_progress_requirements=tuple(schedule.requirements),
-            local_progress_sources=tuple(
-                schedule.requirement_sources or schedule.requirements
-            ),
+            local_progress_sources=tuple(schedule.requirement_sources or schedule.requirements),
             pulse_horizon=PulseHorizon.ASSERTION_SCAN,
         )
         act = Pulse(act_policy) if len(actions) == 1 else BatchPulse(act_policy)
@@ -1173,7 +1211,10 @@ def _orient_read(
 
     view = getattr(world.context, "theory_view", None)
     if _allow_theory:
-        if view is not None and view.temporal_intent is TheoryTemporalIntent.RETRY_TOGETHER:
+        if view is not None and view.temporal_intent in {
+            TheoryTemporalIntent.RETRY_TOGETHER,
+            TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+        }:
             ordinary = _orient_read(
                 compass,
                 world,

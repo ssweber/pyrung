@@ -82,8 +82,7 @@ from pyrung.core.analysis.pilot.types import (
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import _sp_to_expr
-from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.analysis.sp_values import _written_value_for_tag
+from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 from pyrung.core.instruction.advance import constraint_holds
 
 logger = logging.getLogger(__name__)
@@ -1465,6 +1464,7 @@ def _verify_gates(
         LocalProgressKind.TRACE_SETUP,
         LocalProgressKind.REARM,
         LocalProgressKind.TEMPORAL_SETUP,
+        LocalProgressKind.THEORY_CORRECTIVE,
     }:
         orientation = bearing.orientation
         trace_details = (
@@ -1551,7 +1551,12 @@ def _verify_gates(
             and assignments_reached
             and trace_setup_owned
             and (
-                policy.local_progress in {LocalProgressKind.TRACE_SETUP, LocalProgressKind.REARM}
+                policy.local_progress
+                in {
+                    LocalProgressKind.TRACE_SETUP,
+                    LocalProgressKind.REARM,
+                    LocalProgressKind.THEORY_CORRECTIVE,
+                }
                 or requirements_reached
             )
             and declared_boundary_preserved

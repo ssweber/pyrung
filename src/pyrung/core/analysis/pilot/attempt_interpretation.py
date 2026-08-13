@@ -28,12 +28,13 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key
 
 
 class AttemptInterpretationKind(StrEnum):
-    """The five plain outcomes of reading one already-executed attempt."""
+    """Plain outcomes of reading one already-executed attempt."""
 
     KEEP_AND_REREAD = "keep_and_reread"
     COAST_TO_BOUNDARY = "coast_to_boundary"
     SETUP_FIRST = "setup_first"
     RETRY_TOGETHER = "retry_together"
+    RETRY_THROUGH_DEADLINE = "retry_through_deadline"
     UNRESOLVED = "unresolved"
 
 
@@ -52,6 +53,7 @@ class AttemptInterpretation:
         return self.kind in {
             AttemptInterpretationKind.SETUP_FIRST,
             AttemptInterpretationKind.RETRY_TOGETHER,
+            AttemptInterpretationKind.RETRY_THROUGH_DEADLINE,
         }
 
 
@@ -157,9 +159,20 @@ def _classify_requirement(
 ) -> AttemptInterpretationKind:
     """Classify one exact requirement, regardless of which observer found it."""
 
+    exact_consumer_shape = observation.consumer_read is not None or (
+        observation.disposition in {"OVERWRITTEN", "DISPLACED"}
+        and observation.displacement is not None
+    )
     if requirement.deadline.scan_id < assertion_scan:
         return AttemptInterpretationKind.SETUP_FIRST
     if requirement.deadline.scan_id > assertion_scan:
+        # An exact displacement on a later owned scan says the original
+        # producer did useful work, then lost that work at a known adjacent
+        # deadline. Preserve the trigger transaction: restore its source,
+        # recompose the accumulated requirements, and yield again at its
+        # productive assertion landing before reading the next blocker.
+        if exact_consumer_shape and (owner_bound or prior_source):
+            return AttemptInterpretationKind.RETRY_THROUGH_DEADLINE
         # A retained look-ahead may discover a condition on a later scan than
         # the original assertion. With an exact owner-bound occurrence this is
         # actionable prior setup for the next productive edge, not ambiguity.
@@ -173,10 +186,6 @@ def _classify_requirement(
 
     authorities = _guard_authorities(requirement.condition) or frozenset(
         (requirement.operand_authority,)
-    )
-    exact_consumer_shape = observation.consumer_read is not None or (
-        observation.disposition in {"OVERWRITTEN", "DISPLACED"}
-        and observation.displacement is not None
     )
     if OperandAuthority.UNKNOWN in authorities or OperandAuthority.CONFIGURED in authorities:
         return AttemptInterpretationKind.UNRESOLVED

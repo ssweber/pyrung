@@ -192,8 +192,13 @@ def _reconcile_completed_handoffs(
         and observation.consumer_read is not None
         and effect_reached_consumer(observation)
     )
-    if not completed:
-        return observations
+    selected_landings = tuple(
+        observation
+        for observation in observations
+        if observation.appeared is not None
+        and observation.obligation.boundary is not None
+        and observation.obligation.boundary[0] == observation.obligation.tag
+    )
 
     def completed_same_occurrence(observation: EffectObservation) -> bool:
         if (
@@ -212,6 +217,21 @@ def _reconcile_completed_handoffs(
             for receipt in completed
         )
 
+    def superseded_by_selected_landing(observation: EffectObservation) -> bool:
+        """A downstream route producer may legitimately bypass this writer."""
+
+        if (
+            observation.disposition != "ABSENT"
+            or observation.obligation.consumer is not None
+            or observation.obligation.terminal_target
+        ):
+            return False
+        return any(
+            receipt.obligation.tag == observation.obligation.tag
+            and receipt.obligation.producer != observation.obligation.producer
+            for receipt in selected_landings
+        )
+
     return tuple(
         replace(
             observation,
@@ -223,6 +243,15 @@ def _reconcile_completed_handoffs(
             ),
         )
         if completed_same_occurrence(observation)
+        else replace(
+            observation,
+            disposition="SUBSUMED",
+            detail=(
+                "a selected downstream route producer appeared; the earlier "
+                "producer-only absence is subordinate to that landing"
+            ),
+        )
+        if superseded_by_selected_landing(observation)
         else observation
         for observation in observations
     )
@@ -256,21 +285,16 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
         # its input handoffs. The act may still be navigationally ROUTE-owned;
         # receipt authority is an orthogonal, explicitly carried reading.
         program_handoff = (
-            bearing.act.policy.landing_receipt_authority
-            is LandingReceiptAuthority.PROGRAM_STEP
+            bearing.act.policy.landing_receipt_authority is LandingReceiptAuthority.PROGRAM_STEP
         )
-        route_effect_tag = (
-            route.effect_tag or route.channel_tag if route is not None else None
-        )
+        route_effect_tag = route.effect_tag or route.channel_tag if route is not None else None
         charted_target_values = (
             _charted_route_values(ctx, route.channel_tag, route.target_value)
             if route is not None
             else ()
         )
         charted_route = (
-            route is not None
-            and route_effect_tag == ctx.target.tag
-            and charted_target_values
+            route is not None and route_effect_tag == ctx.target.tag and charted_target_values
         )
         charted_landing = bool(
             charted_route
@@ -294,12 +318,8 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 if not (
                     observation.obligation.tag == route_effect_tag
                     and (
-                        observation.disposition
-                        in {"OVERWRITTEN", "STRANDED", "DISPLACED"}
-                        or (
-                            charted_landing
-                            and observation.disposition == "ABSENT"
-                        )
+                        observation.disposition in {"OVERWRITTEN", "STRANDED", "DISPLACED"}
+                        or (charted_landing and observation.disposition == "ABSENT")
                     )
                 )
             )

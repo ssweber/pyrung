@@ -136,6 +136,7 @@ class LocalProgressKind(StrEnum):
     TRACE_SETUP = "trace_setup"
     REARM = "rearm"
     TEMPORAL_SETUP = "temporal_setup"
+    THEORY_CORRECTIVE = "theory_corrective"
     TEMPORAL_EDGE = "temporal_edge"
     OBSERVE_ENTRY = "observe_entry"
 

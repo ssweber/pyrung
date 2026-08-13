@@ -54,6 +54,7 @@ class TheoryTemporalIntent(StrEnum):
 
     SETUP_FIRST = "setup_first"
     RETRY_TOGETHER = "retry_together"
+    RETRY_THROUGH_DEADLINE = "retry_through_deadline"
 
 
 @dataclass(frozen=True)
@@ -1291,9 +1292,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             if temporal_intent is None:
                 raise TheoryInvariantError("temporal source has no temporal intent")
             if fact.temporal_source not in (fact.source, fact.refined_source):
-                raise TheoryInvariantError(
-                    "temporal source is not an exact refinement boundary"
-                )
+                raise TheoryInvariantError("temporal source is not an exact refinement boundary")
         if fact.trigger_attempt_id is not None:
             trigger = state.ledger.attempts.get(fact.trigger_attempt_id)
             if trigger is None:

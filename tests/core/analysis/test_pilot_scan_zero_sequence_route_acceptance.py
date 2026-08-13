@@ -1,11 +1,78 @@
-"""Acceptance contract for repeated scan-zero route refinement."""
+"""Acceptance contract for the field-faithful sequential-correction gap."""
+
+from typing import Any
 
 from pyrung import PLC
 from pyrung.core.analysis.pilot import pilot_events
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
 
-def test_terminal_route_is_composed_from_exact_adjacent_scan_receipts() -> None:
+def _assert_clicknick_failure_prefix(events: tuple[Any, ...]) -> None:
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is False
+    assert events[-1].data["reason"].startswith("No productive next action was found")
+
+    tries = tuple(event for event in events if event.kind == "candidate_try")
+    attempted = tuple(event.data["applied"] for event in tries)
+    reconnect = ((fixture.NetworkAvailable.name, True),)
+
+    # The first two discoveries already follow the desired lifecycle: persist
+    # exactly one correction, yield, then issue a fresh reconnect steer.
+    ready = ((fixture.ReadyCommand.name, True),)
+    ready_index = attempted.index(ready)
+    assert attempted[ready_index + 1] == reconnect
+
+    simulation = ((fixture.SimulationMode.name, True),)
+    simulation_index = attempted.index(simulation)
+    assert attempted[simulation_index - 1] == reconnect
+
+    # Once both corrections are retained, ProgramStep reads the communication
+    # transaction as context for the reconnect. This faithfully reproduces the
+    # ClickNick composite which contradicts the retained SimulationMode=True.
+    contextual_reconnect = (
+        (fixture.NetworkAvailable.name, True),
+        (fixture.SimulationMode.name, False),
+        (fixture.NetworkPeerReady.name, True),
+    )
+    assert attempted[simulation_index + 1] == contextual_reconnect
+    contextual_try = tries[simulation_index + 1]
+    assert contextual_try.data["candidate"]["program_context_actions"] == (
+        (fixture.SimulationMode.name, False),
+        (fixture.NetworkPeerReady.name, True),
+    )
+
+    contextual_rejection = next(
+        event
+        for event in events
+        if event.kind == "candidate_rejected"
+        and event.data.get("applied") == contextual_reconnect
+    )
+    watchdog_overwrite = next(
+        observation
+        for observation in contextual_rejection.data["effect_observations"]
+        if observation.appeared is not None
+        and observation.displacement is not None
+        and observation.appeared.tag == fixture.SequenceStep.name
+        and observation.appeared.values == (98, 40)
+    )
+    assert watchdog_overwrite.displacement.tag == fixture.SequenceStep.name
+    assert watchdog_overwrite.displacement.values == (40, 91)
+
+    # The next WorkingTheory act atomically carries that stale communication
+    # context beside the newly discovered watchdog correction. This is the
+    # behavior the next production change must replace with another singleton
+    # corrective steer followed by a fresh reconnect.
+    watchdog_retry = (
+        (fixture.FirstWatchdogPresetMs.name, 11),
+        *contextual_reconnect,
+    )
+    assert attempted[simulation_index + 2] == watchdog_retry
+    assert tries[simulation_index + 2].data["candidate"]["provenance"] == (
+        "working-theory temporal retry",
+    )
+
+
+def test_neutral_route_reproduces_clicknick_sequential_correction_gap() -> None:
     events = tuple(
         pilot_events(
             PLC(fixture.logic, dt=0.010),
@@ -14,73 +81,38 @@ def test_terminal_route_is_composed_from_exact_adjacent_scan_receipts() -> None:
         )
     )
 
-    journal = events[-1].data["plan_journal"]
-    applied_tags = {tag for step in journal for tag, _value in step.inputs}
-
-    # These are independent facts learned at different points in the same
-    # charted route.  The lifecycle must retain and compose all of them.
-    assert fixture.SafetyPermit.name in applied_tags
-    assert fixture.BaseSensor.name in applied_tags
-    assert fixture.ReadyCommand.name in applied_tags
-    assert fixture.SimulationMode.name in applied_tags
-    assert fixture.CheckpointSensor.name in applied_tags
-    assert fixture.FirstWatchdogPresetMs.name in applied_tags
-    assert fixture.SecondWatchdogPresetMs.name in applied_tags
-    # The active-low interruption branch fires on the observed entry scan and
-    # thereby spends its one-shot.  The successful route must preserve that
-    # exact execution state; pulsing the input would re-arm the late reset.
-    assert fixture.InterruptionInput.name not in applied_tags
-
-    work = events[-1].data["work"]
-    entry_projection = work._replay_rung_write_projection_at(1)
-    terminal_projection = work._replay_rung_write_projection_at(work.state.scan_id)
-    assert entry_projection is not None
-    assert terminal_projection is not None
-    assert any(
-        write.run.rung_id.rung_index == 13
-        and write.transition.tag_name == fixture.SequenceStep.name
-        and write.transition.to_value == 10
-        for write in entry_projection.writes
+    reconnect_overwrite = next(
+        observation
+        for event in events
+        if event.kind == "candidate_accepted"
+        for observation in event.data.get("effect_observations", ())
+        if observation.appeared is not None
+        and observation.displacement is not None
+        and observation.appeared.tag == fixture.SequenceStep.name
+        and observation.appeared.values == (98, 10)
     )
-    assert not any(
-        write.run.rung_id.rung_index == 13
-        and write.transition.tag_name == fixture.SequenceStep.name
-        for write in terminal_projection.writes
-    )
+    assert reconnect_overwrite.displacement.tag == fixture.SequenceStep.name
+    assert reconnect_overwrite.displacement.values == (10, 94)
+    assert reconnect_overwrite.displacement.scan_id == reconnect_overwrite.appeared.scan_id + 1
 
-    assert events[-1].kind == "finished"
-    assert events[-1].data["reached"] is True
     first_coast = next(event for event in events if event.kind == "bearing_coast")
     assert first_coast.scan == 0
     assert first_coast.data["reason"] == "observe exactly one entry scan"
-    second_setup = next(
-        index
-        for index, step in enumerate(journal)
-        if any(tag == fixture.SecondWatchdogPresetMs.name for tag, _value in step.inputs)
-    )
-    retained_coast = next(step for step in journal[second_setup + 1 :] if step.kind == "coast")
-    # Established synthetic corrections are phase-discharged from later
-    # actions, but their executable rungs remain in the overlay until the
-    # structural target.  CheckpointSensor is different: it was an ordinary
-    # level patch, so the runner carries its input-image value forward without
-    # inventing a duplicate PilotRung.
-    assert {
-        fixture.SafetyPermit.name,
-        fixture.BaseSensor.name,
-        fixture.ReadyCommand.name,
-        fixture.SimulationMode.name,
-        fixture.FirstWatchdogPresetMs.name,
-        fixture.SecondWatchdogPresetMs.name,
-    }.issubset(set(retained_coast.steady_holds))
-    assert work.state.tags[fixture.CheckpointSensor.name] is True
+    _assert_clicknick_failure_prefix(events)
 
-    plan = PLC(fixture.logic, dt=0.010).how(
-        fixture.SequenceStep == 81,
-        max_scans=120,
+
+def test_neutral_route_reproduces_gap_after_runner_has_already_stepped() -> None:
+    runner = PLC(fixture.logic, dt=0.010)
+    runner.step()
+
+    assert runner.state.scan_id == 1
+    assert runner.state.tags[fixture.SequenceStep.name] == 99
+
+    events = tuple(
+        pilot_events(
+            runner,
+            fixture.SequenceStep == 81,
+            max_scans=120,
+        )
     )
-    assert plan.reachable, plan.reason
-    assert plan.anchor_scan == 0
-    assert plan.state.tags[fixture.SequenceStep.name] == 81
-    replay = plan.replay()
-    assert replay.state.tags[fixture.SequenceStep.name] == 81
-    assert replay.state.tags[fixture.CheckpointSensor.name] is True
+    _assert_clicknick_failure_prefix(events)

@@ -1693,6 +1693,44 @@ def test_exact_consumer_receipt_subsumes_only_its_producer_only_overwrite() -> N
     assert reconciled[0].displacement is displacement
 
 
+def test_selected_downstream_landing_subsumes_an_obsolete_producer_absence() -> None:
+    earlier = EffectObligation(
+        tag="GenericStep",
+        value=10,
+        producer=(None, 2, ()),
+        consumer=None,
+        required_shape=(),
+    )
+    downstream = EffectObligation(
+        tag="GenericStep",
+        value=40,
+        producer=(None, 5, ()),
+        consumer=(None, 6, ()),
+        required_shape=(("GenericStep", 40), ("Checkpoint", True)),
+        boundary=("GenericStep", 40),
+    )
+    appeared = SimpleNamespace(scan_id=3, ordinal=4)
+    displacement = SimpleNamespace(scan_id=3, ordinal=9)
+    observations = (
+        EffectObservation(earlier, "ABSENT"),
+        EffectObservation(
+            downstream,
+            "OVERWRITTEN",
+            appeared=appeared,
+            displacement=displacement,
+        ),
+    )
+
+    reconciled = _reconcile_completed_handoffs(observations)
+
+    assert tuple(item.disposition for item in reconciled) == (
+        "SUBSUMED",
+        "OVERWRITTEN",
+    )
+    assert reconciled[1].appeared is appeared
+    assert reconciled[1].displacement is displacement
+
+
 def test_local_route_miss_stays_authoritative_without_exact_boundary_handoff() -> None:
     structural = EffectObligation(
         tag="GenericStateRequest",

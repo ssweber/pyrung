@@ -34,6 +34,7 @@ class _Finding:
         consumer: bool,
         owner_bound: bool = False,
         consumed_before_displacement: bool = False,
+        displaced: bool = False,
         source_walk_incomplete: bool = False,
         label: str,
     ) -> None:
@@ -57,12 +58,12 @@ class _Finding:
             consumer_read=object() if consumer else None,
             disposition=(
                 "OVERWRITTEN"
-                if consumed_before_displacement
+                if consumed_before_displacement or displaced
                 else "STRANDED"
                 if consumer
                 else "ABSENT"
             ),
-            displacement=object() if consumed_before_displacement else None,
+            displacement=object() if consumed_before_displacement or displaced else None,
         )
         self.consumed_before_displacement = consumed_before_displacement
         self._label = label
@@ -179,6 +180,27 @@ def test_consumed_program_cleanup_requests_reader_side_same_scan_augmentation() 
     )
 
     assert result.kind is AttemptInterpretationKind.RETRY_TOGETHER
+    assert result.opens_theory
+
+
+def test_later_displacement_retries_trigger_through_exact_deadline() -> None:
+    result = interpret_attempt(
+        trial=_accepted_landing(),
+        program_step=None,
+        intrascan=_report(
+            _Finding(
+                deadline_scan=6,
+                authority=OperandAuthority.PROGRAM_WRITTEN,
+                consumer=False,
+                owner_bound=True,
+                displaced=True,
+                label="adjacent-scan-overwrite",
+            )
+        ),
+        assertion_scan=5,
+    )
+
+    assert result.kind is AttemptInterpretationKind.RETRY_THROUGH_DEADLINE
     assert result.opens_theory
 
 
