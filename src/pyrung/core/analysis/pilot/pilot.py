@@ -206,8 +206,10 @@ from pyrung.core.analysis.pilot.working_theory import (
     AbandonTheory,
     AdvanceTheory,
     ComposeTheoryCorrection,
+    ConductivityResearchFinding,
     OpenTheory,
     ProveTheory,
+    RecordConductivityResearch,
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
@@ -6942,6 +6944,25 @@ def _pilot_loop_events(
 
         if isinstance(result, NeedResearch):
             request = result.request
+            finding = ConductivityResearchFinding(
+                theory_id=request.theory_id,
+                version_id=request.version_id,
+                source=request.source,
+                comparison_identity=request.comparison.identity,
+                compared_attempt_ids=(
+                    request.comparison.earlier_attempt_id,
+                    request.comparison.later_attempt_id,
+                ),
+                displacement=request.displacement,
+                enabling_reads=request.enabling_reads,
+                requirement_drift_identities=tuple(
+                    drift.identity for drift in request.comparison.requirement_drifts
+                ),
+            )
+            _record_controlling_theory_fact(
+                state,
+                RecordConductivityResearch(finding),
+            )
             yield PilotEvent(
                 "conductivity_research_requested",
                 state.work.state.scan_id,
@@ -6962,6 +6983,7 @@ def _pilot_loop_events(
                         }
                         for drift in request.comparison.requirement_drifts
                     ),
+                    "finding_identity": finding.identity,
                     "reason": request.reason,
                 },
             )

@@ -83,6 +83,19 @@ class ConductivityRequirementDrift:
     earlier: TheoryRequirementSnapshot
     later: TheoryRequirementSnapshot
 
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """Stable detached identity of this exact changed demand."""
+
+        return (
+            "conductivity-requirement-drift",
+            self.boundary_identity,
+            self.earlier.semantic_identity,
+            self.earlier.condition_identity,
+            self.later.semantic_identity,
+            self.later.condition_identity,
+        )
+
 
 @dataclass(frozen=True)
 class ConductivityComparison:
@@ -94,15 +107,45 @@ class ConductivityComparison:
     common_stop_identity: tuple[Any, ...] | None = None
     requirement_drifts: tuple[ConductivityRequirementDrift, ...] = ()
 
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """Stable detached identity of the two compared physical attempts."""
+
+        return (
+            "conductivity-comparison",
+            self.earlier_attempt_id,
+            self.later_attempt_id,
+            self.progress,
+            self.common_stop_identity,
+            tuple(drift.identity for drift in self.requirement_drifts),
+        )
+
 
 @dataclass(frozen=True)
 class ConductivityResearchRequest:
     """Compass request to research a repeated stop instead of chasing a literal."""
 
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
     comparison: ConductivityComparison
     displacement: EffectOccurrenceSnapshot
     enabling_reads: tuple[EffectOccurrenceSnapshot, ...]
     reason: str
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        """Identity of the exact evidence question, not of a future answer."""
+
+        return (
+            "conductivity-research-request",
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.comparison.identity,
+            self.displacement,
+            self.enabling_reads,
+        )
 
 
 @dataclass(frozen=True)
@@ -441,6 +484,9 @@ def conductivity_research_request(
         return None
     comparison = replace(comparison, requirement_drifts=relevant_drifts)
     return ConductivityResearchRequest(
+        theory_id=front.theory_id,
+        version_id=front.version_id,
+        source=front.source,
         comparison=comparison,
         displacement=stopped_flow.displacement,
         enabling_reads=stopping_reads,

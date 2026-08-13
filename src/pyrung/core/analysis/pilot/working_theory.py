@@ -15,7 +15,10 @@ from typing import Any, TypeAlias
 
 from pyrsistent import PMap, pmap
 
-from pyrung.core.analysis.pilot.effects import EffectObservationSnapshot
+from pyrung.core.analysis.pilot.effects import (
+    EffectObservationSnapshot,
+    EffectOccurrenceSnapshot,
+)
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 
 TheoryId: TypeAlias = tuple[Any, ...]
@@ -212,6 +215,38 @@ class TheoryFirstEdgeExclusion:
 
 
 @dataclass(frozen=True)
+class ConductivityResearchFinding:
+    """Frozen evidence that one exact repeated conductivity stop was researched.
+
+    This receipt deliberately contains no executable answer. Compass may use
+    it to acknowledge a completed question, then must reread the current World
+    before choosing any correction or steer.
+    """
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    comparison_identity: tuple[Any, ...]
+    compared_attempt_ids: tuple[tuple[Any, ...], tuple[Any, ...]]
+    displacement: EffectOccurrenceSnapshot
+    enabling_reads: tuple[EffectOccurrenceSnapshot, ...]
+    requirement_drift_identities: tuple[tuple[Any, ...], ...]
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            "conductivity-research-finding",
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.comparison_identity,
+            self.displacement,
+            self.enabling_reads,
+            self.requirement_drift_identities,
+        )
+
+
+@dataclass(frozen=True)
 class TheoryView:
     """Detached read-only projection of the active theory for navigation.
 
@@ -323,6 +358,7 @@ class WorkingTheory:
     current_progress_id: TheoryProgressId
     status: TheoryStatus = TheoryStatus.OPEN
     attempt_ids: tuple[tuple[Any, ...], ...] = ()
+    research_finding_ids: tuple[tuple[Any, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -332,6 +368,7 @@ class TheoryLedger:
     progress: PMap[Any, TheoryProgressSnapshot] = pmap()
     theories: PMap[Any, WorkingTheory] = pmap()
     attempts: PMap[Any, TheoryAttemptReceipt] = pmap()
+    research_findings: PMap[Any, ConductivityResearchFinding] = pmap()
     receipts: PMap[Any, TheoryReceipt] = pmap()
     tombstones: PMap[Any, TheoryTombstone] = pmap()
     successors: PMap[Any, TheorySuccessor] = pmap()
@@ -871,6 +908,13 @@ class RecordTheoryAttempt:
 
 
 @dataclass(frozen=True)
+class RecordConductivityResearch:
+    """Record one completed evidence-only research question without scanning."""
+
+    finding: ConductivityResearchFinding
+
+
+@dataclass(frozen=True)
 class AdvanceTheory:
     theory_id: TheoryId
     version_id: TheoryVersionId
@@ -946,6 +990,7 @@ class RecordUnattributedEvidence:
 TheoryFact: TypeAlias = (
     OpenTheory
     | RecordTheoryAttempt
+    | RecordConductivityResearch
     | AdvanceTheory
     | ComposeTheoryCorrection
     | RefineTheory
@@ -1173,6 +1218,8 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
         return ("open", fact.opening_identity)
     if isinstance(fact, RecordTheoryAttempt):
         return ("attempt", fact.attempt_identity)
+    if isinstance(fact, RecordConductivityResearch):
+        return ("conductivity-research", fact.finding.identity)
     if isinstance(fact, AdvanceTheory):
         return ("advance", fact.advance_identity)
     if isinstance(fact, ComposeTheoryCorrection):
@@ -1268,6 +1315,71 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             theories=state.ledger.theories.set(fact.theory_id, updated_theory),
         )
         return replace(state, ledger=ledger)
+    if isinstance(fact, RecordConductivityResearch):
+        finding = fact.finding
+        theory = _active(state, finding.theory_id)
+        if finding.version_id != theory.current_version_id:
+            raise TheoryInvariantError("research addresses a stale theory version")
+        _require_allowed_source(state, theory, finding.source)
+        progress = state.ledger.progress[theory.current_progress_id]
+        if finding.source != progress.provisional_tip:
+            raise TheoryInvariantError("research source is not the current same-scan World")
+        if not finding.enabling_reads or not finding.requirement_drift_identities:
+            raise TheoryInvariantError("research finding lacks its stopping evidence")
+        if finding.displacement.kind != "write" or any(
+            read.kind != "read" for read in finding.enabling_reads
+        ):
+            raise TheoryInvariantError("research finding has malformed occurrence evidence")
+        earlier_id, later_id = finding.compared_attempt_ids
+        if (
+            len(finding.comparison_identity) < 3
+            or finding.comparison_identity[0] != "conductivity-comparison"
+            or finding.comparison_identity[1:3] != (earlier_id, later_id)
+        ):
+            raise TheoryInvariantError("research comparison identity is inconsistent")
+        earlier = state.ledger.attempts.get(earlier_id)
+        later = state.ledger.attempts.get(later_id)
+        if earlier is None or later is None:
+            raise TheoryInvariantError("research comparison attempt is missing")
+        if (
+            earlier.theory_id != finding.theory_id
+            or later.theory_id != finding.theory_id
+            or earlier_id not in theory.attempt_ids
+            or later_id not in theory.attempt_ids
+        ):
+            raise TheoryInvariantError("research comparison belongs to another theory")
+        stopped_observations = tuple(
+            observation
+            for observation in later.conductivity_observations
+            if observation.displacement == finding.displacement
+        )
+        retained_stopping_reads = tuple(
+            read for observation in stopped_observations for read in observation.observed_reads
+        )
+        if not stopped_observations or any(
+            read not in retained_stopping_reads for read in finding.enabling_reads
+        ):
+            raise TheoryInvariantError("research evidence is not owned by its later attempt")
+        findings = _put_unique(
+            state.ledger.research_findings,
+            finding.identity,
+            finding,
+            "conductivity research finding",
+        )
+        if findings is state.ledger.research_findings:
+            return state
+        updated_theory = replace(
+            theory,
+            research_finding_ids=(*theory.research_finding_ids, finding.identity),
+        )
+        return replace(
+            state,
+            ledger=replace(
+                state.ledger,
+                research_findings=findings,
+                theories=state.ledger.theories.set(finding.theory_id, updated_theory),
+            ),
+        )
     if isinstance(fact, AdvanceTheory):
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:

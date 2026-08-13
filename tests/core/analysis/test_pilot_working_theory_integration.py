@@ -11,6 +11,7 @@ import pytest
 
 from pyrung import PLC, Bool, Int, Program, copy, latch, rung, system
 from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.attempt_interpretation import AttemptInterpretationKind
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.conductivity import (
@@ -22,6 +23,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     AdvanceTheory,
     OpenTheory,
     ProveTheory,
+    RecordConductivityResearch,
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
@@ -411,39 +413,51 @@ def test_neutral_retry_exposes_consumer_then_displacement_front(monkeypatch: Any
 def test_extended_watchdog_requests_research_after_same_stop_drifts(
     monkeypatch: Any,
 ) -> None:
-    class ResearchObserved(RuntimeError):
-        pass
-
     captured: list[Any] = []
-    original = pilot_module._record_working_theory_transition
+    original = pilot_module._record_controlling_theory_fact
 
-    def record(state: Any, transition: Any, **kwargs: Any) -> None:
-        original(state, transition, **kwargs)
-        request = Compass().conductivity_research(theory_view(state.theory_state))
-        if request is not None:
-            captured.append(request)
-            raise ResearchObserved
+    def record(state: Any, fact: Any) -> None:
+        before = (
+            state.theory_state.ledger.theories[fact.finding.theory_id].current_progress_id
+            if isinstance(fact, RecordConductivityResearch)
+            else None
+        )
+        original(state, fact)
+        if isinstance(fact, RecordConductivityResearch):
+            theory = state.theory_state.ledger.theories[fact.finding.theory_id]
+            captured.append((fact.finding, before, theory.current_progress_id))
 
-    monkeypatch.setattr(pilot_module, "_record_working_theory_transition", record)
+    monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
 
-    with pytest.raises(ResearchObserved):
-        PLC(sequence_route.logic, dt=0.010).how(
+    events = tuple(
+        pilot_events(
+            PLC(sequence_route.logic, dt=0.010),
             sequence_route.SequenceStep == 81,
             max_scans=40,
         )
+    )
 
+    research_events = tuple(
+        event for event in events if event.kind == "conductivity_research_requested"
+    )
+    assert len(research_events) == 1
     assert len(captured) == 1
-    request = captured[0]
-    comparison = request.comparison
-    assert comparison.progress is ConductivityProgress.SAME_STOP
-    assert len(comparison.requirement_drifts) == 1
-    drift = comparison.requirement_drifts[0]
-    assert drift.earlier.condition_identity != drift.later.condition_identity
-    assert request.displacement.rung == (None, 16)
-    assert tuple(read.tag for read in request.enabling_reads) == (
+    finding, progress_before, progress_after = captured[0]
+    event = research_events[0]
+    assert event.data["finding_identity"] == finding.identity
+    assert finding.source.scan_id == event.scan
+    assert finding.comparison_identity[3] is ConductivityProgress.SAME_STOP
+    assert len(finding.requirement_drift_identities) == 1
+    assert finding.displacement.rung == (None, 16)
+    assert tuple(read.tag for read in finding.enabling_reads) == (
         sequence_route.FirstWatchdog.Done.name,
         "_oneshot:i26",
     )
+    assert progress_after == progress_before
+    research_index = events.index(event)
+    assert not any(item.kind == "candidate_try" for item in events[research_index + 1 :])
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is False
 
 
 def test_prestepped_watchdog_retains_composed_world_for_followup_research(

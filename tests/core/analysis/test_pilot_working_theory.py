@@ -32,9 +32,11 @@ from pyrung.core.analysis.pilot.working_theory import (
     AbandonTheory,
     AdvanceTheory,
     ComposeTheoryCorrection,
+    ConductivityResearchFinding,
     OpenSuccessor,
     OpenTheory,
     ProveTheory,
+    RecordConductivityResearch,
     RecordTheoryAttempt,
     RefineTheory,
     TheoryAttemptDisposition,
@@ -159,6 +161,92 @@ def test_open_creates_one_active_theory_and_initial_version() -> None:
     assert not state.ledger.attempts
     assert not state.ledger.receipts
     assert not state.ledger.tombstones
+
+
+def test_research_finding_records_exact_evidence_without_advancing_the_world() -> None:
+    state, theory_id, version_id = _opened()
+    earlier = _attempt(
+        theory_id,
+        version_id,
+        transition="earlier-stop",
+        actions=(("Reconnect", True),),
+    )
+    source = _boundary("source", 0)
+    displacement = EffectOccurrenceSnapshot(
+        kind="write",
+        ordinal=8,
+        scan_id=1,
+        run_order=3,
+        call_invocation=None,
+        rung=(None, 12),
+        execution_kind="rung",
+        caller_rung=12,
+        call_stack=(),
+        depth=0,
+        enabled=True,
+        tag="ResetDone",
+        values=(False,),
+    )
+    stopping_read = replace(
+        displacement,
+        kind="read",
+        ordinal=7,
+        tag="WatchdogDone",
+        values=(False,),
+    )
+    obligation = EffectObligationSnapshot(
+        tag="SequenceStep",
+        value=40,
+        producer=(None, 10, ()),
+        consumer=(None, 11, ()),
+        required_shape=(("SequenceStep", 40),),
+        boundary=("consumer", 11),
+    )
+    later = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="later-stop",
+            actions=(("Reconnect", True),),
+        ),
+        conductivity_observations=(
+            EffectObservationSnapshot(
+                disposition="DISPLACED",
+                obligation=obligation,
+                displacement=displacement,
+                observed_reads=(stopping_read,),
+            ),
+        ),
+    )
+    state = reduce_theory(state, earlier)
+    state = reduce_theory(state, later)
+    finding = ConductivityResearchFinding(
+        theory_id=theory_id,
+        version_id=version_id,
+        source=source,
+        comparison_identity=(
+            "conductivity-comparison",
+            earlier.attempt_identity,
+            later.attempt_identity,
+            "same-stop",
+        ),
+        compared_attempt_ids=(earlier.attempt_identity, later.attempt_identity),
+        displacement=displacement,
+        enabling_reads=(stopping_read,),
+        requirement_drift_identities=(("requirement-drift", "preset", 10, 20),),
+    )
+    fact = RecordConductivityResearch(finding)
+    progress_id = state.ledger.theories[theory_id].current_progress_id
+
+    recorded = reduce_theory(state, fact)
+
+    theory = recorded.ledger.theories[theory_id]
+    assert theory.current_progress_id == progress_id
+    assert theory.research_finding_ids == (finding.identity,)
+    assert recorded.ledger.research_findings[finding.identity] is finding
+    assert reduce_theory(recorded, fact) is recorded
+    with pytest.raises(FrozenInstanceError):
+        finding.source = _boundary("future", 1)  # ty: ignore[invalid-assignment]
 
 
 def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> None:
