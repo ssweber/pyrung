@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Coast,
     Dwell,
+    ObserveScan,
     Pulse,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
@@ -815,7 +816,7 @@ def _act_event(
             _accepted_payload(act.policy, trial, frame, state, seen_keys),
         )
 
-    if isinstance(act, (Coast, Dwell)):
+    if isinstance(act, (Coast, Dwell, ObserveScan)):
         if phase == "try":
             channel_tag = target_tag
             if isinstance(act, Coast) and act.mode == "bearing":

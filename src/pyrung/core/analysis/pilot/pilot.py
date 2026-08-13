@@ -37,13 +37,14 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
 )
 from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 from pyrung.core.analysis.pilot.bootstrap import (
-    bootstrap_designations,
+    bind_observed_route_designations,
     observe_bootstrap_effects,
 )
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
     Compass,
+    EvidenceScope,
     NavigationCatalog,
     ProbeExhaustedObservation,
 )
@@ -54,6 +55,7 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
+    effect_reached_consumer,
     exact_last_landing_write,
     expectation_from_writer,
     fulfilled_expectation_observations,
@@ -77,9 +79,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     ChannelHeading,
     Coast,
+    LandingReceiptAuthority,
     LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
+    ObserveScan,
     OrientationResult,
     OrientationWorld,
     Pulse,
@@ -92,6 +96,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _merged_pilot_rungs,
     _pilot_rungs_from_proposals,
     _target_unresolved_condition,
+    _until_unresolved_condition,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.physical import install_harness
@@ -133,6 +138,7 @@ from pyrung.core.analysis.pilot.requirement_recovery import (
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
+    EffectReceiptRole,
     ExpectationReceipt,
     FailedEffectReceipt,
     GuardRequirementAtom,
@@ -179,6 +185,7 @@ from pyrung.core.analysis.pilot.types import (
     _CommittedAct,
     _ConfirmedCorrection,
     _ContinuationCheckpoint,
+    _ExecutedAttempt,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -187,7 +194,11 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
     _World,
 )
-from pyrung.core.analysis.pilot.verify import verify_excursion_replay, verify_gates
+from pyrung.core.analysis.pilot.verify import (
+    _route_blocker_crossings,
+    verify_excursion_replay,
+    verify_gates,
+)
 from pyrung.core.analysis.pilot.working_theory import (
     AbandonTheory,
     AdvanceTheory,
@@ -208,6 +219,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     UnattributedTheoryEvidence,
     reduce_theory,
     temporal_need_request,
+    temporal_setup_rung_identities,
+    theory_source_is_retained,
     theory_view,
 )
 from pyrung.core.analysis.pilot.world_key import (
@@ -254,6 +267,7 @@ def _bound_operand_authorities(
     projection: Any,
     checkpoint: _CausalCheckpoint,
     ctx: _PilotContext,
+    state: _PilotState,
 ) -> dict[str, OperandAuthority]:
     """Classify exact boundary operands without inventing write permission."""
 
@@ -262,6 +276,12 @@ def _bound_operand_authorities(
     known = source_work._known_tags_by_name
     program_written = frozenset(ctx.pdg.writers_of)
     configured = _checkpoint_configured_inputs(checkpoint)
+    temporal_owned = temporal_setup_rung_identities(state.theory_state)
+    provisional = frozenset(
+        rung.dest
+        for rung in state.pilot_rungs
+        if _rung_identity(rung) in temporal_owned
+    )
     result: dict[str, OperandAuthority] = {}
     for read in projection.reads:
         tag = read.occurrence.name
@@ -273,6 +293,7 @@ def _bound_operand_authorities(
             steerable=ctx.steerable,
             program_written=program_written,
             configured=configured,
+            provisional=provisional,
         )
     return result
 
@@ -312,6 +333,8 @@ def _derive_bootstrap_requirements(
     state: _PilotState,
     ctx: _PilotContext,
     receipt: _BootstrapExecution,
+    *,
+    provenance: str = "bootstrap",
 ) -> None:
     """Interpret exact appeared bootstrap violations without repairing them."""
 
@@ -319,7 +342,12 @@ def _derive_bootstrap_requirements(
         ctx.program,
         getattr(receipt.checkpoint.world.work, "_harness", None),
     )
-    authorities = _bound_operand_authorities(receipt.projection, receipt.checkpoint, ctx)
+    authorities = _bound_operand_authorities(
+        receipt.projection,
+        receipt.checkpoint,
+        ctx,
+        state,
+    )
     for effect in receipt.appeared_effects:
         derivation = derive_advance_requirement_from_effect(
             index,
@@ -331,7 +359,7 @@ def _derive_bootstrap_requirements(
             selected_writer=effect.designation.producer,
             source_world_key=receipt.checkpoint.key,
             source_checkpoint=receipt.checkpoint,
-            provenance="bootstrap",
+            provenance=provenance,
         )
         if derivation.requirement is None:
             derivation = _bind_guard_derivation_authority(
@@ -343,7 +371,7 @@ def _derive_bootstrap_requirements(
                     selected_writer=effect.designation.producer,
                     source_world_key=receipt.checkpoint.key,
                     source_checkpoint=receipt.checkpoint,
-                    provenance="bootstrap-overwriter",
+                    provenance=f"{provenance}-overwriter",
                 ),
                 receipt.checkpoint,
                 ctx,
@@ -358,6 +386,127 @@ def _release_attempt_projections(attempt: _AttemptResult | None) -> None:
         attempt.release_projections()
 
 
+def _attempt_productive_scan(executed: _ExecutedAttempt) -> int:
+    """Return S1, the first physical scan owned by this ordinary bearing."""
+
+    action_scan = executed.pulse.action_scan
+    if action_scan is not None and not isinstance(executed.bearing.act, Coast):
+        return action_scan
+    first_scan = next(
+        (
+            scan_id
+            for scan_id in executed.pulse.kernel_scan_ids
+            if scan_id > executed.pulse.scan_before
+        ),
+        None,
+    )
+    if first_scan is not None:
+        return first_scan
+    return executed.assertion_scan
+
+
+def _derive_route_landing_requirements(
+    attempt: _AttemptResult,
+    state: _PilotState,
+    ctx: _PilotContext,
+    checkpoint: _CausalCheckpoint,
+) -> tuple[ActiveRequirement, ...]:
+    """Turn an owned look-ahead route departure into SETUP_FIRST facts."""
+
+    executed = attempt.executed_attempt
+    policy = executed.bearing.act.policy if executed is not None else None
+    local_progress = policy.local_progress if policy is not None else None
+    # A selected heading is Compass's exact declaration that this execution is
+    # serving a structural route boundary.  Its optional look-ahead scan is an
+    # owned receipt even when ProgramStep supplied the immediate input and the
+    # ordinary verification promise succeeded.  Read collateral writes now;
+    # waiting for the later target steer to fail needlessly turns current-world
+    # evidence into a historical rebase.
+    accepted_route_step = bool(
+        attempt.trial is not None
+        and policy is not None
+        and policy.heading is not None
+    )
+    if (
+        executed is None
+        or (
+            not accepted_route_step
+            and local_progress
+            not in {LocalProgressKind.TRACE_SETUP, LocalProgressKind.TEMPORAL_SETUP}
+        )
+        or (
+            local_progress is LocalProgressKind.TRACE_SETUP
+            and not attempt.proof_rejection
+            and not accepted_route_step
+        )
+        or (
+            local_progress is LocalProgressKind.TEMPORAL_SETUP
+            and attempt.trial is None
+        )
+    ):
+        return ()
+    orientation = executed.bearing.orientation
+    if orientation is None:
+        return ()
+    heading = executed.bearing.act.policy.heading
+    preserved_values = (
+        ((heading.channel_tag, heading.target_value),) if heading is not None else ()
+    )
+    advance_index = build_advance_index(
+        ctx.program,
+        getattr(checkpoint.world.work, "_harness", None),
+    )
+    derived: list[ActiveRequirement] = []
+    for crossing in _route_blocker_crossings(
+        executed,
+        orientation.world.frame,
+        ctx,
+        pilot_rungs=state.pilot_rungs,
+        resting=ctx.resting,
+    ):
+        if advance_index.resolve(crossing.tag) is not None:
+            # Timer/counter completion bits are derived channels, not local
+            # handoffs Pilot may suppress by complementing the producing
+            # rung's guard.  Their owner-specific operand inversion needs the
+            # later exact consumer read used by ordinary intrascan analysis.
+            # Until that receipt exists, fail closed instead of "preventing"
+            # productive route work such as the dwell that starts a watchdog.
+            continue
+        owner = _execution_epoch_owner(executed.pulse.fork, crossing.projection.scan_id)
+        if owner is None:
+            continue
+        exact_nodes = tuple(
+            node
+            for node in ctx.pdg.rung_nodes
+            if RungId(node.subroutine, node.rung_index) == crossing.write.rung_id
+            and resolve_rung(ctx.program, node) is crossing.write.run.rung
+        )
+        if len(exact_nodes) != 1:
+            continue
+        node = exact_nodes[0]
+        derivation = _bind_guard_derivation_authority(
+            derive_overwriter_guard_requirement_from_write(
+                crossing.write,
+                crossing.projection,
+                execution_epoch=owner[0],
+                execution_owner=owner[1],
+                selected_writer=(node.subroutine, node.rung_index, node.branch_path),
+                source_world_key=checkpoint.key,
+                source_checkpoint=checkpoint,
+                provenance="route-lookahead",
+                scope=(("route_landing_blocker", repr(crossing.predicate)),),
+                preserved_values=preserved_values,
+            ),
+            checkpoint,
+            ctx,
+        )
+        if derivation.requirement is not None and _retain_active_requirement(
+            state, derivation.requirement
+        ):
+            derived.append(derivation.requirement)
+    return tuple(derived)
+
+
 def _derive_attempt_requirements(
     attempt: _AttemptResult,
     state: _PilotState,
@@ -366,23 +515,33 @@ def _derive_attempt_requirements(
 ) -> IntrascanResult | None:
     """Retain and return one interpretation of a disposable steer's receipts."""
 
+    # VERIFY's terminal verdict is stronger than any subordinate handoff
+    # receipt in the same owned execution.  Pipeline/request registers may be
+    # cleaned up after doing their work; once the final objective is true that
+    # cleanup cannot authorize a corrective detour.
+    if attempt.trial is not None and isinstance(attempt.trial.verification, TargetReached):
+        return None
+
+    executed = attempt.executed_attempt
+    exact_displacement = bool(
+        executed is not None
+        and any(
+            observation.disposition in {"OVERWRITTEN", "DISPLACED"}
+            for observation in executed.effect_observations
+        )
+    )
     # A normal accepted act is locally successful and retains its expectation
     # receipt for later regression. An active-theory lookahead is different:
     # if its own scan already proves a selected effect was overwritten or
     # displaced, intrascan owns that new requirement immediately.
-    executed = attempt.executed_attempt
-    if checkpoint is None or (
-        attempt.trial is not None
-        and executed is not None
-        and not any(
-            observation.disposition in {"OVERWRITTEN", "DISPLACED"}
-            for observation in executed.effect_observations
-        )
-    ):
+    if checkpoint is None:
         return None
     if executed is None:
         return None
-    fallback_scan = executed.assertion_scan
+    if attempt.trial is not None and not exact_displacement:
+        _derive_route_landing_requirements(attempt, state, ctx, checkpoint)
+        return None
+    fallback_scan = _attempt_productive_scan(executed)
     question = IntrascanQuestion(
         expectation=executed.bearing.expectation,
         execution=executed.pulse.fork,
@@ -401,6 +560,7 @@ def _derive_attempt_requirements(
             projection,
             checkpoint,
             ctx,
+            state,
         ),
         projection_at=executed.projection_at,
     )
@@ -409,10 +569,59 @@ def _derive_attempt_requirements(
         executed.effect_observations,
         fallback_scan=fallback_scan,
     )
+    exact_report_displacement = any(
+        finding.observation.disposition in {"OVERWRITTEN", "DISPLACED"}
+        for finding in report.findings
+    )
+    if not exact_displacement and not exact_report_displacement:
+        # Route look-ahead complements a crossing only as a fallback. The
+        # recorded route-landing receipt may be more exact than the immediate
+        # act expectation, so decide precedence after both are interpreted.
+        _derive_route_landing_requirements(attempt, state, ctx, checkpoint)
+    _retain_intrascan_findings(
+        report,
+        state,
+        checkpoint,
+        executed,
+        accepted=attempt.trial is not None,
+    )
+    return report
+
+
+def _retain_intrascan_findings(
+    report: IntrascanResult,
+    state: _PilotState,
+    checkpoint: _CausalCheckpoint,
+    executed: _ExecutedAttempt,
+    *,
+    accepted: bool,
+) -> None:
+    """Commit exact intrascan findings through the common receipt boundary."""
+
     for finding in report.findings:
+        # A useful landing after the selected consumer read the transient value
+        # owns the continuation.  Normal cleanup is retained as evidence, but
+        # is not a missing prerequisite for the already-completed handoff.
+        if accepted and effect_reached_consumer(finding.observation):
+            continue
         observation = finding.observation
         derivation = finding.derivation
         diagnostic = finding.diagnostic_snapshot()
+        immediate_expectation = executed.bearing.expectation
+        receipt_expectation = (
+            immediate_expectation
+            if immediate_expectation is not None
+            and any(
+                obligation is observation.obligation
+                for obligation in immediate_expectation.obligations
+            )
+            else EffectExpectation((observation.obligation,))
+        )
+        expectation_role = (
+            EffectReceiptRole.IMMEDIATE
+            if receipt_expectation is immediate_expectation
+            else EffectReceiptRole.ROUTE_LANDING
+        )
         failed = FailedEffectReceipt(
             explanation=diagnostic.explanation,
             observation=diagnostic.observation,
@@ -425,12 +634,206 @@ def _derive_attempt_requirements(
             act_identity=act_identity(executed.bearing.act),
             local_act=executed.bearing.act,
             local_bearing=executed.bearing,
-            expectation=executed.bearing.expectation,
+            # The failed occurrence may belong to the route-landing receipt,
+            # not the act's immediate side-effect expectation.  Retain the
+            # exact obligation that intrascan inverted so WorkingTheory charts
+            # the failed route edge rather than a coincident successful effect.
+            expectation=receipt_expectation,
+            expectation_role=expectation_role,
         )
         if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
             state.failed_effect_receipts.append(failed)
         _retain_active_requirement(state, derivation.requirement)
+
+
+def _derive_settled_target_requirements(
+    trial: _AcceptedTrial,
+    state: _PilotState,
+    ctx: _PilotContext,
+    checkpoint: _CausalCheckpoint | None,
+) -> IntrascanResult | None:
+    """Interpret a zero-net target loss inside monitor-owned settlement.
+
+    Post-commit departure settling is ordinary execution, but it may own the
+    first exact occurrence of the selected terminal writer.  When that value
+    is displaced before the scan exits, hand the recorded projection to the
+    same intrascan interpreter used by a disposable steer.  The resulting
+    failed-effect receipt lets the normal working-theory lifecycle restore the
+    original source and compose a fresh Bearing.
+    """
+
+    if checkpoint is None or target_reached(
+        dict(state.work.state.tags),
+        ctx.target.tag,
+        ctx.target.value,
+        ctx.target.predicate,
+    ):
+        return None
+    executed = trial.attempt
+    scan_before = executed.pulse.fork.state.scan_id
+    scan_after = state.work.state.scan_id
+    if scan_after <= scan_before:
+        return None
+    orientation = executed.bearing.orientation
+    if orientation is None:
+        return None
+    frame = orientation.world.frame
+    expectation = _selected_terminal_target_expectation(frame, ctx.target, ctx)
+    if expectation is None:
+        return None
+    exact_scans = tuple(range(scan_before + 1, scan_after + 1))
+    candidate_scans = terminal_target_replay_scan_ids(
+        expectation,
+        state.work,
+        exact_scans,
+    )
+    if not candidate_scans:
+        return None
+
+    def projection_at(scan_id: int) -> Any:
+        projection = state.work._replay_rung_write_projection_at(scan_id)
+        return projection if projection is not None and projection.scan_id == scan_id else None
+
+    if any(projection_at(scan_id) is None for scan_id in candidate_scans):
+        return None
+    entry_projection = projection_at(candidate_scans[0])
+    assert entry_projection is not None
+    observations = observe_execution_window(
+        expectation,
+        state.work,
+        scan_before=scan_before,
+        action_scan=None,
+        kernel_scan_ids=candidate_scans,
+        projection_at=projection_at,
+    )
+    promoted = promote_terminal_target_observation(
+        observations,
+        # Sparse nomination defines the terminal transaction's exact local
+        # window. Earlier settlement scans may establish this source value;
+        # they are not part of the later zero-net target occurrence.
+        window_entry_value=entry_projection.entry_tags.get(ctx.target.tag),
+        final_landing_value=state.work.state.tags.get(ctx.target.tag),
+    )
+    if promoted is None:
+        return None
+    fallback_scan = next(
+        (
+            occurrence.scan_id
+            for occurrence in (promoted.displacement, promoted.appeared)
+            if occurrence is not None
+        ),
+        candidate_scans[0],
+    )
+    question = IntrascanQuestion(
+        expectation=expectation,
+        execution=state.work,
+        assertion_scan=fallback_scan,
+        source_checkpoint=checkpoint,
+        advance_index=None,
+        operand_authorities={},
+        steerable=ctx.steerable,
+        program_written=frozenset(ctx.pdg.writers_of),
+        configured_inputs=_checkpoint_configured_inputs(checkpoint),
+        advance_index_factory=lambda: build_advance_index(
+            ctx.program,
+            getattr(checkpoint.world.work, "_harness", None),
+        ),
+        operand_authorities_at=lambda projection: _bound_operand_authorities(
+            projection,
+            checkpoint,
+            ctx,
+            state,
+        ),
+        projection_at=projection_at,
+    )
+    report = derive_recorded_observations(
+        question,
+        (promoted,),
+        fallback_scan=fallback_scan,
+    )
+    _retain_intrascan_findings(
+        report,
+        state,
+        checkpoint,
+        executed,
+        accepted=True,
+    )
     return report
+
+
+def _verified_progress_landing(
+    trial: _AcceptedTrial,
+) -> tuple[EffectExpectation, tuple[Any, ...]] | None:
+    """Bind VERIFY's accepted frontier to its unique exact landing write.
+
+    ProgramStep is a pre-execution reading and may remain ``UNCLEAR`` while an
+    exact scan still proves target-relative progress.  In that case VERIFY's
+    ``ScanProgressReceipt`` owns the positive claim and runner history owns its
+    occurrence.  Joining them here gives later departure recovery a causal
+    source without promoting chart geometry or a speculative projection to
+    action authority.
+    """
+
+    progress = trial.execution.scan_progress
+    attempt = trial.attempt
+    heading = attempt.bearing.act.policy.heading
+    if (
+        progress is None
+        or not progress.landing_owns_tip
+        or progress.kind not in {"frontier", "selected-producer"}
+        or heading is None
+        or heading.channel_tag is None
+    ):
+        return None
+    tag = heading.channel_tag
+    value = attempt.pulse.snap.get(tag)
+    candidates = tuple(
+        write
+        for scan_id in attempt.pulse.kernel_scan_ids
+        if progress.source_scan < scan_id <= progress.landing_scan
+        if (projection := attempt.projection_at(scan_id)) is not None
+        for write in projection.writes
+        if write.run.enabled
+        and write.transition.tag_name == tag
+        and _values_match(write.transition.to_value, value)
+    )
+    if not candidates:
+        return None
+    landing_write = candidates[-1]
+    orientation = attempt.bearing.orientation
+    if orientation is None:
+        return None
+    ctx = orientation.world.context
+    writer_nodes = tuple(
+        index
+        for index, node in enumerate(ctx.pdg.rung_nodes)
+        if RungId(node.subroutine, node.rung_index) == landing_write.rung_id
+        and resolve_rung(ctx.program, node) is landing_write.run.rung
+        and tag in node.writes
+    )
+    if len(writer_nodes) != 1:
+        return None
+    expectation = expectation_from_writer(
+        ctx.pdg,
+        ctx.program,
+        writer_node=writer_nodes[0],
+        tag=tag,
+        value=value,
+        boundary=(tag, value),
+    )
+    if expectation is None:
+        return None
+    pulse = attempt.pulse
+    observations = observe_execution_window(
+        expectation,
+        pulse.fork,
+        scan_before=pulse.scan_before,
+        action_scan=pulse.action_scan,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        projection_at=pulse.projection_at,
+    )
+    fulfilled = fulfilled_expectation_observations(expectation, observations)
+    return (expectation, fulfilled) if len(fulfilled) == len(expectation.obligations) else None
 
 
 def _retain_expectation_receipt(
@@ -439,72 +842,106 @@ def _retain_expectation_receipt(
     state: _PilotState,
     checkpoint: _CausalCheckpoint | None,
 ) -> None:
-    """Journal an accepted whole-shape expectation with exact occurrences."""
+    """Journal every accepted expectation role with its exact occurrences.
+
+    One physical act may prove both its immediate selected writer and a later
+    route landing.  They are distinct causal receipts: a subsequent departure
+    can originate at the landing even when the immediate handoff remains
+    valid.  Retaining only the policy expectation loses that ownership and
+    forces post-commit recovery to guess from an unbound incident.
+    """
 
     if checkpoint is None:
         return
-    expectation = trial.attempt.bearing.expectation
-    if expectation is None:
-        return
-    observations = fulfilled_expectation_observations(
-        expectation,
-        trial.attempt.effect_observations,
+    progress_landing = (
+        _verified_progress_landing(trial)
+        if trial.attempt.landing_expectation is None
+        else None
     )
-    if len(observations) != len(expectation.obligations):
-        return
-    epochs = {id(item.execution_epoch) for item in observations}
-    owners = {id(item.execution_owner) for item in observations}
-    if len(epochs) != 1 or len(owners) != 1:
-        return
-    first = observations[0]
-    if first.execution_epoch is None or first.execution_owner is None:
-        return
-    producers = tuple(
-        occurrence_snapshot(item.appeared) for item in observations if item.appeared is not None
-    )
-    consumers = tuple(
-        occurrence_snapshot(item.consumer_read)
-        for item in observations
-        if item.consumer_read is not None
-    )
-    producer_scans = tuple(
-        item.appeared.scan_id for item in observations if item.appeared is not None
-    )
-    if not producer_scans:
-        return
-    # Bind the receipt to the adopted live lineage, not the disposable pulse
-    # fork.  Adoption may rebuild the runner overlay while preserving the
-    # exact history; later regression queries fork from ``state.work`` and
-    # therefore share these retained epoch/query objects.
-    sealed = state.work._causal_lineage.seal_through(state.work.state.scan_id)
-    receipt_owner = next(
+    expectations = (
         (
-            (epoch, owner)
-            for epoch, owner in sealed
-            if all(epoch.first_scan <= scan <= epoch.last_scan for scan in producer_scans)
+            EffectReceiptRole.IMMEDIATE,
+            trial.attempt.bearing.expectation,
+            trial.attempt.effect_observations,
         ),
-        None,
+        (
+            EffectReceiptRole.ROUTE_LANDING,
+            trial.attempt.landing_expectation,
+            trial.attempt.effect_observations,
+        ),
+        (
+            EffectReceiptRole.ROUTE_LANDING,
+            progress_landing[0] if progress_landing is not None else None,
+            progress_landing[1] if progress_landing is not None else (),
+        ),
     )
-    if receipt_owner is None:
-        return
-    receipt_epoch, receipt_query = receipt_owner
-    receipt = ExpectationReceipt(
-        source_world_key=checkpoint.key,
-        checkpoint_owner=checkpoint.owner,
-        act_identity=act_identity(act),
-        active_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
-        obligations=tuple(obligation_snapshot(item.obligation) for item in observations),
-        producer_occurrences=producers,
-        consumer_occurrences=consumers,
-        execution_epoch=receipt_epoch,
-        execution_owner=receipt_query,
-        source_checkpoint=checkpoint,
-        local_act=act,
-        local_bearing=trial.attempt.bearing,
-        expectation=trial.attempt.bearing.expectation,
-    )
-    if not any(current.identity == receipt.identity for current in state.expectation_receipts):
-        state.expectation_receipts.append(receipt)
+    for expectation_role, expectation, evidence in expectations:
+        if expectation is None:
+            continue
+        observations = fulfilled_expectation_observations(
+            expectation,
+            evidence,
+        )
+        if len(observations) != len(expectation.obligations):
+            continue
+        epochs = {id(item.execution_epoch) for item in observations}
+        owners = {id(item.execution_owner) for item in observations}
+        if len(epochs) != 1 or len(owners) != 1:
+            continue
+        first = observations[0]
+        if first.execution_epoch is None or first.execution_owner is None:
+            continue
+        producers = tuple(
+            occurrence_snapshot(item.appeared)
+            for item in observations
+            if item.appeared is not None
+        )
+        consumers = tuple(
+            occurrence_snapshot(item.consumer_read)
+            for item in observations
+            if item.consumer_read is not None
+        )
+        producer_scans = tuple(
+            item.appeared.scan_id for item in observations if item.appeared is not None
+        )
+        if not producer_scans:
+            continue
+        # Bind the receipt to the adopted live lineage, not the disposable
+        # pulse fork. Adoption may rebuild the runner overlay while preserving
+        # exact history; later regression queries fork from ``state.work`` and
+        # therefore share these retained epoch/query objects.
+        sealed = state.work._causal_lineage.seal_through(state.work.state.scan_id)
+        receipt_owner = next(
+            (
+                (epoch, owner)
+                for epoch, owner in sealed
+                if all(epoch.first_scan <= scan <= epoch.last_scan for scan in producer_scans)
+            ),
+            None,
+        )
+        if receipt_owner is None:
+            continue
+        receipt_epoch, receipt_query = receipt_owner
+        receipt = ExpectationReceipt(
+            source_world_key=checkpoint.key,
+            checkpoint_owner=checkpoint.owner,
+            act_identity=act_identity(act),
+            active_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+            obligations=tuple(obligation_snapshot(item.obligation) for item in observations),
+            producer_occurrences=producers,
+            consumer_occurrences=consumers,
+            execution_epoch=receipt_epoch,
+            execution_owner=receipt_query,
+            source_checkpoint=checkpoint,
+            local_act=act,
+            local_bearing=trial.attempt.bearing,
+            expectation=expectation,
+            expectation_role=expectation_role,
+        )
+        if not any(
+            current.identity == receipt.identity for current in state.expectation_receipts
+        ):
+            state.expectation_receipts.append(receipt)
 
 
 @dataclass(frozen=True)
@@ -601,7 +1038,16 @@ def _exact_failed_source(
         and requirement.deadline in receipt.explanation.supporting_occurrences
         and receipt.local_act is not None
         and receipt.local_bearing is not None
-        and receipt.expectation is receipt.local_act.policy.expectation
+        and (
+            receipt.expectation_role is EffectReceiptRole.ROUTE_LANDING
+            or receipt.expectation is receipt.local_act.policy.expectation
+        )
+        and receipt.local_bearing.act is receipt.local_act
+        and receipt.expectation is not None
+        and any(
+            obligation_snapshot(obligation) == receipt.observation.obligation
+            for obligation in receipt.expectation.obligations
+        )
         and receipt.act_identity == act_identity(receipt.local_act)
     )
     return matches[0] if len(matches) == 1 else None
@@ -1714,11 +2160,31 @@ def _derive_program_guard_rebases(
         condition = parent.condition
         if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
             continue
+        source_snapshot = dict(parent.source_checkpoint.world.work.state.tags)
+        # Boolean DFS owns directly executable alternatives first.  Rebasing a
+        # program-written sibling before those alternatives have been read
+        # changes an OR into an eager historical detour and clears the exact
+        # temporal request which should be trying the current-world branch.
+        # Satisfied authoritative atoms may participate; only an unsatisfied
+        # non-assignable atom makes an alternative require history.
+        if any(
+            all(
+                constraint_holds(atom.condition, source_snapshot) is True
+                or (
+                    constraint_holds(atom.condition, source_snapshot) is False
+                    and atom.permits_assignment
+                )
+                for atom in alternative
+            )
+            for alternative in guard_alternatives(condition)
+        ):
+            continue
         atoms = tuple(
             dict.fromkeys(
                 atom for alternative in guard_alternatives(condition) for atom in alternative
             )
         )
+        parent_rebased = False
         for atom in atoms:
             if atom.operand_authority is not OperandAuthority.PROGRAM_WRITTEN:
                 continue
@@ -1733,6 +2199,17 @@ def _derive_program_guard_rebases(
             if _retain_active_requirement(state, rebased):
                 assert rebased is not None
                 added.append((parent, rebased))
+                parent_rebased = True
+        if parent_rebased:
+            # The historical guard fact is the executable replacement for this
+            # program-owned requirement at its earlier source.  Keep the parent
+            # in theory history, but do not ask Compass to execute both the
+            # failed later condition and its rebase in one earlier transaction.
+            index = state.active_requirements.index(parent)
+            state.active_requirements[index] = replace(
+                parent,
+                status=RequirementStatus.DISCHARGED,
+            )
     return tuple(added)
 
 
@@ -1811,6 +2288,119 @@ def _open_theory_from_program_guard_rebases(
         record_fact=_record_controlling_theory_fact,
     )
     return _active_shadow_theory(state) is not None
+
+
+def _refine_active_theory_from_program_guard_rebases(
+    state: _PilotState,
+    rebases: tuple[tuple[ActiveRequirement, ActiveRequirement], ...],
+) -> bool:
+    """Turn an exact earlier prevention fact into the next temporal request.
+
+    The failed act belongs to the active provisional tip, while the rebased
+    requirement belongs to the retained checkpoint before its harmful writer.
+    Record both boundaries explicitly: the former owns the rejected-attempt
+    evidence and the latter is where Compass must read the SETUP_FIRST bearing.
+    """
+
+    theory = _active_shadow_theory(state)
+    if theory is None:
+        return False
+    exact_pairs: list[tuple[ActiveRequirement, FailedEffectReceipt]] = []
+    for parent, rebased in rebases:
+        failed = _exact_failed_source(parent, state)
+        if failed is None:
+            matches = tuple(
+                receipt
+                for receipt in state.failed_effect_receipts
+                if receipt.source_checkpoint.owner is parent.source_checkpoint.owner
+                and receipt.source_world_key == parent.source_world_key
+            )
+            failed = matches[0] if len(matches) == 1 else None
+        if failed is not None:
+            exact_pairs.append((rebased, failed))
+    if not exact_pairs:
+        return False
+    failed_receipts = tuple(failed for _requirement, failed in exact_pairs)
+    if (
+        len({failed.act_identity for failed in failed_receipts}) != 1
+        or len({id(failed.local_bearing) for failed in failed_receipts}) != 1
+        or len({id(failed.source_checkpoint) for failed in failed_receipts}) != 1
+    ):
+        return False
+    progress = state.theory_state.ledger.progress[theory.current_progress_id]
+    trigger_source = progress.provisional_tip
+    failed_source = _theory_boundary_from_checkpoint(failed_receipts[0].source_checkpoint)
+    if failed_source != trigger_source:
+        return False
+    refined_sources = {
+        _theory_boundary_from_checkpoint(requirement.source_checkpoint)
+        for requirement, _failed in exact_pairs
+    }
+    if len(refined_sources) != 1:
+        return False
+    refined_source = next(iter(refined_sources))
+    interpretation = interpret_failed_requirements(
+        exact_pairs=tuple(exact_pairs),
+        assertion_scan=max(requirement.deadline.scan_id for requirement, _ in exact_pairs),
+        landing_owns_tip=False,
+    )
+    if not interpretation.opens_theory:
+        return False
+    attempt_identity = (
+        "program-guard-rebase-attempt",
+        theory.theory_id,
+        theory.current_version_id,
+        trigger_source,
+        tuple(requirement.navigation_identity for requirement, _failed in exact_pairs),
+    )
+    failed = failed_receipts[0]
+    _record_controlling_theory_fact(
+        state,
+        RecordTheoryAttempt(
+            theory_id=theory.theory_id,
+            version_id=theory.current_version_id,
+            attempt_identity=attempt_identity,
+            source=trigger_source,
+            execution_owner_token=(
+                "execution-owner",
+                id(failed.execution_epoch),
+                id(failed.execution_owner),
+            ),
+            occurrence_evidence=tuple(
+                _semantic_key(item.explanation) for item in failed_receipts
+            ),
+            act_identity=failed.act_identity,
+            pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
+            disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+            evidence=(("program-guard-rebases", tuple(
+                requirement.navigation_identity for requirement, _failed in exact_pairs
+            )),),
+        ),
+    )
+    theory = _active_shadow_theory(state)
+    assert theory is not None
+    _record_controlling_theory_fact(
+        state,
+        RefineTheory(
+            theory_id=theory.theory_id,
+            parent_version_id=theory.current_version_id,
+            source=trigger_source,
+            refined_source=refined_source,
+            requirements=tuple(
+                _theory_requirement_snapshot(requirement)
+                for requirement, _failed in exact_pairs
+            ),
+            refinement_identity=(
+                "program-guard-rebase",
+                attempt_identity,
+                refined_source,
+            ),
+            temporal_intent=TheoryTemporalIntent(interpretation.kind.value),
+            trigger_attempt_id=attempt_identity,
+            temporal_source=refined_source,
+        ),
+    )
+    return True
 
 
 def _repaired_program_continuation(
@@ -2326,6 +2916,7 @@ def _preempt_recovery_action_with_program_coast(
             motion=MotionKind.COAST_TO_BEARING,
             expectation=expectation,
             expectation_exemption=None,
+            landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
             provenance=(*result.act.policy.provenance, "recovery ProgramStep keep-running"),
         ),
     )
@@ -2748,94 +3339,174 @@ def _repair_one_active_requirement(
     return blocked or _RequirementRepairResult()
 
 
-def _execute_bootstrap_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
-    """Retain boundary 0 and execute one observed program-owned scan.
-
-    The old cold-start settle advanced the live runner directly.  This adapter
-    deliberately preserves that landing and search-budget behavior while
-    making the execution truth addressable.  Its pre-scan trace supplies only
-    conservative designations; missing designations are not failed promises,
-    and factual appeared-effect classification does not alter orchestration.
-    """
-
-    if state.work.state.scan_id != 0:
-        return None
-
-    before_snap = dict(state.work.state.tags)
-    checkpoint = state.invocation_checkpoint
-    if checkpoint is None:
-        raise RuntimeError("bootstrap scan has no retained invocation checkpoint")
-    scan_before = state.work.state.scan_id
-
-    # Designation is derived before execution from the retained source world.
-    # It is best-effort evidence: an unsupported or ambiguous read must preserve
-    # the established scan-1 landing and leave ordinary Orientation to name its
-    # frontier.
-    designations = ()
-    if ctx.target.predicate is None:
-        try:
-            read = TraceReadConstraints.from_context(
-                ctx,
-                state.work,
-                route=ctx.route,
-                avoid_pred=ctx.avoid_pred,
-            )
-            tree = trace_back(
-                ctx.target.tag,
-                ctx.target.value,
-                before_snap,
-                ctx.pdg,
-                ctx.program,
-                ctx.steerable,
-                constraints=read,
-            )
-            channel_tags = frozenset(ctx.opaque_loop) | frozenset(
-                role.channel_tag for role in ctx.pipeline_roles
-            )
-            designations = bootstrap_designations(
-                tree,
-                ctx.pdg,
-                ctx.program,
-                steerable=ctx.steerable,
-                channel_tags=channel_tags,
-            )
-        except Exception:  # noqa: BLE001 - designation is conservative evidence only
-            logger.debug("pilot: bootstrap designation failed closed", exc_info=True)
-
-    # Exactly the normal program scan previously used for the hidden settle:
-    # no Pulse, Coast, temporary rung, or operator patch participates.
-    state.work.step()
-    scan_after = state.work.state.scan_id
-    projection = state.work._replay_rung_write_projection_at(scan_after)
-    if projection is None:
-        raise RuntimeError("bootstrap scan has no exact execution projection")
-    execution_epoch_pair = next(
+def _execution_owner_at(work: Any, scan_id: int) -> tuple[Any, Any] | None:
+    return next(
         (
             (epoch, owner)
-            for epoch, owner in state.work._causal_lineage.seal_through(scan_after)
-            if epoch.first_scan <= scan_after <= epoch.last_scan
+            for epoch, owner in work._causal_lineage.seal_through(scan_id)
+            if epoch.first_scan <= scan_id <= epoch.last_scan
         ),
         None,
     )
-    if execution_epoch_pair is None:
-        raise RuntimeError("bootstrap scan has no retained execution epoch")
-    execution_epoch, execution_owner = execution_epoch_pair
-    appeared_effects = observe_bootstrap_effects(designations, projection)
 
-    receipt = _BootstrapExecution(
+
+def _entry_execution_receipt(
+    checkpoint: _CausalCheckpoint,
+    execution: Any,
+    scan_after: int,
+) -> _BootstrapExecution:
+    """Retain one adjacent program scan without interpreting its route yet."""
+
+    projection = execution._replay_rung_write_projection_at(scan_after)
+    if projection is None:
+        raise RuntimeError("entry observation has no exact execution projection")
+    owner = _execution_owner_at(execution, scan_after)
+    if owner is None:
+        raise RuntimeError("entry observation has no retained execution epoch")
+    return _BootstrapExecution(
         checkpoint=checkpoint,
-        scan_before=scan_before,
+        scan_before=scan_after - 1,
         scan_after=scan_after,
         projection=projection,
         landing=projection.exit_tags,
-        designations=designations,
-        appeared_effects=appeared_effects,
-        execution_epoch=execution_epoch,
-        execution_owner=execution_owner,
+        designations=(),
+        appeared_effects=(),
+        execution_epoch=owner[0],
+        execution_owner=owner[1],
+        route_bound=False,
     )
+
+
+def _import_adjacent_entry_scan(state: _PilotState, ctx: _PilotContext) -> _BootstrapExecution | None:
+    """Import the runner's exact adjacent history as the same entry receipt.
+
+    The runner already owns the rolling history. PILOT retains only the one
+    source checkpoint and ``N-1 -> N`` projection it has authority to revisit.
+    """
+
+    scan_after = state.work.state.scan_id
+    if scan_after <= 0:
+        return None
+    try:
+        source_work = fork_with_pilot_rungs(
+            state.work,
+            state.pilot_rungs,
+            scan_id=scan_after - 1,
+        )
+    except KeyError:
+        return None
+    source_snap = dict(source_work.state.tags)
+    source_world = _World(
+        work=source_work,
+        committed_acts=pvector([]),
+        best_trend=None,
+        pilot_rungs=state.pilot_rungs,
+        dwell_scans=0,
+    )
+    checkpoint = _CausalCheckpoint(
+        key=(
+            _pilot_world_key(source_snap, state.key_config, (), ())
+            if state.key_config is not None
+            else None
+        ),
+        world=source_world,
+        objective=BearingObjective(ctx.target),
+        configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
+    )
+    try:
+        receipt = _entry_execution_receipt(checkpoint, state.work, scan_after)
+    except RuntimeError:
+        return None
+    state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = receipt
-    _derive_bootstrap_requirements(state, ctx, receipt)
+    state.search_start_scan = checkpoint.world.work.state.scan_id
     return receipt
+
+
+def _retain_entry_bearing_execution(
+    state: _PilotState,
+    checkpoint: _CausalCheckpoint,
+    executed: Any,
+) -> None:
+    """Retain the exact scan produced by an accepted ObserveScan bearing."""
+
+    scan_after = executed.pulse.fork.state.scan_id
+    receipt = _entry_execution_receipt(checkpoint, executed.pulse.fork, scan_after)
+    state.invocation_checkpoint = checkpoint
+    state.bootstrap_execution = receipt
+    state.search_start_scan = checkpoint.world.work.state.scan_id
+
+
+def _bind_entry_execution_to_route(
+    state: _PilotState,
+    ctx: _PilotContext,
+    result: OrientationResult,
+    frame: _IterationFrame,
+) -> _BootstrapExecution | None:
+    """Interpret an adjacent scan only after Compass selected its landing route."""
+
+    receipt = state.bootstrap_execution
+    if receipt is None or receipt.route_bound:
+        return None
+    objective = (
+        result.objective
+        if isinstance(result, Bearing)
+        else BearingObjective(ctx.target, frontier=result.frontier)
+    )
+    checkpoint = replace(receipt.checkpoint, objective=objective)
+    channel_tags = {ctx.target.tag, *ctx.opaque_loop}
+    channel_tags.update(
+        role.channel_tag for role in (*ctx.pipeline_roles, *ctx.chart_roles)
+    )
+    source_tree = frame.tree
+    if ctx.target.predicate is None:
+        try:
+            source_work = receipt.checkpoint.world.work
+            source_tree = trace_back(
+                ctx.target.tag,
+                ctx.target.value,
+                dict(source_work.state.tags),
+                ctx.pdg,
+                ctx.program,
+                ctx.steerable,
+                constraints=TraceReadConstraints.from_context(
+                    ctx,
+                    source_work,
+                    route=(
+                        result.orientation.world.root_route
+                        if result.orientation is not None
+                        else None
+                    ),
+                    avoid_pred=ctx.avoid_pred,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - landing frame remains conservative fallback
+            logger.debug("pilot: entry source route binding failed closed", exc_info=True)
+    designations = bind_observed_route_designations(
+        source_tree,
+        ctx.pdg,
+        ctx.program,
+        receipt.projection,
+        steerable=ctx.steerable,
+        channel_tags=frozenset(channel_tags),
+    )
+    bound = replace(
+        receipt,
+        checkpoint=checkpoint,
+        designations=designations,
+        appeared_effects=observe_bootstrap_effects(designations, receipt.projection),
+        route_bound=True,
+    )
+    state.invocation_checkpoint = checkpoint
+    state.bootstrap_execution = bound
+    _derive_bootstrap_requirements(state, ctx, bound)
+    _record_shadow_bootstrap(
+        state,
+        ctx,
+        bound,
+        remaining_budget=state.remaining_search_scans(ctx.max_scans),
+    )
+    return bound
 
 
 @dataclass(frozen=True)
@@ -3050,7 +3721,13 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         selected_writer if isinstance(selected_writer, tuple) else (selected_writer,)
     )
     scope_identity = scope if isinstance(scope, tuple) else (scope,)
-    source_world_key = _semantic_key(diagnostic.source_world_key)
+    raw_source_world_key = diagnostic.source_world_key
+    if isinstance(raw_source_world_key, tuple) and len(raw_source_world_key) == 3:
+        # Requirement constraints version the current Compass world, not the
+        # retained physical checkpoint. TheoryBoundaryIdentity applies the
+        # same normalization so backward rebases compare like with like.
+        raw_source_world_key = raw_source_world_key[:2]
+    source_world_key = _semantic_key(raw_source_world_key)
     source_world_identity = (
         source_world_key if isinstance(source_world_key, tuple) else (source_world_key,)
     )
@@ -3151,27 +3828,104 @@ def _shadow_transition_from_attempt(
     """
 
     execution = attempt.executed_attempt
-    if execution is None or execution.bearing.expectation is None or checkpoint is None:
+    if execution is None or checkpoint is None:
+        return None
+    novel_requirements = tuple(
+        requirement
+        for requirement in state.active_requirements
+        if requirement.identity not in prior_requirement_identities
+    )
+    route_lookahead_requirements = tuple(
+        requirement
+        for requirement in novel_requirements
+        if requirement.provenance == "route-lookahead"
+    )
+    route_claim_expectation = None
+    if route_lookahead_requirements and not execution.effect_observations:
+        orientation = bearing.orientation
+        if orientation is not None:
+            route_claim_expectation = _selected_terminal_target_expectation(
+                orientation.world.frame,
+                bearing.objective.target,
+                orientation.world.context,
+            )
+    if not execution.effect_observations and route_claim_expectation is None:
+        return None
+    finding_obligations_list: list[Any] = []
+    for finding in intrascan_report.findings if intrascan_report is not None else ():
+        obligation = finding.observation.obligation
+        if obligation not in finding_obligations_list:
+            finding_obligations_list.append(obligation)
+    finding_obligations = tuple(finding_obligations_list)
+    immediate_expectation = execution.bearing.expectation
+    findings_are_immediate = immediate_expectation is not None and all(
+        any(obligation is current for current in immediate_expectation.obligations)
+        for obligation in finding_obligations
+    )
+    claim_expectation = (
+        immediate_expectation
+        if finding_obligations and findings_are_immediate
+        else EffectExpectation(finding_obligations)
+        if finding_obligations
+        else immediate_expectation or execution.landing_expectation or route_claim_expectation
+    )
+    if claim_expectation is None:
         return None
     source = _theory_boundary_from_checkpoint(checkpoint)
     execution_owner, effects = _shadow_execution_evidence(execution)
+    if not effects and route_lookahead_requirements:
+        effects = (
+            (
+                "route-lookahead",
+                tuple(
+                    _semantic_key(requirement.diagnostic_snapshot())
+                    for requirement in route_lookahead_requirements
+                ),
+            ),
+        )
     program_step = _program_step_from_bearing(bearing)
+    productive_scan = _attempt_productive_scan(execution)
     interpretation = interpret_attempt(
         trial=attempt.trial,
         program_step=program_step,
         intrascan=intrascan_report,
-        assertion_scan=execution.assertion_scan,
+        assertion_scan=productive_scan,
     )
     claim = _shadow_claim(
-        execution.bearing.expectation,
+        claim_expectation,
         bearing.objective,
         source,
     )
     requirements = tuple(
-        _theory_requirement_snapshot(requirement)
-        for requirement in state.active_requirements
-        if requirement.identity not in prior_requirement_identities
+        _theory_requirement_snapshot(requirement) for requirement in novel_requirements
     )
+    if (
+        route_lookahead_requirements
+        and len(route_lookahead_requirements) == len(requirements)
+    ):
+        interpretation = AttemptInterpretation(
+            AttemptInterpretationKind.SETUP_FIRST,
+            "the retained look-ahead made a selected-route condition false",
+            tuple(
+                ("route-lookahead-requirement", requirement.navigation_identity)
+                for requirement in route_lookahead_requirements
+            ),
+        )
+    if requirements and not interpretation.opens_theory:
+        selected_act = act_identity(bearing.act)
+        exact_pairs = tuple(
+            (requirement, failed)
+            for requirement in state.active_requirements
+            if requirement.identity not in prior_requirement_identities
+            if (failed := _exact_failed_source(requirement, state)) is not None
+            and failed.act_identity == selected_act
+        )
+        receipt_interpretation = interpret_failed_requirements(
+            exact_pairs=exact_pairs,
+            assertion_scan=productive_scan,
+        )
+        if receipt_interpretation.opens_theory:
+            interpretation = receipt_interpretation
     return _ShadowTheoryTransition(
         claim=claim,
         source=source,
@@ -3180,7 +3934,9 @@ def _shadow_transition_from_attempt(
         act_identity=act_identity(bearing.act),
         pilot_rung_identities=tuple(_rung_identity(rung) for rung in state.pilot_rungs),
         disposition=(
-            TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            TheoryAttemptDisposition.REJECTED_EXACT
+            if requirements and interpretation.opens_theory
+            else TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
             if attempt.trial is not None
             else TheoryAttemptDisposition.REJECTED_EXACT
             if attempt.proof_rejection or requirements
@@ -3224,6 +3980,8 @@ def _shadow_transition_after_monitor(
         if (failed := _exact_failed_source(requirement, state)) is not None
         and (selected_act_identity is None or failed.act_identity == selected_act_identity)
     )
+    progress = trial.execution.scan_progress if trial is not None else None
+    landing_owns_tip = progress is None or progress.landing_owns_tip
     if not exact_pairs:
         return observation, frozenset()
     if observation is None:
@@ -3231,7 +3989,11 @@ def _shadow_transition_after_monitor(
         checkpoints = {
             id(failed.source_checkpoint): failed.source_checkpoint for failed in failed_receipts
         }
-        expectations = {id(failed.expectation): failed.expectation for failed in failed_receipts}
+        expectations = tuple(
+            {
+                id(failed.expectation): failed.expectation for failed in failed_receipts
+            }.values()
+        )
         act_identities = {failed.act_identity for failed in failed_receipts}
         owner_pairs = {
             (id(failed.execution_epoch), id(failed.execution_owner)) for failed in failed_receipts
@@ -3239,14 +4001,21 @@ def _shadow_transition_after_monitor(
         bearings = {id(failed.local_bearing): failed.local_bearing for failed in failed_receipts}
         if (
             len(checkpoints) != 1
-            or len(expectations) != 1
+            or not expectations
             or len(act_identities) != 1
             or len(owner_pairs) != 1
             or len(bearings) != 1
         ):
             return None, frozenset()
         checkpoint = next(iter(checkpoints.values()))
-        expectation = next(iter(expectations.values()))
+        obligations: list[Any] = []
+        for expectation in expectations:
+            for obligation in expectation.obligations:
+                if obligation not in obligations:
+                    obligations.append(obligation)
+        if not obligations:
+            return None, frozenset()
+        expectation = EffectExpectation(tuple(obligations))
         bearing = next(iter(bearings.values()))
         selected_act_identity = next(iter(act_identities))
         source = _theory_boundary_from_checkpoint(source_checkpoint or checkpoint)
@@ -3260,6 +4029,7 @@ def _shadow_transition_after_monitor(
                 if source_checkpoint is not None
                 else assertion_scan
             ),
+            landing_owns_tip=landing_owns_tip,
         )
         requirements = tuple(
             _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
@@ -3286,6 +4056,7 @@ def _shadow_transition_after_monitor(
     interpretation = interpret_failed_requirements(
         exact_pairs=exact_pairs,
         assertion_scan=assertion_scan,
+        landing_owns_tip=landing_owns_tip,
     )
     evidence = tuple(
         item
@@ -3467,18 +4238,12 @@ def _shadow_claim_correlates(state: _PilotState, claim: TheoryClaim) -> bool:
     if theory is None:
         return True
     active_claim = state.theory_state.ledger.claims[theory.claim_id]
-    progress = state.theory_state.ledger.progress[theory.current_progress_id]
-    version = state.theory_state.ledger.versions[theory.current_version_id]
     same_target = (
         claim.objective.target_tag == active_claim.objective.target_tag
         and claim.objective.target_value == active_claim.objective.target_value
         and claim.objective.predicate_identity == active_claim.objective.predicate_identity
     )
-    return same_target and claim.source in (
-        active_claim.source,
-        progress.provisional_tip,
-        version.source,
-    )
+    return same_target and theory_source_is_retained(state.theory_state, claim.source)
 
 
 def _shadow_attempt_identity(
@@ -3589,6 +4354,7 @@ def _record_theory_transition(
                 ),
                 temporal_intent=controlling_intent,
                 trigger_attempt_id=(attempt_identity if controlling_intent is not None else None),
+                temporal_source=(observation.source if controlling_intent is not None else None),
             ),
         )
 
@@ -3659,18 +4425,38 @@ class _ControlledSetupAttempt:
     occurrence_evidence: tuple[Any, ...]
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    local_requirement_identities: tuple[tuple[Any, ...], ...]
+    setup_pairs: tuple[_ActionPair, ...]
     phase: str
     objective: BearingObjective
+    execution_source: TheoryBoundaryIdentity
 
 
 def _resolved_temporal_requirements(
     state: _PilotState,
     request: TemporalNeedRequest,
 ) -> tuple[ActiveRequirement, ...]:
-    """Resolve every detached need atom to one exact live requirement."""
+    """Resolve the exact live requirements belonging to this temporal edge.
 
+    A RETRY_TOGETHER refinement names only the newly observed need, while its
+    triggering act may already contain corrective assignments learned by an
+    earlier version.  Reconstruct that transaction from every still-active
+    requirement in the current theory version.  Exact status matching below
+    keeps discharged historical receipts out of executable navigation.
+    """
+
+    snapshots = tuple(request.requirements)
+    if request.intent is TheoryTemporalIntent.RETRY_TOGETHER:
+        view = theory_view(state.theory_state)
+        if (
+            view is None
+            or view.theory_id != request.theory_id
+            or view.version_id != request.version_id
+        ):
+            raise ValueError("temporal retry does not match the active theory version")
+        snapshots = tuple(view.requirements)
     resolved: list[ActiveRequirement] = []
-    for snapshot in request.requirements:
+    for snapshot in snapshots:
         matches = tuple(
             requirement
             for requirement in state.active_requirements
@@ -3703,7 +4489,13 @@ def _restore_temporal_source(
     if live == request.source:
         return
 
+    retained_rungs = tuple(state.pilot_rungs)
     state.load_world(checkpoint.world)
+    # The checkpoint supplies the earlier runner boundary, not an earlier
+    # theory of what PILOT has learned. Correctives established after that
+    # boundary remain executable facts and are re-evaluated against the
+    # restored snapshot. Appending preserves the overlay's last-owner rule.
+    state.pilot_rungs = _merged_pilot_rungs(retained_rungs, state.pilot_rungs)
     state.pending_departure = None
 
 
@@ -3753,6 +4545,7 @@ def _record_controlled_setup_attempt(
     state: _PilotState,
     request: TemporalNeedRequest,
     transition: _IterationTransition,
+    source_checkpoint: _CausalCheckpoint,
 ) -> _ControlledSetupAttempt:
     """Record one ordinary setup execution before its fork may be adopted."""
 
@@ -3781,6 +4574,7 @@ def _record_controlled_setup_attempt(
         for write in projection.writes
     )
     occurrence_evidence = ("setup-assertion-scan", execution.assertion_scan, occurrences)
+    execution_source = _theory_boundary_from_checkpoint(source_checkpoint)
     # A temporal source can be restored and the same deterministic phase can
     # be observed again on a fresh disposable fork.  Python object identities
     # would make those equivalent scan receipts conflict in the immutable
@@ -3792,6 +4586,14 @@ def _record_controlled_setup_attempt(
         occurrence_evidence,
     )
     action_identity = act_identity(result.act)
+    local_sources = (
+        result.act.policy.local_progress_sources
+        or result.act.policy.local_progress_requirements
+    )
+    local_requirement_identities = tuple(
+        _theory_requirement_snapshot(requirement).semantic_identity
+        for requirement in local_sources
+    )
     phase = "rearm" if result.act.policy.local_progress is LocalProgressKind.REARM else "need"
     rung_identities = tuple(_rung_identity(rung) for rung in state.pilot_rungs)
     attempt_id = (
@@ -3840,8 +4642,11 @@ def _record_controlled_setup_attempt(
         occurrence_evidence,
         action_identity,
         rung_identities,
+        local_requirement_identities,
+        tuple(result.act.policy.applied),
         phase,
         result.objective,
+        execution_source,
     )
 
 
@@ -3861,6 +4666,14 @@ def _complete_controlled_setup(
         raise ValueError("accepted temporal phase lost its active theory")
     progress = state.theory_state.ledger.progress[theory.current_progress_id]
     if boundary != progress.provisional_tip:
+        setup_rung_identities = tuple(
+            _rung_identity(rung)
+            for rung in state.pilot_rungs
+            if any(
+                rung.dest == tag and _values_match(rung.value, value)
+                for tag, value in controlled.setup_pairs
+            )
+        )
         _record_controlling_theory_fact(
             state,
             AdvanceTheory(
@@ -3877,11 +4690,16 @@ def _complete_controlled_setup(
                 phase_receipts=(
                     (
                         "temporal-setup-established",
-                        tuple(item.semantic_identity for item in request.requirements),
+                        controlled.local_requirement_identities,
                         controlled.attempt_id,
+                        setup_rung_identities,
                     ),
                 ),
-                remaining_budget=state.remaining_search_scans(ctx.max_scans),
+                remaining_budget=min(
+                    progress.remaining_budget,
+                    state.remaining_search_scans(ctx.max_scans),
+                ),
+                execution_source=controlled.execution_source,
             ),
         )
         checkpoint = _CausalCheckpoint(
@@ -3896,20 +4714,23 @@ def _complete_controlled_setup(
         ):
             state.temporal_checkpoints.append(checkpoint)
     matched = _resolved_temporal_requirements(state, request)
-    if controlled.phase == "rearm" and not all(
-        requirement_condition_holds(requirement.condition, dict(state.work.state.tags)) is True
-        for requirement in matched
-    ):
-        # The edge was released, but the temporal condition still needs a
-        # distinct reader-selected phase from this new tip.
+    if controlled.phase == "rearm":
+        # Rearm establishes only the trigger's release edge. Even when every
+        # corrective condition happens to hold in that scan, the rejected
+        # transaction has not yet been retried and none of its requirements
+        # may be discharged. The unchanged temporal request is reread from the
+        # newly advanced tip and Compass chooses the assertion phase afresh.
         return
-    observations = tuple(
-        (
-            "requirement-discharged",
-            _theory_requirement_snapshot(requirement).semantic_identity,
-            controlled.attempt_id,
-        )
+    local_identities = set(controlled.local_requirement_identities)
+    locally_established = tuple(
+        requirement
         for requirement in matched
+        if _theory_requirement_snapshot(requirement).semantic_identity in local_identities
+        and requirement_condition_holds(
+            requirement.condition,
+            dict(state.work.state.tags),
+        )
+        is True
     )
     reached = target_reached(
         dict(state.work.state.tags),
@@ -3917,13 +4738,21 @@ def _complete_controlled_setup(
         ctx.target.value,
         ctx.target.predicate,
     )
-    if not successor_need:
-        for requirement in matched:
-            index = state.active_requirements.index(requirement)
-            state.active_requirements[index] = replace(
-                requirement,
-                status=RequirementStatus.DISCHARGED,
-            )
+    discharged = matched if not successor_need and reached else locally_established
+    for requirement in discharged:
+        index = state.active_requirements.index(requirement)
+        state.active_requirements[index] = replace(
+            requirement,
+            status=RequirementStatus.DISCHARGED,
+        )
+    observations = tuple(
+        (
+            "requirement-discharged",
+            _theory_requirement_snapshot(requirement).semantic_identity,
+            controlled.attempt_id,
+        )
+        for requirement in discharged
+    )
     if not successor_need and reached:
         _record_controlling_theory_fact(
             state,
@@ -4250,7 +5079,16 @@ def _make_pilot_context(
     target_predicate: Any = None,
     configured_inputs: frozenset[str] = frozenset(),
 ) -> _PilotContext:
+    from pyrung.core.analysis.pilot.evidence import discover_chart_roles
+
     pipeline_roles = _infer_pipeline_roles_for_context(
+        pdg,
+        program,
+        steerable,
+        opaque_loop,
+        evidence,
+    )
+    chart_roles = discover_chart_roles(
         pdg,
         program,
         steerable,
@@ -4266,6 +5104,14 @@ def _make_pilot_context(
             slices=prior_compass.catalog.slices,
             graphs=_build_static_transition_graphs_for_context(
                 pipeline_roles,
+                pdg,
+                program,
+                steerable,
+                opaque_loop,
+                evidence,
+            ),
+            chart_graphs=_build_static_transition_graphs_for_context(
+                chart_roles,
                 pdg,
                 program,
                 steerable,
@@ -4307,6 +5153,7 @@ def _make_pilot_context(
         max_scans=max_scans,
         avoid_pred=avoid_pred,
         configured_inputs=configured_inputs,
+        chart_roles=chart_roles,
     )
 
 
@@ -4732,12 +5579,21 @@ def _monitor_committed_trial(
             "snapshot": dict(state.work.state.tags),
         },
     )
+    if isinstance(trial.attempt.bearing.act, ObserveScan):
+        # This landing is deliberately provisional until the next Compass read
+        # binds its exact projection to a selected target route.
+        return
     # Verification is the one authority for whether this exact S0 -> S1/S2
     # execution advanced its selected working edge.  Re-proving the receipt
     # here from a newly traversed tree creates a second, drift-prone progress
     # protocol.  An accepted trial without a receipt still reaches legacy trend
     # handling; neither assertion horizon nor an active theory is an exemption.
     progress = trial.execution.scan_progress
+    retained_selected_landing = bool(
+        progress is not None
+        and progress.kind == "selected-producer"
+        and progress.landing_owns_tip
+    )
     if (
         progress is not None
         and progress.landing_owns_tip
@@ -4748,7 +5604,18 @@ def _monitor_committed_trial(
             "frontier",
         }
         and state.pending_departure is None
+        and (
+            not trial.execution.channel_motion.departed
+            or retained_selected_landing
+        )
     ):
+        # A generic frontier crossed before a channel departure is only useful
+        # local motion; the missed bearing still enters ordinary departure
+        # investigation.  A selected-producer receipt is stronger when its
+        # *retained landing* owns the trace tip: the program crossed the narrow
+        # heading and completed the next structural edge in the same accepted
+        # execution.  That is an overshoot in the heading coordinate, not an
+        # ejection from the selected route.
         # The receipt does not merely exempt this landing from legacy trend
         # judgment: it *is* the recovery/checkpoint authority for the new
         # working edge. Bank the exact retained fork so a later regression is
@@ -4815,23 +5682,30 @@ def _commit_trial(
             ctx.compass,
             knowledge=ctx.compass.knowledge.after_stable_context_change(frame.key),
         )
-        try:
-            guard = _target_unresolved_condition(
-                state.work,
-                ctx.target.tag,
-                ctx.target.value,
-                ctx.target.predicate,
-            )
-        except KeyError:
-            guard = None
-        retained = tuple(
-            PilotRung(tag, value, guard)
-            for tag, value in policy.applied
-            if guard is not None
-            and tag not in ctx.edge_tags
-            and tag not in ctx.clear_only
-            and _values_match(state.work.state.tags.get(tag), value)
+        orientation = bearing.orientation
+        trace_details = (
+            orientation.candidates.trace.detail_by_pair if orientation is not None else {}
         )
+        retained_list: list[PilotRung] = []
+        for tag, value in policy.applied:
+            detail = trace_details.get((tag, value))
+            operation = getattr(detail, "operation", None)
+            lifetime = getattr(detail, "until", None)
+            if lifetime is None:
+                lifetime = getattr(operation, "until", None)
+            if (
+                lifetime is None
+                or tag in ctx.edge_tags
+                or tag in ctx.clear_only
+                or not _values_match(state.work.state.tags.get(tag), value)
+            ):
+                continue
+            try:
+                guard = _until_unresolved_condition(state.work, lifetime)
+            except (KeyError, ValueError):
+                continue
+            retained_list.append(PilotRung(tag, value, guard, operation=operation))
+        retained = tuple(retained_list)
         _install_prerequisites(state, retained)
     if isinstance(verified, AssessedMotion):
         # Revisit novelty is invocation knowledge. Consume every credential
@@ -4873,7 +5747,10 @@ def _record_scan_progress_advance(
     progress = state.theory_state.ledger.progress[theory.current_progress_id]
     source = progress.provisional_tip
     boundary = _theory_live_boundary(state)
-    if receipt.source_scan != source.scan_id or boundary == source:
+    if (
+        receipt.source_scan != source.scan_id
+        or boundary.scan_id <= source.scan_id
+    ):
         return
 
     recorded_id = (
@@ -4921,7 +5798,10 @@ def _record_scan_progress_advance(
             boundary=boundary,
             advance_identity=("scan-progress-advance", attempt_id, boundary),
             phase_receipts=(("scan-progress", _semantic_key(receipt)),),
-            remaining_budget=state.remaining_search_scans(ctx.max_scans),
+            remaining_budget=min(
+                progress.remaining_budget,
+                state.remaining_search_scans(ctx.max_scans),
+            ),
         ),
     )
     checkpoint = _CausalCheckpoint(
@@ -5148,10 +6028,14 @@ def _transition_once(
     orientation_read = result.orientation
     if orientation_read is None:
         raise RuntimeError("Compass orientation omitted its current-world reading")
+    # Preserve the exact route alternative selected by this Orientation read.
+    # The shared drive context intentionally carries no retained route, but
+    # execution and verification of this one bearing must see its chart edge.
+    execution_ctx = replace(ctx, route=orientation_read.world.root_route)
     orientation_world = replace(
         orientation_read.world,
         state=state,
-        context=ctx,
+        context=execution_ctx,
         key_config=state.key_config or orientation_read.world.key_config,
     )
     frame = orientation_world.frame
@@ -5172,14 +6056,19 @@ def _transition_once(
         ctx,
     )
     act = result.act
+    attempt_source_checkpoint = _CausalCheckpoint(
+        key=frame.key,
+        world=state.snapshot_world(),
+        objective=result.objective,
+        configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
+    )
     expectation_checkpoint = (
-        _CausalCheckpoint(
-            key=frame.key,
-            world=state.snapshot_world(),
-            objective=result.objective,
-            configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
+        attempt_source_checkpoint
+        if (
+            result.expectation is not None
+            or terminal_target_expectation is not None
+            or isinstance(result.act, ObserveScan)
         )
-        if result.expectation is not None or terminal_target_expectation is not None
         else None
     )
     shadow_requirements_before = _shadow_requirement_identities(state)
@@ -5216,13 +6105,36 @@ def _transition_once(
             executed_for_derivation.pulse,
             prefix_proof,
         )
+    landing_checkpoint = (
+        attempt_source_checkpoint
+        if executed_for_derivation is not None
+        and (
+            executed_for_derivation.landing_expectation is not None
+            or (
+                attempt.trial is not None
+                and attempt.trial.execution.scan_progress is not None
+                and attempt.trial.execution.scan_progress.landing_owns_tip
+            )
+        )
+        else None
+    )
+    receipt_checkpoint = derivation_checkpoint or expectation_checkpoint or landing_checkpoint
     intrascan_report = None
-    if derive_requirements:
+    causal_checkpoint = continuation_checkpoint or receipt_checkpoint
+    crossing = getattr(act, "crossing", None)
+    verification_hypothesis = bool(
+        crossing is not None and crossing.verify_required
+    )
+    # A verification-required crossing is itself the causal hypothesis.  Its
+    # failed downstream expectation explains why verification rejected it, but
+    # does not authorize turning that explanation into setup work for the same
+    # conjecture.  Let ordinary whole-act nogooding expose a sibling branch.
+    if derive_requirements and not verification_hypothesis:
         intrascan_report = _derive_attempt_requirements(
             attempt,
             state,
             ctx,
-            continuation_checkpoint or derivation_checkpoint or expectation_checkpoint,
+            causal_checkpoint,
         )
     shadow_observation = None
     try:
@@ -5230,7 +6142,7 @@ def _transition_once(
             state,
             attempt,
             result,
-            derivation_checkpoint or expectation_checkpoint,
+            receipt_checkpoint,
             prior_requirement_identities=shadow_requirements_before,
             intrascan_report=intrascan_report,
         )
@@ -5269,7 +6181,8 @@ def _transition_once(
                 if state.key_config is not None
                 else frame.key
             )
-            state.proof_rejected_acts.add((proof_world_key, act_identity(act)))
+            proof_scope = EvidenceScope.capture(proof_world_key, frame.snap.items())
+            state.proof_rejected_acts.add((proof_scope, act_identity(act)))
         else:
             rejection_key = (
                 _pilot_world_key(
@@ -5298,10 +6211,17 @@ def _transition_once(
             attempt=attempt,
             trial=attempt.trial,
             shadow_observation=shadow_observation,
-            adoption_checkpoint=derivation_checkpoint or expectation_checkpoint,
+            adoption_checkpoint=receipt_checkpoint,
         )
 
     trial = _adopt_trial(attempt.trial, frame, state, ctx)
+    if isinstance(act, ObserveScan):
+        if expectation_checkpoint is None:
+            raise RuntimeError("entry observation lost its source checkpoint")
+        executed = attempt.executed_attempt
+        if executed is None:
+            raise RuntimeError("entry observation lost its exact execution")
+        _retain_entry_bearing_execution(state, expectation_checkpoint, executed)
     continuation_hop = _advance_recovery_continuation(
         trial,
         frame,
@@ -5313,7 +6233,7 @@ def _transition_once(
         trial,
         act,
         state,
-        derivation_checkpoint or expectation_checkpoint,
+        receipt_checkpoint,
     )
     if shadow_observation is not None:
         try:
@@ -5330,7 +6250,7 @@ def _transition_once(
         trial=trial,
         continuation_hop=continuation_hop,
         shadow_observation=shadow_observation,
-        adoption_checkpoint=derivation_checkpoint or expectation_checkpoint,
+        adoption_checkpoint=receipt_checkpoint,
     )
 
 
@@ -5697,19 +6617,10 @@ def _pilot_loop_events(
     except Exception:  # noqa: BLE001 — diagnostics must not break the drive
         logger.debug("pilot: earned-work build failed", exc_info=True)
 
-    # At scan 0, calc-computed intermediates are still at defaults and may
-    # trivially satisfy conditions that fail once rungs execute (for example,
-    # PV >= Lower where Lower is calculated from SetPoint). Preserve the
-    # established one-scan landing, but retain its causal source and exact
-    # ordered execution truth instead of hiding the step.
-    bootstrap_execution = _execute_bootstrap_scan(state, ctx)
-    _run_shadow_hook(
-        _record_shadow_bootstrap,
-        state,
-        ctx,
-        bootstrap_execution,
-        remaining_budget=state.remaining_search_scans(ctx.max_scans),
-    )
+    # A warmed runner already owns its adjacent execution history. Import one
+    # exact edge; at boundary zero Compass instead chooses ObserveScan and
+    # produces the same receipt through the ordinary execution lifecycle.
+    bootstrap_execution = _import_adjacent_entry_scan(state, ctx)
 
     yield PilotEvent(
         "started",
@@ -5754,7 +6665,6 @@ def _pilot_loop_events(
     last_frontier: tuple[_ActionPair, ...] = ()
     while state.search_scans < ctx.max_scans:
         requirements_before_rebase = len(state.active_requirements)
-        shadow_requirements_before_rebase = _shadow_requirement_identities(state)
         rebased_requirements = _derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
             if _active_shadow_theory(state) is None:
@@ -5764,11 +6674,9 @@ def _pilot_loop_events(
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
             else:
-                _record_shadow_requirement_delta(
+                _refine_active_theory_from_program_guard_rebases(
                     state,
-                    shadow_requirements_before_rebase,
-                    identity=("program-guard-rebase", state.work.state.scan_id),
-                    record_fact=_record_controlling_theory_fact,
+                    rebased_requirements,
                 )
         for active in state.active_requirements[requirements_before_rebase:]:
             yield PilotEvent(
@@ -5790,7 +6698,11 @@ def _pilot_loop_events(
         if temporal_request is not None and temporal_source_checkpoint is not None:
             _restore_temporal_source(state, temporal_request, temporal_source_checkpoint)
         snap = dict(state.work.state.tags)
-        if target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate):
+        entry_execution = state.bootstrap_execution
+        if (
+            (entry_execution is None or entry_execution.route_bound)
+            and target_reached(snap, ctx.target.tag, ctx.target.value, ctx.target.predicate)
+        ):
             _run_shadow_hook(_record_shadow_proved, state)
             _promote_probationary_corrections(state)
             if state.steps:
@@ -5836,6 +6748,24 @@ def _pilot_loop_events(
         orientation_world = orientation_read.world
         candidates = orientation_read.candidates
         frame = orientation_world.frame
+        requirements_before_entry_bind = len(state.active_requirements)
+        bound_entry = _bind_entry_execution_to_route(state, ctx, result, frame)
+        if bound_entry is not None:
+            yield PilotEvent(
+                "entry_scan_observed",
+                bound_entry.scan_after,
+                {"execution": bound_entry.diagnostic_snapshot()},
+            )
+            for requirement in state.active_requirements[requirements_before_entry_bind:]:
+                yield PilotEvent(
+                    "requirement_activated",
+                    requirement.deadline.scan_id,
+                    {"requirement": requirement.diagnostic_snapshot()},
+                )
+            # Route binding adds target-relative theory knowledge and expires
+            # this read. SETUP_FIRST restoration and all later work therefore
+            # begin with a fresh Compass orientation.
+            continue
         result, _recovery_program_step = _preempt_recovery_action_with_program_coast(
             result,
             frame,
@@ -5844,6 +6774,16 @@ def _pilot_loop_events(
             target,
         )
         controlling_setup_request = _setup_request_for_result(temporal_request, result)
+        theory_source_checkpoint = (
+            _CausalCheckpoint(
+                key=frame.key,
+                world=state.snapshot_world(),
+                objective=result.objective,
+                configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
+            )
+            if _active_shadow_theory(state) is not None and isinstance(result, Bearing)
+            else None
+        )
         last_frame = frame
         frontier = result.objective.frontier if isinstance(result, Bearing) else result.frontier
         last_frontier = frontier
@@ -5949,13 +6889,19 @@ def _pilot_loop_events(
             target,
             constraints,
             oriented=result,
+            derivation_checkpoint=theory_source_checkpoint,
             defer_adoption=controlling_setup_request is not None,
             record_rejection=controlling_setup_request is None,
         )
         attempt = transition.attempt
         assert attempt is not None
         controlled_setup_attempt = (
-            _record_controlled_setup_attempt(state, controlling_setup_request, transition)
+            _record_controlled_setup_attempt(
+                state,
+                controlling_setup_request,
+                transition,
+                theory_source_checkpoint,
+            )
             if controlling_setup_request is not None
             else None
         )
@@ -6066,18 +7012,32 @@ def _pilot_loop_events(
         try:
             yield accepted_event
             requirements_before_monitor = _shadow_requirement_identities(state)
-            yield from _monitor_committed_trial(
-                trial,
-                frame,
-                state,
-                ctx,
-                continuation_hop=(transition.continuation_hop),
-            )
+            if controlled_setup_attempt is None:
+                yield from _monitor_committed_trial(
+                    trial,
+                    frame,
+                    state,
+                    ctx,
+                    continuation_hop=(transition.continuation_hop),
+                )
+                _derive_settled_target_requirements(
+                    trial,
+                    state,
+                    ctx,
+                    transition.adoption_checkpoint,
+                )
+                for requirement in state.active_requirements:
+                    if requirement.identity not in requirements_before_monitor:
+                        yield PilotEvent(
+                            "requirement_activated",
+                            requirement.deadline.scan_id,
+                            {"requirement": requirement.diagnostic_snapshot()},
+                        )
             shadow_observation, absorbed_requirement_ids = _shadow_transition_after_monitor(
                 state,
                 transition.shadow_observation,
                 prior_requirement_identities=requirements_before_monitor,
-                assertion_scan=executed_attempt.assertion_scan,
+                assertion_scan=_attempt_productive_scan(executed_attempt),
                 trial=trial,
                 source_checkpoint=transition.adoption_checkpoint,
             )

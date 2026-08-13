@@ -1,7 +1,11 @@
-"""Target-relevant designation and factual observation of bootstrap work.
+"""Target-relevant designation and factual observation of adjacent scan work.
 
-The first program scan is not a selected steer, so this module creates a
-conservative watchlist rather than promises that any effect must appear.
+The first program scan is not a selected steer, so its route is bound after
+landing.  Ordinary steers already own a selected route, but may still need a
+second receipt when an immediate side effect succeeds while the retained
+landing leaves that route.  Both cases use the same conservative designation
+policy rather than inventing effects from endpoint snapshots.
+
 ``bootstrap_designations`` is the one adjustable selection policy.  Exact
 ordered observation remains owned by :class:`ScanRungWriteProjection`; this
 module only adapts its factual results into bootstrap receipts.
@@ -18,6 +22,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pyrung.core.analysis.causal._rung_writes import OrderedEffectObservation
 from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.effects import EffectExpectation, EffectObligation
+from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import (
@@ -158,6 +164,8 @@ def _consumer_shape(
     consumer: TraceNode,
     effect: TraceNode,
     pdg: ProgramGraph,
+    *,
+    consumer_node: Any | None = None,
 ) -> tuple[tuple[str, Any], ...]:
     """Conservative local values read by the selected consumer rung.
 
@@ -169,7 +177,7 @@ def _consumer_shape(
 
     if consumer.writer_rung is None:
         return ()
-    node = pdg.rung_nodes[consumer.writer_rung]
+    node = consumer_node or pdg.rung_nodes[consumer.writer_rung]
     read_tags = node.condition_reads | node.guard_reads | node.data_reads
     candidates = [
         (child.tag, child.value)
@@ -184,6 +192,34 @@ def _consumer_shape(
         if candidate not in unique:
             unique.append(candidate)
     return tuple(unique)
+
+
+def _execution_consumer_node(
+    pdg: ProgramGraph,
+    producer: Any,
+    selected_consumer: Any,
+) -> Any:
+    """Resolve a cross-scope trace edge to its exact caller rung.
+
+    Backward trace nests a subroutine writer below the condition that admits
+    its call.  The selected writer remains the semantic downstream consumer,
+    but the physical read of that admission condition occurs on the caller
+    rung.  When one exact caller joins the producer's scope to the selected
+    consumer's scope, bind the handoff there so ordered execution can observe
+    it before normal subroutine cleanup.
+    """
+
+    if producer.subroutine == selected_consumer.subroutine:
+        return selected_consumer
+    called = selected_consumer.subroutine
+    if called is None:
+        return selected_consumer
+    callers = tuple(
+        node
+        for node in pdg.rung_nodes
+        if node.subroutine == producer.subroutine and called in node.calls
+    )
+    return callers[0] if len(callers) == 1 else selected_consumer
 
 
 def bootstrap_designations(
@@ -227,8 +263,17 @@ def bootstrap_designations(
             consumer_address = None
             if consumer is not None:
                 assert consumer.writer_rung is not None
-                consumer_node = pdg.rung_nodes[consumer.writer_rung]
-                consumer_address = _writer_address(pdg, consumer.writer_rung)
+                selected_consumer_node = pdg.rung_nodes[consumer.writer_rung]
+                consumer_node = _execution_consumer_node(
+                    pdg,
+                    producer_node,
+                    selected_consumer_node,
+                )
+                consumer_address = (
+                    consumer_node.subroutine,
+                    consumer_node.rung_index,
+                    consumer_node.branch_path,
+                )
             consumer_rung = (
                 resolve_rung(program, consumer_node) if consumer_node is not None else None
             )
@@ -243,7 +288,14 @@ def bootstrap_designations(
                         producer=_writer_address(pdg, node.writer_rung),
                         consumer=consumer_address,
                         required_shape=(
-                            _consumer_shape(consumer, node, pdg) if consumer is not None else ()
+                            _consumer_shape(
+                                consumer,
+                                node,
+                                pdg,
+                                consumer_node=consumer_node,
+                            )
+                            if consumer is not None
+                            else ()
                         ),
                         producer_rung=producer_rung,
                         consumer_rung=consumer_rung,
@@ -258,6 +310,180 @@ def bootstrap_designations(
 
     _walk(trace, None, ())
     return tuple(result)
+
+
+def bind_observed_route_designations(
+    trace: TraceNode,
+    pdg: ProgramGraph,
+    program: Any,
+    projection: ScanRungWriteProjection,
+    *,
+    steerable: frozenset[str],
+    channel_tags: frozenset[str],
+) -> tuple[BootstrapDesignation, ...]:
+    """Bind selected chart values to their exact observed alternate writer.
+
+    A charted state channel can enter a selected route value through a writer
+    other than the route's nominal producer (an abort/reset rung is the common
+    case). The value remains target-relevant, but its corrective authority must
+    name the writer that actually ran. Add only exact appeared channel writes
+    whose value is already present on the selected route; arbitrary off-route
+    effects remain excluded.
+    """
+
+    selected = list(
+        bootstrap_designations(
+            trace,
+            pdg,
+            program,
+            steerable=steerable,
+            channel_tags=channel_tags,
+        )
+    )
+    route_values = {
+        (designation.tag, _detached(designation.value)): designation
+        for designation in selected
+        if designation.tag in channel_tags
+    }
+    for write in projection.writes:
+        tag = write.transition.tag_name
+        template = route_values.get((tag, _detached(write.transition.to_value)))
+        if template is None:
+            continue
+        producer_nodes = tuple(
+            node
+            for node in pdg.rung_nodes
+            if node.subroutine == write.rung_id.subroutine
+            and node.rung_index == write.rung_id.rung_index
+            and tag in node.writes
+            and resolve_rung(program, node) is write.run.rung
+        )
+        if len(producer_nodes) != 1:
+            continue
+        node = producer_nodes[0]
+        producer = (node.subroutine, node.rung_index, node.branch_path)
+        path = (
+            *template.path[:-1],
+            BootstrapPathStep(tag, template.value, producer),
+        )
+        if write.run.rung is not template.producer_rung and not any(
+            item.tag == tag
+            and item.value == template.value
+            and item.producer == producer
+            and item.consumer == template.consumer
+            for item in selected
+        ):
+            selected.append(
+                BootstrapDesignation(
+                    tag=tag,
+                    value=template.value,
+                    path=path,
+                    producer=producer,
+                    consumer=template.consumer,
+                    required_shape=template.required_shape,
+                    producer_rung=write.run.rung,
+                    consumer_rung=template.consumer_rung,
+                )
+            )
+    return tuple(selected)
+
+
+def selected_route_landing_expectation(
+    trace: TraceNode,
+    pdg: ProgramGraph,
+    program: Any,
+    projections: tuple[ScanRungWriteProjection, ...],
+    *,
+    landing: Mapping[str, Any],
+    steerable: frozenset[str],
+    channel_tags: frozenset[str],
+    charted_values: Mapping[str, tuple[Any, ...]] | None = None,
+) -> EffectExpectation | None:
+    """Select exact route effects whose retained channel landing went off-route.
+
+    This is the target-route half of an execution receipt.  The act's ordinary
+    expectation still describes its immediate selected producer.  Here we add
+    at most the last appeared selected-route value for each state channel, and
+    only when the final channel value is not represented by the selected trace.
+    Intrascan can then interpret the exact later overwrite without treating all
+    transient route motion as a promise or re-reading the landing as evidence.
+    """
+
+    if not projections or not channel_tags:
+        return None
+    base = bootstrap_designations(
+        trace,
+        pdg,
+        program,
+        steerable=steerable,
+        channel_tags=channel_tags,
+    )
+    charted_values = charted_values or {}
+    off_route_tags = frozenset(
+        tag
+        for tag in channel_tags
+        if not any(
+            _values_match(landing.get(tag), value)
+            for value in charted_values.get(tag, ())
+        )
+        if not any(
+            designation.tag == tag
+            and _values_match(landing.get(tag), designation.value)
+            for designation in base
+        )
+    )
+    if not off_route_tags:
+        return None
+
+    appeared: list[BootstrapEffect] = []
+    for projection in projections:
+        designations = bind_observed_route_designations(
+            trace,
+            pdg,
+            program,
+            projection,
+            steerable=steerable,
+            channel_tags=channel_tags,
+        )
+        appeared.extend(
+            effect
+            for effect in observe_bootstrap_effects(designations, projection)
+            if effect.designation.tag in off_route_tags
+        )
+    if not appeared:
+        return None
+
+    last_by_tag: dict[str, BootstrapEffect] = {}
+    for effect in appeared:
+        current = last_by_tag.get(effect.designation.tag)
+        occurrence = effect.observation.appeared
+        if current is None or (
+            occurrence.scan_id,
+            occurrence.ordinal,
+        ) > (
+            current.observation.appeared.scan_id,
+            current.observation.appeared.ordinal,
+        ):
+            last_by_tag[effect.designation.tag] = effect
+    obligations = tuple(
+        EffectObligation(
+            tag=effect.designation.tag,
+            value=effect.designation.value,
+            producer=effect.designation.producer,
+            consumer=effect.designation.consumer,
+            required_shape=effect.designation.required_shape,
+            boundary=(effect.designation.tag, effect.designation.value),
+            # Unlike an ordinary static target promise, this obligation is
+            # minted only after the selected root writer actually appeared in
+            # an exact owned projection.  It may therefore explain a non-zero
+            # off-route landing without turning target absence into failure.
+            terminal_target=effect.designation.consumer is None,
+            producer_rung=effect.designation.producer_rung,
+            consumer_rung=effect.designation.consumer_rung,
+        )
+        for _tag, effect in sorted(last_by_tag.items())
+    )
+    return EffectExpectation(obligations) if obligations else None
 
 
 def observe_bootstrap_effects(

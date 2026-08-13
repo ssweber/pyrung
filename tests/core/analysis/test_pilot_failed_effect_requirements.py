@@ -527,6 +527,25 @@ def test_nonzero_or_program_written_preset_is_authoritative() -> None:
         )
         is OperandAuthority.CONFIGURED
     )
+    assert (
+        classify_bound_operand_authority(
+            **common,
+            source_value=25,
+            program_written=frozenset(),
+            provisional=frozenset(("WatchdogPresetMs",)),
+        )
+        is OperandAuthority.ADJUSTABLE
+    )
+    assert (
+        classify_bound_operand_authority(
+            **common,
+            source_value=25,
+            program_written=frozenset(),
+            configured=frozenset(("WatchdogPresetMs",)),
+            provisional=frozenset(("WatchdogPresetMs",)),
+        )
+        is OperandAuthority.CONFIGURED
+    )
 
 
 def test_unrelated_operand_occurrence_fails_closed() -> None:
@@ -667,7 +686,7 @@ def test_effect_adapter_does_not_invent_writability() -> None:
     assert result.explanation.kind is FailureExplanationKind.UNKNOWN
 
 
-def test_bootstrap_alarm_emits_exact_preset_requirement() -> None:
+def test_scan_zero_observation_emits_exact_preset_requirement() -> None:
     events = pilot_events(
         PLC(aborted_on_first_scan.logic, dt=0.010),
         aborted_on_first_scan.ProcessStep == aborted_on_first_scan.AT_TARGET,
@@ -675,12 +694,21 @@ def test_bootstrap_alarm_emits_exact_preset_requirement() -> None:
     )
     try:
         started = next(events)
+        activated = next(
+            event
+            for event in events
+            if event.kind == "requirement_activated"
+            and getattr(event.data["requirement"].condition, "tag", None)
+            == aborted_on_first_scan.WatchdogPresetMs.name
+        )
     finally:
         events.close()
 
-    requirements = started.data["active_requirements"]
-    assert len(requirements) == 1
-    requirement = requirements[0]
+    # Boundary zero contains no executed program evidence.  The one-scan
+    # ObserveScan bearing owns the first projection; only its receipt may emit
+    # the corrective while retaining scan 0 as the exact executable source.
+    assert started.data["active_requirements"] == ()
+    requirement = activated.data["requirement"]
     assert requirement.condition == Cmp("FirstScanWatchdogPresetMs", ">", 10)
     assert requirement.deadline.ordinal == 27
     assert requirement.demanding_occurrence.ordinal == 33
@@ -1096,7 +1124,7 @@ def test_conditional_negative_uses_upstream_deadline_but_honors_set_preset() -> 
     assert not requirement.permits_assignment
 
 
-def test_public_failed_effect_event_keeps_selected_writer_and_source() -> None:
+def test_public_overwritten_effect_event_keeps_selected_writer_and_source() -> None:
     events = list(
         pilot_events(
             PLC(alarmed_at_start.logic, dt=0.010),
@@ -1108,11 +1136,11 @@ def test_public_failed_effect_event_keeps_selected_writer_and_source() -> None:
         event.data["receipt"] for event in events if event.kind == "failed_effect_explained"
     ]
 
-    displaced = next(
+    overwritten = next(
         receipt
         for receipt in receipts
-        if receipt.explanation.kind is FailureExplanationKind.DISPLACED
+        if receipt.explanation.kind is FailureExplanationKind.OVERWRITTEN
     )
-    assert displaced.observation.disposition == "DISPLACED"
-    assert displaced.selected_writer == (None, 0, ())
-    assert displaced.source_scan == 1
+    assert overwritten.observation.disposition == "OVERWRITTEN"
+    assert overwritten.selected_writer == (None, 0, ())
+    assert overwritten.source_scan == 1

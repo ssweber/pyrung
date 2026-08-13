@@ -12,11 +12,11 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyrung.core.analysis.causal._rung_writes import RungRead, RungWrite
 from pyrung.core.analysis.pdg import resolve_rung
-from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.sp_values import _SnapshotView, _values_match
 from pyrung.core.analysis.write_sites import (
     instruction_write_targets,
     static_write_target_names,
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
         ScanRungWriteProjection,
     )
     from pyrung.core.analysis.pdg import ProgramGraph
+    from pyrung.core.context import ConditionView
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 EffectDisposition = Literal[
@@ -40,6 +41,7 @@ EffectDisposition = Literal[
     "STRANDED",
     "DISPLACED",
     "SURVIVED",
+    "SUBSUMED",
     "PREVENTED",
     "FIRED",
     "UNKNOWN",
@@ -437,13 +439,13 @@ def _consumer_for_producer(
     for candidate in reversed(path[:-1]):
         node = pdg.rung_nodes[candidate.node_index]
         reads = node.condition_reads | node.guard_reads | node.data_reads
-        if producer.tag not in reads:
-            continue
         # A branch node's structural footprint can include conditions executed
         # by its parent run.  Prefer the outermost same-rung ancestor which
         # reads the effect; that is the dynamic occurrence which observes the
-        # inherited parent condition.  Keep the branch only when no ancestor
-        # owns that read.
+        # inherited parent condition.  The branch's own static read set need
+        # not repeat that parent read, so resolve ancestors before deciding the
+        # candidate does not consume the effect. Keep the branch only when no
+        # ancestor owns that read.
         branch_path = getattr(node, "branch_path", ())
         ancestors = tuple(
             (index, owner)
@@ -459,6 +461,8 @@ def _consumer_for_producer(
         )
         if ancestors:
             return min(ancestors, key=lambda item: len(item[1].branch_path))[0]
+        if producer.tag not in reads:
+            continue
         return candidate.node_index
     return None
 
@@ -486,6 +490,10 @@ def expectation_from_writer(
     if writer_node < 0 or writer_node >= len(rung_nodes):
         return None
     producer_node = rung_nodes[writer_node]
+    if tag not in producer_node.writes:
+        # One receipt binds an exact static producer to its own effect. Route
+        # destinations and request writers are distinct pipeline producers.
+        return None
     consumer = pdg.rung_nodes[consumer_node] if consumer_node is not None else None
     producer_rung = resolve_rung(program, producer_node)
     consumer_rung = resolve_rung(program, consumer) if consumer is not None else None
@@ -581,6 +589,67 @@ def promote_certified_prefix_target_observation(
         observations,
         final_landing_value=final_landing_value,
     )
+
+
+def promote_route_landing_observations(
+    observations: Iterable[EffectObservation],
+    projections: Iterable[ScanRungWriteProjection],
+    *,
+    final_landing: Mapping[str, Any],
+) -> tuple[EffectObservation, ...]:
+    """Prefer the exact off-route landing writer to an earlier stalled handoff.
+
+    A charted producer can appear, fail to reach its selected consumer, and
+    then be replaced later in the same retained window.  For an ordinary
+    handoff receipt, ``STRANDED`` correctly explains the first local failure.
+    A route-*landing* receipt has the stronger question: what left the channel
+    off the selected route at the retained tip?  When an exact later writer
+    owns that final value, report that displacement so intrascan can invert
+    the writer which actually lost the route.
+
+    Missing or ambiguous landing evidence leaves the original observation
+    unchanged.  This adapter never promotes absence and never grants terminal
+    target authority.
+    """
+
+    projection_tuple = tuple(projections)
+    promoted: list[EffectObservation] = []
+    for observation in observations:
+        producer = observation.appeared
+        obligation = observation.obligation
+        if producer is None or observation.disposition in {
+            "SURVIVED",
+            "OVERWRITTEN",
+            "DISPLACED",
+        }:
+            promoted.append(observation)
+            continue
+        landing_value = final_landing.get(obligation.tag)
+        if _values_match(landing_value, obligation.value):
+            promoted.append(observation)
+            continue
+        landing = exact_last_landing_write(
+            projection_tuple,
+            after=producer,
+            tag=obligation.tag,
+            target_value=obligation.value,
+            landing_value=landing_value,
+        )
+        if landing is None:
+            promoted.append(observation)
+            continue
+        landing_projection, displacement = landing
+        promoted.append(
+            replace(
+                observation,
+                disposition="OVERWRITTEN",
+                displacement=displacement,
+                observed_reads=landing_projection.enabling_reads_observed_by_write(displacement),
+                detail="exact later writer owns the off-route retained landing",
+                execution_projection=landing_projection,
+            )
+        )
+    return tuple(promoted)
 
 
 def _promote_displaced_terminal_target(
@@ -716,6 +785,14 @@ def expectation_from_selected_path(
         # A statically opaque consumer is resolved from its exact projected
         # read rather than from a terminal scan-exit shape.
         shape = ()
+    producer_node = pdg.rung_nodes[producer.node_index]
+    if producer.tag not in producer_node.writes:
+        return None
+    consumer_node = pdg.rung_nodes[consumer_node_index] if consumer_node_index is not None else None
+    producer_rung = resolve_rung(program, producer_node)
+    consumer_rung = resolve_rung(program, consumer_node) if consumer_node is not None else None
+    if producer_rung is None or (consumer_node is not None and consumer_rung is None):
+        return None
     # Expectations are execution receipts, not forecasts for the rest of a
     # target trace.  Mint one only when this selected artifact makes the exact
     # producer runnable and its selected consumer is due now.  Otherwise a
@@ -734,14 +811,21 @@ def expectation_from_selected_path(
             or _values_match(selected_state.get(tag), value)
             for tag, value in shape
         )
+        if consumer_ready and consumer_rung is not None:
+            consumer_state = dict(selected_state)
+            consumer_state[producer.tag] = producer.value
+            try:
+                consumer_ready = bool(
+                    consumer_rung._evaluate_conditions(
+                        cast("ConditionView", _SnapshotView(consumer_state, {}))
+                    )
+                )
+            except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+                # The retained scalar shape remains the conservative fallback
+                # when a custom condition cannot be evaluated prospectively.
+                pass
         if not producer_ready or not consumer_ready:
             return None
-    producer_node = pdg.rung_nodes[producer.node_index]
-    consumer_node = pdg.rung_nodes[consumer_node_index] if consumer_node_index is not None else None
-    producer_rung = resolve_rung(program, producer_node)
-    consumer_rung = resolve_rung(program, consumer_node) if consumer_node is not None else None
-    if producer_rung is None or (consumer_node is not None and consumer_rung is None):
-        return None
     obligation = EffectObligation(
         tag=producer.tag,
         value=producer.value,
@@ -858,7 +942,11 @@ def observe_expectation(
                         )
                     )
                     continue
-                if len(preceding_reads) == 1:
+                adjacent_scan_is_observed = any(
+                    candidate.scan_id == projection.scan_id + 1
+                    for candidate in projection_tuple
+                )
+                if len(preceding_reads) == 1 or adjacent_scan_is_observed:
                     wrapped = _observe_wrapped_handoff(
                         obligation,
                         observation.appeared,
@@ -1070,6 +1158,29 @@ def fulfilled_expectation_observations(
             return ()
         fulfilled.append(survived)
     return tuple(fulfilled)
+
+
+def effect_reached_consumer(observation: EffectObservation) -> bool:
+    """Whether one selected value completed its exact handoff.
+
+    Program cleanup may replace a transient value after its selected consumer
+    has read it.  The displacement remains useful execution evidence, but it
+    cannot retroactively turn that completed handoff into a failed one.
+    """
+
+    if observation.disposition == "SURVIVED":
+        return True
+    appeared = observation.appeared
+    consumer = observation.consumer_read
+    displacement = observation.displacement
+    return bool(
+        observation.disposition == "OVERWRITTEN"
+        and appeared is not None
+        and consumer is not None
+        and displacement is not None
+        and appeared.scan_id == consumer.scan_id == displacement.scan_id
+        and appeared.ordinal < consumer.ordinal < displacement.ordinal
+    )
 
 
 def _consumer_reads_preceding_write(

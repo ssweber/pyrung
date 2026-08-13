@@ -1591,6 +1591,7 @@ class TestScanProgressStream:
 
         committed = [e for e in events if e.kind == "trial_committed"]
         assert [event.data["applied"] for event in committed] == [
+            (),
             (("a", True),),
             (("b", True),),
             (("c", True),),

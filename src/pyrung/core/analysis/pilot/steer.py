@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.avoid import _avoid_violations
+from pyrung.core.analysis.pilot.bootstrap import selected_route_landing_expectation
 from pyrung.core.analysis.pilot.causal import action_caused_change as _action_caused_change
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
@@ -34,12 +35,21 @@ from pyrung.core.analysis.pilot.coast import (
     value_trigger,
 )
 from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservation, is_action
-from pyrung.core.analysis.pilot.effects import expectation_from_writer, observe_execution_window
+from pyrung.core.analysis.pilot.effects import (
+    EffectExpectation,
+    EffectObservation,
+    effect_reached_consumer,
+    expectation_from_writer,
+    observe_execution_window,
+    promote_route_landing_observations,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
     Coast,
     Dwell,
+    LandingReceiptAuthority,
+    ObserveScan,
     OrientationWorld,
     Pulse,
     PulseHorizon,
@@ -51,7 +61,8 @@ from pyrung.core.analysis.pilot.overlay import (
     _merged_pilot_rungs,
     fork_with_pilot_rungs,
 )
-from pyrung.core.analysis.pilot.trace import target_reached
+from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
+from pyrung.core.analysis.pilot.trace import scan_transient_rest, target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
     PilotGateEvent,
@@ -81,25 +92,300 @@ _SETTLE_CONE_CEILING = LIMITS.cone_ceiling
 _LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
 
 
+def _charted_route_values(
+    ctx: _PilotContext,
+    channel_tag: str,
+    target_value: Any,
+) -> tuple[Any, ...]:
+    """Return exact channel values with a concrete path to one route target."""
+
+    values: list[Any] = []
+    for graph in ctx.compass.chart_graphs:
+        if graph.role.channel_tag != channel_tag:
+            continue
+        for value in target_reachable_values(graph, target_value):
+            if not any(_values_match(value, current) for current in values):
+                values.append(value)
+    return tuple(values)
+
+
 class StaleBearingError(RuntimeError):
     """The world changed after orientation and before execution."""
 
 
-def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
-    """Bind one declared expectation to its exact physical scan window."""
+def _reconcile_landing_receipts(
+    immediate: tuple[EffectObservation, ...],
+    landing: tuple[EffectObservation, ...],
+    *,
+    heading: Any,
+    final_landing: dict[str, Any],
+) -> tuple[EffectObservation, ...]:
+    """Keep local route facts without making them outrank a completed bearing.
 
+    A selected trace may name one local handoff through a step channel while
+    the program takes another local path through that same operation.  The
+    missed handoff remains factual.  Once the enclosing structural boundary
+    has both landed and reached its exact selected consumer, however, that
+    subordinate miss did not fail this Bearing.  Mark it as subsumed so the
+    next fresh Orientation owns any consequence in the landed world.
+
+    The structural channel itself, terminal targets, and landings without an
+    exact completed boundary receipt remain authoritative failures.
+    """
+
+    if (
+        not landing
+        or heading is None
+        or not _values_match(
+            final_landing.get(heading.channel_tag),
+            heading.target_value,
+        )
+    ):
+        return landing
+    boundary = (heading.channel_tag, heading.target_value)
+    boundary_completed = any(
+        observation.obligation.boundary == boundary
+        and observation.appeared is not None
+        and observation.consumer_read is not None
+        and effect_reached_consumer(observation)
+        for observation in (*immediate, *landing)
+    )
+    if not boundary_completed:
+        return landing
+    return tuple(
+        replace(
+            observation,
+            disposition="SUBSUMED",
+            detail=(
+                "the enclosing structural boundary completed through an exact "
+                "consumer; the missed local route is retained for the fresh "
+                "landing read"
+            ),
+        )
+        if observation.disposition in {"OVERWRITTEN", "STRANDED", "DISPLACED"}
+        and observation.obligation.consumer is not None
+        and observation.obligation.tag != heading.channel_tag
+        else observation
+        for observation in landing
+    )
+
+
+def _reconcile_completed_handoffs(
+    observations: tuple[EffectObservation, ...],
+) -> tuple[EffectObservation, ...]:
+    """Let an exact consumer receipt own a weaker producer-only view.
+
+    Immediate and route-landing expectations can observe the same physical
+    write at different resolutions.  A producer-only expectation reports the
+    value as overwritten at scan exit, while the route expectation can prove
+    that its selected consumer read that exact occurrence before cleanup.  The
+    overwrite remains recorded, but it is not a failed handoff.
+
+    This is deliberately occurrence-addressed.  A different write, a missed
+    selected consumer, or a transient terminal target remains authoritative.
+    """
+
+    completed = tuple(
+        observation
+        for observation in observations
+        if observation.appeared is not None
+        and observation.consumer_read is not None
+        and effect_reached_consumer(observation)
+    )
+    if not completed:
+        return observations
+
+    def completed_same_occurrence(observation: EffectObservation) -> bool:
+        if (
+            observation.disposition not in {"OVERWRITTEN", "STRANDED", "DISPLACED"}
+            or observation.appeared is None
+            or observation.obligation.consumer is not None
+            or observation.obligation.terminal_target
+        ):
+            return False
+        return any(
+            receipt is not observation
+            and receipt.appeared == observation.appeared
+            and receipt.obligation.producer == observation.obligation.producer
+            and receipt.obligation.tag == observation.obligation.tag
+            and _values_match(receipt.obligation.value, observation.obligation.value)
+            for receipt in completed
+        )
+
+    return tuple(
+        replace(
+            observation,
+            disposition="SUBSUMED",
+            detail=(
+                "the exact appeared write reached a selected consumer before "
+                "program cleanup; the producer-only overwrite is retained as "
+                "subordinate evidence"
+            ),
+        )
+        if completed_same_occurrence(observation)
+        else observation
+        for observation in observations
+    )
+
+
+def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
+    """Bind immediate and route-landing expectations to one physical window."""
+
+    action_scan = (
+        None if isinstance(bearing.act, (Coast, Dwell, ObserveScan)) else pulse.action_scan
+    )
+    immediate = observe_execution_window(
+        bearing.expectation,
+        pulse.fork,
+        scan_before=pulse.scan_before,
+        action_scan=action_scan,
+        coast_receipt=pulse.coast_receipt,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        projection_at=pulse.projection_at,
+    )
+    landing_expectation = None
+    projections = ()
+    heading = None
+    orientation = bearing.orientation
+    if orientation is not None and not isinstance(bearing.act, ObserveScan):
+        world = orientation.world
+        ctx = world.context
+        heading = bearing.act.policy.heading
+        route = heading.route if heading is not None else None
+        # ProgramStep already owns the exact present-tense continuation and
+        # its input handoffs. The act may still be navigationally ROUTE-owned;
+        # receipt authority is an orthogonal, explicitly carried reading.
+        program_handoff = (
+            bearing.act.policy.landing_receipt_authority
+            is LandingReceiptAuthority.PROGRAM_STEP
+        )
+        route_effect_tag = (
+            route.effect_tag or route.channel_tag if route is not None else None
+        )
+        charted_target_values = (
+            _charted_route_values(ctx, route.channel_tag, route.target_value)
+            if route is not None
+            else ()
+        )
+        charted_route = (
+            route is not None
+            and route_effect_tag == ctx.target.tag
+            and charted_target_values
+        )
+        charted_landing = bool(
+            charted_route
+            and any(
+                _values_match(pulse.snap.get(route_effect_tag), value)
+                or _values_match(pulse.snap.get(route.channel_tag), value)
+                for value in charted_target_values
+            )
+        )
+        if charted_route:
+            # The chart landing receipt owns every write after the selected
+            # edge appears: a downstream corridor value is progress, while an
+            # off-route value is attributed to its exact final writer.  Keep
+            # A missing selected producer remains an immediate failure unless
+            # this exact execution retained another value on the same chart.
+            # In that case the terminal receipt belongs to a later coast; the
+            # current act is judged by its concrete intermediate landing.
+            immediate = tuple(
+                observation
+                for observation in immediate
+                if not (
+                    observation.obligation.tag == route_effect_tag
+                    and (
+                        observation.disposition
+                        in {"OVERWRITTEN", "STRANDED", "DISPLACED"}
+                        or (
+                            charted_landing
+                            and observation.disposition == "ABSENT"
+                        )
+                    )
+                )
+            )
+        if not program_handoff:
+            exact_scan_ids = tuple(
+                scan_id
+                for scan_id in pulse.kernel_scan_ids
+                if pulse.scan_before < scan_id <= pulse.fork.state.scan_id
+                and (action_scan is None or scan_id >= action_scan)
+            )
+            projections = tuple(
+                projection
+                for scan_id in exact_scan_ids
+                if (projection := pulse.projection_at(scan_id)) is not None
+            )
+        if not program_handoff and len(projections) == len(exact_scan_ids):
+            # A literal-looking register can be discovered as a chart role and
+            # still be an opaque indirection or a same-scan handoff that
+            # provably returns to rest.  Both remain exact execution evidence,
+            # but neither is a retained route coordinate.  Keep the terminal
+            # target authoritative; immediate expectations still own exact
+            # transient consumers when the selected bearing depends on one.
+            channel_tags = {
+                ctx.target.tag,
+                *(
+                    role.channel_tag
+                    for role in (*ctx.pipeline_roles, *ctx.chart_roles)
+                    if role.channel_tag not in ctx.opaque_loop
+                    and role.channel_tag not in ctx.edge_tags
+                    and role.channel_tag not in ctx.clear_only
+                    and not scan_transient_rest(
+                        role.channel_tag,
+                        ctx.pdg,
+                        ctx.program,
+                    )[0]
+                ),
+            }
+            landing_expectation = selected_route_landing_expectation(
+                world.frame.tree,
+                ctx.pdg,
+                ctx.program,
+                projections,
+                landing=pulse.snap,
+                steerable=ctx.steerable,
+                channel_tags=frozenset(channel_tags),
+                charted_values={
+                    ctx.target.tag: charted_target_values,
+                    route.channel_tag: charted_target_values,
+                }
+                if route is not None
+                else {},
+            )
+            if bearing.expectation is not None and landing_expectation is not None:
+                distinct = tuple(
+                    obligation
+                    for obligation in landing_expectation.obligations
+                    if obligation not in bearing.expectation.obligations
+                )
+                landing_expectation = EffectExpectation(distinct) if distinct else None
+    landing = observe_execution_window(
+        landing_expectation,
+        pulse.fork,
+        scan_before=pulse.scan_before,
+        action_scan=action_scan,
+        coast_receipt=pulse.coast_receipt,
+        kernel_scan_ids=pulse.kernel_scan_ids,
+        projection_at=pulse.projection_at,
+    )
+    if landing:
+        landing = promote_route_landing_observations(
+            landing,
+            projections,
+            final_landing=pulse.snap,
+        )
+        landing = _reconcile_landing_receipts(
+            immediate,
+            landing,
+            heading=(bearing.act.policy.heading),
+            final_landing=pulse.snap,
+        )
+    observations = _reconcile_completed_handoffs((*immediate, *landing))
     return _ExecutedAttempt(
         pulse=pulse,
         bearing=bearing,
-        effect_observations=observe_execution_window(
-            bearing.expectation,
-            pulse.fork,
-            scan_before=pulse.scan_before,
-            action_scan=(None if isinstance(bearing.act, (Coast, Dwell)) else pulse.action_scan),
-            coast_receipt=pulse.coast_receipt,
-            kernel_scan_ids=pulse.kernel_scan_ids,
-            projection_at=pulse.projection_at,
-        ),
+        effect_observations=observations,
+        landing_expectation=landing_expectation,
     )
 
 
@@ -565,7 +851,54 @@ def execute(
             state,
             ctx,
         )
+    if isinstance(act, ObserveScan):
+        return _try_observe_scan(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
+
+
+def _try_observe_scan(
+    bearing: Bearing,
+    frame: _IterationFrame,
+    state: _PilotState,
+    ctx: _PilotContext,
+) -> _AttemptResult:
+    """Execute the entry observation bearing for exactly one program scan."""
+
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
+    scan_before = fork.state.scan_id
+    snap_before = dict(fork.state.tags)
+    session = CoastSession(
+        fork,
+        kind="observe_scan",
+        kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
+    )
+    session.arm_avoid(ctx.avoid_pred)
+    session.arm_pens(_pen_tags(state, ctx))
+    session.step_kernel()
+    session.note_pens()
+    snap_after = dict(fork.state.tags)
+    key_config = state.key_config
+    assert key_config is not None
+    trial = _PulseState(
+        fork=fork,
+        scan_before=scan_before,
+        action_scan=None,
+        action_snap=snap_before,
+        wait_snaps=(snap_after,),
+        post_pulse_snap=snap_before,
+        post_pulse_key=frame.key,
+        snap=snap_after,
+        key=_pilot_world_key(
+            snap_after,
+            key_config,
+            state.pilot_rungs,
+            getattr(state, "active_requirements", ()),
+        ),
+        timeline=session.events,
+        kernel_scan_ids=session.kernel_scan_ids,
+        source_snap=snap_before,
+    )
+    return verify_gates(_executed_attempt(bearing, trial), frame, state, ctx)
 
 
 # ---------------------------------------------------------------------------

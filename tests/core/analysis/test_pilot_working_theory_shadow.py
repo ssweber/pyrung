@@ -22,6 +22,7 @@ from tests.fixtures.pilot_alarm_presets import (
     aborted_on_first_scan,
     alarmed_at_start,
 )
+from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
 
 
 def _direct_producer_program() -> tuple[Program, Bool]:
@@ -341,3 +342,43 @@ def test_retained_reset_done_overwrite_is_retry_together_from_same_receipts(
     assert requirement.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
     assert requirement.demanding_occurrence[1] == fixture.Watchdog.Done.name
     assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]
+
+
+def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receipts(
+    monkeypatch: Any,
+) -> None:
+    captured = _capture_shadow_transitions(monkeypatch)
+
+    PLC(sequence_route.logic, dt=0.010).how(
+        sequence_route.SequenceStep == 81,
+        max_scans=40,
+    )
+
+    matching = tuple(
+        observation
+        for observation in captured
+        if any(
+            requirement.deadline_occurrence[1]
+            == sequence_route.FirstWatchdogPresetMs.name
+            for requirement in observation.requirements
+        )
+    )
+    # These are two physical attempts at the same chart edge, not duplicate
+    # recording.  The first landing exposes the initial setup; replay from its
+    # exact source then proves that 11 is still insufficient and refines the
+    # same temporal need for the retry.
+    assert len(matching) == 2
+    initial, refined = matching
+    assert initial.source.scan_id == 1
+    assert refined.source.scan_id == 3
+    assert initial.interpretation.kind is AttemptInterpretationKind.SETUP_FIRST
+    assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
+    assert tuple(
+        (obligation.tag, obligation.value) for obligation in initial.claim.obligations
+    ) == ((sequence_route.SequenceStep.name, 41),)
+    assert tuple(
+        (obligation.tag, obligation.value) for obligation in refined.claim.obligations
+    ) == ((sequence_route.SequenceStep.name, 41),)
+    assert initial.requirements[0].deadline_occurrence[2] == 3
+    assert refined.requirements[0].deadline_occurrence[2] == 4
+    assert initial.act_identity != refined.act_identity

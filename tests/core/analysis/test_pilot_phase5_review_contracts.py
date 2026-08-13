@@ -12,7 +12,7 @@ from pyrung.core.analysis.pilot.pilot import (
     _bootstrap_local_designation_survived,
     _monitor_committed_trial,
 )
-from pyrung.core.analysis.pilot.types import ScanProgressReceipt
+from pyrung.core.analysis.pilot.types import ChannelMotion, ScanProgressReceipt
 
 
 def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() -> None:
@@ -121,6 +121,7 @@ def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> Non
             bearing=SimpleNamespace(act=SimpleNamespace(policy=policy)),
         ),
         execution=SimpleNamespace(
+            channel_motion=ChannelMotion(),
             scan_progress=ScanProgressReceipt(
                 source_scan=11,
                 productive_scan=12,
@@ -136,6 +137,128 @@ def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> Non
     )
     state = SimpleNamespace(
         work=SimpleNamespace(state=SimpleNamespace(scan_id=12, tags={"Input": True})),
+        steps=(),
+        pending_departure=None,
+        checkpoints=[],
+        best_trend=2,
+    )
+
+    events = tuple(
+        _monitor_committed_trial(
+            trial,
+            SimpleNamespace(tree=object()),
+            state,
+            SimpleNamespace(),
+        )
+    )
+
+    assert [event.kind for event in events] == ["trial_committed"]
+    assert monitor_calls == []
+    assert state.checkpoints == [receipt_checkpoint]
+    assert state.best_trend == 1
+
+
+def test_exact_scan_progress_does_not_bypass_channel_departure(monkeypatch) -> None:
+    """A productive intrascan edge cannot turn a missed bearing into a tip."""
+    import pyrung.core.analysis.pilot.pilot as pilot_module
+
+    monitor_calls = []
+
+    def monitor(*args):
+        monitor_calls.append(args)
+        yield SimpleNamespace(kind="departure-monitor")
+
+    monkeypatch.setattr(pilot_module, "_monitor_trend", monitor)
+    policy = SimpleNamespace(action_pairs=(), applied=())
+    trial = SimpleNamespace(
+        attempt=SimpleNamespace(
+            bearing=SimpleNamespace(act=SimpleNamespace(policy=policy)),
+        ),
+        execution=SimpleNamespace(
+            channel_motion=ChannelMotion("State", 6, stop_reason="departed"),
+            scan_progress=ScanProgressReceipt(
+                source_scan=11,
+                productive_scan=12,
+                landing_scan=12,
+                kind="frontier",
+                source_world=("source",),
+                landing_world=("landing",),
+                selected_act=("coast", ()),
+                distance_before=2,
+                distance_after=1,
+            ),
+        ),
+    )
+    state = SimpleNamespace(
+        work=SimpleNamespace(state=SimpleNamespace(scan_id=12, tags={})),
+        steps=(),
+        pending_departure=None,
+        checkpoints=[],
+        best_trend=2,
+    )
+
+    events = tuple(
+        _monitor_committed_trial(
+            trial,
+            SimpleNamespace(tree=object()),
+            state,
+            SimpleNamespace(),
+        )
+    )
+
+    assert [event.kind for event in events] == ["trial_committed", "departure-monitor"]
+    assert len(monitor_calls) == 1
+    assert state.checkpoints == []
+    assert state.best_trend == 2
+
+
+def test_selected_producer_landing_outranks_crossed_intermediate_heading(
+    monkeypatch,
+) -> None:
+    """A retained route tip is progress, not an ejection from its heading."""
+    import pyrung.core.analysis.pilot.pilot as pilot_module
+
+    monitor_calls = []
+
+    def legacy_monitor(*args):
+        monitor_calls.append(args)
+        yield SimpleNamespace(kind="departure-monitor")
+
+    monkeypatch.setattr(pilot_module, "_monitor_trend", legacy_monitor)
+    receipt_checkpoint = object()
+    monkeypatch.setattr(
+        pilot_module,
+        "_trial_checkpoint",
+        lambda *_args: receipt_checkpoint,
+    )
+    monkeypatch.setattr(
+        pilot_module,
+        "_promote_probationary_corrections",
+        lambda _state: (),
+    )
+    policy = SimpleNamespace(action_pairs=(), applied=())
+    trial = SimpleNamespace(
+        attempt=SimpleNamespace(
+            bearing=SimpleNamespace(act=SimpleNamespace(policy=policy)),
+        ),
+        execution=SimpleNamespace(
+            channel_motion=ChannelMotion("State", 40, stop_reason="departed"),
+            scan_progress=ScanProgressReceipt(
+                source_scan=11,
+                productive_scan=12,
+                landing_scan=13,
+                kind="selected-producer",
+                source_world=("source",),
+                landing_world=("next-route-tip",),
+                selected_act=("pulse", (("Advance", True),)),
+                distance_before=2,
+                distance_after=1,
+                landing_owns_tip=True,
+            ),
+        ),
+    )
+    state = SimpleNamespace(
+        work=SimpleNamespace(state=SimpleNamespace(scan_id=13, tags={"State": 50})),
         steps=(),
         pending_departure=None,
         checkpoints=[],

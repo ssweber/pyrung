@@ -432,6 +432,30 @@ def _pilot_rung_execution_receipt(
     return PilotOverlayExecution(tuple(entries))
 
 
+def project_pilot_overlay(
+    snapshot: Mapping[str, Any],
+    pilot_rungs: Iterable[PilotRung],
+    resting: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project the compiled overlay at one hypothetical rung-entry snapshot.
+
+    This is a read of the overlay compiler's existing ownership receipt.  It
+    lets route verification ask which temporary holds would still exist at a
+    prospective boundary without executing a speculative PLC scan.
+    """
+
+    materialized = tuple(pilot_rungs)
+    projected = dict(snapshot)
+    receipt = _pilot_rung_execution_receipt(materialized, projected)
+    for dest in dict.fromkeys(rung.dest for rung in materialized):
+        owner = receipt.owner(dest)
+        if owner is not None:
+            projected[dest] = owner.value
+        elif dest in resting:
+            projected[dest] = resting[dest]
+    return projected
+
+
 def _set_pilot_rungs(plc: PLC, pilot_rungs: Iterable[PilotRung]) -> None:
     """Replace the overlay only before this runner has executed a local scan.
 

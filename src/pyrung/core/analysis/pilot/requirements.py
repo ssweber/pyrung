@@ -86,6 +86,13 @@ class RequirementStatus(StrEnum):
     AMBIGUOUS = "ambiguous"
 
 
+class EffectReceiptRole(StrEnum):
+    """Which part of a local transaction supplied a failed expectation."""
+
+    IMMEDIATE = "immediate"
+    ROUTE_LANDING = "route_landing"
+
+
 class OperandAuthority(StrEnum):
     """Who owns the operand value; this is not assignment permission."""
 
@@ -209,21 +216,25 @@ def classify_bound_operand_authority(
     steerable: frozenset[str],
     program_written: frozenset[str],
     configured: frozenset[str] = frozenset(),
+    provisional: frozenset[str] = frozenset(),
 ) -> OperandAuthority:
     """Classify one owner-declared parameter without granting a write.
 
-    Program authorship is authoritative. For an otherwise external completion
-    parameter, a non-default/nonzero source value is treated as configured and
-    preserved. Only an unwritten parameter still at its empty/default source
-    value inherits existing Pilot steerability as direct assignment authority.
-    This policy is intentionally scoped to owner-declared boundary parameters,
-    not arbitrary numeric process inputs.
+    Program authorship and explicit external configuration are authoritative.
+    A non-default/nonzero source value is otherwise treated as configured and
+    preserved, unless an exact lifecycle receipt says that value came from a
+    provisional Pilot setup. Only that narrow provenance permits a later
+    requirement to refine Pilot's own earlier value. This policy is
+    intentionally scoped to owner-declared boundary parameters, not arbitrary
+    numeric process inputs.
     """
 
     if tag in program_written:
         return OperandAuthority.PROGRAM_WRITTEN
     if tag in configured:
         return OperandAuthority.CONFIGURED
+    if tag in provisional and tag in steerable:
+        return OperandAuthority.ADJUSTABLE
     if source_value != declared_default or bool(source_value):
         return OperandAuthority.CONFIGURED
     if tag in steerable:
@@ -294,6 +305,7 @@ class FailedEffectReceipt:
     local_act: Any = field(default=None, compare=False, repr=False)
     local_bearing: Any = field(default=None, compare=False, repr=False)
     expectation: Any = field(default=None, compare=False, repr=False)
+    expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -306,6 +318,7 @@ class FailedEffectReceipt:
             id(self.execution_epoch),
             id(self.execution_owner),
             self.act_identity,
+            self.expectation_role,
         )
 
     def diagnostic_snapshot(self) -> FailedEffectReceiptSnapshot:
@@ -535,6 +548,7 @@ class ExpectationReceiptSnapshot:
     producer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     consumer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     causal_identity: tuple[int, int, int]
+    expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
 
 @dataclass(frozen=True)
@@ -554,6 +568,7 @@ class ExpectationReceipt:
     local_act: Any = field(default=None, compare=False, repr=False)
     local_bearing: Any = field(default=None, compare=False, repr=False)
     expectation: Any = field(default=None, compare=False, repr=False)
+    expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
 
     def diagnostic_snapshot(self) -> ExpectationReceiptSnapshot:
         checkpoint_work = getattr(
@@ -574,6 +589,7 @@ class ExpectationReceipt:
                 id(self.execution_owner),
                 id(self.checkpoint_owner),
             ),
+            expectation_role=self.expectation_role,
         )
 
     @property
@@ -588,6 +604,7 @@ class ExpectationReceipt:
             self.consumer_occurrences,
             id(self.execution_epoch),
             id(self.execution_owner),
+            self.expectation_role,
         )
 
 
@@ -647,7 +664,10 @@ def match_expectation_receipt(
             or len(receipt.producer_occurrences) != len(receipt.obligations)
             or receipt.act_identity != act_identity(receipt.local_act)
             or receipt.local_bearing.act is not receipt.local_act
-            or receipt.local_bearing.expectation is not receipt.expectation
+            or (
+                receipt.expectation_role is not EffectReceiptRole.ROUTE_LANDING
+                and receipt.local_bearing.expectation is not receipt.expectation
+            )
             or expectation_snapshot(receipt.expectation) != receipt.obligations
             or getattr(receipt.source_checkpoint, "owner", None) is not receipt.checkpoint_owner
             or getattr(receipt.source_checkpoint, "key", None) != receipt.source_world_key
@@ -1543,8 +1563,10 @@ def derive_guard_requirement_from_effect(
     """Derive the exact false frontier of the selected producer/consumer.
 
     ``ABSENT`` explains only the retained producer. ``STRANDED`` may explain
-    only the retained obliged consumer and only when its exact effect read/run
-    survived in this projection. Neither arm searches for another producer.
+    only the retained obliged consumer.  A consumer that ran and read the
+    effect names itself directly; an exactly unique disabled consumer run names
+    its own false guard even though, by definition, it never reached the effect
+    read. Neither arm searches for another producer or consumer.
     """
 
     source_error = _validate_source_identity(
@@ -1574,14 +1596,18 @@ def derive_guard_requirement_from_effect(
         guard_scope = ("producer_guard", getattr(obligation, "producer", None))
     elif disposition == "STRANDED":
         consumer_read = getattr(observation, "consumer_read", None)
-        if consumer_read is None or not any(read is consumer_read for read in projection.reads):
-            return _unknown("stranded effect has no exact obliged-consumer read")
         appeared = getattr(observation, "appeared", None)
         if appeared is None or not any(write is appeared for write in projection.writes):
             return _unknown("stranded effect has no exact selected producer occurrence")
-        run = consumer_read.run
-        if run.rung is not getattr(obligation, "consumer_rung", None):
-            return _unknown("stranded read does not belong to the obliged consumer")
+        consumer_rung = getattr(obligation, "consumer_rung", None)
+        if consumer_read is not None and any(read is consumer_read for read in projection.reads):
+            run = consumer_read.run
+            if run.rung is not consumer_rung:
+                return _unknown("stranded read does not belong to the obliged consumer")
+        else:
+            run = _unique_static_run(projection, consumer_rung)
+            if run is None or run.enabled:
+                return _unknown("stranded effect has no exact disabled consumer run")
         explanation = _guard_explanation(run, projection)
         if explanation.kind is not FailureExplanationKind.GUARD_FALSE:
             return RequirementDerivation(explanation)

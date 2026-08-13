@@ -71,6 +71,7 @@ from pyrung.core.analysis.sp_values import (
     _writer_projection,
     _written_value_for_tag,
 )
+from pyrung.core.analysis.write_sites import instruction_writes_tag
 from pyrung.core.crossing import (
     REVERSE_FALLTHROUGH,
     UNKNOWN,
@@ -185,6 +186,10 @@ class _TraceEnv:
     # disposition attach a harness-linked sensor's *driver* (the input that makes
     # it ramp) as a steerable sibling of the coast leaf.  ``None`` off-fork.
     harness: Any = None
+    # Exact executor memory at this read boundary. Trace consumes this receipt
+    # only to rule out a currently-spent one-shot writer; it never mutates or
+    # reconstructs instruction state.
+    execution_memory: Mapping[str, Any] | None = None
     advance_index: Any = None
     # Per-trace memo for the writer-guard rejection arm (:func:`_writer_guard_verdict`).
     # Pure over the trace-invariant env (frozen snapshot + constant domains), so a
@@ -217,6 +222,7 @@ def _env_for(
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
+    execution_memory: Mapping[str, Any] | None = None,
 ) -> _TraceEnv:
     """Build a trace env, resolving a ``TraceChoice`` route to its lock maps once."""
     from pyrung.core.analysis.pilot.advance import build_advance_index
@@ -239,6 +245,7 @@ def _env_for(
         rejected_actions=rejected_actions,
         max_depth=max_depth,
         harness=harness,
+        execution_memory=execution_memory,
         advance_index=build_advance_index(program, harness),
     )
 
@@ -287,6 +294,7 @@ class TraceReadConstraints:
     # Orientation's action admission. Trace never turns them into assignments.
     active_requirements: tuple[Any, ...] = ()
     harness: Any = None
+    execution_memory: Mapping[str, Any] | None = None
 
     @classmethod
     def from_context(
@@ -310,6 +318,7 @@ class TraceReadConstraints:
             rejected_actions=rejected_actions,
             active_requirements=tuple(getattr(ctx, "active_requirements", ())),
             harness=getattr(work, "_harness", None),
+            execution_memory=getattr(getattr(work, "state", None), "memory", None),
         )
 
     def env(
@@ -341,6 +350,7 @@ class TraceReadConstraints:
             rejected_actions=self.rejected_actions,
             max_depth=max_depth,
             harness=self.harness,
+            execution_memory=self.execution_memory,
         )
 
 
@@ -2057,6 +2067,7 @@ def trace_relational(
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
+    execution_memory: Mapping[str, Any] | None = None,
     constraints: TraceReadConstraints | None = None,
 ) -> TraceNode:
     """Backward trace for a relational *target* predicate (``A op B``).
@@ -2076,6 +2087,7 @@ def trace_relational(
         avoid_pred=avoid_pred,
         rejected_actions=rejected_actions,
         harness=harness,
+        execution_memory=execution_memory,
     )
     env = read.env(snapshot, pdg, program, steerable, max_depth=max_depth)
     nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
@@ -2798,6 +2810,7 @@ def trace_back(
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
+    execution_memory: Mapping[str, Any] | None = None,
     constraints: TraceReadConstraints | None = None,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
@@ -2820,6 +2833,7 @@ def trace_back(
         avoid_pred=avoid_pred,
         rejected_actions=rejected_actions,
         harness=harness,
+        execution_memory=execution_memory,
     )
     env = read.env(
         snapshot,
@@ -3261,6 +3275,40 @@ def _trace_back(
     return node
 
 
+def _rung_write_is_spent_oneshot(
+    rung: Any,
+    tag: str,
+    memory: Mapping[str, Any] | None,
+) -> bool:
+    """Whether every exact writer of *tag* in this rung is currently spent.
+
+    The executor owns one-shot state.  This reader merely consumes its immutable
+    memory receipt at the current boundary.  Mixed or structurally opaque write
+    sites fail closed: one armed/non-one-shot writer keeps the antagonist live.
+    """
+
+    if memory is None:
+        return False
+
+    def _walk(instructions: typing.Iterable[Any]) -> Iterator[Any]:
+        for instruction in instructions:
+            yield instruction
+            children = getattr(instruction, "instructions", None)
+            if children is not None:
+                yield from _walk(children)
+
+    writers = tuple(
+        instruction
+        for instruction in _walk(getattr(rung, "_instructions", ()))
+        if instruction_writes_tag(instruction, tag)
+    )
+    return bool(writers) and all(
+        bool(getattr(instruction, "oneshot", False))
+        and memory.get(instruction.memory_key("_oneshot")) is True
+        for instruction in writers
+    )
+
+
 def _preserve_children(
     env: _TraceEnv,
     tag: str,
@@ -3326,6 +3374,14 @@ def _preserve_children(
         if sp is None:
             continue
         guard = _sp_to_expr(sp)
+        if (
+            _eval_expr_from_state(guard, env.snapshot) is True
+            and _rung_write_is_spent_oneshot(ro, tag, env.execution_memory)
+        ):
+            # Keeping the guard conductive keeps the instruction spent. If a
+            # later bearing changes that condition, the committed scan updates
+            # executor memory and the next ordinary trace read sees it rearmed.
+            continue
         if predicate is None:
             # An exact clobber provably drives the tag away from the value.
             if _can_produce(_written_value_for_tag(ro, tag), value):
@@ -4091,7 +4147,7 @@ def compute_resting_values(
 
     For pure INPUTs: the tag's declared default.
     For ack-cleared Bools: the program's clearing value via
-    ``_scan_transient_rest``.
+    :func:`scan_transient_rest`.
     """
     resting: dict[str, Any] = {}
     for name in steerable:
@@ -4099,7 +4155,7 @@ def compute_resting_values(
         if t is None:
             resting[name] = False
             continue
-        transient, rest_val = _scan_transient_rest(name, pdg, program)
+        transient, rest_val = scan_transient_rest(name, pdg, program)
         if transient and rest_val is not None:
             resting[name] = rest_val
         else:
@@ -4646,12 +4702,17 @@ def _rank_writers(
     return [ri for _availability, _bucket, _clobber, ri in ordered]
 
 
-def _scan_transient_rest(
+def scan_transient_rest(
     tag: str,
     pdg: ProgramGraph,
     program: Any,
 ) -> tuple[bool, Any]:
-    """Whether *tag* provably rests at one value at every scan boundary."""
+    """Whether *tag* provably rests at one value at every scan boundary.
+
+    A proved scan-transient may be an important same-scan handoff, but its
+    asserted value is not a retained coordinate.  Callers may therefore use
+    this fact to distinguish consumer receipts from route-landing promises.
+    """
     from pyrung.core.analysis.simplified import Atom, Or
 
     if pdg.tag_roles.get(tag) == TagRole.INPUT:
@@ -4759,3 +4820,8 @@ def _scan_transient_rest(
             if c_node.rung_index > last_prod_pos:
                 return True, rest
     return False, None
+
+
+# Kept for existing internal callers while the capability acquires its public
+# name.  The classifier is one implementation and one contract.
+_scan_transient_rest = scan_transient_rest

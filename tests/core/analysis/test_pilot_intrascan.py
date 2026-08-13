@@ -35,7 +35,19 @@ from pyrung.core.analysis.pilot.requirements import (
     derive_overwriter_guard_requirement_from_effect,
 )
 from pyrung.core.analysis.pilot.types import _AttemptResult, _ExecutedAttempt, _PulseState
+from pyrung.core.analysis.pilot.working_theory import TheoryState
 from pyrung.core.crossing import Cmp
+
+
+def _adapter_state() -> SimpleNamespace:
+    """Minimal state surface required by the production receipt adapter."""
+
+    return SimpleNamespace(
+        failed_effect_receipts=[],
+        active_requirements=[],
+        theory_state=TheoryState(),
+        pilot_rungs=(),
+    )
 
 
 def _obligation(
@@ -444,7 +456,7 @@ def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> N
         bearing=bearing,
         effect_observations=observations,
     )
-    state = SimpleNamespace(failed_effect_receipts=[], active_requirements=[])
+    state = _adapter_state()
     context = SimpleNamespace(
         program=program,
         pdg=build_program_graph(program),
@@ -486,7 +498,7 @@ def test_pilot_adapter_reuses_the_steer_projection_for_overwrite_evidence() -> N
             replace(observation, execution_projection=None) for observation in observations
         ),
     )
-    replayed_state = SimpleNamespace(failed_effect_receipts=[], active_requirements=[])
+    replayed_state = _adapter_state()
 
     _derive_attempt_requirements(
         _AttemptResult(trial=None, executed=replayed),
@@ -555,7 +567,7 @@ def test_pilot_adapter_matches_service_snapshots_order_and_dedupe() -> None:
         effect_observations=observations,
     )
     attempt = _AttemptResult(trial=None, executed=executed)
-    state = SimpleNamespace(failed_effect_receipts=[], active_requirements=[])
+    state = _adapter_state()
     context = SimpleNamespace(
         program=program,
         pdg=build_program_graph(program),

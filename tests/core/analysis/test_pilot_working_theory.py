@@ -385,6 +385,221 @@ def test_refined_setup_intent_projects_need_without_an_action_artifact() -> None
     assert request.requirements == (requirement,)
 
 
+def test_successor_temporal_request_excludes_accumulated_requirement_history() -> None:
+    state, theory_id, v1 = _opened()
+    first_rejection = _attempt(
+        theory_id,
+        v1,
+        transition="first-setup-trigger",
+        actions=(("first", True),),
+    )
+    state = reduce_theory(state, first_rejection)
+    first = _requirement("first")
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=v1,
+            source=first_rejection.source,
+            refined_source=first_rejection.source,
+            requirements=(first,),
+            refinement_identity=("first-setup",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=first_rejection.attempt_identity,
+        ),
+    )
+
+    v2 = state.ledger.theories[theory_id].current_version_id
+    successor_rejection = _attempt(
+        theory_id,
+        v2,
+        transition="successor-setup-trigger",
+        actions=(("successor", True),),
+    )
+    state = reduce_theory(state, successor_rejection)
+    successor = _requirement("successor")
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=v2,
+            source=successor_rejection.source,
+            refined_source=successor_rejection.source,
+            requirements=(successor,),
+            refinement_identity=("successor-setup",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=successor_rejection.attempt_identity,
+        ),
+    )
+
+    view = theory_view(state)
+    request = temporal_need_request(state)
+
+    assert view is not None
+    assert view.requirements == (first, successor)
+    assert request is not None
+    assert request.requirements == (successor,)
+
+
+def test_adjacent_monitor_receipt_can_rewind_to_the_parent_progress_boundary() -> None:
+    state, theory_id, version_id = _opened()
+    accepted = _attempt(
+        theory_id,
+        version_id,
+        transition="accepted-adjacent-scan",
+        actions=(("setup", True),),
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    )
+    state = reduce_theory(state, accepted)
+    landing = _boundary("landing", 1)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted.attempt_identity,
+            source=accepted.source,
+            boundary=landing,
+            advance_identity=("accept-adjacent-scan",),
+        ),
+    )
+
+    successor = _attempt(
+        theory_id,
+        version_id,
+        transition="successor-at-parent-boundary",
+        actions=(("successor", True),),
+    )
+    state = reduce_theory(state, successor)
+    requirement = _requirement("successor-at-parent-boundary")
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=successor.source,
+            refined_source=successor.source,
+            requirements=(requirement,),
+            refinement_identity=("rewind-for-successor",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=successor.attempt_identity,
+            temporal_source=successor.source,
+        ),
+    )
+
+    view = theory_view(state)
+    request = temporal_need_request(state)
+
+    assert view is not None
+    assert view.source == accepted.source
+    assert request is not None
+    assert request.source == accepted.source
+    assert request.requirements == (requirement,)
+
+
+def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() -> None:
+    state, theory_id, version_id = _opened()
+    accepted = _attempt(
+        theory_id,
+        version_id,
+        transition="accepted-overlay-scan",
+        actions=(("setup", True),),
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    )
+    state = reduce_theory(state, accepted)
+    overlay_source = _boundary("source-with-new-correctives", 0)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted.attempt_identity,
+            source=accepted.source,
+            boundary=_boundary("overlay-landing", 1),
+            advance_identity=("accept-overlay-scan",),
+            execution_source=overlay_source,
+        ),
+    )
+
+    successor = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="successor-at-overlay-source",
+            actions=(("successor", True),),
+        ),
+        source=overlay_source,
+    )
+    state = reduce_theory(state, successor)
+    requirement = _requirement("successor-at-overlay-source")
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=overlay_source,
+            refined_source=overlay_source,
+            requirements=(requirement,),
+            refinement_identity=("rewind-to-overlay-source",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=successor.attempt_identity,
+            temporal_source=overlay_source,
+        ),
+    )
+
+    request = temporal_need_request(state)
+
+    assert request is not None
+    assert request.source == overlay_source
+    assert request.requirements == (requirement,)
+
+
+def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
+    state, theory_id, version_id = _opened()
+    rejected = _attempt(
+        theory_id,
+        version_id,
+        transition="rewind-trigger",
+        actions=(("original", True),),
+    )
+    state = reduce_theory(state, rejected)
+    earlier = replace(
+        rejected.source,
+        world_key=("world", "earlier"),
+        scan_id=0,
+        checkpoint_token=("checkpoint", "earlier"),
+        execution_owner_token=(),
+    )
+    requirement = replace(
+        _requirement("prior"),
+        source_scan=0,
+        source_world_key=earlier.world_key,
+        provenance="program-guard-rebase",
+    )
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=rejected.source,
+            refined_source=earlier,
+            requirements=(requirement,),
+            refinement_identity=("rewind-to-exact-source",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=rejected.attempt_identity,
+            temporal_source=earlier,
+        ),
+    )
+
+    request = temporal_need_request(state)
+
+    assert request is not None
+    assert request.source == earlier
+    view = theory_view(state)
+    assert view is not None
+    assert view.source == earlier
+
+
 def test_theory_view_is_absent_without_an_open_theory() -> None:
     assert theory_view(TheoryState()) is None
 

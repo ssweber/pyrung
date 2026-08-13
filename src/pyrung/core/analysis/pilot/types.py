@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pilot.compass import Compass, CompassObservation
     from pyrung.core.analysis.pilot.effects import (
+        EffectExpectation,
         EffectObservation,
         EffectObservationSnapshot,
         EffectOccurrenceSnapshot,
@@ -123,7 +124,14 @@ class ScanProgressReceipt:
     source_scan: int
     productive_scan: int
     landing_scan: int
-    kind: Literal["target", "selected-producer", "frontier", "earned-work", "conductivity"]
+    kind: Literal[
+        "target",
+        "selected-producer",
+        "frontier",
+        "earned-work",
+        "conductivity",
+        "observation",
+    ]
     source_world: _StateKey
     landing_world: _StateKey
     selected_act: tuple[Any, ...]
@@ -438,6 +446,7 @@ class _BootstrapExecution:
     appeared_effects: tuple[BootstrapEffect, ...]
     execution_epoch: Epoch = field(compare=False, repr=False)
     execution_owner: EpochQuery = field(compare=False, repr=False)
+    route_bound: bool = False
 
     def __post_init__(self) -> None:
         if self.scan_after != self.scan_before + 1:
@@ -891,9 +900,11 @@ class _PilotState:
     # reads.  This receipt is knowledge, not retained executable work.
     recovery_continuation: _RecoveryContinuation | None = None
     # Exact current-world acts rejected by obligation/requirement proof. These
-    # are admissibility receipts, not empirical impossibility/nogood claims;
-    # a changed world or active-requirement identity admits the act anew.
-    proof_rejected_acts: set[tuple[_StateKey, tuple[Any, ...]]] = field(default_factory=set)
+    # are admissibility receipts, not empirical impossibility/nogood claims.
+    # Their EvidenceScope includes the complete pre-action input context, so a
+    # corrective level change admits the act anew while an unchanged replay
+    # remains suppressed.
+    proof_rejected_acts: set[tuple[Any, tuple[Any, ...]]] = field(default_factory=set)
     # Invocation-local knowledge: reverting a handled transition must not
     # authorize the same source/action/evidence occurrence for another lap.
     consumed_revisits: set[RevisitCredential] = field(default_factory=set)
@@ -1081,7 +1092,7 @@ class _PulseState:
 
     fork: PLC
     scan_before: int
-    action_scan: int
+    action_scan: int | None
     action_snap: dict[str, Any]
     wait_snaps: tuple[dict[str, Any], ...]
     post_pulse_snap: dict[str, Any]
@@ -1176,6 +1187,10 @@ class _ExecutedAttempt:
     pulse: _PulseState
     bearing: Bearing
     effect_observations: tuple[EffectObservation, ...] = ()
+    # A factual, post-execution promise for the last selected-route value that
+    # appeared before an off-route retained landing.  It complements rather
+    # than replaces the bearing's immediate producer expectation.
+    landing_expectation: EffectExpectation | None = None
 
     @property
     def assertion_scan(self) -> int:

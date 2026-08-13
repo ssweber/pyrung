@@ -9,12 +9,20 @@ from pyrung.core.analysis.pilot.attempt_interpretation import (
     AttemptInterpretationKind,
     interpret_attempt,
 )
+from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
+from pyrung.core.analysis.pilot.outcome import (
+    Agency,
+    BearingEffect,
+    ProgressEffect,
+    TrialAssessment,
+)
 from pyrung.core.analysis.pilot.program_step import ProgramStepStatus
 from pyrung.core.analysis.pilot.requirements import (
     OperandAuthority,
     RequirementSourceWalkStatus,
 )
+from pyrung.core.analysis.pilot.types import AssessedMotion
 
 
 class _Finding:
@@ -67,6 +75,23 @@ def _report(*findings: Any) -> IntrascanResult:
     return IntrascanResult((), tuple(findings))
 
 
+def _accepted_landing() -> Any:
+    return SimpleNamespace(
+        verification=AssessedMotion(
+            new_key=("landing",),
+            trend=2,
+            assessment=TrialAssessment(
+                agency=Agency.UNKNOWN,
+                bearing=BearingEffect.EXPOSED,
+                progress=ProgressEffect.BACKWARD,
+                new_frontier=True,
+                accepted=True,
+            ),
+        ),
+        earned_work_receipt=EarnedWorkReceipt(),
+    )
+
+
 def test_prior_deadline_is_setup_first() -> None:
     result = interpret_attempt(
         trial=None,
@@ -84,6 +109,37 @@ def test_prior_deadline_is_setup_first() -> None:
 
     assert result.kind is AttemptInterpretationKind.SETUP_FIRST
     assert result.opens_theory
+
+
+def test_accepted_landing_keeps_an_exact_setup_first_receipt() -> None:
+    result = interpret_attempt(
+        trial=_accepted_landing(),
+        program_step=None,
+        intrascan=_report(
+            _Finding(
+                deadline_scan=4,
+                authority=OperandAuthority.ADJUSTABLE,
+                consumer=False,
+                label="accepted-but-displaced",
+            )
+        ),
+        assertion_scan=5,
+    )
+
+    assert result.kind is AttemptInterpretationKind.SETUP_FIRST
+    assert result.opens_theory
+
+
+def test_accepted_landing_without_actionable_temporal_receipt_is_reread() -> None:
+    result = interpret_attempt(
+        trial=_accepted_landing(),
+        program_step=None,
+        intrascan=_report(),
+        assertion_scan=5,
+    )
+
+    assert result.kind is AttemptInterpretationKind.KEEP_AND_REREAD
+    assert not result.opens_theory
 
 
 def test_owner_bound_program_condition_is_setup_first() -> None:

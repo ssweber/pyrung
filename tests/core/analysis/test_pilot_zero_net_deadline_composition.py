@@ -77,10 +77,19 @@ def test_public_pilot_composes_the_earlier_guard_and_reaches_target() -> None:
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
-    applied = tuple(pair for step in events[-1].data["steps"] for pair in step.inputs.items())
+    # The earlier speculative branch is discarded when WorkingTheory restores
+    # its exact source.  The executable journal is the receipt for the fresh
+    # composition. Ordinary level patches persist in the runner input image;
+    # unlike conditional corrective PilotRungs, they are not duplicated in a
+    # journal step's ``steady_holds`` field.
+    journal = events[-1].data["plan_journal"]
+    applied = tuple(pair for step in journal for pair in step.inputs)
     assert (fixture.Advance.name, True) in applied
     assert (fixture.KeepTarget.name, True) in applied
     assert not any(tag in {fixture.State.name, fixture.LinkHealthy.name} for tag, _value in applied)
+    work = events[-1].data["work"]
+    assert work.state.tags[fixture.Advance.name] is True
+    assert work.state.tags[fixture.KeepTarget.name] is True
 
     plan = PLC(fixture.logic).how(
         fixture.State == fixture.TARGET,
@@ -88,5 +97,10 @@ def test_public_pilot_composes_the_earlier_guard_and_reaches_target() -> None:
     )
     assert plan.reachable, plan.reason
     assert plan.state.tags[fixture.State.name] == fixture.TARGET
+    assert plan.state.tags[fixture.Advance.name] is True
     assert plan.state.tags[fixture.KeepTarget.name] is True
     assert plan.state.tags[fixture.LinkHealthy.name] is False
+    replay = plan.replay()
+    assert replay.state.tags[fixture.State.name] == fixture.TARGET
+    assert replay.state.tags[fixture.Advance.name] is True
+    assert replay.state.tags[fixture.KeepTarget.name] is True

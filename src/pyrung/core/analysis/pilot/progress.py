@@ -270,6 +270,7 @@ def _delayed_requirement_from_regression(
         local_act=receipt.local_act,
         local_bearing=receipt.local_bearing,
         expectation=receipt.expectation,
+        expectation_role=receipt.expectation_role,
     )
     if not any(current.identity == failed.identity for current in state.failed_effect_receipts):
         state.failed_effect_receipts.append(failed)
@@ -712,6 +713,7 @@ def _handle_channel_departure(
             ),
             state.work.state.scan_id,
         ),
+        landing_receipt=execution.coast_receipt,
     )
     departure = classify_departure(observation)
     if fulfilled_expectation and earned_work_is_useful_motion(trial.earned_work_receipt):
@@ -1539,6 +1541,50 @@ def _investigate_and_revert(
             if expectation is not None
             else ()
         )
+        # A terminal coast usually declares no producer of its own. Its
+        # departure can nevertheless displace the exact landing receipt that
+        # established the current channel tenure. Join that earlier accepted
+        # occurrence before building the incident; otherwise the monitor sees
+        # the harmful writer but has no source occurrence to hand to ordinary
+        # failed-effect derivation.
+        retained_sources: list[EffectObservation] = []
+        if channel_motion.channel_tag is not None:
+            tenure_value = execution.before_snap.get(channel_motion.channel_tag)
+            for receipt in state.expectation_receipts:
+                for index, obligation in enumerate(receipt.expectation.obligations):
+                    if (
+                        obligation.tag != channel_motion.channel_tag
+                        or not _values_match(obligation.value, tenure_value)
+                    ):
+                        continue
+                    producer = resolve_expectation_receipt_producer(receipt, index)
+                    if producer is None or producer.scan_id < origin.anchor_scan:
+                        continue
+                    projection = state.work._replay_rung_write_projection_at(producer.scan_id)
+                    if projection is None:
+                        continue
+                    retained_sources.append(
+                        EffectObservation(
+                            obligation=obligation,
+                            disposition="SURVIVED",
+                            appeared=producer,
+                            displacement=None,
+                            observed_reads=(),
+                            detail="accepted route landing established this channel tenure",
+                            execution_epoch=receipt.execution_epoch,
+                            execution_owner=receipt.execution_owner,
+                            execution_projection=projection,
+                        )
+                    )
+        if retained_sources:
+            latest_scan = max(item.appeared.scan_id for item in retained_sources if item.appeared)
+            latest = tuple(
+                item
+                for item in retained_sources
+                if item.appeared is not None and item.appeared.scan_id == latest_scan
+            )
+            if len(latest) == 1:
+                fulfilled = (*fulfilled, latest[0])
         exact_delayed_links: list[tuple[Any, BearingDeparture, Any, Any]] = []
         for observation in fulfilled:
             consumer = observation.consumer_read
@@ -1655,7 +1701,6 @@ def _investigate_and_revert(
             source_matches = tuple(
                 (receipt, index, producer)
                 for receipt in state.expectation_receipts
-                if receipt.local_bearing is bearing_owner
                 for index, snapshot in enumerate(receipt.producer_occurrences)
                 if snapshot == occurrence_snapshot(observation.appeared)
                 for producer in (resolve_expectation_receipt_producer(receipt, index),)
@@ -1951,6 +1996,9 @@ def _investigate_and_revert(
             }
 
         investigation_payload = {
+            "retained_sources": len(retained_sources),
+            "exact_delayed_links": len(exact_delayed_links),
+            "exact_witnesses": len(exact_witnesses),
             "hypotheses": len(investigation.hypotheses),
             "confirmed": 0 if reused_receipt is not None else len(investigation.confirmed),
             "rejected": len(investigation.rejected),

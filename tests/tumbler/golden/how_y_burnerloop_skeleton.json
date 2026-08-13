@@ -331,11 +331,10 @@
   "wait_reason": null
  },
  {
+  "kind": "crossing_try"
+ },
+ {
   "applied": [
-   [
-    "Cmd_State_Clear",
-    true
-   ],
    [
     "Cmd_UnitModeChgRequest",
     true
@@ -343,10 +342,204 @@
    [
     "Cmd_Mode_Production",
     true
+   ]
+  ],
+  "candidate": {
+   "Cmd_Mode_Production": true,
+   "Cmd_UnitModeChgRequest": true
+  },
+  "gates": [
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "exact scan edge improved target-relative distance",
+    "event": "scan-productive-step"
+   },
+   {
+    "__type__": "PilotGateEvent",
+    "detail": "distance 25 -> 18",
+    "event": "satisfied"
+   }
+  ],
+  "kind": "crossing_accepted",
+  "trend": 18
+ },
+ {
+  "applied": [
+   [
+    "Cmd_UnitModeChgRequest",
+    true
    ],
    [
-    "S_DryerTemp_F",
-    -1
+    "Cmd_Mode_Production",
+    true
+   ]
+  ],
+  "candidate": {
+   "Cmd_Mode_Production": true,
+   "Cmd_UnitModeChgRequest": true
+  },
+  "kind": "trial_committed"
+ },
+ {
+  "distance": 18,
+  "kind": "iteration",
+  "nogoods": [],
+  "raw_trace_actions": [],
+  "still_need": [
+   "y_BurnerLoop=True (have False)",
+   "o_BurnerLoop=True (have False)",
+   "Heat_CurStep=3 (have 0)",
+   "Heat_PvTemp_F < Heat_TargetTemp_F (have 0)",
+   "Heat__x=1 (have 0)",
+   "Heat_CurStep=2 (have 0)",
+   "Heat_TargetTemp_F=1.0 (have 0)",
+   "Heat_xCall=1 (have 0)",
+   "Heat_Trans=1 (have 0)",
+   "Sts_State_Execute=True (have False)",
+   "Blower_x=True (have False)",
+   "Heat_CurStep=1 (have 0)",
+   "Sts_StateCurrent=6 (have 9)",
+   "Blower__x=1 (have 0)",
+   "Sts_StateRequested=6 (have 0)",
+   "Blower_xCall=1 (have 0)",
+   "Sts_State_Starting=True (have False)",
+   "Sts_StateCurrent=3 (have 9)",
+   "Sts_StateRequested=3 (have 0)"
+  ],
+  "target": [
+   "y_BurnerLoop",
+   true
+  ],
+  "watch_tags": [
+   "Blower__x",
+   "Blower_x",
+   "Blower_xCall",
+   "Cmd_UnitMode",
+   "Cmd_UnitModeChgReqBool",
+   "HeatDelay_Tmr_Done",
+   "Heat_CurStep",
+   "Heat_TargetTemp_F",
+   "Heat_Trans",
+   "Heat__x",
+   "Heat_xCall",
+   "S_CurrStep_Dry",
+   "S_ValLowBandTemp_F",
+   "Sts_Mode_Production",
+   "Sts_StateCurrent",
+   "Sts_StateRequested",
+   "Sts_State_Execute",
+   "Sts_State_Starting",
+   "Sts_UnitModeCurrent",
+   "o_BurnerLoop",
+   "y_BurnerLoop"
+  ]
+ },
+ {
+  "active_trace_actions": [],
+  "candidates": [
+   {
+    "awaited_action_note": "",
+    "awaited_action_prescribed": false,
+    "bearing_channel_tag": "Sts_StateCurrent",
+    "bearing_channel_value": 1,
+    "learned_prescribed": false,
+    "pair": [
+     "Cmd_State_Clear",
+     true
+    ],
+    "prescribed": true,
+    "provenance": [],
+    "route_prescribed": true,
+    "tag": "Cmd_State_Clear",
+    "value": true
+   }
+  ],
+  "kind": "candidates_built",
+  "route_candidates": [
+   [
+    "Cmd_State_Clear",
+    true
+   ]
+  ],
+  "route_plan": {
+   "channel_tag": "Sts_StateCurrent",
+   "needed": [
+    "Sts_StateCurrent",
+    3
+   ],
+   "path": [
+    {
+     "action": [
+      "Cmd_State_Clear",
+      true
+     ],
+     "enablers": [],
+     "from": 9,
+     "request": [
+      "Sts_StateRequested",
+      1
+     ],
+     "to": 1
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 1,
+     "request": [
+      "Sts_StateRequested",
+      2
+     ],
+     "to": 2
+    },
+    {
+     "action": [
+      "Cmd_State_Reset",
+      true
+     ],
+     "enablers": [],
+     "from": 2,
+     "request": [
+      "Sts_StateRequested",
+      15
+     ],
+     "to": 15
+    },
+    {
+     "action": null,
+     "enablers": [],
+     "from": 15,
+     "request": [
+      "Sts_StateRequested",
+      4
+     ],
+     "to": 4
+    },
+    {
+     "action": [
+      "Cmd_State_Start",
+      true
+     ],
+     "enablers": [],
+     "from": 4,
+     "request": [
+      "Sts_StateRequested",
+      3
+     ],
+     "to": 3
+    }
+   ],
+   "target_value": 3
+  },
+  "stuck_reason": null,
+  "trace_actions": [],
+  "wait_prescribed": false,
+  "wait_reason": null
+ },
+ {
+  "applied": [
+   [
+    "Cmd_State_Clear",
+    true
    ]
   ],
   "candidate": {
@@ -365,20 +558,7 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
-   ]
-  ],
+  "co_actions": [],
   "index": 0,
   "kind": "candidate_try",
   "total": 1
@@ -388,37 +568,20 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "exact scan edge improved target-relative distance",
-     "event": "scan-productive-step"
-    },
-    {
-     "__type__": "PilotGateEvent",
-     "detail": "distance 25 -> 18",
-     "event": "departed"
+     "detail": "selected whole-shape effect reached its exact obliged consumer",
+     "event": "expectation-survived"
     }
    ],
    "novel_key": true,
    "state_key_changed": true,
    "target_reached": false,
    "trend_after": 18,
-   "trend_before": 25
+   "trend_before": 18
   },
   "applied": [
    [
     "Cmd_State_Clear",
     true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
    ]
   ],
   "candidate_detail": {
@@ -437,30 +600,12 @@
    "tag": "Cmd_State_Clear",
    "value": true
   },
-  "co_actions": [
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
-   ]
-  ],
+  "co_actions": [],
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "exact scan edge improved target-relative distance",
-    "event": "scan-productive-step"
-   },
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "distance 25 -> 18",
-    "event": "departed"
+    "detail": "selected whole-shape effect reached its exact obliged consumer",
+    "event": "expectation-survived"
    }
   ],
   "index": 0,
@@ -468,33 +613,9 @@
   "watched_changes": [
    {
     "__type__": "TagChange",
-    "after": true,
-    "before": false,
-    "tag": "S_CurrStep_Dry"
-   },
-   {
-    "__type__": "TagChange",
-    "after": 133,
-    "before": 0,
-    "tag": "S_ValLowBandTemp_F"
-   },
-   {
-    "__type__": "TagChange",
-    "after": true,
-    "before": false,
-    "tag": "Sts_Mode_Production"
-   },
-   {
-    "__type__": "TagChange",
     "after": 2,
     "before": 9,
     "tag": "Sts_StateCurrent"
-   },
-   {
-    "__type__": "TagChange",
-    "after": 1,
-    "before": 3,
-    "tag": "Sts_UnitModeCurrent"
    }
   ]
  },
@@ -503,24 +624,43 @@
    [
     "Cmd_State_Clear",
     true
-   ],
-   [
-    "Cmd_UnitModeChgRequest",
-    true
-   ],
-   [
-    "Cmd_Mode_Production",
-    true
-   ],
-   [
-    "S_DryerTemp_F",
-    -1
    ]
   ],
   "candidate": {
    "Cmd_State_Clear": true
   },
   "kind": "trial_committed"
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "investigated": true,
+  "kind": "letrun_ejection",
+  "observe_label": "accept",
+  "reason": null,
+  "requested_value": 1,
+  "to_value": 2
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "from_value": 9,
+  "kind": "departure_check_started",
+  "to_value": 2
+ },
+ {
+  "channel_tag": "Sts_StateCurrent",
+  "classification": "clean_continuation",
+  "earned_work_mark": [
+   [
+    "Internal__Step",
+    101
+   ]
+  ],
+  "from_value": 9,
+  "kind": "pending_departure_started",
+  "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
+  "requested_value": 1,
+  "settled_value": 2
  },
  {
   "distance": 18,
@@ -687,13 +827,8 @@
    "gate_events": [
     {
      "__type__": "PilotGateEvent",
-     "detail": "channel ejected",
-     "event": "channel-override-dead-end"
-    },
-    {
-     "__type__": "PilotGateEvent",
-     "detail": "distance 18 -> 18",
-     "event": "departed"
+     "detail": "selected whole-shape effect reached its exact obliged consumer",
+     "event": "expectation-survived"
     }
    ],
    "novel_key": true,
@@ -728,13 +863,8 @@
   "gates": [
    {
     "__type__": "PilotGateEvent",
-    "detail": "channel ejected",
-    "event": "channel-override-dead-end"
-   },
-   {
-    "__type__": "PilotGateEvent",
-    "detail": "distance 18 -> 18",
-    "event": "departed"
+    "detail": "selected whole-shape effect reached its exact obliged consumer",
+    "event": "expectation-survived"
    }
   ],
   "index": 0,
@@ -775,21 +905,6 @@
   "from_value": 2,
   "kind": "departure_check_started",
   "to_value": 4
- },
- {
-  "channel_tag": "Sts_StateCurrent",
-  "classification": "clean_continuation",
-  "earned_work_mark": [
-   [
-    "Internal__Step",
-    101
-   ]
-  ],
-  "from_value": 2,
-  "kind": "pending_departure_started",
-  "reason": "constrained navigation evidence has a clean forward continuation that preserves earned progress and does not reopen completed work",
-  "requested_value": 15,
-  "settled_value": 4
  },
  {
   "distance": 18,
@@ -1962,27 +2077,62 @@
  {
   "active_trace_actions": [],
   "candidates": [],
+  "completion_frontier": [
+   [
+    "HeatDelay_Tmr_Acc",
+    10.0
+   ]
+  ],
   "kind": "candidates_built",
   "route_candidates": [],
-  "route_plan": null,
+  "route_plan": {
+   "channel_tag": "Heat_xCall",
+   "needed": [
+    "Heat_xCall",
+    1
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [
+      [
+       "HeatDelay_Tmr_Done",
+       true
+      ],
+      [
+       "S_CurrStep_Dry",
+       true
+      ],
+      [
+       "Sts_UnitModeCurrent",
+       1
+      ]
+     ],
+     "from": 0,
+     "request": null,
+     "to": 1
+    }
+   ],
+   "target_value": 1
+  },
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+  "wait_reason": "let-run Heat_xCall: 0->1; the owner reports progress through its operation witness"
  },
  {
-  "channel_tag": "HeatDelay_Tmr_Done",
+  "channel_tag": "Heat_xCall",
   "kind": "bearing_coast",
   "prescribed": true,
-  "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+  "reason": "let-run Heat_xCall: 0->1; the owner reports progress through its operation witness"
  },
  {
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
-  "bearing_coast_actual_value": true,
-  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
-  "bearing_coast_target_value": true,
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Acc",
+  "bearing_coast_target_value": 10.0,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
@@ -2221,27 +2371,62 @@
  {
   "active_trace_actions": [],
   "candidates": [],
+  "completion_frontier": [
+   [
+    "HeatDelay_Tmr_Acc",
+    10.0
+   ]
+  ],
   "kind": "candidates_built",
   "route_candidates": [],
-  "route_plan": null,
+  "route_plan": {
+   "channel_tag": "Heat_xCall",
+   "needed": [
+    "Heat_xCall",
+    1
+   ],
+   "path": [
+    {
+     "action": null,
+     "enablers": [
+      [
+       "HeatDelay_Tmr_Done",
+       true
+      ],
+      [
+       "S_CurrStep_Dry",
+       true
+      ],
+      [
+       "Sts_UnitModeCurrent",
+       1
+      ]
+     ],
+     "from": 0,
+     "request": null,
+     "to": 1
+    }
+   ],
+   "target_value": 1
+  },
   "stuck_reason": null,
   "trace_actions": [],
   "wait_prescribed": true,
-  "wait_reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+  "wait_reason": "let-run Heat_xCall: 0->1; the owner reports progress through its operation witness"
  },
  {
-  "channel_tag": "HeatDelay_Tmr_Done",
+  "channel_tag": "Heat_xCall",
   "kind": "bearing_coast",
   "prescribed": true,
-  "reason": "advance HeatDelay_Tmr_Done to its next boundary True"
+  "reason": "let-run Heat_xCall: 0->1; the owner reports progress through its operation witness"
  },
  {
   "accepted": true,
   "agency": "program",
   "bearing": "satisfied",
-  "bearing_coast_actual_value": true,
-  "bearing_coast_channel_tag": "HeatDelay_Tmr_Done",
-  "bearing_coast_target_value": true,
+  "bearing_coast_actual_value": 10,
+  "bearing_coast_channel_tag": "HeatDelay_Tmr_Acc",
+  "bearing_coast_target_value": 10.0,
   "bearing_stop_reason": "reached",
   "ejected": false,
   "kind": "bearing_coast_accepted",
@@ -2441,7 +2626,7 @@
     101
    ]
   ],
-  "from_value": 2,
+  "from_value": 9,
   "kind": "pending_departure_promoted",
   "landing_mark": [
    [
@@ -2549,10 +2734,6 @@
     "accelerators": [],
     "inputs": [
      [
-      "Cmd_State_Clear",
-      true
-     ],
-     [
       "Cmd_UnitModeChgRequest",
       true
      ],
@@ -2562,11 +2743,28 @@
      ]
     ],
     "kind": "pulse",
-    "label": "Cmd_State_Clear",
+    "label": "Cmd_Mode_Production, Cmd_UnitModeChgRequest",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [],
     "transition": "A_CurDisabledStates_HEX 8191 -> 0",
+    "waiting_for": []
+   },
+   {
+    "__type__": "PlanStep",
+    "accelerators": [],
+    "inputs": [
+     [
+      "Cmd_State_Clear",
+      true
+     ]
+    ],
+    "kind": "pulse",
+    "label": "Cmd_State_Clear",
+    "notes": [],
+    "pulsing_holds": [],
+    "steady_holds": [],
+    "transition": "Cmd_CtrlCmd 0 -> 9",
     "waiting_for": []
    },
    {
@@ -2830,7 +3028,7 @@
     ],
     "inputs": [],
     "kind": "coast",
-    "label": "HeatDelay_Tmr_Done",
+    "label": "HeatDelay_Tmr_Acc",
     "notes": [],
     "pulsing_holds": [],
     "steady_holds": [

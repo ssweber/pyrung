@@ -243,8 +243,12 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     assert prevent_poison.name in _condition_tags(rebased[0].condition)
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
+    # The rebased requirement belongs to the failed action scan, so the fresh
+    # boundary-zero retry composes the corrective with its exact trigger.
     assert any(
-        event.kind == "candidate_try" and event.data["applied"] == ((prevent_poison.name, True),)
+        event.kind == "candidate_try"
+        and event.data["applied"]
+        == ((prevent_poison.name, True), (start.name, True))
         for event in events
     )
     assert events[-1].kind == "finished"

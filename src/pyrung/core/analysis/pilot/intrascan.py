@@ -561,7 +561,7 @@ def derive_recorded_observations(
     advance_index = question.advance_index
     for observation in recorded:
         if (
-            observation.disposition == "SURVIVED"
+            observation.disposition in {"SURVIVED", "SUBSUMED"}
             or id(observation.obligation) in fulfilled_obligations
         ):
             continue

@@ -22,7 +22,17 @@ WALL_S = float(sys.argv[2]) if len(sys.argv) > 2 else 300.0
 
 SHOW = {
     "started",
+    "iteration",
+    "candidates_built",
+    "candidate_try",
+    "candidate_rejected",
     "candidate_accepted",
+    "crossing_try",
+    "crossing_rejected",
+    "crossing_accepted",
+    "requirement_activated",
+    "working_theory_opened",
+    "working_theory_advanced",
     "batch_accepted",
     "widening_accepted",
     "bearing_coast",
@@ -42,6 +52,60 @@ SHOW = {
 
 
 def brief(kind: str, data: dict) -> str:
+    if kind == "iteration":
+        snap = data.get("snapshot") or {}
+        names = (
+            "Sts_StateCurrent",
+            "Sts_StateRequested",
+            "Sts_UnitModeCurrent",
+            "Cmd_CtrlCmd",
+            "sm__loopindex",
+            "Rotate__init",
+            "Blower__init",
+            "Internal__Step",
+            "Heat_xCall",
+        )
+        return " ".join(f"{name}={snap.get(name)!r}" for name in names)
+    if kind == "candidates_built":
+        plan = data.get("route_plan") or {}
+        path = plan.get("path") or ()
+        first = path[0] if path else None
+        candidates = tuple(item.get("pair") for item in data.get("candidates", ()))
+        details = tuple(
+            dict.fromkeys(
+                (
+                    getattr(item, "pair", None),
+                    getattr(getattr(item, "availability", None), "name", None),
+                    getattr(item, "operation_boundary", None),
+                )
+                for item in data.get("trace_action_details", ())
+            )
+        )
+        crossings = tuple(item.get("actions") for item in data.get("crossing_batches", ()))
+        return (
+            f"route={plan.get('channel_tag')}->{plan.get('target_value')!r} "
+            f"first={first} candidates={candidates} "
+            f"trace={details} crossings={crossings} program_step={data.get('program_step')}"
+        )
+    if kind in {"candidate_try", "candidate_rejected"}:
+        return (
+            f"applied={data.get('applied')} "
+            f"gates={[(getattr(g, 'event', None), getattr(g, 'detail', '')) for g in data.get('gates', ())]} "
+            f"effects={data.get('effect_observations')}"
+        )
+    if kind.startswith("crossing_"):
+        return (
+            f"actions={data.get('actions', data.get('applied'))} "
+            f"crossing={data.get('crossing')}"
+        )
+    if kind == "requirement_activated":
+        requirement = data.get("requirement")
+        return (
+            f"provenance={getattr(requirement, 'provenance', None)!r} "
+            f"condition={getattr(requirement, 'condition', None)!r}"
+        )
+    if kind.startswith("working_theory_"):
+        return f"reason={data.get('reason')!r} disposition={data.get('disposition')!r}"
     if kind == "candidate_accepted":
         cd = data.get("candidate_detail") or {}
         return f"tag={cd.get('tag')} value={cd.get('value')!r} applied={data.get('applied')}"
@@ -107,11 +171,18 @@ def main() -> None:
         count += 1
         wall = time.perf_counter() - t0
         if event.kind in SHOW:
-            print(f"[{wall:7.1f}s] scan {event.scan:6d} {event.kind:20s} {brief(event.kind, dict(event.data))}")
+            print(
+                f"[{wall:7.1f}s] scan {event.scan:6d} {event.kind:20s} "
+                f"{brief(event.kind, dict(event.data))}",
+                flush=True,
+            )
         if event.kind == "finished":
             break
         if wall > WALL_S:
-            print(f"[{wall:7.1f}s] WALL BUDGET {WALL_S}s EXCEEDED — aborting drive loop")
+            print(
+                f"[{wall:7.1f}s] WALL BUDGET {WALL_S}s EXCEEDED — aborting drive loop",
+                flush=True,
+            )
             break
     print(f"\n{count} events, {time.perf_counter() - t0:.1f}s wall")
 

@@ -142,7 +142,10 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
             (fixture.EarlyPresetMs.name, 11),
             (fixture.Advance.name, True),
         ),
-        ((fixture.LaterPresetMs.name, 11),),
+        (
+            (fixture.EarlyPresetMs.name, 11),
+            (fixture.LaterPresetMs.name, 11),
+        ),
     )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

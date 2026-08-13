@@ -152,6 +152,77 @@ def test_stopped_timer_surfaces_its_current_external_input() -> None:
     assert result.input_handoffs[0].boundary.tag == timer.Acc.name
 
 
+def test_program_step_keeps_only_the_current_alternative_to_its_exact_producer() -> None:
+    """A prior state command is not a companion for the current state route."""
+
+    idle = 4
+    execute = 6
+    held = 11
+    start = Bool("CurrentAlternativeStart", external=True)
+    resume = Bool("CurrentAlternativeResume", external=True)
+    state = Int("CurrentAlternativeState", default=held)
+    phase = Int("CurrentAlternativePhase")
+    command = Int("CurrentAlternativeCommand")
+    with Program(strict=False) as program:
+        with Rung(start, state == idle):
+            copy(execute, state)
+        with Rung(resume, state == held):
+            copy(execute, state)
+            copy(1, phase)
+        with Rung(state == execute, phase == 1):
+            copy(10, command)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    producer = Producer(
+        rung_index=next(iter(world.pdg.writers_of[command.name])),
+        kind="program",
+        guard_tags=frozenset((state.name, phase.name)),
+        co_writes=frozenset(),
+        command_tag=command.name,
+        command_value=10,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.NEEDS_INPUT
+    assert tuple(action.pair for action in result.required_inputs) == (
+        (resume.name, True),
+    )
+
+
+def test_spent_oneshot_clobber_is_not_reported_as_a_live_program_input() -> None:
+    start = Bool("SpentClobberStart", external=True)
+    suppress = Bool("SpentClobberSuppress", external=True)
+    state = Int("SpentClobberState")
+    with Program(strict=False) as program:
+        with Rung(start):
+            copy(1, state, oneshot=True)
+        with Rung(~suppress):
+            copy(9, state, oneshot=True)
+
+    plc = PLC(program)
+    plc.step()
+    world = _world(program, plc)
+    producer = Producer(
+        rung_index=next(
+            index
+            for index in world.pdg.writers_of[state.name]
+            if world.pdg.rung_nodes[index].condition_reads == frozenset((start.name,))
+        ),
+        kind="program",
+        guard_tags=frozenset((start.name,)),
+        co_writes=frozenset(),
+        command_tag=state.name,
+        command_value=1,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.NEEDS_INPUT
+    assert tuple(action.pair for action in result.required_inputs) == ((start.name, True),)
+
+
 def test_supplied_input_hands_the_timer_back_to_the_exact_producer_reader() -> None:
     """Generic pulse settlement must not consume the next owned operation."""
     program, run, _command, timer = _timer_producer_program()
@@ -203,6 +274,113 @@ def test_later_writer_clobber_is_not_reported_as_forward_motion() -> None:
 
     assert result.status is ProgramStepStatus.UNCLEAR
     assert "did not" in result.reason or "survive" in result.reason
+
+
+def test_structural_channel_motion_after_the_exact_producer_is_observed_once() -> None:
+    """A same-scan successor is motion to observe, not a failed local write."""
+
+    state = Int("ObservedSuccessorState", default=70)
+    with Program(strict=False) as program:
+        with Rung(state == 70):
+            copy(80, state)
+        with Rung(state == 80):
+            copy(81, state)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    world = WorldView(
+        **{
+            **world.__dict__,
+            "opaque_loop": frozenset((state.name,)),
+            "pipeline_roles": (PipelineRoles(state.name),),
+        }
+    )
+    producer = Producer(
+        rung_index=min(world.pdg.writers_of[state.name]),
+        kind="program",
+        guard_tags=frozenset((state.name,)),
+        co_writes=frozenset(),
+        command_tag=state.name,
+        command_value=80,
+    )
+
+    result = read_program_step(world, producer, plc)
+
+    assert result.status is ProgramStepStatus.INTERRUPTED
+    assert result.producer_observed is True
+    assert result.preserve_channels == (state.name,)
+    assert (state.name, 70, 81) in result.projected_changes
+    assert plc.state.tags[state.name] == 70
+
+
+def test_selected_chart_channel_is_structural_without_opaque_role_discovery() -> None:
+    """The chart reader can name its structural channel explicitly."""
+
+    state = Int("SelectedChartState", default=50)
+    with Program(strict=False) as program:
+        with Rung(state == 50):
+            copy(60, state)
+        with Rung(state == 60):
+            copy(92, state)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    producer = Producer(
+        rung_index=min(world.pdg.writers_of[state.name]),
+        kind="program",
+        guard_tags=frozenset((state.name,)),
+        co_writes=frozenset(),
+        command_tag=state.name,
+        command_value=60,
+    )
+
+    result = read_program_step(
+        world,
+        producer,
+        plc,
+        structural_channels=(state.name,),
+    )
+
+    assert result.status is ProgramStepStatus.INTERRUPTED
+    assert result.producer_observed is True
+    assert result.preserve_channels == (state.name,)
+    assert (state.name, 50, 92) in result.projected_changes
+
+
+def test_structural_hazard_does_not_replace_an_unmet_selected_input() -> None:
+    """A chart coordinate alone does not own unrelated program motion."""
+
+    input_ready = Bool("SelectedInputReady", external=True)
+    state = Int("SelectedInputState", default=40)
+    with Program(strict=False) as program:
+        with Rung(state == 40, input_ready):
+            copy(41, state)
+        with Rung(state == 40):
+            copy(91, state)
+
+    plc = PLC(program)
+    world = _world(program, plc)
+    producer = Producer(
+        rung_index=min(world.pdg.writers_of[state.name]),
+        kind="program",
+        guard_tags=frozenset((state.name, input_ready.name)),
+        co_writes=frozenset(),
+        command_tag=state.name,
+        command_value=41,
+    )
+
+    result = read_program_step(
+        world,
+        producer,
+        plc,
+        structural_channels=(state.name,),
+    )
+
+    assert result.status is ProgramStepStatus.NEEDS_INPUT
+    assert result.producer_observed is False
+    assert tuple(action.pair for action in result.required_inputs) == (
+        (input_ready.name, True),
+    )
 
 
 def test_projection_traces_the_exact_producer_occurrence_view() -> None:
@@ -466,5 +644,7 @@ def test_input_must_reach_the_exact_producer_not_merely_move_its_channel() -> No
 
     result = read_program_step(world, producer, plc)
 
-    assert result.status is ProgramStepStatus.UNCLEAR
-    assert "BarrierState is not accepted" in result.reason
+    assert result.status is ProgramStepStatus.INTERRUPTED
+    assert result.required_inputs == ()
+    assert "BarrierState moved" in result.reason
+    assert "no longer current" in result.reason

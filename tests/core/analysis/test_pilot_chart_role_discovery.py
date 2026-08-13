@@ -20,12 +20,15 @@ ChartForward = Bool("ChartDiscoveryForward", external=True)
 ChartReverse = Bool("ChartDiscoveryReverse", external=True)
 ChartUnused = Bool("ChartDiscoveryUnused", external=True)
 ChartStepper = Int("ChartDiscoveryStepper")
+ChartReported = Int("ChartDiscoveryReported")
 
 with Program() as chart_program:
     with rung(ChartStepper == 0, ChartForward):
         copy(1, ChartStepper)
     with rung(ChartStepper == 1, ChartReverse):
         copy(0, ChartStepper)
+    with rung():
+        copy(ChartStepper, ChartReported)
 
 
 def _chart_parts() -> tuple[Any, Any, frozenset[str], TransitionEvidence]:
@@ -40,7 +43,7 @@ def _chart_parts() -> tuple[Any, Any, frozenset[str], TransitionEvidence]:
     evidence = TransitionEvidence(
         functional_deps={},
         elided=frozenset(),
-        stepping=frozenset((ChartUnused.name, ChartStepper.name)),
+        stepping=frozenset((ChartReported.name, ChartUnused.name, ChartStepper.name)),
     )
     return plc, pdg, steerable, evidence
 
@@ -58,6 +61,7 @@ def test_discovers_direct_requestless_stepper_from_prover_evidence() -> None:
 
     assert [role.channel_tag for role in roles] == [ChartStepper.name, ChartUnused.name]
     assert roles[0].request_tags == frozenset()
+    assert roles[0].observation_tags == frozenset((ChartReported.name,))
     graphs = build_static_transition_graphs(
         roles,
         pdg,

@@ -240,6 +240,28 @@ class StaticTransitionGraph:
         return None
 
 
+def target_reachable_values(
+    graph: StaticTransitionGraph,
+    target_value: Any,
+) -> tuple[Any, ...]:
+    """Return concrete values with a charted path to ``target_value``."""
+
+    reachable: list[Any] = [target_value]
+    changed = True
+    while changed:
+        changed = False
+        for edge in graph.edges:
+            if edge.from_value is ANY_FROM or not any(
+                _values_match(edge.to_value, value) for value in reachable
+            ):
+                continue
+            if any(_values_match(edge.from_value, value) for value in reachable):
+                continue
+            reachable.append(edge.from_value)
+            changed = True
+    return tuple(reachable)
+
+
 def _static_graph_identity(graph: StaticTransitionGraph) -> tuple[Any, ...]:
     """Semantic chart identity, including the role that owns its edges."""
 
@@ -247,6 +269,7 @@ def _static_graph_identity(graph: StaticTransitionGraph) -> tuple[Any, ...]:
     return (
         role.channel_tag,
         tuple(sorted(role.request_tags)),
+        tuple(sorted(role.observation_tags)),
         tuple(sorted(role.guard_internal_tags)),
         tuple(sorted(role.scratch_internal_tags)),
         tuple(edge.identity for edge in graph.edges),

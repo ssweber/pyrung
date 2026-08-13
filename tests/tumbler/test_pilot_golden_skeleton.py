@@ -122,8 +122,9 @@ def _assert_bearing_coast_tripwire(skeleton: list[dict]) -> None:
     Historical bug: a coast requested 3->6 landed at 8 and was accepted as
     a program-attributed departure. Every ``bearing_coast_accepted`` must either land
     exactly on the requested bearing value, carry a receipt proving its
-    relational boundary was reached, or be explicitly classified as a
-    departure (``ejected`` under the departure guard).
+    relational boundary was reached, explicitly expose a genuinely new
+    frontier for fresh Orientation, or be classified as a departure
+    (``ejected`` under the departure guard).
     """
     for index, entry in enumerate(skeleton):
         if entry["kind"] != "bearing_coast_accepted":
@@ -135,6 +136,10 @@ def _assert_bearing_coast_tripwire(skeleton: list[dict]) -> None:
         assert (
             landed == requested
             or entry.get("bearing_stop_reason") == "reached"
+            or (
+                entry.get("bearing") == "exposed"
+                and entry.get("new_frontier") is True
+            )
             or entry.get("ejected") is True
         ), (
             f"bearing_coast_accepted[{index}] landed at {landed!r} but requested "

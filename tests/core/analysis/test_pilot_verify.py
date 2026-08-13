@@ -41,6 +41,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ChannelHeading,
     Coast,
     Pulse,
+    RouteEdgeContext,
     TargetSpec,
 )
 from pyrung.core.analysis.pilot.outcome import (
@@ -172,6 +173,8 @@ def test_global_target_from_another_producer_does_not_pardon_selected_effect_fai
     )
 
     assert result.trial is None
+    assert result.executed is attempt
+    assert result.executed_attempt is attempt
     assert result.nogood_pairs == frozenset()
     assert not any(event.event == "target" for event in result.gate_events)
 
@@ -316,6 +319,83 @@ def test_wrong_channel_landing_cannot_mint_a_frontier_progress_receipt():
             BearingEffect.DEPARTED,
             ProgressEffect.FORWARD,
             new_frontier=True,
+            accepted=True,
+        ),
+    )
+
+    accepted = _accepted_trial(
+        attempt,
+        SimpleNamespace(key=("source",), snap=before, distance_before=2),
+        [],
+        ChannelMotion("State", 6, stop_reason="departed"),
+        EarnedWorkReceipt(),
+        verification,
+    )
+
+    assert accepted.execution.scan_progress is None
+
+
+def test_chart_reachability_cannot_mint_selected_producer_landing() -> None:
+    """A globally recoverable side branch is geometry, not landing proof."""
+
+    with Program() as program:
+        pass
+    plc = PLC(program, dt=0.010)
+    before = {"State": 3}
+    after = {"State": 8}
+    route = RouteEdgeContext("State", 3, 6)
+    policy = ActPolicy(
+        ActSource.ROUTE,
+        heading=ChannelHeading("State", 6, route=route),
+        motion=MotionKind.COAST_TO_BEARING,
+    )
+    pulse = _PulseState(
+        plc,
+        0,
+        0,
+        before,
+        (),
+        before,
+        ("source",),
+        after,
+        ("landing",),
+        (),
+    )
+    attempt = _ExecutedAttempt(
+        pulse,
+        Bearing(
+            ("source",),
+            Coast("bearing", policy),
+            BearingObjective(TargetSpec("Target", True)),
+            orientation=SimpleNamespace(
+                world=SimpleNamespace(
+                    context=SimpleNamespace(
+                        target=TargetSpec("Target", True),
+                        compass=SimpleNamespace(
+                            chart_graphs=(
+                                SimpleNamespace(
+                                    role=SimpleNamespace(channel_tag="State"),
+                                    # Boolean True shares an equality domain
+                                    # with integer state 1. The old broad chart
+                                    # proof therefore called state 8 target-
+                                    # reachable despite the selected 3->6 edge.
+                                    edges=(SimpleNamespace(from_value=8, to_value=1),),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    verification = AssessedMotion(
+        ("landing",),
+        1,
+        TrialAssessment(
+            Agency.PROGRAM,
+            BearingEffect.DEPARTED,
+            ProgressEffect.UNCHANGED,
+            new_frontier=False,
             accepted=True,
         ),
     )

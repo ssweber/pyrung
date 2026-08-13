@@ -144,6 +144,8 @@ class TheoryVersion:
     parent_version_id: TheoryVersionId | None = None
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
+    temporal_source: TheoryBoundaryIdentity | None = None
+    temporal_requirements: tuple[TheoryRequirementSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -155,6 +157,7 @@ class TheoryProgressSnapshot:
     remaining_budget: int
     parent_progress_id: TheoryProgressId | None = None
     accepted_attempt_id: tuple[Any, ...] | None = None
+    execution_source: TheoryBoundaryIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -310,6 +313,25 @@ class TheoryLedger:
 class TheoryState:
     ledger: TheoryLedger = TheoryLedger()
     active_theory_id: TheoryId | None = None
+
+
+def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, ...]]:
+    """Read exact rungs owned by accepted temporal setup phases.
+
+    These detached receipts confer no navigation authority. They only let a
+    later exact requirement distinguish Pilot's provisional setup value from
+    user or program configuration.
+    """
+
+    owned: set[tuple[Any, ...]] = set()
+    for progress in state.ledger.progress.values():
+        for receipt in progress.phase_receipts:
+            if len(receipt) < 4 or receipt[0] != "temporal-setup-established":
+                continue
+            identities = receipt[3]
+            if isinstance(identities, tuple):
+                owned.update(item for item in identities if isinstance(item, tuple))
+    return frozenset(owned)
 
 
 def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
@@ -742,7 +764,9 @@ def temporal_need_request(state: TheoryState) -> TemporalNeedRequest | None:
         raise TheoryInvariantError("temporal trigger belongs to another theory")
     if trigger.disposition is not TheoryAttemptDisposition.REJECTED_EXACT:
         raise TheoryInvariantError("temporal trigger is not an exact rejection")
-    if not view.requirements:
+    theory = state.ledger.theories[view.theory_id]
+    version = state.ledger.versions[theory.current_version_id]
+    if not version.temporal_requirements:
         raise TheoryInvariantError("temporal intent has no exact requirements")
     request = TemporalNeedRequest(
         theory_id=view.theory_id,
@@ -751,11 +775,15 @@ def temporal_need_request(state: TheoryState) -> TemporalNeedRequest | None:
         # where the next scan must begin.  Replaying the trigger's old source
         # after an accepted setup/rearm scan would prove work and then perform
         # it a second time instead of following conductivity forward.
-        source=view.source,
+        source=version.temporal_source or view.source,
         intent=view.temporal_intent,
         trigger_attempt_id=trigger.attempt_id,
         trigger_act_identity=trigger.act_identity,
-        requirements=view.requirements,
+        # A version's requirements are the immutable evidence accumulated by
+        # the theory.  Only the requirements attached to this temporal
+        # transition are executable work for Compass.  Exporting the whole
+        # ledger here makes discharged history masquerade as a live handoff.
+        requirements=version.temporal_requirements,
     )
     assert_detached_theory_value(request, path="temporal_need_request")
     return request
@@ -793,6 +821,7 @@ class AdvanceTheory:
     advance_identity: tuple[Any, ...]
     phase_receipts: tuple[tuple[Any, ...], ...] = ()
     remaining_budget: int | None = None
+    execution_source: TheoryBoundaryIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -805,6 +834,7 @@ class RefineTheory:
     refinement_identity: tuple[Any, ...]
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
+    temporal_source: TheoryBoundaryIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -931,12 +961,50 @@ def _allowed_source_boundaries(
     state: TheoryState,
     theory: WorkingTheory,
 ) -> frozenset[TheoryBoundaryIdentity]:
-    """Exact observed boundaries that may source the active lifecycle tip."""
+    """Exact observed boundaries that may source the active lifecycle tip.
+
+    The parent progress boundary is the retained source of the just-accepted
+    adjacent scan.  Its monitor receipt may establish the next temporal need
+    only after progress has advanced to the landing, so it remains admissible
+    for that one lifecycle handoff.
+    """
 
     claim = state.ledger.claims[theory.claim_id]
     version = state.ledger.versions[theory.current_version_id]
     progress = state.ledger.progress[theory.current_progress_id]
-    return frozenset((claim.source, version.source, progress.provisional_tip))
+    prior = (
+        state.ledger.progress[progress.parent_progress_id].provisional_tip
+        if progress.parent_progress_id is not None
+        else None
+    )
+    return frozenset(
+        boundary
+        for boundary in (
+            claim.source,
+            version.source,
+            progress.provisional_tip,
+            progress.execution_source,
+            prior,
+        )
+        if boundary is not None
+    )
+
+
+def theory_source_is_retained(
+    state: TheoryState,
+    source: TheoryBoundaryIdentity,
+) -> bool:
+    """Whether an exact boundary may still source the active theory's next fact."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return False
+    theory = state.ledger.theories.get(theory_id)
+    return bool(
+        theory is not None
+        and theory.status is TheoryStatus.OPEN
+        and source in _allowed_source_boundaries(state, theory)
+    )
 
 
 def _require_allowed_source(
@@ -1143,6 +1211,16 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("advance source is not the current progress boundary")
         if fact.boundary == fact.source or fact.boundary.scan_id < fact.source.scan_id:
             raise TheoryInvariantError("advance boundary is not monotonic from its source")
+        if fact.execution_source is not None:
+            if fact.execution_source.scan_id != fact.source.scan_id:
+                raise TheoryInvariantError(
+                    "advance execution source is not the source scan boundary"
+                )
+            if not fact.execution_source.checkpoint_token or (
+                fact.execution_source.scan_id > 0
+                and not fact.execution_source.execution_owner_token
+            ):
+                raise TheoryInvariantError("advance execution source evidence is missing")
         remaining = (
             parent.remaining_budget if fact.remaining_budget is None else fact.remaining_budget
         )
@@ -1167,6 +1245,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             remaining,
             parent.progress_id,
             fact.accepted_attempt_id,
+            fact.execution_source,
         )
         progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         if theory.current_progress_id == progress_id:
@@ -1189,15 +1268,32 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             fact.refined_source.scan_id > 0 and not fact.refined_source.execution_owner_token
         ):
             raise TheoryInvariantError("refined source exact boundary evidence is missing")
-        if fact.refined_source.scan_id < fact.source.scan_id:
-            raise TheoryInvariantError("refined source cannot precede its source")
         parent = state.ledger.versions[fact.parent_version_id]
+        if fact.refined_source.scan_id < fact.source.scan_id and not (
+            fact.requirements
+            and all(
+                requirement.provenance == "program-guard-rebase"
+                and requirement.source_scan == fact.refined_source.scan_id
+                and requirement.source_world_key == fact.refined_source.world_key
+                for requirement in fact.requirements
+            )
+        ):
+            raise TheoryInvariantError(
+                "backward refinement lacks an exact program-guard rebase source"
+            )
         temporal_intent = fact.temporal_intent
         trigger_attempt_id = fact.trigger_attempt_id
         if (temporal_intent is None) != (trigger_attempt_id is None):
             raise TheoryInvariantError(
                 "temporal intent and triggering attempt must travel together"
             )
+        if fact.temporal_source is not None:
+            if temporal_intent is None:
+                raise TheoryInvariantError("temporal source has no temporal intent")
+            if fact.temporal_source not in (fact.source, fact.refined_source):
+                raise TheoryInvariantError(
+                    "temporal source is not an exact refinement boundary"
+                )
         if fact.trigger_attempt_id is not None:
             trigger = state.ledger.attempts.get(fact.trigger_attempt_id)
             if trigger is None:
@@ -1233,6 +1329,10 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             tuple(item.semantic_identity for item in requirements),
             temporal_intent,
             trigger_attempt_id,
+            fact.temporal_source,
+            tuple(item.semantic_identity for item in fact.requirements)
+            if temporal_intent is not None
+            else (),
             fact.refinement_identity,
         )
         version = TheoryVersion(
@@ -1243,14 +1343,47 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             parent.version_id,
             temporal_intent,
             trigger_attempt_id,
+            fact.temporal_source,
+            fact.requirements if temporal_intent is not None else (),
         )
         versions = _put_unique(state.ledger.versions, version_id, version, "version")
-        updated = replace(theory, current_version_id=version_id)
+        progress_map = state.ledger.progress
+        current_progress_id = theory.current_progress_id
+        if fact.temporal_source is not None:
+            parent_progress = state.ledger.progress[theory.current_progress_id]
+            if fact.temporal_source != parent_progress.provisional_tip:
+                current_progress_id = (
+                    "progress-refine",
+                    fact.theory_id,
+                    parent_progress.progress_id,
+                    fact.temporal_source,
+                    fact.refinement_identity,
+                )
+                rewound = TheoryProgressSnapshot(
+                    fact.theory_id,
+                    current_progress_id,
+                    fact.temporal_source,
+                    (),
+                    parent_progress.remaining_budget,
+                    parent_progress.progress_id,
+                )
+                progress_map = _put_unique(
+                    progress_map,
+                    current_progress_id,
+                    rewound,
+                    "progress",
+                )
+        updated = replace(
+            theory,
+            current_version_id=version_id,
+            current_progress_id=current_progress_id,
+        )
         return replace(
             state,
             ledger=replace(
                 state.ledger,
                 versions=versions,
+                progress=progress_map,
                 theories=state.ledger.theories.set(fact.theory_id, updated),
             ),
         )

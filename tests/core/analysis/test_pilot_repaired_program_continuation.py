@@ -49,7 +49,9 @@ def test_off_path_same_value_writer_is_handled_without_borrowing_program_step(
         and event.data["assignments"] == ((fixture.PresetMs.name, 11),)
         for event in events
     )
-    assert any(
+    # The off-path same-value occurrence does not obstruct the selected route,
+    # so exact writer ownership must avoid inventing a corrective for it.
+    assert not any(
         event.kind == "candidate_try"
         and event.data["applied"] == ((fixture.InterferenceArmed.name, False),)
         for event in events

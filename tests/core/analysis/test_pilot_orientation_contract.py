@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     CrossingFidelity,
     Dwell,
     ExpectationExemption,
+    LandingReceiptAuthority,
     LocalProgressKind,
     NavigationConstraints,
     NeedProbe,
@@ -337,6 +338,115 @@ def test_temporal_retry_lazily_adds_current_trace_sibling_without_assigning_inte
     assert retry.act.policy.applied == (("Request", True), ("Production", True))
 
 
+def test_temporal_retry_continues_past_an_accepted_trace_companion(
+    monkeypatch,
+) -> None:
+    """A wider trigger is identity; fresh trace siblings own the next width."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                trigger_act_identity=pulse_identity(
+                    (("Request", True), ("Mode", True))
+                ),
+                claim=SimpleNamespace(obligations=()),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        _candidate("Request"),
+        _candidate("Mode"),
+        _candidate("Production"),
+        active_trace_actions=(
+            ("Request", True),
+            ("Mode", True),
+            ("Production", True),
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
+    )
+    base_policy = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=(("Request", True),),
+        applied=(("Request", True),),
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+    )
+    ordinary = Bearing(
+        world_key=world.world_key,
+        act=Pulse(base_policy),
+        objective=BearingObjective(TargetSpec("Target", True)),
+    )
+
+    retry = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+        ordinary=ordinary,
+    )
+
+    assert isinstance(retry, Bearing)
+    assert retry.act.policy.applied == (
+        ("Request", True),
+        ("Mode", True),
+        ("Production", True),
+    )
+
+
+def test_temporal_retry_does_not_widen_through_an_avoided_trace_sibling(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    world = replace(
+        world,
+        snapshot={"Target": False, "Avoided": False},
+        context=replace(
+            world.context,
+            avoid_pred=lambda snapshot: bool(snapshot.get("Avoided")),
+            theory_view=SimpleNamespace(
+                trigger_act_identity=pulse_identity((("Request", True),)),
+                claim=SimpleNamespace(obligations=()),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        _candidate("Request"),
+        _candidate("Avoided"),
+        _candidate("Production"),
+        active_trace_actions=(
+            ("Request", True),
+            ("Avoided", True),
+            ("Production", True),
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
+    )
+
+    retry = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(retry, Bearing)
+    assert retry.act.policy.applied == (("Request", True), ("Production", True))
+
+
 def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
     monkeypatch,
 ) -> None:
@@ -431,6 +541,29 @@ def _world(compass: Compass) -> OrientationWorld:
         ),
         context=context,
     )
+
+
+def test_proof_rejection_is_scoped_to_the_exact_input_context() -> None:
+    from pyrung.core.analysis.pilot.compass import EvidenceScope
+    from pyrung.core.analysis.pilot.orientation import _act_preserves_requirements
+
+    world = _world(Compass())
+    world.snapshot["Guard"] = False
+    act = Pulse(
+        ActPolicy(
+            source=ActSource.TRACE,
+            action_pairs=(("Command", True),),
+            applied=(("Command", True),),
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        )
+    )
+    rejected_scope = EvidenceScope.capture(world.world_key, world.snapshot.items())
+    world.state.proof_rejected_acts = {(rejected_scope, act_identity(act))}
+
+    assert not _act_preserves_requirements(world, act)
+
+    corrected = replace(world, snapshot={**world.snapshot, "Guard": True})
+    assert _act_preserves_requirements(corrected, act)
 
 
 def test_nonpromising_executable_policies_have_typed_exemptions() -> None:
@@ -922,6 +1055,7 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
             heading,
             "owned wait",
             frontier=(("PressableLever", True),),
+            landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
         )
     )
     monkeypatch.setattr(
@@ -946,6 +1080,10 @@ def test_orient_carries_wait_heading_and_outer_route_context_whole(monkeypatch) 
     assert result.act.policy.heading.route.channel_tag == "OuterState"
     assert result.act.policy.heading.route.from_value == 6
     assert result.act.policy.heading.route.target_value == 16
+    assert (
+        result.act.policy.landing_receipt_authority
+        is LandingReceiptAuthority.PROGRAM_STEP
+    )
     assert result.objective.frontier == (("PressableLever", True),)
     assert result.orientation is not None
     assert result.orientation.world.frame is world.frame

@@ -54,6 +54,10 @@ def _started_event(events: Iterator[PilotEvent]) -> PilotEvent:
     return event
 
 
+def _entry_event(events: Iterator[PilotEvent]) -> PilotEvent:
+    return next(event for event in events if event.kind == "entry_scan_observed")
+
+
 def _snapshot_accesses(snapshot: BootstrapExecutionSnapshot) -> tuple[tuple[Any, ...], ...]:
     accesses: list[tuple[Any, ...]] = []
     for access in snapshot.ordered_accesses:
@@ -83,16 +87,26 @@ def test_cold_start_retains_boundary_zero_and_exact_bootstrap_execution() -> Non
     )
     try:
         started = _started_event(events)
+        observed = _entry_event(events)
     finally:
         events.close()
 
-    snapshot = started.data["bootstrap_execution"]
+    snapshot = observed.data["execution"]
     assert isinstance(snapshot, BootstrapExecutionSnapshot)
-    assert (snapshot.source_scan, snapshot.landing_scan, started.scan) == (0, 1, 1)
+    assert (snapshot.source_scan, snapshot.landing_scan, started.scan, observed.scan) == (
+        0,
+        1,
+        0,
+        1,
+    )
     assert snapshot.source_world_key is not None
     assert snapshot.source[first_scan.ProcessStep.name] == first_scan.INITIAL
     assert snapshot.objective == (first_scan.ProcessStep.name, first_scan.AT_TARGET)
-    assert snapshot.objective_frontier == ()
+    assert snapshot.objective_frontier
+    assert snapshot.objective_frontier[0] == (
+        first_scan.ProcessStep.name,
+        first_scan.AT_TARGET,
+    )
     assert snapshot.landing[first_scan.ProcessStep.name] == first_scan.ABORTED
     assert _snapshot_accesses(snapshot) == (
         (14, "read", "sys.first_scan", True, 0),
@@ -119,7 +133,8 @@ def test_destructive_bootstrap_reports_exact_target_overwrite_and_consumed_hando
         max_scans=100,
     )
     try:
-        snapshot = _started_event(events).data["bootstrap_execution"]
+        _started_event(events)
+        snapshot = _entry_event(events).data["execution"]
     finally:
         events.close()
 
@@ -191,30 +206,31 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     internal_receipts: list[_BootstrapExecution] = []
     internal_states: list[Any] = []
     original_snapshot = _BootstrapExecution.diagnostic_snapshot
-    original_execute = pilot_module._execute_bootstrap_scan
+    original_bind = pilot_module._bind_entry_execution_to_route
 
     def _capture(receipt: _BootstrapExecution) -> BootstrapExecutionSnapshot:
         internal_receipts.append(receipt)
         return original_snapshot(receipt)
 
-    def _capture_execution(state: Any, ctx: Any) -> _BootstrapExecution | None:
-        receipt = original_execute(state, ctx)
+    def _capture_binding(state: Any, ctx: Any, result: Any, frame: Any) -> _BootstrapExecution | None:
+        receipt = original_bind(state, ctx, result, frame)
         internal_states.append(state)
         return receipt
 
     monkeypatch.setattr(_BootstrapExecution, "diagnostic_snapshot", _capture)
-    monkeypatch.setattr(pilot_module, "_execute_bootstrap_scan", _capture_execution)
+    monkeypatch.setattr(pilot_module, "_bind_entry_execution_to_route", _capture_binding)
     events = pilot_events(
         PLC(first_scan.logic, dt=0.010),
         first_scan.ProcessStep == first_scan.AT_TARGET,
         max_scans=100,
     )
     try:
-        started = _started_event(events)
+        _started_event(events)
+        observed = _entry_event(events)
     finally:
         events.close()
 
-    snapshot = started.data["bootstrap_execution"]
+    snapshot = observed.data["execution"]
     assert isinstance(snapshot, BootstrapExecutionSnapshot)
     assert isinstance(snapshot.source, MappingProxyType)
     assert isinstance(snapshot.landing, MappingProxyType)
@@ -231,7 +247,7 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
 
     # Even replacement of the caller-owned event payload cannot reach back to
     # the private state receipt captured by this test-only instrumentation.
-    cast(dict[str, Any], started.data)["bootstrap_execution"] = None
+    cast(dict[str, Any], observed.data)["execution"] = None
     internal = internal_receipts[0]
     before = internal.diagnostic_snapshot()
     assert internal.checkpoint.world.work.state.scan_id == 0
@@ -265,7 +281,7 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     assert _ordered_accesses(retained_projection) == _ordered_accesses(internal.projection)
 
 
-def test_prescanned_world_does_not_execute_a_bootstrap_scan() -> None:
+def test_prescanned_world_imports_the_adjacent_scan_without_executing_another() -> None:
     plc = PLC(first_scan.logic, dt=0.010)
     plc.step()
     start_scan = plc.state.scan_id
@@ -276,12 +292,17 @@ def test_prescanned_world_does_not_execute_a_bootstrap_scan() -> None:
     )
     try:
         started = _started_event(events)
+        observed = _entry_event(events)
     finally:
         events.close()
 
     assert start_scan == 1
     assert started.scan == start_scan
-    assert started.data["bootstrap_execution"] is None
+    imported = started.data["bootstrap_execution"]
+    assert isinstance(imported, BootstrapExecutionSnapshot)
+    assert (imported.source_scan, imported.landing_scan) == (0, 1)
+    assert observed.scan == 1
+    assert isinstance(observed.data["execution"], BootstrapExecutionSnapshot)
 
 
 def test_alarmed_action_scan_retains_complete_then_watchdog_overwrite() -> None:

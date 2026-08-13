@@ -123,13 +123,21 @@ class ExpectationExemption(StrEnum):
     UNRESOLVED_EFFECT = "unresolved_effect"
 
 
+class LandingReceiptAuthority(StrEnum):
+    """Which current-world reader owns supplemental landing interpretation."""
+
+    ORIENTATION = "orientation"
+    PROGRAM_STEP = "program_step"
+
+
 class LocalProgressKind(StrEnum):
-    """Theory-scoped physical progress that need not move the global key."""
+    """Physical lifecycle progress that need not move the global key."""
 
     TRACE_SETUP = "trace_setup"
     REARM = "rearm"
     TEMPORAL_SETUP = "temporal_setup"
     TEMPORAL_EDGE = "temporal_edge"
+    OBSERVE_ENTRY = "observe_entry"
 
 
 class PulseHorizon(StrEnum):
@@ -141,11 +149,17 @@ class PulseHorizon(StrEnum):
 
 @dataclass(frozen=True)
 class RouteEdgeContext:
-    """The outer chart edge served by an immediate channel heading."""
+    """The structural chart edge served by an immediate channel heading."""
 
     channel_tag: str
     from_value: Any
     target_value: Any
+    # A pipeline route may advance a carrier by writing its actuation handoff.
+    # Keep that exact writer effect visible so execution can receipt the
+    # immediate handoff without assuming the carrier and selected effect are
+    # the same tag.
+    effect_tag: str | None = None
+    effect_value: Any = None
 
 
 @dataclass(frozen=True)
@@ -180,7 +194,22 @@ class ActPolicy:
     context_actions: tuple[_ActionPair, ...] = ()
     expectation: EffectExpectation | None = None
     expectation_exemption: ExpectationExemption | None = None
+    # Navigation provenance and landing-evidence ownership are orthogonal. A
+    # route coast can still be owned by the ProgramStep which read its exact
+    # present-tense producer and input handoffs.
+    landing_receipt_authority: LandingReceiptAuthority = (
+        LandingReceiptAuthority.ORIENTATION
+    )
     local_progress: LocalProgressKind | None = None
+    # Exact subset this local phase promises to establish. A SETUP_FIRST act
+    # may install adjustable corrections while program-owned route facts stay
+    # active for the next fresh Compass bearing.
+    local_progress_requirements: tuple[ActiveRequirement, ...] = ()
+    # Parent lifecycle obligations for the possibly branch-lowered VERIFY
+    # requirements above. An accepted persistent setup phase discharges these
+    # parents once their complete condition holds; the theory itself may stay
+    # provisional while Compass follows program-owned work.
+    local_progress_sources: tuple[ActiveRequirement, ...] = ()
     pulse_horizon: PulseHorizon = PulseHorizon.LOOKAHEAD_SCAN
 
     def __post_init__(self) -> None:
@@ -288,7 +317,24 @@ class Dwell:
     )
 
 
-NavigationAct = Pulse | BatchPulse | Coast | Dwell
+@dataclass(frozen=True)
+class ObserveScan:
+    """One program-owned scan used to establish an observed entry edge.
+
+    This is a real navigation act, not an ambient settle.  It exists only at
+    an unobserved invocation boundary, advances exactly one scan, and yields so
+    Compass can bind the resulting projection to a fresh landing route.
+    """
+
+    policy: ActPolicy = ActPolicy(
+        ActSource.PROGRAM,
+        motion=MotionKind.COAST_HOLDING_WORLD,
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        local_progress=LocalProgressKind.OBSERVE_ENTRY,
+    )
+
+
+NavigationAct = Pulse | BatchPulse | Coast | Dwell | ObserveScan
 
 
 @dataclass(frozen=True)
@@ -409,6 +455,10 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
                 *identity,
                 route.channel_tag,
                 _semantic_key(route.target_value),
+                route.effect_tag,
+                _semantic_key(route.effect_value),
             )
         return identity
+    if isinstance(act, ObserveScan):
+        return ("observe-scan",)
     return ("dwell", _applied_identity(act.policy.applied))

@@ -129,9 +129,7 @@ def test_prior_scan_setup_is_retained_when_the_selected_producer_reaches_target(
         for event in events
         if event.kind == "candidate_try" and tuple(event.data["applied"]) == ((produce.name, True),)
     )
-    requirement_index = next(
-        index for index, event in enumerate(events) if event.kind == "requirement_activated"
-    )
+    assert not any(event.kind == "requirement_activated" for event in events)
     producer_accept_index = next(
         index
         for index, event in enumerate(events)
@@ -149,7 +147,7 @@ def test_prior_scan_setup_is_retained_when_the_selected_producer_reaches_target(
         for index, event in enumerate(events)
         if event.kind == "candidate_try" and event.data["applied"] == ((produce.name, True),)
     )
-    assert consume_try_index < produce_try_index < requirement_index < producer_accept_index
+    assert consume_try_index < produce_try_index < producer_accept_index
     assert len(singleton_produce_tries) == 1
     assert not any(
         event.kind == "candidate_try"

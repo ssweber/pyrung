@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     Dwell,
     NavigationAct,
+    ObserveScan,
     OrientationWorld,
     Pulse,
     TargetSpec,
@@ -22,7 +23,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 
 
 def test_navigation_act_cannot_name_a_historical_replay() -> None:
-    assert get_args(NavigationAct) == (Pulse, BatchPulse, Coast, Dwell)
+    assert get_args(NavigationAct) == (Pulse, BatchPulse, Coast, Dwell, ObserveScan)
     assert not hasattr(navigation_contracts, "RetainedReplay")
     assert not hasattr(navigation_contracts, "RetainedOccurrence")
 

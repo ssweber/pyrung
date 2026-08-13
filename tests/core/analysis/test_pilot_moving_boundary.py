@@ -44,11 +44,11 @@ def _oven_ramp_program() -> tuple[Program, dict[str, Any]]:
 
 
 def test_pilot_renegotiates_a_moving_process_boundary() -> None:
-    """A stale concrete PV correction becomes a normal new investigation.
+    """A stale concrete PV setup becomes a fresh current-world bearing.
 
     Every accepted PV value permits exactly one ramp stair.  The next stair
-    makes that value stale, so PILOT must keep using ordinary progress and
-    departure evidence rather than installing a dynamic predicate operation.
+    makes that value stale, so PILOT must reread the live predicate and select
+    another concrete input rather than installing a dynamic predicate hold.
     """
     program, tags = _oven_ramp_program()
     plc = PLC(program, dt=0.010)
@@ -62,15 +62,15 @@ def test_pilot_renegotiates_a_moving_process_boundary() -> None:
     assert final[tags["pv"].name] >= final[tags["sv"].name]
     assert final[tags["state"].name] == 1
 
-    pv_corrections = [
-        rung
+    pv_bearings = [
+        value
         for event in events
-        if event.kind == "trend_regression"
-        for rung in event.data["pilot_rungs"]
-        if rung.dest == tags["pv"].name
+        if event.kind == "candidate_accepted"
+        for tag, value in event.data["applied"]
+        if tag == tags["pv"].name
     ]
-    assert len({rung.value for rung in pv_corrections}) >= 2, pv_corrections
-    assert all(rung.operation is None for rung in pv_corrections)
-    # Each concrete PV fact expires with its incident scope. It need not be
-    # globally revoked merely because the moving boundary later asks for a new
-    # concrete value.
+    assert len(set(pv_bearings)) >= 2, pv_bearings
+    assert pv_bearings == sorted(pv_bearings)
+    assert not any(event.kind == "trend_regression" for event in events)
+    # Each concrete input remains an ordinary persistent patch until a fresh
+    # orientation replaces it with the next current-world requirement.

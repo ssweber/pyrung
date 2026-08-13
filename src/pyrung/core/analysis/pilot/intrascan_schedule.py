@@ -38,6 +38,12 @@ class RequirementSchedule:
     checkpoint_owner: Any
     source_world_key: Any
     phase: RequirementPhase
+    # Live requirements from which Boolean branch lowering produced
+    # ``requirements``. The lowered requirements are exact VERIFY inputs;
+    # these sources are the lifecycle obligations an accepted phase may
+    # discharge. Ordinary scalar compilation has a one-to-one mapping and
+    # therefore leaves this empty.
+    requirement_sources: tuple[ActiveRequirement, ...] = ()
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -46,6 +52,7 @@ class RequirementSchedule:
             self.checkpoint_owner,
             self.phase,
             tuple(requirement.identity for requirement in self.requirements),
+            tuple(requirement.identity for requirement in self.requirement_sources),
             self.assignments,
             tuple(_rung_identity(rung) for rung in self.pilot_rungs),
         )
@@ -221,6 +228,7 @@ def compile_scalar_schedule(
     *,
     guard: Any,
     causal_anchor: tuple[Any, Any] | None = None,
+    allow_deferred_authoritative: bool = False,
 ) -> ScheduleCompilation:
     """Compile compatible adjustable scalars at one executable source.
 
@@ -261,6 +269,8 @@ def compile_scalar_schedule(
             continue
         condition = cast(Cmp, requirement.condition)
         if constraint_holds(condition, snapshot) is not True:
+            if allow_deferred_authoritative:
+                continue
             return ScheduleCompilation(
                 detail="an unsatisfied authoritative operand forbids direct assignment"
             )
@@ -288,7 +298,7 @@ def compile_scalar_schedule(
     pilot_rungs = tuple(PilotRung(tag, value, guard) for tag, value in assignments)
     return ScheduleCompilation(
         RequirementSchedule(
-            requirements=scalar,
+            requirements=tuple(assignable) if allow_deferred_authoritative else scalar,
             assignments=tuple(assignments),
             pilot_rungs=pilot_rungs,
             checkpoint_owner=anchor_owner,

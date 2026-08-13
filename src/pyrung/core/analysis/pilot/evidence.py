@@ -8,10 +8,10 @@ separate source constraints and enablers.
 
 ``pilot._infer_pipeline_roles_for_context`` owns the legacy opaque admission:
 it visits opaque-loop tags and retains only roles with request tags. Static
-chart discovery is separate: :func:`discover_chart_roles` visits every
-prover-confirmed stepping tag which has a program writer, including direct
-literal channels and roles without request tags. ``infer_pipeline_roles`` owns
-the common inner partition.
+chart discovery is separate: :func:`discover_chart_roles` visits
+prover-confirmed stepping tags, but folds one-way copied projections into the
+structural carrier they observe. ``infer_pipeline_roles`` owns the common role
+partition.
 
 The result is static evidence consumed by trace and graph construction; no
 program execution or runtime transition learning occurs here.
@@ -74,23 +74,41 @@ class TransitionRoute:
     writer_node: int
     writer_subroutine: str | None
     call_site_gates: tuple[tuple[str, Any], ...]
+    consumer_node: int | None = None
     from_values: tuple[Any, ...] = ()
     edge_gates: tuple[tuple[str, bool], ...] = ()
+
+    @property
+    def writer_effect(self) -> tuple[str, Any]:
+        """Return the exact effect owned by ``writer_node``.
+
+        Direct-route writers own the channel destination. Pipeline-route
+        writers own the intermediate request; a later transfer owns the
+        channel landing. A receipt must preserve that distinction.
+        """
+
+        if self.request_tag is not None:
+            return self.request_tag, self.request_value
+        return self.destination_tag, self.destination_value
 
 
 @dataclass(frozen=True)
 class PipelineRoles:
-    """Generic roles inferred for one opaque transition pipeline.
+    """Generic roles inferred around one navigated structural carrier.
 
     ``channel_tag`` is the register being navigated. ``request_tags`` are
-    transient pipeline inputs that can still expose useful cause chains.
-    ``guard_internal_tags`` and ``scratch_internal_tags`` are implementation
-    details of the writer pipeline and should not be recursively pursued as
-    independent goals.
+    actuation handoffs into that carrier. ``observation_tags`` are one-way
+    copied projections of the carrier: useful receipt boundaries, but not
+    independent routes. A PLC can have any number of carrier roles and any
+    number of either handoff kind; none of these imply a global inner/outer
+    nesting.  ``guard_internal_tags`` and ``scratch_internal_tags`` are
+    implementation details of the writer pipeline and should not be
+    recursively pursued as independent goals.
     """
 
     channel_tag: str
     request_tags: frozenset[str] = frozenset()
+    observation_tags: frozenset[str] = frozenset()
     guard_internal_tags: frozenset[str] = frozenset()
     scratch_internal_tags: frozenset[str] = frozenset()
 
@@ -165,6 +183,7 @@ def expand_routes(
     dest_maps: dict[str, dict[Any, Any]] = {}
     affine_transforms: dict[str, list[Affine]] = {}
     indirect_sources: dict[str, list[Any]] = {}
+    transfer_nodes: dict[str, list[int]] = {}
 
     for node_idx in writer_nodes:
         node = pdg.rung_nodes[node_idx]
@@ -211,6 +230,7 @@ def expand_routes(
         elif isinstance(written, Affine):
             request_tags.add(written.source)
             affine_transforms.setdefault(written.source, []).append(written)
+            transfer_nodes.setdefault(written.source, []).append(node_idx)
 
         elif written is UNKNOWN:
             indirect = table_operand_from_copy(
@@ -227,6 +247,7 @@ def expand_routes(
             if indirect is not None and indirect.index_tag != target_tag:
                 request_tags.add(indirect.index_tag)
                 indirect_sources.setdefault(indirect.index_tag, []).append(indirect)
+                transfer_nodes.setdefault(indirect.index_tag, []).append(node_idx)
 
         elif isinstance(written, Aggregate):
             # Honest punt: an aggregate writer produces a runtime sum/count over
@@ -322,6 +343,11 @@ def expand_routes(
                     writer_node=req_node_idx,
                     writer_subroutine=req_node.subroutine,
                     call_site_gates=call_gates,
+                    consumer_node=(
+                        transfer_nodes[request_tag][0]
+                        if len(transfer_nodes.get(request_tag, ())) == 1
+                        else None
+                    ),
                     from_values=_channel_from_values(req_expr, target_tag, source_aliases),
                     edge_gates=_route_edge_gates(req_node, pdg, program, steerable),
                 )
@@ -634,26 +660,57 @@ def discover_chart_roles(
     opaque_loop: frozenset[str],
     evidence: TransitionEvidence | None,
 ) -> tuple[PipelineRoles, ...]:
-    """Discover deterministic read-only chart owners from prover evidence.
+    """Discover deterministic read-only structural carriers from prover evidence.
 
     The prover's stepping classification is the admission receipt. Missing
-    evidence therefore fails closed. Every confirmed stepping dimension gets
-    a role even when static route expansion later yields no graph; discovery
-    must not silently impose the legacy request-tag or opacity filters. This
-    catalog is deliberately separate from ``pipeline_roles`` because only the
-    latter defines Trace opacity and internal tags.
+    evidence therefore fails closed. Stepping is intentionally broader than
+    navigation: it propagates through plain copies so state-space analysis can
+    retain projections. A one-way copied projection is therefore attached to
+    its source carrier as an observation handoff instead of becoming a second
+    route. A copy that participates in feedback is not folded: request/current
+    pipelines remain genuine structural carriers. This catalog is deliberately
+    separate from ``pipeline_roles`` because only the latter defines Trace
+    opacity and internal tags.
     """
 
     if evidence is None:
         return ()
 
+    stepping = frozenset(evidence.stepping_tags())
+    projections = {
+        tag: source
+        for tag in stepping
+        if (source := _one_way_step_projection_source(tag, stepping, pdg, program)) is not None
+    }
+
+    def carrier(tag: str) -> str:
+        seen: set[str] = set()
+        while tag in projections and tag not in seen:
+            seen.add(tag)
+            tag = projections[tag]
+        return tag
+
+    observations: dict[str, set[str]] = {}
+    for projection in projections:
+        observations.setdefault(carrier(projection), set()).add(projection)
+
     roles: list[PipelineRoles] = []
     seen: set[tuple[Any, ...]] = set()
     for tag in evidence.stepping_tags():
+        if tag in projections:
+            continue
         role = infer_pipeline_roles(tag, pdg, program, steerable, opaque_loop, evidence)
+        role = PipelineRoles(
+            channel_tag=role.channel_tag,
+            request_tags=role.request_tags,
+            observation_tags=frozenset(observations.get(tag, ())),
+            guard_internal_tags=role.guard_internal_tags,
+            scratch_internal_tags=role.scratch_internal_tags,
+        )
         identity = (
             role.channel_tag,
             tuple(sorted(role.request_tags)),
+            tuple(sorted(role.observation_tags)),
             tuple(sorted(role.guard_internal_tags)),
             tuple(sorted(role.scratch_internal_tags)),
         )
@@ -662,6 +719,46 @@ def discover_chart_roles(
         seen.add(identity)
         roles.append(role)
     return tuple(roles)
+
+
+def _one_way_step_projection_source(
+    tag: str,
+    stepping: frozenset[str],
+    pdg: ProgramGraph,
+    program: Any,
+) -> str | None:
+    """Return the sole copied stepping source when *tag* is only its projection.
+
+    Copy-propagated stepping is not by itself channel ownership.  All writers
+    must be affine copies of the same stepping source, and the destination must
+    not influence that source again.  The feedback check is what preserves a
+    real request/current pipeline while classifying an unconditional reporting
+    copy as an observation handoff.
+    """
+
+    from pyrung.core.analysis.pdg import resolve_rung
+    from pyrung.core.analysis.sp_values import _written_value_for_tag
+    from pyrung.core.crossing import Affine
+
+    writers = tuple(sorted(pdg.writers_of.get(tag, frozenset())))
+    if not writers:
+        return None
+
+    sources: set[str] = set()
+    for node_idx in writers:
+        rung_obj = resolve_rung(program, pdg.rung_nodes[node_idx])
+        written = _written_value_for_tag(rung_obj, tag)
+        if not isinstance(written, Affine) or written.source == tag:
+            return None
+        sources.add(written.source)
+    if len(sources) != 1:
+        return None
+    source = next(iter(sources))
+    if source not in stepping:
+        return None
+    if source in pdg.downstream_slice(tag, follow_calls=True):
+        return None
+    return source
 
 
 def _target_writer_condition_tags(

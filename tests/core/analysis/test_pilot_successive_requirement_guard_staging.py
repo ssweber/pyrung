@@ -142,8 +142,15 @@ def test_same_source_requirements_compose_before_adjustable_final_guard() -> Non
             (scenario.FirstPresetMs.name, 11),
             (scenario.StartCommand.name, True),
         ),
-        ((scenario.SecondPresetMs.name, 11),),
-        ((scenario.FinalGuard.name, True),),
+        (
+            (scenario.FirstPresetMs.name, 11),
+            (scenario.SecondPresetMs.name, 11),
+        ),
+        (
+            (scenario.FinalGuard.name, True),
+            (scenario.FirstPresetMs.name, 11),
+            (scenario.SecondPresetMs.name, 11),
+        ),
     )
     assert (
         sum(

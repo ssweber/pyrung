@@ -45,6 +45,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     ChannelHeading,
     CrossingFidelity,
+    LandingReceiptAuthority,
     RouteEdgeContext,
 )
 from pyrung.core.analysis.pilot.overlay import (
@@ -88,6 +89,8 @@ class _Candidate:
     # the program displaced the route and must be investigated.
     bearing_channel_tag: str | None = None
     bearing_channel_value: Any = None
+    bearing_boundary: Any = None
+    route_context: RouteEdgeContext | None = None
     # A program-awaited action (awaited_actions.py): the one operator action the program
     # is dwelling on at the current state of an opaque-loop channel, surfaced when
     # the trace dead-ends and the compass route is the avoided command.  Ordered
@@ -138,6 +141,9 @@ class WaitPrescription:
     reason: str | None = None
     frontier: tuple[_ActionPair, ...] = ()
     expectation: EffectExpectation | None = None
+    landing_receipt_authority: LandingReceiptAuthority = (
+        LandingReceiptAuthority.ORIENTATION
+    )
 
 
 @dataclass(frozen=True)
@@ -211,8 +217,33 @@ class _AdmittedWait:
         )
 
     @property
+    def executable_pairs(self) -> frozenset[_ActionPair]:
+        """Pairs whose ordinary Trace receipt permits use in this world.
+
+        Admission answers whether a pair survived policy and empirical
+        filters.  Availability is the separate present-tense receipt: a
+        chart-selected future producer must not turn an
+        ``UNAVAILABLE_FROM_HERE`` input into the current bearing merely by
+        naming it as a supplement.
+        """
+
+        step = self.read.program_step
+        handed_off = frozenset(step.handoff_by_action) if step is not None else frozenset()
+        return frozenset(
+            pair
+            for pair in self.admitted_pairs
+            for detail in (self.admission.detail_by_pair.get(pair),)
+            if detail is None
+            or detail.availability <= _WriterAvailability.AFTER_PREREQ
+            or pair in handed_off
+        )
+
+    @property
     def admitted_supplement(self) -> bool:
-        return any(detail.pair in self.admitted_pairs for detail in self.read.details)
+        step = self.read.program_step
+        if step is not None and step.required_pairs:
+            return step.required_pairs <= self.executable_pairs
+        return any(detail.pair in self.executable_pairs for detail in self.read.details)
 
     @property
     def viable(self) -> bool:
@@ -226,7 +257,7 @@ class _AdmittedWait:
         step = self.read.program_step
         required_pairs = step.required_pairs if step is not None else frozenset()
         return self.read.prescription is not None and (
-            not required_pairs or required_pairs <= self.admitted_pairs
+            not required_pairs or required_pairs <= self.executable_pairs
         )
 
     @property
@@ -253,10 +284,9 @@ class RouteRead:
 
 @dataclass(frozen=True)
 class PrerequisiteRead:
-    """Executable prerequisites and convergence state admitted by this read."""
+    """Executable prerequisites admitted by this read."""
 
     pilot_rungs: tuple[PilotRung, ...] = ()
-    held_command_tags: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -294,6 +324,109 @@ class CrossingBatchRead:
     @property
     def proposed(self) -> bool:
         return self.fidelity.proposed
+
+
+def _effect_operation_batches(
+    details: Sequence[TraceAction],
+    snapshot: Mapping[str, Any],
+    pdg: Any,
+    program: Any,
+    steerable: frozenset[str],
+) -> tuple[CrossingBatchRead, ...]:
+    """Compose inputs which cover one exact writer's local conjunction.
+
+    Target-wide trace actions are not an executable batch.  They become one
+    only when their exact effect paths converge on the same selected writer
+    and, collectively, cover every currently-unsatisfied local requirement of
+    that writer.  Each action must own the immediate operation boundary it
+    covers; a deeper leaf which merely passes through the requirement cannot
+    hitchhike.  The resulting promise is the common writer itself.
+    """
+
+    operations: dict[tuple[int, str, str], dict[str, Any]] = {}
+    for detail in details:
+        for index, step in enumerate(detail.effect_path[:-1]):
+            requirements = tuple(dict.fromkeys(step.local_requirements))
+            if len(requirements) < 2:
+                continue
+            key = (step.node_index, step.tag, repr(step.value))
+            operation = operations.setdefault(
+                key,
+                {
+                    "step": step,
+                    "path": detail.effect_path[: index + 1],
+                    "by_requirement": {},
+                },
+            )
+            if len(detail.effect_path[: index + 1]) < len(operation["path"]):
+                operation["path"] = detail.effect_path[: index + 1]
+            child = detail.effect_path[index + 1]
+            for requirement in requirements:
+                if (
+                    detail.operation_boundary is not None
+                    and detail.operation_boundary[0] == requirement[0]
+                    and _values_match(detail.operation_boundary[1], requirement[1])
+                    and child.tag == requirement[0]
+                    and _values_match(child.value, requirement[1])
+                ):
+                    operation["by_requirement"].setdefault(requirement, []).append(detail.pair)
+
+    reads: list[CrossingBatchRead] = []
+    seen: set[tuple[_ActionPair, ...]] = set()
+    for operation in operations.values():
+        step = operation["step"]
+        pending = tuple(
+            requirement
+            for requirement in dict.fromkeys(step.local_requirements)
+            if not _values_match(snapshot.get(requirement[0]), requirement[1])
+        )
+        if len(pending) < 2 or any(
+            requirement not in operation["by_requirement"] for requirement in pending
+        ):
+            continue
+        choices = tuple(
+            tuple(dict.fromkeys(operation["by_requirement"][requirement]))
+            for requirement in pending
+        )
+        # More than one action for a requirement is an OR, not permission to
+        # enumerate speculative mixtures.  Leave that ambiguity to ordinary
+        # orientation; a local operation batch is exact only when every open
+        # input has one uniquely selected action receipt.
+        if any(len(choice) != 1 for choice in choices):
+            continue
+        for selected in (tuple(choice[0] for choice in choices),):
+            actions = tuple(dict.fromkeys(selected))
+            if len(actions) < 2 or len({tag for tag, _value in actions}) != len(actions):
+                continue
+            if actions in seen:
+                continue
+            expectation = expectation_from_selected_path(
+                operation["path"],
+                pdg,
+                program,
+                boundary=None,
+                selected_pairs=actions,
+                snapshot=snapshot,
+                steerable=steerable,
+                require_ready=False,
+            )
+            if expectation is None:
+                continue
+            seen.add(actions)
+            reads.append(
+                CrossingBatchRead(
+                    actions=actions,
+                    fidelity=CrossingFidelity(
+                        constraints=(),
+                        reason=f"exact local operation for {step.tag}={step.value!r}",
+                        verify_required=True,
+                        exact=True,
+                        proposed=False,
+                    ),
+                    expectation=expectation,
+                )
+            )
+    return tuple(reads)
 
 
 @dataclass(frozen=True)
@@ -588,8 +721,11 @@ def _compass_route_plan(
     ctx: Any,
     key_nogoods: set[_ActionPair] | None = None,
     unavailable_producer_edges: frozenset[tuple[Any, ...]] = frozenset(),
+    *,
+    state: Any = None,
 ) -> StaticPath | None:
-    if not ctx.compass.graphs:
+    graphs = ctx.compass.graphs
+    if not graphs:
         return None
 
     from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
@@ -597,6 +733,10 @@ def _compass_route_plan(
     nogoods = key_nogoods if key_nogoods is not None else set()
     world_key = getattr(frame, "key", None)
     evidence_scope = EvidenceScope.capture(world_key, frame.snap.items())
+    overlay = _pilot_rung_execution_receipt(
+        getattr(state, "pilot_rungs", ()),
+        frame.snap,
+    )
 
     def _edge_open(edge: Any) -> bool:
         if edge.identity in unavailable_producer_edges:
@@ -613,6 +753,36 @@ def _compass_route_plan(
         )
         return admission.allowed
 
+    def _first_edge_open(edge: Any) -> bool:
+        if not _edge_open(edge):
+            return False
+        # Only the first edge executes in this world. A later edge may
+        # legitimately require the opposite of a temporary rearm overlay after
+        # that overlay has yielded at its declared boundary.
+        if not all(
+            (owner := overlay.owner(tag)) is None or _values_match(owner.value, value)
+            for tag, value in (*edge.source_constraints, *edge.enablers)
+        ):
+            return False
+        commanded = (() if edge.action is None else (edge.action, *edge.co_actions))
+        already_effective = bool(commanded) and all(
+            (
+                (owner := overlay.owner(tag)) is not None
+                and _values_match(owner.value, value)
+            )
+            or _values_match(frame.snap.get(tag), value)
+            for tag, value in commanded
+        )
+        # An already-effective command is not another candidate.  It admits
+        # precisely one chart coast only when the selected writer's complete
+        # live guard proves that the program can consume it in this world.
+        return not already_effective or _live_chart_completion_edge(
+            edge,
+            frame,
+            state,
+            ctx,
+        ) is not None
+
     plans: list[StaticPath] = []
     for n in frame.tree.iter_nodes():
         if n.satisfied or n.is_steerable or getattr(n, "pipeline_internal", False):
@@ -625,8 +795,9 @@ def _compass_route_plan(
             n.tag,
             n.value,
             frame.snap,
-            ctx.compass.graphs,
+            graphs,
             edge_allowed=_edge_open,
+            first_edge_allowed=_first_edge_open,
         )
         if plan is not None:
             plans.append(plan)
@@ -636,6 +807,259 @@ def _compass_route_plan(
     return min(
         plans,
         key=lambda p: (_plan_off_target(p, ctx), _plan_ungrounded(p), _route_plan_score(p)),
+    )
+
+
+def _chart_edge_writer_trace(edge: Any, frame: Any, state: Any, ctx: Any) -> Any | None:
+    """Read a chart's exact first-edge writer through ordinary Trace.
+
+    The target-wide trace has already committed to one writer alternative and
+    may legitimately omit the route charted through the current channel value.
+    A chart can propose that alternative, but it cannot declare it executable:
+    writer locking sends the exact effect back through Trace's normal guard,
+    caller, availability, tide-table, avoid, and instruction readers.
+    """
+
+    effect_tag, effect_value = edge.route.writer_effect
+    program = getattr(ctx, "program", None)
+    pdg = getattr(ctx, "pdg", None)
+    if effect_value is None or program is None or pdg is None:
+        return None
+    tree = trace_back(
+        effect_tag,
+        effect_value,
+        frame.snap,
+        pdg,
+        program,
+        getattr(ctx, "steerable", frozenset()),
+        clear_only=getattr(ctx, "clear_only", frozenset()),
+        opaque_loop=getattr(ctx, "opaque_loop", frozenset()),
+        pipeline_internal_tags=getattr(ctx, "pipeline_internal_tags", frozenset()),
+        prior=getattr(ctx, "domain_prior", None),
+        avoid_pred=getattr(ctx, "avoid_pred", None),
+        harness=getattr(getattr(state, "work", None), "_harness", None),
+        execution_memory=getattr(
+            getattr(getattr(state, "work", None), "state", None),
+            "memory",
+            None,
+        ),
+        writer_locks={(effect_tag, effect_value): edge.route.writer_node},
+    )
+    return tree if tree.writer_rung == edge.route.writer_node else None
+
+
+def _live_general_chart_completion_edge(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+    *,
+    allow_conservative_nomination: bool = False,
+) -> Any | None:
+    """Bind read-only chart geometry to an already-live Trace operation.
+
+    Generalized charts never mint actions. Trace identifies the exact writer;
+    ProgramStep and ordinary candidate admission then decide whether that
+    writer owns current work. A conservative ``UNAVAILABLE_FROM_HERE`` trace
+    verdict may be refined by an exact ProgramStep handoff receipt. Without
+    that positive receipt the edge is declined before it becomes a bearing.
+    """
+
+    selected = _chart_edge_writer_trace(edge, frame, state, ctx)
+    if selected is None or (
+        not allow_conservative_nomination
+        and selected.writer_availability > _WriterAvailability.AFTER_PREREQ
+    ):
+        return None
+
+    effect_tag, effect_value = edge.route.writer_effect
+    if effect_value is None:
+        return None
+    from pyrung.core.analysis.pilot.awaited_actions import Producer
+
+    writer = ctx.pdg.rung_nodes[edge.route.writer_node]
+    producer = Producer(
+        rung_index=edge.route.writer_node,
+        kind="program",
+        guard_tags=frozenset(writer.condition_reads | writer.guard_reads),
+        co_writes=frozenset(writer.writes - {effect_tag}),
+        command_tag=effect_tag,
+        command_value=effect_value,
+    )
+    # Trace owns relevance and ProgramStep owns present-tense readiness. The
+    # chart contributes only the next coordinate; an already-effective route
+    # command remains context for this read, never another prescribed action.
+    return replace(
+        edge,
+        from_value=frame.snap.get(edge.role.channel_tag),
+        action=None,
+        co_actions=(),
+        program_producers=(producer,),
+    )
+
+
+def _general_chart_completion_plan(
+    frame: Any,
+    ctx: Any,
+    key_nogoods: set[_ActionPair] | None = None,
+    *,
+    state: Any,
+    allow_conservative_nomination: bool = False,
+) -> StaticPath | None:
+    """Read one bounded chart heading for work Trace already owns.
+
+    Unlike the opaque pipeline route reader, this reader cannot prescribe an
+    action.  It only enriches an exact current-world producer with a channel
+    boundary after all ordinary admission and availability evidence agrees.
+    """
+
+    graphs = ctx.compass.chart_graphs
+    if not graphs:
+        return None
+
+    from pyrung.core.analysis.pilot.pipeline_graph import _best_static_path
+
+    nogoods = key_nogoods if key_nogoods is not None else set()
+    world_key = getattr(frame, "key", None)
+    evidence_scope = EvidenceScope.capture(world_key, frame.snap.items())
+    live_edges: dict[tuple[Any, ...], Any] = {}
+    rejected_edges: set[tuple[Any, ...]] = set()
+
+    def _edge_open(edge: Any) -> bool:
+        return NavigationEvidence.static_edge_admission(
+            edge,
+            world_key=world_key,
+            snapshot=frame.snap,
+            knowledge=ctx.compass.knowledge,
+            blocked_actions=ctx.blocked_actions,
+            context=ctx,
+            evidence_scope=evidence_scope,
+            pair_nogoods=nogoods,
+        ).allowed
+
+    def _first_edge_live(edge: Any) -> bool:
+        if not _edge_open(edge):
+            return False
+        if edge.identity in live_edges:
+            return True
+        if edge.identity in rejected_edges:
+            return False
+        live = _live_general_chart_completion_edge(
+            edge,
+            frame,
+            state,
+            ctx,
+            allow_conservative_nomination=allow_conservative_nomination,
+        )
+        if live is None:
+            rejected_edges.add(edge.identity)
+            return False
+        live_edges[edge.identity] = live
+        return True
+
+    def _first_edge_live_and_grounded(edge: Any) -> bool:
+        return _edge_grounded(edge) and _first_edge_live(edge)
+
+    plans: list[StaticPath] = []
+    chart_channels = frozenset(graph.role.channel_tag for graph in graphs)
+    for node in frame.tree.iter_nodes():
+        if (
+            node.satisfied
+            or node.is_steerable
+            or getattr(node, "pipeline_internal", False)
+            or node.tag not in chart_channels
+            or _values_match(frame.snap.get(node.tag), node.value)
+        ):
+            continue
+        # A source-bound edge records the program's ordinary transition from
+        # this exact channel value.  Search that topology first; otherwise a
+        # shorter wildcard exception/reset writer can beat it inside one BFS
+        # before the plan-level groundedness score ever sees the alternative.
+        # Wildcards remain a fallback when no live grounded continuation can
+        # reach the requested value.
+        plan = _best_static_path(
+            node.tag,
+            node.value,
+            frame.snap,
+            graphs,
+            edge_allowed=_edge_open,
+            first_edge_allowed=_first_edge_live_and_grounded,
+        )
+        if plan is None:
+            plan = _best_static_path(
+                node.tag,
+                node.value,
+                frame.snap,
+                graphs,
+                edge_allowed=_edge_open,
+                first_edge_allowed=_first_edge_live,
+            )
+        if plan is not None:
+            plans.append(plan)
+
+    if not plans:
+        return None
+    selected = min(
+        plans,
+        key=lambda plan: (
+            _plan_off_target(plan, ctx),
+            _plan_ungrounded(plan),
+            _route_plan_score(plan),
+        ),
+    )
+    live = live_edges.get(selected.first_edge.identity)
+    if live is None:
+        return None
+    return replace(selected, edges=(live, *selected.edges[1:]))
+
+
+def _live_chart_completion_edge(
+    edge: Any,
+    frame: Any,
+    state: Any,
+    ctx: Any,
+) -> Any | None:
+    """Ground an already-asserted action edge in the exact current world.
+
+    A route action may have been installed by an earlier setup phase while a
+    late program rung prepared its derived control value. Once the selected
+    writer's complete guard is true, reasserting that action is not a new
+    steer: the next ordinary bearing is one observed program scan. Wildcard
+    chart evidence alone is insufficient; the unique writer/caller guard is
+    the grounding receipt.
+    """
+
+    if edge.action is None:
+        return None
+    overlay = _pilot_rung_execution_receipt(
+        getattr(state, "pilot_rungs", ()),
+        frame.snap,
+    )
+    for tag, value in (edge.action, *edge.co_actions):
+        owner = overlay.owner(tag)
+        if not (
+            (owner is not None and _values_match(owner.value, value))
+            or _values_match(frame.snap.get(tag), value)
+        ):
+            return None
+
+    from pyrung.core.analysis.pilot.evidence import selected_chart_producer_guard_rungs
+    from pyrung.core.analysis.sp_values import _SnapshotView
+
+    guards = selected_chart_producer_guard_rungs(edge, ctx.pdg, ctx.program)
+    if not guards:
+        return None
+    view = _SnapshotView(frame.snap, {})
+    try:
+        if not all(guard._evaluate_conditions(view) for guard in guards):
+            return None
+    except (AttributeError, KeyError, RuntimeError, TypeError, ValueError):
+        return None
+    return replace(
+        edge,
+        from_value=frame.snap.get(edge.role.channel_tag),
+        action=None,
+        co_actions=(),
     )
 
 
@@ -778,19 +1202,19 @@ def _managed_boolean_rungs(
         source = state.work._known_tags_by_name.get(tag)
         if source is None:
             continue
+        active_owner = overlay.owner(tag)
+        if active_owner is not None:
+            # The exact overlay receipt, not Boolean polarity, decides whether
+            # this input is available to a fresh route.  In particular a
+            # trace-requested False cannot release an effective True owner by
+            # repeatedly issuing a patch that the overlay will overwrite.
+            lowered.add(detail.pair)
+            continue
         if value is False:
             # The shared overlay will lower this input, but that lowering is
             # still the live trace action. Keep it visible so PILOT gives the
             # program one scan to observe the release before considering a
             # command that closes the operation.
-            continue
-        active_owner = overlay.owner(tag)
-        if active_owner is not None:
-            # A replay-proved correction owns this input until its observed
-            # release boundary. The backward trace is still diagnostic, but it
-            # cannot append an opposite last-write-wins rung while that proof is
-            # active. Once the guard is false, the fresh trace may steer it.
-            lowered.add(detail.pair)
             continue
         if detail.guard_atoms:
             try:
@@ -1007,6 +1431,24 @@ def _ordered_consumer_required_shape(
     return ordered
 
 
+def _expectation_from_route_writer(ctx: Any, edge: Any) -> EffectExpectation | None:
+    """Bind a chart receipt to the effect its selected writer actually owns."""
+
+    tag, value = edge.route.writer_effect
+    if value is None:
+        return None
+    return expectation_from_writer(
+        ctx.pdg,
+        ctx.program,
+        writer_node=edge.route.writer_node,
+        tag=tag,
+        value=value,
+        consumer_node=edge.route.consumer_node,
+        required_shape=((tag, value),) if edge.route.consumer_node is not None else (),
+        boundary=(edge.role.channel_tag, edge.to_value),
+    )
+
+
 def _prescribe_wait(
     edge: Any,
     frame: Any,
@@ -1038,23 +1480,15 @@ def _prescribe_wait(
     route_reason = (
         f"let-run {edge.role.channel_tag}: {_fmt_from(edge.from_value)}->{edge.to_value!r}"
     )
+    effect_tag, effect_value = edge.route.writer_effect
     route_context = RouteEdgeContext(
         edge.role.channel_tag,
         edge.from_value,
         edge.to_value,
+        effect_tag,
+        effect_value,
     )
-    route_expectation = (
-        expectation_from_writer(
-            ctx.pdg,
-            ctx.program,
-            writer_node=edge.route.writer_node,
-            tag=edge.route.destination_tag,
-            value=edge.route.destination_value,
-            boundary=(edge.role.channel_tag, edge.to_value),
-        )
-        if edge.route.destination_value is not None
-        else None
-    )
+    route_expectation = _expectation_from_route_writer(ctx, edge)
 
     def _read(
         prescription: WaitPrescription | None,
@@ -1063,6 +1497,11 @@ def _prescribe_wait(
         declined_reason: str | None = None,
         declined_frontier: tuple[_ActionPair, ...] = (),
     ) -> WaitRead:
+        if prescription is not None and step is not None:
+            prescription = replace(
+                prescription,
+                landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
+            )
         details = (
             step.inputs_with_lifetime
             if step is not None and prescription is not None
@@ -1126,6 +1565,7 @@ def _prescribe_wait(
             state.work,
             state.pilot_rungs,
             resting=ctx.resting,
+            structural_channels=(edge.role.channel_tag,),
         )
         route_writer = ctx.pdg.rung_nodes[edge.route.writer_node]
         route_writer_reads = (
@@ -1151,8 +1591,21 @@ def _prescribe_wait(
             if consumer_rung is not None
             else None
         )
-        program_expectation = (
-            expectation_from_writer(
+        producer_is_route_writer = (
+            step.producer.rung_index == edge.route.writer_node
+            and step.producer.command_tag == effect_tag
+            and _values_match(step.producer.command_value, effect_value)
+        )
+        program_expectation = None
+        if step.producer_observed and producer_is_route_writer:
+            # ProgramStep has observed the chart edge's exact writer in the
+            # first projected scan.  Its direct writer receipt is already the
+            # whole promise; treating that same rung as both producer and
+            # consumer invents a handoff and can discard the expectation when
+            # no consumer shape exists.
+            program_expectation = route_expectation
+        elif step.producer_observed and local_shape is not None:
+            program_expectation = expectation_from_writer(
                 ctx.pdg,
                 ctx.program,
                 writer_node=step.producer.rung_index,
@@ -1162,9 +1615,6 @@ def _prescribe_wait(
                 required_shape=local_shape,
                 boundary=(edge.role.channel_tag, edge.to_value),
             )
-            if local_shape is not None and step.producer_observed
-            else None
-        )
         preferred_channel = (
             edge.role.channel_tag
             if edge.role.channel_tag in step.preserve_channels
@@ -1304,14 +1754,55 @@ def _admit_trace_details(
         )
         if matching_index is None:
             ordered_details.append(detail)
-            detail_by_pair.setdefault(pair, detail)
         else:
             existing = ordered_details[matching_index]
-            if existing.until is None and detail.until is not None:
-                enriched = replace(existing, until=detail.until)
-                ordered_details[matching_index] = enriched
-                if detail_by_pair.get(pair) is existing:
-                    detail_by_pair[pair] = enriched
+            preferred = (
+                detail
+                if detail.availability < existing.availability
+                else existing
+            )
+            lifetime_owner = next(
+                (candidate for candidate in (existing, detail) if candidate.until is not None),
+                None,
+            )
+            detail = replace(
+                preferred,
+                until=(lifetime_owner.until if lifetime_owner is not None else preferred.until),
+                operation=(
+                    lifetime_owner.operation
+                    if lifetime_owner is not None and lifetime_owner.operation is not None
+                    else preferred.operation
+                ),
+            )
+            ordered_details[matching_index] = detail
+
+        operational = detail_by_pair.get(pair)
+        if operational is None:
+            detail_by_pair[pair] = detail
+            continue
+        # The broad target trace and an exact ProgramStep read can describe
+        # different effect paths for the same physical input. Compose only the
+        # orthogonal execution facts: the narrower reader may prove present
+        # availability while the outer route owns the honest lifetime. Effect
+        # paths/provenance remain separate in ``ordered_details``.
+        preferred = (
+            detail
+            if detail.availability < operational.availability
+            else operational
+        )
+        lifetime_owner = next(
+            (candidate for candidate in (operational, detail) if candidate.until is not None),
+            None,
+        )
+        detail_by_pair[pair] = replace(
+            preferred,
+            until=(lifetime_owner.until if lifetime_owner is not None else preferred.until),
+            operation=(
+                lifetime_owner.operation
+                if lifetime_owner is not None and lifetime_owner.operation is not None
+                else preferred.operation
+            ),
+        )
 
     active_details = tuple(
         detail
@@ -1325,6 +1816,43 @@ def _admit_trace_details(
             or detail.until is not None
         )
     )
+    spent_edges = frozenset(
+        tag
+        for tag in getattr(ctx, "edge_tags", ())
+        if not _values_match(
+            frame.snap.get(tag),
+            getattr(ctx, "resting", {}).get(tag, False),
+        )
+        and any(
+            detail.tag == tag
+            and _values_match(
+                detail.value,
+                getattr(ctx, "resting", {}).get(tag, False),
+            )
+            for detail in active_details
+        )
+    )
+    if spent_edges:
+        # A selected trace can contain both the next assertion and its release
+        # edge.  When the input is still asserted, the release is the current
+        # operation: asserting again would hide that scan inside _apply_pulse
+        # and verify a later route promise against pre-release state.  Preserve
+        # trace order otherwise; fresh orientation will reread after the
+        # ordinary release bearing lands.
+        active_details = tuple(
+            sorted(
+                active_details,
+                key=lambda detail: (
+                    0
+                    if detail.tag in spent_edges
+                    and _values_match(
+                        detail.value,
+                        getattr(ctx, "resting", {}).get(detail.tag, False),
+                    )
+                    else 1
+                ),
+            )
+        )
     trace_action_details = tuple(
         detail for detail in active_details if detail.pair not in key_nogoods
     )
@@ -1411,31 +1939,82 @@ def _read_route_and_wait(
     banked_trace_work = bool(
         admission.actions and earned_work is not None and earned_work.has_banked_work(frame.snap)
     )
-    live_plan = _compass_route_plan(frame, ctx, key_nogoods)
-    route_plan = (
-        None
-        if current_trace_actions
+    route_blocked = bool(
+        current_trace_actions
         or banked_trace_work
         or (getattr(state, "pending_departure", None) is not None and admission.active_actions)
-        else live_plan
     )
+    route_plan = (
+        None
+        if route_blocked
+        else _compass_route_plan(frame, ctx, key_nogoods, state=state)
+    )
+    admitted_completion: _AdmittedWait | None = None
+    if route_plan is not None and route_plan.first_edge.action is not None:
+        general = _general_chart_completion_plan(
+            frame,
+            ctx,
+            key_nogoods,
+            state=state,
+            allow_conservative_nomination=True,
+        )
+        same_first_transition = bool(
+            general is not None
+            and general.first_edge.role.channel_tag == route_plan.first_edge.role.channel_tag
+            and _values_match(general.first_edge.from_value, route_plan.first_edge.from_value)
+            and _values_match(general.first_edge.to_value, route_plan.first_edge.to_value)
+        )
+        if general is not None and not same_first_transition:
+            general_admitted = _admit_wait_read(
+                _prescribe_wait(general.first_edge, frame, state, ctx),
+                tuple(frame.raw_trace_action_details),
+                frame,
+                state,
+                ctx,
+                key_nogoods,
+            )
+            if (
+                general_admitted.viable
+                or not general.first_edge.program_producers
+            ):
+                route_plan = general
+                admitted_completion = general_admitted
+    if route_plan is None and not route_blocked:
+        route_plan = _general_chart_completion_plan(
+            frame,
+            ctx,
+            key_nogoods,
+            state=state,
+        )
+    if route_plan is not None:
+        completion_edge = _live_chart_completion_edge(
+            route_plan.first_edge,
+            frame,
+            state,
+            ctx,
+        )
+        if completion_edge is not None:
+            route_plan = replace(
+                route_plan,
+                edges=(completion_edge, *route_plan.edges[1:]),
+            )
     is_charted_completion = (
         not admission.establish_pending
         and route_plan is not None
         and route_plan.first_edge.action is None
     )
-    admitted_completion: _AdmittedWait | None = None
     unavailable_producer_edges: set[tuple[Any, ...]] = set()
     while is_charted_completion:
         assert route_plan is not None
-        admitted_completion = _admit_wait_read(
-            _prescribe_wait(route_plan.first_edge, frame, state, ctx),
-            tuple(frame.raw_trace_action_details),
-            frame,
-            state,
-            ctx,
-            key_nogoods,
-        )
+        if admitted_completion is None:
+            admitted_completion = _admit_wait_read(
+                _prescribe_wait(route_plan.first_edge, frame, state, ctx),
+                tuple(frame.raw_trace_action_details),
+                frame,
+                state,
+                ctx,
+                key_nogoods,
+            )
         if (
             admitted_completion.viable
             or admitted_completion.admitted_supplement
@@ -1448,6 +2027,7 @@ def _read_route_and_wait(
             ctx,
             key_nogoods,
             frozenset(unavailable_producer_edges),
+            state=state,
         )
         if alternate is None:
             break
@@ -1496,6 +2076,7 @@ def _separate_prerequisites(
         for node in frame.tree.leaves()
     )
     instruction_boundary: ChannelHeading | None = None
+    instruction_node: Any | None = None
     if is_coast:
         for node in frame.tree.leaves():
             step = getattr(node, "advance", None)
@@ -1521,15 +2102,68 @@ def _separate_prerequisites(
             else:
                 instruction_boundary = _boundary_heading(step.until, frame, state)
             if instruction_boundary is not None:
+                instruction_node = node
                 break
+    if instruction_boundary is not None:
+        trace_owned_rendezvous = any(
+            detail.until is not None and not detail.pulse for detail in admission.details
+        )
+        hard_blockers = tuple(
+            node
+            for node in frame.tree.leaves()
+            if node is not instruction_node
+            and not node.satisfied
+            and not node.is_steerable
+            and getattr(node, "advance", None) is None
+            and not getattr(node, "pipeline_internal", False)
+        )
+        if hard_blockers and not trace_owned_rendezvous:
+            # A standalone instruction boundary is only coastable inside its
+            # selected route shape.  Reaching a timer Done through an alternate
+            # enable while a non-steerable sibling guard is false is not route
+            # progress and must leave the next trace alternative visible. A
+            # trace-owned lifetime is different: it is the selected producer's
+            # rendezvous receipt, so durable siblings are positioned before
+            # coasting that instruction boundary.
+            instruction_boundary = None
 
     prerequisite_pilot_rungs = list(admission.managed_boolean_rungs)
     trace_actions = admission.actions
     active_trace_actions = admission.active_actions
     trace_action_details = admission.details
     if is_charted_completion or is_coast:
-        action_or_edge = ctx.compass.action_tags | ctx.edge_tags | ctx.clear_only
-        needed = frontier_pairs(frame.tree, frame.snap)
+        completion_detail_pairs = (
+            frozenset(detail.pair for detail in route_and_wait.charted_wait.details)
+            if is_charted_completion and route_and_wait.charted_wait is not None
+            else frozenset()
+        )
+        route = route_and_wait.route
+        if route is not None:
+            edge = route.plan.first_edge
+            route_actions = () if edge.action is None else (edge.action, *edge.co_actions)
+            route_request = (
+                ()
+                if edge.request_tag is None
+                else ((edge.request_tag, edge.request_value),)
+            )
+            route_needed = (
+                *route_actions,
+                *route_request,
+                *edge.source_constraints,
+                *edge.enablers,
+                *edge.completion,
+            )
+        else:
+            route_needed = ()
+        # A prerequisite cannot make the selected route non-executable.  Put
+        # the chart's immediate edge first because it is the concrete bearing;
+        # the broader target trace follows as supporting evidence.
+        needed = (*route_needed, *frontier_pairs(frame.tree, frame.snap))
+        prerequisite_pilot_rungs = [
+            rung
+            for rung in prerequisite_pilot_rungs
+            if not hold_defeats_needed(rung.dest, rung.value, needed, ctx.pdg, ctx.program)
+        ]
         pulse_tags = {detail.tag for detail in trace_action_details if detail.pulse}
         seen_prereq: set[str] = set()
         for tag, value in trace_actions:
@@ -1538,12 +2172,32 @@ def _separate_prerequisites(
             detail = admission.detail_by_pair.get((tag, value))
             if detail is None or detail.until is None:
                 continue
+            if (
+                detail.availability > _WriterAvailability.AFTER_PREREQ
+                and not _values_match(value, ctx.resting.get(tag, False))
+                and (tag, value) not in completion_detail_pairs
+                and (is_charted_completion or instruction_boundary is None)
+            ):
+                # A chart route and a target-wide trace are separate readings:
+                # only the chart's selected completion detail may position an
+                # unavailable future input for that coast. A standalone
+                # instruction boundary is different. It came from this same
+                # trace, so the trace-owned lifetime is the exact rendezvous
+                # receipt for concurrent inputs which must persist while the
+                # instruction advances. Releases remain valid so a spent
+                # transaction cannot block later structural motion.
+                continue
             scope = _until_unresolved_condition(state.work, detail.until)
             if tag in pulse_tags:
                 seen_prereq.add(tag)
                 if _action_allowed(ctx, (tag, value)):
                     prerequisite_pilot_rungs.extend(_oscillating_rungs(tag, ctx, scope, state.work))
-            elif tag not in action_or_edge and not _values_match(frame.snap.get(tag), value):
+            elif (
+                tag not in ctx.edge_tags
+                and tag not in ctx.clear_only
+                and not detail.pulse
+                and not _values_match(frame.snap.get(tag), value)
+            ):
                 if hold_defeats_needed(tag, value, needed, ctx.pdg, ctx.program):
                     continue
                 seen_prereq.add(tag)
@@ -1557,12 +2211,6 @@ def _separate_prerequisites(
             pair for pair in active_trace_actions if pair[0] not in prereq_tags
         )
 
-    held_command_tags = frozenset(
-        tag
-        for tag in ctx.compass.action_tags
-        if tag not in {rung.dest for rung in state.pilot_rungs}
-        and not _values_match(frame.snap.get(tag), ctx.resting.get(tag, False))
-    )
     updated_trace = replace(
         admission,
         active_actions=active_trace_actions,
@@ -1571,7 +2219,7 @@ def _separate_prerequisites(
     )
     return _PrerequisiteSeparation(
         updated_trace,
-        PrerequisiteRead(tuple(prerequisite_pilot_rungs), held_command_tags),
+        PrerequisiteRead(tuple(prerequisite_pilot_rungs)),
         instruction_boundary,
     )
 
@@ -1777,6 +2425,8 @@ def _assemble_candidate_read(
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
+    *,
+    state: Any = None,
 ) -> CandidateRead:
     """Compose the final durable candidate read from explicit phase receipts."""
 
@@ -1821,7 +2471,7 @@ def _assemble_candidate_read(
         if tree is not None and hasattr(tree, "ordered_crossing_branches")
         else ()
     )
-    crossing_batches: tuple[CrossingBatchRead, ...] = tuple(
+    structural_crossing_batches: tuple[CrossingBatchRead, ...] = tuple(
         CrossingBatchRead(
             actions=branch.pairs,
             fidelity=branch.fidelity,
@@ -1855,6 +2505,26 @@ def _assemble_candidate_read(
             for constraint in branch.constraints
         )
     )
+    operation_batches = (
+        _effect_operation_batches(
+            trace.details,
+            frame.snap,
+            ctx.pdg,
+            ctx.program,
+            getattr(ctx, "steerable", frozenset()),
+        )
+        if trace.details and getattr(ctx, "program", None) is not None
+        else ()
+    )
+    crossing_batches = tuple(
+        batch
+        for index, batch in enumerate((*operation_batches, *structural_crossing_batches))
+        if batch.actions
+        not in {
+            prior.actions
+            for prior in (*operation_batches, *structural_crossing_batches)[:index]
+        }
+    )
     candidates: list[_Candidate] = []
     seen_candidates: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
@@ -1881,6 +2551,142 @@ def _assemble_candidate_read(
             if route_plan is not None and pair in route_candidate_set
             else None
         )
+        route_writer_effect = (
+            prescribed_edge.route.writer_effect if prescribed_edge is not None else None
+        )
+        route_effect_paths = (
+            tuple(
+                trace_detail.effect_path
+                for trace_detail in trace.details
+                if prescribed_edge is not None
+                and trace_detail.pair == pair
+                and trace_detail.effect_path
+                and trace_detail.effect_path[-1].node_index
+                == prescribed_edge.route.writer_node
+                and route_writer_effect is not None
+                and trace_detail.effect_path[-1].tag == route_writer_effect[0]
+                and _values_match(trace_detail.effect_path[-1].value, route_writer_effect[1])
+            )
+            if prescribed_edge is not None
+            else ()
+        )
+        route_effect_path = route_effect_paths[0] if len(route_effect_paths) == 1 else None
+        route_expectation = None
+        if prescribed_edge is not None:
+            if route_effect_path is not None:
+                route_expectation = expectation_from_selected_path(
+                    route_effect_path,
+                    ctx.pdg,
+                    ctx.program,
+                    boundary=(prescribed_edge.role.channel_tag, prescribed_edge.to_value),
+                    selected_pairs=(pair, *prescribed_edge.co_actions),
+                    snapshot=frame.snap,
+                    steerable=getattr(ctx, "steerable", frozenset()),
+                )
+            if route_expectation is None:
+                # The complete target path may name a later consumer whose
+                # structural source has not been reached yet. The selected
+                # edge still owns its immediate carrier/request handoff; keep
+                # that exact writer receipt instead of dropping all effect
+                # evidence for this bearing.
+                route_expectation = _expectation_from_route_writer(ctx, prescribed_edge)
+        route_context = None
+        if prescribed_edge is not None:
+            effect_tag, effect_value = prescribed_edge.route.writer_effect
+            route_context = RouteEdgeContext(
+                prescribed_edge.role.channel_tag,
+                prescribed_edge.from_value,
+                prescribed_edge.to_value,
+                effect_tag,
+                effect_value,
+            )
+        program_handoff = (
+            program_step.handoff_by_action.get(pair)
+            if source is ActSource.PROGRAM and program_step is not None
+            else None
+        )
+        program_receipt_details = (
+            tuple(
+                trace_detail
+                for trace_detail in trace.details
+                if trace_detail.pair == pair
+                and trace_detail.effect_path
+                and trace_detail.effect_path[-1].node_index
+                == program_step.producer.rung_index
+                and trace_detail.effect_path[-1].tag == program_step.producer.command_tag
+                and _values_match(
+                    trace_detail.effect_path[-1].value,
+                    program_step.producer.command_value,
+                )
+            )
+            if source is ActSource.PROGRAM and program_step is not None
+            else ()
+        )
+        program_context_actions = (
+            tuple(
+                dict.fromkeys(
+                    (
+                        *(
+                            required.pair
+                            for required in program_step.required_inputs
+                            if required.pair != pair
+                        ),
+                        *program_step.context_actions,
+                    )
+                )
+            )
+            if source is ActSource.PROGRAM and program_step is not None
+            else ()
+        )
+        program_heading = (
+            _boundary_heading(program_handoff.boundary, frame, state)
+            if program_handoff is not None and state is not None
+            else None
+        )
+        program_consumer_expectations = tuple(
+            expectation
+            for receipt_detail in program_receipt_details
+            if (
+                expectation := expectation_from_selected_path(
+                    receipt_detail.effect_path,
+                    ctx.pdg,
+                    ctx.program,
+                    boundary=receipt_detail.operation_boundary,
+                    selected_pairs=(pair, *program_context_actions),
+                    snapshot=frame.snap,
+                    steerable=getattr(ctx, "steerable", frozenset()),
+                )
+            )
+            is not None
+            and expectation.obligations[0].consumer is not None
+        )
+        program_expectation = (
+            program_consumer_expectations[0]
+            if len(program_consumer_expectations) == 1
+            else next(
+                (
+                    expectation_from_selected_path(
+                        required.effect_path,
+                        ctx.pdg,
+                        ctx.program,
+                        boundary=(
+                            program_heading.channel_tag,
+                            program_heading.target_value,
+                        )
+                        if program_heading is not None
+                        else None,
+                        selected_pairs=(pair, *program_context_actions),
+                        snapshot=frame.snap,
+                        steerable=getattr(ctx, "steerable", frozenset()),
+                    )
+                    for required in program_step.required_inputs
+                    if required.pair == pair and required.effect_path
+                ),
+                None,
+            )
+            if source is ActSource.PROGRAM and program_step is not None
+            else None
+        )
         return _Candidate(
             tag=pair[0],
             value=pair[1],
@@ -1896,6 +2702,8 @@ def _assemble_candidate_read(
                 if detail is not None and detail.operation_boundary is not None
                 else prescribed_edge.role.channel_tag
                 if prescribed_edge is not None
+                else program_heading.channel_tag
+                if program_heading is not None
                 else route_plan.role.channel_tag
                 if pair in program_pairs and route_plan is not None
                 else None
@@ -1905,10 +2713,16 @@ def _assemble_candidate_read(
                 if detail is not None and detail.operation_boundary is not None
                 else prescribed_edge.to_value
                 if prescribed_edge is not None
+                else program_heading.target_value
+                if program_heading is not None
                 else route_plan.first_edge.to_value
                 if pair in program_pairs and route_plan is not None
                 else None
             ),
+            bearing_boundary=(
+                program_heading.boundary if program_heading is not None else None
+            ),
+            route_context=route_context,
             program_note=(
                 f"exact program producer rung {program_step.producer.rung_index} "
                 f"currently needs {pair[0]}={pair[1]!r}"
@@ -1916,7 +2730,7 @@ def _assemble_candidate_read(
                 else ""
             ),
             program_context_actions=(
-                tuple(program_step.context_actions)
+                program_context_actions
                 if pair in program_pairs and program_step is not None
                 else ()
             ),
@@ -1931,38 +2745,9 @@ def _assemble_candidate_read(
                     steerable=getattr(ctx, "steerable", frozenset()),
                 )
                 if detail is not None
-                else (
-                    expectation_from_writer(
-                        ctx.pdg,
-                        ctx.program,
-                        writer_node=prescribed_edge.route.writer_node,
-                        tag=prescribed_edge.route.destination_tag,
-                        value=prescribed_edge.route.destination_value,
-                        boundary=(prescribed_edge.role.channel_tag, prescribed_edge.to_value),
-                    )
-                    if prescribed_edge.route.destination_value is not None
-                    else None
-                )
+                else route_expectation
                 if prescribed_edge is not None
-                else next(
-                    (
-                        expectation_from_selected_path(
-                            required.effect_path,
-                            ctx.pdg,
-                            ctx.program,
-                            boundary=(
-                                program_step.handoff_by_action[pair].channel,
-                                program_step.handoff_by_action[pair].boundary,
-                            ),
-                            selected_pairs=(pair, *program_step.context_actions),
-                            snapshot=frame.snap,
-                            steerable=getattr(ctx, "steerable", frozenset()),
-                        )
-                        for required in program_step.required_inputs
-                        if required.pair == pair and required.effect_path
-                    ),
-                    None,
-                )
+                else program_expectation
                 if source is ActSource.PROGRAM and program_step is not None
                 else learned_action_expectation
                 if source is ActSource.LEARNED_ACTION
@@ -1974,6 +2759,22 @@ def _assemble_candidate_read(
         if _action_allowed(ctx, pair) and pair not in seen_candidates:
             seen_candidates.add(pair)
             candidates.append(_candidate_for(pair))
+    if program_step is not None:
+        # ProgramStep is the present-tense reading of the selected first-edge
+        # producer.  Its admitted input must precede broad target-trace leaves
+        # which describe work beyond that producer (and may explicitly be
+        # UNAVAILABLE_FROM_HERE).  This is ordering by execution evidence, not
+        # a new source of action authority: the pair still had to survive the
+        # shared trace-admission pass above.
+        for required in program_step.required_inputs:
+            pair = required.pair
+            if (
+                pair in trace_actions
+                and _action_allowed(ctx, pair)
+                and pair not in seen_candidates
+            ):
+                seen_candidates.add(pair)
+                candidates.append(_candidate_for(pair))
     for pair in trace_actions:
         for detail in (detail for detail in trace.details if detail.pair == pair):
             candidate = _candidate_for(pair, detail)
@@ -2129,6 +2930,7 @@ def _build_candidates(
         frame,
         ctx,
         key_nogoods,
+        state=state,
     )
 
 
@@ -2163,9 +2965,17 @@ def _candidate_applied(
                 actions.append(co)
                 seen.add(co[0])
 
-    # A convergence-pipeline command (CtrlCmd-style) co-pulses the remaining
-    # trace actions so a level prerequisite and the command land together.
-    if candidate.tag in ctx.compass.action_tags and candidates.trace.active_actions:
+    # A trace-selected convergence command may need the other conjuncts from
+    # that same trace artifact.  A ROUTE bearing is already a closed executable
+    # artifact: its exact edge owns ``co_actions`` above and its admitted steady
+    # prerequisites below.  Folding target-wide trace leaves into it would let
+    # an unavailable downstream writer hitchhike on a current state command
+    # (for example, production/heat inputs riding on PackML Clear).
+    if (
+        candidate.source is not ActSource.ROUTE
+        and candidate.tag in ctx.compass.action_tags
+        and candidates.trace.active_actions
+    ):
         # A pair rejected as a standalone act remains valid context for a
         # different atomic act.  Fresh orientation therefore keeps it out of
         # the candidate queue while still allowing the joint pulse to be
@@ -2174,15 +2984,6 @@ def _candidate_applied(
             if ta[0] not in seen:
                 actions.append(ta)
                 seen.add(ta[0])
-
-    # Releasing the other held convergence buttons is part of the same command:
-    # without it the decoder fires a stuck button instead.  Recorded in the pulse
-    # so replay reproduces a fully-specified, unambiguous command surface.
-    if candidate.tag in ctx.compass.action_tags:
-        for other in sorted(candidates.prerequisites.held_command_tags):
-            if other not in seen:
-                actions.append((other, ctx.resting.get(other, False)))
-                seen.add(other)
 
     # Prerequisite holds (trace actions split into rungs for a bearing coast)
     # are applied to the fork but were removed from trace_actions — record them

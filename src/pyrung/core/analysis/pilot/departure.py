@@ -103,6 +103,7 @@ class ContinuationEvidence:
     channel_status: FrontierStatus
     awaited_action_inspected: bool = False
     awaited_action: AwaitedAction | None = None
+    observed_adjacent: bool = False
 
     def __post_init__(self) -> None:
         if self.awaited_action is not None and not self.awaited_action_inspected:
@@ -435,6 +436,7 @@ def observe_departure(
     source_snap: Any,
     *,
     occurrence_scan: int | None = None,
+    landing_receipt: CoastReceipt | None = None,
 ) -> tuple[DepartureObservation, PLC]:
     """Settle and observe the channel departure paused in ``state.work``."""
     work = getattr(state, "work", None)
@@ -452,9 +454,104 @@ def observe_departure(
         anchor_snap = dict(work.history.at(cause_scan - 1).tags)
     else:
         anchor_snap = dict(source_snap)
+    earned_work = getattr(state, "earned_work", None)
+
+    # An exact one-scan departure may itself be an ordinary actionless chart
+    # edge.  In that case do not run past it looking for global quiescence:
+    # retain the observed landing and let the next Compass lifecycle read own
+    # the next edge. Static charts corroborate this already-executed adjacency;
+    # they still neither select nor execute an action.
+    immediate_value = work.state.tags.get(channel_tag) if work is not None else None
+    immediate_snap = dict(work.state.tags) if work is not None else {}
+    immediate_progress = (
+        earned_work.receipt(anchor_snap, immediate_snap)
+        if earned_work is not None and getattr(earned_work, "components", ())
+        else EarnedWorkReceipt()
+    )
+    goals = list(objective.channel_goals(channel_tag))
+    if landing_receipt is not None and work is not None and goals:
+        progress_erasing_values, all_resolved = _progress_erasing_values(
+            earned_work,
+            anchor_snap,
+            channel_tag,
+        )
+        completed_actions = _completed_channel_actions(state, channel_tag)
+        immediate_key = (
+            _pilot_world_key(
+                immediate_snap,
+                state.key_config,
+                state.pilot_rungs,
+                state.active_requirements,
+            )
+            if state.key_config is not None
+            else None
+        )
+        immediate_scope = EvidenceScope.capture(immediate_key, immediate_snap.items())
+
+        def _adjacent_edge_allowed(edge: Any) -> bool:
+            return _continuation_safety(
+                edge,
+                ctx,
+                settled_key=immediate_key,
+                settled_snap=immediate_snap,
+                evidence_scope=immediate_scope,
+                blocked_actions=ctx.blocked_actions,
+                progress_erasing_values=progress_erasing_values,
+                completed_actions=completed_actions,
+            ).allowed
+
+        compass = getattr(ctx, "compass", None)
+        charts = (
+            *(getattr(compass, "graphs", ()) or ()),
+            *(getattr(compass, "chart_graphs", ()) or ()),
+        )
+        exact_edges = tuple(
+            edge
+            for graph in charts
+            if graph.role.channel_tag == channel_tag
+            for edge in graph.edges
+            if edge.from_value is not ANY_FROM
+            and _values_match(edge.from_value, from_value)
+            and _values_match(edge.to_value, immediate_value)
+            and edge.action is None
+            and _adjacent_edge_allowed(edge)
+        )
+        continuation = NavigationEvidence.channel_continuation(
+            charts,
+            channel_tag,
+            immediate_value,
+            tuple(goals),
+            edge_allowed=_adjacent_edge_allowed,
+        )
+        if (
+            all_resolved
+            and len(exact_edges) == 1
+            and immediate_progress.movement is not EarnedWorkMovement.BACKWARD
+            and isinstance(continuation, Reachable)
+        ):
+            return (
+                DepartureObservation(
+                    channel_tag=channel_tag,
+                    from_value=from_value,
+                    settled_value=immediate_value,
+                    landing_receipt=landing_receipt,
+                    progress=immediate_progress,
+                    reading=DepartureReading(
+                        disposition=DepartureDisposition.UNKNOWN,
+                        occurrence_scan=occurrence_scan,
+                        source_scan=(occurrence_scan - 1 if occurrence_scan is not None else None),
+                        reason="exact actionless chart edge was observed",
+                    ),
+                    continuation=ContinuationEvidence(
+                        continuation,
+                        observed_adjacent=True,
+                    ),
+                ),
+                work,
+            )
+
     fork, receipt = _settle_departure(state, channel_tag)
     settled_value = fork.state.tags.get(channel_tag)
-    earned_work = getattr(state, "earned_work", None)
     progress = (
         earned_work.receipt(anchor_snap, dict(fork.state.tags))
         if earned_work is not None and getattr(earned_work, "components", ())
@@ -620,12 +717,15 @@ def classify_departure(observation: DepartureObservation) -> DepartureResult:
     continuation = observation.continuation
     status = continuation.channel_status
 
-    if receipt.stop_reason != "quiescent":
-        classification = DepartureClassification.UNKNOWN
-        reason = f"landing did not settle within cap ({receipt.stop_reason})"
-    elif progress.movement is EarnedWorkMovement.BACKWARD:
+    if progress.movement is EarnedWorkMovement.BACKWARD:
         classification = DepartureClassification.REGRESSION
         reason = "settled world is behind the exact source receipt"
+    elif continuation.observed_adjacent and isinstance(status, Reachable):
+        classification = DepartureClassification.CLEAN_CONTINUATION
+        reason = "exact observed actionless chart edge has a clean forward continuation"
+    elif receipt.stop_reason != "quiescent":
+        classification = DepartureClassification.UNKNOWN
+        reason = f"landing did not settle within cap ({receipt.stop_reason})"
     elif isinstance(status, Reachable) or continuation.awaited_action is not None:
         classification = DepartureClassification.CLEAN_CONTINUATION
         reason = (

@@ -49,6 +49,11 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
             (fixture.StartCommand.name, True),
         ),
         ((fixture.ConfirmCommand.name, True),),
+        (
+            (fixture.FirstPresetMs.name, 11),
+            (fixture.SecondPresetMs.name, 11),
+            (fixture.ConfirmCommand.name, True),
+        ),
     ]
 
     first_retry_index = next(
@@ -71,13 +76,21 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
         index
         for index, event in enumerate(events)
         if event.kind == "candidate_try"
-        and event.data["applied"] == ((fixture.SecondPresetMs.name, 11),)
+        and event.data["applied"]
+        == (
+            (fixture.FirstPresetMs.name, 11),
+            (fixture.SecondPresetMs.name, 11),
+            (fixture.ConfirmCommand.name, True),
+        )
     )
     assert first_retry_index < confirm_try_index < second_retry_index
     confirmation_source = next(
         event for event in reversed(events[:confirm_try_index]) if event.kind == "iteration"
     )
-    assert confirmation_source.data["snapshot"][fixture.SequenceState.name] == fixture.QUALIFIED
+    assert (
+        confirmation_source.data["snapshot"][fixture.SequenceState.name]
+        == fixture.AWAITING_CONFIRMATION
+    )
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
 

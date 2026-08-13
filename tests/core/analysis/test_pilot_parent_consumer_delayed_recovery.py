@@ -50,7 +50,7 @@ def test_selected_handoff_names_the_parent_read_as_its_consumer() -> None:
     assert observed.consumer_read.execution_kind == "rung"
 
 
-def test_each_surviving_parent_handoff_commits_an_exact_expectation_receipt() -> None:
+def test_accepted_parent_handoff_commits_one_exact_expectation_receipt() -> None:
     events = _events()
     receipts = tuple(
         event.data["receipt"]
@@ -61,8 +61,11 @@ def test_each_surviving_parent_handoff_commits_an_exact_expectation_receipt() ->
         and event.data["receipt"].producer_occurrences[0].values[-1] == fixture.INTERMEDIATE
     )
 
-    assert len(receipts) == 2
-    assert len({receipt.causal_identity for receipt in receipts}) == 2
+    # The first physical handoff survives inside a rejected disposable
+    # transaction and remains on that attempt as corrective evidence.  Only
+    # the corrected, adopted transaction enters the committed expectation
+    # journal, so later regression cannot match a discarded lineage.
+    assert len(receipts) == 1
     assert all(receipt.source_scan == 1 for receipt in receipts)
     assert all(receipt.obligations[0].consumer == (None, 1, ()) for receipt in receipts)
     assert all(receipt.producer_occurrences[0].rung == (None, 0) for receipt in receipts)
@@ -86,7 +89,9 @@ def test_delayed_watchdog_departure_retries_only_the_source_transaction() -> Non
         for index, event in enumerate(events)
         if event.kind == "expectation_committed" and event.data["receipt"].source_scan == 1
     )
-    assert receipt_index < requirement_index
+    # The failed disposable attempt publishes the corrective requirement.  Its
+    # handoff receipt is committed only when the corrected retry is adopted.
+    assert requirement_index < receipt_index
     assert (
         requirement.condition.op,
         requirement.condition.bound,

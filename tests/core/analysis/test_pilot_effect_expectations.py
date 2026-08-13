@@ -18,6 +18,7 @@ from pyrung.core.analysis.pilot.coast import (
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObligation,
+    EffectObservation,
     EffectPathStep,
     observe_execution_window,
     observe_expectation,
@@ -33,6 +34,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BearingObjective,
     ChannelHeading,
     Coast,
+    LandingReceiptAuthority,
     Pulse,
     TargetSpec,
     act_identity,
@@ -41,7 +43,12 @@ from pyrung.core.analysis.pilot.options import _Candidate
 from pyrung.core.analysis.pilot.orientation import _pulse_policy
 from pyrung.core.analysis.pilot.recording import _accepted_payload, _candidate_payload
 from pyrung.core.analysis.pilot.skiff import _skiff_expectation, run_pinned_scan
-from pyrung.core.analysis.pilot.steer import _compass_observations, _executed_attempt
+from pyrung.core.analysis.pilot.steer import (
+    _compass_observations,
+    _executed_attempt,
+    _reconcile_completed_handoffs,
+    _reconcile_landing_receipts,
+)
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
@@ -229,6 +236,48 @@ def test_route_and_program_coast_observe_the_execution_corridor_not_scan_before(
         assert [item.disposition for item in attempt.effect_observations] == ["SURVIVED"]
         assert attempt.effect_observations[0].appeared is not None
         assert attempt.effect_observations[0].appeared.scan_id == 1
+
+
+def test_program_handoff_does_not_replay_scans_for_an_unused_chart_landing() -> None:
+    """The typed handoff receipt owns its coast; supplemental charts do not."""
+
+    plc = PLC(Program())
+    plc.step()
+    projected: list[int] = []
+    # The outer heading may be boundary-free while ProgramStep's selected
+    # input carries an inner handoff boundary.
+    heading = ChannelHeading("GenericState", 16)
+    bearing = Bearing(
+        (),
+        Coast(
+            "program handoff",
+            ActPolicy(
+                ActSource.ROUTE,
+                heading=heading,
+                landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
+            ),
+        ),
+        BearingObjective(TargetSpec("GenericTarget", True)),
+        orientation=SimpleNamespace(
+            world=SimpleNamespace(context=SimpleNamespace()),
+        ),
+    )
+    pulse = SimpleNamespace(
+        fork=plc,
+        scan_before=0,
+        action_scan=0,
+        snap=dict(plc.state.tags),
+        kernel_scan_ids=(1,),
+        projection_at=lambda scan_id: projected.append(scan_id),
+        coast_receipt=None,
+        timeline=(),
+    )
+
+    attempt = _executed_attempt(bearing, pulse)  # type: ignore[arg-type]
+
+    assert attempt.landing_expectation is None
+    assert attempt.effect_observations == ()
+    assert projected == []
 
 
 def test_learned_observation_retains_only_a_unique_static_writer(monkeypatch) -> None:
@@ -1479,6 +1528,195 @@ def test_producer_below_consumer_is_due_when_the_scan_wraps() -> None:
     assert observations[0].appeared.scan_id == 1
     assert observations[0].consumer_read is not None
     assert observations[0].consumer_read.scan_id == 2
+
+
+def test_guarded_consumer_after_producer_can_complete_on_the_adjacent_scan() -> None:
+    """A disabled same-scan consumer does not strand a persistent handoff early."""
+
+    effect = Int("GuardedAdjacentHandoffEffect")
+    output = Int("GuardedAdjacentHandoffOutput")
+    ready = Bool("GuardedAdjacentHandoffReady")
+    command = Bool("GuardedAdjacentHandoffCommand")
+    with Program() as program:
+        with rung(command):
+            copy(1, effect, oneshot=True)
+        with rung(ready, effect == 1):
+            copy(1, output)
+        with rung(effect == 1):
+            out(ready)
+    obligation = EffectObligation(
+        tag=effect.name,
+        value=1,
+        producer=(None, 0, ()),
+        consumer=(None, 1, ()),
+        required_shape=((effect.name, 1),),
+        producer_rung=program.rungs[0],
+        consumer_rung=program.rungs[1],
+    )
+    plc = PLC(program)
+    plc.patch({command.name: True})
+    plc.step()
+    plc.step()
+
+    observations = observe_execution_window(
+        EffectExpectation((obligation,)),
+        plc,
+        scan_before=0,
+        kernel_scan_ids=(1, 2),
+        action_scan=1,
+    )
+
+    assert [item.disposition for item in observations] == ["SURVIVED"]
+    assert observations[0].appeared is not None
+    assert observations[0].appeared.scan_id == 1
+    assert observations[0].consumer_read is not None
+    assert observations[0].consumer_read.scan_id == 2
+
+
+def test_completed_structural_boundary_subsumes_only_its_local_route_miss() -> None:
+    structural = EffectObligation(
+        tag="GenericStateRequest",
+        value=6,
+        producer=(None, 0, ()),
+        consumer=(None, 1, ()),
+        required_shape=(("GenericStateRequest", 6),),
+        boundary=("GenericState", 6),
+    )
+    local = EffectObligation(
+        tag="GenericOperationStep",
+        value=1,
+        producer=("GenericOperation", 0, ()),
+        consumer=("GenericOperation", 1, ()),
+        required_shape=(("GenericOperationStep", 1),),
+        boundary=("GenericOperationStep", 1),
+    )
+    outer = replace(
+        local,
+        tag="GenericState",
+        boundary=("GenericState", 6),
+    )
+    terminal = replace(local, tag="GenericTerminal", consumer=None, terminal_target=True)
+    occurrence = SimpleNamespace()
+    immediate = (
+        EffectObservation(
+            structural,
+            "SURVIVED",
+            appeared=occurrence,
+            consumer_read=occurrence,
+        ),
+    )
+    landing = (
+        EffectObservation(local, "OVERWRITTEN"),
+        EffectObservation(outer, "OVERWRITTEN"),
+        EffectObservation(terminal, "OVERWRITTEN"),
+    )
+
+    reconciled = _reconcile_landing_receipts(
+        immediate,
+        landing,
+        heading=ChannelHeading("GenericState", 6),
+        final_landing={"GenericState": 6},
+    )
+
+    assert tuple(observation.disposition for observation in reconciled) == (
+        "SUBSUMED",
+        "OVERWRITTEN",
+        "OVERWRITTEN",
+    )
+    assert reconciled[0].displacement is landing[0].displacement
+    assert reconciled[0].obligation is local
+
+
+def test_exact_consumer_receipt_subsumes_only_its_producer_only_overwrite() -> None:
+    producer_only = EffectObligation(
+        tag="GenericRequest",
+        value=15,
+        producer=(None, 2, ()),
+        consumer=None,
+        required_shape=(),
+    )
+    handoff = replace(
+        producer_only,
+        consumer=(None, 5, ()),
+        required_shape=(("GenericRequest", 15),),
+        boundary=("GenericRequest", 15),
+    )
+    explicit_other_consumer = replace(producer_only, consumer=(None, 6, ()))
+    terminal = replace(producer_only, tag="GenericTarget", terminal_target=True)
+    appeared = SimpleNamespace(scan_id=2, ordinal=6)
+    other_appearance = SimpleNamespace(scan_id=2, ordinal=7)
+    consumer = SimpleNamespace(scan_id=2, ordinal=9)
+    displacement = SimpleNamespace(scan_id=2, ordinal=12)
+    observations = (
+        EffectObservation(
+            producer_only,
+            "OVERWRITTEN",
+            appeared=appeared,
+            displacement=displacement,
+        ),
+        EffectObservation(
+            handoff,
+            "SURVIVED",
+            appeared=appeared,
+            consumer_read=consumer,
+        ),
+        EffectObservation(
+            producer_only,
+            "OVERWRITTEN",
+            appeared=other_appearance,
+            displacement=displacement,
+        ),
+        EffectObservation(
+            explicit_other_consumer,
+            "OVERWRITTEN",
+            appeared=appeared,
+            displacement=displacement,
+        ),
+        EffectObservation(
+            terminal,
+            "OVERWRITTEN",
+            appeared=appeared,
+            displacement=displacement,
+        ),
+    )
+
+    reconciled = _reconcile_completed_handoffs(observations)
+
+    assert tuple(observation.disposition for observation in reconciled) == (
+        "SUBSUMED",
+        "SURVIVED",
+        "OVERWRITTEN",
+        "OVERWRITTEN",
+        "OVERWRITTEN",
+    )
+    assert reconciled[0].appeared is appeared
+    assert reconciled[0].displacement is displacement
+
+
+def test_local_route_miss_stays_authoritative_without_exact_boundary_handoff() -> None:
+    structural = EffectObligation(
+        tag="GenericStateRequest",
+        value=6,
+        producer=(None, 0, ()),
+        consumer=(None, 1, ()),
+        required_shape=(("GenericStateRequest", 6),),
+        boundary=("GenericState", 6),
+    )
+    local = replace(
+        structural,
+        tag="GenericOperationStep",
+        boundary=("GenericOperationStep", 1),
+    )
+    landing = (EffectObservation(local, "OVERWRITTEN"),)
+
+    reconciled = _reconcile_landing_receipts(
+        (EffectObservation(structural, "SURVIVED"),),
+        landing,
+        heading=ChannelHeading("GenericState", 6),
+        final_landing={"GenericState": 6},
+    )
+
+    assert reconciled is landing
 
 
 def test_ambiguous_consumers_before_producer_fail_closed_at_scan_wrap() -> None:

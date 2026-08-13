@@ -337,6 +337,7 @@ _EVENT_KEEP: dict[str, tuple[str, ...]] = {
 # golden decision record without recording any changed navigation choice.
 _DIAGNOSTIC_EVENT_KINDS = frozenset(
     {
+        "entry_scan_observed",
         "expectation_committed",
         "failed_effect_explained",
         "requirement_activated",

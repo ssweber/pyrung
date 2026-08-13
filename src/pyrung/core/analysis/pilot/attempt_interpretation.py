@@ -174,6 +174,10 @@ def _classify_requirement(
     authorities = _guard_authorities(requirement.condition) or frozenset(
         (requirement.operand_authority,)
     )
+    exact_consumer_shape = observation.consumer_read is not None or (
+        observation.disposition in {"OVERWRITTEN", "DISPLACED"}
+        and observation.displacement is not None
+    )
     if OperandAuthority.UNKNOWN in authorities or OperandAuthority.CONFIGURED in authorities:
         return AttemptInterpretationKind.UNRESOLVED
     if OperandAuthority.PROGRAM_WRITTEN in authorities:
@@ -193,6 +197,8 @@ def _classify_requirement(
                 )
                 for alternative in iter_guard_alternatives(condition)
             ):
+                if exact_consumer_shape or owner_bound or prior_source:
+                    return AttemptInterpretationKind.RETRY_TOGETHER
                 return (
                     AttemptInterpretationKind.SETUP_FIRST
                     if owner_bound or prior_source
@@ -205,10 +211,6 @@ def _classify_requirement(
             else AttemptInterpretationKind.UNRESOLVED
         )
 
-    exact_consumer_shape = observation.consumer_read is not None or (
-        observation.disposition in {"OVERWRITTEN", "DISPLACED"}
-        and observation.displacement is not None
-    )
     if authorities == frozenset((OperandAuthority.ADJUSTABLE,)) and exact_consumer_shape:
         return AttemptInterpretationKind.RETRY_TOGETHER
     return AttemptInterpretationKind.UNRESOLVED
@@ -218,6 +220,7 @@ def interpret_failed_requirements(
     *,
     exact_pairs: Sequence[tuple[ActiveRequirement, FailedEffectReceipt]],
     assertion_scan: int,
+    landing_owns_tip: bool = True,
 ) -> AttemptInterpretation:
     """Interpret exact post-commit failures already produced by progress policy."""
 
@@ -256,7 +259,9 @@ def interpret_failed_requirements(
         )
     kind = next(iter(kinds))
     reason = (
-        "the failed condition's deadline precedes the original pulse"
+        "the missing condition must precede a scan whose landing lost the selected route"
+        if kind is AttemptInterpretationKind.SETUP_FIRST and not landing_owns_tip
+        else "the failed condition's deadline precedes the original pulse"
         if kind is AttemptInterpretationKind.SETUP_FIRST
         else "the original pulse and its missing exact consumer shape belong in one scan"
     )
@@ -312,15 +317,23 @@ def interpret_attempt(
 ) -> AttemptInterpretation:
     """Combine existing specialist receipts without producing new evidence."""
 
+    intrascan_interpretation = _interpret_intrascan(intrascan, assertion_scan)
     if _useful_landing(trial):
         assert trial is not None
+        # Acceptance says the landed world is worth committing and rereading;
+        # it does not erase a more exact temporal receipt from the same owned
+        # execution.  When the selected effect was displaced and intrascan has
+        # already derived one actionable requirement, WorkingTheory must own
+        # the source-bound setup/retry lifecycle before ordinary navigation is
+        # allowed to continue from that provisional landing.
+        if intrascan_interpretation.opens_theory:
+            return intrascan_interpretation
         return AttemptInterpretation(
             AttemptInterpretationKind.KEEP_AND_REREAD,
             "ordinary verification accepted the landing for post-commit observation",
             (_trial_identity(trial),),
         )
 
-    intrascan_interpretation = _interpret_intrascan(intrascan, assertion_scan)
     if program_step is not None and program_step.status is ProgramStepStatus.KEEP_RUNNING:
         if intrascan_interpretation.opens_theory:
             return AttemptInterpretation(

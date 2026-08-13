@@ -19,6 +19,7 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
+from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
 from pyrung.core.analysis.pilot.coast import _has_pending_effects
 from pyrung.core.analysis.pilot.constrained_reachability import (
@@ -31,14 +32,18 @@ from pyrung.core.analysis.pilot.earned_work import (
     earned_work_is_useful_motion,
 )
 from pyrung.core.analysis.pilot.effects import (
+    effect_reached_consumer,
     fulfilled_expectation_observations,
     observe_execution_window,
+    promote_route_landing_observations,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    ActSource,
     Coast,
     Dwell,
     LocalProgressKind,
     NavigationConstraints,
+    ObserveScan,
     OrientationWorld,
     TargetSpec,
     act_identity,
@@ -50,9 +55,11 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
     assess_outcome,
 )
+from pyrung.core.analysis.pilot.overlay import project_pilot_overlay
 from pyrung.core.analysis.pilot.requirement_recovery import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
+    _can_produce,
     frontier_pairs,
     target_reached,
     trace_back,
@@ -74,7 +81,9 @@ from pyrung.core.analysis.pilot.types import (
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.analysis.sp_values import _written_value_for_tag
 from pyrung.core.instruction.advance import constraint_holds
 
 logger = logging.getLogger(__name__)
@@ -89,6 +98,16 @@ class _DeadEndResult:
     trend: int
     has_new_frontier: bool = False
     advanced_frontier: tuple[_ActionPair, ...] = ()
+
+
+@dataclass(frozen=True)
+class _RouteBlockerCrossing:
+    """One exact write that made a selected landing prerequisite false."""
+
+    tag: str
+    predicate: Any
+    projection: Any
+    write: Any
 
 
 class _SpinVerdict(Enum):
@@ -108,7 +127,7 @@ def _proved_effect_violations(attempt: _ExecutedAttempt) -> tuple[Any, ...]:
     fulfilled_obligations = {
         id(item.obligation)
         for item in attempt.effect_observations
-        if item.disposition == "SURVIVED"
+        if effect_reached_consumer(item)
     }
     return tuple(
         observation
@@ -125,21 +144,48 @@ def _rebind_replay_attempt(
 ) -> _ExecutedAttempt:
     """Replace a replayed fork and recompute, never retain, effect facts."""
 
-    effect_observations = observe_execution_window(
+    immediate = observe_execution_window(
         attempt.bearing.expectation,
         replay_trial.fork,
         scan_before=replay_trial.scan_before,
         action_scan=(
-            None if isinstance(attempt.bearing.act, (Coast, Dwell)) else replay_trial.action_scan
+            None
+            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+            else replay_trial.action_scan
         ),
         coast_receipt=replay_trial.coast_receipt,
         kernel_scan_ids=replay_trial.kernel_scan_ids,
         projection_at=replay_trial.projection_at,
     )
+    landing = observe_execution_window(
+        attempt.landing_expectation,
+        replay_trial.fork,
+        scan_before=replay_trial.scan_before,
+        action_scan=(
+            None
+            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+            else replay_trial.action_scan
+        ),
+        coast_receipt=replay_trial.coast_receipt,
+        kernel_scan_ids=replay_trial.kernel_scan_ids,
+        projection_at=replay_trial.projection_at,
+    )
+    if landing:
+        projections = tuple(
+            projection
+            for scan_id in replay_trial.kernel_scan_ids
+            if replay_trial.scan_before < scan_id <= replay_trial.fork.state.scan_id
+            and (projection := replay_trial.projection_at(scan_id)) is not None
+        )
+        landing = promote_route_landing_observations(
+            landing,
+            projections,
+            final_landing=replay_trial.snap,
+        )
     return replace(
         attempt,
         pulse=replay_trial,
-        effect_observations=effect_observations,
+        effect_observations=(*immediate, *landing),
     )
 
 
@@ -222,6 +268,111 @@ def _executed_source_world_key(frame: Any, state: Any) -> tuple[Any, ...]:
     )
 
 
+def _selected_route_landing_tree(
+    trial: _PulseState,
+    frame: Any,
+    ctx: Any,
+) -> Any | None:
+    """Read the landing against the same chart route that selected the act."""
+
+    try:
+        tree = trace_back(
+            ctx.target.tag,
+            ctx.target.value,
+            trial.snap,
+            ctx.pdg,
+            ctx.program,
+            ctx.steerable,
+            constraints=TraceReadConstraints(
+                clear_only=ctx.clear_only,
+                opaque_loop=ctx.opaque_loop,
+                pipeline_internal_tags=ctx.pipeline_internal_tags,
+                route=ctx.route,
+                prior=ctx.domain_prior,
+                avoid_pred=ctx.avoid_pred,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - unavailable route evidence fails closed
+        return None
+    return tree
+
+
+def _route_blocker_crossings(
+    attempt: _ExecutedAttempt,
+    frame: Any,
+    ctx: Any,
+    *,
+    landing_tree: Any | None = None,
+    pilot_rungs: Any = (),
+    resting: Any = None,
+) -> tuple[_RouteBlockerCrossing, ...]:
+    """Bind newly-false selected-route predicates to writes this act owns.
+
+    A stable setup can reach its local channel boundary while its S1/S2 window
+    makes a downstream anti-clobber condition false.  The landing trace names
+    that condition; the ordered projection names the exact harmful write.
+    Neither endpoint distance nor a speculative execution of the next steer is
+    sufficient evidence on its own.
+    """
+
+    _ = landing_tree
+    if ctx.target.predicate is not None or frame.tree.writer_rung is None:
+        return ()
+    result: list[_RouteBlockerCrossing] = []
+    selected_writer = frame.tree.writer_rung
+    for rung_index in sorted(ctx.pdg.writers_of.get(ctx.target.tag, frozenset())):
+        if rung_index == selected_writer:
+            continue
+        rung_node = ctx.pdg.rung_nodes[rung_index]
+        rung = resolve_rung(ctx.program, rung_node)
+        if rung is None:
+            continue
+        written = _written_value_for_tag(rung, ctx.target.tag)
+        if _can_produce(written, ctx.target.value):
+            continue
+        sp = rung.sp_tree()
+        if sp is None:
+            continue
+        predicate = _sp_to_expr(sp)
+        prospective_landing = project_pilot_overlay(
+            {
+                **attempt.pulse.snap,
+                ctx.target.tag: ctx.target.value,
+            },
+            pilot_rungs,
+            resting or {},
+        )
+        if _eval_expr_from_state(predicate, prospective_landing) is not True:
+            continue
+        crossings: list[_RouteBlockerCrossing] = []
+        for scan_id in attempt.pulse.kernel_scan_ids:
+            if not (attempt.pulse.scan_before < scan_id <= attempt.pulse.fork.state.scan_id):
+                continue
+            projection = attempt.projection_at(scan_id)
+            if projection is None:
+                continue
+            rolling = dict(projection.entry_tags)
+            for write in projection.writes:
+                before = {**rolling, ctx.target.tag: ctx.target.value}
+                rolling[write.transition.tag_name] = write.transition.to_value
+                after = {**rolling, ctx.target.tag: ctx.target.value}
+                if (
+                    _eval_expr_from_state(predicate, before) is False
+                    and _eval_expr_from_state(predicate, after) is True
+                ):
+                    crossings.append(
+                        _RouteBlockerCrossing(
+                            write.transition.tag_name,
+                            predicate,
+                            projection,
+                            write,
+                        )
+                    )
+        if len(crossings) == 1:
+            result.append(crossings[0])
+    return tuple(result)
+
+
 def _accepted_trial(
     attempt: _ExecutedAttempt,
     frame: Any,
@@ -234,11 +385,33 @@ def _accepted_trial(
 ) -> _AcceptedTrial:
     """Preserve the final executed attempt and its PLC-free evidence."""
     pulse = attempt.pulse
+    immediate_expectation = attempt.bearing.expectation
+    immediate_obligations = (
+        {id(obligation) for obligation in immediate_expectation.obligations}
+        if immediate_expectation is not None
+        else set()
+    )
+    landing_expectation = attempt.landing_expectation
+    landing_obligations = (
+        {id(obligation) for obligation in landing_expectation.obligations}
+        if landing_expectation is not None
+        else set()
+    )
     survived = tuple(
         observation
         for observation in attempt.effect_observations
-        if observation.disposition == "SURVIVED" and observation.appeared is not None
+        if id(observation.obligation) in immediate_obligations
+        and effect_reached_consumer(observation)
+        and observation.appeared is not None
     )
+    route_survived = tuple(
+        observation
+        for observation in attempt.effect_observations
+        if id(observation.obligation) in landing_obligations
+        and effect_reached_consumer(observation)
+        and observation.appeared is not None
+    )
+    selected_receipts = (*survived, *route_survived)
     selected_producer_landing = any(
         _values_match(
             pulse.snap.get(observation.obligation.tag),
@@ -250,13 +423,19 @@ def _accepted_trial(
             and _values_match(pulse.snap.get(node.tag), node.value)
             for node in frame.tree.iter_nodes()
         )
-        for observation in survived
+        for observation in selected_receipts
     )
     if isinstance(verification, TargetReached):
         progress_kind = "target"
     elif earned_work_is_useful_motion(earned_work_receipt):
         progress_kind = "earned-work"
-    elif survived:
+    elif selected_receipts:
+        # A consumed selected-producer occurrence is stronger than the
+        # candidate's generic TRACE_SETUP declaration.  Its value may be
+        # overwritten later in the same owned window by useful program motion;
+        # VERIFY has already rejected the harmful overwrite case.  Preserve
+        # the accepted landing as the new route tip instead of asking legacy
+        # global trace distance to judge two unrelated route coordinates.
         progress_kind = "selected-producer"
     elif (
         exact_frontier_advanced or verification.assessment.progress is ProgressEffect.FORWARD
@@ -274,6 +453,11 @@ def _accepted_trial(
         # Leave only a wrong bearing-coast landing to post-commit departure
         # handling, which can inspect and replay the incident from its source.
         progress_kind = "frontier"
+    elif attempt.bearing.act.policy.local_progress is LocalProgressKind.TRACE_SETUP:
+        # A stable setup without a stronger execution receipt remains
+        # provisional. Its first landing still needs ordinary post-commit
+        # look-ahead before the setup is banked.
+        progress_kind = "conductivity"
     elif attempt.bearing.act.policy.local_progress is not None:
         progress_kind = "conductivity"
     else:
@@ -281,12 +465,13 @@ def _accepted_trial(
     productive_scan = (
         min(
             observation.appeared.scan_id
-            for observation in survived
+            for observation in selected_receipts
             if observation.appeared is not None
         )
-        if survived
+        if selected_receipts
         else pulse.action_scan
-        if not isinstance(attempt.bearing.act, (Coast, Dwell))
+        if not isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+        and pulse.action_scan is not None
         else pulse.fork.state.scan_id
     )
     scan_progress = (
@@ -303,7 +488,9 @@ def _accepted_trial(
             distance_before=getattr(frame, "distance_before", 0),
             distance_after=(verification.trend if isinstance(verification, AssessedMotion) else 0),
             landing_owns_tip=(
-                selected_producer_landing if progress_kind == "selected-producer" else True
+                selected_producer_landing
+                if progress_kind == "selected-producer"
+                else True
             ),
         )
         if progress_kind is not None
@@ -698,6 +885,7 @@ def _verify_after_spin(
     def _reject() -> _AttemptResult:
         return _AttemptResult(
             trial=None,
+            executed=attempt,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
             confirmed_correction=trial.confirmed_correction,
@@ -898,6 +1086,7 @@ def verify_excursion_replay(
         )
         return _AttemptResult(
             trial=None,
+            executed=attempt,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods),
             confirmed_correction=detected_result.confirmed_correction,
@@ -934,6 +1123,7 @@ def verify_excursion_replay(
             )
             return _AttemptResult(
                 trial=None,
+                executed=attempt,
                 gate_events=tuple(gate_events),
                 nogood_pairs=frozenset(collected_nogoods),
                 confirmed_correction=detected_result.confirmed_correction,
@@ -1061,6 +1251,7 @@ def _verify_gates(
     ) -> _AttemptResult:
         return _AttemptResult(
             trial=None,
+            executed=attempt,
             gate_events=tuple(gate_events),
             nogood_pairs=frozenset(collected_nogoods if nogoods is None else nogoods),
             confirmed_correction=trial.confirmed_correction,
@@ -1213,11 +1404,116 @@ def _verify_gates(
     ):
         return _accept_target()
 
+    if policy.local_progress is LocalProgressKind.OBSERVE_ENTRY:
+        exact_one_scan = (
+            trial.fork.state.scan_id == trial.scan_before + 1
+            and trial.kernel_scan_ids == (trial.scan_before + 1,)
+        )
+        if not exact_one_scan:
+            gate_events.append(
+                PilotGateEvent(
+                    "entry-observation-rejected",
+                    "entry observation did not execute exactly one scan",
+                )
+            )
+            return _reject(nogoods=(), proof_rejection=True)
+        gate_events.append(
+            PilotGateEvent(
+                "entry-observed",
+                "one exact program scan is available for landing orientation",
+            )
+        )
+        assessment = TrialAssessment(
+            agency=Agency.PROGRAM,
+            bearing=BearingEffect.SATISFIED,
+            progress=ProgressEffect.UNCHANGED,
+            new_frontier=False,
+            accepted=True,
+        )
+        accepted = _accepted_trial(
+            attempt,
+            frame,
+            gate_events,
+            channel_motion,
+            earned_work_receipt,
+            AssessedMotion(
+                new_key=trial.key,
+                trend=frame.distance_before,
+                assessment=assessment,
+            ),
+        )
+        scan_progress = accepted.execution.scan_progress
+        assert scan_progress is not None
+        accepted = replace(
+            accepted,
+            execution=replace(
+                accepted.execution,
+                scan_progress=replace(
+                    scan_progress,
+                    kind="observation",
+                    landing_owns_tip=False,
+                ),
+            ),
+        )
+        return _AttemptResult(
+            trial=accepted,
+            gate_events=tuple(gate_events),
+            nogood_pairs=frozenset(),
+        )
+
     if policy.local_progress in {
         LocalProgressKind.TRACE_SETUP,
         LocalProgressKind.REARM,
         LocalProgressKind.TEMPORAL_SETUP,
     }:
+        orientation = bearing.orientation
+        trace_details = (
+            orientation.candidates.trace.detail_by_pair if orientation is not None else {}
+        )
+        primary = policy.primary_action
+        primary_detail = trace_details.get(primary) if primary is not None else None
+        primary_operation = getattr(primary_detail, "operation", None)
+        declared_lifetime = getattr(primary_detail, "until", None)
+        if declared_lifetime is None:
+            declared_lifetime = getattr(primary_operation, "until", None)
+        selected_effect_consumed = any(
+            observation.appeared is not None and effect_reached_consumer(observation)
+            for observation in attempt.effect_observations
+        )
+        selected_trace_setup = bool(
+            policy.source is ActSource.TRACE
+            and primary is not None
+            and primary_detail is not None
+            and primary_detail.pair == primary
+        )
+        trace_setup_owned = (
+            policy.local_progress is not LocalProgressKind.TRACE_SETUP
+            or selected_trace_setup
+            or declared_lifetime is not None
+            or selected_effect_consumed
+        )
+        landing_tree = _selected_route_landing_tree(trial, frame, ctx)
+        landing_distance = landing_tree.unsatisfied_count() if landing_tree is not None else None
+        route_blockers = (
+            _route_blocker_crossings(
+                attempt,
+                frame,
+                ctx,
+                landing_tree=landing_tree,
+                pilot_rungs=state.pilot_rungs,
+                resting=ctx.resting,
+            )
+            if policy.local_progress is LocalProgressKind.TRACE_SETUP
+            else ()
+        )
+        route_owned = (
+            policy.local_progress is not LocalProgressKind.TRACE_SETUP
+            or (
+                landing_distance is not None
+                and landing_distance <= frame.distance_before
+                and not route_blockers
+            )
+        )
         changed = tuple(
             (tag, value)
             for tag, value in applied_actions
@@ -1227,9 +1523,14 @@ def _verify_gates(
         assignments_reached = bool(applied_actions) and all(
             _values_match(trial.snap.get(tag), value) for tag, value in applied_actions
         )
+        progress_requirements = (
+            policy.local_progress_requirements
+            if policy.local_progress_requirements
+            else getattr(ctx, "temporal_requirements", ())
+        )
         requirements_reached = all(
             constraint_holds(requirement.condition, trial.snap) is True
-            for requirement in getattr(ctx, "temporal_requirements", ())
+            for requirement in progress_requirements
         )
         expectation_boundaries_preserved = all(
             obligation.boundary is None
@@ -1248,11 +1549,13 @@ def _verify_gates(
         local_progress_reached = (
             bool(changed)
             and assignments_reached
+            and trace_setup_owned
             and (
                 policy.local_progress in {LocalProgressKind.TRACE_SETUP, LocalProgressKind.REARM}
                 or requirements_reached
             )
             and declared_boundary_preserved
+            and route_owned
         )
         if local_progress_reached:
             gate_events.append(
@@ -1265,6 +1568,16 @@ def _verify_gates(
                         "requirements_reached": requirements_reached,
                         "expectation_boundaries_preserved": expectation_boundaries_preserved,
                         "declared_boundary_preserved": declared_boundary_preserved,
+                        "selected_trace_setup": selected_trace_setup,
+                        "declared_lifetime": declared_lifetime is not None,
+                        "selected_effect_consumed": selected_effect_consumed,
+                        "route_owned": route_owned,
+                        "route_distance_before": frame.distance_before,
+                        "route_distance_after": landing_distance,
+                        "route_blockers": tuple(
+                            (crossing.tag, repr(crossing.predicate), crossing.write.scan_id)
+                            for crossing in route_blockers
+                        ),
                     },
                 )
             )
@@ -1307,10 +1620,23 @@ def _verify_gates(
                         "requirements_reached": requirements_reached,
                         "expectation_boundaries_preserved": expectation_boundaries_preserved,
                         "declared_boundary_preserved": declared_boundary_preserved,
+                        "selected_trace_setup": selected_trace_setup,
+                        "declared_lifetime": declared_lifetime is not None,
+                        "selected_effect_consumed": selected_effect_consumed,
+                        "route_owned": route_owned,
+                        "route_distance_before": frame.distance_before,
+                        "route_distance_after": landing_distance,
+                        "route_blockers": tuple(
+                            (crossing.tag, repr(crossing.predicate), crossing.write.scan_id)
+                            for crossing in route_blockers
+                        ),
                     },
                 )
             )
-            return _reject(nogoods=(), proof_rejection=True)
+            return _reject(
+                nogoods=(policy.regression_nogoods if not trace_setup_owned else ()),
+                proof_rejection=True,
+            )
 
     # Read the selected effect before generic spin/dead-end judgment.  A
     # proved violation is occurrence evidence, not an action nogood; Phase 4

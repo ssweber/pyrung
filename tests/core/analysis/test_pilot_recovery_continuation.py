@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 from pyrung import PLC, Int, Program, copy, rung
@@ -29,6 +30,14 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
     _RecoveryContinuation,
 )
+
+
+@dataclass(frozen=True)
+class _ContextStub:
+    """Minimal immutable context honoring ``_transition_once``'s route seam."""
+
+    configured_inputs: frozenset[str] = frozenset()
+    route: object | None = None
 
 
 def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
@@ -224,12 +233,19 @@ def test_recovery_program_coast_keeps_the_full_execution_window(monkeypatch) -> 
         executed=_ExecutedAttempt(pulse=pulse, bearing=bearing),
         proof_rejection=True,
     )
+    work = SimpleNamespace(
+        state=SimpleNamespace(tags={}),
+        _input_overrides=None,
+    )
+    source_world = SimpleNamespace(work=work, pilot_rungs=())
     state = SimpleNamespace(
         key_config=None,
         pilot_rungs=(),
         proof_rejected_acts=set(),
+        work=work,
+        snapshot_world=lambda: source_world,
     )
-    context = SimpleNamespace(configured_inputs=frozenset())
+    context = _ContextStub()
     program_step = object()
 
     monkeypatch.setattr(pilot_module, "assert_recovery_disposable_state", lambda *args: None)

@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from pyrung import Bool, Int, Program, copy, rung
+import pyrung.core.analysis.pilot.options as options_module
+from pyrung import PLC, Bool, Int, Program, copy, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction, Producer
@@ -27,8 +28,10 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionRoute
 from pyrung.core.analysis.pilot.navigation_contracts import (
+    ActSource,
     ChannelHeading,
     CrossingFidelity,
+    LandingReceiptAuthority,
     NavigationConstraints,
     OrientationWorld,
     RouteEdgeContext,
@@ -36,6 +39,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     pulse_identity,
 )
 from pyrung.core.analysis.pilot.options import (
+    CandidateRead,
     PrerequisiteRead,
     RouteRead,
     WaitPrescription,
@@ -45,8 +49,12 @@ from pyrung.core.analysis.pilot.options import (
     _AdmittedWait,
     _assemble_candidate_read,
     _build_candidates,
+    _Candidate,
+    _candidate_applied,
     _compass_route_actions,
     _compass_route_plan,
+    _effect_operation_batches,
+    _general_chart_completion_plan,
     _LearnedAction,
     _LearnedWait,
     _PrerequisiteSeparation,
@@ -536,7 +544,7 @@ def test_direct_target_chart_is_not_promoted_without_an_opaque_trace_boundary() 
     assert plan is None
 
 
-def test_unrouted_chart_does_not_select_a_sibling_read_locally() -> None:
+def test_general_chart_does_not_promote_an_unowned_action() -> None:
     graph = StaticTransitionGraph(
         PipelineRoles("State"),
         (
@@ -565,6 +573,207 @@ def test_unrouted_chart_does_not_select_a_sibling_read_locally() -> None:
     first = _read_route_and_wait(frame, state, ctx, set())
     assert first.route is None
     assert compass.knowledge.nogood_identities(frame.key) == frozenset()
+
+
+def test_general_chart_bounds_a_trace_admitted_writer_without_minting_its_input() -> None:
+    advance = Bool("ChartOwnedAdvance", external=True)
+    state_tag = Int("ChartOwnedState")
+    with Program() as program:
+        with rung(state_tag == 0, advance):
+            copy(2, state_tag)
+
+    pdg = build_program_graph(program)
+    route = TransitionRoute(
+        destination_tag=state_tag.name,
+        destination_value=2,
+        request_tag=None,
+        request_value=None,
+        source_constraints=((state_tag.name, 0),),
+        enablers=((advance.name, True),),
+        action_tags=frozenset((advance.name,)),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(0,),
+    )
+    graph = StaticTransitionGraph(PipelineRoles(state_tag.name), (route,))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={state_tag.name: 0, advance.name: False},
+        tree=TraceNode(
+            state_tag.name,
+            2,
+            writer_rung=0,
+            writer_availability=_WriterAvailability.AVAILABLE_NOW,
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(chart_graphs=(graph,))),
+        target=TargetSpec(state_tag.name, 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        pdg=pdg,
+        program=program,
+        steerable=frozenset((advance.name,)),
+        opaque_loop=frozenset(),
+    )
+    state = SimpleNamespace(pilot_rungs=())
+
+    plan = _general_chart_completion_plan(frame, ctx, set(), state=state)
+
+    assert plan is not None
+    assert plan.first_edge.action is None
+    assert plan.first_edge.from_value == 0
+    assert plan.first_edge.to_value == 2
+    assert len(plan.first_edge.program_producers) == 1
+
+
+def test_general_chart_only_nominates_a_writer_unavailable_from_this_channel_state() -> None:
+    advance = Bool("ChartUnavailableAdvance", external=True)
+    phase = Int("ChartUnavailablePhase")
+    state_tag = Int("ChartUnavailableState")
+    with Program() as program:
+        with rung(state_tag == 0, phase == 1, advance):
+            copy(2, state_tag)
+
+    pdg = build_program_graph(program)
+    route = TransitionRoute(
+        destination_tag=state_tag.name,
+        destination_value=2,
+        request_tag=None,
+        request_value=None,
+        source_constraints=((state_tag.name, 0),),
+        enablers=((phase.name, 1), (advance.name, True)),
+        action_tags=frozenset((advance.name,)),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(0,),
+    )
+    graph = StaticTransitionGraph(PipelineRoles(state_tag.name), (route,))
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={state_tag.name: 0, phase.name: 0, advance.name: True},
+        tree=TraceNode(
+            state_tag.name,
+            2,
+            writer_rung=0,
+            writer_availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+        ),
+    )
+    ctx = SimpleNamespace(
+        compass=Compass(NavigationCatalog(chart_graphs=(graph,))),
+        target=TargetSpec(state_tag.name, 2),
+        blocked_actions=frozenset(),
+        avoid_pred=None,
+        pdg=pdg,
+        program=program,
+        steerable=frozenset((advance.name,)),
+        opaque_loop=frozenset((phase.name,)),
+    )
+
+    conservative = _general_chart_completion_plan(
+        frame,
+        ctx,
+        set(),
+        state=SimpleNamespace(pilot_rungs=()),
+    )
+    plan = _general_chart_completion_plan(
+        frame,
+        ctx,
+        set(),
+        state=SimpleNamespace(pilot_rungs=()),
+        allow_conservative_nomination=True,
+    )
+
+    assert conservative is None
+    assert plan is not None
+    assert plan.first_edge.action is None
+    assert len(plan.first_edge.program_producers) == 1
+
+
+@pytest.mark.parametrize(
+    ("general_destination", "prescribed", "expected_destination"),
+    ((1, True, 1), (2, True, 2), (2, False, 1)),
+)
+def test_general_chart_only_competes_with_a_distinct_first_transition(
+    monkeypatch,
+    general_destination: int,
+    prescribed: bool,
+    expected_destination: int,
+) -> None:
+    """Same-edge geometry cannot replace its action; a distinct live carrier may."""
+
+    role = PipelineRoles("State")
+    static_edge = StaticTransitionGraph(
+        role,
+        (_action_route(0, 1, "ExactAction"),),
+    ).edges[0]
+    general_edge = replace(
+        static_edge,
+        to_value=general_destination,
+        action=None,
+        program_producers=(Producer(0, "program", frozenset(), frozenset(), "Effect", 1),),
+    )
+    static = StaticPath("State", 9, role, 9, (static_edge,))
+    general = StaticPath("State", 9, role, 9, (general_edge,))
+    required = TraceAction(
+        "CurrentInput",
+        True,
+        availability=_WriterAvailability.AFTER_PREREQ,
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=general_edge.program_producers[0],
+        boundary=None,
+        channel=None,
+        required_inputs=(required,),
+    )
+
+    monkeypatch.setattr(options_module, "_compass_route_plan", lambda *_a, **_k: static)
+    monkeypatch.setattr(
+        options_module,
+        "_general_chart_completion_plan",
+        lambda *_a, **_k: general,
+    )
+    monkeypatch.setattr(options_module, "_live_chart_completion_edge", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        options_module,
+        "_prescribe_wait",
+        lambda *_a, **_k: WaitRead(
+            (
+                WaitPrescription(ChannelHeading("Boundary", 1), "exact current handoff")
+                if prescribed
+                else None
+            ),
+            (required,),
+            program_step=step,
+        ),
+    )
+    frame = SimpleNamespace(
+        key=("world",),
+        snap={"State": 0, "ExactAction": False, "CurrentInput": False},
+        tree=TraceNode("Target", True, satisfied=False),
+        raw_trace_action_details=(),
+    )
+    state = SimpleNamespace(
+        pilot_rungs=(),
+        earned_work=None,
+        pending_departure=None,
+    )
+    ctx = SimpleNamespace(
+        blocked_actions=frozenset(),
+        edge_tags=frozenset(),
+        compass=SimpleNamespace(),
+    )
+
+    read = _read_route_and_wait(frame, state, ctx, set())
+
+    assert read.route is not None
+    assert read.route.plan.first_edge.to_value == expected_destination
+    assert (read.route.plan.first_edge.action is None) is (
+        general_destination != 1 and prescribed
+    )
 
 
 def test_unbanked_broad_trace_keeps_ownership_over_a_shadow_chart() -> None:
@@ -1496,8 +1705,8 @@ def test_route_request_candidate_owns_route_writer_not_same_pair_trace() -> None
     )
     role = PipelineRoles("State", request_tags=frozenset({request.name}))
     route = TransitionRoute(
-        destination_tag=request.name,
-        destination_value=7,
+        destination_tag="State",
+        destination_value=17,
         request_tag=request.name,
         request_value=7,
         source_constraints=(("State", 6),),
@@ -1536,6 +1745,29 @@ def test_route_request_candidate_owns_route_writer_not_same_pair_trace() -> None
     assert obligation.tag == request.name
     assert obligation.producer == (None, 0, ())
     assert obligation.producer != (None, 1, ())
+
+
+def test_writer_expectation_rejects_effect_owned_by_another_writer() -> None:
+    _action, request, trace_effect, _program_effect, program, pdg = _effect_collision_fixture()
+
+    assert (
+        expectation_from_writer(
+            pdg,
+            program,
+            writer_node=0,
+            tag=trace_effect.name,
+            value=9,
+        )
+        is None
+    )
+    expectation = expectation_from_writer(
+        pdg,
+        program,
+        writer_node=0,
+        tag=request.name,
+        value=7,
+    )
+    assert expectation is not None
 
 
 def test_awaited_candidate_owns_awaited_writer_not_same_pair_trace() -> None:
@@ -1585,7 +1817,7 @@ def test_awaited_candidate_owns_awaited_writer_not_same_pair_trace() -> None:
 
 
 def test_program_input_candidate_owns_required_input_path_and_broad_paths_survive() -> None:
-    action, _request, trace_effect, program_effect, program, pdg = _effect_collision_fixture()
+    action, request, trace_effect, program_effect, program, pdg = _effect_collision_fixture()
     pair = (action.name, True)
     program_detail = TraceAction(
         *pair,
@@ -1630,8 +1862,8 @@ def test_program_input_candidate_owns_required_input_path_and_broad_paths_surviv
     broad = ("BroadReceipt", True)
     low_a = ("LowReceiptA", True)
     low_b = ("LowReceiptB", True)
-    first = TraceAction(*broad, effect_path=(EffectPathStep(0, "First", 1),))
-    second = TraceAction(*broad, effect_path=(EffectPathStep(1, "Second", 1),))
+    first = TraceAction(*broad, effect_path=(EffectPathStep(0, request.name, 7),))
+    second = TraceAction(*broad, effect_path=(EffectPathStep(1, trace_effect.name, 9),))
     broad_admission = replace(
         admission,
         active_actions=(broad, low_a, low_b),
@@ -1664,6 +1896,135 @@ def test_program_input_candidate_owns_required_input_path_and_broad_paths_surviv
         (None, 0, ()),
         (None, 1, ()),
     ]
+
+
+def test_current_program_input_precedes_unavailable_outer_trace_leaf() -> None:
+    current = Bool("CurrentProgramInput", external=True)
+    later = Bool("UnavailableOuterInput", external=True)
+    first_effect = Int("CurrentProgramEffect")
+    later_effect = Int("UnavailableOuterEffect")
+    with Program() as program:
+        with rung(current):
+            copy(1, first_effect)
+        with rung(later):
+            copy(2, later_effect)
+    pdg = build_program_graph(program)
+    current_pair = (current.name, True)
+    later_pair = (later.name, True)
+    current_detail = TraceAction(
+        *current_pair,
+        effect_path=(EffectPathStep(0, first_effect.name, 1),),
+    )
+    later_detail = TraceAction(
+        *later_pair,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+        effect_path=(EffectPathStep(1, later_effect.name, 2),),
+    )
+    producer = Producer(
+        0,
+        "program",
+        frozenset({current.name}),
+        frozenset(),
+        first_effect.name,
+        1,
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer,
+        None,
+        first_effect.name,
+        required_inputs=(current_detail,),
+    )
+    admission = _TraceAdmission(
+        active_actions=(later_pair, current_pair),
+        actions=(later_pair, current_pair),
+        details=(later_detail, current_detail),
+        detail_by_pair={later_pair: later_detail, current_pair: current_detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    read = _assemble_candidate_read(
+        _RouteAndCompletionRead(
+            admission,
+            None,
+            WaitRead(None, program_step=step),
+        ),
+        _PrerequisiteSeparation(admission, PrerequisiteRead(), None),
+        None,
+        None,
+        SimpleNamespace(
+            snap={current.name: False, later.name: False},
+            tree=TraceNode(later_effect.name, 2),
+        ),
+        _collision_context(program, pdg),
+        set(),
+    )
+
+    assert tuple((option.pair, option.source) for option in read.options) == (
+        (current_pair, ActSource.PROGRAM),
+        (later_pair, ActSource.TRACE),
+    )
+
+
+def test_route_artifact_does_not_fold_target_wide_trace_leaves() -> None:
+    route_pair = ("RouteCommand", True)
+    edge_gate = ("RouteEdgeGate", True)
+    unrelated = (("LaterMode", True), ("UnavailableProcessInput", -1))
+    role = PipelineRoles("RouteState")
+    transition = TransitionRoute(
+        destination_tag="RouteState",
+        destination_value=1,
+        request_tag=None,
+        request_value=None,
+        source_constraints=(("RouteState", 9),),
+        enablers=(route_pair, edge_gate),
+        action_tags=frozenset(pair[0] for pair in (route_pair, edge_gate)),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(edge_gate,),
+        from_values=(9,),
+    )
+    edge = StaticTransitionEdge(
+        role=role,
+        from_value=9,
+        to_value=1,
+        action=route_pair,
+        request_tag=None,
+        request_value=None,
+        source_constraints=transition.source_constraints,
+        enablers=transition.enablers,
+        route=transition,
+        co_actions=(edge_gate,),
+    )
+    route = RouteRead(
+        StaticPath("RouteState", 1, role, 1, (edge,)),
+        (route_pair,),
+        (edge_gate,),
+    )
+    admission = _TraceAdmission(
+        active_actions=unrelated,
+        actions=unrelated,
+        details=tuple(TraceAction(*pair) for pair in unrelated),
+        detail_by_pair={pair: TraceAction(*pair) for pair in unrelated},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    candidates = CandidateRead(
+        trace=admission,
+        options=(_Candidate(*route_pair, ActSource.ROUTE),),
+        downstream_reach_cap=20,
+        route=route,
+        prerequisites=PrerequisiteRead(
+            pilot_rungs=(PilotRung("ExactSteadyPrerequisite", True, object()),)
+        ),
+    )
+    ctx = SimpleNamespace(compass=SimpleNamespace(action_tags=frozenset({route_pair[0]})))
+
+    assert _candidate_applied(candidates.options[0], candidates, ctx) == (
+        route_pair,
+        edge_gate,
+        ("ExactSteadyPrerequisite", True),
+    )
 
 
 def test_widening_expectation_is_scoped_to_exact_artifact_primary_path() -> None:
@@ -1935,6 +2296,10 @@ def test_program_owned_coasts_promise_command_producer_only_when_observed(monkey
         )
         read = _prescribe_wait(edge, frame, state, ctx)
         assert read.prescription is not None
+        assert (
+            read.prescription.landing_receipt_authority
+            is LandingReceiptAuthority.PROGRAM_STEP
+        )
         expectation = read.prescription.expectation
         if not expected:
             assert expectation is None
@@ -1951,6 +2316,89 @@ def test_program_owned_coasts_promise_command_producer_only_when_observed(monkey
             (first_guard.name, 1),
             (command.name, 7),
         )
+
+
+def test_observed_route_writer_keeps_its_direct_expectation(monkeypatch) -> None:
+    """The route writer is an effect owner, not its own downstream consumer."""
+
+    import pyrung.core.analysis.pilot.program_step as program_step
+
+    state_tag = Int("DirectRouteWriterState", default=50)
+    ready = Bool("DirectRouteWriterReady", default=True)
+    with Program() as program:
+        with rung(state_tag == 50, ready):
+            copy(60, state_tag)
+
+    pdg = build_program_graph(program)
+    producer = Producer(
+        0,
+        "program",
+        frozenset({state_tag.name, ready.name}),
+        frozenset(),
+        state_tag.name,
+        60,
+    )
+    role = PipelineRoles(state_tag.name)
+    route = TransitionRoute(
+        destination_tag=state_tag.name,
+        destination_value=60,
+        request_tag=None,
+        request_value=None,
+        source_constraints=((state_tag.name, 50),),
+        enablers=((ready.name, True),),
+        action_tags=frozenset(),
+        writer_node=0,
+        writer_subroutine=None,
+        call_site_gates=(),
+        from_values=(50,),
+    )
+    edge = StaticTransitionEdge(
+        role=role,
+        from_value=50,
+        to_value=60,
+        action=None,
+        request_tag=None,
+        request_value=None,
+        source_constraints=route.source_constraints,
+        enablers=route.enablers,
+        route=route,
+        program_producers=(producer,),
+    )
+    step = ProgramStep(
+        ProgramStepStatus.INTERRUPTED,
+        producer=producer,
+        boundary=None,
+        channel=state_tag.name,
+        producer_observed=True,
+        projected_changes=((state_tag.name, 50, 92),),
+        preserve_channels=(state_tag.name,),
+    )
+    monkeypatch.setattr(program_step, "read_program_step", lambda *_args, **_kw: step)
+    ctx = SimpleNamespace(
+        pdg=pdg,
+        program=program,
+        steerable=frozenset(),
+        opaque_loop=frozenset(),
+        domain_prior=None,
+        clear_only=frozenset(),
+        pipeline_internal_tags=frozenset(),
+        pipeline_roles=(),
+        avoid_pred=None,
+        resting={},
+    )
+    frame = SimpleNamespace(snap={state_tag.name: 50, ready.name: True})
+    state = SimpleNamespace(work=SimpleNamespace(), pilot_rungs=())
+
+    read = _prescribe_wait(edge, frame, state, ctx)
+
+    assert read.prescription is not None
+    expectation = read.prescription.expectation
+    assert expectation is not None
+    obligation = expectation.obligations[0]
+    assert (obligation.tag, obligation.value) == (state_tag.name, 60)
+    assert obligation.producer == (None, 0, ())
+    assert obligation.consumer is None
+    assert obligation.boundary == (state_tag.name, 60)
 
 
 def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None:
@@ -2036,6 +2484,81 @@ def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None
     assert invalidated.crossing_batches == ()
 
 
+def test_effect_paths_compose_only_the_exact_local_writer_conjunction() -> None:
+    request = Bool("LocalOperationRequest", external=True)
+    mode = Bool("LocalOperationMode", external=True)
+    request_ready = Int("LocalOperationRequestReady")
+    mode_value = Int("LocalOperationModeValue")
+    selected = Int("LocalOperationSelected")
+    unrelated = Int("LocalOperationUnrelated", external=True)
+    with Program() as program:
+        with rung(request):
+            copy(1, request_ready)
+        with rung(mode, request_ready == 1):
+            copy(1, mode_value)
+        with rung(request_ready == 1, mode_value == 1):
+            copy(1, selected)
+
+    common = EffectPathStep(
+        2,
+        selected.name,
+        1,
+        ((request_ready.name, 1), (mode_value.name, 1)),
+    )
+    request_detail = TraceAction(
+        request.name,
+        True,
+        operation_boundary=(request_ready.name, 1),
+        effect_path=(
+            common,
+            EffectPathStep(0, request_ready.name, 1, ((request.name, True),)),
+        ),
+    )
+    mode_detail = TraceAction(
+        mode.name,
+        True,
+        operation_boundary=(mode_value.name, 1),
+        effect_path=(
+            common,
+            EffectPathStep(
+                1,
+                mode_value.name,
+                1,
+                ((mode.name, True), (request_ready.name, 1)),
+            ),
+        ),
+    )
+    unrelated_detail = TraceAction(
+        unrelated.name,
+        -1,
+        operation_boundary=("LaterOperation", 1),
+        effect_path=(EffectPathStep(1, mode_value.name, 1),),
+    )
+
+    batches = _effect_operation_batches(
+        (request_detail, mode_detail, unrelated_detail),
+        {
+            request.name: False,
+            mode.name: False,
+            request_ready.name: 0,
+            mode_value.name: 0,
+            selected.name: 0,
+        },
+        build_program_graph(program),
+        program,
+        frozenset((request.name, mode.name, unrelated.name)),
+    )
+
+    assert tuple(batch.actions for batch in batches) == (
+        ((request.name, True), (mode.name, True)),
+    )
+    assert batches[0].expectation is not None
+    assert tuple(
+        (obligation.tag, obligation.value)
+        for obligation in batches[0].expectation.obligations
+    ) == ((selected.name, 1),)
+
+
 def test_crossing_effect_shape_excludes_heuristic_and_relational_children() -> None:
     from pyrung.core.analysis.pilot.trace import _crossing_at_node
 
@@ -2090,6 +2613,61 @@ def test_supplemental_wait_details_use_ordinary_trace_admission() -> None:
     assert tuple(detail.pair for detail in admitted.details) == (("Keep", True),)
 
 
+def test_supplemental_program_read_composes_availability_with_outer_lifetime() -> None:
+    """Current executability and route lifetime are orthogonal receipts."""
+
+    lifetime = object()
+    outer = TraceAction(
+        "Keep",
+        True,
+        until=lifetime,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+        effect_path=(EffectPathStep(0, "OuterEffect", True),),
+    )
+    current = TraceAction(
+        "Keep",
+        True,
+        availability=_WriterAvailability.AFTER_PREREQ,
+        effect_path=(EffectPathStep(1, "CurrentEffect", True),),
+    )
+    admitted = _admit_trace_details(
+        (outer, current),
+        SimpleNamespace(snap={"Keep": False}),
+        SimpleNamespace(pilot_rungs=()),
+        SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset()),
+        set(),
+    )
+
+    operational = admitted.detail_by_pair[("Keep", True)]
+    assert operational.availability is _WriterAvailability.AFTER_PREREQ
+    assert operational.until is lifetime
+    assert len(admitted.read_details) == 2
+
+
+def test_trace_admission_releases_a_spent_edge_before_its_next_assertion() -> None:
+    """The release scan is its own bearing, not hidden inside another pulse."""
+
+    assertion = TraceAction("Trigger", True)
+    release = TraceAction("Trigger", False)
+    frame = SimpleNamespace(snap={"Trigger": True})
+    state = SimpleNamespace(pilot_rungs=())
+    ctx = SimpleNamespace(
+        blocked_actions=frozenset(),
+        edge_tags=frozenset({"Trigger"}),
+        resting={"Trigger": False},
+    )
+
+    admitted = _admit_trace_details(
+        (assertion, release),
+        frame,
+        state,
+        ctx,
+        set(),
+    )
+
+    assert admitted.actions == (("Trigger", False), ("Trigger", True))
+
+
 def test_prerequisite_separation_retains_trace_action_evidence() -> None:
     detail = TraceAction("Enable", True)
     rung = PilotRung("Enable", True, object())
@@ -2127,6 +2705,207 @@ def test_prerequisite_separation_retains_trace_action_evidence() -> None:
     assert separated.trace.active_actions == ()
     assert separated.prerequisites.pilot_rungs == (rung,)
     assert separated.trace.details == (detail,)
+
+
+def test_program_input_lifetime_outranks_broad_action_catalog_role() -> None:
+    """A proved level handoff is held even when catalogs also call it an action."""
+
+    enable = Bool("ProgramLifetimeEnable", external=True)
+    progress = Int("ProgramLifetimeProgress")
+    with Program(strict=False) as logic:
+        with rung(enable):
+            copy(1, progress)
+
+    plc = PLC(logic)
+    boundary = Eq(progress.name, frozenset((1,)))
+    detail = TraceAction(
+        enable.name,
+        True,
+        until=boundary,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    admission = _TraceAdmission(
+        active_actions=(detail.pair,),
+        actions=(detail.pair,),
+        details=(detail,),
+        detail_by_pair={detail.pair: detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(
+        admission,
+        None,
+        WaitRead(WaitPrescription(None, "charted completion"), details=(detail,)),
+    )
+    frame = SimpleNamespace(
+        snap=dict(plc.state.tags),
+        tree=TraceNode(progress.name, 1, satisfied=False),
+    )
+    state = SimpleNamespace(pilot_rungs=(), work=plc)
+    ctx = SimpleNamespace(
+        compass=SimpleNamespace(action_tags=frozenset((enable.name,))),
+        edge_tags=frozenset(),
+        clear_only=frozenset(),
+        resting={enable.name: False},
+        blocked_actions=frozenset(),
+        pdg=build_program_graph(logic),
+        program=logic,
+        avoid_pred=None,
+    )
+
+    separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
+
+    assert separated.trace.actions == ()
+    assert tuple(rung.dest for rung in separated.prerequisites.pilot_rungs) == (enable.name,)
+
+
+def test_unavailable_broad_lifetime_cannot_hitchhike_on_a_charted_coast() -> None:
+    """The selected completion read, not target-wide relevance, grants the hold."""
+
+    boundary = Eq("LaterEffect", frozenset((True,)))
+    detail = TraceAction(
+        "LaterInput",
+        True,
+        until=boundary,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    admission = _TraceAdmission(
+        active_actions=(detail.pair,),
+        actions=(detail.pair,),
+        details=(detail,),
+        detail_by_pair={detail.pair: detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(
+        admission,
+        None,
+        WaitRead(WaitPrescription(None, "unrelated charted completion")),
+    )
+    frame = SimpleNamespace(
+        snap={"LaterInput": False, "LaterEffect": False},
+        tree=TraceNode("StructuralChannel", 2, satisfied=False),
+    )
+    state = SimpleNamespace(pilot_rungs=(), work=SimpleNamespace())
+    ctx = SimpleNamespace(
+        compass=SimpleNamespace(action_tags=frozenset()),
+        edge_tags=frozenset(),
+        clear_only=frozenset(),
+        resting={"LaterInput": False},
+        blocked_actions=frozenset(),
+        pdg=SimpleNamespace(),
+        program=object(),
+    )
+
+    separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
+
+    assert separated.prerequisites.pilot_rungs == ()
+    assert separated.trace.actions == (detail.pair,)
+
+
+def test_trace_lifetime_positions_concurrent_input_for_its_instruction_coast() -> None:
+    """One selected trace owns both its advancing boundary and durable sibling."""
+
+    feedback_tag = Bool("GenericFeedback", external=True)
+    accumulator_tag = Int("GenericAccumulator")
+    done_tag = Bool("GenericDone")
+    result_tag = Int("GenericResult")
+    with Program(strict=False) as logic:
+        with rung(feedback_tag):
+            copy(accumulator_tag, accumulator_tag)
+        with rung(done_tag):
+            copy(1, result_tag)
+    plc = PLC(logic)
+    boundary = Eq(result_tag.name, frozenset((1,)))
+    advance = SimpleNamespace(until=Eq(accumulator_tag.name, frozenset((5,))))
+    detail = TraceAction(
+        feedback_tag.name,
+        True,
+        until=boundary,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    admission = _TraceAdmission(
+        active_actions=(detail.pair,),
+        actions=(detail.pair,),
+        details=(detail,),
+        detail_by_pair={detail.pair: detail},
+        managed_boolean_rungs=(),
+        establish_pending=False,
+    )
+    route_and_wait = _RouteAndCompletionRead(admission, None, None)
+    feedback = TraceNode(
+        detail.tag,
+        detail.value,
+        satisfied=False,
+        is_steerable=True,
+    )
+    later_local = TraceNode(
+        "GenericLaterLocal",
+        1,
+        satisfied=False,
+    )
+    accumulator = TraceNode(
+        accumulator_tag.name,
+        5,
+        satisfied=False,
+        advance=advance,
+        owner_boundary=(done_tag.name, True),
+        owner_condition=Eq(done_tag.name, frozenset((True,))),
+        linear_boundary=True,
+    )
+    frame = SimpleNamespace(
+        snap={
+            detail.tag: False,
+            accumulator_tag.name: 0,
+            done_tag.name: False,
+            result_tag.name: 0,
+        },
+        tree=TraceNode(
+            result_tag.name,
+            1,
+            satisfied=False,
+            writer_rung=0,
+            children=[feedback, accumulator, later_local],
+        ),
+    )
+    state = SimpleNamespace(pilot_rungs=(), work=plc)
+    ctx = SimpleNamespace(
+        compass=SimpleNamespace(action_tags=frozenset()),
+        edge_tags=frozenset(),
+        clear_only=frozenset(),
+        resting={detail.tag: False},
+        blocked_actions=frozenset(),
+        pdg=build_program_graph(logic),
+        program=logic,
+        avoid_pred=None,
+    )
+
+    separated = _separate_prerequisites(route_and_wait, frame, state, ctx)
+
+    assert separated.trace.actions == ()
+    assert separated.instruction_boundary is not None
+    assert separated.instruction_boundary.channel_tag == "GenericDone"
+    assert tuple(rung.dest for rung in separated.prerequisites.pilot_rungs) == (
+        detail.tag,
+    )
+
+    standalone_detail = replace(detail, until=None)
+    standalone_admission = replace(
+        admission,
+        active_actions=(standalone_detail.pair,),
+        actions=(standalone_detail.pair,),
+        details=(standalone_detail,),
+        detail_by_pair={standalone_detail.pair: standalone_detail},
+    )
+    standalone = _separate_prerequisites(
+        _RouteAndCompletionRead(standalone_admission, None, None),
+        frame,
+        state,
+        ctx,
+    )
+    assert standalone.instruction_boundary is None
+    assert standalone.prerequisites.pilot_rungs == ()
+    assert standalone.trace.actions == (standalone_detail.pair,)
 
 
 def test_program_step_derives_only_a_uniform_shared_input_lifetime() -> None:
@@ -2245,6 +3024,108 @@ def test_prescribed_wait_requires_every_program_input_to_survive_admission() -> 
     )
     assert fully_admitted.viable is True
     assert fully_admitted.prescription is read.prescription
+
+
+def test_unavailable_program_input_cannot_keep_a_future_chart_edge_live() -> None:
+    """Chart relevance cannot promote an unavailable producer supplement."""
+
+    required = TraceAction(
+        "FutureInput",
+        True,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
+        required_inputs=(required,),
+    )
+    admitted = _admit_wait_read(
+        WaitRead(None, (required,), program_step=step),
+        (),
+        SimpleNamespace(snap={"FutureInput": False}),
+        SimpleNamespace(pilot_rungs=()),
+        SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset()),
+        set(),
+    )
+
+    assert required.pair in admitted.admitted_pairs
+    assert required.pair not in admitted.executable_pairs
+    assert admitted.admitted_supplement is False
+    assert admitted.viable is False
+
+
+def test_exact_program_handoff_refines_conservative_trace_availability() -> None:
+    """A current ProgramStep receipt may ground a chart-nominated producer."""
+
+    boundary = Eq("CurrentBoundary", frozenset((1,)))
+    required = TraceAction(
+        "CurrentInput",
+        True,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
+        required_inputs=(required,),
+        input_handoffs=(
+            ProgramInputHandoff(required.pair, boundary, boundary.tag),
+        ),
+    )
+    read = WaitRead(
+        WaitPrescription(ChannelHeading(boundary.tag, 1, boundary), "current handoff"),
+        (required,),
+        program_step=step,
+    )
+    admitted = _admit_wait_read(
+        read,
+        (),
+        SimpleNamespace(snap={"CurrentInput": False}),
+        SimpleNamespace(pilot_rungs=()),
+        SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset()),
+        set(),
+    )
+
+    assert required.pair in admitted.executable_pairs
+    assert admitted.admitted_supplement is True
+    assert admitted.viable is True
+
+
+def test_one_executable_input_cannot_admit_an_incomplete_program_operation() -> None:
+    """Every member of a ProgramStep input operation needs its own receipt."""
+
+    current = TraceAction(
+        "CurrentMember",
+        True,
+        availability=_WriterAvailability.AFTER_PREREQ,
+    )
+    future = TraceAction(
+        "FutureMember",
+        True,
+        availability=_WriterAvailability.UNAVAILABLE_FROM_HERE,
+    )
+    step = ProgramStep(
+        ProgramStepStatus.NEEDS_INPUT,
+        producer=object(),
+        boundary=None,
+        channel=None,
+        required_inputs=(current, future),
+    )
+    admitted = _admit_wait_read(
+        WaitRead(None, (current, future), program_step=step),
+        (),
+        SimpleNamespace(snap={"CurrentMember": False, "FutureMember": False}),
+        SimpleNamespace(pilot_rungs=()),
+        SimpleNamespace(blocked_actions=frozenset(), edge_tags=frozenset()),
+        set(),
+    )
+
+    assert current.pair in admitted.executable_pairs
+    assert future.pair not in admitted.executable_pairs
+    assert admitted.admitted_supplement is False
 
 
 def test_establish_suppression_retains_declined_wait_evidence() -> None:

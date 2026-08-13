@@ -35,6 +35,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     _until_unresolved_condition,
     fork_with_pilot_rungs,
+    project_pilot_overlay,
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.world_key import (
@@ -433,6 +434,25 @@ class TestPilotRungs:
         plc = fork_with_pilot_rungs(plc, pilot_rungs)
         plc.step()
         assert plc.state.tags["In"] is False
+
+    def test_projection_releases_scoped_holds_at_their_target_boundary(self):
+        Target = Int("ProjectionTarget")
+        Ready = Bool("ProjectionReady", external=True)
+        Mode = Bool("ProjectionMode", external=True)
+        snapshot = {Target.name: 98, Ready.name: True, Mode.name: True}
+        rungs = (
+            PilotRung(Ready.name, True, Target != 81),
+            PilotRung(Mode.name, True, Target != 81),
+        )
+
+        projected = project_pilot_overlay(
+            {**snapshot, Target.name: 81},
+            rungs,
+            {Ready.name: False, Mode.name: False},
+        )
+
+        assert projected[Ready.name] is False
+        assert projected[Mode.name] is False
 
     def test_execution_receipt_matches_expanded_continuation_precedence(self):
         """Every installed rule receives one compiler-owned execution state."""

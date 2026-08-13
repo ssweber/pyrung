@@ -378,11 +378,12 @@ def test_designation_includes_non_target_program_written_handoff_on_selected_pat
 
     events = pilot_events(PLC(program), target == 2, max_scans=5)
     try:
-        started = next(events)
+        assert next(events).kind == "started"
+        observed = next(event for event in events if event.kind == "entry_scan_observed")
     finally:
         events.close()
 
-    snapshot = started.data["bootstrap_execution"]
+    snapshot = observed.data["execution"]
     assert isinstance(snapshot, BootstrapExecutionSnapshot)
     handoff_designation = next(
         designation for designation in snapshot.designations if designation.tag == handoff.name
@@ -405,11 +406,12 @@ def test_designation_retains_full_static_branch_path_and_dynamic_address() -> No
 
     events = pilot_events(PLC(program), target == 1, max_scans=5)
     try:
-        started = next(events)
+        assert next(events).kind == "started"
+        observed = next(event for event in events if event.kind == "entry_scan_observed")
     finally:
         events.close()
 
-    snapshot = started.data["bootstrap_execution"]
+    snapshot = observed.data["execution"]
     assert isinstance(snapshot, BootstrapExecutionSnapshot)
     designation = next(item for item in snapshot.designations if item.tag == target.name)
     assert designation.producer[:2] == (None, 0)
