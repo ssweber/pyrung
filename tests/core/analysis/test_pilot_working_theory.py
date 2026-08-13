@@ -1,14 +1,18 @@
-"""Pure lifecycle contracts for the shadow-only WorkingTheory ledger."""
+"""Pure lifecycle contracts for the immutable WorkingTheory ledger."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import FrozenInstanceError, fields, is_dataclass, replace
 from typing import Any
 
 import pytest
 
 from pyrung import PLC
+from pyrung.core.analysis.pilot.effects import (
+    EffectObligationSnapshot,
+    EffectObservationSnapshot,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     NavigationAct,
@@ -219,6 +223,62 @@ def test_attempt_preserves_exact_execution_owner_and_occurrence_evidence() -> No
     )
     assert receipt.source.execution_owner_token == ("execution", "source")
     assert receipt.execution_owner_token != receipt.source.execution_owner_token
+
+
+def test_attempt_passes_immutable_conductivity_observation_through_to_view() -> None:
+    state, theory_id, version_id = _opened()
+    observation = EffectObservationSnapshot(
+        disposition="OVERWRITTEN",
+        obligation=EffectObligationSnapshot(
+            tag="Step",
+            value=40,
+            producer=(None, 4, ()),
+            consumer=None,
+            required_shape=(),
+            boundary=None,
+        ),
+        detail="exact ordered projection",
+    )
+    attempt = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="conductivity",
+            actions=(("Request", True),),
+        ),
+        conductivity_observations=(observation,),
+    )
+
+    state = reduce_theory(state, attempt)
+    receipt = state.ledger.attempts[attempt.attempt_identity]
+    view = theory_view(state)
+
+    assert receipt.conductivity_observations == (observation,)
+    assert receipt.conductivity_observations[0] is observation
+    assert view is not None
+    assert view.attempts[0].conductivity_observations[0] is observation
+
+    def mutate_detail(value: Any) -> None:
+        value.detail = "mutated"
+
+    with pytest.raises(FrozenInstanceError):
+        mutate_detail(observation)
+
+
+def test_attempt_rejects_live_conductivity_evidence() -> None:
+    state, theory_id, version_id = _opened()
+    attempt = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="live-conductivity",
+            actions=(("Request", True),),
+        ),
+        conductivity_observations=(object(),),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(TheoryInvariantError, match="unsupported live type object"):
+        reduce_theory(state, attempt)
 
 
 def test_theory_view_projects_only_the_active_version_and_exact_source() -> None:

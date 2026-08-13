@@ -15,6 +15,7 @@ from typing import Any, TypeAlias
 
 from pyrsistent import PMap, pmap
 
+from pyrung.core.analysis.pilot.effects import EffectObservationSnapshot
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 
 TheoryId: TypeAlias = tuple[Any, ...]
@@ -174,6 +175,10 @@ class TheoryAttemptReceipt:
     disposition: TheoryAttemptDisposition
     evidence: tuple[Any, ...] = ()
     first_edge_identity: tuple[Any, ...] | None = None
+    # Exact immutable effect observations pass through from the execution
+    # boundary. WorkingTheory stores the facts; Compass may derive a
+    # conductivity/front view without the ledger retaining that conclusion.
+    conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -261,7 +266,7 @@ class TheoryTombstone:
 
 @dataclass(frozen=True)
 class NogoodProof:
-    """Proof-level negative evidence; shadow integration never manufactures one."""
+    """Proof-level negative evidence; attempt recording never manufactures one."""
 
     proof_id: tuple[Any, ...]
     executable_world_identity: tuple[Any, ...]
@@ -810,6 +815,7 @@ class RecordTheoryAttempt:
     disposition: TheoryAttemptDisposition
     evidence: tuple[Any, ...] = ()
     first_edge_identity: tuple[Any, ...] | None = None
+    conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1171,17 +1177,18 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if not fact.occurrence_evidence:
             raise TheoryInvariantError("attempt occurrence evidence is missing")
         receipt = TheoryAttemptReceipt(
-            fact.theory_id,
-            fact.version_id,
-            fact.attempt_identity,
-            fact.source,
-            fact.execution_owner_token,
-            fact.occurrence_evidence,
-            fact.act_identity,
-            fact.pilot_rung_identities,
-            fact.disposition,
-            fact.evidence,
-            fact.first_edge_identity,
+            theory_id=fact.theory_id,
+            version_id=fact.version_id,
+            attempt_id=fact.attempt_identity,
+            source=fact.source,
+            execution_owner_token=fact.execution_owner_token,
+            occurrence_evidence=fact.occurrence_evidence,
+            act_identity=fact.act_identity,
+            pilot_rung_identities=fact.pilot_rung_identities,
+            disposition=fact.disposition,
+            evidence=fact.evidence,
+            first_edge_identity=fact.first_edge_identity,
+            conductivity_observations=fact.conductivity_observations,
         )
         attempts = _put_unique(state.ledger.attempts, fact.attempt_identity, receipt, "attempt")
         if attempts is state.ledger.attempts:

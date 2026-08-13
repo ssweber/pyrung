@@ -483,8 +483,8 @@ def test_static_path_can_exclude_an_edge_only_at_the_current_source() -> None:
     assert any(edge.identity == shortcut.identity for edge in fallback.edges[1:])
 
 
-def test_shadow_theory_does_not_change_static_route_selection() -> None:
-    """Detached theory evidence remains inert in production route selection."""
+def test_theory_view_does_not_bypass_static_route_selection() -> None:
+    """Theory evidence reaches navigation through Compass, not route mutation."""
 
     graph = StaticTransitionGraph(
         PipelineRoles("State"),

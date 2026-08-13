@@ -279,12 +279,12 @@ def _drive_worker(
         avoid_conditions = tuple(tags[name] for name in config["avoid"])
         avoid_pred = _compile_avoid(avoid_conditions) if avoid_conditions else None
         formatter = _PilotProgressFormatter()
-        original_interpret = pilot_module._shadow_transition_from_attempt
-        original_record = pilot_module._record_shadow_transition
+        original_interpret = pilot_module._theory_transition_from_attempt
+        original_record = pilot_module._record_working_theory_transition
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
 
         def observation_key(
-            observation: pilot_module._ShadowTheoryTransition,
+            observation: pilot_module._TheoryTransitionEvidence,
         ) -> tuple[Any, ...]:
             return (
                 observation.claim.identity,
@@ -301,7 +301,7 @@ def _drive_worker(
             *,
             prior_requirement_identities: frozenset[tuple[Any, ...]],
             intrascan_report: IntrascanResult | None = None,
-        ) -> pilot_module._ShadowTheoryTransition | None:
+        ) -> pilot_module._TheoryTransitionEvidence | None:
             observation = original_interpret(
                 state,
                 attempt,
@@ -326,7 +326,7 @@ def _drive_worker(
 
         def observe_recorded_interpretation(
             state: _PilotState,
-            observation: pilot_module._ShadowTheoryTransition | None,
+            observation: pilot_module._TheoryTransitionEvidence | None,
             *,
             remaining_budget: int,
         ) -> None:
@@ -356,8 +356,10 @@ def _drive_worker(
             )
             original_record(state, observation, remaining_budget=remaining_budget)
 
-        vars(pilot_module)["_shadow_transition_from_attempt"] = observe_interpretation
-        vars(pilot_module)["_record_shadow_transition"] = observe_recorded_interpretation
+        vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
+        vars(pilot_module)["_record_working_theory_transition"] = (
+            observe_recorded_interpretation
+        )
         messages.put(
             {
                 "type": "started",

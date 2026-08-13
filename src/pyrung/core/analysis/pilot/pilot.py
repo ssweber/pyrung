@@ -55,6 +55,7 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
+    EffectObservationSnapshot,
     effect_reached_consumer,
     exact_last_landing_write,
     expectation_from_writer,
@@ -2246,8 +2247,8 @@ def _open_theory_from_program_guard_rebases(
     )
     if not interpretation.opens_theory:
         return False
-    transition = _ShadowTheoryTransition(
-        claim=_shadow_claim(failed.expectation, failed.local_bearing.objective, source),
+    transition = _TheoryTransitionEvidence(
+        claim=_theory_claim(failed.expectation, failed.local_bearing.objective, source),
         source=source,
         execution_owner_token=(
             "execution-owner",
@@ -2265,6 +2266,7 @@ def _open_theory_from_program_guard_rebases(
             _theory_requirement_snapshot(requirement) for requirement, _failed in exact_pairs
         ),
         interpretation=interpretation,
+        conductivity_observations=tuple(item.observation for item in failed_receipts),
     )
     _record_theory_transition(
         state,
@@ -2272,7 +2274,7 @@ def _open_theory_from_program_guard_rebases(
         remaining_budget=remaining_budget,
         record_fact=_record_controlling_theory_fact,
     )
-    return _active_shadow_theory(state) is not None
+    return _active_working_theory(state) is not None
 
 
 def _refine_active_theory_from_program_guard_rebases(
@@ -2287,7 +2289,7 @@ def _refine_active_theory_from_program_guard_rebases(
     evidence and the latter is where Compass must read the SETUP_FIRST bearing.
     """
 
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return False
     exact_pairs: list[tuple[ActiveRequirement, FailedEffectReceipt]] = []
@@ -2361,9 +2363,10 @@ def _refine_active_theory_from_program_guard_rebases(
                     tuple(requirement.navigation_identity for requirement, _failed in exact_pairs),
                 ),
             ),
+            conductivity_observations=tuple(item.observation for item in failed_receipts),
         ),
     )
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     assert theory is not None
     _record_controlling_theory_fact(
         state,
@@ -3485,7 +3488,7 @@ def _bind_entry_execution_to_route(
     state.invocation_checkpoint = checkpoint
     state.bootstrap_execution = bound
     _derive_bootstrap_requirements(state, ctx, bound)
-    _record_shadow_bootstrap(
+    _record_bootstrap_theory_transition(
         state,
         ctx,
         bound,
@@ -3543,13 +3546,13 @@ class _IterationTransition:
     attempt: _AttemptResult | None = None
     trial: _AcceptedTrial | None = None
     continuation_hop: bool = False
-    shadow_observation: _ShadowTheoryTransition | None = None
+    theory_transition: _TheoryTransitionEvidence | None = None
     adoption_checkpoint: _CausalCheckpoint | None = None
 
 
 @dataclass(frozen=True)
-class _ShadowTheoryTransition:
-    """Detached shadow evidence returned without reducing lifecycle state."""
+class _TheoryTransitionEvidence:
+    """Detached factual evidence returned before lifecycle reduction."""
 
     claim: TheoryClaim
     source: TheoryBoundaryIdentity
@@ -3561,6 +3564,7 @@ class _ShadowTheoryTransition:
     evidence: tuple[Any, ...]
     requirements: tuple[TheoryRequirementSnapshot, ...]
     interpretation: AttemptInterpretation
+    conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
     adopted_boundary: TheoryBoundaryIdentity | None = None
 
     @property
@@ -3644,7 +3648,7 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
     scan_id = state.work.state.scan_id
     epoch_owner = _execution_epoch_owner(state.work, scan_id)
     if epoch_owner is None:
-        raise ValueError("shadow theory requires one exact live execution owner")
+        raise ValueError("working theory requires one exact live execution owner")
     owner_token = ("execution-owner", id(epoch_owner[0]), id(epoch_owner[1]))
     world_key = tuple(key)
     return TheoryBoundaryIdentity(
@@ -3752,7 +3756,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
     )
 
 
-def _shadow_claim(
+def _theory_claim(
     expectation: EffectExpectation,
     objective: BearingObjective,
     source: TheoryBoundaryIdentity,
@@ -3783,20 +3787,42 @@ def _shadow_claim(
     )
 
 
-def _shadow_execution_evidence(execution: Any) -> tuple[tuple[Any, ...], tuple[Any, ...]]:
+def _theory_execution_evidence(
+    execution: Any,
+) -> tuple[
+    tuple[Any, ...],
+    tuple[Any, ...],
+    tuple[EffectObservationSnapshot, ...],
+]:
     """Detach one exact attempt owner and its dynamic occurrence evidence."""
 
     observations = execution.effect_observations
     owned = _execution_epoch_owner(execution.pulse.fork, execution.assertion_scan)
     if owned is None:
-        raise ValueError("shadow attempt requires one exact assertion owner")
-    occurrence_evidence = tuple(
-        _semantic_key(observation.diagnostic_snapshot()) for observation in observations
+        raise ValueError("theory attempt requires one exact assertion owner")
+    snapshots = tuple(observation.diagnostic_snapshot() for observation in observations)
+    occurrence_evidence = tuple(_semantic_key(snapshot) for snapshot in snapshots)
+    return (
+        ("execution-owner", id(owned[0]), id(owned[1])),
+        occurrence_evidence,
+        snapshots,
     )
-    return ("execution-owner", id(owned[0]), id(owned[1])), occurrence_evidence
 
 
-def _shadow_transition_from_attempt(
+def _merge_conductivity_observations(
+    *groups: tuple[EffectObservationSnapshot, ...],
+) -> tuple[EffectObservationSnapshot, ...]:
+    """Combine immutable receipts without requiring their PLC values to be hashable."""
+
+    merged: list[EffectObservationSnapshot] = []
+    for group in groups:
+        for observation in group:
+            if observation not in merged:
+                merged.append(observation)
+    return tuple(merged)
+
+
+def _theory_transition_from_attempt(
     state: _PilotState,
     attempt: _AttemptResult,
     bearing: Bearing,
@@ -3804,12 +3830,12 @@ def _shadow_transition_from_attempt(
     *,
     prior_requirement_identities: frozenset[tuple[Any, ...]],
     intrascan_report: IntrascanResult | None = None,
-) -> _ShadowTheoryTransition | None:
-    """Detach shadow evidence from the already-executed ordinary steer.
+) -> _TheoryTransitionEvidence | None:
+    """Detach theory evidence from the already-executed ordinary steer.
 
     The execution's effect observations already own their exact ordered
     projections. This adapter never forks, replays, or rebuilds a projection;
-    unavailable shared evidence simply leaves the shadow observation absent.
+    unavailable shared evidence simply leaves the transition evidence absent.
     """
 
     execution = attempt.executed_attempt
@@ -3857,7 +3883,7 @@ def _shadow_transition_from_attempt(
     if claim_expectation is None:
         return None
     source = _theory_boundary_from_checkpoint(checkpoint)
-    execution_owner, effects = _shadow_execution_evidence(execution)
+    execution_owner, effects, conductivity_observations = _theory_execution_evidence(execution)
     if not effects and route_lookahead_requirements:
         effects = (
             (
@@ -3876,7 +3902,7 @@ def _shadow_transition_from_attempt(
         intrascan=intrascan_report,
         assertion_scan=productive_scan,
     )
-    claim = _shadow_claim(
+    claim = _theory_claim(
         claim_expectation,
         bearing.objective,
         source,
@@ -3908,7 +3934,7 @@ def _shadow_transition_from_attempt(
         )
         if receipt_interpretation.opens_theory:
             interpretation = receipt_interpretation
-    return _ShadowTheoryTransition(
+    return _TheoryTransitionEvidence(
         claim=claim,
         source=source,
         execution_owner_token=execution_owner,
@@ -3936,18 +3962,19 @@ def _shadow_transition_from_attempt(
         ),
         requirements=requirements,
         interpretation=interpretation,
+        conductivity_observations=conductivity_observations,
     )
 
 
-def _shadow_transition_after_monitor(
+def _theory_transition_after_monitor(
     state: _PilotState,
-    observation: _ShadowTheoryTransition | None,
+    observation: _TheoryTransitionEvidence | None,
     *,
     prior_requirement_identities: frozenset[tuple[Any, ...]],
     assertion_scan: int,
     trial: _AcceptedTrial | None = None,
     source_checkpoint: _CausalCheckpoint | None = None,
-) -> tuple[_ShadowTheoryTransition | None, frozenset[tuple[Any, ...]]]:
+) -> tuple[_TheoryTransitionEvidence | None, frozenset[tuple[Any, ...]]]:
     """Fold normal post-commit receipts into the attempt's final interpretation."""
 
     novel = tuple(
@@ -4020,8 +4047,8 @@ def _shadow_transition_after_monitor(
             and all(current is not source_checkpoint for current in state.temporal_checkpoints)
         ):
             state.temporal_checkpoints.append(source_checkpoint)
-        synthesized = _ShadowTheoryTransition(
-            claim=_shadow_claim(expectation, bearing.objective, source),
+        synthesized = _TheoryTransitionEvidence(
+            claim=_theory_claim(expectation, bearing.objective, source),
             source=source,
             execution_owner_token=owner,
             occurrence_evidence=occurrence_evidence,
@@ -4031,6 +4058,9 @@ def _shadow_transition_after_monitor(
             evidence=(("monitor-requirements", occurrence_evidence),),
             requirements=requirements,
             interpretation=interpretation,
+            conductivity_observations=tuple(
+                failed.observation for _requirement, failed in exact_pairs
+            ),
         )
         return synthesized, frozenset(requirement.identity for requirement, _ in exact_pairs)
     interpretation = interpret_failed_requirements(
@@ -4060,16 +4090,20 @@ def _shadow_transition_after_monitor(
             evidence=evidence,
             requirements=requirements,
             interpretation=interpretation,
+            conductivity_observations=_merge_conductivity_observations(
+                observation.conductivity_observations,
+                tuple(failed.observation for _requirement, failed in exact_pairs),
+            ),
         ),
         frozenset(requirement.identity for requirement, _failed in exact_pairs),
     )
 
 
-def _shadow_bootstrap_transition(
+def _theory_bootstrap_transition(
     state: _PilotState,
     ctx: _PilotContext,
     receipt: _BootstrapExecution,
-) -> _ShadowTheoryTransition | None:
+) -> _TheoryTransitionEvidence | None:
     """Detach the exact cold-start execution when it selected a factual claim."""
 
     if not receipt.appeared_effects:
@@ -4140,7 +4174,7 @@ def _shadow_bootstrap_transition(
         ),
         (("bootstrap-effects", effects),),
     )
-    return _ShadowTheoryTransition(
+    return _TheoryTransitionEvidence(
         claim=claim,
         source=source,
         execution_owner_token=(
@@ -4172,13 +4206,13 @@ def _shadow_bootstrap_transition(
     )
 
 
-def _record_shadow_theory_fact(state: _PilotState, fact: Any) -> None:
-    """Single monkeypatchable shadow seam; the reducer cannot affect control."""
+def _record_optional_theory_fact(state: _PilotState, fact: Any) -> None:
+    """Record a non-controlling lifecycle fact through one fail-open seam."""
 
     try:
         state.theory_state = reduce_theory(state.theory_state, fact)
-    except Exception:  # noqa: BLE001 - shadow diagnostics cannot change the drive
-        logger.debug("pilot: shadow theory reduction failed", exc_info=True)
+    except Exception:  # noqa: BLE001 - optional theory recording cannot change the drive
+        logger.debug("pilot: optional theory reduction failed", exc_info=True)
 
 
 def _record_controlling_theory_fact(state: _PilotState, fact: Any) -> None:
@@ -4187,34 +4221,28 @@ def _record_controlling_theory_fact(state: _PilotState, fact: Any) -> None:
     state.theory_state = reduce_theory(state.theory_state, fact)
 
 
-def _run_shadow_hook(hook: Callable[..., None], *args: Any, **kwargs: Any) -> None:
-    """Keep every shadow conversion outside production control flow."""
+def _run_optional_theory_hook(hook: Callable[..., None], *args: Any, **kwargs: Any) -> None:
+    """Keep every optional theory conversion outside production control flow."""
 
     try:
         hook(*args, **kwargs)
-    except Exception:  # noqa: BLE001 - shadow diagnostics cannot change the drive
-        logger.debug("pilot: shadow theory hook failed", exc_info=True)
+    except Exception:  # noqa: BLE001 - optional theory recording cannot change the drive
+        logger.debug("pilot: optional theory hook failed", exc_info=True)
 
 
-def _shadow_requirement_identities(state: Any) -> frozenset[tuple[Any, ...]]:
-    """Snapshot shadow comparison keys without exposing the drive to failure."""
+def _requirement_identities(state: Any) -> frozenset[tuple[Any, ...]]:
+    """Read the exact live requirement set used by monitor control."""
 
-    try:
-        return frozenset(
-            requirement.identity for requirement in getattr(state, "active_requirements", ())
-        )
-    except Exception:  # noqa: BLE001 - shadow diagnostics cannot change the drive
-        logger.debug("pilot: shadow requirement snapshot failed", exc_info=True)
-        return frozenset()
+    return frozenset(requirement.identity for requirement in state.active_requirements)
 
 
-def _active_shadow_theory(state: _PilotState) -> Any:
+def _active_working_theory(state: _PilotState) -> Any:
     theory_id = state.theory_state.active_theory_id
     return state.theory_state.ledger.theories.get(theory_id) if theory_id is not None else None
 
 
-def _shadow_claim_correlates(state: _PilotState, claim: TheoryClaim) -> bool:
-    theory = _active_shadow_theory(state)
+def _theory_claim_correlates(state: _PilotState, claim: TheoryClaim) -> bool:
+    theory = _active_working_theory(state)
     if theory is None:
         return True
     active_claim = state.theory_state.ledger.claims[theory.claim_id]
@@ -4226,12 +4254,12 @@ def _shadow_claim_correlates(state: _PilotState, claim: TheoryClaim) -> bool:
     return same_target and theory_source_is_retained(state.theory_state, claim.source)
 
 
-def _shadow_attempt_identity(
+def _theory_attempt_identity(
     theory_id: tuple[Any, ...],
-    observation: _ShadowTheoryTransition,
+    observation: _TheoryTransitionEvidence,
 ) -> tuple[Any, ...]:
     return (
-        "shadow-attempt",
+        "theory-attempt",
         theory_id,
         observation.identity,
         observation.execution_owner_token,
@@ -4241,7 +4269,7 @@ def _shadow_attempt_identity(
 
 def _record_theory_transition(
     state: _PilotState,
-    observation: _ShadowTheoryTransition | None,
+    observation: _TheoryTransitionEvidence | None,
     *,
     remaining_budget: int,
     record_fact: Callable[[_PilotState, Any], None],
@@ -4254,7 +4282,7 @@ def _record_theory_transition(
                 state,
                 RecordUnattributedEvidence(
                     UnattributedTheoryEvidence(
-                        observation_id=("shadow-interpretation", observation.identity),
+                        observation_id=("theory-interpretation", observation.identity),
                         boundary=observation.source,
                         evidence=(
                             observation.interpretation.kind.value,
@@ -4270,11 +4298,11 @@ def _record_theory_transition(
             state,
             OpenTheory(
                 claim=observation.claim,
-                opening_identity=("shadow-open", observation.claim.identity),
+                opening_identity=("theory-open", observation.claim.identity),
                 remaining_budget=max(0, remaining_budget),
             ),
         )
-    elif not _shadow_claim_correlates(state, observation.claim):
+    elif not _theory_claim_correlates(state, observation.claim):
         record_fact(
             state,
             RecordUnattributedEvidence(
@@ -4287,10 +4315,10 @@ def _record_theory_transition(
         )
         return
 
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return
-    attempt_identity = _shadow_attempt_identity(theory.theory_id, observation)
+    attempt_identity = _theory_attempt_identity(theory.theory_id, observation)
     record_fact(
         state,
         RecordTheoryAttempt(
@@ -4304,10 +4332,11 @@ def _record_theory_transition(
             pilot_rung_identities=observation.pilot_rung_identities,
             disposition=observation.disposition,
             evidence=observation.evidence,
+            conductivity_observations=observation.conductivity_observations,
         ),
     )
     if observation.requirements:
-        theory = _active_shadow_theory(state)
+        theory = _active_working_theory(state)
         assert theory is not None
         controlling_intent = (
             TheoryTemporalIntent(observation.interpretation.kind.value)
@@ -4328,7 +4357,7 @@ def _record_theory_transition(
                 refined_source=observation.source,
                 requirements=observation.requirements,
                 refinement_identity=(
-                    "shadow-refine",
+                    "theory-refine",
                     observation.identity,
                     tuple(item.semantic_identity for item in observation.requirements),
                 ),
@@ -4339,9 +4368,9 @@ def _record_theory_transition(
         )
 
 
-def _record_shadow_transition(
+def _record_working_theory_transition(
     state: _PilotState,
-    observation: _ShadowTheoryTransition | None,
+    observation: _TheoryTransitionEvidence | None,
     *,
     remaining_budget: int,
 ) -> None:
@@ -4357,17 +4386,17 @@ def _record_shadow_transition(
             state,
             observation,
             remaining_budget=remaining_budget,
-            record_fact=_record_shadow_theory_fact,
+            record_fact=_record_optional_theory_fact,
         )
 
 
 def _record_controlling_transition(
     state: _PilotState,
-    observation: _ShadowTheoryTransition,
+    observation: _TheoryTransitionEvidence,
     *,
     remaining_budget: int,
 ) -> None:
-    """Establish one exact controlling theory without a fail-open shadow seam."""
+    """Establish one exact controlling theory without a fail-open recorder seam."""
 
     if observation.disposition is not TheoryAttemptDisposition.REJECTED_EXACT:
         raise ValueError("controlling transition lacks an exact rejected attempt")
@@ -4385,7 +4414,7 @@ def _record_controlling_transition(
     )
 
 
-def _records_controlling_need(observation: _ShadowTheoryTransition | None) -> bool:
+def _records_controlling_need(observation: _TheoryTransitionEvidence | None) -> bool:
     return bool(
         observation is not None
         and observation.disposition is TheoryAttemptDisposition.REJECTED_EXACT
@@ -4644,7 +4673,7 @@ def _complete_controlled_setup(
 
     request = controlled.request
     boundary = _theory_live_boundary(state)
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         raise ValueError("accepted temporal phase lost its active theory")
     progress = state.theory_state.ledger.progress[theory.current_progress_id]
@@ -4758,7 +4787,7 @@ def _complete_controlled_setup(
     # temporal request; a fresh Compass read may now certify program-owned
     # conductivity. A later failed look-ahead can refine this same branch and
     # recompose every still-active requirement from its root.
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         raise ValueError("accepted temporal phase lost its active theory")
     _record_controlling_theory_fact(
@@ -4774,7 +4803,7 @@ def _complete_controlled_setup(
     )
 
 
-def _record_shadow_bootstrap(
+def _record_bootstrap_theory_transition(
     state: _PilotState,
     ctx: _PilotContext,
     receipt: _BootstrapExecution | None,
@@ -4783,21 +4812,21 @@ def _record_shadow_bootstrap(
 ) -> None:
     if receipt is None:
         return
-    _record_shadow_transition(
+    _record_working_theory_transition(
         state,
-        _shadow_bootstrap_transition(state, ctx, receipt),
+        _theory_bootstrap_transition(state, ctx, receipt),
         remaining_budget=remaining_budget,
     )
 
 
-def _record_shadow_requirement_delta(
+def _record_optional_requirement_delta(
     state: _PilotState,
     before: frozenset[tuple[Any, ...]],
     *,
     identity: tuple[Any, ...],
-    record_fact: Callable[[_PilotState, Any], None] = _record_shadow_theory_fact,
+    record_fact: Callable[[_PilotState, Any], None] = _record_optional_theory_fact,
 ) -> None:
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return
     novel = tuple(
@@ -4815,21 +4844,21 @@ def _record_shadow_requirement_delta(
             source=state.theory_state.ledger.progress[theory.current_progress_id].provisional_tip,
             refined_source=_theory_live_boundary(state),
             requirements=novel,
-            refinement_identity=("shadow-refine", identity),
+            refinement_identity=("theory-refine", identity),
         ),
     )
 
 
-def _record_shadow_advance(
+def _record_optional_theory_advance(
     state: _PilotState,
-    observation: _ShadowTheoryTransition | None,
+    observation: _TheoryTransitionEvidence | None,
     *,
     remaining_budget: int,
     phase_receipts: tuple[tuple[Any, ...], ...] = (),
 ) -> None:
     if observation is None or observation.adopted_boundary is None:
         return
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return
     boundary = _theory_live_boundary(state)
@@ -4839,29 +4868,29 @@ def _record_shadow_advance(
     ):
         return
     parent = state.theory_state.ledger.progress[theory.current_progress_id]
-    _record_shadow_theory_fact(
+    _record_optional_theory_fact(
         state,
         AdvanceTheory(
             theory_id=theory.theory_id,
             version_id=theory.current_version_id,
-            accepted_attempt_id=_shadow_attempt_identity(theory.theory_id, observation),
+            accepted_attempt_id=_theory_attempt_identity(theory.theory_id, observation),
             source=observation.source,
             boundary=boundary,
-            advance_identity=("shadow-advance", observation.identity, boundary),
+            advance_identity=("theory-advance", observation.identity, boundary),
             phase_receipts=phase_receipts,
             remaining_budget=min(parent.remaining_budget, max(0, remaining_budget)),
         ),
     )
 
 
-def _record_shadow_repair_result(
+def _record_optional_repair_result(
     state: _PilotState,
     *,
     requirement: ActiveRequirement | None,
     assignments: Any,
     remaining_budget: int,
 ) -> None:
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return
     boundary = _theory_live_boundary(state)
@@ -4871,12 +4900,12 @@ def _record_shadow_repair_result(
         if requirement is not None
         else ()
     )
-    _record_shadow_theory_fact(
+    _record_optional_theory_fact(
         state,
         RecordUnattributedEvidence(
             UnattributedTheoryEvidence(
                 observation_id=(
-                    "shadow-local-repair",
+                    "theory-local-repair",
                     theory.theory_id,
                     theory.current_version_id,
                     boundary,
@@ -4895,8 +4924,8 @@ def _record_shadow_repair_result(
     )
 
 
-def _record_shadow_proved(state: _PilotState) -> None:
-    theory = _active_shadow_theory(state)
+def _record_optional_theory_proved(state: _PilotState) -> None:
+    theory = _active_working_theory(state)
     if theory is None:
         return
     boundary = _theory_live_boundary(state)
@@ -4906,12 +4935,12 @@ def _record_shadow_proved(state: _PilotState) -> None:
         if requirement.status is RequirementStatus.ACTIVE
     )
     if unresolved:
-        _record_shadow_theory_fact(
+        _record_optional_theory_fact(
             state,
             RecordUnattributedEvidence(
                 UnattributedTheoryEvidence(
                     observation_id=(
-                        "shadow-target-reached-with-active-requirements",
+                        "theory-target-reached-with-active-requirements",
                         theory.theory_id,
                         theory.current_version_id,
                         boundary,
@@ -4940,13 +4969,13 @@ def _record_shadow_proved(state: _PilotState) -> None:
     if not attempts:
         return
     fulfilled = attempts[-1].occurrence_evidence
-    _record_shadow_theory_fact(
+    _record_optional_theory_fact(
         state,
         ProveTheory(
             theory_id=theory.theory_id,
             version_id=theory.current_version_id,
             promoted_landing=boundary,
-            proof_identity=("shadow-proved", theory.theory_id, boundary),
+            proof_identity=("theory-proved", theory.theory_id, boundary),
             fulfilled_obligations=fulfilled,
             requirement_observations=(),
             retained_pilot_rung_identities=tuple(
@@ -4956,21 +4985,21 @@ def _record_shadow_proved(state: _PilotState) -> None:
     )
 
 
-def _record_shadow_abandoned(
+def _record_optional_theory_abandoned(
     state: _PilotState,
     termination: TheoryTermination,
 ) -> None:
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if theory is None:
         return
-    _record_shadow_theory_fact(
+    _record_optional_theory_fact(
         state,
         AbandonTheory(
             theory_id=theory.theory_id,
             version_id=theory.current_version_id,
             termination=termination,
             abandonment_identity=(
-                "shadow-abandoned",
+                "theory-abandoned",
                 theory.theory_id,
                 theory.current_version_id,
                 termination,
@@ -5731,11 +5760,11 @@ def _record_scan_progress_advance(
     state: _PilotState,
     ctx: _PilotContext,
     trial: _AcceptedTrial,
-    observation: _ShadowTheoryTransition | None,
+    observation: _TheoryTransitionEvidence | None,
 ) -> None:
     """Move an active theory only from one exact accepted scan receipt."""
 
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     receipt = trial.execution.scan_progress
     if theory is None or receipt is None:
         return
@@ -5746,7 +5775,7 @@ def _record_scan_progress_advance(
         return
 
     recorded_id = (
-        _shadow_attempt_identity(theory.theory_id, observation)
+        _theory_attempt_identity(theory.theory_id, observation)
         if observation is not None
         and observation.disposition is TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
         and observation.source == source
@@ -6063,7 +6092,7 @@ def _transition_once(
         )
         else None
     )
-    shadow_requirements_before = _shadow_requirement_identities(state)
+    requirements_before_theory_recording = _requirement_identities(state)
     attempt = execute(result, orientation_world)
     if resolve_excursion and attempt.excursion_attempt is not None:
         attempt = _resolve_excursion(attempt, frame, state, ctx)
@@ -6126,18 +6155,18 @@ def _transition_once(
             ctx,
             causal_checkpoint,
         )
-    shadow_observation = None
+    theory_transition = None
     try:
-        shadow_observation = _shadow_transition_from_attempt(
+        theory_transition = _theory_transition_from_attempt(
             state,
             attempt,
             result,
             receipt_checkpoint,
-            prior_requirement_identities=shadow_requirements_before,
+            prior_requirement_identities=requirements_before_theory_recording,
             intrascan_report=intrascan_report,
         )
-    except Exception:  # noqa: BLE001 - shadow conversion cannot change the drive
-        logger.debug("pilot: shadow theory observation failed", exc_info=True)
+    except Exception:  # noqa: BLE001 - optional theory conversion cannot change the drive
+        logger.debug("pilot: working theory observation failed", exc_info=True)
     _record_attempt(attempt, frame, state, ctx, result.objective, act)
 
     if isinstance(act, Coast) and act.mode == "terminal":
@@ -6155,7 +6184,7 @@ def _transition_once(
     if attempt.trial is None:
         if not record_rejection:
             pass
-        elif _records_controlling_need(shadow_observation):
+        elif _records_controlling_need(theory_transition):
             # The act exposed a missing temporal condition. That is exact
             # refinement evidence, not proof that the act is impossible in
             # this world once the condition is composed into the scan.
@@ -6191,7 +6220,7 @@ def _transition_once(
             result=result,
             frame=frame,
             attempt=attempt,
-            shadow_observation=shadow_observation,
+            theory_transition=theory_transition,
         )
 
     if defer_adoption:
@@ -6200,7 +6229,7 @@ def _transition_once(
             frame=frame,
             attempt=attempt,
             trial=attempt.trial,
-            shadow_observation=shadow_observation,
+            theory_transition=theory_transition,
             adoption_checkpoint=receipt_checkpoint,
         )
 
@@ -6225,21 +6254,21 @@ def _transition_once(
         state,
         receipt_checkpoint,
     )
-    if shadow_observation is not None:
+    if theory_transition is not None:
         try:
-            shadow_observation = replace(
-                shadow_observation,
+            theory_transition = replace(
+                theory_transition,
                 adopted_boundary=_theory_live_boundary(state),
             )
-        except Exception:  # noqa: BLE001 - shadow diagnostics cannot change the drive
-            logger.debug("pilot: shadow adoption snapshot failed", exc_info=True)
+        except Exception:  # noqa: BLE001 - optional theory recording cannot change the drive
+            logger.debug("pilot: theory adoption snapshot failed", exc_info=True)
     return _IterationTransition(
         result=result,
         frame=frame,
         attempt=attempt,
         trial=trial,
         continuation_hop=continuation_hop,
-        shadow_observation=shadow_observation,
+        theory_transition=theory_transition,
         adoption_checkpoint=receipt_checkpoint,
     )
 
@@ -6262,13 +6291,13 @@ def _adopt_deferred_transition(
         state,
         transition.adoption_checkpoint,
     )
-    observation = transition.shadow_observation
+    observation = transition.theory_transition
     if observation is not None:
         observation = replace(observation, adopted_boundary=_theory_live_boundary(state))
     return replace(
         transition,
         trial=trial,
-        shadow_observation=observation,
+        theory_transition=observation,
         adoption_checkpoint=None,
     )
 
@@ -6355,7 +6384,7 @@ def _promote_transient_target_failure(
         window_entry_value=window_entry_value,
         final_landing_value=final_landing_value,
     )
-    theory = _active_shadow_theory(state)
+    theory = _active_working_theory(state)
     if promoted is None and theory is not None:
         progress = state.theory_state.ledger.progress[theory.current_progress_id]
         if _theory_live_boundary(state) == progress.provisional_tip:
@@ -6657,7 +6686,7 @@ def _pilot_loop_events(
         requirements_before_rebase = len(state.active_requirements)
         rebased_requirements = _derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
-            if _active_shadow_theory(state) is None:
+            if _active_working_theory(state) is None:
                 _open_theory_from_program_guard_rebases(
                     state,
                     rebased_requirements,
@@ -6692,7 +6721,7 @@ def _pilot_loop_events(
         if (entry_execution is None or entry_execution.route_bound) and target_reached(
             snap, ctx.target.tag, ctx.target.value, ctx.target.predicate
         ):
-            _run_shadow_hook(_record_shadow_proved, state)
+            _run_optional_theory_hook(_record_optional_theory_proved, state)
             _promote_probationary_corrections(state)
             if state.steps:
                 # The terminal let-run's span extends to the actual finish scan;
@@ -6770,7 +6799,7 @@ def _pilot_loop_events(
                 objective=result.objective,
                 configured_inputs=ctx.configured_inputs | _configured_input_names(state.work),
             )
-            if _active_shadow_theory(state) is not None and isinstance(result, Bearing)
+            if _active_working_theory(state) is not None and isinstance(result, Bearing)
             else None
         )
         last_frame = frame
@@ -6839,7 +6868,7 @@ def _pilot_loop_events(
                 )
                 + _frontier_clause(frontier, frame.snap)
             )
-            _run_shadow_hook(_record_shadow_abandoned, state, TheoryTermination.STUCK)
+            _run_optional_theory_hook(_record_optional_theory_abandoned, state, TheoryTermination.STUCK)
             yield from _stopped_events(
                 state,
                 ctx,
@@ -6884,29 +6913,28 @@ def _pilot_loop_events(
         )
         attempt = transition.attempt
         assert attempt is not None
-        controlled_setup_attempt = (
-            _record_controlled_setup_attempt(
+        controlled_setup_attempt = None
+        if controlling_setup_request is not None:
+            assert theory_source_checkpoint is not None
+            controlled_setup_attempt = _record_controlled_setup_attempt(
                 state,
                 controlling_setup_request,
                 transition,
                 theory_source_checkpoint,
             )
-            if controlling_setup_request is not None
-            else None
-        )
         if controlled_setup_attempt is not None and attempt.trial is not None:
             transition = _adopt_deferred_transition(transition, state, ctx)
         if attempt.trial is None:
             if controlled_setup_attempt is not None:
-                if _records_controlling_need(transition.shadow_observation):
-                    assert transition.shadow_observation is not None
-                    _record_shadow_transition(
+                if _records_controlling_need(transition.theory_transition):
+                    assert transition.theory_transition is not None
+                    _record_working_theory_transition(
                         state,
-                        transition.shadow_observation,
+                        transition.theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
                 else:
-                    theory = _active_shadow_theory(state)
+                    theory = _active_working_theory(state)
                     if theory is None:
                         raise ValueError("rejected temporal attempt lost its theory")
                     rejected_attempt_id = controlled_setup_attempt.attempt_id
@@ -6922,17 +6950,17 @@ def _pilot_loop_events(
                             ),
                         ),
                     )
-            elif _records_controlling_need(transition.shadow_observation):
-                _record_shadow_transition(
+            elif _records_controlling_need(transition.theory_transition):
+                _record_working_theory_transition(
                     state,
-                    transition.shadow_observation,
+                    transition.theory_transition,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
             else:
-                _run_shadow_hook(
-                    _record_shadow_transition,
+                _run_optional_theory_hook(
+                    _record_working_theory_transition,
                     state,
-                    transition.shadow_observation,
+                    transition.theory_transition,
                     remaining_budget=state.remaining_search_scans(ctx.max_scans),
                 )
         for requirement in state.active_requirements[requirements_before:]:
@@ -6969,7 +6997,7 @@ def _pilot_loop_events(
             if controlled_setup_attempt is not None:
                 assert controlling_source_world is not None
                 state.load_world(controlling_source_world)
-                if _records_controlling_need(transition.shadow_observation):
+                if _records_controlling_need(transition.theory_transition):
                     state.pending_departure = None
                     continue
                 yield from _stopped_events(
@@ -7000,7 +7028,7 @@ def _pilot_loop_events(
         assert accepted_event is not None
         try:
             yield accepted_event
-            requirements_before_monitor = _shadow_requirement_identities(state)
+            requirements_before_monitor = _requirement_identities(state)
             if controlled_setup_attempt is None:
                 yield from _monitor_committed_trial(
                     trial,
@@ -7022,15 +7050,15 @@ def _pilot_loop_events(
                             requirement.deadline.scan_id,
                             {"requirement": requirement.diagnostic_snapshot()},
                         )
-            shadow_observation, absorbed_requirement_ids = _shadow_transition_after_monitor(
+            theory_transition, absorbed_requirement_ids = _theory_transition_after_monitor(
                 state,
-                transition.shadow_observation,
+                transition.theory_transition,
                 prior_requirement_identities=requirements_before_monitor,
                 assertion_scan=_attempt_productive_scan(executed_attempt),
                 trial=trial,
                 source_checkpoint=transition.adoption_checkpoint,
             )
-            successor_need = _records_controlling_need(shadow_observation)
+            successor_need = _records_controlling_need(theory_transition)
             if successor_need:
                 # Keep the monitor's exact rollback world. The next fresh
                 # Compass read re-executes this scan with the newly learned
@@ -7038,7 +7066,7 @@ def _pilot_loop_events(
                 # instead of beginning after a regressive settled landing.
                 state.pending_departure = None
             elif (
-                _active_shadow_theory(state) is not None
+                _active_working_theory(state) is not None
                 and transition.adoption_checkpoint is not None
                 and state.work.state.scan_id
                 < transition.adoption_checkpoint.world.work.state.scan_id
@@ -7057,13 +7085,13 @@ def _pilot_loop_events(
                 # behind.
                 state.load_world(transition.adoption_checkpoint.world)
                 state.pending_departure = None
-                if shadow_observation is not None:
-                    shadow_observation = replace(
-                        shadow_observation,
+                if theory_transition is not None:
+                    theory_transition = replace(
+                        theory_transition,
                         disposition=TheoryAttemptDisposition.REJECTED_EMPIRICAL,
                         adopted_boundary=None,
                         evidence=(
-                            *shadow_observation.evidence,
+                            *theory_transition.evidence,
                             (
                                 "working-tip-lookahead-rejected",
                                 _theory_boundary_from_checkpoint(transition.adoption_checkpoint),
@@ -7078,25 +7106,25 @@ def _pilot_loop_events(
                     successor_need=successor_need,
                 )
                 if successor_need:
-                    assert shadow_observation is not None
-                    _record_shadow_transition(
+                    assert theory_transition is not None
+                    _record_working_theory_transition(
                         state,
-                        shadow_observation,
+                        theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
             else:
                 if successor_need:
-                    assert shadow_observation is not None
-                    _record_shadow_transition(
+                    assert theory_transition is not None
+                    _record_working_theory_transition(
                         state,
-                        shadow_observation,
+                        theory_transition,
                         remaining_budget=state.remaining_search_scans(ctx.max_scans),
                     )
                 else:
-                    if _active_shadow_theory(state) is not None:
+                    if _active_working_theory(state) is not None:
                         _record_theory_transition(
                             state,
-                            shadow_observation,
+                            theory_transition,
                             remaining_budget=state.remaining_search_scans(ctx.max_scans),
                             record_fact=_record_controlling_theory_fact,
                         )
@@ -7104,23 +7132,23 @@ def _pilot_loop_events(
                             state,
                             ctx,
                             trial,
-                            shadow_observation,
+                            theory_transition,
                         )
                     else:
-                        _run_shadow_hook(
-                            _record_shadow_transition,
+                        _run_optional_theory_hook(
+                            _record_working_theory_transition,
                             state,
-                            shadow_observation,
+                            theory_transition,
                             remaining_budget=state.remaining_search_scans(ctx.max_scans),
                         )
-                _run_shadow_hook(
-                    _record_shadow_requirement_delta,
+                _run_optional_theory_hook(
+                    _record_optional_requirement_delta,
                     state,
                     requirements_before_monitor | absorbed_requirement_ids,
                     identity=(
                         "post-commit",
-                        transition.shadow_observation.identity
-                        if transition.shadow_observation is not None
+                        transition.theory_transition.identity
+                        if transition.theory_transition is not None
                         else (),
                     ),
                 )
@@ -7148,7 +7176,7 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(last_frontier, frame.snap if frame is not None else None)
-        _run_shadow_hook(_record_shadow_abandoned, state, TheoryTermination.BUDGET)
+        _run_optional_theory_hook(_record_optional_theory_abandoned, state, TheoryTermination.BUDGET)
         yield from _stopped_events(
             state,
             ctx,
@@ -7159,7 +7187,7 @@ def _pilot_loop_events(
             candidate_count=0,
         )
         return
-    _run_shadow_hook(_record_shadow_proved, state)
+    _run_optional_theory_hook(_record_optional_theory_proved, state)
     yield _finished_event(
         state,
         ctx,

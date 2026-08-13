@@ -1,4 +1,4 @@
-"""World/knowledge ownership tests for shadow WorkingTheory state."""
+"""World/knowledge ownership tests for persistent WorkingTheory state."""
 
 from __future__ import annotations
 

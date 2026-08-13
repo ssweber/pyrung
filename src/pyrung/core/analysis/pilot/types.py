@@ -888,9 +888,10 @@ class _PilotState:
     # them a future working edge. They are evidence/checkpoints, never cached
     # Bearings or executable suffixes.
     temporal_checkpoints: list[_CausalCheckpoint] = field(default_factory=list)
-    # Immutable shadow-only theory knowledge. It is deliberately not part of
-    # ``_World``: checkpoint restore must not erase observed lifecycle facts,
-    # and the reducer must never participate in adoption or rollback policy.
+    # Immutable WorkingTheory knowledge. It is deliberately not part of
+    # ``_World``: checkpoint restore must not erase observed lifecycle facts.
+    # Some exact temporal facts now guide Compass, while optional lifecycle
+    # recording remains isolated at its explicit adapter boundary.
     theory_state: TheoryState = field(default_factory=TheoryState)
     # Exact Phase-5 local schedules already admitted from one causal source.
     # Attempt identity is knowledge-side so restoring that source cannot turn

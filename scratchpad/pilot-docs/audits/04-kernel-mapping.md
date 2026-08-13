@@ -76,7 +76,7 @@ Totals: kernel 15, instruments 22, probes 6, SPLIT 6, render 1.
 | 2g | `_repair_failed_requirement:2318` / `_repair_one_active_requirement:2567` — RE-ENTERS `_transition_once` at `:1606`,`:2412` | 2318-2612 | SECOND DRIVE LOOP | YES |
 | 2h | `_execute_bootstrap_scan` | 2613-2700 | kernel | YES |
 | 3a | `_DriveSetup`/`_DriveOutcome`/`_IterationTransition` | 2703-2789 | contracts | YES → types.py (prereq) |
-| 3b | Shadow/controlling theory transitions (30 fns; mutation only `:3356,:3364`) | 2790-3965 | ledger driver | YES → theory_drive.py |
+| 3b | Optional/controlling theory transitions (30 fns; mutation only `:3356,:3364`) | 2790-3965 | ledger driver | YES → theory_drive.py |
 | 3c | `_ProverContext` | 3968-3974 | contract | YES → context.py |
 | 4 | `_commit_step` | 3982-4025 | kernel-core | stays |
 | 5 | Context build (`_make_pilot_context`, `_prepare_drive`, `_prepare_target_context`, `_infer_pipeline_roles_for_context`, `_build_static_transition_graphs_for_context`) | 4027-4244 | setup | YES → context.py |
@@ -125,7 +125,7 @@ Pure file moves, no logic edits. One branch, six commits:
 
 - Commit 0 (prereq, ~40 lines): `_DriveSetup`/`_DriveOutcome`/`_IterationTransition` (`pilot.py:2704-2760`) + `_ProverContext` (`:3968-3974`) → types.py.
 - Commit 1 — requirement_repair.py ← pilot.py:231-2700 (~2470 lines). Exports 15 names (xref-proven): `_configured_input_names, _release_attempt_projections, _derive_attempt_requirements, _retain_expectation_receipt, _exact_failed_source, _repaired_program_continuation, _promoted_target_suffix_observation, _adjacent_continuation_source, _exact_local_repair_window, _program_step_from_bearing, _preempt_recovery_action_with_program_coast, _execution_epoch_owner, _advance_recovery_continuation, _repair_one_active_requirement, _execute_bootstrap_scan`. One non-mechanical detail: calls `_transition_once` (`:1606,:2412`) which stays in pilot.py → function-local import inside those two functions (idiom already used 20+ times in the package).
-- Commit 2 — theory_drive.py ← pilot.py:2790-3965 (~1180 lines). 16-name interface. Mutation only at `_record_shadow_theory_fact:3356` / `_record_controlling_theory_fact:3364` (`state.theory_state = reduce_theory(...)`).
+- Commit 2 — theory_drive.py ← pilot.py:2790-3965 (~1180 lines). 16-name interface. Mutation only at `_record_optional_theory_fact:3356` / `_record_controlling_theory_fact:3364` (`state.theory_state = reduce_theory(...)`).
 - Commit 3 — context.py ← pilot.py:4027-4244 + :6075-6166 + :5914-6069 (~410 lines). No mutation, no forks.
 - Commit 4 — probes/target_prefix.py ← pilot.py:4631-4774 (~145 lines). First module written to the probe contract; first `ForkBudget(forks=2, scans=1)`.
 - Commit 5 — recording ← pilot.py:4245-4347 + :5190-5279 (~200 lines) into recording.py (already owns 14 of 43 PilotEvent sites).
