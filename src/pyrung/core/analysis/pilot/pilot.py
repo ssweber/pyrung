@@ -227,6 +227,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTermination,
     UnattributedTheoryEvidence,
     active_theory_correction_rung_identities,
+    assert_temporal_need_current,
     reduce_theory,
     temporal_need_request,
     temporal_setup_rung_identities,
@@ -4528,6 +4529,11 @@ def _temporal_source_checkpoint(
     requirements: tuple[ActiveRequirement, ...],
 ) -> _CausalCheckpoint:
     """Resolve the retained scan immediately before the next temporal edge."""
+
+    # A detached request remains valid historical attribution after its phase
+    # advances, but only the active version's current progress tip may select
+    # an executable checkpoint for another steer.
+    assert_temporal_need_current(state.theory_state, request)
 
     checkpoints = tuple(
         {

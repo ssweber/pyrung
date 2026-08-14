@@ -54,6 +54,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTermination,
     active_theory_correction_rung_identities,
     assert_detached_theory_value,
+    assert_temporal_need_current,
     reduce_theory,
     temporal_need_request,
     theory_view,
@@ -985,6 +986,8 @@ def test_temporal_request_follows_an_accepted_setup_progress_boundary() -> None:
         ),
     )
     version_id = state.ledger.theories[theory_id].current_version_id
+    stale_request = temporal_need_request(state)
+    assert stale_request is not None
     accepted = _attempt(
         theory_id,
         version_id,
@@ -1006,6 +1009,11 @@ def test_temporal_request_follows_an_accepted_setup_progress_boundary() -> None:
         ),
     )
 
+    with pytest.raises(
+        TheoryInvariantError,
+        match="source is not the current progress boundary",
+    ):
+        assert_temporal_need_current(state, stale_request)
     request = temporal_need_request(state)
 
     assert request is not None

@@ -917,6 +917,41 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     return view
 
 
+def assert_temporal_need_current(
+    state: TheoryState,
+    request: TemporalNeedRequest,
+) -> None:
+    """Fail closed when a detached temporal request is used outside its world.
+
+    The request is immutable evidence, so it cannot validate itself against a
+    changing ledger.  Every executable consumer must establish that its theory,
+    version, progress boundary, triggering attempt, and scoped requirements are
+    still the active ones before deriving work from it.
+    """
+
+    if state.active_theory_id != request.theory_id:
+        raise TheoryInvariantError("temporal need does not belong to the active theory")
+    theory = state.ledger.theories.get(request.theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        raise TheoryInvariantError("temporal need theory is missing or closed")
+    if theory.current_version_id != request.version_id:
+        raise TheoryInvariantError("temporal need addresses a stale theory version")
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if progress is None or progress.provisional_tip != request.source:
+        raise TheoryInvariantError("temporal need source is not the current progress boundary")
+    trigger = state.ledger.attempts.get(request.trigger_attempt_id)
+    if (
+        trigger is None
+        or trigger.theory_id != request.theory_id
+        or trigger.act_identity != request.trigger_act_identity
+        or trigger.disposition is not TheoryAttemptDisposition.REJECTED_EXACT
+    ):
+        raise TheoryInvariantError("temporal need trigger is not its exact rejected attempt")
+    version = state.ledger.versions[request.version_id]
+    if request.requirements != version.temporal_requirements:
+        raise TheoryInvariantError("temporal need requirements are not the current temporal scope")
+
+
 def temporal_need_request(state: TheoryState) -> TemporalNeedRequest | None:
     """Project the active temporal need without choosing how to satisfy it."""
 
@@ -953,6 +988,7 @@ def temporal_need_request(state: TheoryState) -> TemporalNeedRequest | None:
         requirements=version.temporal_requirements,
     )
     assert_detached_theory_value(request, path="temporal_need_request")
+    assert_temporal_need_current(state, request)
     return request
 
 
