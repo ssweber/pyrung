@@ -425,7 +425,16 @@ def test_extended_watchdog_requests_research_after_same_stop_drifts(
         original(state, fact)
         if isinstance(fact, RecordConductivityResearch):
             theory = state.theory_state.ledger.theories[fact.finding.theory_id]
-            captured.append((fact.finding, before, theory.current_progress_id))
+            view = theory_view(state.theory_state)
+            captured.append(
+                (
+                    fact.finding,
+                    before,
+                    theory.current_progress_id,
+                    view,
+                    Compass().conductivity_research(view),
+                )
+            )
 
     monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
 
@@ -442,7 +451,7 @@ def test_extended_watchdog_requests_research_after_same_stop_drifts(
     )
     assert len(research_events) == 1
     assert len(captured) == 1
-    finding, progress_before, progress_after = captured[0]
+    finding, progress_before, progress_after, view, repeated_request = captured[0]
     event = research_events[0]
     assert event.data["finding_identity"] == finding.identity
     assert finding.source.scan_id == event.scan
@@ -454,6 +463,9 @@ def test_extended_watchdog_requests_research_after_same_stop_drifts(
         "_oneshot:i26",
     )
     assert progress_after == progress_before
+    assert view is not None
+    assert view.research_findings[-1] == finding
+    assert repeated_request is None
     research_index = events.index(event)
     assert not any(item.kind == "candidate_try" for item in events[research_index + 1 :])
     assert events[-1].kind == "finished"

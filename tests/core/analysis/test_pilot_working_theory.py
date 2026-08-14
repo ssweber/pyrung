@@ -241,9 +241,12 @@ def test_research_finding_records_exact_evidence_without_advancing_the_world() -
     recorded = reduce_theory(state, fact)
 
     theory = recorded.ledger.theories[theory_id]
+    view = theory_view(recorded)
     assert theory.current_progress_id == progress_id
     assert theory.research_finding_ids == (finding.identity,)
     assert recorded.ledger.research_findings[finding.identity] is finding
+    assert view is not None
+    assert view.research_findings == (finding,)
     assert reduce_theory(recorded, fact) is recorded
     with pytest.raises(FrozenInstanceError):
         finding.source = _boundary("future", 1)  # ty: ignore[invalid-assignment]
@@ -586,7 +589,7 @@ def test_theory_view_retains_conductivity_history_across_refinement() -> None:
     )
 
 
-def test_compass_requests_research_for_same_stop_with_drifting_requirement() -> None:
+def test_compass_acknowledges_only_the_exact_retained_research_finding() -> None:
     state, theory_id, version_id = _opened()
     obligation = EffectObligationSnapshot(
         tag="Step",
@@ -724,6 +727,40 @@ def test_compass_requests_research_for_same_stop_with_drifting_requirement() -> 
     assert request.comparison == comparison
     assert request.displacement.tag == "Step"
     assert tuple(read.tag for read in request.enabling_reads) == ("Watchdog.Done",)
+
+    finding = ConductivityResearchFinding(
+        theory_id=request.theory_id,
+        version_id=request.version_id,
+        source=request.source,
+        comparison_identity=request.comparison.identity,
+        compared_attempt_ids=(
+            request.comparison.earlier_attempt_id,
+            request.comparison.later_attempt_id,
+        ),
+        displacement=request.displacement,
+        enabling_reads=request.enabling_reads,
+        requirement_drift_identities=tuple(
+            drift.identity for drift in request.comparison.requirement_drifts
+        ),
+    )
+    state = reduce_theory(state, RecordConductivityResearch(finding))
+    researched_view = theory_view(state)
+
+    assert researched_view is not None
+    assert researched_view.research_findings == (finding,)
+    assert Compass().conductivity_research(researched_view) is None
+
+    other_world_finding = replace(
+        finding,
+        source=replace(finding.source, world_key=("world", "other")),
+    )
+    unmatched_view = replace(
+        researched_view,
+        research_findings=(other_world_finding,),
+    )
+    unmatched_request = Compass().conductivity_research(unmatched_view)
+    assert unmatched_request is not None
+    assert unmatched_request.identity == request.identity
 
 
 def test_theory_view_projects_only_the_active_version_and_exact_source() -> None:

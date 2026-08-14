@@ -233,6 +233,20 @@ class ConductivityResearchFinding:
     requirement_drift_identities: tuple[tuple[Any, ...], ...]
 
     @property
+    def request_identity(self) -> tuple[Any, ...]:
+        """The exact evidence question answered by this finding."""
+
+        return (
+            "conductivity-research-request",
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.comparison_identity,
+            self.displacement,
+            self.enabling_reads,
+        )
+
+    @property
     def identity(self) -> tuple[Any, ...]:
         return (
             "conductivity-research-finding",
@@ -270,6 +284,9 @@ class TheoryView:
     # this is not narrowed to the current version/tip because earlier physical
     # scans explain how the latest temporal need was reached.
     conductivity_attempts: tuple[TheoryAttemptReceipt, ...]
+    # Full ordered research history. Exact request identity prevents an old
+    # finding from suppressing a changed version, World, stop, or requirement.
+    research_findings: tuple[ConductivityResearchFinding, ...]
     first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
@@ -281,6 +298,14 @@ class TheoryView:
         return any(
             exclusion.artifact_identity == artifact_identity
             for exclusion in self.first_edge_exclusions
+        )
+
+    def has_research_finding(self, request_identity: tuple[Any, ...]) -> bool:
+        """Whether this theory already researched this exact evidence question."""
+
+        return any(
+            finding.request_identity == request_identity
+            for finding in self.research_findings
         )
 
 
@@ -803,6 +828,12 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     conductivity_attempts = tuple(
         attempt for attempt in all_attempts if attempt.conductivity_observations
     )
+    research_findings = tuple(
+        finding
+        for finding_id in theory.research_finding_ids
+        for finding in (state.ledger.research_findings.get(finding_id),)
+        if finding is not None
+    )
     rejected = frozenset(
         (
             TheoryAttemptDisposition.REJECTED_EXACT,
@@ -836,6 +867,7 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         version_history=version_history,
         attempts=attempts,
         conductivity_attempts=conductivity_attempts,
+        research_findings=research_findings,
         first_edge_exclusions=exclusions,
         temporal_intent=version.temporal_intent,
         trigger_attempt_id=version.trigger_attempt_id,

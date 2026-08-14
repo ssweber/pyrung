@@ -965,11 +965,18 @@ class Compass:
         self,
         theory_view: TheoryView | None,
     ) -> ConductivityResearchRequest | None:
-        """Name repeated stopped conductivity which needs research before steering."""
+        """Name an exact stopped-flow question unless its finding is retained."""
 
         from pyrung.core.analysis.pilot.conductivity import conductivity_research_request
 
-        return conductivity_research_request(self.conductivity_front(theory_view))
+        request = conductivity_research_request(self.conductivity_front(theory_view))
+        if (
+            request is not None
+            and theory_view is not None
+            and theory_view.has_research_finding(request.identity)
+        ):
+            return None
+        return request
 
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""
