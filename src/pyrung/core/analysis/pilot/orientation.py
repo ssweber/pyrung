@@ -619,6 +619,8 @@ def _theory_correction_composition(
     world: OrientationWorld,
     candidates: CandidateRead,
     target: TargetSpec,
+    *,
+    research_finding_identity: tuple[Any, ...] | None = None,
 ) -> ComposeCorrection | None:
     """Choose one persistent correction without executing a program scan."""
 
@@ -668,6 +670,7 @@ def _theory_correction_composition(
                 pilot_rung=rung,
                 requirements=owned,
                 rationale="working theory: compose one correction, then read Compass again",
+                research_finding_identity=research_finding_identity,
                 orientation=orientation_read,
             )
     return None
@@ -1296,7 +1299,19 @@ def _orient_read(
                         ),
                     ),
                 )
-            composition = _theory_correction_composition(world, candidates, target)
+            completed_research = (
+                compass.completed_conductivity_research(view)
+                if getattr(view, "research_findings", ())
+                else None
+            )
+            composition = _theory_correction_composition(
+                world,
+                candidates,
+                target,
+                research_finding_identity=(
+                    completed_research.identity if completed_research is not None else None
+                ),
+            )
             if composition is not None:
                 return composition
             ordinary = _orient_read(

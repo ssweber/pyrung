@@ -391,6 +391,7 @@ class ComposeCorrection:
     pilot_rung: PilotRung
     requirements: tuple[ActiveRequirement, ...]
     rationale: str
+    research_finding_identity: tuple[Any, ...] | None = None
     orientation: OrientationRead | None = None
 
 

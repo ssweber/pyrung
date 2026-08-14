@@ -21,6 +21,7 @@ from pyrung.core.analysis.pilot.conductivity import (
 from pyrung.core.analysis.pilot.effects import EffectObservationSnapshot
 from pyrung.core.analysis.pilot.working_theory import (
     AdvanceTheory,
+    ComposeTheoryCorrection,
     OpenTheory,
     ProveTheory,
     RecordConductivityResearch,
@@ -410,10 +411,11 @@ def test_neutral_retry_exposes_consumer_then_displacement_front(monkeypatch: Any
     ) == (2, 5, 6, 21)
 
 
-def test_extended_watchdog_requests_research_after_same_stop_drifts(
+def test_extended_watchdog_research_composes_one_explicit_replacement(
     monkeypatch: Any,
 ) -> None:
     captured: list[Any] = []
+    compositions: list[Any] = []
     original = pilot_module._record_controlling_theory_fact
 
     def record(state: Any, fact: Any) -> None:
@@ -435,16 +437,29 @@ def test_extended_watchdog_requests_research_after_same_stop_drifts(
                     Compass().conductivity_research(view),
                 )
             )
+        if isinstance(fact, ComposeTheoryCorrection):
+            compositions.append((fact, tuple(state.pilot_rungs)))
 
     monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
 
-    events = tuple(
-        pilot_events(
-            PLC(sequence_route.logic, dt=0.010),
-            sequence_route.SequenceStep == 81,
-            max_scans=40,
-        )
+    events: list[Any] = []
+    research_seen = False
+    stream = pilot_events(
+        PLC(sequence_route.logic, dt=0.010),
+        sequence_route.SequenceStep == 81,
+        max_scans=40,
     )
+    try:
+        for emitted in stream:
+            events.append(emitted)
+            if emitted.kind == "conductivity_research_requested":
+                research_seen = True
+            elif emitted.kind == "theory_correction_composed" and research_seen:
+                break
+    finally:
+        close = getattr(stream, "close", None)
+        if close is not None:
+            close()
 
     research_events = tuple(
         event for event in events if event.kind == "conductivity_research_requested"
@@ -467,9 +482,19 @@ def test_extended_watchdog_requests_research_after_same_stop_drifts(
     assert view.research_findings[-1] == finding
     assert repeated_request is None
     research_index = events.index(event)
-    assert not any(item.kind == "candidate_try" for item in events[research_index + 1 :])
-    assert events[-1].kind == "finished"
-    assert events[-1].data["reached"] is False
+    post_research = events[research_index + 1 :]
+    assert not any(item.kind == "candidate_try" for item in post_research)
+    assert events[-1].kind == "theory_correction_composed"
+    assert events[-1].scan == event.scan
+    assert events[-1].data["pilot_rung"].dest == sequence_route.FirstWatchdogPresetMs.name
+    assert events[-1].data["pilot_rung"].value == 21
+    fact, installed = compositions[-1]
+    assert fact.research_finding_identity == finding.identity
+    assert len(fact.superseded_pilot_rung_identities) == 1
+    preset_rungs = tuple(
+        rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
+    )
+    assert tuple(rung.value for rung in preset_rungs) == (21,)
 
 
 def test_prestepped_watchdog_retains_composed_world_for_followup_research(

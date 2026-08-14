@@ -33,7 +33,10 @@ if TYPE_CHECKING:
         ConductivityFront,
         ConductivityResearchRequest,
     )
-    from pyrung.core.analysis.pilot.working_theory import TheoryView
+    from pyrung.core.analysis.pilot.working_theory import (
+        ConductivityResearchFinding,
+        TheoryView,
+    )
 
 __all__ = [
     "WAIT",
@@ -977,6 +980,23 @@ class Compass:
         ):
             return None
         return request
+
+    def completed_conductivity_research(
+        self,
+        theory_view: TheoryView | None,
+    ) -> ConductivityResearchFinding | None:
+        """Return the finding for the exact current stopped-flow question."""
+
+        if theory_view is None or not theory_view.research_findings:
+            return None
+        from pyrung.core.analysis.pilot.conductivity import conductivity_research_request
+
+        request = conductivity_research_request(self.conductivity_front(theory_view))
+        return (
+            theory_view.research_finding(request.identity)
+            if request is not None
+            else None
+        )
 
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""

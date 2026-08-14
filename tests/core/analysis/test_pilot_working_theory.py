@@ -52,6 +52,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     TheoryTemporalIntent,
     TheoryTermination,
+    active_theory_correction_rung_identities,
     reduce_theory,
     temporal_need_request,
     theory_view,
@@ -276,6 +277,32 @@ def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> N
     assert progress.provisional_tip == composed
     assert progress.provisional_tip.scan_id == source.scan_id
     assert progress.phase_receipts[-1].kind is TheoryPhaseKind.CORRECTION_COMPOSITION
+
+    replacement = _boundary("source-with-replacement", 0)
+    replacement_identity = ("PresetMs", 21)
+    state = reduce_theory(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=composed,
+            composed_source=replacement,
+            requirement_identities=(("requirement", "preset-20"),),
+            pilot_rung_identities=(replacement_identity,),
+            composition_identity=("compose", "preset-20"),
+            superseded_pilot_rung_identities=(("PresetMs", 11),),
+        ),
+    )
+    theory = state.ledger.theories[theory_id]
+    progress = state.ledger.progress[theory.current_progress_id]
+
+    assert progress.provisional_tip == replacement
+    assert progress.phase_receipts[-1].superseded_pilot_rung_identities == (
+        ("PresetMs", 11),
+    )
+    assert active_theory_correction_rung_identities(state) == frozenset(
+        (replacement_identity,)
+    )
 
 
 def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> None:

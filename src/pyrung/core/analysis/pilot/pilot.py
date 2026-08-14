@@ -189,6 +189,7 @@ from pyrung.core.analysis.pilot.types import (
     _ConfirmedCorrection,
     _ContinuationCheckpoint,
     _ExecutedAttempt,
+    _HoldLogEntry,
     _IterationFrame,
     _PilotContext,
     _PilotState,
@@ -225,6 +226,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
     TheoryTermination,
     UnattributedTheoryEvidence,
+    active_theory_correction_rung_identities,
     reduce_theory,
     temporal_need_request,
     temporal_setup_rung_identities,
@@ -4562,11 +4564,21 @@ def _setup_request_for_result(
     return request
 
 
+@dataclass(frozen=True)
+class _TheoryCorrectionCompositionReceipt:
+    """Exact no-scan World change produced by one correction composition."""
+
+    requirements: tuple[ActiveRequirement, ...]
+    pilot_rung_identity: tuple[Any, ...]
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    research_finding_identity: tuple[Any, ...] | None
+
+
 def _compose_theory_correction(
     state: _PilotState,
     request: TemporalNeedRequest,
     result: ComposeCorrection,
-) -> tuple[ActiveRequirement, ...]:
+) -> _TheoryCorrectionCompositionReceipt:
     """Persist one exact correction at the restored source without stepping."""
 
     theory = _active_working_theory(state)
@@ -4585,6 +4597,15 @@ def _compose_theory_correction(
     if len(matched) != len(result.requirements) or not matched:
         raise ValueError("correction composition lost its exact live requirements")
     rung_identity = _rung_identity(result.pilot_rung)
+    correction_owned = active_theory_correction_rung_identities(state.theory_state)
+    superseded_rungs = tuple(
+        rung
+        for rung in state.pilot_rungs
+        if rung.dest == result.pilot_rung.dest
+        and _rung_identity(rung) in correction_owned
+        and _rung_identity(rung) != rung_identity
+    )
+    superseded_identities = tuple(_rung_identity(rung) for rung in superseded_rungs)
     composition_identity = (
         "working-theory-compose",
         request.theory_id,
@@ -4592,12 +4613,27 @@ def _compose_theory_correction(
         request.source,
         tuple(requirement.identity for requirement in matched),
         rung_identity,
+        superseded_identities,
+        result.research_finding_identity,
     )
-    _install_prerequisites(
-        state,
-        (result.pilot_rung,),
-        source="working-theory-composition",
-    )
+    if superseded_rungs:
+        retained = tuple(
+            rung for rung in state.pilot_rungs if rung not in superseded_rungs
+        )
+        state.pilot_rungs = _merged_pilot_rungs((result.pilot_rung,), retained)
+        state.hold_log.append(
+            _HoldLogEntry(
+                scan=state.work.state.scan_id,
+                source="working-theory-composition-replacement",
+                pilot_rungs=(result.pilot_rung,),
+            )
+        )
+    else:
+        _install_prerequisites(
+            state,
+            (result.pilot_rung,),
+            source="working-theory-composition",
+        )
     composed_source = _theory_live_boundary(state)
     _record_controlling_theory_fact(
         state,
@@ -4609,6 +4645,8 @@ def _compose_theory_correction(
             requirement_identities=tuple(requirement.identity for requirement in matched),
             pilot_rung_identities=(rung_identity,),
             composition_identity=composition_identity,
+            superseded_pilot_rung_identities=superseded_identities,
+            research_finding_identity=result.research_finding_identity,
         ),
     )
     for requirement in matched:
@@ -4634,7 +4672,12 @@ def _compose_theory_correction(
             refinement_identity=("working-theory-composition-yield", composition_identity),
         ),
     )
-    return matched
+    return _TheoryCorrectionCompositionReceipt(
+        requirements=matched,
+        pilot_rung_identity=rung_identity,
+        superseded_pilot_rung_identities=superseded_identities,
+        research_finding_identity=result.research_finding_identity,
+    )
 
 
 def _record_controlled_setup_attempt(
@@ -6933,8 +6976,12 @@ def _pilot_loop_events(
                     "pilot_rung": result.pilot_rung,
                     "conditions": tuple(
                         _theory_requirement_snapshot(requirement).condition_identity
-                        for requirement in composed
+                        for requirement in composed.requirements
                     ),
+                    "superseded_pilot_rung_identities": (
+                        composed.superseded_pilot_rung_identities
+                    ),
+                    "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
                 },
             )
@@ -6987,20 +7034,10 @@ def _pilot_loop_events(
                     "reason": request.reason,
                 },
             )
-            reason = (
-                "Focused conductivity research is required before another steer: "
-                f"{request.reason}"
-            )
-            yield from _stopped_events(
-                state,
-                ctx,
-                frame,
-                reason,
-                journal_channel_tags,
-                journal_acc_names,
-                candidate_count=len(candidates.options),
-            )
-            return
+            # Recording changes theory knowledge, not the executable World.
+            # Discard this candidate read and let Compass reread that same
+            # World with the exact research finding now visible.
+            continue
 
         if isinstance(result, NeedProbe):
             observations = probe_live_guard_frontiers(frame, state, ctx)

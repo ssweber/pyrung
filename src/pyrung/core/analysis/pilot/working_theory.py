@@ -77,6 +77,7 @@ class TheoryPhaseReceipt:
     evidence_identity: tuple[Any, ...]
     requirement_identities: tuple[tuple[Any, ...], ...] = ()
     pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,9 +304,21 @@ class TheoryView:
     def has_research_finding(self, request_identity: tuple[Any, ...]) -> bool:
         """Whether this theory already researched this exact evidence question."""
 
-        return any(
-            finding.request_identity == request_identity
-            for finding in self.research_findings
+        return self.research_finding(request_identity) is not None
+
+    def research_finding(
+        self,
+        request_identity: tuple[Any, ...],
+    ) -> ConductivityResearchFinding | None:
+        """Return the exact completed finding, without broadening its scope."""
+
+        return next(
+            (
+                finding
+                for finding in self.research_findings
+                if finding.request_identity == request_identity
+            ),
+            None,
         )
 
 
@@ -426,6 +439,29 @@ def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, .
                 continue
             owned.update(receipt.pilot_rung_identities)
     return frozenset(owned)
+
+
+def active_theory_correction_rung_identities(
+    state: TheoryState,
+) -> frozenset[tuple[Any, ...]]:
+    """Read the correction rungs still owned by the active theory tip."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return frozenset()
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        return frozenset()
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if progress is None:
+        raise TheoryInvariantError("active theory correction history is incomplete")
+    active: set[tuple[Any, ...]] = set()
+    for receipt in progress.phase_receipts:
+        if receipt.kind is not TheoryPhaseKind.CORRECTION_COMPOSITION:
+            continue
+        active.difference_update(receipt.superseded_pilot_rung_identities)
+        active.update(receipt.pilot_rung_identities)
+    return frozenset(active)
 
 
 def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
@@ -970,6 +1006,8 @@ class ComposeTheoryCorrection:
     requirement_identities: tuple[tuple[Any, ...], ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     composition_identity: tuple[Any, ...]
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    research_finding_identity: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -1496,11 +1534,38 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             and not fact.composed_source.execution_owner_token
         ):
             raise TheoryInvariantError("composition boundary evidence is incomplete")
+        prior_corrections = {
+            rung_identity
+            for phase in parent.phase_receipts
+            if phase.kind is TheoryPhaseKind.CORRECTION_COMPOSITION
+            for rung_identity in phase.pilot_rung_identities
+        }
+        prior_superseded = {
+            rung_identity
+            for phase in parent.phase_receipts
+            for rung_identity in phase.superseded_pilot_rung_identities
+        }
+        active_prior = prior_corrections - prior_superseded
+        if not set(fact.superseded_pilot_rung_identities) <= active_prior:
+            raise TheoryInvariantError("composition supersedes an unowned correction")
+        if set(fact.superseded_pilot_rung_identities) & set(fact.pilot_rung_identities):
+            raise TheoryInvariantError("composition cannot supersede its new correction")
+        if fact.research_finding_identity is not None:
+            finding = state.ledger.research_findings.get(fact.research_finding_identity)
+            if finding is None:
+                raise TheoryInvariantError("composition research finding is missing")
+            if (
+                finding.theory_id != fact.theory_id
+                or finding.version_id != fact.version_id
+                or finding.source != fact.source
+            ):
+                raise TheoryInvariantError("composition research finding has stale ownership")
         receipt = TheoryPhaseReceipt(
             kind=TheoryPhaseKind.CORRECTION_COMPOSITION,
             evidence_identity=fact.composition_identity,
             requirement_identities=fact.requirement_identities,
             pilot_rung_identities=fact.pilot_rung_identities,
+            superseded_pilot_rung_identities=fact.superseded_pilot_rung_identities,
         )
         progress_id: TheoryProgressId = (
             "progress-compose",
