@@ -53,6 +53,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
     TheoryTermination,
     active_theory_correction_rung_identities,
+    assert_detached_theory_value,
     reduce_theory,
     temporal_need_request,
     theory_view,
@@ -245,6 +246,8 @@ def test_research_finding_records_exact_evidence_without_advancing_the_world() -
     view = theory_view(recorded)
     assert theory.current_progress_id == progress_id
     assert theory.research_finding_ids == (finding.identity,)
+    assert finding.identity[0] == "conductivity-research-finding"
+    assert len(finding.identity[1]) == 64
     assert recorded.ledger.research_findings[finding.identity] is finding
     assert view is not None
     assert view.research_findings == (finding,)
@@ -432,6 +435,14 @@ def test_attempt_rejects_live_conductivity_evidence() -> None:
 
     with pytest.raises(TheoryInvariantError, match="unsupported live type object"):
         reduce_theory(state, attempt)
+
+
+def test_detached_validation_visits_shared_identity_ancestry_once() -> None:
+    shared: tuple[object, ...] = ("root",)
+    for _ in range(1_200):
+        shared = ("identity", shared, shared)
+
+    assert_detached_theory_value(shared)
 
 
 def _effect_occurrence(

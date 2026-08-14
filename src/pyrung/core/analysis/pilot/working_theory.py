@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import StrEnum
+from hashlib import sha256
 from typing import Any, TypeAlias
 
 from pyrsistent import PMap, pmap
@@ -249,16 +250,20 @@ class ConductivityResearchFinding:
 
     @property
     def identity(self) -> tuple[Any, ...]:
-        return (
-            "conductivity-research-finding",
-            self.theory_id,
-            self.version_id,
-            self.source,
-            self.comparison_identity,
-            self.displacement,
-            self.enabling_reads,
+        """Compact handle for the exact finding retained in the ledger.
+
+        The finding itself remains full pass-through evidence. Receipts carry
+        this deterministic handle so a later version does not recursively
+        embed its entire ancestral World and theory identity.
+        """
+
+        payload = (
+            self.request_identity,
+            self.compared_attempt_ids,
             self.requirement_drift_identities,
         )
+        digest = sha256(repr(payload).encode("utf-8")).hexdigest()
+        return ("conductivity-research-finding", digest)
 
 
 @dataclass(frozen=True)
@@ -1100,31 +1105,67 @@ _FORBIDDEN_FIELDS = frozenset(
 
 
 def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
-    """Fail closed when a ledger fact contains a live or retained-future value."""
+    """Fail closed when a ledger fact contains a live or retained-future value.
 
-    if callable(value):
-        raise TheoryInvariantError(f"{path} retains a callable")
-    value_type = type(value)
-    if value_type.__name__ in _FORBIDDEN_TYPES:
-        raise TheoryInvariantError(f"{path} retains forbidden {value_type.__name__}")
-    if value is None or isinstance(value, (str, bytes, int, float, bool, StrEnum)):
-        return
-    if isinstance(value, tuple | frozenset):
-        for index, item in enumerate(value):
-            assert_detached_theory_value(item, path=f"{path}[{index}]")
-        return
-    if isinstance(value, PMap):
-        for key, item in value.items():
-            assert_detached_theory_value(key, path=f"{path}.key")
-            assert_detached_theory_value(item, path=f"{path}[{key!r}]")
-        return
-    if is_dataclass(value):
-        for item in fields(value):
-            if item.name in _FORBIDDEN_FIELDS:
-                raise TheoryInvariantError(f"{path}.{item.name} is a retained-future field")
-            assert_detached_theory_value(getattr(value, item.name), path=f"{path}.{item.name}")
-        return
-    raise TheoryInvariantError(f"{path} contains unsupported live type {value_type.__name__}")
+    Theory identities form an immutable DAG: a later identity may refer to the
+    same ancestral tuple through several evidence edges. Validate each object
+    once so shared ancestry does not turn this safety check into an exponential
+    tree walk. A distinct ``visiting`` state still rejects a genuine cycle.
+    """
+
+    pending: list[tuple[bool, Any, str]] = [(False, value, path)]
+    states: dict[int, bool] = {}
+    while pending:
+        leaving, current, current_path = pending.pop()
+        if leaving:
+            states[id(current)] = True
+            continue
+
+        if callable(current):
+            raise TheoryInvariantError(f"{current_path} retains a callable")
+        value_type = type(current)
+        if value_type.__name__ in _FORBIDDEN_TYPES:
+            raise TheoryInvariantError(
+                f"{current_path} retains forbidden {value_type.__name__}"
+            )
+        if current is None or isinstance(
+            current, (str, bytes, int, float, bool, StrEnum)
+        ):
+            continue
+
+        compound = isinstance(current, tuple | frozenset | PMap) or is_dataclass(current)
+        if not compound:
+            raise TheoryInvariantError(
+                f"{current_path} contains unsupported live type {value_type.__name__}"
+            )
+        prior_state = states.get(id(current))
+        if prior_state is False:
+            raise TheoryInvariantError(f"{current_path} contains an object cycle")
+        if prior_state is True:
+            continue
+        states[id(current)] = False
+        pending.append((True, current, current_path))
+
+        children: list[tuple[Any, str]] = []
+        if isinstance(current, tuple | frozenset):
+            children.extend(
+                (item, f"{current_path}[{index}]")
+                for index, item in enumerate(current)
+            )
+        elif isinstance(current, PMap):
+            for key, item in current.items():
+                children.append((key, f"{current_path}.key"))
+                children.append((item, f"{current_path}[{key!r}]"))
+        else:
+            for item in fields(current):
+                if item.name in _FORBIDDEN_FIELDS:
+                    raise TheoryInvariantError(
+                        f"{current_path}.{item.name} is a retained-future field"
+                    )
+                children.append(
+                    (getattr(current, item.name), f"{current_path}.{item.name}")
+                )
+        pending.extend((False, item, item_path) for item, item_path in reversed(children))
 
 
 def _put_unique(mapping: PMap[Any, Any], key: Any, value: Any, label: str) -> PMap[Any, Any]:
