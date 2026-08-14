@@ -28,15 +28,17 @@ World and decides what happens next. Neither component retains a future action.
   theory progress tip without advancing the physical scan.
 - Compass returns `NeedResearch` when consecutive attempts stop at the same
   writer and a causally joined requirement changes.
-- The runner currently emits `conductivity_research_requested` and stops before
-  another steer.
+- The runner records `conductivity_research_requested`, composes one correction,
+  and yields to a fresh Compass read before another steer.
 - The process-isolated watcher counts steer, composition, probe, and research
   decisions and enforces wall, stall, output, and RSS limits.
 
-Five reachability contracts intentionally remain red until research can be
-executed: alarm preset acceptance, both scan-zero route acceptances, and the
-two neutral WorkingTheory reachability contracts. All other affected recovery
-contracts must remain green during this work.
+- A charted producer receipt may end at one unique automatic outer consumer;
+  exact execution still proves that the occurrence crossed that boundary.
+- A selected-producer execution window can retain the immediately observed
+  actionless successor without requiring a coast or settling past the target.
+- The alarm, neutral WorkingTheory, scan-zero, and already-stepped reachability
+  contracts are green under the non-atomic lifecycle.
 
 ## Next steps
 
@@ -74,7 +76,7 @@ After composition, Compass rereads the changed World and chooses one ordinary
 steer. If that scan exposes another stop, WorkingTheory retains it and the loop
 returns to research. No phase automatically chains a second steer.
 
-### 5. Prove three sequential issues in the neutral fixture
+### 5. Prove three sequential issues in the neutral fixture — complete
 
 Extend or variant the neutral route so one invocation demonstrates:
 
@@ -85,19 +87,19 @@ steer → compose A → steer → research → compose B → steer
 
 Assert exact occurrence ownership and same-scan World changes at every phase.
 
-### 6. Restore reachability contracts
+### 6. Restore reachability contracts — complete
 
 Turn the five intentionally red tests green without weakening their target,
 replay, authority, or scan-count contracts. Update only assertions that still
 encode atomic composition.
 
-### 7. Replay the ClickNick/HeelStep-shaped case
+### 7. Replay the ClickNick/HeelStep-shaped case — complete
 
 Run both scan-zero and already-stepped entry Worlds. Entry state must come from
 the runner's actual World; bootstrap must not invent a prior scan or bypass
 Compass evidence.
 
-### 8. Remove legacy residue
+### 8. Remove legacy residue — next
 
 Sweep stale atomic-composition language, shadow-era names, tuple protocols,
 and folded recovery helpers only after their replacement receipts have focused

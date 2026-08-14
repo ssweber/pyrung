@@ -349,7 +349,7 @@ def test_scan_zero_done_overwrite_is_setup_first_from_exact_preset_deadline(
     assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]
 
 
-def test_retained_reset_done_overwrite_is_retry_together_from_same_receipts(
+def test_retained_reset_done_overwrites_are_sequential_exact_attempts(
     monkeypatch: Any,
 ) -> None:
     fixture = alarmed_at_start
@@ -361,22 +361,43 @@ def test_retained_reset_done_overwrite_is_retry_together_from_same_receipts(
     )
 
     assert result.reachable
-    observation = _preset_transition(captured, fixture.WatchdogPresetMs.name)
-    assert observation.source.scan_id == 1
-    assert observation.act_identity[0] != "executed-program-scan"
-    assert observation.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
-    assert observation.conductivity_observations
+    observations = tuple(
+        observation
+        for observation in captured
+        if any(
+            requirement.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
+            for requirement in observation.requirements
+        )
+    )
+    assert len(observations) == 3
+    initial, refined, later = observations
+    assert tuple(item.source.scan_id for item in observations) == (1, 1, 3)
+    assert initial.act_identity == refined.act_identity
+    assert later.act_identity != refined.act_identity
+    assert tuple(item.interpretation.kind for item in observations) == (
+        AttemptInterpretationKind.RETRY_TOGETHER,
+        AttemptInterpretationKind.RETRY_THROUGH_DEADLINE,
+        AttemptInterpretationKind.RETRY_TOGETHER,
+    )
+    assert all(item.conductivity_observations for item in observations)
     assert all(
         isinstance(item, EffectObservationSnapshot)
+        for observation in observations
         for item in observation.conductivity_observations
     )
-    requirement = observation.requirements[0]
-    assert requirement.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
-    assert requirement.demanding_occurrence[1] == fixture.Watchdog.Done.name
-    assert requirement.deadline_occurrence[3][-1] < requirement.demanding_occurrence[3][-1]
+    requirements = tuple(observation.requirements[0] for observation in observations)
+    assert tuple(item.deadline_occurrence[2] for item in requirements) == (2, 3, 4)
+    assert all(
+        item.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
+        and item.demanding_occurrence[1] == fixture.Watchdog.Done.name
+        and item.deadline_occurrence[3][-1] < item.demanding_occurrence[3][-1]
+        for item in requirements
+    )
 
 
-def test_neutral_retry_exposes_consumer_then_displacement_front(monkeypatch: Any) -> None:
+def test_sequential_retry_retains_prior_consumer_displacement_fronts(
+    monkeypatch: Any,
+) -> None:
     fixture = alarmed_at_start
     captured = _capture_conductivity_fronts(monkeypatch)
 
@@ -386,29 +407,35 @@ def test_neutral_retry_exposes_consumer_then_displacement_front(monkeypatch: Any
     )
 
     assert result.reachable
-    assert len(captured) == 1
+    assert len(captured) == 3
+    assert tuple(len(front.flows) for front in captured) == (1, 2, 4)
     flows = tuple(
         flow
-        for flow in captured[0].flows
+        for flow in captured[-1].flows
         if any(
             obligation.tag == fixture.ProcessStep.name
             and obligation.value == fixture.RUNNING
             for obligation in flow.obligations
         )
     )
-    assert len(flows) == 1
-    flow = flows[0]
-    assert flow.reach is ConductivityReach.CONSUMER
-    assert len(flow.obligations) == 2
-    assert flow.appeared is not None
-    assert flow.front_occurrence is not None
-    assert flow.displacement is not None
-    assert (
-        flow.appeared.scan_id,
-        flow.appeared.ordinal,
-        flow.front_occurrence.ordinal,
-        flow.displacement.ordinal,
-    ) == (2, 5, 6, 21)
+    assert len(flows) == 3
+    assert all(flow.reach is ConductivityReach.CONSUMER for flow in flows)
+    assert flows[0] == captured[0].flows[0]
+    assert flows[:2] == captured[1].flows
+    assert tuple(
+        (
+            flow.appeared.scan_id if flow.appeared is not None else None,
+            flow.appeared.ordinal if flow.appeared is not None else None,
+            flow.front_occurrence.ordinal if flow.front_occurrence is not None else None,
+            flow.displacement.scan_id if flow.displacement is not None else None,
+            flow.displacement.ordinal if flow.displacement is not None else None,
+        )
+        for flow in flows
+    ) == (
+        (2, 5, 6, 2, 21),
+        (2, 7, 8, 3, 20),
+        (2, 7, 8, None, None),
+    )
 
 
 def test_extended_watchdog_research_composes_one_explicit_replacement(
@@ -519,18 +546,39 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
     try:
         for emitted in stream:
             events.append(emitted)
-            if len(compositions) == 3:
+            if (
+                len(compositions) == 3
+                and emitted.kind == "candidate_try"
+                and emitted.data["applied"]
+                == ((sequence_route.CheckpointSensor.name, True),)
+            ):
                 break
     finally:
         close = getattr(stream, "close", None)
         if close is not None:
             close()
 
-    assert tuple(fact.pilot_rung_identities[0][1] for fact, _ in compositions) == (
+    composed_values = tuple(
+        fact.pilot_rung_identities[0][1] for fact, _ in compositions
+    )
+    assert composed_values == (
         11,
         21,
         31,
+    ), tuple(
+        (event.kind, event.scan, event.data.get("applied"), event.data.get("reason"))
+        for event in events[-20:]
     )
+    third_requirements = tuple(
+        event.data["requirement"]
+        for event in events
+        if event.kind == "requirement_activated"
+        and getattr(event.data["requirement"].condition, "tag", None)
+        == sequence_route.FirstWatchdogPresetMs.name
+        and getattr(event.data["requirement"].condition, "bound", None) == 30
+    )
+    assert third_requirements
+    assert third_requirements[-1].operand_authority.value == "adjustable"
     second_composition_index = next(
         index
         for index, event in enumerate(events)
@@ -559,6 +607,14 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
         rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
     )
     assert tuple(rung.value for rung in preset_rungs) == (31,)
+
+    post_third_checkpoint = events[-1]
+    obligation = post_third_checkpoint.data["candidate"]["effect_expectation"][0]
+    assert obligation.tag == sequence_route.SequenceStep.name
+    assert obligation.value == 41
+    assert obligation.producer == (None, 4, (0,))
+    assert obligation.consumer == (None, 5, ())
+    assert obligation.required_shape == ((sequence_route.SequenceStep.name, 41),)
 
 
 def test_prestepped_watchdog_retains_composed_world_for_followup_research(
@@ -615,24 +671,33 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
             for requirement in observation.requirements
         )
     )
-    # These are two physical attempts at the same chart edge, not duplicate
-    # recording. The first reconnect exposes the watchdog; composition changes
-    # the same-scan World, and a fresh Compass read selects that same reconnect
-    # steer again. Its later displacement proves that 11 is still insufficient.
-    assert len(matching) == 2
-    initial, refined = matching
-    assert initial.source.scan_id == 3
-    assert refined.source.scan_id == 3
+    # The first two attempts refine the reconnect edge.  Once its exact write
+    # conducts through the charted outer consumer, the checkpoint steer exposes
+    # a third, later displacement from a new source World.
+    assert len(matching) == 3
+    initial, refined, later = matching
+    assert (initial.source.scan_id, refined.source.scan_id, later.source.scan_id) == (
+        3,
+        3,
+        5,
+    )
     assert initial.source.world_key != refined.source.world_key
     assert initial.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_THROUGH_DEADLINE
+    assert later.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert tuple(
         (obligation.tag, obligation.value) for obligation in initial.claim.obligations
     ) == ((sequence_route.SequenceStep.name, 40),)
     assert tuple(
         (obligation.tag, obligation.value) for obligation in refined.claim.obligations
     ) == ((sequence_route.SequenceStep.name, 40),)
+    assert tuple(
+        (obligation.tag, obligation.value) for obligation in later.claim.obligations
+    ) == ((sequence_route.SequenceStep.name, 41),)
     assert initial.requirements[0].deadline_occurrence[2] == 4
     assert refined.requirements[0].deadline_occurrence[2] == 5
+    assert later.requirements[0].deadline_occurrence[2] == 6
     assert initial.act_identity == refined.act_identity
+    assert later.act_identity != refined.act_identity
     assert initial.pilot_rung_identities != refined.pilot_rung_identities
+    assert refined.pilot_rung_identities != later.pilot_rung_identities

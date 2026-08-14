@@ -103,6 +103,7 @@ from pyrung.core.analysis.pilot.types import (
     _PilotState,
     _RecoveryOrigin,
 )
+from pyrung.core.analysis.pilot.working_theory import temporal_setup_rung_identities
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
     _rung_identity,
@@ -214,6 +215,14 @@ def _delayed_requirement_from_regression(
         configured = frozenset((*overrides.forces, *overrides.pending_patches))
     else:
         configured = frozenset(configured)
+    # A retained theory correction is configuration, but it is configuration
+    # owned by this intrascan investigation.  Preserve that provenance so
+    # newer exact evidence may refine it; external force/patch configuration
+    # remains authoritative in classify_bound_operand_authority.
+    temporal_owned = temporal_setup_rung_identities(state.theory_state)
+    provisional = frozenset(
+        rung.dest for rung in state.pilot_rungs if _rung_identity(rung) in temporal_owned
+    )
     authorities = {
         read.occurrence.name: classify_bound_operand_authority(
             read.occurrence.name,
@@ -225,6 +234,7 @@ def _delayed_requirement_from_regression(
             steerable=ctx.steerable,
             program_written=frozenset(ctx.pdg.writers_of),
             configured=configured,
+            provisional=provisional,
         )
         for read in projection.reads
     }
@@ -714,6 +724,7 @@ def _handle_channel_departure(
             state.work.state.scan_id,
         ),
         landing_receipt=execution.coast_receipt,
+        execution_receipt=execution.scan_progress,
     )
     departure = classify_departure(observation)
     if fulfilled_expectation and earned_work_is_useful_motion(trial.earned_work_receipt):
@@ -915,7 +926,7 @@ def _open_pending_departure(
                 "requested_value": channel_motion.target_value,
                 "settled_value": observation.settled_value,
                 "reason": departure.reason,
-                "settle_scans": observation.landing_receipt.logical_scans,
+                "settle_scans": observation.logical_scans,
                 "earned_work_mark": earned_work_mark,
                 "entry_progress": observation.progress,
                 "classification": departure.classification.value,

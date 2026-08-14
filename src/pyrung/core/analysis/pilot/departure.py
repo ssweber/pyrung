@@ -44,7 +44,11 @@ from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.types import _PilotContext, _PilotState
+    from pyrung.core.analysis.pilot.types import (
+        ScanProgressReceipt,
+        _PilotContext,
+        _PilotState,
+    )
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
@@ -117,10 +121,21 @@ class DepartureObservation:
     channel_tag: str
     from_value: Any
     settled_value: Any
-    landing_receipt: CoastReceipt
+    landing_receipt: CoastReceipt | None
     progress: EarnedWorkReceipt
     reading: DepartureReading
     continuation: ContinuationEvidence
+    execution_receipt: ScanProgressReceipt | None = None
+
+    @property
+    def logical_scans(self) -> int:
+        """Exact observed landing span, whether produced by coast or an act."""
+
+        if self.landing_receipt is not None:
+            return self.landing_receipt.logical_scans
+        if self.execution_receipt is not None:
+            return self.execution_receipt.landing_scan - self.execution_receipt.source_scan
+        return 0
 
 
 @dataclass(frozen=True)
@@ -437,6 +452,7 @@ def observe_departure(
     *,
     occurrence_scan: int | None = None,
     landing_receipt: CoastReceipt | None = None,
+    execution_receipt: ScanProgressReceipt | None = None,
 ) -> tuple[DepartureObservation, PLC]:
     """Settle and observe the channel departure paused in ``state.work``."""
     work = getattr(state, "work", None)
@@ -469,7 +485,15 @@ def observe_departure(
         else EarnedWorkReceipt()
     )
     goals = list(objective.channel_goals(channel_tag))
-    if landing_receipt is not None and work is not None and goals:
+    exact_execution_window = (
+        execution_receipt is not None
+        and execution_receipt.kind == "selected-producer"
+    )
+    if (
+        (landing_receipt is not None or exact_execution_window)
+        and work is not None
+        and goals
+    ):
         progress_erasing_values, all_resolved = _progress_erasing_values(
             earned_work,
             anchor_snap,
@@ -546,6 +570,7 @@ def observe_departure(
                         continuation,
                         observed_adjacent=True,
                     ),
+                    execution_receipt=execution_receipt,
                 ),
                 work,
             )
@@ -585,6 +610,7 @@ def observe_departure(
                 progress=progress,
                 reading=_reading(explain=explain),
                 continuation=continuation,
+                execution_receipt=execution_receipt,
             ),
             fork,
         )
@@ -723,6 +749,9 @@ def classify_departure(observation: DepartureObservation) -> DepartureResult:
     elif continuation.observed_adjacent and isinstance(status, Reachable):
         classification = DepartureClassification.CLEAN_CONTINUATION
         reason = "exact observed actionless chart edge has a clean forward continuation"
+    elif receipt is None:
+        classification = DepartureClassification.UNKNOWN
+        reason = "departure has no exact settled landing receipt"
     elif receipt.stop_reason != "quiescent":
         classification = DepartureClassification.UNKNOWN
         reason = f"landing did not settle within cap ({receipt.stop_reason})"
@@ -766,8 +795,8 @@ def classify_departure(observation: DepartureObservation) -> DepartureResult:
         observation.channel_tag,
         observation.from_value,
         observation.settled_value,
-        receipt.logical_scans,
-        receipt.stop_reason,
+        observation.logical_scans,
+        receipt.stop_reason if receipt is not None else "execution-window",
         classification,
         reason,
     )

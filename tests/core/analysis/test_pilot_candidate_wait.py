@@ -2401,6 +2401,92 @@ def test_observed_route_writer_keeps_its_direct_expectation(monkeypatch) -> None
     assert obligation.boundary == (state_tag.name, 60)
 
 
+def test_charted_edge_receipt_ends_at_unique_automatic_successor() -> None:
+    """A chart coordinate may conduct through its exact next consumer."""
+
+    state_tag = Int("ChartedSuccessorState", default=40)
+    advance = Bool("ChartedSuccessorAdvance", external=True)
+    ready = Bool("ChartedSuccessorReady", default=True)
+    with Program() as program:
+        with rung(state_tag == 40, advance):
+            copy(41, state_tag)
+        with rung(state_tag == 41, ready):
+            copy(50, state_tag)
+        with rung(state_tag == 50):
+            copy(81, state_tag)
+
+    pdg = build_program_graph(program)
+    role = PipelineRoles(state_tag.name)
+
+    def route(
+        source: int,
+        destination: int,
+        writer: int,
+        *,
+        enablers=(),
+        action_tags=frozenset(),
+    ) -> TransitionRoute:
+        return TransitionRoute(
+            destination_tag=state_tag.name,
+            destination_value=destination,
+            request_tag=None,
+            request_value=None,
+            source_constraints=((state_tag.name, source),),
+            enablers=enablers,
+            action_tags=action_tags,
+            writer_node=writer,
+            writer_subroutine=None,
+            call_site_gates=(),
+            from_values=(source,),
+        )
+
+    selected_route = route(
+        40,
+        41,
+        0,
+        enablers=((advance.name, True),),
+        action_tags=frozenset({advance.name}),
+    )
+    graph = StaticTransitionGraph(
+        role,
+        (
+            selected_route,
+            route(41, 50, 1, enablers=((ready.name, True),)),
+            route(50, 81, 2),
+        ),
+    )
+    selected_edge = next(
+        edge for edge in graph.edges if edge.from_value == 40 and edge.to_value == 41
+    )
+    ctx = SimpleNamespace(
+        pdg=pdg,
+        program=program,
+        # Public scalar targets retain their compiled predicate as well as the
+        # concrete chart coordinate.
+        target=TargetSpec(state_tag.name, 81, lambda snap: snap[state_tag.name] == 81),
+        compass=Compass(NavigationCatalog(chart_graphs=(graph,))),
+    )
+
+    expectation = options_module._expectation_from_route_writer(
+        ctx,
+        selected_edge,
+        {
+            state_tag.name: 40,
+            advance.name: False,
+            ready.name: True,
+        },
+    )
+
+    assert expectation is not None
+    obligation = expectation.obligations[0]
+    assert obligation.producer == (None, 0, ())
+    assert obligation.consumer == (None, 1, ())
+    assert obligation.required_shape == (
+        (state_tag.name, 41),
+        (ready.name, True),
+    )
+
+
 def test_crossing_batch_bypasses_pair_nogood_but_honors_explicit_block() -> None:
     admission = _TraceAdmission(
         active_actions=(),

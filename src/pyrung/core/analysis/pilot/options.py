@@ -55,6 +55,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
     _until_unresolved_condition,
 )
+from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM, target_reachable_values
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     frontier_pairs,
@@ -1431,20 +1432,169 @@ def _ordered_consumer_required_shape(
     return ordered
 
 
-def _expectation_from_route_writer(ctx: Any, edge: Any) -> EffectExpectation | None:
-    """Bind a chart receipt to the effect its selected writer actually owns."""
+def _charted_successor_consumer(
+    ctx: Any,
+    edge: Any,
+    snapshot: Mapping[str, Any],
+) -> tuple[int, tuple[_ActionPair, ...]] | None:
+    """Name one exact automatic consumer on the charted target corridor.
+
+    A state edge's value need not survive scan exit: the next program-owned
+    edge can consume that exact occurrence and advance the same carrier.  The
+    static chart may designate that consumer, but execution still has to prove
+    the occurrence handoff.  Wildcard, action-owned, off-target, and ambiguous
+    successors deliberately provide no consumer receipt.
+    """
+
+    target = getattr(ctx, "target", None)
+    compass = getattr(ctx, "compass", None)
+    if (
+        target is None
+        or compass is None
+        or target.tag != edge.role.channel_tag
+    ):
+        return None
+
+    effect_tag, effect_value = edge.route.writer_effect
+    candidates: list[tuple[int, tuple[_ActionPair, ...]]] = []
+    for graph in compass.chart_graphs:
+        if graph.role.channel_tag != edge.role.channel_tag:
+            continue
+        reachable = target_reachable_values(graph, target.value)
+        for successor in graph.edges:
+            if (
+                successor.from_value is ANY_FROM
+                or successor.action is not None
+                or not _values_match(successor.from_value, edge.to_value)
+                or not any(
+                    _values_match(successor.to_value, value) for value in reachable
+                )
+            ):
+                continue
+            writer = ctx.pdg.rung_nodes[successor.route.writer_node]
+            branch_path = getattr(writer, "branch_path", ())
+            read_owners = tuple(
+                (index, node)
+                for index, node in enumerate(ctx.pdg.rung_nodes)
+                if getattr(node, "subroutine", object())
+                == getattr(writer, "subroutine", object())
+                and getattr(node, "rung_index", object())
+                == getattr(writer, "rung_index", object())
+                and len(getattr(node, "branch_path", ())) <= len(branch_path)
+                and branch_path[: len(getattr(node, "branch_path", ()))]
+                == getattr(node, "branch_path", ())
+                and effect_tag
+                in (node.condition_reads | node.guard_reads | node.data_reads)
+            )
+            if not read_owners:
+                continue
+            consumer_node, consumer = min(
+                read_owners,
+                key=lambda item: len(getattr(item[1], "branch_path", ())),
+            )
+            consumer_reads = (
+                consumer.condition_reads | consumer.guard_reads | consumer.data_reads
+            )
+            requirements = [
+                pair
+                for pair in (
+                    *successor.source_constraints,
+                    *successor.enablers,
+                    *successor.completion,
+                )
+                if pair[0] in consumer_reads
+            ]
+            if effect_tag in consumer_reads:
+                requirements.append((effect_tag, effect_value))
+            from pyrung.core.analysis.pdg import resolve_rung
+
+            consumer_rung = resolve_rung(ctx.program, consumer)
+            shape = (
+                _ordered_consumer_required_shape(
+                    consumer_rung,
+                    snapshot,
+                    requirements,
+                )
+                if consumer_rung is not None
+                else None
+            )
+            if shape is not None:
+                candidate = (consumer_node, shape)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _charted_program_edge(
+    ctx: Any,
+    step: Any,
+    snapshot: Mapping[str, Any],
+) -> Any | None:
+    """Resolve a ProgramStep producer to one exact current chart edge."""
+
+    compass = getattr(ctx, "compass", None)
+    target = getattr(ctx, "target", None)
+    if compass is None or target is None:
+        return None
+    candidates: list[Any] = []
+    identities: list[tuple[Any, ...]] = []
+    for graph in compass.chart_graphs:
+        if graph.role.channel_tag != target.tag:
+            continue
+        current = snapshot.get(graph.role.channel_tag)
+        for edge in graph.edges:
+            effect_tag, effect_value = edge.route.writer_effect
+            if (
+                edge.from_value is ANY_FROM
+                or not _values_match(edge.from_value, current)
+                or step.producer.rung_index != edge.route.writer_node
+                or step.producer.command_tag != effect_tag
+                or not _values_match(step.producer.command_value, effect_value)
+                or edge.identity in identities
+            ):
+                continue
+            identities.append(edge.identity)
+            candidates.append(edge)
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _expectation_from_route_writer(
+    ctx: Any,
+    edge: Any,
+    snapshot: Mapping[str, Any],
+) -> EffectExpectation | None:
+    """Bind a chart receipt to its writer and exact downstream consumer."""
 
     tag, value = edge.route.writer_effect
     if value is None:
         return None
+    successor = (
+        _charted_successor_consumer(ctx, edge, snapshot)
+        if edge.route.consumer_node is None
+        else None
+    )
+    consumer_node = (
+        edge.route.consumer_node
+        if edge.route.consumer_node is not None
+        else successor[0]
+        if successor is not None
+        else None
+    )
+    required_shape = (
+        ((tag, value),)
+        if edge.route.consumer_node is not None
+        else successor[1]
+        if successor is not None
+        else ()
+    )
     return expectation_from_writer(
         ctx.pdg,
         ctx.program,
         writer_node=edge.route.writer_node,
         tag=tag,
         value=value,
-        consumer_node=edge.route.consumer_node,
-        required_shape=((tag, value),) if edge.route.consumer_node is not None else (),
+        consumer_node=consumer_node,
+        required_shape=required_shape,
         boundary=(edge.role.channel_tag, edge.to_value),
     )
 
@@ -1488,7 +1638,7 @@ def _prescribe_wait(
         effect_tag,
         effect_value,
     )
-    route_expectation = _expectation_from_route_writer(ctx, edge)
+    route_expectation = _expectation_from_route_writer(ctx, edge, frame.snap)
 
     def _read(
         prescription: WaitPrescription | None,
@@ -2589,7 +2739,11 @@ def _assemble_candidate_read(
                 # edge still owns its immediate carrier/request handoff; keep
                 # that exact writer receipt instead of dropping all effect
                 # evidence for this bearing.
-                route_expectation = _expectation_from_route_writer(ctx, prescribed_edge)
+                route_expectation = _expectation_from_route_writer(
+                    ctx,
+                    prescribed_edge,
+                    frame.snap,
+                )
         route_context = None
         if prescribed_edge is not None:
             effect_tag, effect_value = prescribed_edge.route.writer_effect
@@ -2660,9 +2814,22 @@ def _assemble_candidate_read(
             is not None
             and expectation.obligations[0].consumer is not None
         )
+        program_route_edge = (
+            _charted_program_edge(ctx, program_step, frame.snap)
+            if source is ActSource.PROGRAM and program_step is not None
+            else None
+        )
+        program_route_expectation = (
+            _expectation_from_route_writer(ctx, program_route_edge, frame.snap)
+            if program_route_edge is not None
+            else None
+        )
         program_expectation = (
             program_consumer_expectations[0]
             if len(program_consumer_expectations) == 1
+            else program_route_expectation
+            if program_route_expectation is not None
+            and program_route_expectation.obligations[0].consumer is not None
             else next(
                 (
                     expectation_from_selected_path(

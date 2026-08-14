@@ -157,6 +157,34 @@ def _decision_lines(
                 f"reason={event.data.get('reason')!r}"
             ),
         ), False
+    if event.kind == "candidate_try":
+        candidate = event.data["candidate"]
+        expectation = candidate.get("effect_expectation")
+        obligations = (
+            tuple(
+                {
+                    "tag": obligation.tag,
+                    "value": obligation.value,
+                    "producer": obligation.producer,
+                    "consumer": obligation.consumer,
+                    "shape": obligation.required_shape,
+                }
+                for obligation in expectation
+            )
+            if expectation is not None
+            else ()
+        )
+        return (
+            (
+                "[candidate-receipt] "
+                f"scan={event.scan} applied={tuple(event.data['applied'])!r} "
+                f"source={{'route': {candidate['route_prescribed']!r}, "
+                f"'program': {candidate['program_prescribed']!r}, "
+                f"'prescribed': {candidate['prescribed']!r}}} "
+                f"heading={(candidate['bearing_channel_tag'], candidate['bearing_channel_value'])!r} "
+                f"obligations={obligations!r}"
+            ),
+        ), False
     if event.kind == "bearing_coast_accepted":
         effects = tuple(
             (
@@ -278,6 +306,7 @@ def _interpretation_line(message: Mapping[str, Any]) -> str:
         f"scan={message['scan']} kind={message['kind']} "
         f"projected_scans={message['projected_scans']} "
         f"assertion_projection_cached={message['assertion_projection_cached']} "
+        f"requirements={tuple(message['requirements'])!r} "
         f"reason={message['reason']!r} support={support}"
     )
 
@@ -405,6 +434,19 @@ def _drive_worker(
                     "kind": interpretation.kind.value,
                     "reason": interpretation.reason,
                     "supporting_identities": interpretation.supporting_identities,
+                    "requirements": tuple(
+                        {
+                            "deadline": requirement.deadline_occurrence[1],
+                            "demanding": requirement.demanding_occurrence[1],
+                            "phase": getattr(requirement.phase, "value", requirement.phase),
+                            "authority": getattr(
+                                requirement.operand_authority,
+                                "value",
+                                requirement.operand_authority,
+                            ),
+                        }
+                        for requirement in observation.requirements
+                    ),
                     "projected_scans": projected_scans,
                     "assertion_projection_cached": assertion_cached,
                     "stop": interpretation.kind.value == config["stop_interpretation"],

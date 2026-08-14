@@ -1,16 +1,20 @@
-"""Acceptance contract for the field-faithful sequential-correction gap."""
+"""Acceptance contract for the field-faithful sequential correction route."""
 
 from typing import Any
 
 from pyrung import PLC
-from pyrung.core.analysis.pilot import pilot_events
 from tests.fixtures import pilot_scan_zero_sequence_route as fixture
 
 
-def _assert_clicknick_failure_prefix(events: tuple[Any, ...]) -> None:
+def _assert_clicknick_success(
+    events: tuple[Any, ...],
+    plan: Any,
+    *,
+    anchor_scan: int,
+) -> None:
     assert events[-1].kind == "finished"
-    assert events[-1].data["reached"] is False
-    assert events[-1].data["reason"].startswith("No productive next action was found")
+    assert events[-1].data["reached"] is True
+    assert events[-1].data["reason"] == "target reached"
 
     tries = tuple(event for event in events if event.kind == "candidate_try")
     attempted = tuple(event.data["applied"] for event in tries)
@@ -26,9 +30,8 @@ def _assert_clicknick_failure_prefix(events: tuple[Any, ...]) -> None:
     simulation_index = attempted.index(simulation)
     assert attempted[simulation_index - 1] == reconnect
 
-    # Once both corrections are retained, ProgramStep reads the communication
-    # transaction as context for the reconnect. This faithfully reproduces the
-    # ClickNick composite which contradicts the retained SimulationMode=True.
+    # ProgramStep reads the communication transaction as context for a fresh
+    # reconnect.  WorkingTheory corrections remain separate World changes.
     contextual_reconnect = (
         (fixture.NetworkAvailable.name, True),
         (fixture.SimulationMode.name, False),
@@ -58,32 +61,95 @@ def _assert_clicknick_failure_prefix(events: tuple[Any, ...]) -> None:
     assert watchdog_overwrite.displacement.tag == fixture.SequenceStep.name
     assert watchdog_overwrite.displacement.values == (40, 91)
 
-    # The next WorkingTheory act atomically carries that stale communication
-    # context beside the newly discovered watchdog correction. This is the
-    # behavior the next production change must replace with another singleton
-    # corrective steer followed by a fresh reconnect.
-    watchdog_retry = (
+    compositions = tuple(
+        (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+        for event in events
+        if event.kind == "theory_correction_composed"
+    )
+    assert compositions == (
         (fixture.FirstWatchdogPresetMs.name, 11),
-        *contextual_reconnect,
+        (fixture.FirstWatchdogPresetMs.name, 21),
+        (fixture.FirstWatchdogPresetMs.name, 31),
+        (fixture.SecondWatchdogPresetMs.name, 11),
     )
-    assert attempted[simulation_index + 2] == watchdog_retry
-    assert tries[simulation_index + 2].data["candidate"]["provenance"] == (
-        "working-theory temporal retry",
+    assert not any(
+        tag in {fixture.FirstWatchdogPresetMs.name, fixture.SecondWatchdogPresetMs.name}
+        for event in tries
+        for tag, _value in event.data["applied"]
     )
 
+    decision_kinds = {"candidate_try", "bearing_coast"}
+    next_decisions = []
+    for index, event in enumerate(events):
+        if event.kind != "theory_correction_composed":
+            continue
+        next_decisions.append(
+            next(item for item in events[index + 1 :] if item.kind in decision_kinds)
+        )
+    assert tuple(event.kind for event in next_decisions) == (
+        "candidate_try",
+        "candidate_try",
+        "candidate_try",
+        "bearing_coast",
+    )
+    assert tuple(next_decisions[index].data["applied"] for index in range(2)) == (
+        contextual_reconnect,
+        contextual_reconnect,
+    )
+    assert next_decisions[2].data["applied"] == (
+        (fixture.CheckpointSensor.name, True),
+    )
 
-def test_neutral_route_reproduces_clicknick_sequential_correction_gap() -> None:
-    events = tuple(
-        pilot_events(
-            PLC(fixture.logic, dt=0.010),
-            fixture.SequenceStep == 81,
-            max_scans=120,
+    checkpoint_acceptance = next(
+        event
+        for event in events
+        if event.kind == "candidate_accepted"
+        and event.data.get("applied") == ((fixture.CheckpointSensor.name, True),)
+        and any(
+            observation.obligation.tag == fixture.SequenceStep.name
+            and observation.obligation.value == 41
+            and observation.consumer_read is not None
+            for observation in event.data.get("effect_observations", ())
         )
     )
+    assert checkpoint_acceptance.scan == 7
+
+    adjacent = next(
+        event
+        for event in events
+        if event.kind == "pending_departure_started"
+        and event.data["from_value"] == 41
+        and event.data["settled_value"] == 50
+    )
+    assert adjacent.data["classification"] == "clean_continuation"
+    assert adjacent.data["settle_scans"] == 2
+
+    assert plan.reachable, plan.reason
+    assert plan.anchor_scan == anchor_scan
+    assert plan.total_scans == 10 - anchor_scan
+    assert plan.state.scan_id == 10
+    assert plan.state.tags[fixture.SequenceStep.name] == 81
+    assert plan.state.tags[fixture.FirstWatchdogPresetMs.name] == 31
+    assert plan.state.tags[fixture.SecondWatchdogPresetMs.name] == 11
+    replay = plan.replay()
+    assert replay.state.scan_id == 10
+    assert replay.state.tags[fixture.SequenceStep.name] == 81
+    assert replay.state.tags[fixture.FirstWatchdogPresetMs.name] == 31
+    assert replay.state.tags[fixture.SecondWatchdogPresetMs.name] == 11
+
+
+def test_neutral_route_resolves_clicknick_sequential_corrections() -> None:
+    events: list[Any] = []
+    plan = PLC(fixture.logic, dt=0.010).how(
+        fixture.SequenceStep == 81,
+        max_scans=120,
+        on_event=events.append,
+    )
+    recorded = tuple(events)
 
     reconnect_overwrite = next(
         observation
-        for event in events
+        for event in recorded
         if event.kind == "candidate_accepted"
         for observation in event.data.get("effect_observations", ())
         if observation.appeared is not None
@@ -95,24 +161,23 @@ def test_neutral_route_reproduces_clicknick_sequential_correction_gap() -> None:
     assert reconnect_overwrite.displacement.values == (10, 94)
     assert reconnect_overwrite.displacement.scan_id == reconnect_overwrite.appeared.scan_id + 1
 
-    first_coast = next(event for event in events if event.kind == "bearing_coast")
+    first_coast = next(event for event in recorded if event.kind == "bearing_coast")
     assert first_coast.scan == 0
     assert first_coast.data["reason"] == "observe exactly one entry scan"
-    _assert_clicknick_failure_prefix(events)
+    _assert_clicknick_success(recorded, plan, anchor_scan=0)
 
 
-def test_neutral_route_reproduces_gap_after_runner_has_already_stepped() -> None:
+def test_neutral_route_resolves_corrections_after_runner_has_already_stepped() -> None:
     runner = PLC(fixture.logic, dt=0.010)
     runner.step()
 
     assert runner.state.scan_id == 1
     assert runner.state.tags[fixture.SequenceStep.name] == 99
 
-    events = tuple(
-        pilot_events(
-            runner,
-            fixture.SequenceStep == 81,
-            max_scans=120,
-        )
+    events: list[Any] = []
+    plan = runner.how(
+        fixture.SequenceStep == 81,
+        max_scans=120,
+        on_event=events.append,
     )
-    _assert_clicknick_failure_prefix(events)
+    _assert_clicknick_success(tuple(events), plan, anchor_scan=1)
