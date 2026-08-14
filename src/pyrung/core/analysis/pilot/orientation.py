@@ -495,6 +495,8 @@ def _theory_temporal_retry_bearing(
                 expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
                 provenance=("working-theory temporal tip setup",),
                 local_progress=LocalProgressKind.TEMPORAL_SETUP,
+                local_progress_requirements=tuple(schedule.requirements),
+                local_progress_sources=tuple(schedule.requirement_sources or schedule.requirements),
                 pulse_horizon=PulseHorizon.ASSERTION_SCAN,
             )
             act = Pulse(policy) if len(setup) == 1 else BatchPulse(policy)
@@ -618,6 +620,11 @@ def _iter_temporal_schedules(
                 replace(
                     atom.requirement,
                     condition=atom.condition,
+                    deadline=(
+                        atom.guard_atom.deadline
+                        if atom.guard_atom is not None
+                        else atom.requirement.deadline
+                    ),
                     operand_authority=(
                         atom.guard_atom.operand_authority
                         if atom.guard_atom is not None

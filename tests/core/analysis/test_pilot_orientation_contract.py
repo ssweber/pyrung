@@ -532,7 +532,14 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
         orientation,
         "_iter_temporal_schedules",
         lambda *_args: iter(
-            (SimpleNamespace(assignments=(("Production", True),), pilot_rungs=()),)
+            (
+                SimpleNamespace(
+                    assignments=(("Production", True),),
+                    pilot_rungs=(),
+                    requirements=("exact-lowered-requirement",),
+                    requirement_sources=("parent-requirement",),
+                ),
+            )
         ),
     )
 
@@ -543,6 +550,8 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
     assert result.act.policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
     assert result.act.policy.applied == (("Production", True),)
+    assert result.act.policy.local_progress_requirements == ("exact-lowered-requirement",)
+    assert result.act.policy.local_progress_sources == ("parent-requirement",)
 
 
 def test_temporal_retry_yields_to_conductivity_research_before_another_steer(

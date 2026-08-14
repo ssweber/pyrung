@@ -37,6 +37,11 @@ from pyrung.core.analysis.pilot.effects import (
     observe_execution_window,
     promote_route_landing_observations,
 )
+from pyrung.core.analysis.pilot.intrascan import (
+    IntrascanRequirementDisposition,
+    build_intrascan_requirement_evidence,
+    observe_intrascan_requirement,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     Coast,
@@ -107,6 +112,90 @@ class _RouteBlockerCrossing:
     predicate: Any
     projection: Any
     write: Any
+
+
+@dataclass(frozen=True)
+class _TemporalSetupOccurrenceReceipt:
+    """Exact requirement reads which establish one endpoint-invisible setup."""
+
+    consumed_actions: tuple[_ActionPair, ...] = ()
+    requirements_observed: bool = False
+    observations: tuple[Any, ...] = ()
+
+
+def _observe_temporal_setup_occurrences(
+    attempt: _ExecutedAttempt,
+    requirements: tuple[Any, ...],
+    applied_actions: tuple[_ActionPair, ...],
+    ctx: Any,
+) -> _TemporalSetupOccurrenceReceipt:
+    """Prove each setup action at its relocated demanding guard surface."""
+
+    if not applied_actions or not requirements:
+        return _TemporalSetupOccurrenceReceipt()
+    assertion_projection = attempt.projection_at(attempt.assertion_scan)
+    if assertion_projection is None:
+        return _TemporalSetupOccurrenceReceipt(
+            observations=(("assertion-projection-unavailable",),)
+        )
+
+    requirement_observations = []
+    observation_receipts: list[Any] = []
+    for requirement in requirements:
+        projector = getattr(
+            requirement.execution_owner,
+            "pilot_rung_write_projection_at",
+            None,
+        )
+        source_projection = (
+            projector(requirement.deadline.scan_id) if projector is not None else None
+        )
+        if source_projection is None:
+            observation_receipts.append(
+                ("source-projection-unavailable", requirement.deadline.scan_id)
+            )
+            return _TemporalSetupOccurrenceReceipt(observations=tuple(observation_receipts))
+        evidence = build_intrascan_requirement_evidence(
+            requirement,
+            source_projection,
+            steerable=ctx.steerable,
+            program_written=frozenset(ctx.pdg.writers_of),
+            configured_inputs=ctx.configured_inputs,
+        )
+        observation = observe_intrascan_requirement(evidence, assertion_projection)
+        requirement_observations.append(observation)
+        observation_receipts.append(
+            (
+                observation.disposition.value,
+                evidence.complete,
+                evidence.detail,
+                observation.detail,
+                tuple((read.tag, read.values, read.rung) for read in observation.observed_reads),
+            )
+        )
+
+    requirements_observed = all(
+        observation.disposition is IntrascanRequirementDisposition.SATISFIED
+        for observation in requirement_observations
+    )
+    consumed_actions: tuple[_ActionPair, ...] = ()
+    if requirements_observed:
+        observed_reads = tuple(
+            read for observation in requirement_observations for read in observation.observed_reads
+        )
+        consumed_actions = tuple(
+            (tag, value)
+            for tag, value in applied_actions
+            if any(
+                read.tag == tag and len(read.values) == 1 and _values_match(read.values[0], value)
+                for read in observed_reads
+            )
+        )
+    return _TemporalSetupOccurrenceReceipt(
+        consumed_actions,
+        requirements_observed,
+        tuple(observation_receipts),
+    )
 
 
 class _SpinVerdict(Enum):
@@ -1516,6 +1605,28 @@ def _verify_gates(
         assignments_reached = bool(applied_actions) and all(
             _values_match(trial.snap.get(tag), value) for tag, value in applied_actions
         )
+        progress_requirements = (
+            policy.local_progress_requirements
+            if policy.local_progress_requirements
+            else getattr(ctx, "temporal_requirements", ())
+        )
+        temporal_setup_consumed: tuple[_ActionPair, ...] = ()
+        temporal_setup_requirements_observed = False
+        temporal_setup_observation_receipts: tuple[Any, ...] = ()
+        if (
+            policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
+            and applied_actions
+            and progress_requirements
+        ):
+            temporal_receipt = _observe_temporal_setup_occurrences(
+                attempt,
+                tuple(progress_requirements),
+                tuple(applied_actions),
+                ctx,
+            )
+            temporal_setup_consumed = temporal_receipt.consumed_actions
+            temporal_setup_requirements_observed = temporal_receipt.requirements_observed
+            temporal_setup_observation_receipts = temporal_receipt.observations
         route_advanced = bool(
             landing_distance is not None
             and landing_distance < frame.distance_before
@@ -1537,11 +1648,6 @@ def _verify_gates(
                 for tag, value in applied_actions
             )
         )
-        progress_requirements = (
-            policy.local_progress_requirements
-            if policy.local_progress_requirements
-            else getattr(ctx, "temporal_requirements", ())
-        )
         requirements_reached = all(
             constraint_holds(cast(Any, requirement.condition), trial.snap) is True
             for requirement in progress_requirements
@@ -1561,7 +1667,14 @@ def _verify_gates(
             and (channel_motion.departed or not expectation_boundaries_preserved)
         )
         local_progress_reached = (
-            ((bool(changed) and assignments_reached) or intrascan_configuration_consumed)
+            (
+                (bool(changed) and assignments_reached)
+                or intrascan_configuration_consumed
+                or (
+                    temporal_setup_requirements_observed
+                    and len(temporal_setup_consumed) == len(applied_actions)
+                )
+            )
             and trace_setup_owned
             and (
                 policy.local_progress
@@ -1571,6 +1684,7 @@ def _verify_gates(
                     LocalProgressKind.THEORY_CORRECTIVE,
                 }
                 or requirements_reached
+                or temporal_setup_requirements_observed
             )
             and declared_boundary_preserved
             and route_owned
@@ -1590,6 +1704,11 @@ def _verify_gates(
                         "declared_lifetime": declared_lifetime is not None,
                         "selected_effect_consumed": selected_effect_consumed,
                         "intrascan_configuration_consumed": (intrascan_configuration_consumed),
+                        "temporal_setup_consumed": temporal_setup_consumed,
+                        "temporal_setup_requirements_observed": (
+                            temporal_setup_requirements_observed
+                        ),
+                        "temporal_setup_observations": temporal_setup_observation_receipts,
                         "route_owned": route_owned,
                         "route_distance_before": frame.distance_before,
                         "route_distance_after": landing_distance,
@@ -1643,6 +1762,11 @@ def _verify_gates(
                         "declared_lifetime": declared_lifetime is not None,
                         "selected_effect_consumed": selected_effect_consumed,
                         "intrascan_configuration_consumed": (intrascan_configuration_consumed),
+                        "temporal_setup_consumed": temporal_setup_consumed,
+                        "temporal_setup_requirements_observed": (
+                            temporal_setup_requirements_observed
+                        ),
+                        "temporal_setup_observations": temporal_setup_observation_receipts,
                         "route_owned": route_owned,
                         "route_distance_before": frame.distance_before,
                         "route_distance_after": landing_distance,

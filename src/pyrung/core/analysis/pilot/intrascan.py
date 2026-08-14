@@ -1190,7 +1190,7 @@ def _execute_closure_attempt(
         else ()
     )
     requirement_observations = tuple(
-        _observe_requirement(item, projection) for item in question.requirements
+        observe_intrascan_requirement(item, projection) for item in question.requirements
     )
     effects_hold = all(
         (
@@ -1274,10 +1274,12 @@ def _execute_closure_attempt(
     )
 
 
-def _observe_requirement(
+def observe_intrascan_requirement(
     evidence: IntrascanRequirementEvidence,
     projection: ScanRungWriteProjection,
 ) -> IntrascanRequirementObservation:
+    """Relocate and judge one complete requirement on an exact candidate scan."""
+
     if not evidence.complete:
         return IntrascanRequirementObservation(
             evidence.identity,

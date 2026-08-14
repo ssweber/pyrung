@@ -136,6 +136,33 @@ def _decision_lines(
     snapshot: Mapping[str, Any],
     stop_action: tuple[str, Any] | None,
 ) -> tuple[tuple[str, ...], bool]:
+    if event.kind == "candidate_rejected":
+        local_progress = next(
+            (
+                gate
+                for gate in event.data.get("gates", ())
+                if gate.event == "theory-local-progress-rejected"
+            ),
+            None,
+        )
+        effects = tuple(
+            (
+                getattr(effect, "disposition", None),
+                getattr(getattr(effect, "obligation", None), "tag", None),
+                getattr(getattr(effect, "appeared", None), "scan_id", None),
+                getattr(getattr(effect, "consumer_read", None), "scan_id", None),
+            )
+            for effect in event.data.get("effect_observations", ())
+        )
+        return (
+            (
+                "[candidate-rejected] "
+                f"scan={event.scan} applied={tuple(event.data['applied'])!r} "
+                "local_progress="
+                f"{dict(local_progress.evidence) if local_progress is not None else None!r} "
+                f"effects={effects!r}"
+            ),
+        ), False
     if event.kind == "conductivity_research_requested":
         stop = event.data["displacement"]
         return (
