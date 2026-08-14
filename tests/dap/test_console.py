@@ -540,6 +540,32 @@ class TestCausalVerbs:
         assert trying == "\nPulse ModeRequest=True, Production=True..."
         assert accepted == " done.\n"
 
+    def test_how_progress_streams_an_exact_crossing_as_one_atomic_pulse(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        actions = (("ModeRequest", True), ("Production", True))
+        progress = _PilotProgressFormatter()
+
+        trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
+        accepted = progress.format(PilotEvent("crossing_accepted", 11, {"applied": actions}))
+
+        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert accepted == " done.\n"
+
+    def test_how_progress_closes_a_rejected_exact_crossing(self):
+        from pyrung.core.analysis.pilot.types import PilotEvent
+        from pyrung.dap.console import _PilotProgressFormatter
+
+        actions = (("ModeRequest", True), ("Production", True))
+        progress = _PilotProgressFormatter()
+
+        trying = progress.format(PilotEvent("crossing_try", 10, {"actions": actions}))
+        rejected = progress.format(PilotEvent("crossing_rejected", 11, {"actions": actions}))
+
+        assert trying == "\nPulse ModeRequest=True, Production=True..."
+        assert rejected == " no useful change.\n"
+
     def test_how_progress_calls_prerequisite_controls_set_and_explains_why(self):
         from pyrung import Bool, Int
         from pyrung.core.analysis.pilot.overlay import PilotRung

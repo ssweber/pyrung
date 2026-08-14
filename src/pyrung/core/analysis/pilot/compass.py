@@ -992,11 +992,7 @@ class Compass:
         from pyrung.core.analysis.pilot.conductivity import conductivity_research_request
 
         request = conductivity_research_request(self.conductivity_front(theory_view))
-        return (
-            theory_view.research_finding(request.identity)
-            if request is not None
-            else None
-        )
+        return theory_view.research_finding(request.identity) if request is not None else None
 
     def apply(self, observations: Iterable[NavigationObservation]) -> tuple[Compass, bool]:
         """Return a new facade when observations add durable knowledge."""

@@ -142,9 +142,7 @@ class WaitPrescription:
     reason: str | None = None
     frontier: tuple[_ActionPair, ...] = ()
     expectation: EffectExpectation | None = None
-    landing_receipt_authority: LandingReceiptAuthority = (
-        LandingReceiptAuthority.ORIENTATION
-    )
+    landing_receipt_authority: LandingReceiptAuthority = LandingReceiptAuthority.ORIENTATION
 
 
 @dataclass(frozen=True)
@@ -765,24 +763,25 @@ def _compass_route_plan(
             for tag, value in (*edge.source_constraints, *edge.enablers)
         ):
             return False
-        commanded = (() if edge.action is None else (edge.action, *edge.co_actions))
+        commanded = () if edge.action is None else (edge.action, *edge.co_actions)
         already_effective = bool(commanded) and all(
-            (
-                (owner := overlay.owner(tag)) is not None
-                and _values_match(owner.value, value)
-            )
+            ((owner := overlay.owner(tag)) is not None and _values_match(owner.value, value))
             or _values_match(frame.snap.get(tag), value)
             for tag, value in commanded
         )
         # An already-effective command is not another candidate.  It admits
         # precisely one chart coast only when the selected writer's complete
         # live guard proves that the program can consume it in this world.
-        return not already_effective or _live_chart_completion_edge(
-            edge,
-            frame,
-            state,
-            ctx,
-        ) is not None
+        return (
+            not already_effective
+            or _live_chart_completion_edge(
+                edge,
+                frame,
+                state,
+                ctx,
+            )
+            is not None
+        )
 
     plans: list[StaticPath] = []
     for n in frame.tree.iter_nodes():
@@ -1448,11 +1447,7 @@ def _charted_successor_consumer(
 
     target = getattr(ctx, "target", None)
     compass = getattr(ctx, "compass", None)
-    if (
-        target is None
-        or compass is None
-        or target.tag != edge.role.channel_tag
-    ):
+    if target is None or compass is None or target.tag != edge.role.channel_tag:
         return None
 
     effect_tag, effect_value = edge.route.writer_effect
@@ -1466,9 +1461,7 @@ def _charted_successor_consumer(
                 successor.from_value is ANY_FROM
                 or successor.action is not None
                 or not _values_match(successor.from_value, edge.to_value)
-                or not any(
-                    _values_match(successor.to_value, value) for value in reachable
-                )
+                or not any(_values_match(successor.to_value, value) for value in reachable)
             ):
                 continue
             writer = ctx.pdg.rung_nodes[successor.route.writer_node]
@@ -1476,15 +1469,12 @@ def _charted_successor_consumer(
             read_owners = tuple(
                 (index, node)
                 for index, node in enumerate(ctx.pdg.rung_nodes)
-                if getattr(node, "subroutine", object())
-                == getattr(writer, "subroutine", object())
-                and getattr(node, "rung_index", object())
-                == getattr(writer, "rung_index", object())
+                if getattr(node, "subroutine", object()) == getattr(writer, "subroutine", object())
+                and getattr(node, "rung_index", object()) == getattr(writer, "rung_index", object())
                 and len(getattr(node, "branch_path", ())) <= len(branch_path)
                 and branch_path[: len(getattr(node, "branch_path", ()))]
                 == getattr(node, "branch_path", ())
-                and effect_tag
-                in (node.condition_reads | node.guard_reads | node.data_reads)
+                and effect_tag in (node.condition_reads | node.guard_reads | node.data_reads)
             )
             if not read_owners:
                 continue
@@ -1492,9 +1482,7 @@ def _charted_successor_consumer(
                 read_owners,
                 key=lambda item: len(getattr(item[1], "branch_path", ())),
             )
-            consumer_reads = (
-                consumer.condition_reads | consumer.guard_reads | consumer.data_reads
-            )
+            consumer_reads = consumer.condition_reads | consumer.guard_reads | consumer.data_reads
             requirements = [
                 pair
                 for pair in (
@@ -1906,11 +1894,7 @@ def _admit_trace_details(
             ordered_details.append(detail)
         else:
             existing = ordered_details[matching_index]
-            preferred = (
-                detail
-                if detail.availability < existing.availability
-                else existing
-            )
+            preferred = detail if detail.availability < existing.availability else existing
             lifetime_owner = next(
                 (candidate for candidate in (existing, detail) if candidate.until is not None),
                 None,
@@ -1935,11 +1919,7 @@ def _admit_trace_details(
         # orthogonal execution facts: the narrower reader may prove present
         # availability while the outer route owns the honest lifetime. Effect
         # paths/provenance remain separate in ``ordered_details``.
-        preferred = (
-            detail
-            if detail.availability < operational.availability
-            else operational
-        )
+        preferred = detail if detail.availability < operational.availability else operational
         lifetime_owner = next(
             (candidate for candidate in (operational, detail) if candidate.until is not None),
             None,
@@ -2095,9 +2075,7 @@ def _read_route_and_wait(
         or (getattr(state, "pending_departure", None) is not None and admission.active_actions)
     )
     route_plan = (
-        None
-        if route_blocked
-        else _compass_route_plan(frame, ctx, key_nogoods, state=state)
+        None if route_blocked else _compass_route_plan(frame, ctx, key_nogoods, state=state)
     )
     admitted_completion: _AdmittedWait | None = None
     if route_plan is not None and route_plan.first_edge.action is not None:
@@ -2123,10 +2101,7 @@ def _read_route_and_wait(
                 ctx,
                 key_nogoods,
             )
-            if (
-                general_admitted.viable
-                or not general.first_edge.program_producers
-            ):
+            if general_admitted.viable or not general.first_edge.program_producers:
                 route_plan = general
                 admitted_completion = general_admitted
     if route_plan is None and not route_blocked:
@@ -2292,9 +2267,7 @@ def _separate_prerequisites(
             edge = route.plan.first_edge
             route_actions = () if edge.action is None else (edge.action, *edge.co_actions)
             route_request = (
-                ()
-                if edge.request_tag is None
-                else ((edge.request_tag, edge.request_value),)
+                () if edge.request_tag is None else ((edge.request_tag, edge.request_value),)
             )
             route_needed = (
                 *route_actions,
@@ -2671,8 +2644,7 @@ def _assemble_candidate_read(
         for index, batch in enumerate((*operation_batches, *structural_crossing_batches))
         if batch.actions
         not in {
-            prior.actions
-            for prior in (*operation_batches, *structural_crossing_batches)[:index]
+            prior.actions for prior in (*operation_batches, *structural_crossing_batches)[:index]
         }
     )
     candidates: list[_Candidate] = []
@@ -2711,8 +2683,7 @@ def _assemble_candidate_read(
                 if prescribed_edge is not None
                 and trace_detail.pair == pair
                 and trace_detail.effect_path
-                and trace_detail.effect_path[-1].node_index
-                == prescribed_edge.route.writer_node
+                and trace_detail.effect_path[-1].node_index == prescribed_edge.route.writer_node
                 and route_writer_effect is not None
                 and trace_detail.effect_path[-1].tag == route_writer_effect[0]
                 and _values_match(trace_detail.effect_path[-1].value, route_writer_effect[1])
@@ -2765,8 +2736,7 @@ def _assemble_candidate_read(
                 for trace_detail in trace.details
                 if trace_detail.pair == pair
                 and trace_detail.effect_path
-                and trace_detail.effect_path[-1].node_index
-                == program_step.producer.rung_index
+                and trace_detail.effect_path[-1].node_index == program_step.producer.rung_index
                 and trace_detail.effect_path[-1].tag == program_step.producer.command_tag
                 and _values_match(
                     trace_detail.effect_path[-1].value,
@@ -2886,9 +2856,7 @@ def _assemble_candidate_read(
                 if pair in program_pairs and route_plan is not None
                 else None
             ),
-            bearing_boundary=(
-                program_heading.boundary if program_heading is not None else None
-            ),
+            bearing_boundary=(program_heading.boundary if program_heading is not None else None),
             route_context=route_context,
             program_note=(
                 f"exact program producer rung {program_step.producer.rung_index} "
@@ -2935,11 +2903,7 @@ def _assemble_candidate_read(
         # shared trace-admission pass above.
         for required in program_step.required_inputs:
             pair = required.pair
-            if (
-                pair in trace_actions
-                and _action_allowed(ctx, pair)
-                and pair not in seen_candidates
-            ):
+            if pair in trace_actions and _action_allowed(ctx, pair) and pair not in seen_candidates:
                 seen_candidates.add(pair)
                 candidates.append(_candidate_for(pair))
     for pair in trace_actions:

@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.avoid import _avoid_snap_names
@@ -124,9 +124,7 @@ def _proved_effect_violations(attempt: _ExecutedAttempt) -> tuple[Any, ...]:
     """Exact selected-effect failures which must outrank generic acceptance."""
 
     fulfilled_obligations = {
-        id(item.obligation)
-        for item in attempt.effect_observations
-        if effect_reached_consumer(item)
+        id(item.obligation) for item in attempt.effect_observations if effect_reached_consumer(item)
     }
     return tuple(
         observation
@@ -487,9 +485,7 @@ def _accepted_trial(
             distance_before=getattr(frame, "distance_before", 0),
             distance_after=(verification.trend if isinstance(verification, AssessedMotion) else 0),
             landing_owns_tip=(
-                selected_producer_landing
-                if progress_kind == "selected-producer"
-                else True
+                selected_producer_landing if progress_kind == "selected-producer" else True
             ),
         )
         if progress_kind is not None
@@ -1506,13 +1502,10 @@ def _verify_gates(
             if policy.local_progress is LocalProgressKind.TRACE_SETUP
             else ()
         )
-        route_owned = (
-            policy.local_progress is not LocalProgressKind.TRACE_SETUP
-            or (
-                landing_distance is not None
-                and landing_distance <= frame.distance_before
-                and not route_blockers
-            )
+        route_owned = policy.local_progress is not LocalProgressKind.TRACE_SETUP or (
+            landing_distance is not None
+            and landing_distance <= frame.distance_before
+            and not route_blockers
         )
         changed = tuple(
             (tag, value)
@@ -1523,13 +1516,34 @@ def _verify_gates(
         assignments_reached = bool(applied_actions) and all(
             _values_match(trial.snap.get(tag), value) for tag, value in applied_actions
         )
+        route_advanced = bool(
+            landing_distance is not None
+            and landing_distance < frame.distance_before
+            and not route_blockers
+        )
+        # Some externally writable configuration registers are intentionally
+        # consumed and reset by the program in the assertion scan.  They are
+        # still real intrascan steering when the exact disposable trial moves
+        # the selected route closer.  Requiring their patched value to survive
+        # would reject the successful transaction merely because its consumer
+        # acknowledged it.
+        intrascan_configuration_consumed = bool(
+            policy.local_progress is LocalProgressKind.TRACE_SETUP
+            and route_advanced
+            and any(
+                ctx.pdg.writers_of.get(tag, frozenset())
+                and not _values_match(frame.snap.get(tag), value)
+                and not _values_match(trial.snap.get(tag), value)
+                for tag, value in applied_actions
+            )
+        )
         progress_requirements = (
             policy.local_progress_requirements
             if policy.local_progress_requirements
             else getattr(ctx, "temporal_requirements", ())
         )
         requirements_reached = all(
-            constraint_holds(requirement.condition, trial.snap) is True
+            constraint_holds(cast(Any, requirement.condition), trial.snap) is True
             for requirement in progress_requirements
         )
         expectation_boundaries_preserved = all(
@@ -1547,8 +1561,7 @@ def _verify_gates(
             and (channel_motion.departed or not expectation_boundaries_preserved)
         )
         local_progress_reached = (
-            bool(changed)
-            and assignments_reached
+            ((bool(changed) and assignments_reached) or intrascan_configuration_consumed)
             and trace_setup_owned
             and (
                 policy.local_progress
@@ -1576,6 +1589,7 @@ def _verify_gates(
                         "selected_trace_setup": selected_trace_setup,
                         "declared_lifetime": declared_lifetime is not None,
                         "selected_effect_consumed": selected_effect_consumed,
+                        "intrascan_configuration_consumed": (intrascan_configuration_consumed),
                         "route_owned": route_owned,
                         "route_distance_before": frame.distance_before,
                         "route_distance_after": landing_distance,
@@ -1628,6 +1642,7 @@ def _verify_gates(
                         "selected_trace_setup": selected_trace_setup,
                         "declared_lifetime": declared_lifetime is not None,
                         "selected_effect_consumed": selected_effect_consumed,
+                        "intrascan_configuration_consumed": (intrascan_configuration_consumed),
                         "route_owned": route_owned,
                         "route_distance_before": frame.distance_before,
                         "route_distance_after": landing_distance,

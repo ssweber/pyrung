@@ -797,6 +797,7 @@ def test_pilot_investigates_one_reported_excursion_then_returns_it_to_verify(
         ),
         effect_observations=(cast(Any, object()),),
     )
+    assert executed.pulse.action_scan is not None
     executed.pulse._projection_cache[executed.pulse.action_scan] = cast(
         Any,
         (object(), object()),

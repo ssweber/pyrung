@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
+from pyrung.core.analysis.pilot.awaited_actions import _button_writes
 from pyrung.core.analysis.pilot.compass import EvidenceScope
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.intrascan_schedule import (
@@ -379,9 +380,7 @@ def _theory_temporal_retry_bearing(
             ):
                 if temporal_intent is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE:
                     additions = tuple(
-                        pair
-                        for pair in (*setup, *companions)
-                        if pair not in tuple(base.applied)
+                        pair for pair in (*setup, *companions) if pair not in tuple(base.applied)
                     )
                     if not additions:
                         continue
@@ -452,7 +451,11 @@ def _theory_temporal_retry_bearing(
                     and isinstance(candidate_identity[1], tuple)
                     else frozenset()
                 )
-                if candidate_pairs and candidate_pairs <= trigger_pairs:
+                if (
+                    temporal_intent is not TheoryTemporalIntent.SETUP_FIRST
+                    and candidate_pairs
+                    and candidate_pairs <= trigger_pairs
+                ):
                     # Correlation can recover a fresh live base from the prior
                     # batch, but every subset already contained in that trigger
                     # has been tried. Only a newly reader-authorized addition is
@@ -533,23 +536,54 @@ def _theory_rearm_bearing(
     )
     if not releases:
         return None
-    if any(pair in world.context.blocked_actions for pair in releases) or _avoid_forces(
+    release_tags = {tag for tag, _value in releases}
+    actions = tuple(
+        (
+            tag,
+            world.context.resting.get(tag, False),
+        )
+        if tag in release_tags
+        else (tag, value)
+        for tag, value in trigger_actions
+    )
+    trigger_tags = {tag for tag, _value in trigger_actions}
+    trigger_snapshot = {**world.snapshot, **dict(trigger_actions)}
+    desired_writes: dict[str, Any] = {}
+    if world.context.pdg is not None and world.context.program is not None:
+        for tag, value in trigger_actions:
+            if _values_match(value, True):
+                desired_writes.update(_button_writes(world.context, tag, trigger_snapshot))
+    conflicting_releases: list[_ActionPair] = []
+    for tag in sorted(world.context.steerable - trigger_tags):
+        current = world.snapshot.get(tag)
+        resting = world.context.resting.get(tag, False)
+        if _values_match(current, resting) or not _values_match(current, True):
+            continue
+        active_writes = _button_writes(world.context, tag, world.snapshot)
+        if any(
+            destination in desired_writes
+            and not _values_match(active_value, desired_writes[destination])
+            for destination, active_value in active_writes.items()
+        ):
+            conflicting_releases.append((tag, resting))
+    actions = (*actions, *conflicting_releases)
+    if any(pair in world.context.blocked_actions for pair in actions) or _avoid_forces(
         world.context,
-        releases,
+        actions,
         world.snapshot,
     ):
         return None
     policy = ActPolicy(
         source=ActSource.WIDENING,
-        action_pairs=releases,
-        applied=releases,
+        action_pairs=actions,
+        applied=actions,
         note="working theory: rearm spent edge before temporal retry",
         expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
         provenance=("working-theory temporal rearm",),
         local_progress=LocalProgressKind.REARM,
         pulse_horizon=PulseHorizon.ASSERTION_SCAN,
     )
-    act = Pulse(policy) if len(releases) == 1 else BatchPulse(policy)
+    act = Pulse(policy) if len(actions) == 1 else BatchPulse(policy)
     if world.context.compass.knowledge.act_is_nogood(world.world_key, act_identity(act)):
         return None
     return _bearing(
@@ -646,8 +680,7 @@ def _theory_correction_composition(
             owned = tuple(
                 requirement
                 for requirement in sources
-                if getattr(getattr(requirement, "condition", None), "tag", None)
-                == rung.dest
+                if getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
             )
             if not owned:
                 continue
@@ -656,9 +689,7 @@ def _theory_correction_composition(
                 world_key=world.world_key,
                 world=world,
                 candidates=candidates,
-                considered_paths=(
-                    (candidates.route.plan,) if candidates.route is not None else ()
-                ),
+                considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
                 rankings=tuple(candidates.options),
                 exclusions=tuple(
                     world.context.compass.knowledge.nogood_identities(world.world_key)
@@ -1294,9 +1325,7 @@ def _orient_read(
                             (candidates.route.plan,) if candidates.route is not None else ()
                         ),
                         rankings=tuple(candidates.options),
-                        exclusions=tuple(
-                            compass.knowledge.nogood_identities(world.world_key)
-                        ),
+                        exclusions=tuple(compass.knowledge.nogood_identities(world.world_key)),
                     ),
                 )
             completed_research = (
@@ -1347,6 +1376,26 @@ def _orient_read(
         if theory_setup is not None:
             return theory_setup
         if setup_first and prescription is None:
+            # SETUP_FIRST is sequential: establish/rearm the prerequisite in
+            # one accepted scan, then steer afresh. Once no setup remains, the
+            # original trigger is now a legitimate next transaction even
+            # though its action identity is unchanged; the provisional tip is
+            # what makes it new work rather than replay at the old source.
+            ordinary = _orient_read(
+                compass,
+                world,
+                target,
+                _allow_theory=False,
+                _candidate_read=candidates,
+            )
+            retry = _theory_temporal_retry_bearing(
+                world,
+                candidates,
+                target,
+                ordinary=ordinary if isinstance(ordinary, Bearing) else None,
+            )
+            if retry is not None:
+                return retry
             return _probe_or_stuck(
                 compass,
                 world,

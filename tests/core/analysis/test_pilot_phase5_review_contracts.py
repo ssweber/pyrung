@@ -132,7 +132,7 @@ def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> Non
                 selected_act=("pulse", (("Input", True),)),
                 distance_before=2,
                 distance_after=1,
-            )
+            ),
         ),
     )
     state = SimpleNamespace(

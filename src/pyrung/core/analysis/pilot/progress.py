@@ -1563,9 +1563,8 @@ def _investigate_and_revert(
             tenure_value = execution.before_snap.get(channel_motion.channel_tag)
             for receipt in state.expectation_receipts:
                 for index, obligation in enumerate(receipt.expectation.obligations):
-                    if (
-                        obligation.tag != channel_motion.channel_tag
-                        or not _values_match(obligation.value, tenure_value)
+                    if obligation.tag != channel_motion.channel_tag or not _values_match(
+                        obligation.value, tenure_value
                     ):
                         continue
                     producer = resolve_expectation_receipt_producer(receipt, index)

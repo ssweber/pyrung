@@ -199,9 +199,7 @@ class ActPolicy:
     # Navigation provenance and landing-evidence ownership are orthogonal. A
     # route coast can still be owned by the ProgramStep which read its exact
     # present-tense producer and input handoffs.
-    landing_receipt_authority: LandingReceiptAuthority = (
-        LandingReceiptAuthority.ORIENTATION
-    )
+    landing_receipt_authority: LandingReceiptAuthority = LandingReceiptAuthority.ORIENTATION
     local_progress: LocalProgressKind | None = None
     # Exact subset this local phase promises to establish. A SETUP_FIRST act
     # may install adjustable corrections while program-owned route facts stay

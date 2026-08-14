@@ -7,7 +7,7 @@ from typing import Any, cast
 
 import pytest
 
-from pyrung import PLC
+from pyrung import PLC, Bool, Program, Rung, latch, out
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot.pilot import pilot_events
@@ -16,6 +16,7 @@ from pyrung.core.analysis.pilot.types import (
     PilotEvent,
     _BootstrapExecution,
 )
+from pyrung.core.runner import _compile_avoid
 from tests.fixtures.pilot_alarm_presets import aborted_on_first_scan as first_scan
 from tests.fixtures.pilot_alarm_presets import alarmed_at_start as alarmed
 from tests.fixtures.pilot_alarm_presets import conditional_negative
@@ -77,6 +78,31 @@ def _snapshot_accesses(snapshot: BootstrapExecutionSnapshot) -> tuple[tuple[Any,
                 )
             )
     return tuple(accesses)
+
+
+def test_rejected_entry_observation_stops_instead_of_retrying_scan_zero() -> None:
+    start = Bool("RejectedEntry_Start", external=True)
+    running = Bool("RejectedEntry_Running")
+    done = Bool("RejectedEntry_Done")
+    with Program() as logic:
+        with Rung(start):
+            latch(running)
+        with Rung(running):
+            out(done)
+
+    events = list(
+        pilot_events(
+            PLC(logic, dt=0.010),
+            done,
+            max_scans=5,
+            avoid_pred=_compile_avoid(~start),
+        )
+    )
+
+    assert [event.kind for event in events].count("bearing_coast_rejected") == 1
+    assert events[-1].kind == "finished"
+    assert events[-1].data["reached"] is False
+    assert "avoid excludes ~RejectedEntry_Start" in events[-1].data["reason"]
 
 
 def test_cold_start_retains_boundary_zero_and_exact_bootstrap_execution() -> None:
@@ -212,7 +238,9 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
         internal_receipts.append(receipt)
         return original_snapshot(receipt)
 
-    def _capture_binding(state: Any, ctx: Any, result: Any, frame: Any) -> _BootstrapExecution | None:
+    def _capture_binding(
+        state: Any, ctx: Any, result: Any, frame: Any
+    ) -> _BootstrapExecution | None:
         receipt = original_bind(state, ctx, result, frame)
         internal_states.append(state)
         return receipt

@@ -771,9 +771,7 @@ def test_general_chart_only_competes_with_a_distinct_first_transition(
 
     assert read.route is not None
     assert read.route.plan.first_edge.to_value == expected_destination
-    assert (read.route.plan.first_edge.action is None) is (
-        general_destination != 1 and prescribed
-    )
+    assert (read.route.plan.first_edge.action is None) is (general_destination != 1 and prescribed)
 
 
 def test_unbanked_broad_trace_keeps_ownership_over_a_shadow_chart() -> None:
@@ -2296,10 +2294,7 @@ def test_program_owned_coasts_promise_command_producer_only_when_observed(monkey
         )
         read = _prescribe_wait(edge, frame, state, ctx)
         assert read.prescription is not None
-        assert (
-            read.prescription.landing_receipt_authority
-            is LandingReceiptAuthority.PROGRAM_STEP
-        )
+        assert read.prescription.landing_receipt_authority is LandingReceiptAuthority.PROGRAM_STEP
         expectation = read.prescription.expectation
         if not expected:
             assert expectation is None
@@ -2635,13 +2630,10 @@ def test_effect_paths_compose_only_the_exact_local_writer_conjunction() -> None:
         frozenset((request.name, mode.name, unrelated.name)),
     )
 
-    assert tuple(batch.actions for batch in batches) == (
-        ((request.name, True), (mode.name, True)),
-    )
+    assert tuple(batch.actions for batch in batches) == (((request.name, True), (mode.name, True)),)
     assert batches[0].expectation is not None
     assert tuple(
-        (obligation.tag, obligation.value)
-        for obligation in batches[0].expectation.obligations
+        (obligation.tag, obligation.value) for obligation in batches[0].expectation.obligations
     ) == ((selected.name, 1),)
 
 
@@ -2971,9 +2963,7 @@ def test_trace_lifetime_positions_concurrent_input_for_its_instruction_coast() -
     assert separated.trace.actions == ()
     assert separated.instruction_boundary is not None
     assert separated.instruction_boundary.channel_tag == "GenericDone"
-    assert tuple(rung.dest for rung in separated.prerequisites.pilot_rungs) == (
-        detail.tag,
-    )
+    assert tuple(rung.dest for rung in separated.prerequisites.pilot_rungs) == (detail.tag,)
 
     standalone_detail = replace(detail, until=None)
     standalone_admission = replace(
@@ -3157,9 +3147,7 @@ def test_exact_program_handoff_refines_conservative_trace_availability() -> None
         boundary=None,
         channel=None,
         required_inputs=(required,),
-        input_handoffs=(
-            ProgramInputHandoff(required.pair, boundary, boundary.tag),
-        ),
+        input_handoffs=(ProgramInputHandoff(required.pair, boundary, boundary.tag),),
     )
     read = WaitRead(
         WaitPrescription(ChannelHeading(boundary.tag, 1, boundary), "current handoff"),

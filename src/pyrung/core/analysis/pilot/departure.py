@@ -486,14 +486,9 @@ def observe_departure(
     )
     goals = list(objective.channel_goals(channel_tag))
     exact_execution_window = (
-        execution_receipt is not None
-        and execution_receipt.kind == "selected-producer"
+        execution_receipt is not None and execution_receipt.kind == "selected-producer"
     )
-    if (
-        (landing_receipt is not None or exact_execution_window)
-        and work is not None
-        and goals
-    ):
+    if (landing_receipt is not None or exact_execution_window) and work is not None and goals:
         progress_erasing_values, all_resolved = _progress_erasing_values(
             earned_work,
             anchor_snap,

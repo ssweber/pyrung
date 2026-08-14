@@ -47,8 +47,7 @@ def _assert_clicknick_success(
     contextual_rejection = next(
         event
         for event in events
-        if event.kind == "candidate_rejected"
-        and event.data.get("applied") == contextual_reconnect
+        if event.kind == "candidate_rejected" and event.data.get("applied") == contextual_reconnect
     )
     watchdog_overwrite = next(
         observation
@@ -96,9 +95,7 @@ def _assert_clicknick_success(
         contextual_reconnect,
         contextual_reconnect,
     )
-    assert next_decisions[2].data["applied"] == (
-        (fixture.CheckpointSensor.name, True),
-    )
+    assert next_decisions[2].data["applied"] == ((fixture.CheckpointSensor.name, True),)
 
     checkpoint_acceptance = next(
         event

@@ -247,8 +247,7 @@ def test_late_program_guard_rebases_to_its_pre_bootstrap_writer() -> None:
     # boundary-zero retry composes the corrective with its exact trigger.
     assert any(
         event.kind == "candidate_try"
-        and event.data["applied"]
-        == ((prevent_poison.name, True), (start.name, True))
+        and event.data["applied"] == ((prevent_poison.name, True), (start.name, True))
         for event in events
     )
     assert events[-1].kind == "finished"

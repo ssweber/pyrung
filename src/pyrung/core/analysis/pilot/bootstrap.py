@@ -422,13 +422,9 @@ def selected_route_landing_expectation(
     off_route_tags = frozenset(
         tag
         for tag in channel_tags
+        if not any(_values_match(landing.get(tag), value) for value in charted_values.get(tag, ()))
         if not any(
-            _values_match(landing.get(tag), value)
-            for value in charted_values.get(tag, ())
-        )
-        if not any(
-            designation.tag == tag
-            and _values_match(landing.get(tag), designation.value)
+            designation.tag == tag and _values_match(landing.get(tag), designation.value)
             for designation in base
         )
     )

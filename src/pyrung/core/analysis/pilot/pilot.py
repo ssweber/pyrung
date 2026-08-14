@@ -4617,9 +4617,7 @@ def _compose_theory_correction(
         result.research_finding_identity,
     )
     if superseded_rungs:
-        retained = tuple(
-            rung for rung in state.pilot_rungs if rung not in superseded_rungs
-        )
+        retained = tuple(rung for rung in state.pilot_rungs if rung not in superseded_rungs)
         state.pilot_rungs = _merged_pilot_rungs((result.pilot_rung,), retained)
         state.hold_log.append(
             _HoldLogEntry(
@@ -6978,9 +6976,7 @@ def _pilot_loop_events(
                         _theory_requirement_snapshot(requirement).condition_identity
                         for requirement in composed.requirements
                     ),
-                    "superseded_pilot_rung_identities": (
-                        composed.superseded_pilot_rung_identities
-                    ),
+                    "superseded_pilot_rung_identities": (composed.superseded_pilot_rung_identities),
                     "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
                 },
@@ -7077,7 +7073,9 @@ def _pilot_loop_events(
                 )
                 + _frontier_clause(frontier, frame.snap)
             )
-            _run_optional_theory_hook(_record_optional_theory_abandoned, state, TheoryTermination.STUCK)
+            _run_optional_theory_hook(
+                _record_optional_theory_abandoned, state, TheoryTermination.STUCK
+            )
             yield from _stopped_events(
                 state,
                 ctx,
@@ -7203,6 +7201,27 @@ def _pilot_loop_events(
                 yield rejected_event
             finally:
                 _release_attempt_projections(attempt)
+            if isinstance(act, ObserveScan):
+                # Boundary zero has exactly one legal act: execute the first
+                # program scan so Compass has an observed world to read. If
+                # that act is gate-rejected, retrying cannot change either the
+                # source World or the observation and therefore loops without
+                # consuming scan budget. There is no alternative bearing yet.
+                yield from _stopped_events(
+                    state,
+                    ctx,
+                    frame,
+                    _with_avoid_reason(
+                        "The entry observation was rejected",
+                        state,
+                        ctx,
+                        frame,
+                    ),
+                    journal_channel_tags,
+                    journal_acc_names,
+                    candidate_count=1,
+                )
+                return
             if controlled_setup_attempt is not None:
                 assert controlling_source_world is not None
                 state.load_world(controlling_source_world)
@@ -7385,7 +7404,9 @@ def _pilot_loop_events(
             ctx,
             frame,
         ) + _frontier_clause(last_frontier, frame.snap if frame is not None else None)
-        _run_optional_theory_hook(_record_optional_theory_abandoned, state, TheoryTermination.BUDGET)
+        _run_optional_theory_hook(
+            _record_optional_theory_abandoned, state, TheoryTermination.BUDGET
+        )
         yield from _stopped_events(
             state,
             ctx,

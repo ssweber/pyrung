@@ -103,8 +103,7 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
         index
         for index, event in enumerate(events)
         if event.kind == "requirement_activated"
-        and getattr(event.data["requirement"].condition, "tag", None)
-        == fixture.LaterPresetMs.name
+        and getattr(event.data["requirement"].condition, "tag", None) == fixture.LaterPresetMs.name
     )
     discovery_receipts = tuple(
         event.data["receipt"]
@@ -147,9 +146,7 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
         (fixture.LaterPresetMs.name, 11),
     )
     advance_tries = tuple(
-        tuple(event.data["applied"])
-        for event in events
-        if event.kind == "candidate_try"
+        tuple(event.data["applied"]) for event in events if event.kind == "candidate_try"
     )
     assert advance_tries == (
         ((fixture.Advance.name, True),),

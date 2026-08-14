@@ -554,8 +554,10 @@ class _PilotProgressFormatter:
             why = f" to satisfy {'; '.join(dict.fromkeys(reasons))}" if reasons else ""
             return f"  Set {_pilot_assignments(holds)}{why}.\n"
 
-        if kind == "candidate_try":
-            actions = data.get("applied", ())
+        if kind in {"candidate_try", "crossing_try"}:
+            # Exact same-scan operations use the crossing lifecycle, but they
+            # are still one atomic pulse from the operator's point of view.
+            actions = data.get("applied", data.get("actions", ()))
             if not actions:
                 return None
             prefix = ""
@@ -572,7 +574,12 @@ class _PilotProgressFormatter:
             pulsed = tuple(action for action in actions if action not in self._last_holds)
             return prefix + f"\nPulse {_pilot_assignments(pulsed or actions)}..."
 
-        if kind in {"candidate_rejected", "batch_rejected", "widening_rejected"}:
+        if kind in {
+            "candidate_rejected",
+            "crossing_rejected",
+            "batch_rejected",
+            "widening_rejected",
+        }:
             if self._trial_open:
                 self._trial_open = False
                 return " no useful change.\n"
@@ -581,7 +588,12 @@ class _PilotProgressFormatter:
                 return " no useful change.\n"
             return None
 
-        if kind in {"candidate_accepted", "batch_accepted", "widening_accepted"}:
+        if kind in {
+            "candidate_accepted",
+            "crossing_accepted",
+            "batch_accepted",
+            "widening_accepted",
+        }:
             if self._trial_open:
                 self._trial_open = False
                 return " done.\n"

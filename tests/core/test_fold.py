@@ -492,9 +492,9 @@ def _count_kernel_scans(plc: PLC) -> dict[str, int]:
     counter = {"n": 0}
     original = plc._run_single_scan
 
-    def wrapped(*, consume_pause_request: bool):  # type: ignore[no-untyped-def]
+    def wrapped(**scan_options):  # type: ignore[no-untyped-def]
         counter["n"] += 1
-        return original(consume_pause_request=consume_pause_request)
+        return original(**scan_options)
 
     plc._run_single_scan = wrapped  # ty: ignore[invalid-assignment]
     return counter

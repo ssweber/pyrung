@@ -413,8 +413,7 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
         flow
         for flow in captured[-1].flows
         if any(
-            obligation.tag == fixture.ProcessStep.name
-            and obligation.value == fixture.RUNNING
+            obligation.tag == fixture.ProcessStep.name and obligation.value == fixture.RUNNING
             for obligation in flow.obligations
         )
     )
@@ -549,8 +548,7 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
             if (
                 len(compositions) == 3
                 and emitted.kind == "candidate_try"
-                and emitted.data["applied"]
-                == ((sequence_route.CheckpointSensor.name, True),)
+                and emitted.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
             ):
                 break
     finally:
@@ -558,9 +556,7 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
         if close is not None:
             close()
 
-    composed_values = tuple(
-        fact.pilot_rung_identities[0][1] for fact, _ in compositions
-    )
+    composed_values = tuple(fact.pilot_rung_identities[0][1] for fact, _ in compositions)
     assert composed_values == (
         11,
         21,
@@ -582,20 +578,17 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
     second_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed"
-        and event.data["pilot_rung"].value == 21
+        if event.kind == "theory_correction_composed" and event.data["pilot_rung"].value == 21
     )
     third_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed"
-        and event.data["pilot_rung"].value == 31
+        if event.kind == "theory_correction_composed" and event.data["pilot_rung"].value == 31
     )
     intervening = events[second_composition_index + 1 : third_composition_index]
     assert any(
         event.kind == "candidate_try"
-        and event.data["applied"]
-        == ((sequence_route.CheckpointSensor.name, True),)
+        and event.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
         for event in intervening
     )
     assert not any(event.kind == "conductivity_research_requested" for event in intervening)
@@ -666,8 +659,7 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
         observation
         for observation in captured
         if any(
-            requirement.deadline_occurrence[1]
-            == sequence_route.FirstWatchdogPresetMs.name
+            requirement.deadline_occurrence[1] == sequence_route.FirstWatchdogPresetMs.name
             for requirement in observation.requirements
         )
     )
@@ -691,9 +683,9 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
     assert tuple(
         (obligation.tag, obligation.value) for obligation in refined.claim.obligations
     ) == ((sequence_route.SequenceStep.name, 40),)
-    assert tuple(
-        (obligation.tag, obligation.value) for obligation in later.claim.obligations
-    ) == ((sequence_route.SequenceStep.name, 41),)
+    assert tuple((obligation.tag, obligation.value) for obligation in later.claim.obligations) == (
+        (sequence_route.SequenceStep.name, 41),
+    )
     assert initial.requirements[0].deadline_occurrence[2] == 4
     assert refined.requirements[0].deadline_occurrence[2] == 5
     assert later.requirements[0].deadline_occurrence[2] == 6

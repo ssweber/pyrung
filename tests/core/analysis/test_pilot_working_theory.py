@@ -300,12 +300,8 @@ def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> N
     progress = state.ledger.progress[theory.current_progress_id]
 
     assert progress.provisional_tip == replacement
-    assert progress.phase_receipts[-1].superseded_pilot_rung_identities == (
-        ("PresetMs", 11),
-    )
-    assert active_theory_correction_rung_identities(state) == frozenset(
-        (replacement_identity,)
-    )
+    assert progress.phase_receipts[-1].superseded_pilot_rung_identities == (("PresetMs", 11),)
+    assert active_theory_correction_rung_identities(state) == frozenset((replacement_identity,))
 
 
 def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> None:
@@ -963,6 +959,57 @@ def test_refined_setup_intent_projects_need_without_an_action_artifact() -> None
     assert request.source == rejected.source
     assert request.trigger_act_identity == rejected.act_identity
     assert request.requirements == (requirement,)
+
+
+def test_temporal_request_follows_an_accepted_setup_progress_boundary() -> None:
+    state, theory_id, version_id = _opened()
+    rejected = _attempt(
+        theory_id,
+        version_id,
+        transition="setup-trigger-before-progress",
+        actions=(("original", True),),
+    )
+    state = reduce_theory(state, rejected)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=rejected.source,
+            refined_source=rejected.source,
+            requirements=(_requirement("prior"),),
+            refinement_identity=("setup-before-progress",),
+            temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+            trigger_attempt_id=rejected.attempt_identity,
+            temporal_source=rejected.source,
+        ),
+    )
+    version_id = state.ledger.theories[theory_id].current_version_id
+    accepted = _attempt(
+        theory_id,
+        version_id,
+        transition="accepted-setup-progress",
+        actions=(("setup", True),),
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    )
+    state = reduce_theory(state, accepted)
+    landing = _boundary("accepted-setup-landing", 1)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted.attempt_identity,
+            source=accepted.source,
+            boundary=landing,
+            advance_identity=("accepted-setup-progress",),
+        ),
+    )
+
+    request = temporal_need_request(state)
+
+    assert request is not None
+    assert request.source == landing
 
 
 def test_successor_temporal_request_excludes_accumulated_requirement_history() -> None:

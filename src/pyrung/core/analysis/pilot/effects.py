@@ -943,8 +943,7 @@ def observe_expectation(
                     )
                     continue
                 adjacent_scan_is_observed = any(
-                    candidate.scan_id == projection.scan_id + 1
-                    for candidate in projection_tuple
+                    candidate.scan_id == projection.scan_id + 1 for candidate in projection_tuple
                 )
                 if len(preceding_reads) == 1 or adjacent_scan_is_observed:
                     wrapped = _observe_wrapped_handoff(

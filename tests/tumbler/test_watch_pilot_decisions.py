@@ -177,9 +177,7 @@ def test_research_receipt_names_exact_stop_and_requirement_drift() -> None:
         scan=23,
         data={
             "displacement": stop,
-            "enabling_reads": (
-                {"tag": "WatchdogDone", "rung": 16, "values": (False, True)},
-            ),
+            "enabling_reads": ({"tag": "WatchdogDone", "rung": 16, "values": (False, True)},),
             "requirement_drifts": (
                 {
                     "earlier": ("WatchdogPresetMs", ">", 10),
@@ -205,6 +203,14 @@ def test_interpretation_receipt_names_kind_and_projection_reuse() -> None:
             "kind": "retry_together",
             "projected_scans": (17,),
             "assertion_projection_cached": True,
+            "requirements": (
+                {
+                    "deadline": 42,
+                    "demanding": 17,
+                    "phase": "assert",
+                    "authority": "configured",
+                },
+            ),
             "reason": "the pulse and consumer shape belong in one scan",
             "supporting_identities": (("consumer-read", 17, 42),),
         }
@@ -212,6 +218,7 @@ def test_interpretation_receipt_names_kind_and_projection_reuse() -> None:
 
     assert "scan=17 kind=retry_together projected_scans=(17,)" in line
     assert "assertion_projection_cached=True" in line
+    assert "'phase': 'assert', 'authority': 'configured'" in line
     assert "consumer-read" in line
 
 

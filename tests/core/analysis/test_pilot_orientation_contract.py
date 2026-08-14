@@ -614,6 +614,80 @@ def test_temporal_rearm_declares_one_assertion_scan() -> None:
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
 
 
+def test_temporal_rearm_preserves_the_original_level_command() -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    world.snapshot.update({"Command": False, "Request": True})
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                trigger_act_identity=pulse_identity((("Command", True), ("Request", True))),
+            ),
+            edge_tags=frozenset(("Request",)),
+            resting={"Command": False, "Request": False},
+        ),
+    )
+
+    result = orientation._theory_rearm_bearing(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.applied == (("Command", True), ("Request", False))
+    assert result.act.policy.local_progress is LocalProgressKind.REARM
+
+
+def test_temporal_rearm_releases_an_asserted_competing_command(monkeypatch) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    writes = {
+        "Reset": {"CommandCode": 1, "RequestReady": True},
+        "Clear": {"CommandCode": 9, "RequestReady": True},
+        "Request": {},
+    }
+    monkeypatch.setattr(
+        orientation,
+        "_button_writes",
+        lambda _context, tag, _snapshot: writes[tag],
+    )
+    compass = Compass()
+    world = _world(compass)
+    world.snapshot.update({"Reset": False, "Clear": True, "Request": True})
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                trigger_act_identity=pulse_identity((("Reset", True), ("Request", True))),
+            ),
+            pdg=SimpleNamespace(rung_nodes=()),
+            program=object(),
+            steerable=frozenset(("Reset", "Clear", "Request")),
+            edge_tags=frozenset(("Request",)),
+            resting={"Reset": False, "Clear": False, "Request": False},
+        ),
+    )
+
+    result = orientation._theory_rearm_bearing(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.applied == (
+        ("Request", False),
+        ("Reset", True),
+        ("Clear", False),
+    )
+
+
 def _world(compass: Compass) -> OrientationWorld:
     from pyrung.core.analysis.pilot.trace import TraceNode
 

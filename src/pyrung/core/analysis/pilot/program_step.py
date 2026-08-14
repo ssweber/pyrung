@@ -336,9 +336,7 @@ def read_program_step(
     if admitted_pairs:
         required = tuple(action for action in required if action.pair in admitted_pairs)
         required_tags = frozenset(action.tag for action in required)
-        context_actions = tuple(
-            pair for pair in context_actions if pair[0] in required_tags
-        )
+        context_actions = tuple(pair for pair in context_actions if pair[0] in required_tags)
         input_handoffs = tuple(
             handoff for handoff in input_handoffs if handoff.action in admitted_pairs
         )
@@ -396,9 +394,7 @@ def read_program_step(
         if not _values_match(before.get(tag), after.get(tag))
     )
     owned_channels = tuple(
-        dict.fromkeys(
-            role.channel_tag for role in getattr(ctx, "pipeline_roles", ())
-        )
+        dict.fromkeys(role.channel_tag for role in getattr(ctx, "pipeline_roles", ()))
     )
     selected_channels = tuple(dict.fromkeys(structural_channels))
     owned_departed_channels = tuple(

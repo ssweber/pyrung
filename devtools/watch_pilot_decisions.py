@@ -486,9 +486,7 @@ def _drive_worker(
             )
 
         vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
-        vars(pilot_module)["_record_working_theory_transition"] = (
-            observe_recorded_interpretation
-        )
+        vars(pilot_module)["_record_working_theory_transition"] = observe_recorded_interpretation
         messages.put(
             {
                 "type": "started",
@@ -551,8 +549,7 @@ def _drive_worker(
                         "events": event_count,
                         "scan": last_scan,
                         "reason": (
-                            f"decision budget {config['decision_budget']} reached "
-                            f"at {event.kind}"
+                            f"decision budget {config['decision_budget']} reached at {event.kind}"
                         ),
                     }
                 )
@@ -952,11 +949,7 @@ def main(argv: list[str] | None = None) -> int:
             f"output={args.output_budget:g}s memory={args.memory_budget_mb}MB"
         )
         + f" entry_steps={args.entry_steps}"
-        + (
-            f" decisions={args.decision_budget}"
-            if args.decision_budget is not None
-            else ""
-        ),
+        + (f" decisions={args.decision_budget}" if args.decision_budget is not None else ""),
         flush=True,
     )
     process.start()

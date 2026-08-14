@@ -863,8 +863,7 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     attempts = tuple(
         attempt
         for attempt in all_attempts
-        if attempt.version_id == version.version_id
-        and attempt.source == progress.provisional_tip
+        if attempt.version_id == version.version_id and attempt.source == progress.provisional_tip
     )
     conductivity_attempts = tuple(
         attempt for attempt in all_attempts if attempt.conductivity_observations
@@ -943,7 +942,7 @@ def temporal_need_request(state: TheoryState) -> TemporalNeedRequest | None:
         # where the next scan must begin.  Replaying the trigger's old source
         # after an accepted setup/rearm scan would prove work and then perform
         # it a second time instead of following conductivity forward.
-        source=version.temporal_source or view.source,
+        source=view.source,
         intent=view.temporal_intent,
         trigger_attempt_id=trigger.attempt_id,
         trigger_act_identity=trigger.act_identity,
@@ -1125,12 +1124,8 @@ def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
             raise TheoryInvariantError(f"{current_path} retains a callable")
         value_type = type(current)
         if value_type.__name__ in _FORBIDDEN_TYPES:
-            raise TheoryInvariantError(
-                f"{current_path} retains forbidden {value_type.__name__}"
-            )
-        if current is None or isinstance(
-            current, (str, bytes, int, float, bool, StrEnum)
-        ):
+            raise TheoryInvariantError(f"{current_path} retains forbidden {value_type.__name__}")
+        if current is None or isinstance(current, (str, bytes, int, float, bool, StrEnum)):
             continue
 
         compound = isinstance(current, tuple | frozenset | PMap) or is_dataclass(current)
@@ -1149,8 +1144,7 @@ def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
         children: list[tuple[Any, str]] = []
         if isinstance(current, tuple | frozenset):
             children.extend(
-                (item, f"{current_path}[{index}]")
-                for index, item in enumerate(current)
+                (item, f"{current_path}[{index}]") for index, item in enumerate(current)
             )
         elif isinstance(current, PMap):
             for key, item in current.items():
@@ -1162,9 +1156,7 @@ def assert_detached_theory_value(value: Any, *, path: str = "value") -> None:
                     raise TheoryInvariantError(
                         f"{current_path}.{item.name} is a retained-future field"
                     )
-                children.append(
-                    (getattr(current, item.name), f"{current_path}.{item.name}")
-                )
+                children.append((getattr(current, item.name), f"{current_path}.{item.name}"))
         pending.extend((False, item, item_path) for item, item_path in reversed(children))
 
 
@@ -1571,8 +1563,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.composed_source.scan_id != fact.source.scan_id:
             raise TheoryInvariantError("no-scan composition advanced the physical scan")
         if not fact.composed_source.checkpoint_token or (
-            fact.composed_source.scan_id > 0
-            and not fact.composed_source.execution_owner_token
+            fact.composed_source.scan_id > 0 and not fact.composed_source.execution_owner_token
         ):
             raise TheoryInvariantError("composition boundary evidence is incomplete")
         prior_corrections = {

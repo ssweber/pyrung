@@ -136,10 +136,7 @@ def _assert_bearing_coast_tripwire(skeleton: list[dict]) -> None:
         assert (
             landed == requested
             or entry.get("bearing_stop_reason") == "reached"
-            or (
-                entry.get("bearing") == "exposed"
-                and entry.get("new_frontier") is True
-            )
+            or (entry.get("bearing") == "exposed" and entry.get("new_frontier") is True)
             or entry.get("ejected") is True
         ), (
             f"bearing_coast_accepted[{index}] landed at {landed!r} but requested "

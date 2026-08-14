@@ -183,9 +183,9 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
     assert command_steps[1].scan == 3
     assert command_steps[1].scans == 1
     assert command_steps[1].inputs == ((fixture.AtTarget.name, True),)
-    assert _recorded_correction_values(
-        plan, fixture.WatchdogPresetMs.name
-    ) == frozenset({11, 21, 31})
+    assert _recorded_correction_values(plan, fixture.WatchdogPresetMs.name) == frozenset(
+        {11, 21, 31}
+    )
 
     replay = plan.replay()
     assert replay.state.scan_id == 4

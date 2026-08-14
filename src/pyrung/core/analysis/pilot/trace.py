@@ -3374,9 +3374,8 @@ def _preserve_children(
         if sp is None:
             continue
         guard = _sp_to_expr(sp)
-        if (
-            _eval_expr_from_state(guard, env.snapshot) is True
-            and _rung_write_is_spent_oneshot(ro, tag, env.execution_memory)
+        if _eval_expr_from_state(guard, env.snapshot) is True and _rung_write_is_spent_oneshot(
+            ro, tag, env.execution_memory
         ):
             # Keeping the guard conductive keeps the instruction spent. If a
             # later bearing changes that condition, the committed scan updates

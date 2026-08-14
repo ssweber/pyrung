@@ -348,8 +348,7 @@ def _flow(
             and _after(observation.consumer_read, appeared)
             and (
                 displacement is None
-                or _occurrence_order(observation.consumer_read)
-                < _occurrence_order(displacement)
+                or _occurrence_order(observation.consumer_read) < _occurrence_order(displacement)
             )
         )
     )
@@ -394,10 +393,7 @@ def _attempt_front(
             (
                 group
                 for group in groups
-                if (
-                    group[0].appeared is not None
-                    and group[0].appeared == observation.appeared
-                )
+                if (group[0].appeared is not None and group[0].appeared == observation.appeared)
                 or (
                     group[0].appeared is None
                     and observation.appeared is None
@@ -471,9 +467,7 @@ def conductivity_research_request(
     if stopped_flow is None or stopped_flow.displacement is None:
         return None
     stopping_reads = _stopping_reads(stopped_flow)
-    stopping_read_identities = {
-        _effect_occurrence_identity(read) for read in stopping_reads
-    }
+    stopping_read_identities = {_effect_occurrence_identity(read) for read in stopping_reads}
     relevant_drifts = tuple(
         drift
         for drift in comparison.requirement_drifts

@@ -186,9 +186,7 @@ def test_program_step_keeps_only_the_current_alternative_to_its_exact_producer()
     result = read_program_step(world, producer, plc)
 
     assert result.status is ProgramStepStatus.NEEDS_INPUT
-    assert tuple(action.pair for action in result.required_inputs) == (
-        (resume.name, True),
-    )
+    assert tuple(action.pair for action in result.required_inputs) == ((resume.name, True),)
 
 
 def test_spent_oneshot_clobber_is_not_reported_as_a_live_program_input() -> None:
@@ -378,9 +376,7 @@ def test_structural_hazard_does_not_replace_an_unmet_selected_input() -> None:
 
     assert result.status is ProgramStepStatus.NEEDS_INPUT
     assert result.producer_observed is False
-    assert tuple(action.pair for action in result.required_inputs) == (
-        (input_ready.name, True),
-    )
+    assert tuple(action.pair for action in result.required_inputs) == ((input_ready.name, True),)
 
 
 def test_projection_traces_the_exact_producer_occurrence_view() -> None:
