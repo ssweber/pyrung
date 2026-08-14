@@ -1493,7 +1493,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             if observation.displacement == finding.displacement
         )
         retained_stopping_reads = tuple(
-            read for observation in stopped_observations for read in observation.observed_reads
+            read
+            for observation in stopped_observations
+            for read in (observation.displacement_enabling_reads or observation.observed_reads)
         )
         if not stopped_observations or any(
             read not in retained_stopping_reads for read in finding.enabling_reads

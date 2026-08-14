@@ -437,7 +437,7 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
     )
 
 
-def test_extended_watchdog_research_composes_one_explicit_replacement(
+def test_nested_reconnect_research_yields_before_watchdog_research_and_replacement(
     monkeypatch: Any,
 ) -> None:
     captured: list[Any] = []
@@ -478,7 +478,9 @@ def test_extended_watchdog_research_composes_one_explicit_replacement(
     try:
         for emitted in stream:
             events.append(emitted)
-            if emitted.kind == "conductivity_research_requested":
+            if emitted.kind == "conductivity_research_requested" and emitted.data[
+                "displacement"
+            ].rung == (None, 16):
                 research_seen = True
             elif emitted.kind == "theory_correction_composed" and research_seen:
                 break
@@ -490,10 +492,28 @@ def test_extended_watchdog_research_composes_one_explicit_replacement(
     research_events = tuple(
         event for event in events if event.kind == "conductivity_research_requested"
     )
-    assert len(research_events) == 1
-    assert len(captured) == 1
-    finding, progress_before, progress_after, view, repeated_request = captured[0]
-    event = research_events[0]
+    assert len(research_events) == 2
+    assert len(captured) == 2
+    reconnect, watchdog = captured
+    reconnect_finding = reconnect[0]
+    reconnect_event, event = research_events
+    assert reconnect_event.data["finding_identity"] == reconnect_finding.identity
+    assert reconnect_finding.displacement.rung == (None, 19)
+    assert tuple(read.tag for read in reconnect_finding.enabling_reads) == (
+        sequence_route.NetworkAvailable.name,
+        sequence_route.SequenceStep.name,
+        sequence_route.RecoveryCounter.Done.name,
+        sequence_route.ServiceStatus.name,
+        "_oneshot:i31",
+    )
+    first_research_index = events.index(reconnect_event)
+    watchdog_research_index = events.index(event)
+    assert any(
+        item.kind == "candidate_try"
+        for item in events[first_research_index + 1 : watchdog_research_index]
+    )
+
+    finding, progress_before, progress_after, view, repeated_request = watchdog
     assert event.data["finding_identity"] == finding.identity
     assert finding.source.scan_id == event.scan
     assert finding.comparison_identity[3] is ConductivityProgress.SAME_STOP
@@ -507,8 +527,7 @@ def test_extended_watchdog_research_composes_one_explicit_replacement(
     assert view is not None
     assert view.research_findings[-1] == finding
     assert repeated_request is None
-    research_index = events.index(event)
-    post_research = events[research_index + 1 :]
+    post_research = events[watchdog_research_index + 1 :]
     assert not any(item.kind == "candidate_try" for item in post_research)
     assert events[-1].kind == "theory_correction_composed"
     assert events[-1].scan == event.scan

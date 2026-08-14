@@ -211,6 +211,7 @@ class EffectObservationSnapshot:
     displacement: EffectOccurrenceSnapshot | None = None
     displaced_read: EffectOccurrenceSnapshot | None = None
     observed_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
+    displacement_enabling_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
     detail: str = ""
     execution_epoch: EffectEpochSnapshot | None = None
 
@@ -226,6 +227,11 @@ class EffectObservation:
     displacement: RungWrite | None = field(default=None, compare=False, repr=False)
     displaced_read: RungRead | None = field(default=None, compare=False, repr=False)
     observed_reads: tuple[RungRead, ...] = field(default=(), compare=False, repr=False)
+    displacement_enabling_reads: tuple[RungRead, ...] = field(
+        default=(),
+        compare=False,
+        repr=False,
+    )
     detail: str = ""
     execution_epoch: Any = field(default=None, compare=False, repr=False)
     execution_owner: Any = field(default=None, compare=False, repr=False)
@@ -237,6 +243,22 @@ class EffectObservation:
         compare=False,
         repr=False,
     )
+
+    def __post_init__(self) -> None:
+        """Freeze the exact displacement ancestry while its projection is owned."""
+
+        if (
+            not self.displacement_enabling_reads
+            and self.displacement is not None
+            and self.execution_projection is not None
+        ):
+            object.__setattr__(
+                self,
+                "displacement_enabling_reads",
+                self.execution_projection.enabling_read_closure_observed_by_write(
+                    self.displacement
+                ),
+            )
 
     def diagnostic_snapshot(self) -> EffectObservationSnapshot:
         return EffectObservationSnapshot(
@@ -255,6 +277,9 @@ class EffectObservation:
                 else None
             ),
             observed_reads=tuple(occurrence_snapshot(read) for read in self.observed_reads),
+            displacement_enabling_reads=tuple(
+                occurrence_snapshot(read) for read in self.displacement_enabling_reads
+            ),
             detail=self.detail,
             execution_epoch=(
                 EffectEpochSnapshot(
@@ -645,6 +670,9 @@ def promote_route_landing_observations(
                 disposition="OVERWRITTEN",
                 displacement=displacement,
                 observed_reads=landing_projection.enabling_reads_observed_by_write(displacement),
+                displacement_enabling_reads=(
+                    landing_projection.enabling_read_closure_observed_by_write(displacement)
+                ),
                 detail="exact later writer owns the off-route retained landing",
                 execution_projection=landing_projection,
             )
@@ -699,6 +727,9 @@ def _promote_displaced_terminal_target(
             landing_projection,
             displacement,
             observation.obligation.tag,
+        ),
+        displacement_enabling_reads=(
+            landing_projection.enabling_read_closure_observed_by_write(displacement)
         ),
         detail="global target appeared but the final same-scan writer replaced it",
         execution_projection=landing_projection,
@@ -1819,6 +1850,7 @@ def observe_execution_window(
                         displacement=observation.displacement,
                         displaced_read=observation.displaced_read,
                         observed_reads=observation.observed_reads,
+                        displacement_enabling_reads=(observation.displacement_enabling_reads),
                         detail="coast corridor contains unobserved or folded scans",
                     )
                 )

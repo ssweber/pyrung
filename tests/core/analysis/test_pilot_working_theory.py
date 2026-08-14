@@ -624,7 +624,7 @@ def test_theory_view_retains_conductivity_history_across_refinement() -> None:
     )
 
 
-def test_compass_acknowledges_only_the_exact_retained_research_finding() -> None:
+def test_compass_research_joins_an_enclosing_guard_to_a_nested_stopping_writer() -> None:
     state, theory_id, version_id = _opened()
     obligation = EffectObligationSnapshot(
         tag="Step",
@@ -651,12 +651,21 @@ def test_compass_acknowledges_only_the_exact_retained_research_finding() -> None
             values=(True,),
             rung_index=16,
         )
+        branch_selector = _effect_occurrence(
+            "read",
+            128,
+            scan_id=scan_id,
+            tag="BranchSelector",
+            values=(True,),
+            rung_index=17,
+        )
         return EffectObservationSnapshot(
             disposition="OVERWRITTEN",
             obligation=obligation,
             appeared=appeared,
             displacement=displacement,
-            observed_reads=(watchdog_done,),
+            observed_reads=(branch_selector,),
+            displacement_enabling_reads=(watchdog_done, branch_selector),
         )
 
     first = replace(
@@ -761,7 +770,10 @@ def test_compass_acknowledges_only_the_exact_retained_research_finding() -> None
     assert request is not None
     assert request.comparison == comparison
     assert request.displacement.tag == "Step"
-    assert tuple(read.tag for read in request.enabling_reads) == ("Watchdog.Done",)
+    assert tuple(read.tag for read in request.enabling_reads) == (
+        "Watchdog.Done",
+        "BranchSelector",
+    )
 
     finding = ConductivityResearchFinding(
         theory_id=request.theory_id,

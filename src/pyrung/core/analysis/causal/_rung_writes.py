@@ -162,6 +162,28 @@ class ScanRungWriteProjection:
             if read.ordinal < write.ordinal
         )
 
+    def enabling_read_closure_observed_by_write(
+        self,
+        write: RungWrite,
+    ) -> tuple[RungRead, ...]:
+        """Exact reads on the executed guard ancestry of one selected write.
+
+        A write in a nested branch is enabled both by its direct branch reads
+        and by each enclosing dynamic rung.  Walk only that recorded ancestry;
+        sibling and unrelated runs remain outside the closure.  The returned
+        occurrences retain their original execution order.
+        """
+
+        runs = [write.run]
+        enclosing = self.parent_run(write.run)
+        while enclosing is not None:
+            runs.append(enclosing)
+            enclosing = self.parent_run(enclosing)
+        owners = {id(run) for run in runs}
+        return tuple(
+            read for read in self.reads if id(read.run) in owners and read.ordinal < write.ordinal
+        )
+
     def observed_shape(self, consumer_read: RungRead) -> tuple[RungRead, ...]:
         """All exact direct reads of one selected dynamic consumer occurrence.
 

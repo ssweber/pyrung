@@ -193,7 +193,7 @@ def _stopping_reads(flow: ConductivityFlow) -> tuple[EffectOccurrenceSnapshot, .
             read
             for observation in flow.observations
             if observation.displacement == flow.displacement
-            for read in observation.observed_reads
+            for read in (observation.displacement_enabling_reads or observation.observed_reads)
         )
     )
 

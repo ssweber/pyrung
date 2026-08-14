@@ -134,6 +134,19 @@ def test_compact_views_preserve_guard_cursor_and_derivation() -> None:
     assert capture not in gc.get_referents(projection)
 
 
+def test_write_enabling_read_closure_includes_only_its_dynamic_ancestors() -> None:
+    _plc, _capture, projection, pending, entry, _edge = _captured_projection()
+    branch_write = next(
+        write for write in projection.writes if write.transition.tag_name == "CompactBranchOut"
+    )
+
+    direct = projection.enabling_reads_observed_by_write(branch_write)
+    closure = projection.enabling_read_closure_observed_by_write(branch_write)
+
+    assert tuple(read.occurrence.name for read in direct) == (pending.name,)
+    assert tuple(read.occurrence.name for read in closure) == (entry.name, pending.name)
+
+
 def test_selected_scan_compaction_value_error_fails_closed(monkeypatch) -> None:
     program, _pending, _entry, _edge = _guard_surface_program()
     plc = PLC(program)
