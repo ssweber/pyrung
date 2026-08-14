@@ -497,6 +497,70 @@ def test_extended_watchdog_research_composes_one_explicit_replacement(
     assert tuple(rung.value for rung in preset_rungs) == (21,)
 
 
+def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
+    monkeypatch: Any,
+) -> None:
+    compositions: list[tuple[Any, tuple[Any, ...]]] = []
+    original = pilot_module._record_controlling_theory_fact
+
+    def record(state: Any, fact: Any) -> None:
+        original(state, fact)
+        if isinstance(fact, ComposeTheoryCorrection):
+            compositions.append((fact, tuple(state.pilot_rungs)))
+
+    monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
+
+    events: list[Any] = []
+    stream = pilot_events(
+        PLC(sequence_route.logic, dt=0.010),
+        sequence_route.SequenceStep == 81,
+        max_scans=40,
+    )
+    try:
+        for emitted in stream:
+            events.append(emitted)
+            if len(compositions) == 3:
+                break
+    finally:
+        close = getattr(stream, "close", None)
+        if close is not None:
+            close()
+
+    assert tuple(fact.pilot_rung_identities[0][1] for fact, _ in compositions) == (
+        11,
+        21,
+        31,
+    )
+    second_composition_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "theory_correction_composed"
+        and event.data["pilot_rung"].value == 21
+    )
+    third_composition_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "theory_correction_composed"
+        and event.data["pilot_rung"].value == 31
+    )
+    intervening = events[second_composition_index + 1 : third_composition_index]
+    assert any(
+        event.kind == "candidate_try"
+        and event.data["applied"]
+        == ((sequence_route.CheckpointSensor.name, True),)
+        for event in intervening
+    )
+    assert not any(event.kind == "conductivity_research_requested" for event in intervening)
+
+    third_fact, installed = compositions[-1]
+    assert third_fact.research_finding_identity is None
+    assert len(third_fact.superseded_pilot_rung_identities) == 1
+    preset_rungs = tuple(
+        rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
+    )
+    assert tuple(rung.value for rung in preset_rungs) == (31,)
+
+
 def test_prestepped_watchdog_retains_composed_world_for_followup_research(
     monkeypatch: Any,
 ) -> None:
