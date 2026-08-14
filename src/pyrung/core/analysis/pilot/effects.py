@@ -247,17 +247,25 @@ class EffectObservation:
     def __post_init__(self) -> None:
         """Freeze the exact displacement ancestry while its projection is owned."""
 
-        if (
-            not self.displacement_enabling_reads
-            and self.displacement is not None
-            and self.execution_projection is not None
+        if self.displacement is None:
+            if self.displacement_enabling_reads:
+                raise ValueError("displacement ancestry requires a displacement write")
+            return
+        if self.execution_projection is None:
+            return
+        exact = self.execution_projection.enabling_read_closure_observed_by_write(self.displacement)
+        if self.displacement_enabling_reads and any(
+            left is not right
+            for left, right in zip(self.displacement_enabling_reads, exact, strict=False)
         ):
+            raise ValueError("displacement ancestry is not owned by the exact projection")
+        if self.displacement_enabling_reads and len(self.displacement_enabling_reads) != len(exact):
+            raise ValueError("displacement ancestry is incomplete for the exact projection")
+        if not self.displacement_enabling_reads:
             object.__setattr__(
                 self,
                 "displacement_enabling_reads",
-                self.execution_projection.enabling_read_closure_observed_by_write(
-                    self.displacement
-                ),
+                exact,
             )
 
     def diagnostic_snapshot(self) -> EffectObservationSnapshot:
@@ -1945,6 +1953,7 @@ def _from_ordered(
         displacement=observation.displacement,
         displaced_read=observation.displaced_read,
         observed_reads=observation.observed_reads,
+        displacement_enabling_reads=observation.displacement_enabling_reads,
         detail=observation.detail,
         execution_projection=projection,
     )

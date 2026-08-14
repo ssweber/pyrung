@@ -78,9 +78,10 @@ class OrderedEffectObservation:
 
     ``consumer_read`` is the exact read which consumed the effect, when one
     exists. ``displacement`` is the first exact later write which defeated the
-    effect or a required consumer-shape read.  ``observed_reads`` retains the
-    exact occurrence-addressed reads relevant to the verdict without flattening
-    repeated reads into a tag dictionary.
+    effect or a required consumer-shape read. ``observed_reads`` retains the
+    local occurrence-addressed reads relevant to the verdict, while
+    ``displacement_enabling_reads`` carries the displacement's exact executed
+    guard ancestry. Neither flattens repeated reads into a tag dictionary.
     """
 
     disposition: EffectDisposition
@@ -89,6 +90,7 @@ class OrderedEffectObservation:
     displacement: RungWrite | None = None
     displaced_read: RungRead | None = None
     observed_reads: tuple[RungRead, ...] = ()
+    displacement_enabling_reads: tuple[RungRead, ...] = ()
     detail: str = ""
 
 
@@ -107,8 +109,20 @@ class ScanRungWriteProjection:
     _reads_by_run: dict[int, tuple[RungRead, ...]] = field(init=False, repr=False)
     _reads_by_tag: dict[str, tuple[RungRead, ...]] = field(init=False, repr=False)
     _call_invocation_by_run: dict[int, int | None] = field(init=False, repr=False)
+    _run_order_by_identity: dict[int, int] = field(init=False, repr=False)
+    _parent_order_by_run: dict[int, int | None] = field(init=False, repr=False)
+    _write_identities: frozenset[int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        for kind, accesses in (("read", self.reads), ("write", self.writes)):
+            for access in accesses:
+                if access.scan_id != self.scan_id:
+                    raise ValueError(f"{kind} belongs to a different projection scan")
+                if not 0 <= access.run_order < len(self.runs):
+                    raise ValueError(f"{kind} has no projection-owned run order")
+                if self.runs[access.run_order] is not access.run:
+                    raise ValueError(f"{kind} run identity does not match its projection order")
+
         by_run: dict[int, list[RungWrite]] = {}
         by_tag: dict[str, list[RungWrite]] = {}
         for occurrence in self.writes:
@@ -124,20 +138,26 @@ class ScanRungWriteProjection:
         self._reads_by_run = {key: tuple(value) for key, value in reads_by_run.items()}
         self._reads_by_tag = {key: tuple(value) for key, value in reads_by_tag.items()}
         self._call_invocation_by_run = _dynamic_call_invocations(self.runs)
+        self._run_order_by_identity = {id(run): order for order, run in enumerate(self.runs)}
+        parent_by_run: dict[int, int | None] = {}
+        ancestry: list[int] = []
+        for order, run in enumerate(self.runs):
+            while ancestry and self.runs[ancestry[-1]].depth >= run.depth:
+                ancestry.pop()
+            parent_by_run[order] = ancestry[-1] if ancestry else None
+            ancestry.append(order)
+        self._parent_order_by_run = parent_by_run
+        self._write_identities = frozenset(id(write) for write in self.writes)
 
     def writes_for_run(self, run: RungRun) -> tuple[RungWrite, ...]:
         """Exact direct writes attributed to this dynamic run."""
-        for order, candidate in enumerate(self.runs):
-            if candidate is run:
-                return self._writes_by_run.get(order, ())
-        return ()
+        order = self._run_order_by_identity.get(id(run))
+        return self._writes_by_run.get(order, ()) if order is not None else ()
 
     def reads_for_run(self, run: RungRun) -> tuple[RungRead, ...]:
         """Exact direct reads attributed to this dynamic run."""
-        for order, candidate in enumerate(self.runs):
-            if candidate is run:
-                return self._reads_by_run.get(order, ())
-        return ()
+        order = self._run_order_by_identity.get(id(run))
+        return self._reads_by_run.get(order, ()) if order is not None else ()
 
     def reads_observed_by_write(self, write: RungWrite) -> tuple[RungRead, ...]:
         """Exact reads in the selected instruction before its selected write."""
@@ -174,14 +194,24 @@ class ScanRungWriteProjection:
         occurrences retain their original execution order.
         """
 
+        if id(write) not in self._write_identities:
+            raise ValueError("write is not owned by this execution projection")
+
         runs = [write.run]
         enclosing = self.parent_run(write.run)
         while enclosing is not None:
             runs.append(enclosing)
             enclosing = self.parent_run(enclosing)
-        owners = {id(run) for run in runs}
+        direct_owner = id(write.run)
+        ancestor_owners = {id(run) for run in runs[1:]}
         return tuple(
-            read for read in self.reads if id(read.run) in owners and read.ordinal < write.ordinal
+            read
+            for read in self.reads
+            if read.ordinal < write.ordinal
+            and (
+                id(read.run) == direct_owner
+                or (id(read.run) in ancestor_owners and read.instruction is None)
+            )
         )
 
     def observed_shape(self, consumer_read: RungRead) -> tuple[RungRead, ...]:
@@ -255,6 +285,9 @@ class ScanRungWriteProjection:
                     effect_write,
                     displacement=displacement,
                     observed_reads=self.enabling_reads_observed_by_write(displacement),
+                    displacement_enabling_reads=(
+                        self.enabling_read_closure_observed_by_write(displacement)
+                    ),
                 )
             return OrderedEffectObservation("SURVIVED", effect_write)
 
@@ -312,6 +345,9 @@ class ScanRungWriteProjection:
                 consumer_read=effect_read,
                 displacement=displacement,
                 observed_reads=self.enabling_reads_observed_by_write(displacement),
+                displacement_enabling_reads=(
+                    self.enabling_read_closure_observed_by_write(displacement)
+                ),
             )
 
         if effect_read is None:
@@ -393,6 +429,9 @@ class ScanRungWriteProjection:
                 displacement=displaced_by,
                 displaced_read=observed,
                 observed_reads=consumer_reads,
+                displacement_enabling_reads=(
+                    self.enabling_read_closure_observed_by_write(displaced_by)
+                ),
             )
 
         if not effect_read.run.enabled:
@@ -486,13 +525,11 @@ class ScanRungWriteProjection:
 
     def parent_run(self, run: RungRun) -> RungRun | None:
         """Nearest enclosing dynamic run, if this occurrence is nested."""
-        run_order = self._run_order(run)
+        run_order = self._run_order_by_identity.get(id(run))
         if run_order is None:
             return None
-        for candidate in reversed(self.runs[:run_order]):
-            if candidate.depth < run.depth:
-                return candidate
-        return None
+        parent_order = self._parent_order_by_run[run_order]
+        return self.runs[parent_order] if parent_order is not None else None
 
     def write_at_ordinal(self, ordinal: int) -> RungWrite | None:
         """Resolve one retained rung-write identity."""
@@ -571,12 +608,6 @@ class ScanRungWriteProjection:
             entry = self.entry_tags.get(tag_name)
             if entry != observed_value:
                 return Transition(tag_name, self.scan_id, entry, observed_value)
-        return None
-
-    def _run_order(self, run: RungRun) -> int | None:
-        for order, candidate in enumerate(self.runs):
-            if candidate is run:
-                return order
         return None
 
 

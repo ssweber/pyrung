@@ -2427,7 +2427,23 @@ def derive_advance_requirement_from_effect(
         return _unknown("effect disposition has no typed requirement explanation")
 
     candidates: list[RequirementDerivation] = []
-    for demanding_read in getattr(observation, "observed_reads", ()):
+    # These surfaces are complementary.  The immutable displacement closure
+    # owns the final writer's exact local/caller guards.  ``observed_reads``
+    # may additionally own an exact predecessor chain (for example a nested
+    # rollback whose caller consumed an intermediate value produced by an
+    # Advance completion).  Replacing the latter with the former loses that
+    # conductivity; append only identities not already present instead.
+    displacement_reads = tuple(getattr(observation, "displacement_enabling_reads", ()))
+    observed_reads = tuple(getattr(observation, "observed_reads", ()))
+    demanding_reads = (
+        *displacement_reads,
+        *(
+            read
+            for read in observed_reads
+            if not any(read is exact for exact in displacement_reads)
+        ),
+    )
+    for demanding_read in demanding_reads:
         channel = demanding_read.occurrence.name
         observed_value = demanding_read.occurrence.value
         if not isinstance(observed_value, bool) or index.resolve(channel) is None:

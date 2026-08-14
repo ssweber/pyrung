@@ -117,6 +117,7 @@ class BootstrapEffectSnapshot:
     displacement: BootstrapOccurrenceSnapshot | None
     displaced_read: BootstrapOccurrenceSnapshot | None
     observed_reads: tuple[BootstrapOccurrenceSnapshot, ...]
+    displacement_enabling_reads: tuple[BootstrapOccurrenceSnapshot, ...]
     detail: str = ""
 
 
@@ -151,6 +152,9 @@ class BootstrapEffect:
                 else None
             ),
             observed_reads=tuple(_read_snapshot(read) for read in observation.observed_reads),
+            displacement_enabling_reads=tuple(
+                _read_snapshot(read) for read in observation.displacement_enabling_reads
+            ),
             detail=observation.detail,
         )
 

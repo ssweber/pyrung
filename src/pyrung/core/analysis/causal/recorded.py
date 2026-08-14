@@ -949,6 +949,8 @@ def _walk_backward(
                 pdg,
                 program,
                 caller_rung_index=caller_rung_index,
+                projection=rung_writes,
+                selected_write=selected_write,
             )
             steps.append(wrapped)
             for p in triggers:
@@ -993,6 +995,8 @@ def _walk_backward(
                     pdg,
                     program,
                     caller_rung_index=caller_rung_index,
+                    projection=rung_writes,
+                    selected_write=selected_write,
                 )
                 steps.append(wrapped)
                 for p in triggers:
@@ -1013,6 +1017,8 @@ def _walk_backward(
                 pdg,
                 program,
                 caller_rung_index=caller_rung_index,
+                projection=rung_writes,
+                selected_write=selected_write,
             )
             steps.append(wrapped)
             conjunctive_roots.append(transition)
@@ -1105,6 +1111,8 @@ def _walk_backward(
                 pdg,
                 program,
                 caller_rung_index=caller_rung_index,
+                projection=rung_writes,
+                selected_write=selected_write,
             )
         )
         step_idx = len(steps) - 1
@@ -1531,6 +1539,8 @@ def _with_caller_gate(
     program: Program | None,
     *,
     caller_rung_index: int | None = None,
+    projection: ScanRungWriteProjection | None = None,
+    selected_write: RungWrite | None = None,
 ) -> ChainStep:
     """Surface the call-site caller gate as a lever on a subroutine writer.
 
@@ -1542,7 +1552,37 @@ def _with_caller_gate(
     names the actual caller; older evidence falls back only when one call site
     is structurally unambiguous.
     """
-    if sub_name is None or pdg is None or program is None:
+    if sub_name is None:
+        return step
+    if (
+        projection is not None
+        and selected_write is not None
+        and selected_write.run.rung_id.subroutine == sub_name
+        and selected_write.run.rung_id.rung_index == step.rung_index
+    ):
+        existing = {e.tag_name for e in step.enablers} | {t.tag_name for t in step.triggers}
+        caller_enablers = list(step.enablers)
+        for read in projection.enabling_read_closure_observed_by_write(selected_write):
+            if (
+                read.run is selected_write.run
+                or read.occurrence.domain != "tag"
+                or read.occurrence.name in existing
+            ):
+                continue
+            existing.add(read.occurrence.name)
+            caller_enablers.append(
+                EnablingCondition(
+                    tag_name=read.occurrence.name,
+                    value=read.occurrence.value,
+                    held_since_scan=None,
+                )
+            )
+        return step.with_caller(
+            selected_write.run.caller_rung,
+            tuple(caller_enablers),
+        )
+
+    if pdg is None or program is None:
         return step
     call_sites = pdg.call_site_rung_indices().get(sub_name, frozenset())
     if caller_rung_index is None and len(call_sites) != 1:

@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from pyrung import PLC, And, Bool, Int, Or, Program, copy, out, rise, rung
 from pyrung.core.analysis.causal._rung_writes import (
     RungRead,
@@ -548,7 +550,7 @@ def test_nonzero_or_program_written_preset_is_authoritative() -> None:
     )
 
 
-def test_unrelated_operand_occurrence_fails_closed() -> None:
+def test_projection_rejects_unowned_operand_occurrence_at_construction() -> None:
     evidence = _evidence()
     unrelated = replace(
         evidence.preset_read,
@@ -564,20 +566,16 @@ def test_unrelated_operand_occurrence_fails_closed() -> None:
             ),
         ),
     )
-    projection = replace(
-        evidence.projection,
-        reads=(
-            evidence.enable_read,
-            evidence.acc_read,
-            unrelated,
-            evidence.demanding_read,
-        ),
-    )
-
-    result = _derive(evidence, projection=projection, operand_read=unrelated)
-
-    assert result.requirement is None
-    assert result.explanation.kind is FailureExplanationKind.UNKNOWN
+    with pytest.raises(ValueError, match="run identity"):
+        replace(
+            evidence.projection,
+            reads=(
+                evidence.enable_read,
+                evidence.acc_read,
+                unrelated,
+                evidence.demanding_read,
+            ),
+        )
 
 
 def test_later_operand_cannot_be_an_exact_deadline() -> None:
@@ -661,6 +659,55 @@ def test_effect_adapter_uses_only_exact_consequential_owner_read() -> None:
 
     assert result.requirement is not None
     assert result.requirement.condition == Cmp("WatchdogPresetMs", ">", 10)
+
+
+def test_effect_adapter_uses_exact_displacement_ancestry_before_local_reads() -> None:
+    evidence = _evidence()
+    observation = SimpleNamespace(
+        disposition="OVERWRITTEN",
+        observed_reads=(evidence.enable_read,),
+        displacement_enabling_reads=(evidence.demanding_read,),
+    )
+
+    result = derive_advance_requirement_from_effect(
+        evidence.index,
+        evidence.projection,
+        observation,
+        operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
+        execution_epoch=evidence.epoch,
+        execution_owner=evidence.epoch_owner,
+        selected_writer=(None, 2, ()),
+        source_world_key=("world", 0),
+        source_checkpoint=evidence.checkpoint,
+    )
+
+    assert result.requirement is not None
+    assert result.requirement.demanding_occurrence.ordinal == evidence.demanding_read.ordinal
+
+
+def test_effect_adapter_keeps_exact_predecessor_reads_beyond_displacement_ancestry() -> None:
+    evidence = _evidence()
+    observation = SimpleNamespace(
+        disposition="OVERWRITTEN",
+        observed_reads=(evidence.demanding_read,),
+        displacement_enabling_reads=(evidence.enable_read,),
+    )
+
+    result = derive_advance_requirement_from_effect(
+        evidence.index,
+        evidence.projection,
+        observation,
+        operand_authorities={"WatchdogPresetMs": OperandAuthority.ADJUSTABLE},
+        execution_epoch=evidence.epoch,
+        execution_owner=evidence.epoch_owner,
+        selected_writer=(None, 2, ()),
+        source_world_key=("world", 0),
+        source_checkpoint=evidence.checkpoint,
+    )
+
+    assert result.requirement is not None
+    assert result.requirement.condition == Cmp("WatchdogPresetMs", ">", 10)
+    assert result.requirement.demanding_occurrence.ordinal == evidence.demanding_read.ordinal
 
 
 def test_effect_adapter_does_not_invent_writability() -> None:

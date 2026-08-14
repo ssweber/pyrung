@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pilot.static_expressions import (
     _channel_from_values,
+    caller_guard_context,
 )
 from pyrung.core.analysis.pilot.tide_tables import _read_table, table_operand_from_copy
 
@@ -497,29 +498,19 @@ def _call_site_conditions(
     pdg: ProgramGraph,
     program: Any,
 ) -> tuple[tuple[str, Any], ...]:
-    """Extract conditions from call-site rungs for subroutine writers."""
+    """Extract conditions common to every recursive caller alternative."""
     if node.subroutine is None:
         return ()
 
-    from pyrung.core.analysis.pdg import resolve_rung
-    from pyrung.core.analysis.simplified import _sp_to_expr
     from pyrung.core.analysis.sp_values import _extract_condition_values
 
-    gates: list[tuple[str, Any]] = []
-
-    for call_site in _call_site_nodes(node, pdg):
-        cs_rung = resolve_rung(program, call_site)
-        if cs_rung is None:
-            continue
-        cs_sp = cs_rung.sp_tree()
-        if cs_sp is None:
-            continue
-        cs_conds = _extract_condition_values(_sp_to_expr(cs_sp))
-        for tag, values in sorted(cs_conds.items()):
-            if len(values) == 1:
-                gates.append((tag, next(iter(values))))
-
-    return tuple(gates)
+    guard = caller_guard_context(program).caller_guards.get(node.subroutine)
+    if guard is None:
+        return ()
+    conditions = _extract_condition_values(guard)
+    return tuple(
+        (tag, next(iter(values))) for tag, values in sorted(conditions.items()) if len(values) == 1
+    )
 
 
 def selected_chart_producer_guard_rungs(
@@ -571,29 +562,25 @@ def _route_edge_gates(
     from pyrung.core.analysis.pdg import resolve_rung
     from pyrung.core.analysis.simplified import And, Atom, Or, _sp_to_expr
 
-    gates: set[tuple[str, bool]] = set()
-
-    def visit(expr: Any) -> None:
+    def required(expr: Any) -> frozenset[tuple[str, bool]]:
         if isinstance(expr, Atom):
             if expr.form in ("rise", "fall") and expr.tag in steerable:
-                gates.add((expr.tag, expr.form == "rise"))
-        elif isinstance(expr, (And, Or)):
-            for term in expr.terms:
-                visit(term)
+                return frozenset(((expr.tag, expr.form == "rise"),))
+            return frozenset()
+        if isinstance(expr, And):
+            return frozenset().union(*(required(term) for term in expr.terms))
+        if isinstance(expr, Or):
+            terms = tuple(required(term) for term in expr.terms)
+            return frozenset.intersection(*terms) if terms else frozenset()
+        return frozenset()
 
-    def visit_node(n: Any) -> None:
-        ro = resolve_rung(program, n)
-        if ro is None:
-            return
-        sp = ro.sp_tree()
-        if sp is not None:
-            visit(_sp_to_expr(sp))
-
-    visit_node(node)
-
-    for call_site in _call_site_nodes(node, pdg):
-        visit_node(call_site)
-
+    writer = resolve_rung(program, node)
+    writer_sp = writer.sp_tree() if writer is not None else None
+    gates = required(_sp_to_expr(writer_sp)) if writer_sp is not None else frozenset()
+    if node.subroutine is not None:
+        caller = caller_guard_context(program).caller_guards.get(node.subroutine)
+        if caller is not None:
+            gates |= required(caller)
     return tuple(sorted(gates))
 
 

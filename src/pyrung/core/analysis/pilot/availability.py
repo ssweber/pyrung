@@ -11,12 +11,14 @@ execute the program.
 
 from __future__ import annotations
 
-import functools
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.partial_eval import partial_eval
 from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.static_expressions import (
+    caller_guard_context,
+)
 from pyrung.core.analysis.pilot.static_expressions import (
     simplified_expr_tags as _simplified_expr_tags,
 )
@@ -275,21 +277,6 @@ def _expr_availability(
     return _WriterAvailability.UNKNOWN
 
 
-@functools.lru_cache(maxsize=16)
-def _caller_guard_ctx(program: Any) -> Any:
-    """The shared per-program caller-guard context, cached per program.
-
-    Wraps the ONE caller-guard-Expr recursion (``simplified._build_guard_ctx``):
-    per subroutine, the full symbolic call guard (OR over call sites, each ANDed
-    with the caller's own recursive call guard, recursion-cycle guarded).  The
-    trace hot path asks for availability per writer per iteration, so the ctx is
-    memoized here because ``Program`` is hashable.
-    """
-    from pyrung.core.analysis.simplified import _build_guard_ctx
-
-    return _build_guard_ctx(program)
-
-
 def _caller_availability(
     rung_node: Any,
     snapshot: dict[str, Any],
@@ -302,7 +289,7 @@ def _caller_availability(
 
     A body rung with an unconditionally-true local guard is not available when
     its subroutine is only called from a contradictory state.  Reads the one
-    shared caller-guard recursion (``_caller_guard_ctx`` →
+    shared caller-guard recursion (``caller_guard_context`` →
     ``simplified._build_guard_ctx``): the full symbolic call guard for the
     writer's subroutine — OR over call sites, each ANDed with the caller's own
     recursive call guard — classified through the same ``_expr_availability``
@@ -313,7 +300,7 @@ def _caller_availability(
     if not subroutine:
         return _WriterAvailability.AVAILABLE_NOW
 
-    ctx = _caller_guard_ctx(program)
+    ctx = caller_guard_context(program)
     if not ctx.caller_map.get(subroutine):
         return _WriterAvailability.UNKNOWN
     guard_expr = ctx.caller_guards.get(subroutine)

@@ -4,7 +4,22 @@ import gc
 
 import pytest
 
-from pyrung.core import PLC, Bool, Program, Rung, branch, out, rise, system
+from pyrung.core import (
+    PLC,
+    Bool,
+    Int,
+    Or,
+    Program,
+    Rung,
+    branch,
+    call,
+    copy,
+    out,
+    reset,
+    rise,
+    subroutine,
+    system,
+)
 from pyrung.core.analysis.causal._rung_writes import (
     ScanRungWriteProjection,
     compact_projection_condition_views,
@@ -54,6 +69,46 @@ def _captured_projection():
     )
     assert isinstance(projection, ScanRungWriteProjection)
     return plc, capture, projection, pending, entry, edge
+
+
+def _nested_displacement_projection():
+    top = Bool("CompactTopGate", default=True)
+    top_skipped = Bool("CompactTopSkipped")
+    middle = Bool("CompactMiddleGate", default=True)
+    middle_skipped = Bool("CompactMiddleSkipped")
+    leaf = Bool("CompactLeafGate", default=True)
+    unrelated_data = Int("CompactUnrelatedData", default=7)
+    scratch = Int("CompactScratch")
+    result = Bool("CompactNestedResult")
+
+    with Program() as program:
+        with Rung():
+            out(result)
+        with Rung(Or(top, top_skipped)):
+            call("CompactMiddle")
+        with subroutine("CompactMiddle"):
+            with Rung(Or(middle, middle_skipped)):
+                copy(unrelated_data, scratch)
+                call("CompactLeaf")
+        with subroutine("CompactLeaf"):
+            with Rung(leaf):
+                reset(result)
+
+    plc = PLC(program)
+    plc.step()
+    projection = plc._replay_pilot_rung_write_projection_at(plc.state.scan_id)
+    assert projection is not None
+    return (
+        program,
+        projection,
+        result,
+        top,
+        top_skipped,
+        middle,
+        middle_skipped,
+        leaf,
+        unrelated_data,
+    )
 
 
 def test_pilot_selected_scan_replay_is_compact_and_does_not_mutate_generic_cache() -> None:
@@ -145,6 +200,52 @@ def test_write_enabling_read_closure_includes_only_its_dynamic_ancestors() -> No
 
     assert tuple(read.occurrence.name for read in direct) == (pending.name,)
     assert tuple(read.occurrence.name for read in closure) == (entry.name, pending.name)
+
+
+def test_nested_displacement_owns_exact_guards_not_skipped_or_ancestor_data() -> None:
+    (
+        program,
+        projection,
+        result,
+        top,
+        top_skipped,
+        middle,
+        middle_skipped,
+        leaf,
+        unrelated_data,
+    ) = _nested_displacement_projection()
+    observation = projection.observe_appeared_handoff(
+        result.name,
+        True,
+        producer_rung=program.rungs[0],
+        consumer_rung=None,
+    )[0]
+
+    assert observation.disposition == "OVERWRITTEN"
+    assert tuple(read.occurrence.name for read in observation.observed_reads) == (leaf.name,)
+    assert tuple(read.occurrence.name for read in observation.displacement_enabling_reads) == (
+        top.name,
+        middle.name,
+        leaf.name,
+    )
+    assert top_skipped.name not in {
+        read.occurrence.name for read in observation.displacement_enabling_reads
+    }
+    assert middle_skipped.name not in {
+        read.occurrence.name for read in observation.displacement_enabling_reads
+    }
+    assert unrelated_data.name not in {
+        read.occurrence.name for read in observation.displacement_enabling_reads
+    }
+
+
+def test_enabling_read_closure_rejects_a_write_from_another_projection() -> None:
+    _program, first, *_rest = _nested_displacement_projection()
+    _program, second, result, *_rest = _nested_displacement_projection()
+    foreign = next(write for write in second.writes if write.transition.tag_name == result.name)
+
+    with pytest.raises(ValueError, match="not owned"):
+        first.enabling_read_closure_observed_by_write(foreign)
 
 
 def test_selected_scan_compaction_value_error_fails_closed(monkeypatch) -> None:

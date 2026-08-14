@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
@@ -22,6 +23,15 @@ if TYPE_CHECKING:
 _INDEX_CHASE_CAP = 32
 _REAL_STRICT_EPSILON = 1e-6
 _FORM_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "==", "ne": "!="}
+
+
+@functools.lru_cache(maxsize=16)
+def caller_guard_context(program: Any) -> Any:
+    """Shared recursive symbolic caller guards for one immutable program."""
+
+    from pyrung.core.analysis.simplified import _build_guard_ctx
+
+    return _build_guard_ctx(program)
 
 
 def _resolved_atom_operand(atom: Atom, snapshot: dict[str, Any]) -> Any:

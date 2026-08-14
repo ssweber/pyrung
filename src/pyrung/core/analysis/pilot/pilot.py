@@ -1088,6 +1088,7 @@ def _is_exact_bootstrap_source(
             continue
         occurrences = (
             *effect.observation.observed_reads,
+            *effect.observation.displacement_enabling_reads,
             effect.observation.consumer_read,
             effect.observation.displaced_read,
         )
@@ -1111,6 +1112,7 @@ def _bootstrap_designation_for_requirement(
     for effect in receipt.appeared_effects:
         occurrences = (
             *effect.observation.observed_reads,
+            *effect.observation.displacement_enabling_reads,
             effect.observation.consumer_read,
             effect.observation.displaced_read,
         )

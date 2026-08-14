@@ -1763,7 +1763,7 @@ def _investigate_and_revert(
                             departure.tag,
                             *(
                                 read.occurrence.name
-                                for read in projection.enabling_reads_observed_by_write(
+                                for read in projection.enabling_read_closure_observed_by_write(
                                     harmful_write
                                 )
                             ),

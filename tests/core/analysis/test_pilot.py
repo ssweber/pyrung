@@ -2451,3 +2451,87 @@ def test_expand_routes_subroutine_call_site_gates():
     # Call site gate should include Enable
     gate_tags = {tag for tag, _val in route.call_site_gates}
     assert "Enable" in gate_tags, f"Expected Enable in call_site_gates, got {route.call_site_gates}"
+
+
+def test_expand_routes_carries_recursive_nested_call_guards():
+    """Static routes retain every conjunct on the recursive caller path."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.steerable import compute_steerable
+
+    top = Bool("NestedRouteTop", external=True)
+    middle = Bool("NestedRouteMiddle", external=True)
+    command = Bool("NestedRouteCommand", external=True)
+    state = Int("NestedRouteState")
+
+    with Program() as program:
+        with rung(top):
+            call("NestedRouteOuter")
+        with subroutine("NestedRouteOuter"):
+            with rung(middle):
+                call("NestedRouteWriter")
+        with subroutine("NestedRouteWriter"):
+            with rung(state == 0, command):
+                copy(1, state)
+
+    plc = PLC(program)
+    pdg = build_program_graph(program)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program)
+    route = expand_routes(state.name, pdg, program, steerable, frozenset())[0]
+
+    assert set(route.call_site_gates) == {(top.name, True), (middle.name, True)}
+
+
+def test_expand_routes_keeps_only_guards_common_to_alternate_call_sites():
+    """Alternative callers are OR arms, not one synthetic conjunction."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.steerable import compute_steerable
+
+    common = Bool("AlternateRouteCommon", external=True)
+    left = Bool("AlternateRouteLeft", external=True)
+    right = Bool("AlternateRouteRight", external=True)
+    command = Bool("AlternateRouteCommand", external=True)
+    state = Int("AlternateRouteState")
+
+    with Program(strict=False) as program:
+        with rung(common, left):
+            call("AlternateRouteWriter")
+        with rung(common, right):
+            call("AlternateRouteWriter")
+        with subroutine("AlternateRouteWriter"):
+            with rung(state == 0, command):
+                copy(1, state)
+
+    plc = PLC(program)
+    pdg = build_program_graph(program)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program)
+    route = expand_routes(state.name, pdg, program, steerable, frozenset())[0]
+
+    assert route.call_site_gates == ((common.name, True),)
+
+
+def test_expand_routes_does_not_compose_alternate_edge_arms_together():
+    """An OR of edge gates does not require every edge in one pulse."""
+    from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.evidence import expand_routes
+    from pyrung.core.analysis.steerable import compute_steerable
+
+    left = Bool("AlternateEdgeLeft", external=True)
+    right = Bool("AlternateEdgeRight", external=True)
+    command = Bool("AlternateEdgeCommand", external=True)
+    state = Int("AlternateEdgeState")
+
+    with Program(strict=False) as program:
+        with rung(Or(rise(left), rise(right))):
+            call("AlternateEdgeWriter")
+        with subroutine("AlternateEdgeWriter"):
+            with rung(state == 0, command):
+                copy(1, state)
+
+    plc = PLC(program)
+    pdg = build_program_graph(program)
+    steerable = compute_steerable(pdg, plc._known_tags_by_name, program)
+    route = expand_routes(state.name, pdg, program, steerable, frozenset())[0]
+
+    assert route.edge_gates == ()

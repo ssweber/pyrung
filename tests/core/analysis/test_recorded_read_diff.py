@@ -9,7 +9,7 @@ operand values.
 
 from __future__ import annotations
 
-from pyrung import Bool, Int, Program, Rung, calc, copy, out
+from pyrung import Bool, Int, Or, Program, Rung, calc, copy, out
 from pyrung.core import call, subroutine
 from pyrung.core.analysis.causal import recorded as recorded_module
 from pyrung.core.analysis.causal.crossings_recorded import (
@@ -261,6 +261,40 @@ def test_cause_crosses_subroutine_aggregate_writer() -> None:
     assert "DS2" in [t.tag_name for t in calc_step.triggers]
     assert "Enable" in [e.tag_name for e in calc_step.enablers]
     assert "DS2" in chain.tags()
+
+
+def test_cause_uses_exact_nested_caller_reads_instead_of_static_leaves() -> None:
+    top = Bool("CauseExactTop", default=True)
+    top_skipped = Bool("CauseStaticTopSkipped")
+    middle = Bool("CauseExactMiddle", default=True)
+    middle_skipped = Bool("CauseStaticMiddleSkipped")
+    leaf = Bool("CauseExactLeaf", default=True)
+    unrelated = Int("CauseAncestorData", default=7)
+    scratch = Int("CauseAncestorScratch")
+    result = Bool("CauseNestedResult")
+
+    with Program() as program:
+        with Rung(Or(top, top_skipped)):
+            call("CauseMiddle")
+        with subroutine("CauseMiddle"):
+            with Rung(Or(middle, middle_skipped)):
+                copy(unrelated, scratch)
+                call("CauseLeaf")
+        with subroutine("CauseLeaf"):
+            with Rung(leaf):
+                out(result)
+
+    runner = PLC(program)
+    runner.step()
+    chain = runner.cause(result.name)
+
+    assert chain is not None
+    step = next(item for item in chain.steps if item.transition.tag_name == result.name)
+    enablers = {item.tag_name for item in step.enablers}
+    assert {top.name, middle.name, leaf.name} <= enablers
+    assert top_skipped.name not in enablers
+    assert middle_skipped.name not in enablers
+    assert unrelated.name not in enablers
 
 
 def test_cause_crosses_branch_writer() -> None:
