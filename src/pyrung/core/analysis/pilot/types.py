@@ -682,7 +682,7 @@ class _PilotContext:
     collect_action_attribution: bool = True
     # Clear-only (ack-cleared momentary) command tags — the pulse-treatment set.
     # Kept off prerequisite holds (options.py) and off preferred init/reset
-    # writer selection (trace._rank_writers): a momentary command, never a hold.
+    # writer selection: a momentary command, never a hold.
     clear_only: frozenset[str] = frozenset()
     # Phase-4 scheduling knowledge exposed read-only to Orientation.  It is
     # not an executable overlay and candidate construction must not mutate it.

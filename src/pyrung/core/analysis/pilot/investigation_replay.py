@@ -47,7 +47,7 @@ from pyrung.core.analysis.pilot.overlay import (
 )
 from pyrung.core.analysis.pilot.pulse import _apply_pulse
 from pyrung.core.analysis.pilot.skiff import run_pinned_scan
-from pyrung.core.analysis.pilot.trace import _can_produce, target_reached, trace_back
+from pyrung.core.analysis.pilot.trace import target_reached, trace_back
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
@@ -58,6 +58,7 @@ from pyrung.core.analysis.pilot.types import (
     _StepContext,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_state_key
+from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 from pyrung.core.context import RungId
 

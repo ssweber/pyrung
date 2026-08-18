@@ -72,7 +72,6 @@ from pyrung.core.analysis.pilot.overlay import project_pilot_overlay
 from pyrung.core.analysis.pilot.requirement_admission import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
-    _can_produce,
     frontier_pairs,
     target_reached,
     trace_back,
@@ -92,6 +91,7 @@ from pyrung.core.analysis.pilot.types import (
     _PulseState,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
+from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.simplified import _sp_to_expr
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core.analysis.pilot import trace as _t
+from pyrung.core.analysis.pdg import resolve_rung
+from pyrung.core.analysis.pilot.trace import _env_for, _scope_ref, _visit_key, trace_back
+from pyrung.core.analysis.pilot.writer_selection import _can_produce
+from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 
 # (tag, value, predicate)
 TargetSpec = tuple[str, Any, Any]
@@ -27,8 +30,8 @@ def _producers(env: Any, tag: str, val: Any) -> set[int]:
     """Rungs that can produce ``tag == val`` (cold/initial state excluded)."""
     out: set[int] = set()
     for ri in env.pdg.writers_of.get(tag, frozenset()):
-        ro = _t.resolve_rung(env.program, env.pdg.rung_nodes[ri])
-        if ro is not None and _t._can_produce(_t._written_value_for_tag(ro, tag), val):
+        ro = resolve_rung(env.program, env.pdg.rung_nodes[ri])
+        if ro is not None and _can_produce(_written_value_for_tag(ro, tag), val):
             out.add(ri)
     return out
 
@@ -37,11 +40,11 @@ def _writes_off(env: Any, ri: int, tag: str, val: Any) -> Any:
     """Written value if rung ``ri`` drives ``tag`` off ``val`` retentively, else None."""
     if ri not in env.pdg.writers_of.get(tag, frozenset()):
         return None
-    ro = _t.resolve_rung(env.program, env.pdg.rung_nodes[ri])
+    ro = resolve_rung(env.program, env.pdg.rung_nodes[ri])
     if ro is None:
         return None
-    wv = _t._written_value_for_tag(ro, tag)
-    if _t._can_produce(wv, val):
+    wv = _written_value_for_tag(ro, tag)
+    if _can_produce(wv, val):
         return None  # this writer could itself produce the target — not a clobber
     if tag in env.pdg.rung_nodes[ri].ote_writes:
         return None  # OTE / self-clearing — transient, not a retentive clobber
@@ -58,14 +61,14 @@ def _route_clobbers(env: Any, x: tuple[str, Any], y: tuple[str, Any]) -> list[tu
     yt, yv = y
     routes: list[tuple[int, list]] = []
     for ri in sorted(_producers(env, xt, xv)):
-        tree = _t.trace_back(
+        tree = trace_back(
             xt,
             xv,
             env.snapshot,
             env.pdg,
             env.program,
             env.steerable,
-            writer_locks={_t._visit_key(xt, xv): ri},
+            writer_locks={_visit_key(xt, xv): ri},
         )
         rungs: set[int] = {ri}
         _all_writer_rungs(tree, rungs)
@@ -103,7 +106,7 @@ def _me_reason(env: Any, a: TargetSpec, b: TargetSpec, ev_ab: list, ev_ba: list)
     def _ev(ev: list, ytag: str) -> str:
         return (
             ", ".join(
-                f"{_t._scope_ref(ri, env.pdg.rung_nodes[ri])} sets {ytag}={_unwrap(wv)!r}"
+                f"{_scope_ref(ri, env.pdg.rung_nodes[ri])} sets {ytag}={_unwrap(wv)!r}"
                 for ri, wv in ev
             )
             or "?"
@@ -152,12 +155,12 @@ def analyze(
     retentive clobber).  Otherwise ``ok=True`` and ``ordered`` is a
     clobberer-first establish order for the drive loop.
     """
-    env = _t._env_for(snapshot, pdg, program, steerable)
+    env = _env_for(snapshot, pdg, program, steerable)
 
     for i in range(len(targets)):
         for j in range(i + 1, len(targets)):
             ti, tj = targets[i], targets[j]
-            if ti[0] == tj[0] and not _t._values_match(ti[1], tj[1]):
+            if ti[0] == tj[0] and not _values_match(ti[1], tj[1]):
                 return (
                     False,
                     f"pilot: {ti[0]} is one register; cannot be both "

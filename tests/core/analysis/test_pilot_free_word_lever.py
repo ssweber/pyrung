@@ -169,11 +169,11 @@ def _transient_stepper_program() -> tuple[Program, object, dict[str, object]]:
 
 def test_transient_stepper_ranks_current_state_tools() -> None:
     """The reset/decrement writer is an edge from 5->4, not a tool at state 3."""
-    from pyrung.core.analysis.pilot.trace import (
-        _rank_writers,
+    from pyrung.core.analysis.pilot.availability import (
         _writer_availability,
         _WriterAvailability,
     )
+    from pyrung.core.analysis.pilot.writer_selection import _rank_writers
     from pyrung.core.analysis.steerable import compute_steerable
 
     prog, _target, _tags = _transient_stepper_program()

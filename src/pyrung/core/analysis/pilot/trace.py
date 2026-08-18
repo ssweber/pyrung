@@ -37,7 +37,6 @@ from pyrung.core.analysis.pilot.availability import (
     _equality_gated_coil,
     _reduce_guard_by_fire_pins,
     _reduce_guard_by_pin,
-    _writer_availability,
     _WriterAvailability,
 )
 from pyrung.core.analysis.pilot.effects import EffectPathStep
@@ -47,6 +46,17 @@ from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
     _heuristic_inequality_target,
     _resolve_inequality_target,
+)
+from pyrung.core.analysis.pilot.writer_selection import (
+    _UNRESOLVED,
+    _can_produce,
+    _concrete_written_value,
+    _producer_constraints,
+    _producer_pins,
+    _rank_writers,
+    _reverse_writer,
+    _sole_write_instr,
+    _WriterRank,
 )
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
 from pyrung.core.analysis.return_guards import _return_early_guard_exprs
@@ -64,14 +74,10 @@ from pyrung.core.analysis.sp_values import (
     _invert_affine,
     _required_from_atom,
     _values_match,
-    _writer_for_tag,
-    _writer_projection,
     _written_value_for_tag,
 )
 from pyrung.core.analysis.write_sites import instruction_writes_tag
 from pyrung.core.crossing import (
-    REVERSE_FALLTHROUGH,
-    UNKNOWN,
     Affine,
     AffineCmp,
     Aggregate,
@@ -79,10 +85,8 @@ from pyrung.core.crossing import (
     Constraint,
     CrossingContext,
     Eq,
-    Literal,
     ReverseResult,
     eq_target,
-    evaluate_forward,
 )
 from pyrung.core.instruction.advance import constraint_holds
 
@@ -1112,84 +1116,6 @@ class _Lever:
     note: str = ""
 
 
-def _sole_write_instr(tag: str, pdg: ProgramGraph, program: Any) -> Any:
-    """The sole exact static instruction writing *tag*, or ``None``.
-
-    Rung selection belongs to the PDG; destination-shape resolution belongs to
-    the shared write-site enumerator consumed by :func:`_writer_for_tag`.
-    """
-    writers = pdg.writers_of.get(tag, frozenset())
-    if len(writers) != 1:
-        return None
-    ro = resolve_rung(program, pdg.rung_nodes[next(iter(writers))])
-    if ro is None:
-        return None
-    return _writer_for_tag(ro, tag)
-
-
-def _reverse_writer(
-    ro: Any,
-    tag: str,
-    value: Any,
-    snapshot: dict[str, Any],
-    pdg: ProgramGraph,
-) -> ReverseResult:
-    """Reverse the exact instruction selected inside a writer rung.
-
-    ``pdg.writers_of`` owns writer selection (including subroutine and branch
-    nodes); this helper only resolves the instruction inside that already-chosen
-    rung and asks its registered crossing for the producer-side receipt.
-    """
-    instr = _writer_for_tag(ro, tag)
-    if instr is None:
-        return REVERSE_FALLTHROUGH
-    from pyrung.core.analysis import crossings
-
-    return crossings.reverse(
-        instr,
-        ro,
-        eq_target(tag, value),
-        CrossingContext(
-            snapshot=snapshot,
-            tags_by_name=pdg.tags,
-        ),
-    )
-
-
-def _producer_constraints(
-    result: ReverseResult,
-    target: Constraint,
-) -> tuple[Constraint, ...]:
-    """The deterministic producer requirements carried by a reverse receipt.
-
-    Trace can currently consume one conjunctive branch of scalar ``Eq``/``Cmp``
-    requirements. Other algebra shapes and disjunctions remain with their
-    established specialized consumers; fallthrough never fabricates a need.
-    A constraint identical to the target is a hold/self-copy, not progress.
-    """
-    normalized = normalize_reverse_result(result)
-    if normalized.fallthrough or normalized.contradiction or len(normalized.branches) != 1:
-        return ()
-    (branch,) = normalized.branches
-    requirements: list[Constraint] = []
-    for constraint in branch:
-        if not isinstance(constraint, (Eq, Cmp, AffineCmp)):
-            return ()
-        if constraint == target:
-            continue
-        if isinstance(constraint, Eq) and len(constraint.values) != 1:
-            return ()
-        requirements.append(constraint)
-    return tuple(requirements)
-
-
-def _producer_pins(result: ReverseResult, target: Constraint) -> dict[str, Any]:
-    """Singleton equality pins from one deterministic producer receipt."""
-    pins: dict[str, Any] = {}
-    for constraint in _producer_constraints(result, target):
-        if isinstance(constraint, Eq):
-            pins[constraint.tag] = next(iter(constraint.values))
-    return pins
 
 
 #: simplified comparison form <-> Crossings ``Cmp`` operator symbol.
@@ -4245,218 +4171,3 @@ def _visit_key(tag: str, value: Any) -> tuple[str, Any]:
     if isinstance(value, (bool, int, float, str, type(None))):
         return (tag, value)
     return (tag, id(value))
-
-
-def _can_produce(wv: Any, value: Any) -> bool:
-    if isinstance(wv, Literal):
-        return _values_match(wv.value, value)
-    if isinstance(wv, Affine):
-        return True
-    if isinstance(wv, Aggregate):
-        return True
-    return True  # UNKNOWN — assume it could
-
-
-_UNRESOLVED = object()
-
-
-def _concrete_written_value(wv: Any, snapshot: dict[str, Any]) -> Any:
-    """The concrete value *wv* provably drives this scan, or ``_UNRESOLVED``.
-
-    A ``Literal`` produces its value; an ``Affine`` (identity/scaled copy)
-    produces ``source * scale + offset`` when the source's live value is a
-    known number.  Anything else — an opaque copy, an aggregate, an absent or
-    non-numeric source — is unresolved (punt, never fabricate).
-    """
-    if not isinstance(wv, (Literal, Affine, Aggregate)):
-        return _UNRESOLVED
-    produced = evaluate_forward(wv, snapshot)
-    return _UNRESOLVED if produced is UNKNOWN else produced
-
-
-def _writer_clobbers_codemand(
-    ro: Any,
-    tag: str,
-    codemands: tuple[tuple[str, Any], ...],
-    snapshot: dict[str, Any],
-) -> bool:
-    """Whether *ro*'s co-writes provably falsify a concurrent sibling demand.
-
-    ``codemands`` are the concrete ``(tag, value)`` demands of the enclosing
-    guard's *other* atoms — pins that must all hold at the same fire scan.  A
-    writer selected to satisfy one atom that, via a **different** co-write,
-    provably drives a co-demanded register to a conflicting value defeats the
-    joint requirement (firing the C_Start rung for ``CmdReq == 1`` also writes
-    ``Cmd := 2``, clobbering the sibling need ``Cmd == 5``).  State-consistent
-    ranking demotes such a writer below a tied sibling whose co-writes preserve
-    the demand.  Only a *provable* conflict counts — an unresolved co-write
-    never demotes (punt, never fabricate).  Ordering only; never drops a writer.
-    """
-    for cd_tag, cd_val in codemands:
-        if cd_tag == tag:
-            continue
-        produced = _concrete_written_value(_written_value_for_tag(ro, cd_tag), snapshot)
-        if produced is _UNRESOLVED:
-            continue
-        if not _values_match(produced, cd_val):
-            return True
-    return False
-
-
-def _is_self_gated(rn: Any, pdg: ProgramGraph, tag: str) -> bool:
-    """A writer is self-gated if its condition or call-gate reads the tag.
-
-    ``with rung(State == 1): copy(1, State)`` is a hold/latch — it can
-    never *cause* a transition, only sustain one.  The trace should prefer
-    transition writers that can actually move the tag to the target value.
-    """
-    if tag in rn.condition_reads:
-        return True
-    if rn.subroutine:
-        for cn in pdg.rung_nodes:
-            if rn.subroutine in cn.calls and tag in cn.condition_reads:
-                return True
-    return False
-
-
-@dataclass(frozen=True)
-class _WriterRank:
-    """One writer's place in a ``_rank_writers`` ordering, with its sort key.
-
-    Recording only: carries the three sort dimensions the ranker computes and
-    otherwise throws away — ``availability`` (the ``_WriterAvailability`` verdict),
-    ``bucket`` (writer role: literal-establish / affine / counterfactual / …), and
-    ``clobber`` (1 iff the writer's co-writes defeat a concurrent sibling demand).
-    Stashed on ``TraceNode.writer_ranking`` so the "why this writer" decision is
-    legible after the fact.
-    """
-
-    ri: int
-    availability: _WriterAvailability
-    bucket: int
-    clobber: int
-
-
-def _rank_writers(
-    writers: frozenset[int],
-    pdg: ProgramGraph,
-    program: Any,
-    tag: str,
-    value: Any,
-    snapshot: dict[str, Any],
-    opaque_loop: frozenset[str] = frozenset(),
-    clear_only: frozenset[str] = frozenset(),
-    *,
-    steerable: frozenset[str] = frozenset(),
-    ancestry: tuple[tuple[str, Any], ...] = (),
-    codemands: tuple[tuple[str, Any], ...] = (),
-    availability_out: dict[int, _WriterAvailability] | None = None,
-    ranking_out: list[_WriterRank] | None = None,
-    reverse_out: dict[int, ReverseResult] | None = None,
-) -> list[int]:
-    """Rank viable writers by current-state availability, then writer role.
-
-    - Prevents dead-ending on a latch writer (``if State == 1: copy(1, State)``)
-      when a transition writer (``copy(C_UnitMode, State)``) exists.
-    - Prevents selecting a *counterfactual* writer — one whose guard, evaluated in
-      the projected prerequisite state, has a false leaf on a pinned tag.  Covers
-      both the one-hot case (``copy(1, S_StateCompleteBool)`` under ``S_Clearing``
-      while we hold ``S_Starting``) and the self-referential affine step counter
-      (the even-step rung gated ``valstepisodd != 1`` cannot produce
-      ``CurStep == 2``, because at the source state ``CurStep == 1`` the parity is
-      odd; the transition rung gated ``Trans == 1`` stays live).  See
-      ``_writer_projection``.
-    - Demotes a *maintenance* writer — a literal init/reset rung fireable only by
-      pressing a clear-only (ack-cleared momentary) lever off the natural path
-      (``fill(1, CurStep)`` gated ``Or(xInit, xReset)``).  Its guard is not
-      consistent with the state the plan drives toward; a self-advancing value-step
-      writer whose guard the pipeline establishes (``CurStep+1`` under the caller
-      gate) is the state-consistent choice, so the maintenance writer ranks below
-      it — kept as a fallback, never the default route.
-    """
-    pinned_overlay = {t: snapshot.get(t) for t in opaque_loop}
-    pinned = frozenset(opaque_loop)
-    ranked: list[tuple[_WriterAvailability, int, int, int]] = []
-    prior_same_tag_values = tuple(v for t, v in ancestry if t == tag)
-    # Non-steerable ancestry registers count as current-state tags: a writer
-    # whose guard demands a different value of a register this walk already
-    # derives through is state-inconsistent (circular), so it sinks below the
-    # writer whose state guard the live snapshot satisfies.  Ordering only.
-    ancestry_tags = frozenset(t for t, _v in ancestry if t not in steerable)
-    for ri in sorted(writers):
-        rn = pdg.rung_nodes[ri]
-        ro = resolve_rung(program, rn)
-        if ro is None:
-            continue
-        wv = _written_value_for_tag(ro, tag)
-        if not _can_produce(wv, value):
-            continue
-        reverse_result = _reverse_writer(ro, tag, value, snapshot, pdg)
-        if reverse_out is not None:
-            reverse_out[ri] = reverse_result
-        if normalize_reverse_result(reverse_result).contradiction:
-            continue
-        proj = _writer_projection(ro, tag, value, snapshot, pdg, program, pinned_overlay, pinned)
-        is_counterfactual = proj is not None and proj[0]
-        availability = _writer_availability(
-            ro,
-            rn,
-            wv,
-            tag,
-            value,
-            snapshot,
-            pdg,
-            program,
-            steerable,
-            opaque_loop,
-            is_counterfactual,
-            ancestry_tags,
-        )
-        if isinstance(wv, Affine) and wv.source == tag and wv.storage.kind == "identity":
-            src_val = _invert_affine(wv, value)
-            if src_val is not None and any(
-                _values_match(src_val, prior) for prior in prior_same_tag_values
-            ):
-                availability = _WriterAvailability.UNAVAILABLE_FROM_HERE
-
-        bucket = 1  # ordinary non-literal / affine writer
-        if isinstance(wv, Literal) and _values_match(wv.value, value):
-            if _is_self_gated(rn, pdg, tag):
-                bucket = 4
-            elif is_counterfactual:
-                bucket = 3
-            elif proj is not None and any(t in clear_only for t in proj[1]):
-                # Fireable only by pressing a clear-only maintenance lever off the
-                # natural path — rank below any self-advancing value-step writer.
-                bucket = 2
-            else:
-                bucket = 0
-        else:
-            producer_pins = _producer_pins(reverse_result, eq_target(tag, value))
-            if producer_pins and all(
-                _values_match(snapshot.get(src_tag), src_val)
-                for src_tag, src_val in producer_pins.items()
-            ):
-                bucket = 0
-            if is_counterfactual:
-                bucket = 3
-
-        # State-consistent co-write tie-break: among writers otherwise tied on
-        # availability and role, one whose *other* co-writes provably clobber a
-        # concurrent sibling demand (the C_Start rung produces ``CmdReq == 1`` but
-        # also writes ``Cmd := 2``, defeating the sibling ``Cmd == 5`` the same guard
-        # needs) sinks below a sibling whose co-writes preserve it.  Ordering only.
-        clobber = (
-            1 if (codemands and _writer_clobbers_codemand(ro, tag, codemands, snapshot)) else 0
-        )
-
-        ranked.append((availability, bucket, clobber, ri))
-        if availability_out is not None:
-            availability_out[ri] = availability
-    ordered = sorted(ranked)
-    if ranking_out is not None:
-        ranking_out.extend(
-            _WriterRank(ri=ri, availability=av, bucket=bkt, clobber=clb)
-            for av, bkt, clb, ri in ordered
-        )
-    return [ri for _availability, _bucket, _clobber, ri in ordered]

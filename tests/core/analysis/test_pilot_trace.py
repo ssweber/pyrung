@@ -45,7 +45,6 @@ from pyrung.core.analysis.pilot.trace import (
     _constraint_atom,
     _env_for,
     _inequality_levers,
-    _rank_writers,
     _rewrite_internal_compare,
     _select_trace_alternative,
     _trace_back,
@@ -56,6 +55,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
+from pyrung.core.analysis.pilot.writer_selection import _rank_writers
 from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.condition import Condition
