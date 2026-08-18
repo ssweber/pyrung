@@ -869,6 +869,18 @@ class TheoryState:
     active_theory_id: TheoryId | None = None
 
 
+def active_theory(state: TheoryState) -> WorkingTheory | None:
+    """Return the exact active case, or ``None`` when no case is open."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return None
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        raise TheoryInvariantError("active theory is missing or closed")
+    return theory
+
+
 def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, ...]]:
     """Read exact rungs owned by accepted temporal setup phases.
 
@@ -1316,12 +1328,10 @@ def theory_boundary_claim(
 def theory_view(state: TheoryState) -> TheoryView | None:
     """Return the exact active navigation view, or ``None`` when no theory is open."""
 
-    theory_id = state.active_theory_id
-    if theory_id is None:
+    theory = active_theory(state)
+    if theory is None:
         return None
-    theory = state.ledger.theories.get(theory_id)
-    if theory is None or theory.status is not TheoryStatus.OPEN:
-        raise TheoryInvariantError("active theory is missing or closed")
+    theory_id = theory.theory_id
     claim = state.ledger.claims.get(theory.claim_id)
     version = state.ledger.versions.get(theory.current_version_id)
     progress = state.ledger.progress.get(theory.current_progress_id)

@@ -70,6 +70,38 @@ from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.context import RungId
 
 
+def _exact_failed_source(
+    requirement: ActiveRequirement,
+    state: _PilotState,
+) -> FailedEffectReceipt | None:
+    """Match one requirement to its exact failed local transaction."""
+
+    matches = tuple(
+        receipt
+        for receipt in state.failed_effect_receipts
+        if receipt.checkpoint_owner is requirement.checkpoint_owner
+        and receipt.source_world_key == requirement.source_world_key
+        and receipt.selected_writer == requirement.selected_writer
+        and receipt.execution_epoch is requirement.execution_epoch
+        and receipt.execution_owner is requirement.execution_owner
+        and requirement.deadline in receipt.explanation.supporting_occurrences
+        and receipt.local_act is not None
+        and receipt.local_bearing is not None
+        and (
+            receipt.expectation_role is EffectReceiptRole.ROUTE_LANDING
+            or receipt.expectation is receipt.local_act.policy.expectation
+        )
+        and receipt.local_bearing.act is receipt.local_act
+        and receipt.expectation is not None
+        and any(
+            obligation_snapshot(obligation) == receipt.observation.obligation
+            for obligation in receipt.expectation.obligations
+        )
+        and receipt.act_identity == act_identity(receipt.local_act)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
 def _configured_input_names(plc: Any) -> frozenset[str]:
     """Snapshot explicit patch/force ownership without retaining its manager."""
 

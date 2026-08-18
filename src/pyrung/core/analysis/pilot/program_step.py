@@ -25,7 +25,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
@@ -38,6 +38,18 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import AffineCmp, Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceStep, constraint_holds
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.navigation_contracts import Bearing
+
+
+def _program_step_from_bearing(bearing: Bearing) -> Any | None:
+    """Return Orientation's existing reading without projecting again."""
+
+    orientation = bearing.orientation
+    candidates = orientation.candidates if orientation is not None else None
+    wait = candidates.wait if candidates is not None else None
+    return wait.program_step if wait is not None else None
 
 
 class ProgramStepStatus(StrEnum):
