@@ -50,7 +50,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     RouteEdgeContext,
     TargetSpec,
-    act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
@@ -125,8 +124,6 @@ def _executed(
             replay_motion=getattr(pulse, "replay_motion", ChannelMotion()),
             spans=capture_execution_spans(pulse.fork, tuple(pulse.kernel_scan_ids)),
             source_scan=pulse.scan_before,
-            source_world=bearing.world_key,
-            decision_identity=act_identity(bearing.act),
             applied_configurations=configurations,
             stop=getattr(pulse, "stop_receipt", None),
         ),

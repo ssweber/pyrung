@@ -232,8 +232,6 @@ class ExecutionReceipt:
     intrascan_act: IntrascanActReceipt | None = None
     spans: tuple[ExecutionSpan, ...] = ()
     source_scan: int | None = None
-    source_world: tuple[Any, ...] | None = None
-    decision_identity: tuple[Any, ...] = ()
     applied_configurations: tuple[ScanEntryConfiguration, ...] = ()
     stop: StopReceipt | None = None
 

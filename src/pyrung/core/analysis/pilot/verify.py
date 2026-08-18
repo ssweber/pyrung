@@ -731,7 +731,6 @@ def _accepted_trial(
         scan_progress=scan_progress,
         investigation_producer=investigation_producer,
         intrascan_act=intrascan_act,
-        source_world=getattr(frame, "key", attempt.bearing.world_key),
     )
     return _AcceptedTrial(
         attempt=attempt,

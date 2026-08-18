@@ -234,8 +234,6 @@ def _entry_execution_receipt(
         timeline=(),
         spans=capture_execution_spans(execution, (scan_after,)),
         source_scan=scan_before,
-        source_world=checkpoint.key,
-        decision_identity=("executed-program-scan", scan_before, scan_after),
     )
     return _BootstrapExecution(
         checkpoint=checkpoint,

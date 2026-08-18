@@ -66,7 +66,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Pulse,
-    act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -495,8 +494,6 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
         replay_motion=getattr(pulse, "replay_motion", ChannelMotion()),
         spans=capture_execution_spans(pulse.fork, pulse.kernel_scan_ids),
         source_scan=pulse.scan_before,
-        source_world=bearing.world_key,
-        decision_identity=act_identity(bearing.act),
         applied_configurations=applied_configurations,
         stop=getattr(pulse, "stop_receipt", None),
     )
