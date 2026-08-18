@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.analysis.pilot import pilot as pilot_module
 from pyrung.core.analysis.pilot.effects import EffectExpectation
+from pyrung.core.analysis.pilot.execution import MotionKind
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -23,7 +24,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.program_step import ProgramStep, ProgramStepStatus
 from pyrung.core.analysis.pilot.types import (
-    MotionKind,
     _AttemptResult,
     _ContinuationCheckpoint,
     _ExecutedAttempt,

@@ -9,6 +9,7 @@ import pytest
 
 from pyrung import PLC, Int, Program, Rung, copy
 from pyrung.core.analysis.pilot import navigation_contracts, steer
+from pyrung.core.analysis.pilot.execution import PulseHorizon, ScanEntryConfiguration
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -23,10 +24,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Pulse,
-    PulseHorizon,
     TargetSpec,
 )
-from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
 from pyrung.core.condition import CompareEq
 
 

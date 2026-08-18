@@ -22,7 +22,10 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObservationSnapshot,
     EffectOccurrenceSnapshot,
 )
-from pyrung.core.analysis.pilot.execution import CheckpointRef
+from pyrung.core.analysis.pilot.execution import (
+    CheckpointRef,
+    ScanEntryConfiguration,
+)
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.runner import EpochRef
 
@@ -85,34 +88,6 @@ class TheoryPhaseKind(StrEnum):
     CORRECTION_COMPOSITION = "correction_composition"
     CORRECTION_INSTALL = "correction_install"
     WORLD_REBASE = "world_rebase"
-
-
-@dataclass(frozen=True)
-class ScanEntryConfiguration:
-    """Desired user-style values applied at the next execution boundary.
-
-    WorkingTheory owns this correction across retries.  A Bearing carries it
-    unchanged to execution, while the resulting ExecutionReceipt records each
-    distinct physical application.
-    """
-
-    assignments: tuple[tuple[str, Any], ...]
-
-    def __post_init__(self) -> None:
-        assignments = tuple(self.assignments)
-        if not assignments:
-            raise ValueError("scan-entry configuration cannot be empty")
-        names = tuple(tag for tag, _value in assignments)
-        if len(set(names)) != len(names):
-            raise ValueError("scan-entry configuration cannot assign one tag twice")
-        object.__setattr__(self, "assignments", assignments)
-
-    @property
-    def identity(self) -> tuple[Any, ...]:
-        return (
-            "scan-entry-configuration",
-            tuple((tag, _semantic_key(value)) for tag, value in self.assignments),
-        )
 
 
 @dataclass(frozen=True)

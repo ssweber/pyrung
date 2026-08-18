@@ -47,6 +47,14 @@ from pyrung.core.analysis.pilot.effects import (
     observe_execution_window,
     promote_route_landing_observations,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    PulseHorizon,
+    StopCondition,
+    StopReceipt,
+    capture_execution_spans,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Bearing,
@@ -58,9 +66,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Pulse,
-    PulseHorizon,
-    StopCondition,
-    StopReceipt,
     act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
@@ -73,8 +78,6 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
 from pyrung.core.analysis.pilot.trace import scan_transient_rest, target_reached
 from pyrung.core.analysis.pilot.types import (
-    ChannelMotion,
-    ExecutionReceipt,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
@@ -84,7 +87,6 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _PulseState,
-    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity
@@ -92,7 +94,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import TransitionCause
-    from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
+    from pyrung.core.analysis.pilot.execution import ScanEntryConfiguration
     from pyrung.core.runner import PLC
 
 

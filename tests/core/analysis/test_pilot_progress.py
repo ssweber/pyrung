@@ -46,6 +46,11 @@ from pyrung.core.analysis.pilot.earned_work import (
     EarnedWorkReading,
     EarnedWorkReceipt,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    MotionKind,
+)
 from pyrung.core.analysis.pilot.investigate import _deviation_bearing
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -81,9 +86,6 @@ from pyrung.core.analysis.pilot.progress import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    ChannelMotion,
-    ExecutionReceipt,
-    MotionKind,
     PilotEvent,
     RevisitCredential,
     TargetReached,

@@ -342,6 +342,7 @@ class TestSimultaneousTerminals:
         assert receipt.stop_reason == "reached"
 
     def test_target_and_avoid_same_scan_preserve_typed_avoid_evidence(self):
+        from pyrung.core.analysis.pilot.execution import ChannelMotion
         from pyrung.core.analysis.pilot.navigation_contracts import (
             ActPolicy,
             ActSource,
@@ -351,7 +352,6 @@ class TestSimultaneousTerminals:
             TargetSpec,
         )
         from pyrung.core.analysis.pilot.types import (
-            ChannelMotion,
             _AvoidMember,
             _AvoidPredicate,
             _ExecutedAttempt,

@@ -16,6 +16,11 @@ from pyrung.core.analysis.pilot.effects import (
     obligation_snapshot,
     occurrence_snapshot,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    ExecutionSpan,
+)
 from pyrung.core.analysis.pilot.investigation_replay import (
     CausalOccurrence,
     RegressionWitness,
@@ -31,7 +36,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.progress import _match_regression_expectation_receipt
 from pyrung.core.analysis.pilot.requirements import ExpectationReceipt
-from pyrung.core.analysis.pilot.types import ChannelMotion, ExecutionReceipt, ExecutionSpan
 from pyrung.core.context import RungId
 from pyrung.core.executor import WriteOccurrence
 

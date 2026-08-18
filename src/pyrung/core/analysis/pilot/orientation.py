@@ -10,6 +10,12 @@ from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import _button_writes
 from pyrung.core.analysis.pilot.compass import EvidenceScope
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
+from pyrung.core.analysis.pilot.execution import (
+    MotionKind,
+    PulseHorizon,
+    ScanEntryConfiguration,
+    StopCondition,
+)
 from pyrung.core.analysis.pilot.intrascan_schedule import (
     RequirementSchedule,
     compile_scalar_schedule,
@@ -42,8 +48,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProbeRequest,
     ProgramScan,
     Pulse,
-    PulseHorizon,
-    StopCondition,
     Stuck,
     TargetSpec,
     act_identity,
@@ -73,10 +77,9 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
-from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _IterationFrame
+from pyrung.core.analysis.pilot.types import _ActionPair, _IterationFrame
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
-    ScanEntryConfiguration,
     TheoryTemporalIntent,
 )
 from pyrung.core.analysis.pilot.world_key import (

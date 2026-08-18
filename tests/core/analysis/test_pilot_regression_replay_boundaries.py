@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from pyrung import PLC, Bool, Int, Program, copy, rung
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.execution import ChannelMotion, MotionKind
 from pyrung.core.analysis.pilot.investigation_replay import (
     RegressionWitness,
     ReplayIncident,
@@ -16,7 +17,6 @@ from pyrung.core.analysis.pilot.investigation_replay import (
     build_replay_fn,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import TargetSpec
-from pyrung.core.analysis.pilot.types import ChannelMotion, MotionKind
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.crossing import Cmp
 

@@ -37,6 +37,7 @@ from pyrung.core.analysis.pilot.constrained_reachability import (
 )
 from pyrung.core.analysis.pilot.corrections import break_guard_holds
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkMovement
+from pyrung.core.analysis.pilot.execution import ExecutionReceipt, MotionKind
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
     _pilot_rungs_from_proposals,
@@ -50,8 +51,6 @@ from pyrung.core.analysis.pilot.trace import _can_produce, target_reached, trace
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
-    ExecutionReceipt,
-    MotionKind,
     _ActionPair,
     _ConfirmedCorrection,
     _IterationFrame,

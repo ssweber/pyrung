@@ -44,8 +44,8 @@ from pyrung.core.analysis.pilot.world_key import _pilot_world_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.execution import ExecutionReceipt
     from pyrung.core.analysis.pilot.types import (
-        ExecutionReceipt,
         _PilotContext,
         _PilotState,
     )

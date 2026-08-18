@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReading, EarnedWorkReceipt
+from pyrung.core.analysis.pilot.execution import ChannelMotion
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
     BearingEffect,
@@ -14,7 +15,6 @@ from pyrung.core.analysis.pilot.outcome import (
     TrialAssessment,
     assess_outcome,
 )
-from pyrung.core.analysis.pilot.types import ChannelMotion
 
 
 def _bearing_coast(

@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 from pyrung import PLC, Int, Program, Timer, copy, on_delay, rung, system
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.execution import ChannelMotion
 from pyrung.core.analysis.pilot.pilot import _monitor_committed_trial
-from pyrung.core.analysis.pilot.types import ChannelMotion, ScanProgressReceipt
+from pyrung.core.analysis.pilot.types import ScanProgressReceipt
 
 
 def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() -> None:
@@ -45,13 +46,20 @@ def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() 
 
     events = tuple(pilot_events(PLC(logic, dt=0.010), state == complete, max_scans=20))
 
-    retries = tuple(
+    corrections = tuple(
         event
         for event in events
-        if event.kind == "candidate_try" and event.data["applied"] == ((preset.name, 11),)
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"] == ((preset.name, 11),)
     )
-    assert len(retries) == 1, tuple((event.kind, event.scan, event.data) for event in events)
-    assert retries[0].scan == 0
+    assert len(corrections) == 1, tuple(
+        (event.kind, event.scan, event.data) for event in events
+    )
+    assert not any(
+        event.kind == "candidate_try" and (preset.name, 11) in event.data["applied"]
+        for event in events
+    )
+    assert corrections[0].scan == 0
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True

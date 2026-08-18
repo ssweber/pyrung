@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot import progress, recording
+from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -21,8 +22,6 @@ from pyrung.core.analysis.pilot.outcome import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    ChannelMotion,
-    ExecutionReceipt,
     _AcceptedTrial,
     _ExecutedAttempt,
     _PulseState,

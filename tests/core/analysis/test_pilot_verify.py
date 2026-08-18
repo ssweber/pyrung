@@ -31,6 +31,13 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
     observe_execution_window,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    ExecutionSpan,
+    MotionKind,
+    capture_execution_spans,
+)
 from pyrung.core.analysis.pilot.investigate import ExcursionResult, correction_identity
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -61,10 +68,6 @@ from pyrung.core.analysis.pilot.requirements import (
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    ChannelMotion,
-    ExecutionReceipt,
-    ExecutionSpan,
-    MotionKind,
     RevisitCredential,
     TargetReached,
     _AttemptResult,
@@ -72,7 +75,6 @@ from pyrung.core.analysis.pilot.types import (
     _ExecutedAttempt,
     _IterationFrame,
     _PulseState,
-    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.verify import (
     _accepted_trial,

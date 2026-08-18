@@ -58,6 +58,11 @@ def test_unconfigured_external_zero_preset_remains_adjustable() -> None:
     assert len(requirements) == 1
     assert requirements[0].operand_authority.value == "adjustable"
     assert any(
+        event.kind == "theory_correction_composed"
+        and event.data["configuration"] == ((preset.name, 11),)
+        for event in events
+    )
+    assert not any(
         event.kind == "candidate_try" and (preset.name, 11) in event.data["applied"]
         for event in events
     )

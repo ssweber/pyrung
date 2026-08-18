@@ -26,6 +26,11 @@ from pyrsistent import pvector
 from pyrung import PLC, Bool, Int, Or, Program, copy, fill, latch, out, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.corrections import CorrectionHypothesis, _precise_causes
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    MotionKind,
+)
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     DeviationIncident,
@@ -68,10 +73,7 @@ from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     BearingDeparture,
-    ChannelMotion,
     CorrectionStatus,
-    ExecutionReceipt,
-    MotionKind,
     RevisitCredential,
     _AcceptedTrial,
     _AttemptResult,

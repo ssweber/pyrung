@@ -16,7 +16,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pilot.types import ExecutionReceipt
+    from pyrung.core.analysis.pilot.execution import ExecutionReceipt
 
 from pyrung.core.analysis.causal._rung_writes import (
     RungRead,

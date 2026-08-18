@@ -21,7 +21,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectOccurrenceSelector,
     EffectOccurrenceSnapshot,
 )
-from pyrung.core.analysis.pilot.execution import CheckpointRef
+from pyrung.core.analysis.pilot.execution import CheckpointRef, ScanEntryConfiguration
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanBoundaryRealization,
     IntrascanProducerGoal,
@@ -59,7 +59,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordIntrascanTracebackFrontier,
     RecordTheoryAttempt,
     RefineTheory,
-    ScanEntryConfiguration,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
     TheoryClaim,

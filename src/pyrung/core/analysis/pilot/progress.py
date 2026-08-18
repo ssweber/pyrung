@@ -45,6 +45,7 @@ from pyrung.core.analysis.pilot.effects import (
     fulfilled_expectation_observations,
     occurrence_snapshot,
 )
+from pyrung.core.analysis.pilot.execution import MotionKind
 from pyrung.core.analysis.pilot.investigate import (
     CausalOccurrence,
     InvestigationRejection,
@@ -90,7 +91,6 @@ from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     BearingDeparture,
     CorrectionStatus,
-    MotionKind,
     PilotEvent,
     TargetReached,
     _AcceptedTrial,

@@ -70,6 +70,12 @@ from pyrung.core.analysis.pilot.effects import (
     promote_terminal_target_observation,
     terminal_target_replay_scan_ids,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ExecutionReceipt,
+    MotionKind,
+    PulseHorizon,
+    ScanEntryConfiguration,
+)
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanQuestion,
     IntrascanResult,
@@ -98,7 +104,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationResult,
     OrientationWorld,
     ProgramScan,
-    PulseHorizon,
     Stuck,
     TargetSpec,
     act_identity,
@@ -178,8 +183,6 @@ from pyrung.core.analysis.pilot.trace import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    ExecutionReceipt,
-    MotionKind,
     PilotEvent,
     TargetReached,
     WorldView,
@@ -225,7 +228,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordUnattributedEvidence,
     RefineTheory,
     RetainedCorrectionReceipt,
-    ScanEntryConfiguration,
     TemporalNeedRequest,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,

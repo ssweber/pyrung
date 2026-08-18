@@ -37,6 +37,12 @@ from pyrung.core.analysis.pilot.effects import (
     observe_execution_window,
     promote_route_landing_observations,
 )
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    MotionKind,
+    PulseHorizon,
+    capture_execution_spans,
+)
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanRequirementDisposition,
     build_intrascan_requirement_evidence,
@@ -52,7 +58,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ObserveScan,
     OrientationWorld,
     ProgramScan,
-    PulseHorizon,
     TargetSpec,
     act_identity,
 )
@@ -74,10 +79,8 @@ from pyrung.core.analysis.pilot.trace import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
-    ChannelMotion,
     IntrascanActReceipt,
     InvestigationProducerReceipt,
-    MotionKind,
     PilotGateEvent,
     RevisitCredential,
     ScanProgressReceipt,
@@ -87,7 +90,6 @@ from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
     _ExecutedAttempt,
     _PulseState,
-    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state

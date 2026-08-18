@@ -11,6 +11,11 @@ from pyrung.core.analysis.pilot.compass import (
     Compass,
     ProbeExhaustedObservation,
 )
+from pyrung.core.analysis.pilot.execution import (
+    MotionKind,
+    PulseHorizon,
+    ScanEntryConfiguration,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -25,7 +30,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     IntrascanPulse,
     LandingReceiptAuthority,
     LocalProgressKind,
-    MotionKind,
     NavigationConstraints,
     NeedIntrascanTraceback,
     NeedProbe,
@@ -33,7 +37,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationWorld,
     ProgramScan,
     Pulse,
-    PulseHorizon,
     RouteEdgeContext,
     Stuck,
     TargetSpec,
@@ -55,7 +58,6 @@ from pyrung.core.analysis.pilot.recording import _candidate_payload
 from pyrung.core.analysis.pilot.requirements import OperandAuthority
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
-    ScanEntryConfiguration,
     TheoryTemporalIntent,
 )
 from pyrung.core.context import RungId

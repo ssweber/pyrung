@@ -18,9 +18,14 @@ from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
-from pyrung.core.analysis.pilot.execution import CheckpointRef
-from pyrung.core.analysis.pilot.working_theory import (
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    CheckpointRef,
+    ExecutionReceipt,
     ScanEntryConfiguration,
+    StopReceipt,
+)
+from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     TheoryView,
 )
@@ -38,7 +43,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.effects import (
         EffectExpectation,
         EffectObservation,
-        EffectObservationSnapshot,
         EffectOccurrenceSnapshot,
     )
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
@@ -46,7 +50,6 @@ if TYPE_CHECKING:
         ActPolicy,
         Bearing,
         BearingObjective,
-        StopReceipt,
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
@@ -67,40 +70,6 @@ if TYPE_CHECKING:
 
 _ActionPair = tuple[str, Any]
 _StateKey = tuple[Any, ...]
-
-
-class MotionKind(Enum):
-    """Execution semantics of a trial; event labels remain diagnostic only."""
-
-    INTERVENTION = "intervention"
-    COAST_TO_BEARING = "coast-to-bearing"
-    COAST_HOLDING_WORLD = "coast-holding-world"
-
-    @property
-    def is_coast(self) -> bool:
-        return self is not MotionKind.INTERVENTION
-
-
-@dataclass(frozen=True)
-class ChannelMotion:
-    """One requested channel boundary and verification's owned landing."""
-
-    channel_tag: str | None = None
-    target_value: Any = None
-    boundary: Any = None
-    stop_reason: str | None = None
-
-    @property
-    def active(self) -> bool:
-        return self.channel_tag is not None
-
-    @property
-    def reached(self) -> bool:
-        return self.stop_reason == "reached"
-
-    @property
-    def departed(self) -> bool:
-        return self.stop_reason == "departed"
 
 
 @dataclass(frozen=True)
@@ -733,160 +702,6 @@ class _PilotContext:
 
 
 @dataclass(frozen=True)
-class ExecutionSpan:
-    """Exact kernel scans from one immutable Epoch owner.
-
-    ``owner`` is deliberately the detached query for the Epoch, never the
-    lineage's mutable live-query adapter.  The scan IDs are the interpreter
-    scans the attempt actually executed; folded logical gaps are absent.
-    """
-
-    owner: EpochQuery = field(repr=False)
-    kernel_scan_ids: tuple[int, ...]
-
-    def __post_init__(self) -> None:
-        scans = tuple(self.kernel_scan_ids)
-        if not scans:
-            raise ValueError("an execution span must own at least one kernel scan")
-        if any(
-            later <= earlier
-            for earlier, later in zip(scans, scans[1:], strict=False)
-        ):
-            raise ValueError("execution span scans must be strictly increasing")
-        epoch = self.owner.epoch
-        if any(scan < epoch.first_scan or scan > epoch.last_scan for scan in scans):
-            raise ValueError("execution span scan lies outside its Epoch")
-        object.__setattr__(self, "kernel_scan_ids", scans)
-
-    @property
-    def epoch(self) -> Epoch:
-        """The immutable physical evidence owner."""
-
-        return self.owner.epoch
-
-    @property
-    def first_scan(self) -> int:
-        return self.kernel_scan_ids[0]
-
-    @property
-    def last_scan(self) -> int:
-        return self.kernel_scan_ids[-1]
-
-
-def capture_execution_spans(
-    fork: PLC,
-    kernel_scan_ids: tuple[int, ...],
-) -> tuple[ExecutionSpan, ...]:
-    """Bind an executed scan stream to stable detached Epoch queries.
-
-    A normal Pilot attempt creates one child Epoch.  The tuple shape keeps the
-    ownership honest if a caller ever supplies a stream crossing an inherited
-    Epoch boundary instead of silently pretending it has one owner.
-    """
-
-    scans = tuple(kernel_scan_ids)
-    if not scans:
-        return ()
-    if any(
-        later <= earlier
-        for earlier, later in zip(scans, scans[1:], strict=False)
-    ):
-        raise ValueError("execution scan stream must be strictly increasing")
-
-    lineage = fork._causal_lineage
-    spans: list[ExecutionSpan] = []
-    for epoch, first_scan, last_scan in lineage.epochs_covering(scans[0], scans[-1]):
-        owned = tuple(scan for scan in scans if first_scan <= scan <= last_scan)
-        if owned:
-            spans.append(
-                ExecutionSpan(
-                    owner=lineage._detached_query_for(epoch),
-                    kernel_scan_ids=owned,
-                )
-            )
-    if tuple(scan for span in spans for scan in span.kernel_scan_ids) != scans:
-        raise ValueError("execution scan stream has no complete Epoch ownership")
-    return tuple(spans)
-
-
-@dataclass(frozen=True)
-class ExecutionReceipt:
-    """One steer/run/observe cycle and its exact physical evidence.
-
-    Navigation declares the decision; Epoch owns the executed history.  This
-    receipt is the single immutable association between them.  Interpretations
-    added by VERIFY, such as progress, remain facts about this receipt rather
-    than competing execution owners.  Rejected attempts retain the same base
-    receipt without an acceptance interpretation.
-    """
-
-    before_snap: Mapping[str, Any]
-    after_snap: Mapping[str, Any]
-    channel_motion: ChannelMotion
-    coast_receipt: CoastReceipt | None
-    timeline: tuple[CoastTriggerEvent, ...]
-    effect_observations: tuple[EffectObservationSnapshot, ...] = ()
-    # The coast operation navigation actually executed.  ``channel_motion``
-    # may be rebound to the semantic channel that owned an ejection; replay
-    # must still seek this original boundary while watching that incident
-    # channel for another departure.
-    replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
-    scan_progress: ScanProgressReceipt | None = None
-    investigation_producer: InvestigationProducerReceipt | None = None
-    intrascan_act: IntrascanActReceipt | None = None
-    spans: tuple[ExecutionSpan, ...] = ()
-    source_scan: int | None = None
-    source_world: _StateKey | None = None
-    decision_identity: tuple[Any, ...] = ()
-    applied_configurations: tuple[ScanEntryConfiguration, ...] = ()
-    stop: StopReceipt | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
-        object.__setattr__(self, "after_snap", MappingProxyType(dict(self.after_snap)))
-        object.__setattr__(self, "timeline", tuple(self.timeline))
-        object.__setattr__(self, "effect_observations", tuple(self.effect_observations))
-        object.__setattr__(self, "spans", tuple(self.spans))
-        object.__setattr__(self, "applied_configurations", tuple(self.applied_configurations))
-        scans = self.kernel_scan_ids
-        if scans and self.source_scan is not None and scans[0] <= self.source_scan:
-            raise ValueError("execution receipt scans must follow their source")
-
-    @property
-    def accelerators(self) -> tuple[_ActionPair, ...]:
-        """Exact fold writes derived from the typed coast receipt."""
-        return self.coast_receipt.advances if self.coast_receipt is not None else ()
-
-    @property
-    def kernel_scan_ids(self) -> tuple[int, ...]:
-        """Ordered interpreter scans across the receipt's Epoch spans."""
-
-        return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
-
-    @property
-    def epoch_ref(self) -> Any:
-        """The one physical Epoch interval owned by this ordinary execution."""
-
-        references = tuple(dict.fromkeys(span.epoch.reference for span in self.spans))
-        if len(references) != 1:
-            raise ValueError("execution receipt does not have exactly one Epoch reference")
-        return references[0]
-
-    @property
-    def consumer_boundary_reached(self) -> bool | None:
-        """Whether this execution reached its requested consumer occurrence."""
-
-        return self.stop.consumer_boundary_reached if self.stop is not None else None
-
-    def owner_at(self, scan_id: int) -> EpochQuery | None:
-        """Return the one detached Epoch query owning an executed scan."""
-
-        return next(
-            (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
-            None,
-        )
-
-@dataclass(frozen=True)
 class _StepContext:
     """Semantic and evidentiary context owned by one committed operation."""
 
@@ -927,6 +742,12 @@ class _HoldLogEntry:
     scan: int
     source: str
     pilot_rungs: tuple[PilotRung, ...]
+
+    @property
+    def tags(self) -> tuple[_ActionPair, ...]:
+        """Concise recording view derived from the installed executable form."""
+
+        return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
 
 
 class CorrectionStatus(Enum):

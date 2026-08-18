@@ -27,6 +27,12 @@ from pyrung import (
 )
 from pyrung.core.analysis.pilot import pilot_how
 from pyrung.core.analysis.pilot.coast import CoastReceipt
+from pyrung.core.analysis.pilot.execution import (
+    ChannelMotion,
+    ExecutionReceipt,
+    MotionKind,
+    ScanEntryConfiguration,
+)
 from pyrung.core.analysis.pilot.navigation_contracts import ActPolicy, ActSource
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.recording import (
@@ -36,15 +42,11 @@ from pyrung.core.analysis.pilot.recording import (
 )
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
 from pyrung.core.analysis.pilot.types import (
-    ChannelMotion,
-    ExecutionReceipt,
-    MotionKind,
     _CommittedAct,
     _HoldLogEntry,
     _Step,
     _StepContext,
 )
-from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
 

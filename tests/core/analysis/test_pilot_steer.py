@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from pyrung import Bool, Int, Program, Rung, Timer, copy, on_delay, out
 from pyrung.core.analysis.pilot.coast import TARGET, value_trigger
+from pyrung.core.analysis.pilot.execution import MotionKind
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -29,7 +30,7 @@ from pyrung.core.analysis.pilot.steer import (
     _try_terminal_letrun,
 )
 from pyrung.core.analysis.pilot.trace import TraceNode
-from pyrung.core.analysis.pilot.types import MotionKind, _IterationFrame
+from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.runner import PLC
 

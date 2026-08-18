@@ -26,6 +26,7 @@ from pyrung.core.analysis.pilot.effects import (
     required_shape,
     terminal_target_replay_scan_ids,
 )
+from pyrung.core.analysis.pilot.execution import ChannelMotion, ExecutionReceipt
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
     ActSource,
@@ -51,8 +52,6 @@ from pyrung.core.analysis.pilot.steer import (
 )
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
-    ChannelMotion,
-    ExecutionReceipt,
     TargetReached,
     _AcceptedTrial,
     _ExecutedAttempt,

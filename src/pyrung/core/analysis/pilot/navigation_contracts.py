@@ -11,7 +11,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
-from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _StateKey
+from pyrung.core.analysis.pilot.execution import (
+    MotionKind,
+    PulseHorizon,
+    ScanEntryConfiguration,
+    StopCondition,
+)
+from pyrung.core.analysis.pilot.types import _ActionPair, _StateKey
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
@@ -32,7 +38,6 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace import TraceChoice
     from pyrung.core.analysis.pilot.working_theory import (
         IntrascanTracebackFrontier,
-        ScanEntryConfiguration,
         TheoryClaim,
         TheoryView,
     )
@@ -158,46 +163,6 @@ class LocalProgressKind(StrEnum):
     OBSERVE_ENTRY = "observe_entry"
     INTRASCAN_STAGE = "intrascan_stage"
     INTRASCAN_DIRECT = "intrascan_direct"
-
-
-class PulseHorizon(StrEnum):
-    """How far physical pulse execution may run before yielding to Compass."""
-
-    ASSERTION_SCAN = "assertion_scan"
-    CONSUMER_BOUNDARY = "consumer_boundary"
-    LOOKAHEAD_SCAN = "lookahead_scan"
-
-
-@dataclass(frozen=True)
-class StopCondition:
-    """The exact observation boundary requested for one execution."""
-
-    horizon: PulseHorizon
-    consumer_boundary: ConsumerBoundary | None = None
-    reason: str = ""
-
-    def __post_init__(self) -> None:
-        if (self.horizon is PulseHorizon.CONSUMER_BOUNDARY) != (
-            self.consumer_boundary is not None
-        ):
-            raise ValueError("consumer-bound stop condition requires one exact boundary")
-
-
-@dataclass(frozen=True)
-class StopReceipt:
-    """Where execution actually yielded for its requested stop condition."""
-
-    condition: StopCondition
-    stopped_scan: int
-    reached: bool
-
-    @property
-    def consumer_boundary_reached(self) -> bool | None:
-        """Return a result only for an explicitly consumer-bound execution."""
-
-        if self.condition.horizon is not PulseHorizon.CONSUMER_BOUNDARY:
-            return None
-        return self.reached
 
 
 @dataclass(frozen=True)
