@@ -9,7 +9,7 @@ import pytest
 
 from pyrung import PLC, Bool, Program, Rung, latch, out
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
-from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import entry_execution as entry_execution_module
 from pyrung.core.analysis.pilot.pilot import pilot_events
 from pyrung.core.analysis.pilot.types import (
     BootstrapExecutionSnapshot,
@@ -232,7 +232,7 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
     internal_receipts: list[_BootstrapExecution] = []
     internal_states: list[Any] = []
     original_snapshot = _BootstrapExecution.diagnostic_snapshot
-    original_bind = pilot_module._bind_entry_execution_to_route
+    original_bind = entry_execution_module.bind_entry_execution_to_route
 
     def _capture(receipt: _BootstrapExecution) -> BootstrapExecutionSnapshot:
         internal_receipts.append(receipt)
@@ -246,7 +246,11 @@ def test_bootstrap_event_consumer_cannot_mutate_or_advance_internal_receipt(
         return receipt
 
     monkeypatch.setattr(_BootstrapExecution, "diagnostic_snapshot", _capture)
-    monkeypatch.setattr(pilot_module, "_bind_entry_execution_to_route", _capture_binding)
+    monkeypatch.setattr(
+        entry_execution_module,
+        "bind_entry_execution_to_route",
+        _capture_binding,
+    )
     events = pilot_events(
         PLC(first_scan.logic, dt=0.010),
         first_scan.ProcessStep == first_scan.AT_TARGET,
