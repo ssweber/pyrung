@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
+import pyrung.core.analysis.pilot.drive_setup as _drive_setup
 import pyrung.core.analysis.pilot.pilot as _engine
 import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
@@ -109,7 +110,7 @@ def _parse_target(*conditions: Any) -> tuple[str, Any, Any]:
 
 
 def _single_target_plan(
-    setup: _engine._DriveSetup,
+    setup: _drive_setup.DriveSetup,
     outcome: _engine._DriveOutcome,
     target_tag: str,
     target_value: Any,
@@ -173,8 +174,8 @@ def pilot_events(
     states the same way ``how(avoid=...)`` does.
     """
     target_tag, target_value, target_predicate = _parse_target(*conditions)
-    setup = _engine._prepare_drive(plc, unlink=unlink)
-    ctx, _route_taken = _engine._prepare_target_context(
+    setup = _drive_setup.prepare_drive(plc, unlink=unlink)
+    ctx, _route_taken = _drive_setup.prepare_target_context(
         setup,
         target_tag,
         target_value,
@@ -216,8 +217,8 @@ def pilot_how(
             on_event=on_event,
         )
     target_tag, target_value, target_predicate = targets[0]
-    setup = _engine._prepare_drive(plc, unlink=unlink)
-    ctx, route_taken = _engine._prepare_target_context(
+    setup = _drive_setup.prepare_drive(plc, unlink=unlink)
+    ctx, route_taken = _drive_setup.prepare_target_context(
         setup,
         target_tag,
         target_value,
@@ -282,7 +283,7 @@ def _pilot_how_multi(
     from pyrung.core.analysis.pilot import multitarget as _mt  # noqa: PLC0415
 
     label = " & ".join(f"{tt}={tv!r}" for tt, tv, _ in targets)
-    setup = _engine._prepare_drive(plc, unlink=unlink)
+    setup = _drive_setup.prepare_drive(plc, unlink=unlink)
 
     goal_pairs = tuple((tt, tv) for tt, tv, _ in targets)
 
@@ -315,7 +316,7 @@ def _pilot_how_multi(
         # Same route discipline as single-target how(): infer every admissible
         # current-world route and let Orientation choose among them. ``avoid=``
         # is not tied to any one target, so it constrains every target uniformly.
-        ctx, _route_taken = _engine._prepare_target_context(
+        ctx, _route_taken = _drive_setup.prepare_target_context(
             setup,
             t_tag,
             t_val,

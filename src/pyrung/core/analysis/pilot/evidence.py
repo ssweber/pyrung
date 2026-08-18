@@ -6,7 +6,7 @@ canonicalizes pipeline aliases, identifies channel, action, stepping, and
 internal tags, and expands ingress paths into ``TransitionRoute`` values with
 separate source constraints and enablers.
 
-``pilot._infer_pipeline_roles_for_context`` owns the legacy opaque admission:
+``drive_setup.infer_opaque_pipeline_roles`` owns the legacy opaque admission:
 it visits opaque-loop tags and retains only roles with request tags. Static
 chart discovery is separate: :func:`discover_chart_roles` visits
 prover-confirmed stepping tags, but folds one-way copied projections into the

@@ -143,8 +143,8 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     only by an indirect copy over a constant jump table."""
     from pyrung.core.analysis.pdg import build_program_graph
     from pyrung.core.analysis.pilot.api import pilot_events
+    from pyrung.core.analysis.pilot.drive_setup import build_prover_context
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.prove.classify import _compute_stepping_tags
     from pyrung.core.analysis.steerable import compute_steerable
@@ -166,7 +166,7 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     assert state_name in opaque_loop, sorted(opaque_loop)
 
     # The pilot-facing consumer agrees (is_stepping is what engages the compass).
-    prover = _build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic, dict(plc.state.tags))
     assert prover.evidence is not None
     assert prover.evidence.is_stepping(state_name)
 

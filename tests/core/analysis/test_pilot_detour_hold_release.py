@@ -397,8 +397,8 @@ def test_stepper_is_an_earned_work_component() -> None:
     """Detour classification fails closed without earned work; the fixture's
     recipe stepper must classify (family B, self-limiting +2 advances)."""
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.drive_setup import build_prover_context
     from pyrung.core.analysis.pilot.earned_work import build_earned_work
-    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
     logic, tags = _door_cycle_program()
@@ -407,7 +407,7 @@ def test_stepper_is_an_earned_work_component() -> None:
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    prover = _build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic, dict(plc.state.tags))
     assert prover.key_config is not None
     earned_work = build_earned_work(
         pdg,

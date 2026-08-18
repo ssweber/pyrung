@@ -19,6 +19,7 @@ from pyrung import (
 )
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot.drive_setup import build_prover_context
 from pyrung.core.analysis.pilot.earned_work import (
     EarnedWork,
     EarnedWorkComponent,
@@ -26,7 +27,6 @@ from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
     earned_work_is_useful_motion,
 )
-from pyrung.core.analysis.pilot.pilot import _build_prover_context
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 from tests.core.analysis.test_pilot_departure_progress import _knock_three_times_program
 
@@ -35,7 +35,7 @@ def _earned_work_for(logic, plc, target_tag, channel_tags=frozenset()):
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     clear_only = compute_clear_only(pdg, plc._known_tags_by_name, logic)
-    prover = _build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic, dict(plc.state.tags))
     assert prover.key_config is not None
     return build_earned_work(
         pdg,

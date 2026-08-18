@@ -248,14 +248,14 @@ def _packml_table_detour_program() -> tuple[Program, dict[str, object]]:
 def _current_ctx(logic, plc):
     """Build the pdg / steerable / opaque_loop / evidence the recognizer consumes."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.pilot import _build_prover_context
+    from pyrung.core.analysis.pilot.drive_setup import build_prover_context
     from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.steerable import compute_steerable
 
     pdg = build_program_graph(logic)
     steerable = compute_steerable(pdg, plc._known_tags_by_name, logic)
     opaque_loop = detect_opaque_loop(pdg, logic)
-    prover = _build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic, dict(plc.state.tags))
     return pdg, steerable, opaque_loop, prover.evidence
 
 
@@ -446,8 +446,8 @@ def test_table_detour_arms_opaque_table_surface() -> None:
     StateRequested -> State transition pipeline.
     """
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.drive_setup import build_prover_context
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.steerable import compute_steerable
 
@@ -462,7 +462,7 @@ def test_table_detour_arms_opaque_table_surface() -> None:
 
     # (2) State stays copy-coupled *stepping* (plain copy source), so the compass
     #     value-graph is built for it rather than the loop dead-ending immediately.
-    prover = _build_prover_context(logic, dict(plc.state.tags))
+    prover = build_prover_context(logic, dict(plc.state.tags))
     assert prover.evidence is not None
     assert prover.evidence.is_stepping(state_name)
 
@@ -490,7 +490,7 @@ def test_completion_edges_record_program_owned_command_bearings() -> None:
     ``rise(CompleteTmr.Done)`` producers issue them is Part 2's discovery —
     the sibling trace reads it, record time invents nothing.
     """
-    from pyrung.core.analysis.pilot.pilot import _infer_pipeline_roles_for_context
+    from pyrung.core.analysis.pilot.drive_setup import infer_opaque_pipeline_roles
     from pyrung.core.analysis.pilot.pipeline_graph import build_static_transition_graphs
 
     HOLD_CMD, COMPLETE_CMD = 4, 10
@@ -499,7 +499,7 @@ def test_completion_edges_record_program_owned_command_bearings() -> None:
     plc = PLC(logic, dt=0.010)
     plc.step()
     pdg, steerable, opaque_loop, evidence = _current_ctx(logic, plc)
-    roles = _infer_pipeline_roles_for_context(pdg, logic, steerable, opaque_loop, evidence)
+    roles = infer_opaque_pipeline_roles(pdg, logic, steerable, opaque_loop, evidence)
     graphs = build_static_transition_graphs(roles, pdg, logic, steerable, opaque_loop, evidence)
 
     completions = {

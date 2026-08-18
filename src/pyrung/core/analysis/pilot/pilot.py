@@ -1,8 +1,6 @@
 """Execution and verification engine for PILOT drives.
 
-This module builds static/runtime context, prepares the user-selected trace
-constraint, and dispatches the typed orientation results returned by
-``Compass``.
+This module dispatches the typed orientation results returned by ``Compass``.
 It invokes execution, owns verification-time excursion investigation, applies
 observations, commits eligible forks, and delegates post-commit recovery. It
 does not parse public requests, assemble public plans, or synthesize a
@@ -12,7 +10,6 @@ navigation decision.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
@@ -26,7 +23,6 @@ import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 from pyrung.core.analysis.graph import (
     PlanStep,
-    RouteTaken,
 )
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import iter_advance_owners
@@ -34,9 +30,7 @@ from pyrung.core.analysis.pilot.awaited_actions import sibling_producer_family
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     CoastObservation,
-    Compass,
     EvidenceScope,
-    NavigationCatalog,
     ProbeExhaustedObservation,
 )
 from pyrung.core.analysis.pilot.earned_work import (
@@ -85,16 +79,6 @@ from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
     _until_unresolved_condition,
     fork_with_pilot_rungs,
-)
-from pyrung.core.analysis.pilot.physical import install_harness
-from pyrung.core.analysis.pilot.pipeline_graph import (
-    detect_opaque_loop,
-    detect_opaque_pipelines,
-)
-from pyrung.core.analysis.pilot.program_facts import (
-    compute_edge_tags,
-    compute_reference_constants,
-    compute_resting_values,
 )
 from pyrung.core.analysis.pilot.program_step import (
     read_program_step,
@@ -151,7 +135,6 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
 )
 from pyrung.core.analysis.pilot.trace_read import (
-    DomainPrior,
     TraceChoice,
     TraceReadConstraints,
 )
@@ -192,39 +175,13 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
-    _StateKeyConfig,
 )
 from pyrung.core.analysis.sp_values import _values_match
-from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
 
 if TYPE_CHECKING:
-    from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
-    from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
     from pyrung.core.runner import PLC
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class _DriveSetup:
-    """Static/runtime preparation shared by every target driven on one PLC."""
-
-    work: PLC
-    program: Any
-    pdg: ProgramGraph
-    steerable: frozenset[str]
-    edge_tags: set[str]
-    resting: dict[str, Any]
-    anchor_scan: int
-    diag_snapshot: dict[str, Any]
-    nd_domains: dict[str, tuple[Any, ...]] | None
-    stateful_domains: dict[str, tuple[Any, ...]] | None
-    key_config: _StateKeyConfig | None
-    evidence: TransitionEvidence | None
-    compass: Compass
-    opaque_loop: frozenset[str]
-    configured_inputs: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -257,16 +214,6 @@ class _IterationTransition:
     continuation_hop: bool = False
     theory_transition: _TheoryTransitionEvidence | None = None
     adoption_checkpoint: _CausalCheckpoint | None = None
-
-
-@dataclass(frozen=True)
-class _ProverContext:
-    """Best-effort static evidence shared by drive setup and target context."""
-
-    nd_domains: dict[str, tuple[Any, ...]] | None = None
-    stateful_domains: dict[str, tuple[Any, ...]] | None = None
-    key_config: _StateKeyConfig | None = None
-    evidence: TransitionEvidence | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -320,242 +267,6 @@ def _commit_step(
             ),
         )
     return fork, steps
-
-
-def _make_pilot_context(
-    plc: PLC,
-    target_tag: str,
-    target_value: Any,
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    edge_tags: set[str],
-    resting: dict[str, Any],
-    *,
-    nd_domains: dict[str, tuple[Any, ...]] | None,
-    stateful_domains: dict[str, tuple[Any, ...]] | None,
-    evidence: TransitionEvidence | None,
-    key_config: _StateKeyConfig | None,
-    compass: Compass | None,
-    opaque_loop: frozenset[str],
-    route: TraceChoice | None,
-    max_scans: int,
-    avoid_pred: Any = None,
-    target_predicate: Any = None,
-    configured_inputs: frozenset[str] = frozenset(),
-) -> _PilotContext:
-    from pyrung.core.analysis.pilot.evidence import discover_chart_roles
-
-    pipeline_roles = _infer_pipeline_roles_for_context(
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        evidence,
-    )
-    chart_roles = discover_chart_roles(
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        evidence,
-    )
-    pipeline_internal_tags = frozenset(
-        tag for role in pipeline_roles for tag in role.trace_internal_tags
-    )
-    prior_compass = compass or Compass()
-    compass = Compass(
-        catalog=NavigationCatalog(
-            slices=prior_compass.catalog.slices,
-            graphs=_build_static_transition_graphs_for_context(
-                pipeline_roles,
-                pdg,
-                program,
-                steerable,
-                opaque_loop,
-                evidence,
-            ),
-            chart_graphs=_build_static_transition_graphs_for_context(
-                chart_roles,
-                pdg,
-                program,
-                steerable,
-                opaque_loop,
-                evidence,
-            ),
-        ),
-        knowledge=prior_compass.knowledge,
-    )
-    # Domain prior for trace's inequality resolution: nondeterministic domains
-    # for free inputs, stateful domains for program-owned tags, and affine
-    # func-deps for derived tags. All are receipts from the same ExploreContext.
-    domain_prior = DomainPrior(
-        nd_domains=nd_domains,
-        stateful_domains=stateful_domains,
-        func_deps=evidence.affine_projections() if evidence is not None else None,
-    )
-    # Clear-only (ack-cleared momentary) command tags: a subset of ``steerable``
-    # kept off prerequisite holds and off preferred init/reset writer selection.
-    clear_only = compute_clear_only(pdg, plc._known_tags_by_name, program)
-    return _PilotContext(
-        target=TargetSpec(target_tag, target_value, target_predicate),
-        pdg=pdg,
-        program=program,
-        steerable=steerable,
-        edge_tags=edge_tags,
-        clear_only=clear_only,
-        resting=resting,
-        nd_domains=nd_domains,
-        domain_prior=domain_prior,
-        evidence=evidence,
-        key_config=key_config,
-        compass=compass,
-        opaque_loop=opaque_loop,
-        pipeline_roles=pipeline_roles,
-        pipeline_internal_tags=pipeline_internal_tags,
-        route=route,
-        blocked_actions=frozenset(),
-        max_scans=max_scans,
-        avoid_pred=avoid_pred,
-        configured_inputs=configured_inputs,
-        chart_roles=chart_roles,
-    )
-
-
-def _prepare_drive(
-    plc: PLC,
-    *,
-    unlink: list[str] | None,
-) -> _DriveSetup:
-    """Build the shared program/runtime analysis for one public drive."""
-
-    from pyrung.core.analysis.pdg import build_program_graph
-
-    configured_inputs = _configured_input_names(plc)
-    work = fork_with_pilot_rungs(plc, (), history_budget=math.inf)
-    program = plc._program
-    pdg = build_program_graph(program)
-    harness_fb = install_harness(work, unlink=unlink)
-    ref_consts = compute_reference_constants(pdg, program, work._known_tags_by_name)
-    steerable = compute_steerable(pdg, work._known_tags_by_name, program) - harness_fb - ref_consts
-    edge_tags = compute_edge_tags(pdg, program)
-    resting = compute_resting_values(steerable, work._known_tags_by_name, pdg, program)
-    diag_snapshot = dict(work.state.tags)
-    prover = _build_prover_context(
-        program,
-        diag_snapshot,
-    )
-    opaque_slices = detect_opaque_pipelines(pdg, program, steerable)
-    return _DriveSetup(
-        work=work,
-        program=program,
-        pdg=pdg,
-        steerable=steerable,
-        edge_tags=edge_tags,
-        resting=resting,
-        anchor_scan=work.state.scan_id,
-        diag_snapshot=diag_snapshot,
-        nd_domains=prover.nd_domains,
-        stateful_domains=prover.stateful_domains,
-        key_config=prover.key_config,
-        evidence=prover.evidence,
-        compass=Compass(NavigationCatalog(slices=tuple(opaque_slices))),
-        opaque_loop=detect_opaque_loop(pdg, program),
-        configured_inputs=configured_inputs,
-    )
-
-
-def _prepare_target_context(
-    setup: _DriveSetup,
-    target_tag: str,
-    target_value: Any,
-    target_predicate: Any,
-    *,
-    max_scans: int,
-    avoid_pred: Any,
-    compass: Compass | None = None,
-    work: PLC | None = None,
-) -> tuple[_PilotContext, RouteTaken | None]:
-    """Bind one target and its initial route report to a prepared drive."""
-
-    target_work = setup.work if work is None else work
-    route_taken = _target_route.prepare_target_route(
-        target_work,
-        target_tag,
-        target_value,
-        setup.pdg,
-        setup.program,
-        setup.steerable,
-        setup.opaque_loop,
-        target_predicate=target_predicate,
-        avoid_pred=avoid_pred,
-    )
-    ctx = _make_pilot_context(
-        target_work,
-        target_tag,
-        target_value,
-        setup.pdg,
-        setup.program,
-        setup.steerable,
-        setup.edge_tags,
-        setup.resting,
-        nd_domains=setup.nd_domains,
-        stateful_domains=setup.stateful_domains,
-        evidence=setup.evidence,
-        key_config=setup.key_config,
-        compass=compass or setup.compass,
-        opaque_loop=setup.opaque_loop,
-        route=None,
-        max_scans=max_scans,
-        avoid_pred=avoid_pred,
-        target_predicate=target_predicate,
-        configured_inputs=setup.configured_inputs,
-    )
-    return ctx, route_taken
-
-
-def _infer_pipeline_roles_for_context(
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    opaque_loop: frozenset[str],
-    evidence: TransitionEvidence | None,
-) -> tuple[PipelineRoles, ...]:
-    if not opaque_loop:
-        return ()
-
-    from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-
-    roles: list[PipelineRoles] = []
-    for tag in sorted(opaque_loop):
-        if evidence is not None and not evidence.is_stepping(tag):
-            continue
-        role = infer_pipeline_roles(tag, pdg, program, steerable, opaque_loop, evidence)
-        if role.request_tags:
-            roles.append(role)
-    return tuple(roles)
-
-
-def _build_static_transition_graphs_for_context(
-    pipeline_roles: tuple[PipelineRoles, ...],
-    pdg: ProgramGraph,
-    program: Any,
-    steerable: frozenset[str],
-    opaque_loop: frozenset[str],
-    evidence: TransitionEvidence | None,
-) -> tuple[StaticTransitionGraph, ...]:
-    if not pipeline_roles:
-        return ()
-    from pyrung.core.analysis.pilot.pipeline_graph import build_static_transition_graphs
-
-    return build_static_transition_graphs(
-        pipeline_roles,
-        pdg,
-        program,
-        steerable,
-        opaque_loop,
-        evidence,
-    )
 
 
 def _with_avoid_reason(
@@ -2790,100 +2501,3 @@ def _pilot_loop(
         knowledge=dict(final.data.get("knowledge", {})),
         root_route=final.data.get("root_route"),
     )
-
-
-# ---------------------------------------------------------------------------
-# Prover context — value domains + state key config
-# ---------------------------------------------------------------------------
-
-
-def _build_prover_context(
-    program: Any,
-    snapshot: dict[str, Any],
-) -> _ProverContext:
-    """Build prover context for value domains and state key projection.
-
-    Fields are ``None`` on failure, so PILOT falls back to Bool-only probing,
-    pivot-tag state keys, and local static evidence.
-    """
-    try:
-        from dataclasses import replace as _replace
-
-        from pyrung.circuitpy.codegen import compile_kernel as _compile_kernel
-        from pyrung.core.analysis.pilot.evidence import build_transition_evidence
-        from pyrung.core.analysis.prove import _build_explore_context
-        from pyrung.core.analysis.prove.passes import _OptConfig
-        from pyrung.core.analysis.prove.results import Intractable
-
-        opt = _replace(_OptConfig(), domains_only=True)
-        compiled = _compile_kernel(program, blockless=True, proof_metadata=True)
-        ctx = _build_explore_context(
-            program,
-            _opt_config=opt,
-            compiled=compiled,
-            initial_state=snapshot,
-            allow_partial=True,
-        )
-        if isinstance(ctx, Intractable):
-            return _ProverContext()
-        nd = getattr(ctx, "nondeterministic_dims", None)
-        stateful = getattr(ctx, "stateful_dims", None)
-        evidence = build_transition_evidence(ctx)
-        if nd:
-            logger.info("pilot: nd_domains ready (%d dims)", len(nd))
-
-        # Build state key config from ExploreContext.
-        #
-        # The pilot's macro-state key needs the *pre-elision* stateful set.
-        # Elision drops scan-local registers because BFS enumerates inputs, so a
-        # register that is a pure function of the inputs each scan is redundant in
-        # the BFS key.  The pilot does the opposite — it *holds* inputs and
-        # *observes* registers — so a scan-local channel (e.g. a config/mode
-        # register decoded from a command) is the observable proxy for its own
-        # steering; dropping it makes an establish move (change the channel) read
-        # as SPIN.  Restore the elided tags, appended after the originals so the
-        # done/threshold spec indices (which point into the original positions)
-        # stay valid.
-        stateful_names = ctx.stateful_names + tuple(
-            sorted(set(ctx.elided_tags) - set(ctx.stateful_names))
-        )
-        done_specs = ctx.state_key_done_specs
-        threshold_vector_specs = ctx.threshold_vector_specs
-
-        acc_names: set[str] = set()
-        for spec in done_specs:
-            acc_names.add(spec.acc_name)
-        for spec in threshold_vector_specs:
-            acc_names.add(spec.acc_name)
-        acc_indices = frozenset(i for i, name in enumerate(stateful_names) if name in acc_names)
-
-        if not stateful_names:
-            logger.info("pilot: stateful_names empty, falling back to pivot_tags")
-            return _ProverContext(
-                nd_domains=nd,
-                stateful_domains=stateful,
-                evidence=evidence,
-            )
-
-        key_config = _StateKeyConfig(
-            stateful_names=stateful_names,
-            done_specs=done_specs,
-            threshold_vector_specs=threshold_vector_specs,
-            acc_indices=acc_indices,
-        )
-        logger.info(
-            "pilot: state key ready (%d dims, %d done, %d threshold, %d acc masked)",
-            len(stateful_names),
-            len(done_specs),
-            len(threshold_vector_specs),
-            len(acc_indices),
-        )
-        return _ProverContext(
-            nd_domains=nd,
-            stateful_domains=stateful,
-            key_config=key_config,
-            evidence=evidence,
-        )
-    except Exception:  # noqa: BLE001
-        logger.debug("pilot: context build failed", exc_info=True)
-        return _ProverContext()
