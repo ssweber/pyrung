@@ -38,11 +38,11 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
 )
 from pyrung.core.analysis.pilot.trace import (
-    rank_trace_choices,
     trace_back,
     trace_relational,
 )
 from pyrung.core.analysis.pilot.trace_read import TraceChoice, TraceReadConstraints
+from pyrung.core.analysis.pilot.trace_routes import rank_trace_choices
 from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode, frontier_pairs
 from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.pilot.world_key import (
