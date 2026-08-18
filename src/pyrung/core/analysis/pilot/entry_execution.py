@@ -33,7 +33,8 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _configured_input_names,
     _derive_bootstrap_requirements,
 )
-from pyrung.core.analysis.pilot.trace import TraceReadConstraints, trace_back
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
     _BootstrapExecution,
     _CausalCheckpoint,

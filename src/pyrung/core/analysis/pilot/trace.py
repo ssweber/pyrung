@@ -30,15 +30,10 @@ from dataclasses import dataclass, field, replace
 from itertools import product
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
+import pyrung.core.analysis.pilot.availability as _availability
+import pyrung.core.analysis.pilot.trace_read as _trace_read
 from pyrung.core.analysis.pdg import TagRole, resolve_rung
 from pyrung.core.analysis.pilot.advance import demand_holds
-from pyrung.core.analysis.pilot.availability import (
-    _GUARD_CONTRADICTION,
-    _equality_gated_coil,
-    _reduce_guard_by_fire_pins,
-    _reduce_guard_by_pin,
-    _WriterAvailability,
-)
 from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.static_expressions import (
     _atom_text,
@@ -102,59 +97,6 @@ if TYPE_CHECKING:
 _TraceChoicePayload = TypeVar("_TraceChoicePayload")
 
 
-class UnsupportedConstruct(Exception):
-    """Trace encountered a program construct for which it has no read rule.
-
-    Raised at read time and caught at exactly one drive boundary in
-    ``pilot.py``; ``recording.py`` renders the caret/source diagnostic.  Test
-    mode propagates the exception; drive mode degrades to a named terminal
-    result instead of probing a construct the reader did not understand.
-    """
-
-    def __init__(
-        self,
-        construct_kind: str,
-        unsupported: Any,
-        provenance: tuple[str, ...] = (),
-    ) -> None:
-        self.construct_kind = construct_kind
-        self.unsupported = unsupported
-        self.provenance = provenance
-        self.source_file = getattr(unsupported, "source_file", None)
-        self.source_line = getattr(unsupported, "source_line", None)
-        name = type(unsupported).__name__
-        context = f" at {provenance[-1]}" if provenance else ""
-        super().__init__(f"unsupported {construct_kind} {name}{context}")
-
-
-# The availability-layer names imported above are re-exported *by that import* —
-# external importers (``options.py``, ``tide_tables.py``, the pilot tests
-# that reach for these ``_``-prefixed names directly) keep importing them from
-# ``trace``.  The recursion core below calls them by their bare names.
-
-
-@dataclass(frozen=True)
-class DomainPrior:
-    """Prover-derived domain prior for resolving inequality atoms.
-
-    ``nd_domains`` maps a free/steerable input to its value domain
-    (``_ExploreContext.nondeterministic_dims``); ``stateful_domains`` maps a
-    program-owned tag to the values its writers can produce
-    (``_ExploreContext.stateful_dims``); and ``func_deps`` is the affine
-    projection map ``{tag: (source, scale, offset)}`` for derived scratch
-    (``_ExploreContext.functional_dep_projections``).  These feed
-    :func:`_resolve_inequality_target` so an inequality (``PV >= Lower``,
-    ``ModeSel >= 1``) resolves to a *reachable* satisfying value instead of a
-    blind arithmetic boundary.  ``None`` everywhere reproduces the pre-domain
-    snapshot-boundary behavior — the prior is a completeness aid, never
-    correctness-bearing (the interpreted fork verifies every plan).
-    """
-
-    nd_domains: dict[str, tuple[Any, ...]] | None = None
-    stateful_domains: dict[str, tuple[Any, ...]] | None = None
-    func_deps: dict[str, tuple[str, int, Any]] | None = None
-
-
 @dataclass(frozen=True)
 class _TraceEnv:
     """Invariant context threaded through one backward trace.
@@ -182,7 +124,7 @@ class _TraceEnv:
     pipeline_internal_tags: frozenset[str] = frozenset()
     writer_locks: dict[tuple[str, Any], int] | None = None
     or_locks: dict[tuple[str, str], int] | None = None
-    prior: DomainPrior | None = None
+    prior: _trace_read.DomainPrior | None = None
     avoid_pred: Any = None
     # Exact singleton actions rejected in this executable world. Joint acts are
     # intentionally absent: disproving ``A + B`` does not disprove either member
@@ -221,10 +163,10 @@ def _env_for(
     clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
-    route: TraceChoice | None = None,
+    route: _trace_read.TraceChoice | None = None,
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
-    prior: DomainPrior | None = None,
+    prior: _trace_read.DomainPrior | None = None,
     avoid_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
@@ -257,110 +199,37 @@ def _env_for(
     )
 
 
-@dataclass(frozen=True)
-class TraceChoice:
-    """One enumerated route through a multi-writer / OR-over-coils Bool trace.
+def _env_from_constraints(
+    read: _trace_read.TraceReadConstraints,
+    snapshot: dict[str, Any],
+    pdg: ProgramGraph,
+    program: Any,
+    steerable: frozenset[str],
+    *,
+    writer_locks: dict[tuple[str, Any], int] | None = None,
+    or_locks: dict[tuple[str, str], int] | None = None,
+    max_depth: int = 15,
+) -> _TraceEnv:
+    """Lower a caller-owned trace request to the recursion engine's environment."""
 
-    Internal: ``enumerate_trace_choices`` produces these so ``_prepare_route``
-    can pick a deterministic default and record the rest as pivots on
-    :class:`~pyrung.core.analysis.graph.RouteTaken`. ``route_condition`` is the
-    concrete ``(tag, value)`` that distinguishes the route and can be named by
-    ``avoid=`` to exclude it.
-    """
-
-    id: str
-    label: str
-    route: tuple[str, ...]
-    writer_locks: tuple[tuple[str, Any, int], ...] = ()
-    or_locks: tuple[tuple[str, str, int], ...] = ()
-    route_condition: tuple[str, Any] | None = None
-
-    def __str__(self) -> str:
-        detail = " -> ".join(_compact_route(self.route))
-        return f"route={self.id}: {self.label}" + (f" ({detail})" if detail else "")
-
-    def writer_lock_map(self) -> dict[tuple[str, Any], int]:
-        return {(tag, value): rung for tag, value, rung in self.writer_locks}
-
-    def or_lock_map(self) -> dict[tuple[str, str], int]:
-        return {(tag, key): index for tag, key, index in self.or_locks}
-
-
-@dataclass(frozen=True)
-class TraceReadConstraints:
-    """The complete caller-owned constraint set for one backward trace read."""
-
-    clear_only: frozenset[str] = frozenset()
-    opaque_loop: frozenset[str] = frozenset()
-    pipeline_internal_tags: frozenset[str] = frozenset()
-    route: TraceChoice | None = None
-    prior: DomainPrior | None = None
-    avoid_pred: Any = None
-    rejected_actions: frozenset[tuple[str, Any]] = frozenset()
-    # Inert recovery constraints participate in the read identity and in
-    # Orientation's action admission. Trace never turns them into assignments.
-    active_requirements: tuple[Any, ...] = ()
-    harness: Any = None
-    execution_memory: Mapping[str, Any] | None = None
-
-    @classmethod
-    def from_context(
-        cls,
-        ctx: Any,
-        work: Any,
-        *,
-        route: TraceChoice | None,
-        avoid_pred: Any,
-        rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
-    ) -> TraceReadConstraints:
-        """Read the invariant trace constraints from an explicit pilot context."""
-
-        return cls(
-            clear_only=ctx.clear_only,
-            opaque_loop=ctx.opaque_loop,
-            pipeline_internal_tags=ctx.pipeline_internal_tags,
-            route=route,
-            prior=ctx.domain_prior,
-            avoid_pred=avoid_pred,
-            rejected_actions=rejected_actions,
-            active_requirements=tuple(getattr(ctx, "active_requirements", ())),
-            harness=getattr(work, "_harness", None),
-            execution_memory=getattr(getattr(work, "state", None), "memory", None),
-        )
-
-    def env(
-        self,
-        snapshot: dict[str, Any],
-        pdg: ProgramGraph,
-        program: Any,
-        steerable: frozenset[str],
-        *,
-        writer_locks: dict[tuple[str, Any], int] | None = None,
-        or_locks: dict[tuple[str, str], int] | None = None,
-        max_depth: int = 15,
-    ) -> _TraceEnv:
-        """Lower this read receipt to Trace's recursive environment."""
-
-        return _env_for(
-            snapshot,
-            pdg,
-            program,
-            steerable,
-            clear_only=self.clear_only,
-            opaque_loop=self.opaque_loop,
-            pipeline_internal_tags=self.pipeline_internal_tags,
-            route=self.route,
-            writer_locks=writer_locks,
-            or_locks=or_locks,
-            prior=self.prior,
-            avoid_pred=self.avoid_pred,
-            rejected_actions=self.rejected_actions,
-            max_depth=max_depth,
-            harness=self.harness,
-            execution_memory=self.execution_memory,
-        )
-
-
+    return _env_for(
+        snapshot,
+        pdg,
+        program,
+        steerable,
+        clear_only=read.clear_only,
+        opaque_loop=read.opaque_loop,
+        pipeline_internal_tags=read.pipeline_internal_tags,
+        route=read.route,
+        writer_locks=writer_locks,
+        or_locks=or_locks,
+        prior=read.prior,
+        avoid_pred=read.avoid_pred,
+        rejected_actions=read.rejected_actions,
+        max_depth=max_depth,
+        harness=read.harness,
+        execution_memory=read.execution_memory,
+    )
 
 
 @dataclass(frozen=True)
@@ -568,7 +437,7 @@ def _inequality_levers(
     snapshot: dict[str, Any],
     steerable: frozenset[str],
     pdg: ProgramGraph,
-    prior: DomainPrior | None,
+    prior: _trace_read.DomainPrior | None,
     program: Any = None,
 ) -> list[_Lever]:
     """Actionable levers for ``A op B``, as :class:`_Lever` values.
@@ -1334,14 +1203,14 @@ def trace_relational(
     clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
-    route: TraceChoice | None = None,
-    prior: DomainPrior | None = None,
+    route: _trace_read.TraceChoice | None = None,
+    prior: _trace_read.DomainPrior | None = None,
     avoid_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
     execution_memory: Mapping[str, Any] | None = None,
-    constraints: TraceReadConstraints | None = None,
+    constraints: _trace_read.TraceReadConstraints | None = None,
 ) -> TraceNode:
     """Backward trace for a relational *target* predicate (``A op B``).
 
@@ -1351,7 +1220,7 @@ def trace_relational(
     relational node (or a coast leaf / dead-end) as the tree root; a satisfied
     predicate yields a ``satisfied`` leaf (the drive loop's early-exit owns it).
     """
-    read = constraints or TraceReadConstraints(
+    read = constraints or _trace_read.TraceReadConstraints(
         clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
@@ -1362,7 +1231,7 @@ def trace_relational(
         harness=harness,
         execution_memory=execution_memory,
     )
-    env = read.env(snapshot, pdg, program, steerable, max_depth=max_depth)
+    env = _env_from_constraints(read, snapshot, pdg, program, steerable, max_depth=max_depth)
     nodes = _trace_expression(env, predicate, predicate.tag, _visited=set(), _depth=0)
     if nodes:
         root = nodes[0]
@@ -1503,7 +1372,7 @@ class _WriterAttempt:
 
     children: tuple[TraceNode, ...]
     writer_rung: int
-    writer_availability: _WriterAvailability
+    writer_availability: _availability._WriterAvailability
     live_guard: bool
     crossing_exact: bool | None
     visited_after: frozenset[tuple[str, Any]]
@@ -1757,7 +1626,7 @@ def _route_conflicts(tree: TraceNode, pdg: ProgramGraph, program: Any) -> frozen
 
     def walk(node: TraceNode, anc: frozenset[int]) -> None:
         if not (node.relational or node.value is None):
-            alias = _equality_gated_coil(node.tag, node.value, pdg, program)
+            alias = _availability._equality_gated_coil(node.tag, node.value, pdg, program)
             if alias is not None:
                 demand_tag, demand_vals = alias
             else:
@@ -1917,7 +1786,7 @@ def _trace_expression(
 
     if isinstance(expr, Atom):
         if expr.unsupported is not None:
-            raise UnsupportedConstruct("condition", expr.unsupported, provenance)
+            raise _trace_read.UnsupportedConstruct("condition", expr.unsupported, provenance)
         target = _atom_target(expr, env.snapshot)
         if target is None:
             if expr.form in ("lt", "le", "gt", "ge", "ne"):
@@ -2061,7 +1930,7 @@ def _trace_expression(
             child.provenance = provenance
         return [child]
 
-    raise UnsupportedConstruct("expression", expr, provenance)
+    raise _trace_read.UnsupportedConstruct("expression", expr, provenance)
 
 
 def trace_back(
@@ -2075,16 +1944,16 @@ def trace_back(
     clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
-    route: TraceChoice | None = None,
+    route: _trace_read.TraceChoice | None = None,
     writer_locks: dict[tuple[str, Any], int] | None = None,
     or_locks: dict[tuple[str, str], int] | None = None,
-    prior: DomainPrior | None = None,
+    prior: _trace_read.DomainPrior | None = None,
     avoid_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     max_depth: int = 15,
     harness: Any = None,
     execution_memory: Mapping[str, Any] | None = None,
-    constraints: TraceReadConstraints | None = None,
+    constraints: _trace_read.TraceReadConstraints | None = None,
     _visited: set[tuple[str, Any]] | None = None,
     _ancestry: tuple[tuple[str, Any], ...] = (),
     _depth: int = 0,
@@ -2097,7 +1966,7 @@ def trace_back(
     recursion instead of a dozen kwargs.  A ``TraceChoice`` resolves to its lock
     maps here, once.
     """
-    read = constraints or TraceReadConstraints(
+    read = constraints or _trace_read.TraceReadConstraints(
         clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
@@ -2108,7 +1977,8 @@ def trace_back(
         harness=harness,
         execution_memory=execution_memory,
     )
-    env = read.env(
+    env = _env_from_constraints(
+        read,
         snapshot,
         pdg,
         program,
@@ -2206,7 +2076,7 @@ def _trace_back(
 
     node = TraceNode(tag=tag, value=value)
 
-    writer_availability: dict[int, _WriterAvailability] = {}
+    writer_availability: dict[int, _availability._WriterAvailability] = {}
     writer_ranking: list[_WriterRank] = []
     writer_reverses: dict[int, ReverseResult] = {}
     ranked_writers = _rank_writers(
@@ -2287,18 +2157,20 @@ def _trace_back(
         # frontier fighting the source pin.
         if reverse_result.exact and guard_expr is not None:
             for pin_tag, pin_value in producer_pins.items():
-                guard_expr = _reduce_guard_by_pin(guard_expr, pin_tag, pin_value, env.snapshot)
-                if guard_expr is _GUARD_CONTRADICTION:
+                guard_expr = _availability._reduce_guard_by_pin(
+                    guard_expr, pin_tag, pin_value, env.snapshot
+                )
+                if guard_expr is _availability._GUARD_CONTRADICTION:
                     writer_skips.append((ri, "guard_pin_contradiction"))
                     break
-            if guard_expr is _GUARD_CONTRADICTION:
+            if guard_expr is _availability._GUARD_CONTRADICTION:
                 continue
 
         if guard_expr is not None:
-            guard_expr = _reduce_guard_by_fire_pins(
+            guard_expr = _availability._reduce_guard_by_fire_pins(
                 guard_expr, ro, tag, value, env.snapshot, env.pdg, env.program
             )
-            if guard_expr is _GUARD_CONTRADICTION:
+            if guard_expr is _availability._GUARD_CONTRADICTION:
                 writer_skips.append((ri, "guard_fire_pin_contradiction"))
                 continue
 
@@ -2326,7 +2198,9 @@ def _trace_back(
         attempt_node = writer_build.node
         attempt_visited = writer_build.visited
         attempt_node.writer_rung = ri
-        attempt_node.writer_availability = writer_availability.get(ri, _WriterAvailability.UNKNOWN)
+        attempt_node.writer_availability = writer_availability.get(
+            ri, _availability._WriterAvailability.UNKNOWN
+        )
         normalized_reverse = normalize_reverse_result(reverse_result)
         attempt_node.crossing_exact = (
             None if normalized_reverse.fallthrough else normalized_reverse.exact
@@ -2786,7 +2660,7 @@ def enumerate_trace_choices(
     steerable: frozenset[str] = frozenset(),
     clear_only: frozenset[str] = frozenset(),
     max_choices: int = 16,
-) -> tuple[TraceChoice, ...]:
+) -> tuple[_trace_read.TraceChoice, ...]:
     """Enumerate route choices for an ambiguous ``tag == value`` trace.
 
     General over the target value — ``Bool == True``, ``Bool == False`` (the
@@ -2853,7 +2727,7 @@ def enumerate_trace_choices(
     if len(options) <= 1:
         return ()
 
-    choices: list[TraceChoice] = []
+    choices: list[_trace_read.TraceChoice] = []
     for i, (writer_ri, draft) in enumerate(options[:max_choices], 1):
         route = draft.route
         writer_locks: tuple[tuple[str, Any, int], ...] = ()
@@ -2867,7 +2741,7 @@ def enumerate_trace_choices(
                 _writer_route_condition(writer_ri, tag, value, pdg, program) or route_condition
             )
         choices.append(
-            TraceChoice(
+            _trace_read.TraceChoice(
                 id=str(i),
                 label=_choice_label(route, tag, value),
                 route=route,
@@ -2909,7 +2783,7 @@ def writer_route_eligible(
     return _arm_fully_steerable(_sp_to_expr(sp), tag, steerable)
 
 
-def route_rung_order(choice: TraceChoice) -> tuple[int, ...]:
+def route_rung_order(choice: _trace_read.TraceChoice) -> tuple[int, ...]:
     """Deterministic rung-order tiebreak key for a route (lowest wins).
 
     The committed writer's rung index for a multi-writer route, else the chosen
@@ -2932,12 +2806,15 @@ def rank_trace_choices(
     clear_only: frozenset[str] = frozenset(),
     opaque_loop: frozenset[str] = frozenset(),
     pipeline_internal_tags: frozenset[str] = frozenset(),
-    prior: DomainPrior | None = None,
+    prior: _trace_read.DomainPrior | None = None,
     avoid_pred: Any = None,
     rejected_actions: frozenset[tuple[str, Any]] = frozenset(),
     harness: Any = None,
-    constraints: TraceReadConstraints | None = None,
-) -> tuple[tuple[TraceChoice, ...], tuple[tuple[TraceChoice, TraceNode], ...]]:
+    constraints: _trace_read.TraceReadConstraints | None = None,
+) -> tuple[
+    tuple[_trace_read.TraceChoice, ...],
+    tuple[tuple[_trace_read.TraceChoice, TraceNode], ...],
+]:
     """Enumerate and rank current-world root choices once.
 
     The complete enumerated set is returned for route reporting; the ranked set
@@ -2946,7 +2823,7 @@ def rank_trace_choices(
     independently re-derived at the two ownership boundaries.
     """
 
-    read = constraints or TraceReadConstraints(
+    read = constraints or _trace_read.TraceReadConstraints(
         clear_only=clear_only,
         opaque_loop=opaque_loop,
         pipeline_internal_tags=pipeline_internal_tags,
@@ -2964,7 +2841,7 @@ def rank_trace_choices(
         steerable=steerable,
         clear_only=read.clear_only,
     )
-    traced: list[tuple[TraceChoice, TraceNode]] = []
+    traced: list[tuple[_trace_read.TraceChoice, TraceNode]] = []
     for choice in choices:
         tree = trace_back(
             tag,
@@ -3050,20 +2927,6 @@ def _choice_label(route: tuple[str, ...], tag: str, value: Any) -> str:
     if route:
         return route[-1]
     return f"{tag}={value!r}"
-
-
-def _compact_route(route: tuple[str, ...], *, max_items: int = 8) -> tuple[str, ...]:
-    compact: list[str] = []
-    seen: set[str] = set()
-    for item in route:
-        if item in seen:
-            continue
-        seen.add(item)
-        compact.append(item)
-    if len(compact) <= max_items:
-        return tuple(compact)
-    head = compact[: max_items - 2]
-    return (*head, "...", compact[-1])
 
 
 def _combine_route_options(

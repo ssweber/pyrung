@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     )
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.requirements import ActiveRequirement
-    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace_read import TraceChoice
     from pyrung.core.analysis.pilot.working_theory import (
         IntrascanTracebackFrontier,
         TheoryClaim,

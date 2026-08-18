@@ -40,7 +40,7 @@ from pyrung.core.analysis.pilot.recording import (
     _frontier_clause,
     render_unsupported_construct,
 )
-from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
+from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.types import (
     _CommittedAct,
     _HoldLogEntry,

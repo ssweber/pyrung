@@ -35,7 +35,7 @@ from pyrung import (
     subroutine,
 )
 from pyrung.core.analysis.pilot import pilot_events, pilot_how
-from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
+from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
 
@@ -705,7 +705,7 @@ def test_equality_gated_coil_single_equality_unchanged():
     move this case: the alias is now the singleton set ``{3}`` (same conflict
     behavior), and a non-``True`` request never aliases."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+    from pyrung.core.analysis.pilot.availability import _equality_gated_coil
 
     Mode = Int("Mode")
     ManualMode = Bool("ManualMode")
@@ -724,7 +724,7 @@ def test_equality_gated_coil_or_of_two_equalities_is_set_valued():
     ``out(HiLo)`` under ``rung(Or(Mode == 3, Mode == 5))`` means ``HiLo=True``
     implies ``Mode in {3, 5}`` — the Or-widens branch of the lattice."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+    from pyrung.core.analysis.pilot.availability import _equality_gated_coil
 
     Mode = Int("Mode")
     HiLo = Bool("HiLo")
@@ -742,7 +742,7 @@ def test_equality_gated_coil_two_writers_agree_union_set():
     ``HiLo`` is driven ``True`` from two rungs (``Mode == 3`` and ``Mode == 5``);
     ``HiLo=True`` implies ``Mode`` is in the union ``{3, 5}``."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+    from pyrung.core.analysis.pilot.availability import _equality_gated_coil
 
     Mode = Int("Mode")
     Flag = Bool("Flag")
@@ -762,7 +762,7 @@ def test_equality_gated_coil_inequality_returns_none():
     Honesty boundary: never fabricate a channel constraint the guard does not
     actually pin."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+    from pyrung.core.analysis.pilot.availability import _equality_gated_coil
 
     Mode = Int("Mode")
     Flag = Bool("Flag")
@@ -777,7 +777,7 @@ def test_equality_gated_coil_inequality_returns_none():
 def test_equality_gated_coil_writers_disagree_returns_none():
     """Writers that gate *different* registers cannot alias to one channel set."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import _equality_gated_coil
+    from pyrung.core.analysis.pilot.availability import _equality_gated_coil
 
     Mode = Int("Mode")
     Other = Int("Other")

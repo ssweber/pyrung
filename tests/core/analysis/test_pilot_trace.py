@@ -38,8 +38,6 @@ from pyrung.core.analysis.pilot.program_facts import (
 )
 from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
-    TraceReadConstraints,
-    UnsupportedConstruct,
     _apply_writer_attempt,
     _constraint_atom,
     _env_for,
@@ -54,6 +52,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
+from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints, UnsupportedConstruct
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.writer_selection import _rank_writers
 from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate

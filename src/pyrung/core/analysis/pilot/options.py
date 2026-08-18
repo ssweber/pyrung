@@ -57,10 +57,8 @@ from pyrung.core.analysis.pilot.overlay import (
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM, target_reachable_values
-from pyrung.core.analysis.pilot.trace import (
-    TraceReadConstraints,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.world_key import wait_edge_nogood

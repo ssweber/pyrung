@@ -55,7 +55,7 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     RefineTheory,
     reduce_theory,
 )
-from pyrung.core.analysis.pilot.trace import TraceChoice
+from pyrung.core.analysis.pilot.trace_read import TraceChoice
 from pyrung.core.analysis.pilot.types import _Checkpoint, _World
 from pyrung.core.analysis.pilot.working_theory import (
     ConductivityResearchFinding,

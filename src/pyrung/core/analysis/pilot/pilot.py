@@ -149,15 +149,17 @@ from pyrung.core.analysis.pilot.theory_reducer import (
     RecordIntrascanTracebackFrontier,
 )
 from pyrung.core.analysis.pilot.trace import (
-    DomainPrior,
-    TraceChoice,
-    TraceReadConstraints,
-    UnsupportedConstruct,
     _route_forced_names,
     enumerate_trace_choices,
     rank_trace_choices,
     target_reached,
     trace_back,
+)
+from pyrung.core.analysis.pilot.trace_read import (
+    DomainPrior,
+    TraceChoice,
+    TraceReadConstraints,
+    UnsupportedConstruct,
 )
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (

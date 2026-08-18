@@ -31,11 +31,11 @@ from pyrung.core.analysis.pilot.overlay import (
     _union_conditions,
 )
 from pyrung.core.analysis.pilot.trace import (
-    UnsupportedConstruct,
     _route_has_no_dead_end,
     enumerate_trace_choices,
     trace_back,
 )
+from pyrung.core.analysis.pilot.trace_read import UnsupportedConstruct
 from pyrung.core.analysis.pilot.world_key import _rung_identity, _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 

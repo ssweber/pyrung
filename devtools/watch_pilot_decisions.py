@@ -38,7 +38,8 @@ from pyrung.core.analysis.pilot import theory_drive as theory_drive_module
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
-from pyrung.core.analysis.pilot.trace import TraceReadConstraints, trace_relational
+from pyrung.core.analysis.pilot.trace import trace_relational
+from pyrung.core.analysis.pilot.trace_read import TraceReadConstraints
 from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
     _CausalCheckpoint,

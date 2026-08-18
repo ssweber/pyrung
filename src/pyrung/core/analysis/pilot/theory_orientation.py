@@ -58,9 +58,7 @@ from pyrung.core.analysis.pilot.requirement_admission import (
 )
 from pyrung.core.analysis.pilot.requirements import OperandAuthority
 from pyrung.core.analysis.pilot.temporal_need import iter_temporal_need_branches
-from pyrung.core.analysis.pilot.trace import (
-    TraceChoice,
-)
+from pyrung.core.analysis.pilot.trace_read import TraceChoice
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,

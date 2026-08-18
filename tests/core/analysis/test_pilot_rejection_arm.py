@@ -23,11 +23,11 @@ from pyrung import PLC, Bool, Int, Program, calc, copy, rise, rung
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.tide_tables import GUARD_DEAD, GUARD_SAT
 from pyrung.core.analysis.pilot.trace import (
-    DomainPrior,
     _writer_guard_verdict,
     resolve_rung,
     trace_back,
 )
+from pyrung.core.analysis.pilot.trace_read import DomainPrior
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.writer_selection import _reverse_writer
 from pyrung.core.analysis.simplified import _sp_to_expr

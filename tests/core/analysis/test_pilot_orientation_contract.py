@@ -1643,7 +1643,7 @@ def test_candidate_read_exposes_only_owned_receipts() -> None:
 
 def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation_reading as orientation
-    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace_read import TraceChoice
 
     route_a = TraceChoice(id="route-a", label="A", route=("A",))
     route_b = TraceChoice(id="route-b", label="B", route=("B",))
@@ -1674,7 +1674,7 @@ def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) 
 
 def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
     from pyrung.core.analysis.pilot.orientation_reading import _assemble_world
-    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace_read import TraceChoice
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 
@@ -2184,7 +2184,7 @@ def test_orient_returns_need_probe_then_stuck_after_budget(monkeypatch) -> None:
 
 def test_orient_returns_stuck_after_budget_with_route_receipt(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
-    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace_read import TraceChoice
 
     active = TraceChoice(id="route-a", label="A", route=("A",))
     compass = Compass()

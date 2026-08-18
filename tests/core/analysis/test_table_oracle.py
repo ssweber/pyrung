@@ -475,7 +475,8 @@ def _mask_gate_program(transition: str):
 
 def _mask_gate_trace(transition: str, *, mode: int = 3):
     """``(tree, holding)`` for a trace of the HOLDING transition from *mode*."""
-    from pyrung.core.analysis.pilot.trace import DomainPrior, trace_back
+    from pyrung.core.analysis.pilot.trace import trace_back
+    from pyrung.core.analysis.pilot.trace_read import DomainPrior
     from pyrung.core.analysis.steerable import compute_steerable
 
     prog, holding = _mask_gate_program(transition)
