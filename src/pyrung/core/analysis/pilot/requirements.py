@@ -13,7 +13,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.types import ExecutionReceipt
 
 from pyrung.core.analysis.causal._rung_writes import (
     RungRead,
@@ -568,13 +571,32 @@ class ExpectationReceipt:
     obligations: tuple[Any, ...]
     producer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
     consumer_occurrences: tuple[EffectOccurrenceSnapshot, ...]
-    execution_epoch: Any = field(compare=False, repr=False)
-    execution_owner: Any = field(compare=False, repr=False)
+    execution: ExecutionReceipt = field(compare=False, repr=False)
     source_checkpoint: Any = field(compare=False, repr=False)
     local_act: Any = field(default=None, compare=False, repr=False)
     local_bearing: Any = field(default=None, compare=False, repr=False)
     expectation: Any = field(default=None, compare=False, repr=False)
     expectation_role: EffectReceiptRole = EffectReceiptRole.IMMEDIATE
+
+    @property
+    def execution_owner(self) -> Any:
+        """The one Epoch query owning every producer occurrence."""
+
+        owners = tuple(
+            dict.fromkeys(
+                self.execution.owner_at(occurrence.scan_id)
+                for occurrence in self.producer_occurrences
+            )
+        )
+        if len(owners) != 1 or owners[0] is None:
+            raise ValueError("expectation producers do not share one execution owner")
+        return owners[0]
+
+    @property
+    def execution_epoch(self) -> Any:
+        """The immutable Epoch owning this expectation's producer."""
+
+        return self.execution_owner.epoch
 
     def diagnostic_snapshot(self) -> ExpectationReceiptSnapshot:
         checkpoint_work = getattr(

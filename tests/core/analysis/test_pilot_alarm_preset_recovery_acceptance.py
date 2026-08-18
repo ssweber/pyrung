@@ -50,7 +50,14 @@ def _recorded_correction_values(plan, tag: str) -> frozenset[object]:
     from_steps = tuple(
         rung.value for step in plan.journal for rung in step.rungs if rung.dest == tag
     )
-    return frozenset((*from_holds, *from_steps))
+    from_patches = tuple(
+        value
+        for step in plan.journal
+        if step.kind == "patch"
+        for candidate, value in step.inputs
+        if candidate == tag
+    )
+    return frozenset((*from_holds, *from_steps, *from_patches))
 
 
 def test_startup_alarm_becomes_a_compass_setup_bearing_in_one_scan() -> None:
@@ -133,10 +140,11 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
     corrections = tuple(
-        event.data["pilot_rung"].value
+        value
         for event in events
         if event.kind == "theory_correction_composed"
-        and event.data["pilot_rung"].dest == fixture.WatchdogPresetMs.name
+        for tag, value in event.data["configuration"]
+        if tag == fixture.WatchdogPresetMs.name
     )
     assert corrections == (11, 21)
     assert not any(
@@ -166,12 +174,13 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
     assert plan.state.tags[fixture.Reset.name] is True
     assert plan.state.tags[fixture.AtTarget.name] is True
     assert plan.changes == {
+        fixture.WatchdogPresetMs.name: 21,
         fixture.Reset.name: True,
         fixture.AtTarget.name: True,
     }
     assert plan.ordered_steps == [
-        (2, {fixture.Reset.name: True}),
-        (3, {fixture.AtTarget.name: True}),
+        (2, {fixture.WatchdogPresetMs.name: 11, fixture.Reset.name: True}),
+        (3, {fixture.WatchdogPresetMs.name: 21, fixture.AtTarget.name: True}),
     ]
 
     command_steps = tuple(step for step in plan.journal if step.kind == "pulse")

@@ -473,7 +473,7 @@ class IntrascanBoundaryRealization:
     stage_requirements: tuple[IntrascanReadRequirement, ...] = ()
     unresolved_producer_goals: tuple[IntrascanProducerGoal, ...] = ()
     consumer_horizon_read: IntrascanReadRequirement | None = None
-    consumer_execution_horizon_reached: bool = False
+    consumer_stop_reached: bool = False
     witnessed: bool = False
     detail: str = ""
 
@@ -522,7 +522,7 @@ class IntrascanTracebackWitness:
     traceback_step: IntrascanTracebackStep | None = None
     blocked_edges: tuple[IntrascanEdgeRequirement, ...] = ()
     consumer_horizon_read: IntrascanReadRequirement | None = None
-    consumer_execution_horizon_reached: bool = False
+    consumer_stop_reached: bool = False
     detail: str = ""
 
 
@@ -1022,7 +1022,7 @@ def research_intrascan_boundary_realization(
     """Test a direct consumer or producer→consumer realization without writes."""
 
     if (
-        witness.consumer_execution_horizon_reached
+        witness.consumer_stop_reached
         and witness.consumer_horizon_read is not None
         and witness.assertion_scan == witness.source_scan + 1
     ):
@@ -1036,7 +1036,7 @@ def research_intrascan_boundary_realization(
             consumer_write=None,
             consumer_assignments=assignments,
             consumer_horizon_read=witness.consumer_horizon_read,
-            consumer_execution_horizon_reached=True,
+            consumer_stop_reached=True,
             witnessed=True,
             detail=(
                 "ordinary execution established the required value before the "
@@ -1531,7 +1531,7 @@ def research_intrascan_traceback(
         if not applications and projection is not None
         else None
     )
-    consumer_execution_horizon_reached = natural_consumer_read is not None
+    stop_reached = natural_consumer_read is not None
     consumer_horizon_read = (
         _read_requirement(
             projection,
@@ -1617,14 +1617,14 @@ def research_intrascan_traceback(
         traceback_step=traceback_step,
         blocked_edges=blocked_edges,
         consumer_horizon_read=consumer_horizon_read,
-        consumer_execution_horizon_reached=consumer_execution_horizon_reached,
+        consumer_stop_reached=stop_reached,
         detail=(
             "exact occurrence-local hypothetical and one backward hop were observed"
             if traceback_step is not None
             else "exact consumer was blocked by retained instruction edge state"
             if blocked_edges
             else "ordinary execution reached the exact consumer with its required value"
-            if consumer_execution_horizon_reached
+            if stop_reached
             else "exact occurrence-local hypothetical had no useful downstream handoff"
             if exact
             else (

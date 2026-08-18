@@ -63,9 +63,10 @@ def _assert_clicknick_success(
     assert watchdog_overwrite.displacement.values == (40, 91)
 
     compositions = tuple(
-        (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+        assignment
         for event in events
         if event.kind == "theory_correction_composed"
+        for assignment in event.data["configuration"]
     )
     assert compositions == (
         (fixture.FirstWatchdogPresetMs.name, 11),
@@ -111,7 +112,9 @@ def _assert_clicknick_success(
             for observation in event.data.get("effect_observations", ())
         )
     )
-    assert checkpoint_acceptance.scan == 7
+    # The preset is now applied at the entry boundary of this real steer; the
+    # legacy dedicated preset Pulse no longer consumes its own scan.
+    assert checkpoint_acceptance.scan == 6
 
     adjacent = next(
         event

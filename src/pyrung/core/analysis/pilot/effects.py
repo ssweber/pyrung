@@ -583,13 +583,13 @@ def consumer_boundary_reached(
     )
 
 
-def consumer_execution_horizon_reached(
+def consumer_stop_reached(
     boundary: ConsumerBoundary,
     *,
     source_scan: int,
     projection_at: Callable[[int], ScanRungWriteProjection | None],
 ) -> bool:
-    """Whether replay evaluated the exact consumer occurrence named by the receipt.
+    """Whether replay evaluated the exact consumer occurrence named by the stop.
 
     This is deliberately weaker than :func:`consumer_boundary_reached`. A
     correction may change or remove the historical producer value; that is an

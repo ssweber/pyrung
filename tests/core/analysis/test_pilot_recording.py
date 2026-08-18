@@ -37,13 +37,14 @@ from pyrung.core.analysis.pilot.recording import (
 from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
+    ExecutionReceipt,
     MotionKind,
     _CommittedAct,
-    _ExecutionEvidence,
     _HoldLogEntry,
     _Step,
     _StepContext,
 )
+from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
 from pyrung.core.condition import Condition
 from pyrung.core.context import ConditionView, ScanContext
 
@@ -108,7 +109,7 @@ def _step_context(
             applied=action_pairs,
             motion=MotionKind.INTERVENTION,
         ),
-        execution=_ExecutionEvidence(
+        execution=ExecutionReceipt(
             before_snap or {},
             {},
             ChannelMotion(),
@@ -142,6 +143,48 @@ def test_edge_operation_journal_uses_owned_pulse_not_release() -> None:
     assert journal[0].inputs == (("Cmd", True),)
 
 
+def test_scan_entry_configuration_is_a_patch_not_a_pulse() -> None:
+    configuration = ScanEntryConfiguration((("WatchdogPresetMs", 11),))
+    step = _Step(
+        inputs={"WatchdogPresetMs": 11, "Reconnect": True},
+        scan_before=10,
+        scan_after=11,
+    )
+    policy = ActPolicy(
+        ActSource.TRACE,
+        action_pairs=(("Reconnect", True),),
+        applied=(("Reconnect", True),),
+        motion=MotionKind.INTERVENTION,
+    )
+    receipt = ExecutionReceipt(
+        before_snap={"WatchdogPresetMs": 0, "Reconnect": False},
+        after_snap={"WatchdogPresetMs": 11, "Reconnect": True},
+        channel_motion=ChannelMotion(),
+        coast_receipt=None,
+        timeline=(),
+        applied_configurations=(configuration,),
+        entry_snap={"WatchdogPresetMs": 11, "Reconnect": False},
+    )
+    state = SimpleNamespace(
+        committed_acts=(
+            _CommittedAct(
+                steps=(step,),
+                context=_StepContext(policy=policy, execution=receipt),
+            ),
+        ),
+        lever_notes={},
+        hold_log=(),
+        correction_receipts=(),
+    )
+
+    journal = _build_plan_journal(state, None, frozenset(), frozenset())
+
+    assert tuple((item.kind, item.inputs) for item in journal) == (
+        ("patch", (("WatchdogPresetMs", 11),)),
+        ("pulse", (("Reconnect", True),)),
+    )
+
+
 def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
     """The coast receipt, not runner history, owns exact fold edits."""
     step = _Step(inputs={}, scan_before=10, scan_after=13)
@@ -160,7 +203,7 @@ def test_ordinary_fold_journal_uses_receipt_with_unusable_scan_log() -> None:
             ActSource.TRACE,
             motion=MotionKind.COAST_TO_BEARING,
         ),
-        execution=_ExecutionEvidence(
+        execution=ExecutionReceipt(
             before_snap={},
             after_snap={},
             channel_motion=ChannelMotion("State", 2),

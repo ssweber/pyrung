@@ -35,7 +35,7 @@ def test_later_autonomous_displacement_retries_the_fresh_program_transaction() -
         (
             event.kind,
             (
-                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                event.data["configuration"][0]
                 if event.kind == "theory_correction_composed"
                 else tuple(event.data["applied"])
             ),
@@ -54,7 +54,7 @@ def test_later_autonomous_displacement_retries_the_fresh_program_transaction() -
         index
         for index, event in enumerate(events)
         if event.kind == "theory_correction_composed"
-        and event.data["pilot_rung"].dest == fixture.SecondPresetMs.name
+        and event.data["configuration"][0][0] == fixture.SecondPresetMs.name
     )
     assert any(
         event.kind == "bearing_coast"

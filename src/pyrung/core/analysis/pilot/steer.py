@@ -13,7 +13,7 @@ checkpoints, or install corrections.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrung.core.analysis.pdg import resolve_rung
@@ -41,7 +41,7 @@ from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservat
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObservation,
-    consumer_execution_horizon_reached,
+    consumer_stop_reached,
     effect_reached_consumer,
     expectation_from_writer,
     observe_execution_window,
@@ -59,6 +59,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Pulse,
     PulseHorizon,
+    StopCondition,
+    StopReceipt,
+    act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
     PilotRung,
@@ -71,6 +74,7 @@ from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
 from pyrung.core.analysis.pilot.trace import scan_transient_rest, target_reached
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
+    ExecutionReceipt,
     PilotGateEvent,
     _ActionPair,
     _AttemptResult,
@@ -80,6 +84,7 @@ from pyrung.core.analysis.pilot.types import (
     _PilotContext,
     _PilotState,
     _PulseState,
+    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.verify import verify_gates
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _rung_identity
@@ -87,6 +92,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.compass import TransitionCause
+    from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
     from pyrung.core.runner import PLC
 
 
@@ -96,6 +102,42 @@ if TYPE_CHECKING:
 
 _SETTLE_CONE_CEILING = LIMITS.cone_ceiling
 _LETRUN_DWELL_CEILING = LIMITS.dwell_ceiling
+
+
+@dataclass(frozen=True)
+class _ExecutionLaunch:
+    """One prepared execution fork and its exact scan-entry configuration."""
+
+    fork: PLC
+    scan_before: int
+    entry_snap: dict[str, Any]
+    configurations: tuple[ScanEntryConfiguration, ...]
+
+
+def _fork_for_execution(
+    state: _PilotState,
+    configurations: tuple[ScanEntryConfiguration, ...],
+) -> _ExecutionLaunch:
+    """Prepare one fork and apply declared configuration before its first scan."""
+
+    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
+    scan_before = fork.state.scan_id
+    entry_snap = dict(fork.state.tags)
+    assignments = tuple(
+        assignment for configuration in configurations for assignment in configuration.assignments
+    )
+    names = tuple(tag for tag, _value in assignments)
+    if len(set(names)) != len(names):
+        raise ValueError("scan-entry configurations assign one tag more than once")
+    if assignments:
+        fork.patch(dict(assignments))
+        entry_snap.update(assignments)
+    return _ExecutionLaunch(
+        fork=fork,
+        scan_before=scan_before,
+        entry_snap=entry_snap,
+        configurations=tuple(configurations),
+    )
 
 
 def _charted_route_values(
@@ -435,11 +477,33 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
             final_landing=pulse.snap,
         )
     observations = _reconcile_completed_handoffs((*immediate, *landing))
+    source_snap = getattr(pulse, "source_snap", None)
+    after_snap = getattr(pulse, "snap", dict(pulse.fork.state.tags))
+    applied_configurations = tuple(getattr(pulse, "applied_configurations", ()))
+    execution = ExecutionReceipt(
+        before_snap=(source_snap or getattr(pulse, "action_snap", after_snap)),
+        after_snap=after_snap,
+        channel_motion=getattr(pulse, "channel_motion", ChannelMotion()),
+        coast_receipt=pulse.coast_receipt,
+        timeline=pulse.timeline,
+        effect_observations=tuple(
+            observation.diagnostic_snapshot() for observation in observations
+        ),
+        replay_motion=getattr(pulse, "replay_motion", ChannelMotion()),
+        spans=capture_execution_spans(pulse.fork, pulse.kernel_scan_ids),
+        source_scan=pulse.scan_before,
+        source_world=bearing.world_key,
+        decision_identity=act_identity(bearing.act),
+        applied_configurations=applied_configurations,
+        entry_snap=(source_snap if applied_configurations else None),
+        stop=getattr(pulse, "stop_receipt", None),
+    )
     return _ExecutedAttempt(
         pulse=pulse,
         bearing=bearing,
         effect_observations=observations,
         landing_expectation=landing_expectation,
+        execution=execution,
     )
 
 
@@ -537,15 +601,21 @@ def _apply_actions(
     state: _PilotState,
     ctx: _PilotContext,
     *,
+    entry_configurations: tuple[ScanEntryConfiguration, ...] = (),
     horizon: PulseHorizon = PulseHorizon.ASSERTION_SCAN,
     consumer_boundary: Any = None,
+    stop_condition: StopCondition | None = None,
 ) -> _PulseState:
     key_config = state.key_config
     assert key_config is not None
 
-    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    scan_before = fork.state.scan_id
-    source_snap = dict(fork.state.tags)
+    stop = stop_condition or StopCondition(horizon, consumer_boundary)
+    horizon = stop.horizon
+    consumer_boundary = stop.consumer_boundary
+    launch = _fork_for_execution(state, entry_configurations)
+    fork = launch.fork
+    scan_before = launch.scan_before
+    source_snap = launch.entry_snap
     session = CoastSession(
         fork,
         kind="pulse",
@@ -628,13 +698,22 @@ def _apply_actions(
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
         source_snap=source_snap,
+        applied_configurations=launch.configurations,
     )
-    if horizon is PulseHorizon.CONSUMER_BOUNDARY:
-        pulse.consumer_execution_horizon_reached = consumer_execution_horizon_reached(
+    reached_consumer = (
+        consumer_stop_reached(
             consumer_boundary,
             source_scan=scan_before,
             projection_at=pulse.projection_at,
         )
+        if horizon is PulseHorizon.CONSUMER_BOUNDARY
+        else None
+    )
+    pulse.stop_receipt = StopReceipt(
+        condition=stop,
+        stopped_scan=fork.state.scan_id,
+        reached=(reached_consumer is True if reached_consumer is not None else True),
+    )
     return pulse
 
 
@@ -803,8 +882,10 @@ def _try_action_batch(
         frame,
         state,
         ctx,
+        entry_configurations=bearing.entry_configurations,
         horizon=policy.pulse_horizon,
         consumer_boundary=policy.consumer_boundary,
+        stop_condition=bearing.stop_condition,
     )
     key_config = state.key_config
     assert key_config is not None
@@ -950,9 +1031,10 @@ def _try_single_program_scan(
 ) -> _AttemptResult:
     """Execute an observation or evidence-selected stage for exactly one scan."""
 
-    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    scan_before = fork.state.scan_id
-    snap_before = dict(fork.state.tags)
+    launch = _fork_for_execution(state, bearing.entry_configurations)
+    fork = launch.fork
+    scan_before = launch.scan_before
+    snap_before = launch.entry_snap
     session = CoastSession(
         fork,
         kind=("observe_scan" if isinstance(bearing.act, ObserveScan) else "program_scan"),
@@ -983,6 +1065,7 @@ def _try_single_program_scan(
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
         source_snap=snap_before,
+        applied_configurations=launch.configurations,
     )
     return verify_gates(_executed_attempt(bearing, trial), frame, state, ctx)
 
@@ -1044,9 +1127,10 @@ def _try_bearing_coast(
     boundary = heading.boundary if heading is not None else None
     route_channel_tag = route.channel_tag if route is not None else None
     replay_motion = ChannelMotion(channel_tag, target_value, boundary)
-    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    scan_before = fork.state.scan_id
-    snap_before = dict(fork.state.tags)
+    launch = _fork_for_execution(state, bearing.entry_configurations)
+    fork = launch.fork
+    scan_before = launch.scan_before
+    snap_before = launch.entry_snap
 
     # Confirmed conditional holds (oscillation correctives) animate during the
     # channel coast, same as the terminal let-run — fork_with_pilot_rungs installs
@@ -1149,6 +1233,7 @@ def _try_bearing_coast(
         ),
         replay_motion=replay_motion,
         source_snap=snap_before,
+        applied_configurations=launch.configurations,
     )
 
     result = verify_gates(
@@ -1188,9 +1273,10 @@ def _try_terminal_letrun(
     # overrides do not propagate through fork(), and a freshly-installed
     # prerequisite — e.g. the Enable that drives a harness sensor's ramp — has not
     # been scanned onto state.work yet, so its value isn't carried either.
-    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    scan_before = fork.state.scan_id
-    snap_before = dict(fork.state.tags)
+    launch = _fork_for_execution(state, bearing.entry_configurations)
+    fork = launch.fork
+    scan_before = launch.scan_before
+    snap_before = launch.entry_snap
     start_roles = {t: snap_before.get(t) for t in role_tags}
 
     # Confirmed conditional holds animate during the coast as oscillating rungs
@@ -1206,12 +1292,20 @@ def _try_terminal_letrun(
         else None
     )
 
-    budget = min(
-        _COAST_BUDGET,
-        max(
-            2,
-            state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
-        ),
+    exact_assertion_scan = bool(
+        bearing.stop_condition is not None
+        and bearing.stop_condition.horizon is PulseHorizon.ASSERTION_SCAN
+    )
+    budget = (
+        1
+        if exact_assertion_scan
+        else min(
+            _COAST_BUDGET,
+            max(
+                2,
+                state.remaining_search_scans(ctx.max_scans, scan_id=scan_before),
+            ),
+        )
     )
     session = CoastSession(
         fork,
@@ -1284,6 +1378,12 @@ def _try_terminal_letrun(
             timeline=session.events,
             kernel_scan_ids=session.kernel_scan_ids,
             source_snap=snap_before,
+            applied_configurations=launch.configurations,
+            stop_receipt=(
+                StopReceipt(bearing.stop_condition, fork.state.scan_id, True)
+                if exact_assertion_scan and bearing.stop_condition is not None
+                else None
+            ),
         )
         result = verify_gates(
             _executed_attempt(bearing, stalled),
@@ -1333,6 +1433,12 @@ def _try_terminal_letrun(
         kernel_scan_ids=session.kernel_scan_ids,
         channel_motion=ChannelMotion(chan_tag, chan_val),
         source_snap=snap_before,
+        applied_configurations=launch.configurations,
+        stop_receipt=(
+            StopReceipt(bearing.stop_condition, fork.state.scan_id, True)
+            if exact_assertion_scan and bearing.stop_condition is not None
+            else None
+        ),
     )
 
     result = verify_gates(
@@ -1369,9 +1475,10 @@ def _try_terminal_dwell(
     re-ejecting: a non-completing dwell terminates at the stuck exit rather than
     repeatedly spending the invocation's remaining search budget.
     """
-    fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
-    scan_before = fork.state.scan_id
-    snap_before = dict(fork.state.tags)
+    launch = _fork_for_execution(state, bearing.entry_configurations)
+    fork = launch.fork
+    scan_before = launch.scan_before
+    snap_before = launch.entry_snap
 
     def _reached(tags: dict[str, Any]) -> bool:
         return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
@@ -1446,6 +1553,7 @@ def _try_terminal_dwell(
         timeline=session.events,
         kernel_scan_ids=session.kernel_scan_ids,
         source_snap=snap_before,
+        applied_configurations=launch.configurations,
     )
 
     # Empty actions, no channel register: the settled fork already reached the

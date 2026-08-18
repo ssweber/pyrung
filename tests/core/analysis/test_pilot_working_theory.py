@@ -58,6 +58,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordIntrascanTracebackFrontier,
     RecordTheoryAttempt,
     RefineTheory,
+    ScanEntryConfiguration,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
     TheoryClaim,
@@ -71,9 +72,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     TheoryTemporalIntent,
     TheoryTermination,
-    active_theory_correction_rung_identities,
+    active_theory_configurations,
     active_theory_pilot_rung_identities,
-    active_theory_superseded_correction_rung_identities,
     active_theory_superseded_pilot_rung_identities,
     assert_detached_theory_value,
     assert_temporal_need_current,
@@ -342,17 +342,17 @@ def test_research_finding_records_exact_evidence_without_advancing_the_world() -
         finding.source = _boundary("future", 1)  # ty: ignore[invalid-assignment]
 
 
-def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> None:
+def test_no_scan_composition_keeps_the_physical_tip_and_updates_configuration() -> None:
     state, theory_id, version_id = _opened()
     source = _boundary("source", 0)
-    composed = _boundary("source-with-correction", 0)
+    first = ScanEntryConfiguration((("PresetMs", 11),))
     fact = ComposeTheoryCorrection(
         theory_id=theory_id,
         version_id=version_id,
         source=source,
-        composed_source=composed,
+        composed_source=source,
         requirement_identities=(("requirement", "preset"),),
-        pilot_rung_identities=(("PresetMs", 11),),
+        configuration=first,
         composition_identity=("compose", "preset"),
     )
 
@@ -360,37 +360,36 @@ def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> N
     view = theory_view(state)
 
     assert view is not None
-    assert view.source == composed
+    assert view.source == source
+    assert view.configurations == (first,)
     theory = state.ledger.theories[theory_id]
     progress = state.ledger.progress[theory.current_progress_id]
-    assert progress.provisional_tip == composed
+    assert progress.provisional_tip == source
     assert progress.provisional_tip.scan_id == source.scan_id
     assert progress.phase_receipts[-1].kind is TheoryPhaseKind.CORRECTION_COMPOSITION
 
-    replacement = _boundary("source-with-replacement", 0)
-    replacement_identity = ("PresetMs", 21)
+    replacement = ScanEntryConfiguration((("PresetMs", 21),))
     state = reduce_theory(
         state,
         ComposeTheoryCorrection(
             theory_id=theory_id,
             version_id=version_id,
-            source=composed,
-            composed_source=replacement,
+            source=source,
+            composed_source=source,
             requirement_identities=(("requirement", "preset-20"),),
-            pilot_rung_identities=(replacement_identity,),
+            configuration=replacement,
             composition_identity=("compose", "preset-20"),
-            superseded_pilot_rung_identities=(("PresetMs", 11),),
+            superseded_configuration_identities=(first.identity,),
         ),
     )
     theory = state.ledger.theories[theory_id]
     progress = state.ledger.progress[theory.current_progress_id]
 
-    assert progress.provisional_tip == replacement
-    assert progress.phase_receipts[-1].superseded_pilot_rung_identities == (("PresetMs", 11),)
-    assert active_theory_correction_rung_identities(state) == frozenset((replacement_identity,))
-    assert active_theory_superseded_correction_rung_identities(state) == frozenset(
-        (("PresetMs", 11),)
+    assert progress.provisional_tip == source
+    assert progress.phase_receipts[-1].superseded_configuration_identities == (
+        first.identity,
     )
+    assert active_theory_configurations(state) == (replacement,)
 
 
 def test_intrascan_traceback_finding_is_retained_without_advancing_world() -> None:
@@ -763,54 +762,55 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
     assert theory_id is not None
     version_id = state.ledger.theories[theory_id].current_version_id
     correction = ("Link", False, "guard")
-    composed = replace(source, world_key=(source.world_key[0], (correction,)))
-    state = reduce_theory(
-        state,
-        ComposeTheoryCorrection(
-            theory_id=theory_id,
-            version_id=version_id,
-            source=source,
-            composed_source=composed,
-            requirement_identities=(("requirement", "link-low"),),
-            pilot_rung_identities=(correction,),
-            composition_identity=("compose", "link-low"),
-        ),
-    )
-    rejected = RecordTheoryAttempt(
+    accepted = RecordTheoryAttempt(
         theory_id=theory_id,
         version_id=version_id,
-        attempt_identity=("rejected", "owner", "occurrence"),
-        source=composed,
+        attempt_identity=("accepted", "owner", "occurrence"),
+        source=source,
         execution_owner_token=("attempt-owner",),
         occurrence_evidence=("attempt-occurrence",),
         act_identity=(("Reset", True),),
         pilot_rung_identities=(correction,),
-        disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
         evidence=(("scan", 1),),
     )
-    state = reduce_theory(state, rejected)
+    state = reduce_theory(state, accepted)
+    execution_boundary = replace(
+        source,
+        scan_id=1,
+        checkpoint_token=("checkpoint", "executed"),
+        execution_owner_token=("execution", "executed"),
+        occurrence_identity=("occurrence", "executed"),
+    )
     state = reduce_theory(
         state,
-        RefineTheory(
+        AdvanceTheory(
             theory_id=theory_id,
-            parent_version_id=version_id,
-            source=composed,
-            refined_source=source,
-            requirements=(_requirement("link-high"),),
-            refinement_identity=("rewind-for-link-high",),
-            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-            trigger_attempt_id=rejected.attempt_identity,
-            temporal_source=source,
+            version_id=version_id,
+            source=source,
+            boundary=execution_boundary,
+            accepted_attempt_id=accepted.attempt_identity,
+            advance_identity=("advance", "link-low"),
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.CORRECTION_INSTALL,
+                    evidence_identity=("install", "link-low"),
+                    pilot_rung_identities=(correction,),
+                ),
+            ),
         ),
     )
-    refined_version = state.ledger.theories[theory_id].current_version_id
+    composed = replace(
+        execution_boundary,
+        world_key=(execution_boundary.world_key[0], (correction,)),
+    )
 
     state = reduce_theory(
         state,
         RebaseTheoryWorld(
             theory_id=theory_id,
-            version_id=refined_version,
-            source=source,
+            version_id=version_id,
+            source=execution_boundary,
             rebased_source=composed,
             retained_pilot_rung_identities=(correction,),
             rebase_identity=("restore-owned-link-low",),
@@ -822,7 +822,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
     assert view.source == composed
     progress = state.ledger.progress[state.ledger.theories[theory_id].current_progress_id]
     assert tuple(receipt.kind for receipt in progress.phase_receipts) == (
-        TheoryPhaseKind.CORRECTION_COMPOSITION,
+        TheoryPhaseKind.CORRECTION_INSTALL,
         TheoryPhaseKind.WORLD_REBASE,
     )
 
@@ -832,7 +832,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
             state,
             RebaseTheoryWorld(
                 theory_id=theory_id,
-                version_id=refined_version,
+                version_id=version_id,
                 source=composed,
                 rebased_source=replace(
                     composed,
@@ -1876,7 +1876,7 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
                     evidence_identity=accepted.attempt_identity,
                 ),
                 TheoryPhaseReceipt(
-                    kind=TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                    kind=TheoryPhaseKind.CONSUMER_STOP,
                     evidence_identity=accepted.attempt_identity,
                     execution_tip=_boundary("overlay-landing", 1),
                 ),
@@ -2028,7 +2028,7 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
             execution_source=child_landing,
             phase_receipts=(
                 TheoryPhaseReceipt(
-                    TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                    TheoryPhaseKind.CONSUMER_STOP,
                     continuation.attempt_identity,
                     execution_tip=horizon_tip,
                 ),
@@ -2044,16 +2044,7 @@ def test_child_consumer_boundary_advances_without_replacing_transaction_owner() 
     assert view.investigation_scope.execution_source == transaction.execution_source
     assert view.investigation_scope.consumer_boundary is child_boundary
     assert view.investigation_scope.consumer_boundary_attempt_id == child.attempt_identity
-    assert view.investigation_scope.consumer_execution_horizon is not None
-    assert (
-        view.investigation_scope.consumer_execution_horizon.transaction_attempt_id
-        == transaction.attempt_identity
-    )
-    assert (
-        view.investigation_scope.consumer_execution_horizon.source == transaction.execution_source
-    )
-    assert view.investigation_scope.consumer_execution_horizon.consumer_boundary is child_boundary
-    assert view.investigation_scope.consumer_execution_horizon.tip == horizon_tip
+    assert view.investigation_scope.consumer_stop == horizon_tip
 
     later_failure = replace(
         _attempt(

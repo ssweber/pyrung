@@ -30,7 +30,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
     EffectPolarity,
     consumer_boundary_reached,
-    consumer_execution_horizon_reached,
+    consumer_stop_reached,
     displacement_consumer_read,
     occurrence_selector,
     occurrence_snapshot,
@@ -196,7 +196,7 @@ def test_consumer_boundary_proves_one_retained_cross_scan_handoff() -> None:
     changed_consumer_projection = _projection(replay)
     changed_projections = {changed_consumer_projection.scan_id: changed_consumer_projection}
 
-    assert consumer_execution_horizon_reached(
+    assert consumer_stop_reached(
         boundary,
         source_scan=0,
         projection_at=changed_projections.get,

@@ -137,9 +137,10 @@ def test_recovery_observes_target_before_same_scan_rollback() -> None:
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
     compositions = tuple(
-        (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+        assignment
         for event in events
         if event.kind == "theory_correction_composed"
+        for assignment in event.data["configuration"]
     )
     assert compositions == (
         (fixture.EarlyPresetMs.name, 11),

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.trace import TraceChoice
     from pyrung.core.analysis.pilot.working_theory import (
         IntrascanTracebackFrontier,
+        ScanEntryConfiguration,
         TheoryClaim,
         TheoryView,
     )
@@ -165,6 +166,38 @@ class PulseHorizon(StrEnum):
     ASSERTION_SCAN = "assertion_scan"
     CONSUMER_BOUNDARY = "consumer_boundary"
     LOOKAHEAD_SCAN = "lookahead_scan"
+
+
+@dataclass(frozen=True)
+class StopCondition:
+    """The exact observation boundary requested for one execution."""
+
+    horizon: PulseHorizon
+    consumer_boundary: ConsumerBoundary | None = None
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if (self.horizon is PulseHorizon.CONSUMER_BOUNDARY) != (
+            self.consumer_boundary is not None
+        ):
+            raise ValueError("consumer-bound stop condition requires one exact boundary")
+
+
+@dataclass(frozen=True)
+class StopReceipt:
+    """Where execution actually yielded for its requested stop condition."""
+
+    condition: StopCondition
+    stopped_scan: int
+    reached: bool
+
+    @property
+    def consumer_boundary_reached(self) -> bool | None:
+        """Return a result only for an explicitly consumer-bound execution."""
+
+        if self.condition.horizon is not PulseHorizon.CONSUMER_BOUNDARY:
+            return None
+        return self.reached
 
 
 @dataclass(frozen=True)
@@ -435,6 +468,8 @@ class Bearing:
     act: NavigationAct
     objective: BearingObjective
     prerequisites: tuple[PilotRung, ...] = ()
+    entry_configurations: tuple[ScanEntryConfiguration, ...] = ()
+    stop_condition: StopCondition | None = None
     rationale: str = ""
     orientation: OrientationRead | None = None
     # Ambient maintenance may be claim-free. Orientation owns enforcing that
@@ -457,11 +492,11 @@ class Bearing:
 
 @dataclass(frozen=True)
 class ComposeCorrection:
-    """Install one theory correction without advancing the physical runner."""
+    """Compose one desired scan-entry correction without executing a scan."""
 
     world_key: _StateKey
     frontier: tuple[_ActionPair, ...]
-    pilot_rung: PilotRung
+    configuration: ScanEntryConfiguration
     requirements: tuple[ActiveRequirement, ...]
     rationale: str
     research_finding_identity: tuple[Any, ...] | None = None

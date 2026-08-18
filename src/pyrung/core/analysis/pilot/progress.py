@@ -237,12 +237,18 @@ def _delayed_requirement_from_regression(
     else:
         configured = frozenset(configured)
     # A retained theory correction is configuration, but it is configuration
-    # owned by this intrascan investigation.  Preserve that provenance so
-    # newer exact evidence may refine it; external force/patch configuration
-    # remains authoritative in classify_bound_operand_authority.
+    # owned by this exact execution attempt. Preserve the receipt provenance so
+    # newer evidence may refine it; external force/patch configuration remains
+    # authoritative in classify_bound_operand_authority.
     temporal_owned = temporal_setup_rung_identities(state.theory_state)
     provisional = frozenset(
-        rung.dest for rung in state.pilot_rungs if _rung_identity(rung) in temporal_owned
+        rung.dest
+        for rung in state.pilot_rungs
+        if _rung_identity(rung) in temporal_owned
+    ) | frozenset(
+        tag
+        for configuration in receipt.execution.applied_configurations
+        for tag, _value in configuration.assignments
     )
     authorities = {
         read.occurrence.name: classify_bound_operand_authority(
@@ -813,7 +819,7 @@ def _handle_channel_departure(
             state.work.state.scan_id,
         ),
         landing_receipt=execution.coast_receipt,
-        execution_receipt=execution.scan_progress,
+        execution=execution,
     )
     departure = classify_departure(observation)
     if fulfilled_expectation and earned_work_is_useful_motion(trial.earned_work_receipt):

@@ -82,6 +82,7 @@ from pyrung.core.analysis.pilot.progress import (
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
+    ExecutionReceipt,
     MotionKind,
     PilotEvent,
     RevisitCredential,
@@ -90,7 +91,6 @@ from pyrung.core.analysis.pilot.types import (
     _Checkpoint,
     _CommittedAct,
     _ExecutedAttempt,
-    _ExecutionEvidence,
     _PilotState,
     _PulseState,
     _Step,
@@ -153,7 +153,7 @@ def _make_state(best_trend: int, checkpoints: list, **over: Any) -> _PilotState:
                     action_pairs=tuple(step.inputs.items()),
                     applied=tuple(step.inputs.items()),
                 ),
-                execution=_ExecutionEvidence({}, {}, ChannelMotion(), None, ()),
+                execution=ExecutionReceipt({}, {}, ChannelMotion(), None, ()),
             ),
         )
         for step in steps
@@ -255,7 +255,7 @@ def _make_trial(
                 objective=objective,
             ),
         ),
-        execution=_ExecutionEvidence(
+        execution=ExecutionReceipt(
             before_snap=before_snap,
             after_snap=fork_snap,
             channel_motion=channel_motion,

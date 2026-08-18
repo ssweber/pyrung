@@ -31,6 +31,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.progress import _match_regression_expectation_receipt
 from pyrung.core.analysis.pilot.requirements import ExpectationReceipt
+from pyrung.core.analysis.pilot.types import ChannelMotion, ExecutionReceipt, ExecutionSpan
 from pyrung.core.context import RungId
 from pyrung.core.executor import WriteOccurrence
 
@@ -116,6 +117,14 @@ def _receipt(
         key=(source,),
         world=SimpleNamespace(work=SimpleNamespace(state=SimpleNamespace(scan_id=7))),
     )
+    execution = ExecutionReceipt(
+        before_snap={},
+        after_snap={},
+        channel_motion=ChannelMotion(),
+        coast_receipt=None,
+        timeline=(),
+        spans=(ExecutionSpan(owner=owner, kernel_scan_ids=(write.scan_id,)),),
+    )
     receipt = ExpectationReceipt(
         source_world_key=(source,),
         checkpoint_owner=checkpoint_owner,
@@ -124,8 +133,7 @@ def _receipt(
         obligations=(obligation_snapshot(obligation),),
         producer_occurrences=(occurrence_snapshot(write),),
         consumer_occurrences=(),
-        execution_epoch=epoch,
-        execution_owner=owner,
+        execution=execution,
         source_checkpoint=checkpoint,
         local_act=act,
         local_bearing=bearing,
@@ -145,8 +153,12 @@ def _match(receipts, *, occurrence, epoch, owner):
     )
 
 
+def _epoch() -> SimpleNamespace:
+    return SimpleNamespace(first_scan=8, last_scan=8)
+
+
 def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     recorded = _write(call_invocation=1)
     later_invocation = _write(call_invocation=2)
@@ -157,7 +169,7 @@ def test_same_tag_and_rung_with_a_different_dynamic_address_does_not_match() -> 
 
 @pytest.mark.parametrize("foreign_dimension", ["epoch", "owner"])
 def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str) -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="first")
@@ -174,7 +186,7 @@ def test_foreign_epoch_or_execution_owner_does_not_match(foreign_dimension: str)
 
 
 def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     selected_write = _write(call_invocation=1)
     sibling_write = _write(call_invocation=2)
@@ -196,7 +208,7 @@ def test_unique_exact_dynamic_occurrence_selects_its_source_receipt() -> None:
 
 
 def test_corrected_overlay_bearing_key_may_differ_from_source_checkpoint() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
@@ -220,7 +232,7 @@ def test_corrected_overlay_bearing_key_may_differ_from_source_checkpoint() -> No
 
 
 def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     recorded = _write(call_invocation=1)
     reconstructed = _write(call_invocation=1, rung=recorded.run.rung)
@@ -238,7 +250,7 @@ def test_equal_epoch_reconstruction_of_the_exact_occurrence_still_matches() -> N
 
 
 def test_duplicate_exact_receipts_are_ambiguous() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     first = _receipt(write, epoch=epoch, owner=owner, source="same")
@@ -249,7 +261,7 @@ def test_duplicate_exact_receipts_are_ambiguous() -> None:
 
 @pytest.mark.parametrize("corruption", ["checkpoint_owner", "source_world"])
 def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
@@ -263,7 +275,7 @@ def test_receipt_source_identity_must_remain_intact(corruption: str) -> None:
 
 
 def test_malformed_source_checkpoint_fails_closed() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
@@ -276,7 +288,7 @@ def test_malformed_source_checkpoint_fails_closed() -> None:
 
 
 def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
@@ -291,7 +303,7 @@ def test_receipt_obligation_shape_must_match_its_local_expectation() -> None:
 
 
 def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")
@@ -318,7 +330,7 @@ def test_receipt_static_producer_must_own_the_dynamic_occurrence() -> None:
 
 
 def test_progress_handoff_uses_unfiltered_exact_link_without_reading_a_future_suffix() -> None:
-    epoch = object()
+    epoch = _epoch()
     owner = _ReplayOwner(epoch)
     write = _write(call_invocation=1)
     receipt = _receipt(write, epoch=epoch, owner=owner, source="source")

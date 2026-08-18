@@ -595,7 +595,7 @@ def test_real_program_producer_can_reach_the_consumer_horizon_without_a_fake_pat
 
     assert not witness.applied_exactly_once
     assert witness.application_values == ()
-    assert witness.consumer_execution_horizon_reached
+    assert witness.consumer_stop_reached
     assert witness.consumer_horizon_read is not None
     assert (
         witness.consumer_horizon_read.tag,
@@ -605,7 +605,7 @@ def test_real_program_producer_can_reach_the_consumer_horizon_without_a_fake_pat
 
     realization = research_intrascan_boundary_realization(request, witness, source, ())
     assert realization.witnessed
-    assert realization.consumer_execution_horizon_reached
+    assert realization.consumer_stop_reached
     assert not realization.direct
     assert realization.consumer_write is None
     assert realization.consumer_assignments == ((start.name, True),)

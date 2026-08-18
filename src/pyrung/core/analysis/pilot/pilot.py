@@ -189,6 +189,7 @@ from pyrung.core.analysis.pilot.trace import (
 )
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
+    ExecutionReceipt,
     MotionKind,
     PilotEvent,
     TargetReached,
@@ -236,6 +237,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordUnattributedEvidence,
     RefineTheory,
     RetainedCorrectionReceipt,
+    ScanEntryConfiguration,
     TemporalNeedRequest,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
@@ -248,9 +250,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
     TheoryTermination,
     UnattributedTheoryEvidence,
-    active_theory_correction_rung_identities,
+    active_theory_configurations,
     active_theory_pilot_rung_identities,
-    active_theory_superseded_correction_rung_identities,
     active_theory_superseded_pilot_rung_identities,
     assert_temporal_need_current,
     reduce_theory,
@@ -304,6 +305,7 @@ def _bound_operand_authorities(
     checkpoint: _CausalCheckpoint,
     ctx: _PilotContext,
     state: _PilotState,
+    execution: ExecutionReceipt | None = None,
 ) -> dict[str, OperandAuthority]:
     """Classify exact boundary operands without inventing write permission."""
 
@@ -316,6 +318,12 @@ def _bound_operand_authorities(
     provisional = frozenset(
         rung.dest for rung in state.pilot_rungs if _rung_identity(rung) in temporal_owned
     )
+    if execution is not None:
+        provisional |= frozenset(
+            tag
+            for configuration in execution.applied_configurations
+            for tag, _value in configuration.assignments
+        )
     result: dict[str, OperandAuthority] = {}
     for read in projection.reads:
         tag = read.occurrence.name
@@ -669,6 +677,7 @@ def _derive_charted_intrascan_front(
             checkpoint,
             ctx,
             state,
+            executed.execution,
         ),
         projection_at=projection_at,
     )
@@ -758,6 +767,7 @@ def _derive_attempt_requirements(
             checkpoint,
             ctx,
             state,
+            attempt.execution_receipt,
         ),
         projection_at=executed.projection_at,
     )
@@ -950,6 +960,7 @@ def _derive_settled_target_requirements(
             checkpoint,
             ctx,
             state,
+            trial.execution,
         ),
         projection_at=projection_at,
     )
@@ -1104,27 +1115,8 @@ def _retain_expectation_receipt(
             for item in observations
             if item.consumer_read is not None
         )
-        producer_scans = tuple(
-            item.appeared.scan_id for item in observations if item.appeared is not None
-        )
-        if not producer_scans:
+        if not producers:
             continue
-        # Bind the receipt to the adopted live lineage, not the disposable
-        # pulse fork. Adoption may rebuild the runner overlay while preserving
-        # exact history; later regression queries fork from ``state.work`` and
-        # therefore share these retained epoch/query objects.
-        sealed = state.work._causal_lineage.seal_through(state.work.state.scan_id)
-        receipt_owner = next(
-            (
-                (epoch, owner)
-                for epoch, owner in sealed
-                if all(epoch.first_scan <= scan <= epoch.last_scan for scan in producer_scans)
-            ),
-            None,
-        )
-        if receipt_owner is None:
-            continue
-        receipt_epoch, receipt_query = receipt_owner
         receipt = ExpectationReceipt(
             source_world_key=checkpoint.key,
             checkpoint_owner=checkpoint.owner,
@@ -1133,8 +1125,7 @@ def _retain_expectation_receipt(
             obligations=tuple(obligation_snapshot(item.obligation) for item in observations),
             producer_occurrences=producers,
             consumer_occurrences=consumers,
-            execution_epoch=receipt_epoch,
-            execution_owner=receipt_query,
+            execution=trial.execution,
             source_checkpoint=checkpoint,
             local_act=act,
             local_bearing=trial.attempt.bearing,
@@ -3794,6 +3785,7 @@ class _TheoryTransitionEvidence:
     investigation_frontier_id: tuple[Any, ...] | None = None
     producer_goal_id: tuple[Any, ...] | None = None
     observation_boundary: TheoryBoundaryIdentity | None = None
+    configurations: tuple[ScanEntryConfiguration, ...] = ()
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -3813,6 +3805,7 @@ class _TheoryTransitionEvidence:
             self.investigation_frontier_id,
             self.producer_goal_id,
             self.observation_boundary,
+            tuple(configuration.identity for configuration in self.configurations),
         )
 
 
@@ -4145,6 +4138,9 @@ def _theory_transition_from_attempt(
     execution = attempt.executed_attempt
     if execution is None or checkpoint is None:
         return None
+    execution_receipt = execution.execution
+    if execution_receipt is None:
+        raise ValueError("theory transition has no immutable execution receipt")
     investigation_producer = (
         attempt.trial.execution.investigation_producer if attempt.trial is not None else None
     )
@@ -4341,6 +4337,7 @@ def _theory_transition_from_attempt(
         ),
         conductivity_observations=conductivity_observations,
         consumer_boundary=_execution_consumer_boundary(execution),
+        configurations=execution_receipt.applied_configurations,
         investigation_frontier_id=(selected_frontier_id),
         producer_goal_id=(selected_goal_id),
     )
@@ -4510,15 +4507,16 @@ def _theory_transition_after_monitor(
     )
 
 
-def _frontier_within_consumer_execution_horizon(scope: Any) -> bool:
-    """Whether the current frontier is still owned by its typed transaction span."""
+def _frontier_within_consumer_stop(scope: Any) -> bool:
+    """Whether the current frontier remains before its receipt-owned stop."""
 
-    horizon = getattr(scope, "consumer_execution_horizon", None)
+    stop = getattr(scope, "consumer_stop", None)
     return bool(
-        horizon is not None
-        and getattr(scope, "transaction_attempt_id", None) == horizon.transaction_attempt_id
-        and scope.execution_source == horizon.source
-        and scope.frontier.scan_id <= horizon.tip.scan_id
+        stop is not None
+        and getattr(scope, "transaction_attempt_id", None) is not None
+        and getattr(scope, "consumer_boundary_attempt_id", None) is not None
+        and getattr(scope, "consumer_boundary", None) is not None
+        and scope.frontier.scan_id <= stop.scan_id
     )
 
 
@@ -4540,7 +4538,7 @@ def _failed_source_is_active_transaction(
     scope = view.investigation_scope if view is not None else None
     return bool(
         scope is not None
-        and _frontier_within_consumer_execution_horizon(scope)
+        and _frontier_within_consumer_stop(scope)
         and scope.transaction_act_identity is not None
         and observation.source == scope.frontier
         and failed.act_identity == scope.transaction_act_identity
@@ -4597,7 +4595,7 @@ def _retain_investigation_transaction_source(
     scope = view.investigation_scope if view is not None else None
     if (
         scope is None
-        or not _frontier_within_consumer_execution_horizon(scope)
+        or not _frontier_within_consumer_stop(scope)
         or observation.source != scope.frontier
         or scope.execution_source == scope.frontier
         or scope.transaction_act_identity is None
@@ -4864,6 +4862,7 @@ def _record_theory_transition(
             producer_goal_id=observation.producer_goal_id,
             observation_boundary=observation.observation_boundary,
             program_transaction=observation.program_transaction,
+            configurations=observation.configurations,
         ),
     )
     if observation.requirements:
@@ -4969,12 +4968,13 @@ class _ControlledSetupAttempt:
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     local_requirement_identities: tuple[tuple[Any, ...], ...]
     setup_pairs: tuple[_ActionPair, ...]
-    executed_pending_correction_rung_identities: tuple[tuple[Any, ...], ...]
+    executed_pending_overlay_identities: tuple[tuple[Any, ...], ...]
+    configurations: tuple[ScanEntryConfiguration, ...]
     phase: str
     objective: BearingObjective
     execution_source: TheoryBoundaryIdentity
     consumer_boundary: ConsumerBoundary | None = None
-    consumer_execution_horizon_reached: bool | None = None
+    consumer_boundary_reached: bool | None = None
 
 
 def _resolved_temporal_requirements(
@@ -5081,8 +5081,6 @@ def _normalize_retained_theory_overlays(
     owned_identities = active_theory_pilot_rung_identities(state.theory_state)
     if not owned_identities:
         return retained_rungs
-    active_corrections = active_theory_correction_rung_identities(state.theory_state)
-    superseded_corrections = active_theory_superseded_correction_rung_identities(state.theory_state)
     superseded_overlays = active_theory_superseded_pilot_rung_identities(state.theory_state)
 
     rung_by_identity: dict[tuple[Any, ...], PilotRung] = {}
@@ -5100,14 +5098,7 @@ def _normalize_retained_theory_overlays(
     seen: set[tuple[Any, ...]] = set()
     for rung in retained_rungs:
         identity = _rung_identity(rung)
-        replacements = tuple(
-            owned
-            for owned_identity, owned in rung_by_identity.items()
-            if identity in superseded_corrections
-            and owned_identity in active_corrections
-            and owned_identity[0] == identity[0]
-        )
-        if identity in superseded_overlays and not replacements:
+        if identity in superseded_overlays:
             continue
         related = tuple(
             owned
@@ -5115,9 +5106,7 @@ def _normalize_retained_theory_overlays(
             if owned_identity[:2] == identity[:2]
         )
         selected = (
-            replacements[0]
-            if len(replacements) == 1
-            else related[0]
+            related[0]
             if identity not in owned_identities and len(related) == 1
             else rung
         )
@@ -5250,7 +5239,10 @@ def _setup_request_for_result(
     view = getattr(getattr(view, "context", None), "theory_view", None)
     configured_continuation = bool(
         policy.local_progress is LocalProgressKind.TEMPORAL_EDGE
-        and getattr(view, "pending_correction_rung_identities", frozenset())
+        and (
+            getattr(view, "pending_configuration_identities", frozenset())
+            or getattr(view, "pending_overlay_identities", frozenset())
+        )
     )
     if (
         policy.source is not ActSource.WIDENING
@@ -5263,11 +5255,11 @@ def _setup_request_for_result(
 
 @dataclass(frozen=True)
 class _TheoryCorrectionCompositionReceipt:
-    """Exact no-scan World change produced by one correction composition."""
+    """Exact no-scan WorkingTheory change produced by one composition."""
 
     requirements: tuple[ActiveRequirement, ...]
-    pilot_rung_identity: tuple[Any, ...]
-    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    configuration: ScanEntryConfiguration
+    superseded_configuration_identities: tuple[tuple[Any, ...], ...]
     research_finding_identity: tuple[Any, ...] | None
 
 
@@ -5275,9 +5267,8 @@ def _compose_theory_correction(
     state: _PilotState,
     request: TemporalNeedRequest,
     result: ComposeCorrection,
-    source_checkpoint: _CausalCheckpoint,
 ) -> _TheoryCorrectionCompositionReceipt:
-    """Persist one exact correction at the restored source without stepping."""
+    """Persist desired entry configuration without changing the physical World."""
 
     theory = _active_working_theory(state)
     if theory is None or theory.theory_id != request.theory_id:
@@ -5320,42 +5311,25 @@ def _compose_theory_correction(
         )
         for requirement in matched
     )
-    rung_identity = _rung_identity(result.pilot_rung)
-    correction_owned = active_theory_correction_rung_identities(state.theory_state)
-    superseded_rungs = tuple(
-        rung
-        for rung in state.pilot_rungs
-        if rung.dest == result.pilot_rung.dest
-        and _rung_identity(rung) in correction_owned
-        and _rung_identity(rung) != rung_identity
+    configuration = result.configuration
+    destinations = frozenset(tag for tag, _value in configuration.assignments)
+    superseded = tuple(
+        active
+        for active in active_theory_configurations(state.theory_state)
+        if active.identity != configuration.identity
+        and any(tag in destinations for tag, _value in active.assignments)
     )
-    superseded_identities = tuple(_rung_identity(rung) for rung in superseded_rungs)
+    superseded_identities = tuple(item.identity for item in superseded)
     composition_identity = (
         "working-theory-compose",
         request.theory_id,
         request.version_id,
         request.source,
         matched_identities,
-        rung_identity,
+        configuration.identity,
         superseded_identities,
         result.research_finding_identity,
     )
-    if superseded_rungs:
-        retained = tuple(rung for rung in state.pilot_rungs if rung not in superseded_rungs)
-        state.pilot_rungs = _merged_pilot_rungs((result.pilot_rung,), retained)
-        state.hold_log.append(
-            _HoldLogEntry(
-                scan=state.work.state.scan_id,
-                source="working-theory-composition-replacement",
-                pilot_rungs=(result.pilot_rung,),
-            )
-        )
-    else:
-        _install_prerequisites(
-            state,
-            (result.pilot_rung,),
-            source="working-theory-composition",
-        )
     composed_source = _theory_live_boundary(state)
     _record_controlling_theory_fact(
         state,
@@ -5365,27 +5339,16 @@ def _compose_theory_correction(
             source=request.source,
             composed_source=composed_source,
             requirement_identities=matched_identities,
-            pilot_rung_identities=(rung_identity,),
+            configuration=configuration,
             composition_identity=composition_identity,
-            superseded_pilot_rung_identities=superseded_identities,
+            superseded_configuration_identities=superseded_identities,
             research_finding_identity=result.research_finding_identity,
         ),
     )
-    composed_checkpoint = _CausalCheckpoint(
-        key=composed_source.world_key,
-        world=state.snapshot_world(),
-        objective=source_checkpoint.objective,
-        configured_inputs=source_checkpoint.configured_inputs,
-    )
-    if all(
-        _theory_boundary_from_checkpoint(current) != composed_source
-        for current in state.temporal_checkpoints
-    ):
-        state.temporal_checkpoints.append(composed_checkpoint)
     theory = _active_working_theory(state)
     assert theory is not None
     # Preserve the transaction root only while the current trigger is exactly
-    # the failure at that transaction's ConsumerExecutionHorizon. An old transaction
+    # the failure at that transaction's consumer stop. An old transaction
     # may remain in theory history after unrelated productive work; it cannot
     # pull a new correction hundreds of scans back to its former source.
     retry_source = retained_transaction_source or composed_source
@@ -5409,8 +5372,8 @@ def _compose_theory_correction(
     # can retry/research with this one additional corrective in place.
     return _TheoryCorrectionCompositionReceipt(
         requirements=matched,
-        pilot_rung_identity=rung_identity,
-        superseded_pilot_rung_identities=superseded_identities,
+        configuration=configuration,
+        superseded_configuration_identities=superseded_identities,
         research_finding_identity=result.research_finding_identity,
     )
 
@@ -5427,6 +5390,9 @@ def _record_controlled_setup_attempt(
     execution = attempt.executed_attempt if attempt is not None else None
     if attempt is None or execution is None:
         raise ValueError("setup-first execution lost its exact attempt evidence")
+    execution_receipt = execution.execution
+    if execution_receipt is None:
+        raise ValueError("setup-first execution has no immutable execution receipt")
     result = transition.result
     if not isinstance(result, Bearing):
         raise ValueError("setup-first execution lost its executable Bearing")
@@ -5477,7 +5443,7 @@ def _record_controlled_setup_attempt(
     )
     rung_identities = tuple(_rung_identity(rung) for rung in state.pilot_rungs)
     view = theory_view(state.theory_state)
-    pending = view.pending_correction_rung_identities if view is not None else frozenset()
+    pending = view.pending_overlay_identities if view is not None else frozenset()
     effective = _pilot_rung_execution_receipt(
         state.pilot_rungs,
         dict(source_checkpoint.world.work.state.tags),
@@ -5530,6 +5496,7 @@ def _record_controlled_setup_attempt(
                 result.act.policy.heading,
                 dict(source_checkpoint.world.work.state.tags),
             ),
+            configurations=execution_receipt.applied_configurations,
         ),
     )
     return _ControlledSetupAttempt(
@@ -5542,11 +5509,12 @@ def _record_controlled_setup_attempt(
         local_requirement_identities,
         tuple(result.act.policy.applied),
         executed_pending,
+        execution_receipt.applied_configurations,
         phase,
         result.objective,
         execution_source,
         _execution_consumer_boundary(execution),
-        execution.pulse.consumer_execution_horizon_reached,
+        execution_receipt.consumer_boundary_reached,
     )
 
 
@@ -5588,7 +5556,7 @@ def _complete_controlled_setup(
                 continues_transaction
                 and current_scope is not None
                 and current_scope.consumer_boundary is not None
-                and controlled.consumer_execution_horizon_reached is True
+                and controlled.consumer_boundary_reached is True
             )
         )
     )
@@ -5639,7 +5607,7 @@ def _complete_controlled_setup(
             dict.fromkeys(
                 (
                     *setup_rung_identities,
-                    *controlled.executed_pending_correction_rung_identities,
+                    *controlled.executed_pending_overlay_identities,
                 )
             )
         )
@@ -5673,6 +5641,7 @@ def _complete_controlled_setup(
                                 superseded_pilot_rung_identities=tuple(
                                     _rung_identity(rung) for rung in superseded_rungs
                                 ),
+                                configurations=controlled.configurations,
                             ),
                         )
                         if controlled.phase != "transaction"
@@ -5688,6 +5657,7 @@ def _complete_controlled_setup(
                                 superseded_pilot_rung_identities=tuple(
                                     _rung_identity(rung) for rung in superseded_rungs
                                 ),
+                                configurations=controlled.configurations,
                                 execution_source=controlled.execution_source,
                             ),
                         )
@@ -5707,9 +5677,10 @@ def _complete_controlled_setup(
                     *(
                         (
                             TheoryPhaseReceipt(
-                                kind=TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                                kind=TheoryPhaseKind.CONSUMER_STOP,
                                 evidence_identity=controlled.attempt_id,
                                 pilot_rung_identities=setup_rung_identities,
+                                configurations=controlled.configurations,
                                 execution_tip=boundary,
                             ),
                         )
@@ -6178,6 +6149,8 @@ def _commit_step(
     scan_before: int,
     resting: dict[str, Any],
     edge_tags: set[str],
+    *,
+    edge_inputs: dict[str, Any] | None = None,
 ) -> tuple[PLC, tuple[_Step, ...]]:
     """Record a step (or release+pulse pair) and swap the work fork.
 
@@ -6192,10 +6165,11 @@ def _commit_step(
     step whenever the inputs drive an edge tag *off* resting, so the replay
     reproduces the same edge.
     """
+    pulsed_inputs = inputs if edge_inputs is None else edge_inputs
     edge_release = {
         t: resting.get(t, False)
-        for t in inputs
-        if t in edge_tags and not _values_match(inputs[t], resting.get(t, False))
+        for t in pulsed_inputs
+        if t in edge_tags and not _values_match(pulsed_inputs[t], resting.get(t, False))
     }
     if edge_release:
         steps = (
@@ -6818,13 +6792,19 @@ def _commit_trial(
     # harness sensor's ramp) are the input that makes the coast advance — fold
     # them into the recorded inputs so replay re-establishes them.  ``applied``
     # is empty for a let-run, so this is the only place the driver is recorded.
-    step_inputs = dict(policy.applied)
+    configuration_inputs = {
+        tag: value
+        for configuration in execution.applied_configurations
+        for tag, value in configuration.assignments
+    }
+    step_inputs = {**configuration_inputs, **dict(policy.applied)}
     work, steps = _commit_step(
         pulse.fork,
         step_inputs,
         pulse.scan_before,
         ctx.resting,
         ctx.edge_tags,
+        edge_inputs=dict(policy.applied),
     )
     act = _CommittedAct(steps=steps, context=_step_context(trial, frame, state))
     # Adopt the physical fork and its replay evidence in one persistent-world
@@ -7024,7 +7004,7 @@ def _record_theory_execution_advance(
         and current_scope.transaction_attempt_id is not None
         and current_scope.consumer_boundary is not None
         and policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
-        and trial.attempt.pulse.consumer_execution_horizon_reached is True
+        and trial.execution.consumer_boundary_reached is True
     )
     extends_consumer_horizon = bool(observes_consumer or replays_owned_consumer)
     _record_controlling_theory_fact(
@@ -7071,7 +7051,7 @@ def _record_theory_execution_advance(
                 *(
                     (
                         TheoryPhaseReceipt(
-                            kind=TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                            kind=TheoryPhaseKind.CONSUMER_STOP,
                             evidence_identity=attempt_id,
                             execution_tip=boundary,
                         ),
@@ -8158,30 +8138,29 @@ def _pilot_loop_events(
         if isinstance(result, ComposeCorrection):
             if temporal_request is None:
                 raise RuntimeError("Compass requested composition without a temporal need")
-            if temporal_source_checkpoint is None:
-                raise RuntimeError("correction composition lost its executable source")
             composed = _compose_theory_correction(
                 state,
                 temporal_request,
                 result,
-                temporal_source_checkpoint,
             )
             yield PilotEvent(
                 "theory_correction_composed",
                 state.work.state.scan_id,
                 {
-                    "pilot_rung": result.pilot_rung,
+                    "configuration": result.configuration.assignments,
                     "conditions": tuple(
                         _theory_requirement_snapshot(requirement).condition_identity
                         for requirement in composed.requirements
                     ),
-                    "superseded_pilot_rung_identities": (composed.superseded_pilot_rung_identities),
+                    "superseded_configuration_identities": (
+                        composed.superseded_configuration_identities
+                    ),
                     "research_finding_identity": composed.research_finding_identity,
                     "reason": result.rationale,
                 },
             )
-            # Composition changes the executable overlay but consumes no PLC
-            # scan. Compass must read that new World before choosing a steer.
+            # Composition changes the durable case but consumes no PLC scan.
+            # Compass must read that refined theory before choosing a steer.
             continue
 
         if isinstance(result, NeedResearch):
@@ -8400,8 +8379,8 @@ def _pilot_loop_events(
                     "traceback_step": witness.traceback_step,
                     "blocked_edges": witness.blocked_edges,
                     "consumer_horizon_read": witness.consumer_horizon_read,
-                    "consumer_execution_horizon_reached": (
-                        witness.consumer_execution_horizon_reached
+                    "consumer_stop_reached": (
+                        witness.consumer_stop_reached
                     ),
                     "boundary_realization": realization,
                     "finding_identity": finding.identity if finding is not None else None,

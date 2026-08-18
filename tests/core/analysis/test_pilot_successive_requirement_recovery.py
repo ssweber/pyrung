@@ -38,7 +38,7 @@ def test_second_delayed_hazard_refines_the_same_source_before_adoption() -> None
         (
             event.kind,
             (
-                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                event.data["configuration"][0]
                 if event.kind == "theory_correction_composed"
                 else tuple(event.data["applied"])
             ),

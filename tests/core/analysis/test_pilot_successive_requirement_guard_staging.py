@@ -135,7 +135,7 @@ def test_same_source_requirements_compose_before_adjustable_final_guard() -> Non
         (
             event.kind,
             (
-                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                event.data["configuration"][0]
                 if event.kind == "theory_correction_composed"
                 else tuple(event.data["applied"])
             ),

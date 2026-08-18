@@ -150,7 +150,7 @@ def test_composition_receipt_names_no_scan_theory_update() -> None:
         kind="theory_correction_composed",
         scan=17,
         data={
-            "pilot_rung": SimpleNamespace(dest="WatchdogPresetMs", value=11),
+            "configuration": (("WatchdogPresetMs", 11),),
             "conditions": (("WatchdogPresetMs", ">", 10),),
             "reason": "compose one correction, then read Compass again",
         },
@@ -160,7 +160,7 @@ def test_composition_receipt_names_no_scan_theory_update() -> None:
 
     assert stopped is False
     assert lines == (
-        "[composition] scan=17 rung=('WatchdogPresetMs', 11) "
+        "[composition] scan=17 configuration=(('WatchdogPresetMs', 11),) "
         "conditions=(('WatchdogPresetMs', '>', 10),) "
         "reason='compose one correction, then read Compass again'",
     )

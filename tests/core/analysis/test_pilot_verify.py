@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Pulse,
     RouteEdgeContext,
     TargetSpec,
+    act_identity,
 )
 from pyrung.core.analysis.pilot.outcome import (
     Agency,
@@ -61,6 +62,8 @@ from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
+    ExecutionReceipt,
+    ExecutionSpan,
     MotionKind,
     RevisitCredential,
     TargetReached,
@@ -69,6 +72,7 @@ from pyrung.core.analysis.pilot.types import (
     _ExecutedAttempt,
     _IterationFrame,
     _PulseState,
+    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.verify import (
     _accepted_trial,
@@ -92,6 +96,40 @@ from pyrung.core.runner import PLC
 # ---------------------------------------------------------------------------
 # Gate pipeline
 # ---------------------------------------------------------------------------
+
+
+def _executed(
+    pulse: _PulseState,
+    bearing: Bearing,
+    effect_observations: tuple[EffectObservation, ...] = (),
+) -> _ExecutedAttempt:
+    """Build the same immutable pre-VERIFY receipt production execution requires."""
+
+    configurations = tuple(getattr(pulse, "applied_configurations", ()))
+    source_snap = getattr(pulse, "source_snap", None)
+    return _ExecutedAttempt(
+        pulse,
+        bearing,
+        effect_observations,
+        execution=ExecutionReceipt(
+            before_snap=source_snap or pulse.action_snap,
+            after_snap=pulse.snap,
+            channel_motion=getattr(pulse, "channel_motion", ChannelMotion()),
+            coast_receipt=pulse.coast_receipt,
+            timeline=tuple(getattr(pulse, "timeline", ())),
+            effect_observations=tuple(
+                observation.diagnostic_snapshot() for observation in effect_observations
+            ),
+            replay_motion=getattr(pulse, "replay_motion", ChannelMotion()),
+            spans=capture_execution_spans(pulse.fork, tuple(pulse.kernel_scan_ids)),
+            source_scan=pulse.scan_before,
+            source_world=bearing.world_key,
+            decision_identity=act_identity(bearing.act),
+            applied_configurations=configurations,
+            entry_snap=(source_snap if configurations else None),
+            stop=getattr(pulse, "stop_receipt", None),
+        ),
+    )
 
 
 def _target_landing_attempt(
@@ -131,7 +169,7 @@ def _target_landing_attempt(
         BearingObjective(TargetSpec(target.name, True)),
     )
     return (
-        _ExecutedAttempt(pulse, bearing, observations),
+        _executed(pulse, bearing, observations),
         SimpleNamespace(
             snap=before,
             key=("source",),
@@ -139,6 +177,31 @@ def _target_landing_attempt(
             tree=TraceNode(target.name, True),
         ),
     )
+
+
+def test_execution_span_keeps_one_detached_epoch_owner_across_the_next_fork() -> None:
+    command = Bool("ReceiptCommand", external=True)
+    result = Bool("ReceiptResult")
+    with Program() as program:
+        with Rung(command):
+            out(result)
+
+    source = PLC(program)
+    execution = source.fork()
+    execution.patch({command.name: True})
+    execution.step()
+
+    spans = capture_execution_spans(execution, (1,))
+
+    assert len(spans) == 1
+    span = spans[0]
+    assert isinstance(span, ExecutionSpan)
+    assert span.kernel_scan_ids == (1,)
+    assert span.epoch.first_scan <= 1 <= span.epoch.last_scan
+    assert span.owner.state_at(1).tags[result.name] is True
+
+    continuation = execution.fork()
+    assert continuation._causal_lineage.owner_at(1) is span.owner
 
 
 def test_global_target_from_another_producer_does_not_pardon_selected_effect_failure() -> None:
@@ -303,7 +366,7 @@ def test_wrong_channel_landing_cannot_mint_a_frontier_progress_receipt():
         ("landing",),
         (),
     )
-    attempt = _ExecutedAttempt(
+    attempt = _executed(
         pulse,
         Bearing(
             ("source",),
@@ -361,7 +424,7 @@ def test_chart_reachability_cannot_mint_selected_producer_landing() -> None:
         ("landing",),
         (),
     )
-    attempt = _ExecutedAttempt(
+    attempt = _executed(
         pulse,
         Bearing(
             ("source",),
@@ -517,7 +580,7 @@ class TestGateSpin:
             frame_key,
             (),
         )
-        executed = _ExecutedAttempt(pulse=trial, bearing=bearing)
+        executed = _executed(pulse=trial, bearing=bearing)
 
         result = verify_gates(
             executed,
@@ -590,7 +653,7 @@ class TestGateSpin:
         observation = ActionNogoodObservation(frame_key, ("pair", (source.name, True)))
         detected = _AttemptResult(
             trial=None,
-            excursion_attempt=_ExecutedAttempt(pulse=trial, bearing=bearing),
+            excursion_attempt=_executed(pulse=trial, bearing=bearing),
             observations=(observation,),
         )
 
@@ -688,7 +751,7 @@ class TestGateSpin:
 
         detected = _AttemptResult(
             trial=None,
-            excursion_attempt=_ExecutedAttempt(
+            excursion_attempt=_executed(
                 pulse=pulse,
                 bearing=bearing,
                 effect_observations=original_observations,
@@ -1251,7 +1314,7 @@ class TestVerifyGates:
         )
 
         result = verify_gates(
-            _ExecutedAttempt(
+            _executed(
                 pulse,
                 Bearing(
                     source_key,
@@ -1333,7 +1396,7 @@ class TestVerifyGates:
         bearing = Bearing(("world",), Pulse(policy), objective)
 
         result = verify_gates(
-            _ExecutedAttempt(pulse=pulse, bearing=bearing),
+            _executed(pulse=pulse, bearing=bearing),
             SimpleNamespace(snap=before),
             SimpleNamespace(
                 earned_work=EarnedWork((EarnedWorkComponent("VerifyStep", "stepper", 1),))
@@ -1453,7 +1516,7 @@ class TestVerifyGates:
         frame = SimpleNamespace(key=frame_key, snap=before)
         detected = _AttemptResult(
             trial=None,
-            excursion_attempt=_ExecutedAttempt(pulse=pulse, bearing=bearing),
+            excursion_attempt=_executed(pulse=pulse, bearing=bearing),
         )
 
         replay = plc.fork()

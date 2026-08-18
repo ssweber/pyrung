@@ -105,7 +105,7 @@ def test_delayed_watchdog_departure_retries_only_the_source_transaction() -> Non
         (
             event.kind,
             (
-                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                event.data["configuration"][0]
                 if event.kind == "theory_correction_composed"
                 else tuple(event.data["applied"])
             ),

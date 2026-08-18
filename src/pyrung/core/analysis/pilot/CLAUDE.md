@@ -231,6 +231,13 @@ one corrected local act is executed and verified, and only its landing may
 replace the live world. No later action is stored with that receipt.
 `recovery.py::compose_corrections` owns this bounded regression transaction.
 
+Every steer/run/observe cycle freezes one immutable `ExecutionReceipt` before
+VERIFY. Its `ExecutionSpan` values point to the exact Epoch-owned kernel scans;
+it also records the scan-entry configuration actually applied and the exact
+`StopReceipt`. VERIFY, replay, progress, departure, and recording consume this
+association rather than reconstructing physical ownership from mutable state.
+Timer and counter presets are `ScanEntryConfiguration` values, not PilotRungs.
+
 WorkingTheory handles a different problem: an executed scan can reveal the
 next condition needed to keep the selected producer/frontier conductive. It
 retains only causal facts and lifecycle state: the exact source/provisional
@@ -259,9 +266,9 @@ value at one exact occurrence boundary on a disposable fork. That patch is a
 "what if" instrument and can never be emitted as a production `Bearing`.
 
 A `ConsumerBoundary` names the exact dynamic consumer occurrence where the
-transaction's value was observed. A `ConsumerExecutionHorizon` names the
-furthest accepted World still owned by that same receipt-bound transaction.
-The horizon can authorize only a fresh reader's reconstruction of that exact
+transaction's value was observed. The investigation scope retains one plain
+`consumer_stop`: the exact accepted boundary where that consumer-bound run
+yielded. It can authorize only a fresh reader's reconstruction of that exact
 transaction; it cannot broaden a retry with sibling or future actions.
 `ProgramTransaction` supplies the corresponding frozen identity for
 program-owned motion. It normalizes an outer route, a later direct heading, or
@@ -414,8 +421,8 @@ this table only locates the owner.
   authority-approved current-world assignments. `requirement_recovery.py`
   remains the compatibility facade and owns active-requirement admission.
 - Controlling theory knowledge: `working_theory.py` owns detached immutable
-  claims, versions, attempt/progress receipts, temporal intent, consumer-bound
-  execution horizons, normalized program-transaction identities, lifecycle
+  claims, versions, attempt/progress receipts, temporal intent, consumer stops,
+  normalized program-transaction identities, lifecycle
   facts, and the pure reducer. The live outer loop alone applies facts to
   `_PilotState.theory_state`; Compass consumes a detached `TheoryView` and
   resolves it through the same current-world `CandidateRead` as ordinary
@@ -585,7 +592,7 @@ Static reading and orientation:
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
 - `working_theory.py` — controlling detached facts, typed temporal intent,
-  consumer execution horizons, normalized program transactions, and pure
+  consumer stops, normalized program transactions, and pure
   lifecycle reducer; it never stores navigation reads, acts, checkpoints,
   worlds, forks, PilotRungs, routes, or callables
 - `navigation_contracts.py` — immutable navigation contracts
@@ -679,9 +686,8 @@ plain language on first use.
   scan exit; derived from receipts rather than stored as a conclusion.
 - **consumer boundary** — the exact dynamic read occurrence that consumed the
   transaction's produced value.
-- **consumer execution horizon** — the furthest accepted World still owned by
-  one exact consumer-bound transaction receipt; never authority for unrelated
-  future work.
+- **consumer stop** — the exact accepted boundary where one consumer-bound
+  transaction yielded; never authority for unrelated future work.
 - **program transaction** — a frozen channel/source/target/effect identity used
   to correlate the same program-owned transition across route-wrapped, direct,
   or exact observed-write representations. A fresh Compass read still supplies
@@ -769,7 +775,7 @@ second projection or navigation path.
 
 For temporal changes, first run the focused timer-preset and scan-progress
 tests. They must cover setup-first, same-transaction retry, retry through a
-later deadline, edge rearm, consumer-bound execution horizons, actionless
+later deadline, edge rearm, consumer-bound stops, actionless
 program transactions, lazy `OR`, logical `AND`, configured/program-owned
 operands, one `CandidateRead` per world, and both values of
 `landing_owns_tip`. Then run `make test-pilot`; only

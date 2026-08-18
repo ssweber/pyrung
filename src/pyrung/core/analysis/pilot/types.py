@@ -18,7 +18,11 @@ from pyrsistent import field as _precord_field
 
 from pyrung.core.analysis.pilot.coast import CoastReceipt, CoastTriggerEvent
 from pyrung.core.analysis.pilot.earned_work import EarnedWorkReceipt
-from pyrung.core.analysis.pilot.working_theory import TheoryState, TheoryView
+from pyrung.core.analysis.pilot.working_theory import (
+    ScanEntryConfiguration,
+    TheoryState,
+    TheoryView,
+)
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
@@ -41,6 +45,7 @@ if TYPE_CHECKING:
         ActPolicy,
         Bearing,
         BearingObjective,
+        StopReceipt,
         TargetSpec,
     )
     from pyrung.core.analysis.pilot.outcome import TrialAssessment
@@ -726,12 +731,91 @@ class _PilotContext:
 
 
 @dataclass(frozen=True)
-class _ExecutionEvidence:
-    """PLC-free evidence from the final execution VERIFY accepted.
+class ExecutionSpan:
+    """Exact kernel scans from one immutable Epoch owner.
 
-    Navigation's policy remains a declaration. This record contains only the
-    final observed operation window, copied away from the mutable execution
-    fork after excursion replay has selected the pulse that will be committed.
+    ``owner`` is deliberately the detached query for the Epoch, never the
+    lineage's mutable live-query adapter.  The scan IDs are the interpreter
+    scans the attempt actually executed; folded logical gaps are absent.
+    """
+
+    owner: EpochQuery = field(repr=False)
+    kernel_scan_ids: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        scans = tuple(self.kernel_scan_ids)
+        if not scans:
+            raise ValueError("an execution span must own at least one kernel scan")
+        if any(
+            later <= earlier
+            for earlier, later in zip(scans, scans[1:], strict=False)
+        ):
+            raise ValueError("execution span scans must be strictly increasing")
+        epoch = self.owner.epoch
+        if any(scan < epoch.first_scan or scan > epoch.last_scan for scan in scans):
+            raise ValueError("execution span scan lies outside its Epoch")
+        object.__setattr__(self, "kernel_scan_ids", scans)
+
+    @property
+    def epoch(self) -> Epoch:
+        """The immutable physical evidence owner."""
+
+        return self.owner.epoch
+
+    @property
+    def first_scan(self) -> int:
+        return self.kernel_scan_ids[0]
+
+    @property
+    def last_scan(self) -> int:
+        return self.kernel_scan_ids[-1]
+
+
+def capture_execution_spans(
+    fork: PLC,
+    kernel_scan_ids: tuple[int, ...],
+) -> tuple[ExecutionSpan, ...]:
+    """Bind an executed scan stream to stable detached Epoch queries.
+
+    A normal Pilot attempt creates one child Epoch.  The tuple shape keeps the
+    ownership honest if a caller ever supplies a stream crossing an inherited
+    Epoch boundary instead of silently pretending it has one owner.
+    """
+
+    scans = tuple(kernel_scan_ids)
+    if not scans:
+        return ()
+    if any(
+        later <= earlier
+        for earlier, later in zip(scans, scans[1:], strict=False)
+    ):
+        raise ValueError("execution scan stream must be strictly increasing")
+
+    lineage = fork._causal_lineage
+    spans: list[ExecutionSpan] = []
+    for epoch, first_scan, last_scan in lineage.epochs_covering(scans[0], scans[-1]):
+        owned = tuple(scan for scan in scans if first_scan <= scan <= last_scan)
+        if owned:
+            spans.append(
+                ExecutionSpan(
+                    owner=lineage._detached_query_for(epoch),
+                    kernel_scan_ids=owned,
+                )
+            )
+    if tuple(scan for span in spans for scan in span.kernel_scan_ids) != scans:
+        raise ValueError("execution scan stream has no complete Epoch ownership")
+    return tuple(spans)
+
+
+@dataclass(frozen=True)
+class ExecutionReceipt:
+    """One steer/run/observe cycle and its exact physical evidence.
+
+    Navigation declares the decision; Epoch owns the executed history.  This
+    receipt is the single immutable association between them.  Interpretations
+    added by VERIFY, such as progress, remain facts about this receipt rather
+    than competing execution owners.  Rejected attempts retain the same base
+    receipt without an acceptance interpretation.
     """
 
     before_snap: Mapping[str, Any]
@@ -748,25 +832,62 @@ class _ExecutionEvidence:
     scan_progress: ScanProgressReceipt | None = None
     investigation_producer: InvestigationProducerReceipt | None = None
     intrascan_act: IntrascanActReceipt | None = None
+    spans: tuple[ExecutionSpan, ...] = ()
+    source_scan: int | None = None
+    source_world: _StateKey | None = None
+    decision_identity: tuple[Any, ...] = ()
+    applied_configurations: tuple[ScanEntryConfiguration, ...] = ()
+    entry_snap: Mapping[str, Any] | None = None
+    stop: StopReceipt | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
         object.__setattr__(self, "after_snap", MappingProxyType(dict(self.after_snap)))
         object.__setattr__(self, "timeline", tuple(self.timeline))
         object.__setattr__(self, "effect_observations", tuple(self.effect_observations))
+        object.__setattr__(self, "spans", tuple(self.spans))
+        object.__setattr__(self, "applied_configurations", tuple(self.applied_configurations))
+        if self.entry_snap is not None:
+            object.__setattr__(self, "entry_snap", MappingProxyType(dict(self.entry_snap)))
+        scans = self.kernel_scan_ids
+        if scans and self.source_scan is not None and scans[0] <= self.source_scan:
+            raise ValueError("execution receipt scans must follow their source")
+        if bool(self.applied_configurations) != (self.entry_snap is not None):
+            raise ValueError(
+                "applied scan-entry configuration requires its exact entry snapshot"
+            )
 
     @property
     def accelerators(self) -> tuple[_ActionPair, ...]:
         """Exact fold writes derived from the typed coast receipt."""
         return self.coast_receipt.advances if self.coast_receipt is not None else ()
 
+    @property
+    def kernel_scan_ids(self) -> tuple[int, ...]:
+        """Ordered interpreter scans across the receipt's Epoch spans."""
+
+        return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
+
+    @property
+    def consumer_boundary_reached(self) -> bool | None:
+        """Whether this execution reached its requested consumer occurrence."""
+
+        return self.stop.consumer_boundary_reached if self.stop is not None else None
+
+    def owner_at(self, scan_id: int) -> EpochQuery | None:
+        """Return the one detached Epoch query owning an executed scan."""
+
+        return next(
+            (span.owner for span in self.spans if scan_id in span.kernel_scan_ids),
+            None,
+        )
 
 @dataclass(frozen=True)
 class _StepContext:
     """Semantic and evidentiary context owned by one committed operation."""
 
     policy: ActPolicy
-    execution: _ExecutionEvidence
+    execution: ExecutionReceipt
     frontier_tags: tuple[str, ...] = ()
     # Exact pilot rungs present during this step. Kept as ``Any`` here to
     # avoid coupling the state container back to the PilotRung implementation.
@@ -1125,7 +1246,7 @@ class _PulseState:
 
     Navigation's ``ChannelHeading`` is a declaration; the coast's actually
     selected landing and every trial observation live here, on the execution
-    side, until VERIFY freezes what it accepts into ``_ExecutionEvidence``.
+    side, until execution freezes it into an ``ExecutionReceipt`` for VERIFY.
     """
 
     fork: PLC
@@ -1169,16 +1290,13 @@ class _PulseState:
     # Original operation boundary for causal replay.  Unlike
     # ``channel_motion``, this is never rebound to an ejection channel.
     replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
-    # ``None`` means this act did not request a consumer-bound horizon. A
-    # Boolean says whether execution evaluated the receipt's exact consumer
-    # occurrence. Whether the historical value flowed there is separate
-    # conductivity evidence and may intentionally change after a correction.
-    consumer_execution_horizon_reached: bool | None = None
     # Snapshot immediately before this act's first owned kernel scan.  This is
     # the execution-window entry value needed to distinguish a whole-window
     # zero-net excursion from ordinary non-zero channel motion without replaying
     # a projection merely to recover ``entry_tags``.
     source_snap: dict[str, Any] | None = None
+    applied_configurations: tuple[ScanEntryConfiguration, ...] = ()
+    stop_receipt: StopReceipt | None = None
 
     def __post_init__(self) -> None:
         if any(
@@ -1234,6 +1352,10 @@ class _ExecutedAttempt:
     # appeared before an off-route retained landing.  It complements rather
     # than replaces the bearing's immediate producer expectation.
     landing_expectation: EffectExpectation | None = None
+    # Production executions freeze this before VERIFY judges the attempt.
+    # Optional only for lightweight unit fixtures that construct this private
+    # carrier without a real Epoch lineage.
+    execution: ExecutionReceipt | None = None
 
     @property
     def assertion_scan(self) -> int:
@@ -1297,7 +1419,7 @@ class _AcceptedTrial:
     """
 
     attempt: _ExecutedAttempt
-    execution: _ExecutionEvidence
+    execution: ExecutionReceipt
     verification: TrialVerification
     earned_work_receipt: EarnedWorkReceipt = field(default_factory=EarnedWorkReceipt)
     gate_events: tuple[PilotGateEvent, ...] = ()
@@ -1344,6 +1466,15 @@ class _AttemptResult:
         if self.trial is not None:
             return self.trial.attempt
         return self.executed or self.excursion_attempt
+
+    @property
+    def execution_receipt(self) -> ExecutionReceipt | None:
+        """The immutable receipt for the selected physical execution."""
+
+        if self.trial is not None:
+            return self.trial.execution
+        executed = self.executed_attempt
+        return executed.execution if executed is not None else None
 
     def release_projections(self) -> None:
         """Release each physical execution's shared projection cache once."""

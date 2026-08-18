@@ -50,10 +50,10 @@ from pyrung.core.analysis.pilot.trace import _can_produce, target_reached, trace
 from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     DeviationIncident,
+    ExecutionReceipt,
     MotionKind,
     _ActionPair,
     _ConfirmedCorrection,
-    _ExecutionEvidence,
     _IterationFrame,
     _Step,
     _StepContext,
@@ -123,7 +123,7 @@ def _step_owns_departure(step: ReplayStep, witness: RegressionWitness | None) ->
 
 
 def _deviation_bearing(
-    execution: _ExecutionEvidence,
+    execution: ExecutionReceipt,
     frame: _IterationFrame,
     watch_tags: list[str],
     frontier: tuple[_ActionPair, ...],

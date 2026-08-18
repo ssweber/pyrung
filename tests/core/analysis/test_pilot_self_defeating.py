@@ -70,6 +70,7 @@ from pyrung.core.analysis.pilot.types import (
     BearingDeparture,
     ChannelMotion,
     CorrectionStatus,
+    ExecutionReceipt,
     MotionKind,
     RevisitCredential,
     _AcceptedTrial,
@@ -78,7 +79,6 @@ from pyrung.core.analysis.pilot.types import (
     _ConfirmedCorrection,
     _CorrectionReceipt,
     _ExecutedAttempt,
-    _ExecutionEvidence,
     _PilotState,
     _PulseState,
     _World,
@@ -585,7 +585,7 @@ def _saboteur_scenario():
                 ),
             ),
         ),
-        execution=_ExecutionEvidence(
+        execution=ExecutionReceipt(
             source_snapshot,
             landing_snapshot,
             ChannelMotion("State", 6, stop_reason="departed"),

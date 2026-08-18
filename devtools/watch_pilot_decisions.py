@@ -272,12 +272,12 @@ def _decision_lines(
             ),
         ), False
     if event.kind == "theory_correction_composed":
-        rung = event.data["pilot_rung"]
+        configuration = tuple(event.data["configuration"])
         conditions = tuple(event.data["conditions"])
         return (
             (
                 "[composition] "
-                f"scan={event.scan} rung={(rung.dest, rung.value)!r} "
+                f"scan={event.scan} configuration={configuration!r} "
                 f"conditions={len(conditions) if compact else conditions!r} "
                 f"reason={event.data.get('reason')!r}"
             ),
@@ -471,6 +471,19 @@ def _interpretation_line(message: Mapping[str, Any]) -> str:
     )
 
 
+def _condition_identity_summary(identity: Any) -> tuple[Any, ...]:
+    """Name one condition without serializing its complete proof tree."""
+
+    if not isinstance(identity, tuple) or len(identity) < 2:
+        return (type(identity).__name__,)
+    kind = identity[1]
+    fields = identity[2] if len(identity) > 2 else ()
+    if kind == "Cmp" and isinstance(fields, tuple):
+        values = dict(fields)
+        return (kind, values.get("tag"), values.get("op"), values.get("bound"))
+    return (kind,)
+
+
 def _compact_interpretation_line(message: Mapping[str, Any]) -> str:
     """Render the decision-bearing part without expanding proof support."""
 
@@ -553,6 +566,7 @@ def _drive_worker(
         formatter = _PilotProgressFormatter()
         original_orient = Compass.orient
         original_interpret = pilot_module._theory_transition_from_attempt
+        original_after_monitor = pilot_module._theory_transition_after_monitor
         original_record = pilot_module._record_working_theory_transition
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
 
@@ -694,6 +708,26 @@ def _drive_worker(
                                 )
                             )
                         ),
+                        "active_requirements": tuple(
+                            (
+                                (
+                                    type(requirement.condition).__name__,
+                                    getattr(requirement.condition, "tag", None),
+                                    getattr(requirement.condition, "op", None),
+                                    getattr(requirement.condition, "bound", None),
+                                ),
+                                getattr(requirement.status, "value", requirement.status),
+                                getattr(
+                                    requirement.operand_authority,
+                                    "value",
+                                    requirement.operand_authority,
+                                ),
+                                requirement.provenance,
+                                requirement.demanding_occurrence.scan_id,
+                                requirement.deadline.scan_id,
+                            )
+                            for requirement in world.state.active_requirements[-8:]
+                        ),
                         "progress_attempt": progress_attempt,
                         "pending_corrections": tuple(
                             sorted(
@@ -764,6 +798,13 @@ def _drive_worker(
                             getattr(policy, "pulse_horizon", None),
                         ),
                         "consumer_boundary": _consumer_boundary_summary(consumer_boundary),
+                        "entry_configurations": tuple(
+                            (
+                                configuration.identity,
+                                configuration.assignments,
+                            )
+                            for configuration in getattr(result, "entry_configurations", ())
+                        ),
                         "overlay": tuple(
                             (rung.dest, rung.value) for rung in world.state.pilot_rungs
                         ),
@@ -889,8 +930,63 @@ def _drive_worker(
                 }
             )
 
+        def observe_after_monitor(
+            state: _PilotState,
+            observation: pilot_module._TheoryTransitionEvidence | None,
+            *,
+            prior_requirement_identities: frozenset[tuple[Any, ...]],
+            assertion_scan: int,
+            trial: Any = None,
+            source_checkpoint: _CausalCheckpoint | None = None,
+        ) -> tuple[
+            pilot_module._TheoryTransitionEvidence | None,
+            frozenset[tuple[Any, ...]],
+        ]:
+            result, absorbed = original_after_monitor(
+                state,
+                observation,
+                prior_requirement_identities=prior_requirement_identities,
+                assertion_scan=assertion_scan,
+                trial=trial,
+                source_checkpoint=source_checkpoint,
+            )
+            messages.put(
+                {
+                    "type": "post_monitor",
+                    "elapsed": time.monotonic() - started,
+                    "scan": state.work.state.scan_id,
+                    "incoming": (
+                        observation.interpretation.kind.value
+                        if observation is not None
+                        else None
+                    ),
+                    "outgoing": (
+                        result.interpretation.kind.value if result is not None else None
+                    ),
+                    "requirements": (
+                        tuple(
+                            (
+                                _condition_identity_summary(requirement.condition_identity),
+                                requirement.operand_authority,
+                                requirement.provenance,
+                            )
+                            for requirement in result.requirements
+                        )
+                        if result is not None
+                        else ()
+                    ),
+                    "absorbed": len(absorbed),
+                    "novel": sum(
+                        requirement.identity not in prior_requirement_identities
+                        for requirement in state.active_requirements
+                    ),
+                }
+            )
+            return result, absorbed
+
         Compass.orient = observe_orientation
         vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
+        vars(pilot_module)["_theory_transition_after_monitor"] = observe_after_monitor
         vars(pilot_module)["_record_working_theory_transition"] = observe_recorded_interpretation
         messages.put(
             {
@@ -1163,6 +1259,18 @@ def watch_worker(
                 print(line, flush=True)
                 last_visible_at = now
                 last_visible = {"visible": line, "elapsed": message["elapsed"]}
+            elif kind == "post_monitor":
+                last_event_at = now
+                line = (
+                    "[post-monitor] "
+                    f"scan={message['scan']} incoming={message['incoming']!r} "
+                    f"outgoing={message['outgoing']!r} novel={message['novel']} "
+                    f"absorbed={message['absorbed']} "
+                    f"requirements={message['requirements']!r}"
+                )
+                print(line, flush=True)
+                last_visible_at = now
+                last_visible = {"visible": line, "elapsed": message["elapsed"]}
             elif kind == "orientation":
                 last_event_at = now
                 line = (
@@ -1172,6 +1280,7 @@ def watch_worker(
                     f"trigger={message['trigger']!r} "
                     f"trigger_values={message['trigger_values']!r} "
                     f"focus={message['focus']!r} "
+                    f"requirements={message['active_requirements']!r} "
                     f"progress_attempt={message['progress_attempt']!r} "
                     f"pending={message['pending_corrections']!r} "
                     f"scope={message['investigation_scope']!r} "
@@ -1185,6 +1294,7 @@ def watch_worker(
                     f"local={message['local_progress']!r} "
                     f"horizon={message['pulse_horizon']!r} "
                     f"consumer_boundary={message['consumer_boundary']!r} "
+                    f"entry_configurations={message['entry_configurations']!r} "
                     f"overlay={message['overlay']!r}"
                 )
                 print(line, flush=True)

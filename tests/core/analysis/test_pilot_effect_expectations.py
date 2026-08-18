@@ -52,10 +52,10 @@ from pyrung.core.analysis.pilot.steer import (
 from pyrung.core.analysis.pilot.trace import TraceNode
 from pyrung.core.analysis.pilot.types import (
     ChannelMotion,
+    ExecutionReceipt,
     TargetReached,
     _AcceptedTrial,
     _ExecutedAttempt,
-    _ExecutionEvidence,
     _PulseState,
 )
 from pyrung.core.analysis.pilot.verify import _owned_channel_motion, _rebind_replay_attempt
@@ -1858,14 +1858,21 @@ def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> N
 
     original = PLC(program)
     original.step()
-    old_pulse = SimpleNamespace(
+    old_snap = dict(original.state.tags)
+    old_pulse = _PulseState(
         fork=original,
         scan_before=0,
         action_scan=1,
+        action_snap=old_snap,
+        wait_snaps=(),
+        post_pulse_snap=old_snap,
+        post_pulse_key=(),
+        snap=old_snap,
+        key=(),
         kernel_scan_ids=(1,),
-        projection_at=original._replay_rung_write_projection_at,
         coast_receipt=None,
         timeline=(),
+        source_snap=dict(original.history.at(0).tags),
     )
     old_attempt = _executed_attempt(bearing, old_pulse)  # type: ignore[arg-type]
     assert old_attempt.effect_observations[0].disposition == "ABSENT"
@@ -1873,14 +1880,21 @@ def test_excursion_replay_recomputes_effect_receipt_from_replacement_fork() -> N
     replay = PLC(program)
     replay.patch({enabled.name: True})
     replay.step()
-    replay_pulse = SimpleNamespace(
+    replay_snap = dict(replay.state.tags)
+    replay_pulse = _PulseState(
         fork=replay,
         scan_before=0,
         action_scan=1,
+        action_snap=replay_snap,
+        wait_snaps=(),
+        post_pulse_snap=replay_snap,
+        post_pulse_key=(),
+        snap=replay_snap,
+        key=(),
         kernel_scan_ids=(1,),
-        projection_at=replay._replay_rung_write_projection_at,
         coast_receipt=None,
         timeline=(),
+        source_snap=dict(replay.history.at(0).tags),
     )
     rebound = _rebind_replay_attempt(old_attempt, replay_pulse)  # type: ignore[arg-type]
 
@@ -1909,27 +1923,41 @@ def test_coast_replay_rebind_preserves_execution_corridor_mode() -> None:
     original = PLC(program)
     original.step()
     original_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
-    original_pulse = SimpleNamespace(
+    original_snap = dict(original.state.tags)
+    original_pulse = _PulseState(
         fork=original,
         scan_before=0,
         action_scan=0,
+        action_snap=original_snap,
+        wait_snaps=(),
+        post_pulse_snap=original_snap,
+        post_pulse_key=(),
+        snap=original_snap,
+        key=(),
         kernel_scan_ids=(1,),
-        projection_at=original._replay_rung_write_projection_at,
         coast_receipt=original_receipt,
         timeline=(),
+        source_snap=dict(original.history.at(0).tags),
     )
     attempt = _executed_attempt(bearing, original_pulse)  # type: ignore[arg-type]
     replay = PLC(program)
     replay.step()
     replay_receipt = CoastReceipt("bearing", 0, 1, "reached", ("target",), (), 1, kernel_scans=1)
-    replay_pulse = SimpleNamespace(
+    replay_snap = dict(replay.state.tags)
+    replay_pulse = _PulseState(
         fork=replay,
         scan_before=0,
         action_scan=0,
+        action_snap=replay_snap,
+        wait_snaps=(),
+        post_pulse_snap=replay_snap,
+        post_pulse_key=(),
+        snap=replay_snap,
+        key=(),
         kernel_scan_ids=(1,),
-        projection_at=replay._replay_rung_write_projection_at,
         coast_receipt=replay_receipt,
         timeline=(),
+        source_snap=dict(replay.history.at(0).tags),
     )
 
     rebound = _rebind_replay_attempt(attempt, replay_pulse)  # type: ignore[arg-type]
@@ -2244,7 +2272,7 @@ def test_execution_and_recording_retain_only_detached_effect_observations() -> N
         action_scan=1,
     )
     snapshots = tuple(item.diagnostic_snapshot() for item in raw)
-    evidence = _ExecutionEvidence({}, {}, ChannelMotion(), None, (), snapshots)
+    evidence = ExecutionReceipt({}, {}, ChannelMotion(), None, (), snapshots)
     pulse = SimpleNamespace(
         fork=plc,
         scan_before=0,

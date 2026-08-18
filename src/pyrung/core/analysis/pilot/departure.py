@@ -45,7 +45,7 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.types import (
-        ScanProgressReceipt,
+        ExecutionReceipt,
         _PilotContext,
         _PilotState,
     )
@@ -125,7 +125,7 @@ class DepartureObservation:
     progress: EarnedWorkReceipt
     reading: DepartureReading
     continuation: ContinuationEvidence
-    execution_receipt: ScanProgressReceipt | None = None
+    execution: ExecutionReceipt | None = None
 
     @property
     def logical_scans(self) -> int:
@@ -133,8 +133,9 @@ class DepartureObservation:
 
         if self.landing_receipt is not None:
             return self.landing_receipt.logical_scans
-        if self.execution_receipt is not None:
-            return self.execution_receipt.landing_scan - self.execution_receipt.source_scan
+        progress = self.execution.scan_progress if self.execution is not None else None
+        if progress is not None:
+            return progress.landing_scan - progress.source_scan
         return 0
 
 
@@ -452,7 +453,7 @@ def observe_departure(
     *,
     occurrence_scan: int | None = None,
     landing_receipt: CoastReceipt | None = None,
-    execution_receipt: ScanProgressReceipt | None = None,
+    execution: ExecutionReceipt | None = None,
 ) -> tuple[DepartureObservation, PLC]:
     """Settle and observe the channel departure paused in ``state.work``."""
     work = getattr(state, "work", None)
@@ -485,8 +486,9 @@ def observe_departure(
         else EarnedWorkReceipt()
     )
     goals = list(objective.channel_goals(channel_tag))
-    exact_execution_window = (
-        execution_receipt is not None and execution_receipt.kind == "selected-producer"
+    progress_receipt = execution.scan_progress if execution is not None else None
+    exact_execution_window = progress_receipt is not None and progress_receipt.kind == (
+        "selected-producer"
     )
     if (landing_receipt is not None or exact_execution_window) and work is not None and goals:
         progress_erasing_values, all_resolved = _progress_erasing_values(
@@ -565,7 +567,7 @@ def observe_departure(
                         continuation,
                         observed_adjacent=True,
                     ),
-                    execution_receipt=execution_receipt,
+                    execution=execution,
                 ),
                 work,
             )
@@ -605,7 +607,7 @@ def observe_departure(
                 progress=progress,
                 reading=_reading(explain=explain),
                 continuation=continuation,
-                execution_receipt=execution_receipt,
+                execution=execution,
             ),
             fork,
         )

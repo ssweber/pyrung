@@ -86,8 +86,8 @@ from pyrung.core.analysis.pilot.types import (
     _ActionPair,
     _AttemptResult,
     _ExecutedAttempt,
-    _ExecutionEvidence,
     _PulseState,
+    capture_execution_spans,
 )
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _semantic_key
 from pyrung.core.analysis.prove.expr import _eval_expr_from_state
@@ -339,7 +339,11 @@ def _rebind_replay_attempt(
     attempt: _ExecutedAttempt,
     replay_trial: _PulseState,
 ) -> _ExecutedAttempt:
-    """Replace a replayed fork and recompute, never retain, effect facts."""
+    """Replace a replayed fork and freeze its own physical execution receipt."""
+
+    execution = attempt.execution
+    if execution is None:
+        raise ValueError("excursion replay requires the opening execution receipt")
 
     immediate = observe_execution_window(
         attempt.bearing.expectation,
@@ -379,10 +383,34 @@ def _rebind_replay_attempt(
             projections,
             final_landing=replay_trial.snap,
         )
+    observations = (*immediate, *landing)
+    source_snap = replay_trial.source_snap
+    configurations = tuple(replay_trial.applied_configurations)
+    replay_execution = replace(
+        execution,
+        before_snap=(source_snap or execution.before_snap),
+        after_snap=replay_trial.snap,
+        channel_motion=replay_trial.channel_motion,
+        coast_receipt=replay_trial.coast_receipt,
+        timeline=replay_trial.timeline,
+        effect_observations=tuple(
+            observation.diagnostic_snapshot() for observation in observations
+        ),
+        replay_motion=replay_trial.replay_motion,
+        spans=capture_execution_spans(
+            replay_trial.fork,
+            replay_trial.kernel_scan_ids,
+        ),
+        source_scan=replay_trial.scan_before,
+        applied_configurations=configurations,
+        entry_snap=(source_snap if configurations else None),
+        stop=replay_trial.stop_receipt,
+    )
     return replace(
         attempt,
         pulse=replay_trial,
-        effect_observations=(*immediate, *landing),
+        effect_observations=observations,
+        execution=replay_execution,
     )
 
 
@@ -693,19 +721,16 @@ def _accepted_trial(
         if progress_kind is not None
         else None
     )
-    execution = _ExecutionEvidence(
+    if attempt.execution is None:
+        raise ValueError("VERIFY requires an immutable pre-verification execution receipt")
+    execution = replace(
+        attempt.execution,
         before_snap=frame.snap,
-        after_snap=pulse.snap,
         channel_motion=channel_motion,
-        coast_receipt=pulse.coast_receipt,
-        timeline=pulse.timeline,
-        effect_observations=tuple(
-            observation.diagnostic_snapshot() for observation in attempt.effect_observations
-        ),
-        replay_motion=pulse.replay_motion,
         scan_progress=scan_progress,
         investigation_producer=investigation_producer,
         intrascan_act=intrascan_act,
+        source_world=getattr(frame, "key", attempt.bearing.world_key),
     )
     return _AcceptedTrial(
         attempt=attempt,
@@ -1519,7 +1544,10 @@ def _verify_gates(
 
     if (
         policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
-        and trial.consumer_execution_horizon_reached is not True
+        and (
+            trial.stop_receipt is None
+            or trial.stop_receipt.consumer_boundary_reached is not True
+        )
         and not target_reached(
             trial.snap,
             ctx.target.tag,
@@ -1722,12 +1750,25 @@ def _verify_gates(
             nogood_pairs=frozenset(),
         )
 
+    execution_configurations = (
+        attempt.execution.applied_configurations
+        if attempt.execution is not None
+        else tuple(getattr(trial, "applied_configurations", ()))
+    )
+    configured_actions = tuple(
+        assignment
+        for configuration in execution_configurations
+        for assignment in configuration.assignments
+    )
+    configured_temporal_edge = bool(
+        policy.local_progress is LocalProgressKind.TEMPORAL_EDGE and configured_actions
+    )
     if policy.local_progress in {
         LocalProgressKind.TRACE_SETUP,
         LocalProgressKind.REARM,
         LocalProgressKind.TEMPORAL_SETUP,
         LocalProgressKind.THEORY_CORRECTIVE,
-    }:
+    } or configured_temporal_edge:
         orientation = bearing.orientation
         trace_details = (
             orientation.candidates.trace.detail_by_pair if orientation is not None else {}
@@ -1793,18 +1834,32 @@ def _verify_gates(
             if policy.local_progress_requirements
             else getattr(ctx, "temporal_requirements", ())
         )
+        requirement_tags = frozenset(
+            tag
+            for requirement in progress_requirements
+            if (tag := getattr(getattr(requirement, "condition", None), "tag", None))
+            is not None
+        )
         temporal_setup_consumed: tuple[_ActionPair, ...] = ()
         temporal_setup_requirements_observed = False
         temporal_setup_observation_receipts: tuple[Any, ...] = ()
+        temporal_setup_actions = (
+            tuple(pair for pair in configured_actions if pair[0] in requirement_tags)
+            if configured_temporal_edge
+            else tuple(applied_actions)
+        )
         if (
-            policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
-            and applied_actions
+            (
+                policy.local_progress is LocalProgressKind.TEMPORAL_SETUP
+                or configured_temporal_edge
+            )
+            and temporal_setup_actions
             and progress_requirements
         ):
             temporal_receipt = _observe_temporal_setup_occurrences(
                 attempt,
                 tuple(progress_requirements),
-                tuple(applied_actions),
+                temporal_setup_actions,
                 ctx,
             )
             temporal_setup_consumed = temporal_receipt.consumed_actions
@@ -1856,7 +1911,7 @@ def _verify_gates(
                 or investigation_producer_witnessed
                 or (
                     temporal_setup_requirements_observed
-                    and len(temporal_setup_consumed) == len(applied_actions)
+                    and len(temporal_setup_consumed) == len(temporal_setup_actions)
                 )
             )
             and trace_setup_owned
@@ -1866,6 +1921,7 @@ def _verify_gates(
                     LocalProgressKind.TRACE_SETUP,
                     LocalProgressKind.REARM,
                     LocalProgressKind.THEORY_CORRECTIVE,
+                    LocalProgressKind.TEMPORAL_EDGE,
                 }
                 or requirements_reached
                 or temporal_setup_requirements_observed

@@ -28,6 +28,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
+    active_theory_configurations,
     theory_view,
 )
 from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
@@ -431,13 +432,14 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
     terminal = captured[-1].flows[-1]
     assert tuple((item.tag, item.value) for item in terminal.obligations) == (
         (fixture.ProcessStep.name, fixture.COMPLETE),
-        (fixture.ProcessStep.name, fixture.COMPLETE),
     )
     assert terminal.reach is ConductivityReach.PRODUCER
     assert terminal.appeared is not None
-    assert (terminal.appeared.scan_id, terminal.appeared.ordinal) == (3, 10)
+    # Scan-entry configuration is not an executable PilotRung, so it adds no
+    # synthetic overlay occurrence ahead of the program's exact write.
+    assert (terminal.appeared.scan_id, terminal.appeared.ordinal) == (3, 9)
     assert terminal.displacement is not None
-    assert (terminal.displacement.scan_id, terminal.displacement.ordinal) == (3, 23)
+    assert (terminal.displacement.scan_id, terminal.displacement.ordinal) == (3, 22)
 
 
 def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
@@ -467,7 +469,7 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
                 )
             )
         if isinstance(fact, ComposeTheoryCorrection):
-            compositions.append((fact, tuple(state.pilot_rungs)))
+            compositions.append((fact, active_theory_configurations(state.theory_state)))
 
     monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
 
@@ -534,15 +536,18 @@ def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
     assert not any(item.kind == "candidate_try" for item in post_research)
     assert events[-1].kind == "theory_correction_composed"
     assert events[-1].scan == event.scan
-    assert events[-1].data["pilot_rung"].dest == sequence_route.FirstWatchdogPresetMs.name
-    assert events[-1].data["pilot_rung"].value == 21
+    assert events[-1].data["configuration"] == (
+        (sequence_route.FirstWatchdogPresetMs.name, 21),
+    )
     fact, installed = compositions[-1]
     assert fact.research_finding_identity == finding.identity
-    assert len(fact.superseded_pilot_rung_identities) == 1
-    preset_rungs = tuple(
-        rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
+    assert len(fact.superseded_configuration_identities) == 1
+    preset_configurations = tuple(
+        configuration
+        for configuration in installed
+        if configuration.assignments[0][0] == sequence_route.FirstWatchdogPresetMs.name
     )
-    assert tuple(rung.value for rung in preset_rungs) == (21,)
+    assert tuple(configuration.assignments[0][1] for configuration in preset_configurations) == (21,)
 
 
 def test_neutral_route_steers_again_before_researching_third_intrascan_correction(
@@ -554,7 +559,7 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
     def record(state: Any, fact: Any) -> None:
         original(state, fact)
         if isinstance(fact, ComposeTheoryCorrection):
-            compositions.append((fact, tuple(state.pilot_rungs)))
+            compositions.append((fact, active_theory_configurations(state.theory_state)))
 
     monkeypatch.setattr(pilot_module, "_record_controlling_theory_fact", record)
 
@@ -574,7 +579,7 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
         if close is not None:
             close()
 
-    composed_values = tuple(fact.pilot_rung_identities[0][1] for fact, _ in compositions)
+    composed_values = tuple(fact.configuration.assignments[0][1] for fact, _ in compositions)
     assert composed_values == (
         11,
         21,
@@ -596,12 +601,14 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
     second_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed" and event.data["pilot_rung"].value == 21
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"][0][1] == 21
     )
     third_composition_index = next(
         index
         for index, event in enumerate(events)
-        if event.kind == "theory_correction_composed" and event.data["pilot_rung"].value == 31
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"][0][1] == 31
     )
     intervening = events[second_composition_index + 1 : third_composition_index]
     assert any(
@@ -613,11 +620,15 @@ def test_neutral_route_steers_again_before_researching_third_intrascan_correctio
 
     third_fact, installed = compositions[-1]
     assert third_fact.research_finding_identity is not None
-    assert len(third_fact.superseded_pilot_rung_identities) == 1
-    preset_rungs = tuple(
-        rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
+    assert len(third_fact.superseded_configuration_identities) == 1
+    preset_configurations = tuple(
+        configuration
+        for configuration in installed
+        if configuration.assignments[0][0] == sequence_route.FirstWatchdogPresetMs.name
     )
-    assert tuple(rung.value for rung in preset_rungs) == (31,)
+    assert tuple(configuration.assignments[0][1] for configuration in preset_configurations) == (
+        31,
+    )
 
     checkpoint_try = next(
         event
@@ -706,7 +717,10 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
         3,
         5,
     )
-    assert initial.source.world_key != refined.source.world_key
+    # Composition changes WorkingTheory's desired entry configuration, not the
+    # physical source World.  Each retry's receipt names the exact configuration
+    # that distinguishes otherwise identical source boundaries.
+    assert initial.source.world_key == refined.source.world_key
     assert initial.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
     assert refined.interpretation.kind is AttemptInterpretationKind.RETRY_THROUGH_DEADLINE
     assert later.interpretation.kind is AttemptInterpretationKind.RETRY_TOGETHER
@@ -724,5 +738,10 @@ def test_monitor_records_initial_and_refined_watchdog_attempts_from_exact_receip
     assert later.requirements[0].deadline_occurrence[2] == 6
     assert initial.act_identity == refined.act_identity
     assert later.act_identity != refined.act_identity
-    assert initial.pilot_rung_identities != refined.pilot_rung_identities
-    assert refined.pilot_rung_identities != later.pilot_rung_identities
+    assert initial.configurations == ()
+    assert tuple(item.assignments for item in refined.configurations) == (
+        ((sequence_route.FirstWatchdogPresetMs.name, 11),),
+    )
+    assert tuple(item.assignments for item in later.configurations) == (
+        ((sequence_route.FirstWatchdogPresetMs.name, 21),),
+    )

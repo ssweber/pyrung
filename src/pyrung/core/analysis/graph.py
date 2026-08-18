@@ -173,8 +173,9 @@ class PlanStep:
     """One move in the PILOT drive journal — what was done and why.
 
     ``kind`` classifies the move so the repr can group/filter:
-    - ``"command"`` — a candidate pulse (button press).
-    - ``"hold"``    — a hold installation (discovered prerequisite).
+    - ``"pulse"`` — a candidate pulse (button press).
+    - ``"patch"`` — user-style configuration applied before one execution.
+    - ``"force"`` — a temporary-logic installation (discovered prerequisite).
     - ``"coast"``   — a bearing coast or let-run dwell (waiting for timers/sequences).
     - ``"accelerator"`` — a timer/counter accumulator patch (proved-safe skip).
     """
@@ -485,6 +486,10 @@ def _format_plan_step(
 
     if step.kind == "revoke":
         return _format_rung_revoke(prefix, step.rungs, control_steps)
+
+    if step.kind == "patch":
+        tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)
+        return _with_notes(f"{prefix} Set {tags} before the next scan.")
 
     if step.kind == "pulse":
         tags = ", ".join(f"{t}={_format_value(v)}" for t, v in step.inputs)

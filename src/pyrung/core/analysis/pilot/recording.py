@@ -246,6 +246,29 @@ def _build_plan_journal(
         is_coast = sc.policy.motion.is_coast
         transition = _format_transition(sc, channel_tags)
         span = semantic_step.scan_after - first_step.scan_before
+        configuration_inputs = tuple(
+            assignment
+            for configuration in sc.execution.applied_configurations
+            for assignment in configuration.assignments
+        )
+
+        if configuration_inputs:
+            entries.append(
+                (
+                    first_step.scan_before,
+                    "a_configuration",
+                    PlanStep(
+                        kind="patch",
+                        scan=first_step.scan_before,
+                        scans=0,
+                        inputs=configuration_inputs,
+                        label=", ".join(
+                            dict.fromkeys(tag for tag, _value in configuration_inputs)
+                        ),
+                        notes=_notes_for(configuration_inputs),
+                    ),
+                )
+            )
 
         if is_coast:
             known_tags = getattr(fork, "_known_tags_by_name", {}) if fork is not None else {}
@@ -275,7 +298,7 @@ def _build_plan_journal(
         else:
             command_inputs = [
                 (tag, val)
-                for tag, val in semantic_step.inputs.items()
+                for tag, val in sc.policy.applied
                 if not (
                     isinstance(val, (int, float)) and not isinstance(val, bool) and tag in acc_names
                 )

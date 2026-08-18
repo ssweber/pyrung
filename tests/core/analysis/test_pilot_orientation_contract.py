@@ -55,6 +55,7 @@ from pyrung.core.analysis.pilot.recording import _candidate_payload
 from pyrung.core.analysis.pilot.requirements import OperandAuthority
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
+    ScanEntryConfiguration,
     TheoryTemporalIntent,
 )
 from pyrung.core.context import RungId
@@ -417,11 +418,6 @@ def test_pending_configuration_retries_only_the_horizon_owned_transaction(
     transaction_identity = pulse_identity(transaction)
     transaction_attempt_id = ("attempt", "transaction")
     boundary_attempt_id = ("attempt", "consumer")
-    horizon = SimpleNamespace(
-        transaction_attempt_id=transaction_attempt_id,
-        consumer_boundary_attempt_id=boundary_attempt_id,
-        consumer_boundary=boundary,
-    )
     scope = SimpleNamespace(
         transaction_attempt_id=transaction_attempt_id,
         transaction_act_identity=transaction_identity,
@@ -431,7 +427,7 @@ def test_pending_configuration_retries_only_the_horizon_owned_transaction(
         retry_act_identity=None,
         consumer_boundary_attempt_id=boundary_attempt_id,
         consumer_boundary=boundary,
-        consumer_execution_horizon=horizon,
+        consumer_stop=object(),
     )
     world = _world(Compass())
     world.snapshot["SequenceStep"] = 50
@@ -466,7 +462,7 @@ def test_pending_configuration_retries_only_the_horizon_owned_transaction(
     )
     monkeypatch.setattr(
         orientation,
-        "_pending_correction_pairs",
+        "_pending_theory_pairs",
         lambda *_args: (("TestingMode", True),),
     )
     broad_policy = ActPolicy(
@@ -521,6 +517,9 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
                 trigger_act_identity=act_identity(coast),
+                configurations=(
+                    ScanEntryConfiguration((("WatchdogPreset", 11),)),
+                ),
                 trigger_program_transaction=ProgramTransaction.from_heading(
                     heading,
                     world.snapshot,
@@ -546,7 +545,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     )
     monkeypatch.setattr(
         orientation,
-        "_pending_correction_pairs",
+        "_pending_theory_pairs",
         lambda *_args: (("WatchdogPreset", 11),),
     )
 
@@ -565,7 +564,10 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
     assert result.act.policy.local_progress_requirements == ("watchdog-requirement",)
     assert result.act.policy.local_progress_sources == ("watchdog-parent",)
-    assert result.prerequisites == (corrective,)
+    assert result.prerequisites == ()
+    assert result.entry_configurations == (
+        ScanEntryConfiguration((("WatchdogPreset", 11),)),
+    )
     assert act_identity(result.act) == act_identity(coast)
 
 
@@ -699,11 +701,7 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
                     transaction_attempt_id=transaction_attempt_id,
                     consumer_boundary=consumer_boundary,
                     consumer_boundary_attempt_id=boundary_attempt_id,
-                    consumer_execution_horizon=SimpleNamespace(
-                        transaction_attempt_id=transaction_attempt_id,
-                        consumer_boundary_attempt_id=boundary_attempt_id,
-                        consumer_boundary=consumer_boundary,
-                    ),
+                    consumer_stop=object(),
                     transaction_rearmed=False,
                 ),
             ),
@@ -722,7 +720,7 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
     )
     monkeypatch.setattr(
         orientation,
-        "_pending_correction_pairs",
+        "_pending_theory_pairs",
         lambda _world: (("WatchdogPreset", 11),),
     )
     base = ActPolicy(
@@ -751,8 +749,8 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
     assert retry.act.policy.consumer_boundary is consumer_boundary
 
 
-def test_consumer_execution_horizon_does_not_escape_its_transaction() -> None:
-    """A pulse missing any owned transaction action cannot inherit its horizon."""
+def test_consumer_stop_does_not_escape_its_transaction() -> None:
+    """A pulse missing any owned transaction action cannot inherit its stop."""
 
     import pyrung.core.analysis.pilot.orientation as orientation
 
@@ -764,11 +762,7 @@ def test_consumer_execution_horizon_does_not_escape_its_transaction() -> None:
         transaction_attempt_id=transaction_attempt_id,
         consumer_boundary=consumer_boundary,
         consumer_boundary_attempt_id=boundary_attempt_id,
-        consumer_execution_horizon=SimpleNamespace(
-            transaction_attempt_id=transaction_attempt_id,
-            consumer_boundary_attempt_id=boundary_attempt_id,
-            consumer_boundary=consumer_boundary,
-        ),
+        consumer_stop=object(),
     )
 
     assert orientation._owned_consumer_boundary(scope, (("Request", True),)) is None
@@ -1249,7 +1243,7 @@ def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
     assert result.orientation.candidates.options == ()
 
 
-def test_temporal_retry_researches_after_pending_correction_was_in_exact_attempt(
+def test_temporal_retry_researches_after_pending_overlay_was_in_exact_attempt(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
@@ -1270,7 +1264,7 @@ def test_temporal_retry_researches_after_pending_correction_was_in_exact_attempt
             world.context,
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
-                pending_correction_rung_identities=frozenset((correction_identity,)),
+                pending_overlay_identities=frozenset((correction_identity,)),
                 conductivity_attempts=(
                     SimpleNamespace(
                         attempt_id=attempt_id,
@@ -1294,7 +1288,7 @@ def test_temporal_retry_researches_after_pending_correction_was_in_exact_attempt
     assert result.request is request
 
 
-def test_untried_pending_correction_still_preempts_conductivity_research() -> None:
+def test_untried_pending_overlay_still_preempts_conductivity_research() -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
     correction = PilotRung("Correction", True, Int("Guard") == 1)
@@ -1306,7 +1300,7 @@ def test_untried_pending_correction_still_preempts_conductivity_research() -> No
         context=replace(
             world.context,
             theory_view=SimpleNamespace(
-                pending_correction_rung_identities=frozenset((correction_identity,)),
+                pending_overlay_identities=frozenset((correction_identity,)),
                 conductivity_attempts=(
                     SimpleNamespace(
                         attempt_id=("attempt", 2),
@@ -1320,7 +1314,7 @@ def test_untried_pending_correction_still_preempts_conductivity_research() -> No
         comparison=SimpleNamespace(later_attempt_id=("attempt", 2)),
     )
 
-    assert orientation._untried_pending_correction_pairs(world, request) == (("Correction", True),)
+    assert orientation._untried_pending_theory_pairs(world, request) == (("Correction", True),)
 
 
 def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() -> None:
@@ -1452,8 +1446,7 @@ def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None
     import pyrung.core.analysis.pilot.orientation as orientation
 
     compass = Compass()
-    correction = PilotRung("WatchdogPreset", 31, Int("Guard") != 81)
-    correction_identity = orientation._rung_identity(correction)
+    configuration = ScanEntryConfiguration((("WatchdogPreset", 31),))
     source = SimpleNamespace(scan_id=5)
     actions = (("Request", True),)
     requirement = object()
@@ -1461,7 +1454,6 @@ def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None
     world.snapshot["Request"] = True
     world = replace(
         world,
-        state=SimpleNamespace(**{**vars(world.state), "pilot_rungs": (correction,)}),
         context=replace(
             world.context,
             theory_view=SimpleNamespace(
@@ -1474,7 +1466,8 @@ def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None
                     transaction_selected_pairs=actions,
                     transaction_rearmed=False,
                 ),
-                pending_correction_rung_identities=frozenset((correction_identity,)),
+                configurations=(configuration,),
+                pending_configuration_identities=frozenset((configuration.identity,)),
             ),
             steerable=frozenset(("Request",)),
             edge_tags=frozenset(("Request",)),

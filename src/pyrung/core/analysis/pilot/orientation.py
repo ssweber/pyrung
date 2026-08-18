@@ -43,6 +43,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ProgramScan,
     Pulse,
     PulseHorizon,
+    StopCondition,
     Stuck,
     TargetSpec,
     act_identity,
@@ -75,6 +76,7 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _IterationFrame
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,
+    ScanEntryConfiguration,
     TheoryTemporalIntent,
 )
 from pyrung.core.analysis.pilot.world_key import (
@@ -303,23 +305,21 @@ def _reader_authorized_transaction_pairs(
     return transaction
 
 
-def _owned_consumer_execution_horizon(scope: Any) -> Any:
-    """Return one internally consistent receipt-owned execution horizon."""
+def _owned_consumer_stop(scope: Any) -> Any:
+    """Return one internally consistent receipt-owned consumer stop."""
 
     if scope is None:
         return None
-    horizon = getattr(scope, "consumer_execution_horizon", None)
+    stop = getattr(scope, "consumer_stop", None)
     if (
-        horizon is None
+        stop is None
         or not getattr(scope, "transaction_act_pairs", ())
-        or getattr(scope, "transaction_attempt_id", None)
-        != getattr(horizon, "transaction_attempt_id", None)
-        or getattr(scope, "consumer_boundary_attempt_id", None)
-        != getattr(horizon, "consumer_boundary_attempt_id", None)
-        or getattr(scope, "consumer_boundary", None) != getattr(horizon, "consumer_boundary", None)
+        or getattr(scope, "transaction_attempt_id", None) is None
+        or getattr(scope, "consumer_boundary_attempt_id", None) is None
+        or getattr(scope, "consumer_boundary", None) is None
     ):
         return None
-    return horizon
+    return stop
 
 
 def _reader_authorized_horizon_transaction_pairs(
@@ -331,7 +331,7 @@ def _reader_authorized_horizon_transaction_pairs(
     """Rebuild only the transaction named by a valid horizon receipt."""
 
     scope = getattr(getattr(world.context, "theory_view", None), "investigation_scope", None)
-    if _owned_consumer_execution_horizon(scope) is None:
+    if _owned_consumer_stop(scope) is None:
         return ()
     transaction = tuple(getattr(scope, "transaction_act_pairs", ()))
     if pulse_identity(transaction) != getattr(scope, "transaction_act_identity", None):
@@ -348,11 +348,11 @@ def _owned_consumer_boundary(
 ) -> Any:
     """Return the boundary only when this pulse continues its owning receipt."""
 
-    horizon = _owned_consumer_execution_horizon(scope)
+    stop = _owned_consumer_stop(scope)
     transaction = tuple(getattr(scope, "transaction_act_pairs", ()))
-    if horizon is None or not all(_pair_matches_any(pair, actions) for pair in transaction):
+    if stop is None or not all(_pair_matches_any(pair, actions) for pair in transaction):
         return None
-    return horizon.consumer_boundary
+    return scope.consumer_boundary
 
 
 def _theory_temporal_retry_bearing(
@@ -368,10 +368,10 @@ def _theory_temporal_retry_bearing(
         raise ValueError("retry-together theory has no resolved live requirements")
     prescription = candidates.wait.prescription if candidates.wait is not None else None
     temporal_intent = getattr(world.context.theory_view, "temporal_intent", None)
-    pending_configuration = _pending_correction_pairs(world)
+    pending_configuration = _pending_theory_pairs(world)
     scope = getattr(world.context.theory_view, "investigation_scope", None)
     configured_corrections = (
-        _configured_correction_pairs(world)
+        _configured_theory_pairs(world)
         if scope is not None and getattr(scope, "transaction_rearmed", False)
         else pending_configuration
     )
@@ -570,7 +570,7 @@ def _theory_temporal_retry_bearing(
                         # yields.  The fresh reader must retry the producer
                         # which owns this temporal transaction before another
                         # correction can be installed.
-                        if _owned_consumer_execution_horizon(scope) is not None:
+                        if _owned_consumer_stop(scope) is not None:
                             actions = _reader_authorized_horizon_transaction_pairs(
                                 world,
                                 base,
@@ -734,8 +734,8 @@ def _theory_temporal_retry_bearing(
             )
             if ordinary is None or not continuation_authorized:
                 return None
-            owned_horizon = _owned_consumer_execution_horizon(scope)
-            if owned_horizon is not None:
+            owned_stop = _owned_consumer_stop(scope)
+            if owned_stop is not None:
                 actions = _reader_authorized_horizon_transaction_pairs(
                     world,
                     ordinary.act.policy,
@@ -845,7 +845,7 @@ def _theory_rearm_bearing(
     scope = getattr(view, "investigation_scope", None)
     retained_transaction = bool(
         getattr(view, "temporal_intent", None) is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE
-        and _pending_correction_pairs(world)
+        and _pending_theory_pairs(world)
         and scope is not None
         and getattr(scope, "transaction_act_pairs", ())
         and getattr(scope, "transaction_selected_pairs", ())
@@ -1040,10 +1040,13 @@ def _theory_correction_composition(
     requirements = tuple(getattr(world.context, "temporal_requirements", ()))
     if not requirements:
         raise ValueError("temporal retry has no resolved live requirements")
-    installed = frozenset(_rung_identity(rung) for rung in world.state.pilot_rungs)
+    installed = frozenset(
+        configuration.identity for configuration in getattr(view, "configurations", ())
+    )
     for schedule in _iter_temporal_schedules(world, target, requirements):
         for rung in schedule.pilot_rungs:
-            if _rung_identity(rung) in installed or _avoid_forces(
+            configuration = ScanEntryConfiguration(((rung.dest, rung.value),))
+            if configuration.identity in installed or _avoid_forces(
                 world.context,
                 ((rung.dest, rung.value),),
                 world.snapshot,
@@ -1122,7 +1125,7 @@ def _theory_correction_composition(
             return ComposeCorrection(
                 world_key=world.world_key,
                 frontier=frontier,
-                pilot_rung=rung,
+                configuration=configuration,
                 requirements=owned,
                 rationale="working theory: compose one correction, then read Compass again",
                 research_finding_identity=research_finding_identity,
@@ -1946,37 +1949,40 @@ def _counterfactual_guard(tag: Any, condition: Cmp) -> Any | None:
     return compare(condition.bound) if compare is not None else None
 
 
-def _theory_pending_correction_bearing(
+def _theory_pending_configuration_bearing(
     world: OrientationWorld,
     candidates: CandidateRead,
     target: TargetSpec,
 ) -> Bearing | None:
-    """Execute one newly composed correction before any trigger is retried."""
+    """Apply newly composed configuration and observe exactly one fresh scan."""
 
     view = getattr(world.context, "theory_view", None)
-    pending = getattr(view, "pending_correction_rung_identities", frozenset())
-    if not pending:
+    pending = getattr(view, "pending_configuration_identities", frozenset())
+    configurations = tuple(
+        configuration
+        for configuration in getattr(view, "configurations", ())
+        if configuration.identity in pending
+    )
+    if not configurations:
         return None
-    rungs = tuple(rung for rung in world.state.pilot_rungs if _rung_identity(rung) in pending)
-    if len(rungs) != 1:
-        return None
-    rung = rungs[0]
+    configured_tags = frozenset(
+        tag for configuration in configurations for tag, _value in configuration.assignments
+    )
     requirements = tuple(
         requirement
         for requirement in getattr(world.context, "temporal_requirements", ())
-        if getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
+        if getattr(getattr(requirement, "condition", None), "tag", None) in configured_tags
     )
     if not requirements:
         return None
-    actions = ((rung.dest, rung.value),)
-    act = Pulse(
+    act = Coast(
+        "terminal",
         ActPolicy(
             source=ActSource.WIDENING,
-            action_pairs=actions,
-            applied=actions,
-            note="working theory: execute one newly composed correction",
+            motion=MotionKind.COAST_HOLDING_WORLD,
+            note="working theory: observe one newly configured scan",
             expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
-            local_progress=LocalProgressKind.TEMPORAL_SETUP,
+            local_progress=LocalProgressKind.TEMPORAL_EDGE,
             local_progress_requirements=requirements,
             local_progress_sources=requirements,
             pulse_horizon=PulseHorizon.ASSERTION_SCAN,
@@ -1992,15 +1998,15 @@ def _theory_pending_correction_bearing(
         act,
         candidates,
         target=target,
-        rationale="working theory: execute one correction, then read Compass again",
+        rationale="working theory: apply configuration for one scan, then read Compass again",
     )
 
 
-def _pending_correction_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
-    """Installed theory configuration which is not a fresh candidate action."""
+def _pending_overlay_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """Genuine temporary ladder overlays awaiting their first execution."""
 
     view = getattr(world.context, "theory_view", None)
-    pending = getattr(view, "pending_correction_rung_identities", frozenset())
+    pending = getattr(view, "pending_overlay_identities", frozenset())
     return tuple(
         (rung.dest, rung.value)
         for rung in world.state.pilot_rungs
@@ -2008,7 +2014,25 @@ def _pending_correction_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...
     )
 
 
-def _untried_pending_correction_pairs(
+def _pending_theory_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """Theory-owned overlays and configuration awaiting physical execution."""
+
+    view = getattr(world.context, "theory_view", None)
+    pending_configuration_ids = getattr(
+        view,
+        "pending_configuration_identities",
+        frozenset(),
+    )
+    configured = tuple(
+        assignment
+        for configuration in getattr(view, "configurations", ())
+        if configuration.identity in pending_configuration_ids
+        for assignment in configuration.assignments
+    )
+    return (*_pending_overlay_pairs(world), *configured)
+
+
+def _untried_pending_theory_pairs(
     world: OrientationWorld,
     research: Any,
 ) -> tuple[_ActionPair, ...]:
@@ -2022,10 +2046,21 @@ def _untried_pending_correction_pairs(
     hide a different overwrite which that same scan has now exposed.
     """
 
-    pending_pairs = _pending_correction_pairs(world)
-    if not pending_pairs:
-        return ()
     view = getattr(world.context, "theory_view", None)
+    pending_pairs = _pending_overlay_pairs(world)
+    pending_configuration_ids = getattr(
+        view,
+        "pending_configuration_identities",
+        frozenset(),
+    )
+    pending_configuration_pairs = tuple(
+        assignment
+        for configuration in getattr(view, "configurations", ())
+        if configuration.identity in pending_configuration_ids
+        for assignment in configuration.assignments
+    )
+    if not pending_pairs and not pending_configuration_pairs:
+        return ()
     later_attempt_id = getattr(
         getattr(research, "comparison", None),
         "later_attempt_id",
@@ -2037,27 +2072,43 @@ def _untried_pending_correction_pairs(
         if attempt.attempt_id == later_attempt_id
     )
     if len(attempts) != 1:
-        return pending_pairs
-    tried = frozenset(attempts[0].pilot_rung_identities)
-    pending = getattr(view, "pending_correction_rung_identities", frozenset())
+        return (*pending_pairs, *pending_configuration_pairs)
+    tried = frozenset(getattr(attempts[0], "pilot_rung_identities", ()))
+    pending = getattr(view, "pending_overlay_identities", frozenset())
     untried = pending - tried
-    return tuple(
+    overlays = tuple(
         (rung.dest, rung.value)
         for rung in world.state.pilot_rungs
         if _rung_identity(rung) in untried
     )
+    tried_configurations = frozenset(
+        configuration.identity for configuration in getattr(attempts[0], "configurations", ())
+    )
+    configured = tuple(
+        assignment
+        for configuration in getattr(view, "configurations", ())
+        if configuration.identity in pending_configuration_ids - tried_configurations
+        for assignment in configuration.assignments
+    )
+    return (*overlays, *configured)
 
 
-def _configured_correction_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
-    """All currently installed theory corrections, whether pending or observed."""
+def _configured_theory_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """All theory-owned overlays and configuration, pending or observed."""
 
     view = getattr(world.context, "theory_view", None)
-    configured = getattr(view, "correction_rung_identities", frozenset())
-    return tuple(
+    configured = getattr(view, "overlay_identities", frozenset())
+    overlays = tuple(
         (rung.dest, rung.value)
         for rung in world.state.pilot_rungs
         if _rung_identity(rung) in configured
     )
+    assignments = tuple(
+        assignment
+        for configuration in getattr(view, "configurations", ())
+        for assignment in configuration.assignments
+    )
+    return (*overlays, *assignments)
 
 
 def _pair_matches_any(pair: _ActionPair, others: tuple[_ActionPair, ...]) -> bool:
@@ -2065,7 +2116,7 @@ def _pair_matches_any(pair: _ActionPair, others: tuple[_ActionPair, ...]) -> boo
 
 
 def _candidate_is_pending_configuration(candidate: Any, world: OrientationWorld) -> bool:
-    return _pair_matches_any(candidate.pair, _pending_correction_pairs(world))
+    return _pair_matches_any(candidate.pair, _pending_theory_pairs(world))
 
 
 def _current_candidate_applied(
@@ -2075,7 +2126,7 @@ def _current_candidate_applied(
 ) -> tuple[_ActionPair, ...]:
     """Keep installed corrections in the overlay, not the next act identity."""
 
-    pending = _pending_correction_pairs(world)
+    pending = _pending_theory_pairs(world)
     return tuple(
         pair
         for pair in _candidate_applied(candidate, candidates, world.context)
@@ -2495,12 +2546,52 @@ def _bearing(
     inherited = (
         () if isinstance(act, (ObserveScan, ProgramScan)) else candidates.prerequisites.pilot_rungs
     )
-    merged_prerequisites = tuple(dict.fromkeys((*inherited, *prerequisites)))
+    view = getattr(world.context, "theory_view", None)
+    entry_configurations = tuple(getattr(view, "configurations", ()))
+    configured_tags = frozenset(
+        tag
+        for configuration in entry_configurations
+        for tag, _value in configuration.assignments
+    )
+    # WorkingTheory's entry configuration is the sole representation of these
+    # user-style values.  Static route discovery can independently rediscover
+    # the same preset as a conditional prerequisite; carrying both would turn
+    # one correction back into a PilotRung after execution.
+    merged_prerequisites = tuple(
+        rung
+        for rung in dict.fromkeys((*inherited, *prerequisites))
+        if rung.dest not in configured_tags
+    )
+    stop_condition = StopCondition(
+        (
+            PulseHorizon.ASSERTION_SCAN
+            if entry_configurations
+            and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
+            else policy.pulse_horizon
+        ),
+        (
+            policy.consumer_boundary
+            if policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+            else None
+        ),
+        (
+            "observe the configured entry scan"
+            if entry_configurations
+            and policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN
+            else "execute to the declared consumer"
+            if policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+            else "observe the assertion scan"
+            if policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+            else "observe one lookahead scan"
+        ),
+    )
     return Bearing(
         world_key=world.world_key,
         act=act,
         objective=BearingObjective(target=target, frontier=_frontier(world, candidates)),
         prerequisites=merged_prerequisites,
+        entry_configurations=entry_configurations,
+        stop_condition=stop_condition,
         rationale=rationale,
         orientation=orientation_read,
         investigation_selection=investigation_selection,
@@ -2662,7 +2753,7 @@ def _orient_read(
                 if retry is not None:
                     return retry
             research = compass.conductivity_research(view)
-            if research is not None and not _untried_pending_correction_pairs(
+            if research is not None and not _untried_pending_theory_pairs(
                 world,
                 research,
             ):
@@ -2729,6 +2820,13 @@ def _orient_read(
             )
             if composed is not None:
                 return composed
+            configured_scan = _theory_pending_configuration_bearing(
+                world,
+                candidates,
+                target,
+            )
+            if configured_scan is not None:
+                return configured_scan
             return _probe_or_stuck(
                 compass,
                 world,

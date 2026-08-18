@@ -26,6 +26,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     PulseHorizon,
     TargetSpec,
 )
+from pyrung.core.analysis.pilot.working_theory import ScanEntryConfiguration
+from pyrung.core.condition import CompareEq
 
 
 def test_consumer_bound_horizon_requires_its_exact_receipt() -> None:
@@ -133,3 +135,58 @@ def test_program_scan_executes_exactly_one_disposable_scan(monkeypatch) -> None:
     assert executed.pulse.fork.state.scan_id == 1
     assert executed.pulse.kernel_scan_ids == (1,)
     assert executed.pulse.snap[staged.name] == 98
+
+
+def test_scan_entry_configuration_is_applied_only_to_the_execution_fork(monkeypatch) -> None:
+    preset = Int("ConfiguredPreset", external=True)
+    result = Int("ConfiguredResult")
+    with Program() as program:
+        with Rung(CompareEq(preset, 11)):
+            copy(81, result)
+
+    source = PLC(program)
+    key = ("configured-world",)
+    state = SimpleNamespace(
+        key_config=object(),
+        work=source,
+        pilot_rungs=(),
+        active_requirements=(),
+        watch_tags=(),
+    )
+    context = SimpleNamespace(
+        program=program,
+        pipeline_roles=(),
+        avoid_pred=None,
+        target=TargetSpec(result.name, 999),
+    )
+    world = OrientationWorld(
+        world_key=key,
+        snapshot=dict(source.state.tags),
+        frame=SimpleNamespace(key=key),
+        state=state,
+        context=context,
+    )
+    configuration = ScanEntryConfiguration(((preset.name, 11),))
+    bearing = Bearing(
+        world_key=key,
+        act=ProgramScan(
+            expected_write=SimpleNamespace(tag=result.name, after=81),
+            evidence_identity=("configured-program-scan",),
+        ),
+        objective=BearingObjective(context.target),
+        entry_configurations=(configuration,),
+    )
+    monkeypatch.setattr(steer, "_pilot_world_key", lambda *_args: key)
+    monkeypatch.setattr(steer, "verify_gates", lambda attempt, *_args: attempt)
+
+    executed = steer.execute(bearing, world)
+
+    assert source.state.tags[preset.name] == 0
+    assert source.state.tags[result.name] == 0
+    assert executed.pulse.source_snap[preset.name] == 11
+    assert executed.pulse.snap[result.name] == 81
+    assert executed.pulse.applied_configurations == (configuration,)
+    assert executed.execution is not None
+    assert executed.execution.applied_configurations == (configuration,)
+    assert executed.execution.kernel_scan_ids == (1,)
+    assert executed.execution.owner_at(1) is not None

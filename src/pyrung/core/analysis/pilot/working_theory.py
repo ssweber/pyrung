@@ -79,10 +79,38 @@ class TheoryPhaseKind(StrEnum):
     REARM = "rearm"
     TRANSACTION_ATTEMPT = "transaction_attempt"
     CONSUMER_BOUNDARY = "consumer_boundary"
-    CONSUMER_EXECUTION_HORIZON = "consumer_execution_horizon"
+    CONSUMER_STOP = "consumer_stop"
     CORRECTION_COMPOSITION = "correction_composition"
     CORRECTION_INSTALL = "correction_install"
     WORLD_REBASE = "world_rebase"
+
+
+@dataclass(frozen=True)
+class ScanEntryConfiguration:
+    """Desired user-style values applied at the next execution boundary.
+
+    WorkingTheory owns this correction across retries.  A Bearing carries it
+    unchanged to execution, while the resulting ExecutionReceipt records each
+    distinct physical application.
+    """
+
+    assignments: tuple[tuple[str, Any], ...]
+
+    def __post_init__(self) -> None:
+        assignments = tuple(self.assignments)
+        if not assignments:
+            raise ValueError("scan-entry configuration cannot be empty")
+        names = tuple(tag for tag, _value in assignments)
+        if len(set(names)) != len(names):
+            raise ValueError("scan-entry configuration cannot assign one tag twice")
+        object.__setattr__(self, "assignments", assignments)
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            "scan-entry-configuration",
+            tuple((tag, _semantic_key(value)) for tag, value in self.assignments),
+        )
 
 
 @dataclass(frozen=True)
@@ -94,6 +122,8 @@ class TheoryPhaseReceipt:
     requirement_identities: tuple[tuple[Any, ...], ...] = ()
     pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
     superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    configurations: tuple[ScanEntryConfiguration, ...] = ()
+    superseded_configuration_identities: tuple[tuple[Any, ...], ...] = ()
     execution_source: TheoryBoundaryIdentity | None = None
     execution_tip: TheoryBoundaryIdentity | None = None
 
@@ -204,17 +234,6 @@ class TheoryProgressSnapshot:
 
 
 @dataclass(frozen=True)
-class ConsumerExecutionHorizon:
-    """Furthest accepted World still owned by one consumer-bound transaction."""
-
-    transaction_attempt_id: tuple[Any, ...]
-    source: TheoryBoundaryIdentity
-    consumer_boundary_attempt_id: tuple[Any, ...]
-    consumer_boundary: ConsumerBoundary
-    tip: TheoryBoundaryIdentity
-
-
-@dataclass(frozen=True)
 class ProgramTransaction:
     """Detached identity of one program-owned channel transition.
 
@@ -311,7 +330,7 @@ class TheoryInvestigationScope:
     transaction_selected_pairs: tuple[tuple[str, Any], ...] = ()
     consumer_boundary: ConsumerBoundary | None = None
     consumer_boundary_attempt_id: tuple[Any, ...] | None = None
-    consumer_execution_horizon: ConsumerExecutionHorizon | None = None
+    consumer_stop: TheoryBoundaryIdentity | None = None
     transaction_rearmed: bool = False
     retry_act_identity: tuple[Any, ...] | None = None
 
@@ -344,6 +363,7 @@ class TheoryAttemptReceipt:
     producer_goal_id: tuple[Any, ...] | None = None
     observation_boundary: TheoryBoundaryIdentity | None = None
     program_transaction: ProgramTransaction | None = None
+    configurations: tuple[ScanEntryConfiguration, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -562,8 +582,10 @@ class TheoryView:
     trigger_act_identity: tuple[Any, ...] | None = None
     trigger_consumer_boundary: ConsumerBoundary | None = None
     trigger_program_transaction: ProgramTransaction | None = None
-    correction_rung_identities: frozenset[tuple[Any, ...]] = frozenset()
-    pending_correction_rung_identities: frozenset[tuple[Any, ...]] = frozenset()
+    overlay_identities: frozenset[tuple[Any, ...]] = frozenset()
+    pending_overlay_identities: frozenset[tuple[Any, ...]] = frozenset()
+    configurations: tuple[ScanEntryConfiguration, ...] = ()
+    pending_configuration_identities: frozenset[tuple[Any, ...]] = frozenset()
 
     def excludes_first_edge(self, artifact_identity: tuple[Any, ...]) -> bool:
         """Whether this exact theory/version/source already rejected an artifact."""
@@ -896,53 +918,27 @@ def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, .
     return frozenset(owned)
 
 
-def active_theory_correction_rung_identities(
+def active_theory_configurations(
     state: TheoryState,
-) -> frozenset[tuple[Any, ...]]:
-    """Read the correction rungs still owned by the active theory tip."""
+) -> tuple[ScanEntryConfiguration, ...]:
+    """Return the desired scan-entry configuration owned by the active case."""
 
     theory_id = state.active_theory_id
     if theory_id is None:
-        return frozenset()
+        return ()
     theory = state.ledger.theories.get(theory_id)
     if theory is None or theory.status is not TheoryStatus.OPEN:
-        return frozenset()
+        return ()
     progress = state.ledger.progress.get(theory.current_progress_id)
     if progress is None:
-        raise TheoryInvariantError("active theory correction history is incomplete")
-    active: set[tuple[Any, ...]] = set()
+        raise TheoryInvariantError("active theory configuration history is incomplete")
+    active: dict[tuple[Any, ...], ScanEntryConfiguration] = {}
     for receipt in progress.phase_receipts:
-        if receipt.kind not in {
-            TheoryPhaseKind.CORRECTION_COMPOSITION,
-            TheoryPhaseKind.CORRECTION_INSTALL,
-        }:
-            continue
-        active.difference_update(receipt.superseded_pilot_rung_identities)
-        active.update(receipt.pilot_rung_identities)
-    return frozenset(active)
-
-
-def active_theory_superseded_correction_rung_identities(
-    state: TheoryState,
-) -> frozenset[tuple[Any, ...]]:
-    """Read correction identities explicitly replaced on the active tip."""
-
-    theory_id = state.active_theory_id
-    if theory_id is None:
-        return frozenset()
-    theory = state.ledger.theories.get(theory_id)
-    if theory is None or theory.status is not TheoryStatus.OPEN:
-        return frozenset()
-    progress = state.ledger.progress.get(theory.current_progress_id)
-    if progress is None:
-        raise TheoryInvariantError("active theory correction history is incomplete")
-    superseded: set[tuple[Any, ...]] = set()
-    for receipt in progress.phase_receipts:
-        if receipt.kind is not TheoryPhaseKind.CORRECTION_COMPOSITION:
-            continue
-        superseded.update(receipt.superseded_pilot_rung_identities)
-        superseded.difference_update(receipt.pilot_rung_identities)
-    return frozenset(superseded)
+        for identity in receipt.superseded_configuration_identities:
+            active.pop(identity, None)
+        for configuration in receipt.configurations:
+            active[configuration.identity] = configuration
+    return tuple(active.values())
 
 
 def active_theory_superseded_pilot_rung_identities(
@@ -1438,26 +1434,34 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         if version.trigger_attempt_id is not None
         else None
     )
-    pending_corrections: set[tuple[Any, ...]] = set()
+    pending_overlays: set[tuple[Any, ...]] = set()
+    pending_configurations: set[tuple[Any, ...]] = set()
     transaction_attempt: TheoryAttemptReceipt | None = None
     boundary_attempt: TheoryAttemptReceipt | None = None
     transaction_execution_source = _transaction_execution_source(state, theory, progress)
     transaction_execution_tip: TheoryBoundaryIdentity | None = None
     transaction_rearmed = False
     for receipt in progress.phase_receipts:
-        pending_corrections.difference_update(receipt.superseded_pilot_rung_identities)
+        pending_overlays.difference_update(receipt.superseded_pilot_rung_identities)
+        pending_configurations.difference_update(receipt.superseded_configuration_identities)
         if receipt.kind in {
             TheoryPhaseKind.CORRECTION_COMPOSITION,
             TheoryPhaseKind.CORRECTION_INSTALL,
         }:
-            pending_corrections.update(receipt.pilot_rung_identities)
+            pending_overlays.update(receipt.pilot_rung_identities)
+            pending_configurations.update(
+                configuration.identity for configuration in receipt.configurations
+            )
         elif receipt.kind in {
             TheoryPhaseKind.TEMPORAL_SETUP,
             TheoryPhaseKind.REARM,
             TheoryPhaseKind.TRANSACTION_ATTEMPT,
-            TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+            TheoryPhaseKind.CONSUMER_STOP,
         }:
-            pending_corrections.difference_update(receipt.pilot_rung_identities)
+            pending_overlays.difference_update(receipt.pilot_rung_identities)
+            pending_configurations.difference_update(
+                configuration.identity for configuration in receipt.configurations
+            )
         if receipt.kind is TheoryPhaseKind.TRANSACTION_ATTEMPT:
             candidate = state.ledger.attempts.get(receipt.evidence_identity)
             if (
@@ -1484,24 +1488,14 @@ def theory_view(state: TheoryState) -> TheoryView | None:
                     "consumer boundary phase lost its accepted transaction receipt"
                 )
             boundary_attempt = candidate
-        elif receipt.kind is TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON:
+        elif receipt.kind is TheoryPhaseKind.CONSUMER_STOP:
             if receipt.execution_tip is None:
-                raise TheoryInvariantError("execution horizon phase lost its exact tip")
+                raise TheoryInvariantError("consumer stop phase lost its exact tip")
             transaction_execution_tip = receipt.execution_tip
         elif receipt.kind is TheoryPhaseKind.REARM and transaction_attempt is not None:
             transaction_rearmed = True
-    consumer_execution_horizon = (
-        ConsumerExecutionHorizon(
-            transaction_attempt_id=transaction_attempt.attempt_id,
-            source=(
-                transaction_execution_source
-                if transaction_execution_source is not None
-                else transaction_attempt.source
-            ),
-            consumer_boundary_attempt_id=boundary_attempt.attempt_id,
-            consumer_boundary=boundary_attempt.consumer_boundary,
-            tip=transaction_execution_tip,
-        )
+    consumer_stop = (
+        transaction_execution_tip
         if transaction_attempt is not None
         and boundary_attempt is not None
         and boundary_attempt.consumer_boundary is not None
@@ -1543,16 +1537,21 @@ def theory_view(state: TheoryState) -> TheoryView | None:
             consumer_boundary_attempt_id=(
                 boundary_attempt.attempt_id if boundary_attempt is not None else None
             ),
-            consumer_execution_horizon=consumer_execution_horizon,
+            consumer_stop=consumer_stop,
             transaction_rearmed=transaction_rearmed,
             retry_act_identity=(
                 transaction_attempt.act_identity
                 if transaction_attempt is not None
-                and consumer_execution_horizon is not None
+                and consumer_stop is not None
                 and trigger is not None
-                and trigger.source == consumer_execution_horizon.source
+                and trigger.source
+                == (
+                    transaction_execution_source
+                    if transaction_execution_source is not None
+                    else transaction_attempt.source
+                )
                 and trigger.observation_boundary is not None
-                and trigger.observation_boundary == consumer_execution_horizon.tip
+                and trigger.observation_boundary == consumer_stop
                 else None
             ),
         )
@@ -1581,8 +1580,10 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         trigger_act_identity=(trigger.act_identity if trigger is not None else None),
         trigger_consumer_boundary=(trigger.consumer_boundary if trigger is not None else None),
         trigger_program_transaction=(trigger.program_transaction if trigger is not None else None),
-        correction_rung_identities=active_theory_correction_rung_identities(state),
-        pending_correction_rung_identities=frozenset(pending_corrections),
+        overlay_identities=active_theory_pilot_rung_identities(state),
+        pending_overlay_identities=frozenset(pending_overlays),
+        configurations=active_theory_configurations(state),
+        pending_configuration_identities=frozenset(pending_configurations),
     )
     assert_detached_theory_value(view, path="theory_view")
     return view
@@ -1692,6 +1693,7 @@ class RecordTheoryAttempt:
     producer_goal_id: tuple[Any, ...] | None = None
     observation_boundary: TheoryBoundaryIdentity | None = None
     program_transaction: ProgramTransaction | None = None
+    configurations: tuple[ScanEntryConfiguration, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1762,9 +1764,9 @@ class ComposeTheoryCorrection:
     source: TheoryBoundaryIdentity
     composed_source: TheoryBoundaryIdentity
     requirement_identities: tuple[tuple[Any, ...], ...]
-    pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    configuration: ScanEntryConfiguration
     composition_identity: tuple[Any, ...]
-    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    superseded_configuration_identities: tuple[tuple[Any, ...], ...] = ()
     research_finding_identity: tuple[Any, ...] | None = None
 
 
@@ -2325,6 +2327,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             producer_goal_id=fact.producer_goal_id,
             observation_boundary=observation_boundary,
             program_transaction=fact.program_transaction,
+            configurations=fact.configurations,
         )
         attempts = _put_unique(state.ledger.attempts, fact.attempt_identity, receipt, "attempt")
         if attempts is state.ledger.attempts:
@@ -2457,9 +2460,9 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             )
         realization = finding.realization
         natural_horizon = bool(
-            finding.witness.consumer_execution_horizon_reached
+            finding.witness.consumer_stop_reached
             and finding.witness.consumer_horizon_read is not None
-            and realization.consumer_execution_horizon_reached
+            and realization.consumer_stop_reached
             and realization.consumer_horizon_read == finding.witness.consumer_horizon_read
             and realization.consumer_scan == finding.source.scan_id + 1
             and realization.consumer_assignments
@@ -2597,7 +2600,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                     or fact.execution_source != receipt.execution_source
                 ):
                     raise TheoryInvariantError("transaction phase lacks its exact execution source")
-            if receipt.kind is not TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON:
+            if receipt.kind is not TheoryPhaseKind.CONSUMER_STOP:
                 continue
             preceding = (*parent.phase_receipts, *fact.phase_receipts[:index])
             if (
@@ -2606,7 +2609,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 or not any(item.kind is TheoryPhaseKind.CONSUMER_BOUNDARY for item in preceding)
             ):
                 raise TheoryInvariantError(
-                    "execution horizon lacks its exact tip, transaction, or consumer boundary"
+                    "consumer stop lacks its exact tip, transaction, or consumer boundary"
                 )
         phases = (*parent.phase_receipts, *fact.phase_receipts)
         progress_id: TheoryProgressId = _ledger_identity(
@@ -2765,32 +2768,34 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.version_id != theory.current_version_id:
             raise TheoryInvariantError("composition addresses a stale theory version")
         _require_allowed_source(state, theory, fact.source)
-        if not fact.requirement_identities or not fact.pilot_rung_identities:
-            raise TheoryInvariantError("composition lacks its exact requirement or rung identity")
+        if not fact.requirement_identities:
+            raise TheoryInvariantError("composition lacks its exact requirement identity")
         parent = state.ledger.progress[theory.current_progress_id]
         if fact.source != parent.provisional_tip:
             raise TheoryInvariantError("composition source is not the current progress boundary")
         if fact.composed_source.scan_id != fact.source.scan_id:
             raise TheoryInvariantError("no-scan composition advanced the physical scan")
+        if fact.composed_source != fact.source:
+            raise TheoryInvariantError("scan-entry composition changed the physical World")
         if not fact.composed_source.checkpoint_token or (
             fact.composed_source.scan_id > 0 and not fact.composed_source.execution_owner_token
         ):
             raise TheoryInvariantError("composition boundary evidence is incomplete")
-        prior_corrections = {
-            rung_identity
+        prior_configurations = {
+            configuration.identity
             for phase in parent.phase_receipts
             if phase.kind is TheoryPhaseKind.CORRECTION_COMPOSITION
-            for rung_identity in phase.pilot_rung_identities
+            for configuration in phase.configurations
         }
         prior_superseded = {
-            rung_identity
+            configuration_identity
             for phase in parent.phase_receipts
-            for rung_identity in phase.superseded_pilot_rung_identities
+            for configuration_identity in phase.superseded_configuration_identities
         }
-        active_prior = prior_corrections - prior_superseded
-        if not set(fact.superseded_pilot_rung_identities) <= active_prior:
+        active_prior = prior_configurations - prior_superseded
+        if not set(fact.superseded_configuration_identities) <= active_prior:
             raise TheoryInvariantError("composition supersedes an unowned correction")
-        if set(fact.superseded_pilot_rung_identities) & set(fact.pilot_rung_identities):
+        if fact.configuration.identity in fact.superseded_configuration_identities:
             raise TheoryInvariantError("composition cannot supersede its new correction")
         if fact.research_finding_identity is not None:
             finding = state.ledger.research_findings.get(fact.research_finding_identity)
@@ -2806,8 +2811,10 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             kind=TheoryPhaseKind.CORRECTION_COMPOSITION,
             evidence_identity=fact.composition_identity,
             requirement_identities=fact.requirement_identities,
-            pilot_rung_identities=fact.pilot_rung_identities,
-            superseded_pilot_rung_identities=fact.superseded_pilot_rung_identities,
+            configurations=(fact.configuration,),
+            superseded_configuration_identities=(
+                fact.superseded_configuration_identities
+            ),
         )
         progress_id: TheoryProgressId = _ledger_identity(
             "progress-compose",

@@ -37,7 +37,7 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
         (
             event.kind,
             (
-                (event.data["pilot_rung"].dest, event.data["pilot_rung"].value)
+                event.data["configuration"][0]
                 if event.kind == "theory_correction_composed"
                 else tuple(event.data["applied"])
             ),
@@ -67,7 +67,7 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
         and event.data["applied"] == ((fixture.StartCommand.name, True),)
         and any(
             prior.kind == "theory_correction_composed"
-            and prior.data["pilot_rung"].dest == fixture.FirstPresetMs.name
+            and prior.data["configuration"][0][0] == fixture.FirstPresetMs.name
             for prior in events[:index]
         )
     )
@@ -84,7 +84,7 @@ def test_later_displacement_is_retried_from_each_productive_scan_tip() -> None:
         and event.data["applied"] == ((fixture.ConfirmCommand.name, True),)
         and any(
             prior.kind == "theory_correction_composed"
-            and prior.data["pilot_rung"].dest == fixture.SecondPresetMs.name
+            and prior.data["configuration"][0][0] == fixture.SecondPresetMs.name
             for prior in events[:index]
         )
     )
