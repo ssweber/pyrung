@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import importlib
 from itertools import islice
 
 from pyrung import PLC
-from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot import pilot_events, recovery_continuation
 from tests.fixtures import pilot_progress_repeated_subroutine_landing as repeated
 from tests.fixtures import pilot_progress_same_landing_interference as fixture
 
@@ -14,8 +13,7 @@ from tests.fixtures import pilot_progress_same_landing_interference as fixture
 def test_off_path_same_value_writer_is_handled_without_borrowing_program_step(
     monkeypatch,
 ) -> None:
-    pilot_module = importlib.import_module("pyrung.core.analysis.pilot.pilot")
-    original = pilot_module._repaired_program_continuation
+    original = recovery_continuation.repaired_program_continuation
     continuation_results = []
 
     def capture_continuation(*args, **kwargs):
@@ -24,8 +22,8 @@ def test_off_path_same_value_writer_is_handled_without_borrowing_program_step(
         return result
 
     monkeypatch.setattr(
-        pilot_module,
-        "_repaired_program_continuation",
+        recovery_continuation,
+        "repaired_program_continuation",
         capture_continuation,
     )
     events = tuple(
@@ -71,8 +69,7 @@ def test_off_path_same_value_writer_is_handled_without_borrowing_program_step(
 def test_repeated_subroutine_writer_is_followed_without_borrowing_another_call_site(
     monkeypatch,
 ) -> None:
-    pilot_module = importlib.import_module("pyrung.core.analysis.pilot.pilot")
-    original = pilot_module._repaired_program_continuation
+    original = recovery_continuation.repaired_program_continuation
     continuation_results = []
 
     def capture_continuation(*args, **kwargs):
@@ -81,8 +78,8 @@ def test_repeated_subroutine_writer_is_followed_without_borrowing_another_call_s
         return result
 
     monkeypatch.setattr(
-        pilot_module,
-        "_repaired_program_continuation",
+        recovery_continuation,
+        "repaired_program_continuation",
         capture_continuation,
     )
     events = tuple(

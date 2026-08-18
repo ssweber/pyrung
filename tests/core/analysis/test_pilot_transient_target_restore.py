@@ -5,8 +5,7 @@ from __future__ import annotations
 from itertools import islice
 
 from pyrung import PLC
-from pyrung.core.analysis.pilot import pilot as pilot_module
-from pyrung.core.analysis.pilot import pilot_events
+from pyrung.core.analysis.pilot import pilot_events, recovery_continuation
 from tests.fixtures import pilot_transient_target_restore as fixture
 
 
@@ -68,8 +67,8 @@ def test_scan_tip_recovery_does_not_use_folded_program_continuation(
         raise AssertionError("scan-tip recovery must not fold a logical gap")
 
     monkeypatch.setattr(
-        pilot_module,
-        "_repaired_program_continuation",
+        recovery_continuation,
+        "repaired_program_continuation",
         reject_legacy_continuation,
     )
     events = tuple(

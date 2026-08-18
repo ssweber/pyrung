@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.effects import EffectOccurrenceSnapshot
-from pyrung.core.analysis.pilot.pilot import _mandatory_guard_blocker
+from pyrung.core.analysis.pilot.requirement_repair import mandatory_guard_blocker
 from pyrung.core.analysis.pilot.requirements import (
     GuardLogic,
     GuardRequirementAtom,
@@ -88,7 +88,7 @@ def test_program_owned_blocker_does_not_decline_with_missing_adjustable_work() -
     )
 
     assert (
-        _mandatory_guard_blocker(
+        mandatory_guard_blocker(
             (requirement,),
             {"ProgramGuard": False, "AdjustableGuard": False},
         )

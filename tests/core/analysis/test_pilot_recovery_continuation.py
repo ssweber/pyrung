@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from pyrung import PLC, Int, Program, copy, rung
 from pyrung.core.analysis.pilot import pilot as pilot_module
+from pyrung.core.analysis.pilot import recovery_continuation
 from pyrung.core.analysis.pilot.effects import EffectExpectation
 from pyrung.core.analysis.pilot.execution import MotionKind
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -114,17 +115,17 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
         projected_changes=((channel.name, 0, 3),),
     )
     monkeypatch.setattr(
-        pilot_module,
+        recovery_continuation,
         "execution_epoch_owner",
         lambda work, scan_id: (epoch, owner),
     )
     monkeypatch.setattr(
-        pilot_module,
+        recovery_continuation,
         "_pilot_world_key",
         lambda tags, key_config, pilot_rungs, active_requirements: ("landing",),
     )
 
-    certified = pilot_module._advance_recovery_continuation(
+    certified = recovery_continuation.advance_recovery_continuation(
         trial,
         SimpleNamespace(key=source_key),
         state,
@@ -182,20 +183,20 @@ def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> 
         projection_at=lambda scan_id: object(),
     )
     monkeypatch.setattr(
-        pilot_module,
+        recovery_continuation,
         "_pilot_world_key",
         lambda tags, key_config, pilot_rungs, active_requirements: source_key,
     )
     monkeypatch.setattr(
-        pilot_module,
+        recovery_continuation,
         "execution_epoch_owner",
         lambda work, scan_id: (epoch, owner),
     )
 
-    assert pilot_module._adjacent_continuation_source(state, pulse) is source_checkpoint
+    assert recovery_continuation.adjacent_continuation_source(state, pulse) is source_checkpoint
 
     pulse.projection_at = lambda scan_id: None if scan_id == 2 else object()
-    assert pilot_module._adjacent_continuation_source(state, pulse) is None
+    assert recovery_continuation.adjacent_continuation_source(state, pulse) is None
 
 
 def test_recovery_program_coast_keeps_the_full_execution_window(monkeypatch) -> None:
@@ -252,8 +253,8 @@ def test_recovery_program_coast_keeps_the_full_execution_window(monkeypatch) -> 
     monkeypatch.setattr(pilot_module, "assert_recovery_disposable_state", lambda *args: None)
     monkeypatch.setattr(pilot_module, "_prepare_oriented_result", lambda *args: None)
     monkeypatch.setattr(
-        pilot_module,
-        "_preempt_recovery_action_with_program_coast",
+        recovery_continuation,
+        "preempt_recovery_action_with_program_coast",
         lambda *args: (bearing, program_step),
     )
     monkeypatch.setattr(
@@ -318,17 +319,17 @@ def test_recovery_program_coast_carries_the_selected_target_expectation(
         observable_motion=lambda: motion,
     )
     monkeypatch.setattr(
-        pilot_module,
-        "_recovery_anchor_program_step",
+        recovery_continuation,
+        "recovery_anchor_program_step",
         lambda *args: step,
     )
     monkeypatch.setattr(
-        pilot_module,
+        recovery_continuation,
         "_selected_terminal_target_expectation",
         lambda *args: expectation,
     )
 
-    result, selected = pilot_module._preempt_recovery_action_with_program_coast(
+    result, selected = recovery_continuation.preempt_recovery_action_with_program_coast(
         original,
         frame,
         SimpleNamespace(),

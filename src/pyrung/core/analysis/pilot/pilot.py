@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from pyrsistent import pvector
 
+import pyrung.core.analysis.pilot.recovery_continuation as _recovery_continuation
+import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
 from pyrung.core.analysis.graph import (
     Plan,
@@ -49,8 +51,6 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
-    exact_last_landing_write,
-    fulfilled_expectation_observations,
     observe_execution_window,
     occurrence_snapshot,
     promote_certified_prefix_target_observation,
@@ -58,7 +58,6 @@ from pyrung.core.analysis.pilot.effects import (
     terminal_target_replay_scan_ids,
 )
 from pyrung.core.analysis.pilot.execution import (
-    MotionKind,
     execution_epoch_owner,
 )
 from pyrung.core.analysis.pilot.intrascan import (
@@ -66,17 +65,13 @@ from pyrung.core.analysis.pilot.intrascan import (
     research_intrascan_traceback,
     research_retained_frontier_realization,
 )
-from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
-    ActSource,
     Bearing,
     BearingObjective,
-    ChannelHeading,
     Coast,
     ComposeCorrection,
     IntrascanPulse,
-    LandingReceiptAuthority,
     LocalProgressKind,
     NavigationConstraints,
     NeedIntrascanBoundaryRealization,
@@ -103,8 +98,6 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_pipelines,
 )
 from pyrung.core.analysis.pilot.program_step import (
-    ProgramStepStatus,
-    _program_step_from_bearing,
     read_program_step,
 )
 from pyrung.core.analysis.pilot.progress import (
@@ -130,25 +123,13 @@ from pyrung.core.analysis.pilot.recovery import (
 )
 from pyrung.core.analysis.pilot.requirement_evidence import (
     _attempt_productive_scan,
-    _bind_guard_derivation_authority,
     _configured_input_names,
     _derive_attempt_requirements,
     _derive_bootstrap_requirements,
     _derive_settled_target_requirements,
-    _disposable_requirement_state,
     _release_attempt_projections,
-    _retain_active_requirement,
     _retain_expectation_receipt,
     _selected_terminal_target_expectation,
-)
-from pyrung.core.analysis.pilot.requirements import (
-    ActiveRequirement,
-    GuardRequirementAtom,
-    GuardRequirementCondition,
-    GuardRequirementExpr,
-    OperandAuthority,
-    RequirementStatus,
-    derive_overwriter_guard_requirement_from_write,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
 from pyrung.core.analysis.pilot.steer import _install_prerequisites, execute
@@ -190,7 +171,6 @@ from pyrung.core.analysis.pilot.types import (
     _IterationFrame,
     _PilotContext,
     _PilotState,
-    _RecoveryContinuation,
     _Step,
     _StepContext,
     _World,
@@ -216,14 +196,10 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
-    _semantic_key,
     _StateKeyConfig,
 )
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.analysis.steerable import compute_clear_only, compute_steerable
-from pyrung.core.context import RungId
-from pyrung.core.crossing import Cmp
-from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
@@ -234,1039 +210,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _mandatory_guard_blocker(
-    requirements: tuple[ActiveRequirement, ...],
-    snapshot: Mapping[str, Any],
-) -> GuardRequirementAtom | None:
-    """Name one exact false program-owned guard for a proved landing overwrite."""
-
-    def exhaustive(condition: GuardRequirementCondition) -> bool:
-        if isinstance(condition, GuardRequirementAtom):
-            return True
-        return condition.exhaustive and all(exhaustive(term) for term in condition.terms)
-
-    for requirement in requirements:
-        if getattr(requirement, "status", RequirementStatus.ACTIVE) is not RequirementStatus.ACTIVE:
-            continue
-        condition = requirement.condition
-        if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
-            continue
-        if not any(item and item[0] == "overwriter_guard" for item in requirement.scope):
-            # A producer guard can become true through a still-untried sibling
-            # action (for example a crossing DNF branch).  Only an observed
-            # final landing overwrite proves the local act has reached this
-            # mandatory condition and may safely decline here.
-            continue
-        if not exhaustive(condition):
-            continue
-        blockers: list[GuardRequirementAtom] = []
-        for alternative in iter_guard_alternatives(condition):
-            unsatisfied = tuple(
-                atom
-                for atom in alternative
-                if constraint_holds(atom.condition, snapshot) is not True
-            )
-            if not unsatisfied:
-                break
-            if any(atom.permits_assignment for atom in unsatisfied):
-                break
-            blockers.append(unsatisfied[0])
-        else:
-            if blockers:
-                return blockers[0]
-    return None
-
-
-def _mandatory_guard_decline_reason(
-    blocker: GuardRequirementAtom,
-    snapshot: Mapping[str, Any],
-    target: TargetSpec,
-) -> str:
-    """Describe an exact mandatory guard solely in terms of the machine."""
-
-    condition = blocker.condition
-    if isinstance(condition, Cmp):
-        observed = (
-            blocker.deadline.values[-1]
-            if blocker.deadline.tag == condition.tag and blocker.deadline.values
-            else snapshot.get(condition.tag)
-        )
-        bound = condition.bound if not condition.bound_is_tag else snapshot.get(condition.bound)
-        needed = (
-            f"{condition.tag} {condition.op} {condition.bound}={bound!r}"
-            if condition.bound_is_tag
-            else f"{condition.tag} {condition.op} {bound!r}"
-        )
-        return (
-            f"The machine has {condition.tag}={observed!r}, but "
-            f"{target.tag}={target.value!r} requires {needed}; "
-            f"{condition.tag} is controlled by the program."
-        )
-    return (
-        f"The machine cannot preserve {target.tag}={target.value!r} because its "
-        "required program-controlled condition is false."
-    )
-
-
-def _program_guard_rebase_surfaces(
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> tuple[tuple[_CausalCheckpoint, Any, Any], ...]:
-    """Join retained executable boundaries to their exact execution histories."""
-
-    surfaces: list[tuple[_CausalCheckpoint, Any, Any]] = []
-    checkpoints: list[_CausalCheckpoint] = [
-        _CausalCheckpoint(
-            key=checkpoint.key,
-            world=checkpoint.world,
-            objective=checkpoint.objective,
-            configured_inputs=ctx.configured_inputs
-            | _configured_input_names(checkpoint.world.work),
-            owner=checkpoint.owner,
-        )
-        for checkpoint in state.checkpoints
-    ]
-    if state.invocation_checkpoint is not None:
-        checkpoints.append(state.invocation_checkpoint)
-    bootstrap = state.bootstrap_execution
-    if bootstrap is not None:
-        checkpoints.append(bootstrap.checkpoint)
-        surfaces.append(
-            (bootstrap.checkpoint, bootstrap.execution_epoch, bootstrap.execution_owner)
-        )
-    for receipt in (*state.expectation_receipts, *state.failed_effect_receipts):
-        checkpoints.append(receipt.source_checkpoint)
-        surfaces.append(
-            (receipt.source_checkpoint, receipt.execution_epoch, receipt.execution_owner)
-        )
-    for requirement in state.active_requirements:
-        checkpoints.append(requirement.source_checkpoint)
-        surfaces.append(
-            (
-                requirement.source_checkpoint,
-                requirement.execution_epoch,
-                requirement.execution_owner,
-            )
-        )
-
-    # The live lineage owns accepted program motion even when that motion had
-    # no expectation receipt. Ordinary progress checkpoints retain the exact
-    # executable boundaries on that same lineage.
-    lineage = state.work._causal_lineage
-    for epoch, owner in lineage.seal_through(state.work.state.scan_id):
-        for checkpoint in checkpoints:
-            if checkpoint.world.work.state.scan_id < epoch.first_scan:
-                surfaces.append((checkpoint, epoch, owner))
-
-    unique: list[tuple[_CausalCheckpoint, Any, Any]] = []
-    identities: set[tuple[int, int, int]] = set()
-    for checkpoint, epoch, owner in surfaces:
-        identity = (id(checkpoint), id(epoch), id(owner))
-        if identity in identities or getattr(owner, "epoch", None) is not epoch:
-            continue
-        identities.add(identity)
-        unique.append((checkpoint, epoch, owner))
-    return tuple(unique)
-
-
-def _program_guard_transition_candidates(
-    owner: Any,
-    rung_ids: frozenset[RungId],
-    tag: str,
-    *,
-    before_scan: int,
-) -> tuple[int, ...]:
-    """Use compressed firing columns to rank possible transitions newest first."""
-
-    main = frozenset(rung.rung_index for rung in rung_ids if rung.subroutine is None)
-    nested = frozenset(rung for rung in rung_ids if rung.subroutine is not None)
-    candidates: set[int] = set()
-    if main:
-        candidates.update(
-            owner.rung_firing_timelines.tag_transition_candidate_scans_before(
-                main,
-                tag,
-                before_scan,
-            )
-        )
-    if nested:
-        candidates.update(
-            owner.node_firing_timelines.tag_transition_candidate_scans_before(
-                nested,
-                tag,
-                before_scan,
-            )
-        )
-    return tuple(sorted(candidates, reverse=True))
-
-
-def _preinvocation_program_guard_surfaces(
-    state: _PilotState,
-    ctx: _PilotContext,
-    rung_ids: frozenset[RungId],
-    tag: str,
-    *,
-    before_scan: int,
-) -> tuple[tuple[_CausalCheckpoint, Any, Any], ...]:
-    """Reconstruct exact retained boundaries for pre-drive transition candidates."""
-
-    invocation = state.invocation_checkpoint
-    if invocation is None:
-        return ()
-    invocation_work = invocation.world.work
-    invocation_scan = invocation_work.state.scan_id
-    surfaces: list[tuple[_CausalCheckpoint, Any, Any]] = []
-    for epoch, owner in invocation_work._causal_lineage.seal_through(invocation_scan):
-        bounded_before = min(before_scan, invocation_scan + 1, epoch.last_scan + 1)
-        for candidate_scan in _program_guard_transition_candidates(
-            owner,
-            rung_ids,
-            tag,
-            before_scan=bounded_before,
-        ):
-            source_scan = candidate_scan - 1
-            if source_scan < 0:
-                continue
-            try:
-                source_work = fork_with_pilot_rungs(
-                    invocation_work,
-                    tuple(invocation.world.pilot_rungs),
-                    scan_id=source_scan,
-                )
-            except KeyError:
-                continue
-            source_key = (
-                _pilot_world_key(
-                    dict(source_work.state.tags),
-                    state.key_config,
-                    invocation.world.pilot_rungs,
-                    (),
-                )
-                if state.key_config is not None
-                else None
-            )
-            surfaces.append(
-                (
-                    _CausalCheckpoint(
-                        key=source_key,
-                        world=invocation.world.set(work=source_work),
-                        objective=invocation.objective,
-                        configured_inputs=invocation.configured_inputs,
-                    ),
-                    epoch,
-                    owner,
-                )
-            )
-    return tuple(surfaces)
-
-
-def _program_guard_rebase_requirement(
-    blocker: GuardRequirementAtom,
-    parent: ActiveRequirement,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> ActiveRequirement | None:
-    """Trace one false program guard back to the nearest exact harmful writer.
-
-    Range-compressed firing timelines only rank candidates, nearest first.
-    Each candidate still needs an owner-bound scan projection, a unique
-    good-to-bad write, and an executable retained checkpoint before its scan.
-    """
-
-    condition = blocker.condition
-    if not isinstance(condition, Cmp):
-        return None
-    failed_snapshot = dict(parent.source_checkpoint.world.work.state.tags)
-    if (
-        constraint_holds(condition, failed_snapshot) is not False
-        or condition.tag not in failed_snapshot
-    ):
-        return None
-
-    writer_nodes = tuple(
-        ctx.pdg.rung_nodes[index] for index in ctx.pdg.writers_of.get(condition.tag, ())
-    )
-    rung_ids = frozenset(RungId(node.subroutine, node.rung_index) for node in writer_nodes)
-    if not rung_ids:
-        return None
-
-    failed_scan = parent.source_checkpoint.world.work.state.scan_id
-    ranked: list[tuple[int, int, _CausalCheckpoint, Any, Any]] = []
-    surfaces = (
-        *_program_guard_rebase_surfaces(state, ctx),
-        *_preinvocation_program_guard_surfaces(
-            state,
-            ctx,
-            rung_ids,
-            condition.tag,
-            before_scan=failed_scan + 1,
-        ),
-    )
-    for checkpoint, epoch, owner in surfaces:
-        checkpoint_scan = checkpoint.world.work.state.scan_id
-        if (
-            checkpoint_scan >= failed_scan
-            or constraint_holds(condition, checkpoint.world.work.state.tags) is not True
-        ):
-            continue
-        before_scan = min(failed_scan + 1, epoch.last_scan + 1)
-        for candidate_scan in _program_guard_transition_candidates(
-            owner,
-            rung_ids,
-            condition.tag,
-            before_scan=before_scan,
-        ):
-            if checkpoint_scan < candidate_scan:
-                ranked.append((candidate_scan, checkpoint_scan, checkpoint, epoch, owner))
-
-    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    seen_candidates: set[tuple[int, int, int]] = set()
-    for candidate_scan, _checkpoint_scan, checkpoint, epoch, owner in ranked:
-        candidate_identity = (candidate_scan, id(epoch), id(checkpoint))
-        if candidate_identity in seen_candidates:
-            continue
-        seen_candidates.add(candidate_identity)
-        projection = owner._runner()._replay_rung_write_projection_at(candidate_scan)
-        if projection is None or projection.scan_id != candidate_scan:
-            continue
-        crossings = []
-        for write in projection.writes:
-            if write.transition.tag_name != condition.tag:
-                continue
-            before = dict(projection.entry_tags)
-            before[condition.tag] = write.transition.from_value
-            after = dict(before)
-            after[condition.tag] = write.transition.to_value
-            if (
-                constraint_holds(condition, before) is True
-                and constraint_holds(condition, after) is False
-            ):
-                crossings.append(write)
-        if len(crossings) != 1:
-            continue
-        displacement = crossings[0]
-        exact_nodes = tuple(
-            node
-            for node in writer_nodes
-            if RungId(node.subroutine, node.rung_index) == displacement.rung_id
-            and resolve_rung(ctx.program, node) is displacement.run.rung
-        )
-        if len(exact_nodes) != 1:
-            continue
-        node = exact_nodes[0]
-        selected_writer = (node.subroutine, node.rung_index, node.branch_path)
-        derivation = _bind_guard_derivation_authority(
-            derive_overwriter_guard_requirement_from_write(
-                displacement,
-                projection,
-                execution_epoch=epoch,
-                execution_owner=owner,
-                selected_writer=selected_writer,
-                source_world_key=checkpoint.key,
-                source_checkpoint=checkpoint,
-                provenance="program-guard-rebase",
-                scope=(("program_guard_rebase", condition),),
-            ),
-            checkpoint,
-            ctx,
-        )
-        if derivation.requirement is not None:
-            return derivation.requirement
-    return None
-
-
-def _derive_program_guard_rebases(
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> tuple[tuple[ActiveRequirement, ActiveRequirement], ...]:
-    """Add history-backed adjustable facts without executing a repair.
-
-    A program-written blocker is evidence, not a Bearing.  Rebase each such
-    atom to the nearest retained harmful writer, retain the resulting
-    adjustable requirement, and leave execution to WorkingTheory + Compass.
-    """
-
-    added: list[tuple[ActiveRequirement, ActiveRequirement]] = []
-    for parent in tuple(state.active_requirements):
-        if parent.status is not RequirementStatus.ACTIVE:
-            continue
-        condition = parent.condition
-        if not isinstance(condition, GuardRequirementAtom | GuardRequirementExpr):
-            continue
-        source_snapshot = dict(parent.source_checkpoint.world.work.state.tags)
-        # Boolean DFS owns directly executable alternatives first.  Rebasing a
-        # program-written sibling before those alternatives have been read
-        # changes an OR into an eager historical detour and clears the exact
-        # temporal request which should be trying the current-world branch.
-        # Satisfied authoritative atoms may participate; only an unsatisfied
-        # non-assignable atom makes an alternative require history.
-        if any(
-            all(
-                constraint_holds(atom.condition, source_snapshot) is True
-                or (
-                    constraint_holds(atom.condition, source_snapshot) is False
-                    and atom.permits_assignment
-                )
-                for atom in alternative
-            )
-            for alternative in iter_guard_alternatives(condition)
-        ):
-            continue
-        atoms = tuple(
-            dict.fromkeys(
-                atom for alternative in iter_guard_alternatives(condition) for atom in alternative
-            )
-        )
-        parent_rebased = False
-        for atom in atoms:
-            if atom.operand_authority is not OperandAuthority.PROGRAM_WRITTEN:
-                continue
-            rebased = _program_guard_rebase_requirement(atom, parent, state, ctx)
-            if rebased is not None and any(
-                current.provenance == "program-guard-rebase"
-                and current.source_checkpoint.owner is rebased.source_checkpoint.owner
-                and _semantic_key(current.condition) == _semantic_key(rebased.condition)
-                for current in state.active_requirements
-            ):
-                continue
-            if _retain_active_requirement(state, rebased):
-                assert rebased is not None
-                added.append((parent, rebased))
-                parent_rebased = True
-        if parent_rebased:
-            # The historical guard fact is the executable replacement for this
-            # program-owned requirement at its earlier source.  Keep the parent
-            # in theory history, but do not ask Compass to execute both the
-            # failed later condition and its rebase in one earlier transaction.
-            index = state.active_requirements.index(parent)
-            state.active_requirements[index] = replace(
-                parent,
-                status=RequirementStatus.DISCHARGED,
-            )
-    return tuple(added)
-
-
-def _repaired_program_continuation(
-    candidate: _PilotState,
-    ctx: _PilotContext,
-    trial: _AcceptedTrial,
-    expectation: EffectExpectation,
-    *,
-    execution_work: Any | None = None,
-) -> int | None:
-    """Prove that a corrected consumer handoff folded only target-path work.
-
-    A pulse may satisfy its exact consumer and then ride several program-owned
-    state writes before the executor returns.  In that case the trial's channel
-    verification still describes a departure from the pulse's requested value,
-    even though the corrected suffix is useful autonomous progress.  Re-read
-    the target path at the exact consumer scan and ask ``ProgramStep`` whether
-    its selected landing writer is reached by an unchanged projection.
-
-    The landing writer must be the unique program-owned writer already selected
-    on that fresh target trace.  A same-tag automatic writer outside the target
-    path therefore cannot turn arbitrary drift into an accepted repair.
-    """
-
-    channel = trial.execution.channel_motion.channel_tag
-    if channel is None:
-        return None
-    work = candidate.work if execution_work is None else execution_work
-    observations = fulfilled_expectation_observations(
-        expectation,
-        trial.attempt.effect_observations,
-    )
-    handoffs = tuple(
-        item
-        for item in observations
-        if item.obligation.tag == channel and item.appeared is not None
-    )
-    if len(handoffs) != 1:
-        return None
-    handoff = handoffs[0]
-    boundary = handoff.consumer_read or handoff.appeared
-    boundary_projection = handoff.execution_projection
-    assert boundary is not None
-    if boundary_projection is None or boundary_projection.scan_id != boundary.scan_id:
-        return None
-    boundary_scan = boundary.scan_id
-    exact_scan_ids = trial.attempt.pulse.kernel_scan_ids
-    if boundary_scan not in exact_scan_ids:
-        return None
-
-    same_scan_suffix = tuple(
-        write
-        for write in boundary_projection.writes
-        if write.ordinal > boundary.ordinal
-        and write.transition.tag_name == channel
-        and write.run.enabled
-    )
-    boundary_operation_runs = boundary.run.rung_occurrences
-    if any(
-        all(write.run is not operation_run for operation_run in boundary_operation_runs)
-        for write in same_scan_suffix
-    ):
-        # The scan-exit snapshot is a faithful consumer boundary only when any
-        # later channel write belongs to that same dynamic consumer operation,
-        # including its exact nested branch runs. A sibling/outer writer would
-        # already have displaced the handoff before the historical fork on
-        # which ProgramStep projects.
-        return None
-
-    try:
-        handoff_work = fork_with_pilot_rungs(
-            work,
-            candidate.pilot_rungs,
-            scan_id=boundary_scan,
-        )
-    except KeyError:
-        return None
-
-    handoff_snap = dict(handoff_work.state.tags)
-    landing_value = work.state.tags.get(channel)
-    if _values_match(handoff_snap.get(channel), landing_value):
-        return None
-
-    probe = _disposable_requirement_state(
-        candidate,
-        _CausalCheckpoint(
-            key=None,
-            world=candidate.world.set(work=handoff_work),
-            objective=trial.attempt.bearing.objective,
-            configured_inputs=ctx.configured_inputs,
-        ),
-    )
-    reading = ctx.compass.orient(
-        OrientationWorld(
-            world_key=(),
-            snapshot=handoff_snap,
-            frame=None,
-            state=probe,
-            context=ctx,
-            key_config=probe.key_config,
-        ),
-        ctx.target,
-        NavigationConstraints(active_requirements=tuple(probe.active_requirements)),
-    )
-    orientation = reading.orientation
-    if orientation is None or orientation.world.frame is None:
-        return None
-    landing_writers = {
-        node.writer_rung
-        for node in orientation.world.frame.tree.iter_nodes()
-        if node.tag == channel
-        and _values_match(node.value, landing_value)
-        and node.writer_rung is not None
-    }
-    if len(landing_writers) != 1:
-        return None
-    landing_writer = next(iter(landing_writers))
-    selected_rung = resolve_rung(ctx.program, ctx.pdg.rung_nodes[landing_writer])
-    if selected_rung is None:
-        return None
-
-    later_writes = list(same_scan_suffix)
-    relevant_projections = [boundary_projection]
-    for scan_id in exact_scan_ids:
-        if scan_id <= boundary_scan or scan_id > work.state.scan_id:
-            continue
-        projection = work._replay_rung_write_projection_at(scan_id)
-        if projection is None:
-            return None
-        relevant_projections.append(projection)
-        later_writes.extend(
-            write
-            for write in projection.writes
-            if write.transition.tag_name == channel and write.run.enabled
-        )
-    landing_occurrences = tuple(
-        write for write in later_writes if _values_match(write.transition.to_value, landing_value)
-    )
-    if not landing_occurrences:
-        return None
-
-    # The whole observed suffix must belong to one retained causal epoch. Scan
-    # numbers alone are not occurrence ownership: a fork can reuse them under
-    # another execution epoch.
-    suffix_owner = work._causal_lineage.owner_at(boundary_scan)
-    if suffix_owner is None or any(
-        work._causal_lineage.owner_at(projection.scan_id) is not suffix_owner
-        for projection in relevant_projections
-    ):
-        return None
-
-    def dynamic_invocations(projection: Any) -> frozenset[int | None]:
-        return frozenset(
-            occurrence.call_invocation
-            for occurrence in (*projection.reads, *projection.writes)
-            if occurrence.run.rung is selected_rung
-        )
-
-    if any(len(dynamic_invocations(projection)) > 1 for projection in relevant_projections):
-        return None
-
-    world = WorldView(
-        snapshot=handoff_snap,
-        pdg=ctx.pdg,
-        program=ctx.program,
-        steerable=ctx.steerable,
-        opaque_loop=ctx.opaque_loop,
-        prior=ctx.domain_prior,
-        clear_only=ctx.clear_only,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        pipeline_roles=ctx.pipeline_roles,
-        avoid_pred=ctx.avoid_pred,
-        harness=getattr(handoff_work, "_harness", None),
-    )
-    family = sibling_producer_family(world, channel, landing_value)
-    producers = (
-        tuple(
-            producer for producer in family.program_owned if producer.rung_index == landing_writer
-        )
-        if family is not None
-        else ()
-    )
-    if len(producers) != 1:
-        return None
-    step = read_program_step(
-        world,
-        producers[0],
-        handoff_work,
-        candidate.pilot_rungs,
-        resting=ctx.resting,
-        projection_scans=4,
-    )
-    motion = step.observable_motion(channel)
-    if not (
-        step.status is ProgramStepStatus.KEEP_RUNNING
-        and motion is not None
-        and _values_match(motion.before_value, handoff_snap.get(channel))
-        and _values_match(motion.target_value, landing_value)
-    ):
-        return None
-
-    # Reproduce ProgramStep's bounded unchanged projection and join its one
-    # selected producer occurrence to the historical landing winner by full
-    # dynamic address. Static rung identity alone aliases repeated subroutine
-    # calls and loop iterations.
-    projected_work = fork_with_pilot_rungs(handoff_work, candidate.pilot_rungs)
-    projected_occurrences = []
-    for _ in range(4):
-        projected_work.step()
-        projection = projected_work._replay_rung_write_projection_at(projected_work.state.scan_id)
-        if projection is None or len(dynamic_invocations(projection)) > 1:
-            return None
-        projected_occurrences.extend(
-            write
-            for write in projection.writes
-            if write.run.rung is selected_rung
-            and write.transition.tag_name == channel
-            and _values_match(write.transition.to_value, landing_value)
-            and write.run.enabled
-        )
-        if _values_match(projected_work.state.tags.get(channel), landing_value):
-            break
-    if len(projected_occurrences) != 1:
-        return None
-    projected_occurrence = projected_occurrences[0]
-
-    def dynamic_address(write: Any) -> tuple[Any, ...]:
-        return (
-            write.scan_id,
-            write.ordinal,
-            write.run_order,
-            write.call_invocation,
-            write.rung_id,
-            write.run.kind,
-            write.run.caller_rung,
-            write.run.call_stack,
-        )
-
-    historical_matches = tuple(
-        occurrence
-        for occurrence in landing_occurrences
-        if dynamic_address(occurrence) == dynamic_address(projected_occurrence)
-    )
-    if len(historical_matches) != 1:
-        return None
-    landing_occurrence = historical_matches[0]
-    selected_node = ctx.pdg.rung_nodes[landing_writer]
-    capture_indices = ctx.pdg.timeline_capture_indices_for_node(landing_writer)
-    if selected_node.subroutine is not None:
-        if len(capture_indices) != 1:
-            return None
-        if landing_occurrence.run.caller_rung != next(iter(capture_indices)):
-            return None
-    if any(
-        write.scan_id == landing_occurrence.scan_id
-        and write.ordinal > landing_occurrence.ordinal
-        and write.transition.tag_name == channel
-        and write.run.enabled
-        for write in later_writes
-    ):
-        # The suffix boundary is a historical scan exit. A later same-scan
-        # channel write would make that boundary unobservable.
-        return None
-    return landing_occurrence.scan_id
-
-
-def _promoted_target_suffix_observation(
-    expectation: EffectExpectation,
-    pulse: Any,
-    checkpoint_scan: int,
-) -> Any:
-    """Promote an exact zero-net target loss after one proven checkpoint."""
-
-    exact_suffix = tuple(
-        scan_id
-        for scan_id in pulse.kernel_scan_ids
-        if checkpoint_scan < scan_id <= pulse.fork.state.scan_id
-    )
-    if not exact_suffix:
-        return None
-    boundary_projection = pulse.projection_at(exact_suffix[0])
-    if boundary_projection is None:
-        return None
-    terminal = expectation.obligations[0]
-    observations = observe_execution_window(
-        expectation,
-        pulse.fork,
-        scan_before=checkpoint_scan,
-        action_scan=None,
-        coast_receipt=pulse.coast_receipt,
-        kernel_scan_ids=exact_suffix,
-        projection_at=pulse.projection_at,
-    )
-    return promote_terminal_target_observation(
-        observations,
-        window_entry_value=boundary_projection.entry_tags.get(terminal.tag),
-        final_landing_value=pulse.fork.state.tags.get(terminal.tag),
-    )
-
-
-def _continuation_source_checkpoint(
-    state: _PilotState,
-    continuation: _RecoveryContinuation,
-) -> _CausalCheckpoint | None:
-    """Resolve one retained causal source without storing it in the stream."""
-
-    matches = tuple(
-        requirement.source_checkpoint
-        for requirement in state.active_requirements
-        if requirement.checkpoint_owner is continuation.checkpoint_owner
-        and requirement.source_world_key == continuation.source_world_key
-    )
-    unique = {id(checkpoint): checkpoint for checkpoint in matches}
-    return next(iter(unique.values())) if len(unique) == 1 else None
-
-
-def _adjacent_continuation_source(
-    state: _PilotState,
-    pulse: Any,
-    prefix_proof: _ContinuationCheckpoint | None = None,
-) -> _CausalCheckpoint | None:
-    """Return source authority only for one contiguous certified exact window."""
-
-    continuation = state.recovery_continuation
-    if continuation is None:
-        return None
-    tip = continuation.tip
-    assert state.key_config is not None
-    current_key = _pilot_world_key(
-        dict(state.work.state.tags),
-        state.key_config,
-        state.pilot_rungs,
-        state.active_requirements,
-    )
-    ephemeral_prefix = bool(
-        prefix_proof is not None
-        and prefix_proof.kind == "target_prefix"
-        and prefix_proof.scan_id == tip.scan_id
-        and prefix_proof.world_key == tip.world_key
-        and prefix_proof.execution_epoch is tip.execution_epoch
-        and prefix_proof.execution_owner is tip.execution_owner
-        and prefix_proof.landing_occurrence is not None
-    )
-    pulse_epoch_owner = execution_epoch_owner(pulse.fork, pulse.scan_before)
-    exact_scan_ids = tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
-    if (
-        not (tip.program_step_certified or ephemeral_prefix)
-        or tip.scan_id != pulse.scan_before
-        or tip.world_key != current_key
-        or pulse_epoch_owner is None
-        or pulse_epoch_owner[0] is not tip.execution_epoch
-        or pulse_epoch_owner[1] is not tip.execution_owner
-        or pulse.kernel_scan_ids != exact_scan_ids
-        or any(pulse.projection_at(scan_id) is None for scan_id in exact_scan_ids)
-    ):
-        return None
-    receipt = pulse.coast_receipt
-    if receipt is not None and (
-        receipt.macro_folds
-        or receipt.advances
-        or receipt.timer_quanta_replayed
-        or receipt.skipped_scans
-    ):
-        return None
-    return _continuation_source_checkpoint(state, continuation)
-
-
-def _exact_local_repair_window(
-    checkpoint: _CausalCheckpoint | None,
-    pulse: Any,
-) -> bool:
-    """Whether one rejected retry retains its whole exact source window."""
-
-    if (
-        checkpoint is None
-        or checkpoint.world.work.state.scan_id != pulse.scan_before
-        or pulse.kernel_scan_ids
-        != tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
-        or any(pulse.projection_at(scan_id) is None for scan_id in pulse.kernel_scan_ids)
-    ):
-        return False
-    receipt = pulse.coast_receipt
-    return receipt is None or not (
-        receipt.macro_folds
-        or receipt.advances
-        or receipt.timer_quanta_replayed
-        or receipt.skipped_scans
-    )
-
-
-def _selected_program_step(trial: _AcceptedTrial) -> Any | None:
-    return _program_step_from_bearing(trial.attempt.bearing)
-
-
-def _recovery_anchor_program_step(
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    target: TargetSpec,
-) -> Any | None:
-    """Freshly prove that a repaired anchor should keep running unchanged."""
-
-    continuation = state.recovery_continuation
-    if continuation is None or continuation.tip.scan_id != state.work.state.scan_id:
-        return None
-    if continuation.tip.world_key != frame.key:
-        return None
-    owned = execution_epoch_owner(state.work, state.work.state.scan_id)
-    if (
-        owned is None
-        or owned[0] is not continuation.tip.execution_epoch
-        or owned[1] is not continuation.tip.execution_owner
-    ):
-        return None
-    expectation = _selected_terminal_target_expectation(frame, target, ctx)
-    if expectation is None:
-        return None
-    terminal = expectation.obligations[0]
-    world = WorldView(
-        snapshot=frame.snap,
-        pdg=ctx.pdg,
-        program=ctx.program,
-        steerable=ctx.steerable,
-        opaque_loop=ctx.opaque_loop,
-        prior=ctx.domain_prior,
-        clear_only=ctx.clear_only,
-        pipeline_internal_tags=ctx.pipeline_internal_tags,
-        pipeline_roles=ctx.pipeline_roles,
-        avoid_pred=ctx.avoid_pred,
-        harness=getattr(state.work, "_harness", None),
-    )
-    family = sibling_producer_family(world, terminal.tag, terminal.value)
-
-    def producer_address(producer: Any) -> tuple[Any, ...]:
-        node = ctx.pdg.rung_nodes[producer.rung_index]
-        return (node.subroutine, node.rung_index, node.branch_path)
-
-    producers = (
-        tuple(
-            producer
-            for producer in family.program_owned
-            if producer_address(producer) == terminal.producer
-        )
-        if family is not None
-        else ()
-    )
-    if len(producers) != 1:
-        return None
-    step = read_program_step(
-        world,
-        producers[0],
-        state.work,
-        state.pilot_rungs,
-        resting=ctx.resting,
-    )
-    if (
-        step.status is not ProgramStepStatus.KEEP_RUNNING
-        or step.required_inputs
-        or step.context_actions
-        or step.observable_motion() is None
-    ):
-        return None
-    return step
-
-
-def _preempt_recovery_action_with_program_coast(
-    result: OrientationResult,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    target: TargetSpec,
-) -> tuple[OrientationResult, Any | None]:
-    """Prefer a proved unchanged program hop over a harmful fresh action."""
-
-    if not isinstance(result, Bearing):
-        return result, None
-    # A Working Theory phase is already the reader-selected answer to an exact
-    # intrascan need.  Replacing it here with a generic recovery coast would
-    # execute a different act than the temporal request (and its receipt)
-    # names.  Let that bounded setup/rearm scan run unchanged; its landing is
-    # reread normally on the next turn.
-    if result.act.policy.local_progress is not None:
-        return result, None
-    step = _recovery_anchor_program_step(frame, state, ctx, target)
-    if step is None or isinstance(result.act, Coast):
-        return result, step
-    expectation = _selected_terminal_target_expectation(frame, target, ctx)
-    assert expectation is not None
-    motion = step.observable_motion()
-    assert motion is not None
-    act = Coast(
-        "bearing",
-        replace(
-            result.act.policy,
-            source=ActSource.PROGRAM,
-            action_pairs=(),
-            applied=(),
-            nogood_pair=None,
-            heading=ChannelHeading(
-                motion.channel_tag,
-                motion.target_value,
-                boundary=step.boundary,
-            ),
-            motion=MotionKind.COAST_TO_BEARING,
-            expectation=expectation,
-            expectation_exemption=None,
-            landing_receipt_authority=LandingReceiptAuthority.PROGRAM_STEP,
-            provenance=(*result.act.policy.provenance, "recovery ProgramStep keep-running"),
-        ),
-    )
-    orientation = (
-        replace(result.orientation, selected_bearing_id=repr(act_identity(act)))
-        if result.orientation is not None
-        else None
-    )
-    return (
-        replace(
-            result,
-            act=act,
-            rationale=step.reason,
-            orientation=orientation,
-        ),
-        step,
-    )
-
-
-def _advance_recovery_continuation(
-    trial: _AcceptedTrial,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-    program_step: Any | None = None,
-) -> bool:
-    """Append one freshly certified checkpoint for the committed recovery hop."""
-
-    continuation = state.recovery_continuation
-    if continuation is None:
-        return False
-    pulse = trial.attempt.pulse
-    exact_window = (
-        continuation.tip.scan_id == pulse.scan_before
-        and continuation.tip.world_key == frame.key
-        and pulse.kernel_scan_ids
-        == tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
-    )
-    receipt = pulse.coast_receipt
-    exact_window = exact_window and not (
-        receipt is not None
-        and (
-            receipt.macro_folds
-            or receipt.advances
-            or receipt.timer_quanta_replayed
-            or receipt.skipped_scans
-        )
-    )
-    certified = False
-    motion = None
-    if exact_window and isinstance(trial.attempt.bearing.act, Coast):
-        step = program_step or _selected_program_step(trial)
-        physical_channel = trial.execution.channel_motion.channel_tag
-        motion = step.observable_motion(physical_channel) if step is not None else None
-        certified = bool(
-            step is not None
-            and step.status is ProgramStepStatus.KEEP_RUNNING
-            and motion is not None
-            and _values_match(
-                motion.before_value,
-                trial.execution.before_snap.get(motion.channel_tag),
-            )
-            and _values_match(
-                motion.target_value,
-                trial.execution.after_snap.get(motion.channel_tag),
-            )
-        )
-    # Program-input handoffs need the typed NEEDS_INPUT/action/boundary join;
-    # a resting edge and a survived expectation alone are not authority.
-    selected_release = False
-    if not certified and not selected_release:
-        state.recovery_continuation = None
-        return False
-    epoch_owner = execution_epoch_owner(pulse.fork, state.work.state.scan_id)
-    projections = tuple(pulse.projection_at(scan_id) for scan_id in pulse.kernel_scan_ids)
-    if epoch_owner is None or any(projection is None for projection in projections):
-        state.recovery_continuation = None
-        return False
-    landing_occurrence = None
-    if certified and motion is not None:
-        exact_projections = tuple(
-            projection for projection in projections if projection is not None
-        )
-        landing = exact_last_landing_write(
-            exact_projections,
-            after=None,
-            tag=motion.channel_tag,
-            target_value=motion.before_value,
-            landing_value=motion.target_value,
-        )
-        if landing is None:
-            state.recovery_continuation = None
-            return False
-        landing_occurrence = occurrence_snapshot(landing[1])
-    assert state.key_config is not None
-    key = _pilot_world_key(
-        dict(state.work.state.tags),
-        state.key_config,
-        state.pilot_rungs,
-        state.active_requirements,
-    )
-    state.recovery_continuation = replace(
-        continuation,
-        checkpoints=(
-            *continuation.checkpoints,
-            _ContinuationCheckpoint(
-                scan_id=state.work.state.scan_id,
-                world_key=key,
-                kind="unchanged_coast" if certified else "program_input_handoff",
-                execution_epoch=epoch_owner[0],
-                execution_owner=epoch_owner[1],
-                landing_occurrence=landing_occurrence,
-            ),
-        ),
-    )
-    return True
 
 
 def _execution_owner_at(work: Any, scan_id: int) -> tuple[Any, Any] | None:
@@ -2472,7 +1415,7 @@ def _transition_once(
     )
     frame = orientation_world.frame
     _prepare_oriented_result(state, result, orientation_world, frame)
-    result, recovery_program_step = _preempt_recovery_action_with_program_coast(
+    result, recovery_program_step = _recovery_continuation.preempt_recovery_action_with_program_coast(
         result,
         frame,
         state,
@@ -2532,7 +1475,7 @@ def _transition_once(
     continuation_checkpoint = None
     executed_for_derivation = attempt.executed_attempt
     if terminal_target_expectation is not None and executed_for_derivation is not None:
-        continuation_checkpoint = _adjacent_continuation_source(
+        continuation_checkpoint = _recovery_continuation.adjacent_continuation_source(
             state,
             executed_for_derivation.pulse,
             prefix_proof,
@@ -2655,7 +1598,7 @@ def _transition_once(
         if executed is None:
             raise RuntimeError("entry observation lost its exact execution")
         _retain_entry_bearing_execution(state, expectation_checkpoint, executed)
-    continuation_hop = _advance_recovery_continuation(
+    continuation_hop = _recovery_continuation.advance_recovery_continuation(
         trial,
         frame,
         state,
@@ -2782,7 +1725,7 @@ def _promote_transient_target_failure(
             )
     existing = executed.bearing.expectation
     if promoted is None and attempt.trial is not None and existing is not None:
-        checkpoint_scan = _repaired_program_continuation(
+        checkpoint_scan = _recovery_continuation.repaired_program_continuation(
             state,
             ctx,
             attempt.trial,
@@ -2790,12 +1733,12 @@ def _promote_transient_target_failure(
             execution_work=pulse.fork,
         )
         if checkpoint_scan is not None:
-            promoted = _promoted_target_suffix_observation(
+            promoted = _recovery_continuation.promoted_target_suffix_observation(
                 target_expectation,
                 pulse,
                 checkpoint_scan,
             )
-        if promoted is None and _exact_local_repair_window(
+        if promoted is None and _recovery_continuation.exact_local_repair_window(
             local_repair_checkpoint,
             pulse,
         ):
@@ -2810,7 +1753,15 @@ def _promote_transient_target_failure(
                 target_observations,
                 final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
             )
-    if promoted is None and _adjacent_continuation_source(state, pulse, prefix_proof) is not None:
+    if (
+        promoted is None
+        and _recovery_continuation.adjacent_continuation_source(
+            state,
+            pulse,
+            prefix_proof,
+        )
+        is not None
+    ):
         promoted = promote_certified_prefix_target_observation(
             target_observations,
             final_landing_value=pulse.fork.state.tags.get(terminal_obligation.tag),
@@ -3072,7 +2023,7 @@ def _pilot_loop_events(
     last_frontier: tuple[_ActionPair, ...] = ()
     while state.search_scans < ctx.max_scans:
         requirements_before_rebase = len(state.active_requirements)
-        rebased_requirements = _derive_program_guard_rebases(state, ctx)
+        rebased_requirements = _requirement_repair.derive_program_guard_rebases(state, ctx)
         if rebased_requirements:
             if active_theory(state.theory_state) is None:
                 _theory_drive._open_theory_from_program_guard_rebases(
@@ -3206,12 +2157,14 @@ def _pilot_loop_events(
             # this read. SETUP_FIRST restoration and all later work therefore
             # begin with a fresh Compass orientation.
             continue
-        result, _recovery_program_step = _preempt_recovery_action_with_program_coast(
-            result,
-            frame,
-            state,
-            ctx,
-            target,
+        result, _recovery_program_step = (
+            _recovery_continuation.preempt_recovery_action_with_program_coast(
+                result,
+                frame,
+                state,
+                ctx,
+                target,
+            )
         )
         controlling_setup_request = _theory_drive._setup_request_for_result(
             temporal_request, result
@@ -3563,12 +2516,12 @@ def _pilot_loop_events(
             continue
 
         if isinstance(result, Stuck):
-            mandatory_blocker = _mandatory_guard_blocker(
+            mandatory_blocker = _requirement_repair.mandatory_guard_blocker(
                 tuple(state.active_requirements),
                 state.work.state.tags,
             )
             terminal_reason = (
-                _mandatory_guard_decline_reason(
+                _requirement_repair.mandatory_guard_decline_reason(
                     mandatory_blocker,
                     state.work.state.tags,
                     ctx.target,

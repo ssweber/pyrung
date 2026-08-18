@@ -32,6 +32,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     active_theory_configurations,
     theory_view,
 )
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 from tests.fixtures import pilot_scan_zero_sequence_route as sequence_route
 from tests.fixtures.pilot_alarm_presets import (
     aborted_on_first_scan,
@@ -100,7 +101,7 @@ def _stable_public_value(value: Any, *, field_name: str = "") -> Any:
     return (
         type(value).__module__,
         type(value).__qualname__,
-        _stable_public_value(pilot_module._semantic_key(value)),
+        _stable_public_value(_semantic_key(value)),
     )
 
 
