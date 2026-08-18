@@ -62,7 +62,7 @@ from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,
     _target_unresolved_condition,
 )
-from pyrung.core.analysis.pilot.requirement_recovery import (
+from pyrung.core.analysis.pilot.requirement_admission import (
     actions_preserve_active_requirements,
 )
 from pyrung.core.analysis.pilot.requirements import OperandAuthority

@@ -69,7 +69,7 @@ from pyrung.core.analysis.pilot.outcome import (
     assess_outcome,
 )
 from pyrung.core.analysis.pilot.overlay import project_pilot_overlay
-from pyrung.core.analysis.pilot.requirement_recovery import active_requirement_violations
+from pyrung.core.analysis.pilot.requirement_admission import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     _can_produce,

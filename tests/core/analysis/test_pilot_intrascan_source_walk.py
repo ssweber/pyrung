@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     promote_terminal_target_observation,
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanFinding
-from pyrung.core.analysis.pilot.requirement_recovery import guard_alternatives
+from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     GuardRequirementAtom,
@@ -174,7 +174,7 @@ def test_two_hop_walk_uses_exact_sources_with_strictly_earlier_deadlines() -> No
     assert walk.links[1].required_read.ordinal < walk.links[0].source_write.ordinal
     assert tuple(
         tuple(atom.condition for atom in alternative)
-        for alternative in guard_alternatives(walk.condition)
+        for alternative in iter_guard_alternatives(walk.condition)
     ) == (
         (Cmp(second_permit.name, "!=", True),),
         (Cmp(first_permit.name, "!=", True),),
@@ -273,7 +273,7 @@ def test_cross_tag_walk_preserves_nested_false_options_report_only() -> None:
     assert nested.exhaustive is False
     assert tuple(
         tuple(atom.condition for atom in alternative)
-        for alternative in guard_alternatives(condition)
+        for alternative in iter_guard_alternatives(condition)
     ) == (
         (
             Cmp(path_a.name, "!=", True),
@@ -342,7 +342,7 @@ def test_three_hop_walk_preserves_nested_boolean_alternatives_and_deadlines() ->
         for earlier, later in zip(walk.links, walk.links[1:], strict=False)
     )
     condition = walk.condition
-    alternatives = guard_alternatives(condition)
+    alternatives = iter_guard_alternatives(condition)
     alternative_conditions = tuple(
         tuple(atom.condition for atom in alternative) for alternative in alternatives
     )

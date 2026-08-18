@@ -1,20 +1,10 @@
-"""Compatibility facade for active-requirement schedule consumers.
-
-Pure schedule compilation is owned by the report-only intrascan service. This
-module retains the established imports used by production recovery while also
-keeping current-world requirement admission helpers local.
-"""
+"""Admit current-world actions without invalidating retained requirements."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from pyrung.core.analysis.pilot.intrascan_schedule import (
-    RequirementSchedule,
-    ScheduleCompilation,
-    compile_scalar_schedule,
-    guard_alternatives,
-)
+from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     GuardLogic,
@@ -28,13 +18,6 @@ from pyrung.core.analysis.pilot.requirements import (
 from pyrung.core.crossing import Constraint
 from pyrung.core.instruction.advance import constraint_holds
 
-__all__ = [
-    "RequirementSchedule",
-    "ScheduleCompilation",
-    "compile_scalar_schedule",
-    "guard_alternatives",
-]
-
 
 def requirement_condition_holds(
     condition: Constraint | GuardRequirementCondition,
@@ -44,8 +27,8 @@ def requirement_condition_holds(
 
     Active requirements are navigation constraints even when their operand is
     configured or program-written and therefore has no executable PilotRung.
-    This evaluator is shared by Orientation's admission read and Verify's
-    landing proof so those two seams interpret compound guards identically.
+    Orientation admission and Verify landing proof share this evaluator so the
+    two seams interpret compound guards identically.
     """
 
     if isinstance(condition, GuardRequirementAtom):
@@ -71,9 +54,9 @@ def active_requirement_violations(
 ) -> tuple[ActiveRequirement, ...]:
     """Return exact ACTIVE/STEADY truths a candidate would invalidate.
 
-    An unresolved condition is not guessed into a veto.  A requirement which
+    An unresolved condition is not guessed into a veto. A requirement which
     was already false is recovery work, rather than proof that an unrelated
-    candidate destroyed it.  Only a proved true-to-false transition is a
+    candidate destroyed it. Only a proved true-to-false transition is a
     preservation violation.
     """
 
@@ -84,10 +67,7 @@ def active_requirement_violations(
         and requirement.phase is RequirementPhase.STEADY
         # Adjustable operands are physically held by their PilotRungs. Guard
         # prerequisites are occurrence-scoped: they may be true at their
-        # demanding read and legitimately false at the settled landing (for
-        # example State==1 enabling the transition to State==2). Endpoint
-        # preservation is therefore the missing constraint specifically for
-        # authoritative operands which recovery must honor but cannot assign.
+        # demanding read and legitimately false at the settled landing.
         and getattr(requirement, "operand_authority", None)
         in {OperandAuthority.CONFIGURED, OperandAuthority.PROGRAM_WRITTEN}
         and requirement_condition_holds(requirement.condition, before) is True
@@ -113,7 +93,7 @@ def actions_preserve_active_requirements(
             continue
         if any(
             not atom.permits_assignment and getattr(atom.condition, "tag", None) in assigned_tags
-            for alternative in guard_alternatives(condition)
+            for alternative in iter_guard_alternatives(condition)
             for atom in alternative
         ):
             return False

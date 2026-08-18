@@ -66,6 +66,7 @@ from pyrung.core.analysis.pilot.intrascan import (
     research_intrascan_traceback,
     research_retained_frontier_realization,
 )
+from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
 from pyrung.core.analysis.pilot.investigate import investigate_excursion
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
@@ -139,9 +140,6 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _retain_active_requirement,
     _retain_expectation_receipt,
     _selected_terminal_target_expectation,
-)
-from pyrung.core.analysis.pilot.requirement_recovery import (
-    guard_alternatives,
 )
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
@@ -262,7 +260,7 @@ def _mandatory_guard_blocker(
         if not exhaustive(condition):
             continue
         blockers: list[GuardRequirementAtom] = []
-        for alternative in guard_alternatives(condition):
+        for alternative in iter_guard_alternatives(condition):
             unsatisfied = tuple(
                 atom
                 for atom in alternative
@@ -611,12 +609,12 @@ def _derive_program_guard_rebases(
                 )
                 for atom in alternative
             )
-            for alternative in guard_alternatives(condition)
+            for alternative in iter_guard_alternatives(condition)
         ):
             continue
         atoms = tuple(
             dict.fromkeys(
-                atom for alternative in guard_alternatives(condition) for atom in alternative
+                atom for alternative in iter_guard_alternatives(condition) for atom in alternative
             )
         )
         parent_rebased = False

@@ -5,9 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import PLC, Bool, Int, Program, copy, rung
-from pyrung.core.analysis.pilot.requirement_recovery import (
+from pyrung.core.analysis.pilot.intrascan_schedule import (
     compile_scalar_schedule,
-    guard_alternatives,
+    iter_guard_alternatives,
 )
 from pyrung.core.analysis.pilot.requirements import (
     GuardLogic,
@@ -131,4 +131,4 @@ def test_guard_any_remains_separate_repair_alternatives() -> None:
     right = GuardRequirementAtom(Cmp("Right", "==", True), (), deadline, (1,))
     condition = GuardRequirementExpr(GuardLogic.ANY, (left, right))
 
-    assert guard_alternatives(condition) == ((left,), (right,))
+    assert tuple(iter_guard_alternatives(condition)) == ((left,), (right,))

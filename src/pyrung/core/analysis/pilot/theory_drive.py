@@ -41,8 +41,8 @@ from pyrung.core.analysis.pilot.overlay import (
     _merged_pilot_rungs,
     _pilot_rung_execution_receipt,
 )
+from pyrung.core.analysis.pilot.requirement_admission import requirement_condition_holds
 from pyrung.core.analysis.pilot.requirement_evidence import _exact_failed_source
-from pyrung.core.analysis.pilot.requirement_recovery import requirement_condition_holds
 from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     FailedEffectReceipt,

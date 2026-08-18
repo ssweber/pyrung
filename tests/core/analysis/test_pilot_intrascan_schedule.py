@@ -9,12 +9,6 @@ from pyrung.core.analysis.pilot.intrascan_schedule import (
     compile_scalar_schedule as compile_intrascan_scalar_schedule,
 )
 from pyrung.core.analysis.pilot.intrascan_schedule import iter_guard_alternatives
-from pyrung.core.analysis.pilot.requirement_recovery import (
-    compile_scalar_schedule as compile_compatibility_scalar_schedule,
-)
-from pyrung.core.analysis.pilot.requirement_recovery import (
-    guard_alternatives as compatibility_guard_alternatives,
-)
 from pyrung.core.analysis.pilot.requirements import (
     GuardLogic,
     GuardRequirementAtom,
@@ -75,7 +69,6 @@ def test_nested_all_any_yields_only_joint_sibling_alternatives() -> None:
     )
     assert [atom.deadline for atom in alternatives[0]] == [first_deadline, common_deadline]
     assert [atom.deadline for atom in alternatives[1]] == [second_deadline, common_deadline]
-    assert compatibility_guard_alternatives(condition) == alternatives
 
 
 def test_nested_any_all_yields_joint_branch_and_atomic_sibling_without_superset() -> None:
@@ -99,10 +92,9 @@ def test_nested_any_all_yields_joint_branch_and_atomic_sibling_without_superset(
     assert (first, second, sibling) not in alternatives
     assert [atom.deadline for atom in alternatives[0]] == [first_deadline, second_deadline]
     assert alternatives[1][0].deadline is sibling_deadline
-    assert compatibility_guard_alternatives(condition) == alternatives
 
 
-def test_intrascan_scalar_compiler_matches_the_existing_adapter_exactly() -> None:
+def test_intrascan_scalar_compiler_materializes_one_exact_schedule() -> None:
     plc = PLC(schedule_program)
     requirements = (
         _scalar_requirement(Cmp(ScheduleFirst.name, ">", 10)),
@@ -111,27 +103,12 @@ def test_intrascan_scalar_compiler_matches_the_existing_adapter_exactly() -> Non
     )
 
     direct = compile_intrascan_scalar_schedule(requirements, plc, guard=ScheduleActive)
-    compatibility = compile_compatibility_scalar_schedule(
-        requirements,
-        plc,
-        guard=ScheduleActive,
-    )
-
     assert direct.schedule is not None
-    assert compatibility.schedule is not None
-    assert direct.detail == compatibility.detail == ""
-    assert direct.schedule.requirements == compatibility.schedule.requirements
-    assert direct.schedule.assignments == compatibility.schedule.assignments
-    assert direct.schedule.checkpoint_owner == compatibility.schedule.checkpoint_owner
-    assert direct.schedule.source_world_key == compatibility.schedule.source_world_key
-    assert direct.schedule.phase is compatibility.schedule.phase
-    assert [
-        (item.dest, item.value, item.guard is ScheduleActive)
-        for item in direct.schedule.pilot_rungs
-    ] == [
-        (item.dest, item.value, item.guard is ScheduleActive)
-        for item in compatibility.schedule.pilot_rungs
-    ]
+    assert direct.detail == ""
+    assert direct.schedule.checkpoint_owner == "intrascan-checkpoint"
+    assert direct.schedule.source_world_key == ("intrascan-source",)
+    assert direct.schedule.phase is RequirementPhase.STEADY
+    assert all(item.guard is ScheduleActive for item in direct.schedule.pilot_rungs)
     assert direct.schedule.assignments == (
         (ScheduleFirst.name, 11),
         (ScheduleSecond.name, 4),

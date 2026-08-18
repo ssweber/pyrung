@@ -98,14 +98,6 @@ def iter_guard_alternatives(
     yield from combine(0, ())
 
 
-def guard_alternatives(
-    condition: GuardRequirementCondition,
-) -> tuple[tuple[GuardRequirementAtom, ...], ...]:
-    """Compatibility materialization of :func:`iter_guard_alternatives`."""
-
-    return tuple(iter_guard_alternatives(condition))
-
-
 def _tag_limits(tag: Tag) -> tuple[int | float | None, int | float | None]:
     limits: dict[TagType, tuple[int | float | None, int | float | None]] = {
         TagType.INT: (-32768, 32767),
