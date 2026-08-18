@@ -239,7 +239,7 @@ def compute_steerable(
     never happen?"* it is the set of values the ladder cannot guarantee — the two
     faces of the same fact.  Callers wanting only genuine program constants that
     seed lookup-table pointers must subtract those separately
-    (``pilot.trace.compute_reference_constants``, a drive-layer concern).
+    (``pilot.program_facts.compute_reference_constants``, a drive-layer concern).
     """
     from pyrung.core.system_points import READ_ONLY_SYSTEM_TAG_NAMES
 

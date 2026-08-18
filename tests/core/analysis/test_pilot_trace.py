@@ -32,6 +32,10 @@ from pyrung import (
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot.navigation_contracts import CrossingFidelity
 from pyrung.core.analysis.pilot.physical import install_harness
+from pyrung.core.analysis.pilot.program_facts import (
+    compute_reference_constants,
+    scan_transient_rest,
+)
 from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
     TraceNode,
@@ -43,14 +47,12 @@ from pyrung.core.analysis.pilot.trace import (
     _inequality_levers,
     _rank_writers,
     _rewrite_internal_compare,
-    _scan_transient_rest,
     _select_trace_alternative,
     _trace_back,
     _trace_expression,
     _TraceAlternative,
     _TraceEnv,
     _WriterBuild,
-    compute_reference_constants,
     trace_back,
     trace_relational,
 )
@@ -2224,7 +2226,7 @@ def test_multiscope_rest_provable():
             copy(0, flag)
 
     pdg = build_program_graph(logic)
-    assert _scan_transient_rest("flag", pdg, logic) == (True, 0)
+    assert scan_transient_rest("flag", pdg, logic) == (True, 0)
 
 
 def test_multiscope_rest_ambiguous_punts():
@@ -2251,7 +2253,7 @@ def test_multiscope_rest_ambiguous_punts():
             call("sB")  # producer runs after the clearer
 
     pdg = build_program_graph(logic)
-    assert _scan_transient_rest("flag", pdg, logic) == (False, None)
+    assert scan_transient_rest("flag", pdg, logic) == (False, None)
 
 
 # -- WalkContext: the read-side seam, importable without trace -----------------

@@ -76,7 +76,8 @@ from pyrung.core.analysis.pilot.overlay import (
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import target_reachable_values
-from pyrung.core.analysis.pilot.trace import scan_transient_rest, target_reached
+from pyrung.core.analysis.pilot.program_facts import scan_transient_rest
+from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     PilotGateEvent,
     _ActionPair,
@@ -701,15 +702,16 @@ def _apply_actions(
         source_snap=source_snap,
         applied_configurations=launch.configurations,
     )
-    reached_consumer = (
-        consumer_stop_reached(
+    if horizon is PulseHorizon.CONSUMER_BOUNDARY:
+        if consumer_boundary is None:
+            raise ValueError("consumer-boundary pulse has no consumer receipt")
+        reached_consumer = consumer_stop_reached(
             consumer_boundary,
             source_scan=scan_before,
             projection_at=pulse.projection_at,
         )
-        if horizon is PulseHorizon.CONSUMER_BOUNDARY
-        else None
-    )
+    else:
+        reached_consumer = None
     pulse.stop_receipt = StopReceipt(
         condition=stop,
         stopped_scan=fork.state.scan_id,

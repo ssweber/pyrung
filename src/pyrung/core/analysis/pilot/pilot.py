@@ -100,6 +100,11 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     detect_opaque_loop,
     detect_opaque_pipelines,
 )
+from pyrung.core.analysis.pilot.program_facts import (
+    compute_edge_tags,
+    compute_reference_constants,
+    compute_resting_values,
+)
 from pyrung.core.analysis.pilot.program_step import (
     read_program_step,
 )
@@ -150,9 +155,6 @@ from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
     UnsupportedConstruct,
     _route_forced_names,
-    compute_edge_tags,
-    compute_reference_constants,
-    compute_resting_values,
     enumerate_trace_choices,
     frontier_pairs,
     rank_trace_choices,

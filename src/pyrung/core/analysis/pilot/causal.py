@@ -109,7 +109,8 @@ def _reference_constants(plc: PLC) -> frozenset[str]:
     """Lookup-table reference constants for *plc*'s program, cached per fork.
 
     ``never_written`` roots include the never-written copy sources that feed a
-    jump table's pointer chain (``compute_reference_constants``, trace.py) —
+    jump table's pointer chain (``compute_reference_constants``,
+    ``program_facts.py``) —
     declared program constants, not field levers.  Consuming them as nogoods or
     folding them into chain membership would flood the pilot's avoid/nogood
     logic with lookup-table plumbing, so both walkers demote them.
@@ -127,7 +128,7 @@ def _reference_constants(plc: PLC) -> frozenset[str]:
     program = getattr(plc, "_program", None)
     if program is not None and hasattr(program, "rungs"):
         try:
-            from pyrung.core.analysis.pilot.trace import compute_reference_constants
+            from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
 
             result = compute_reference_constants(
                 plc._ensure_pdg(), program, plc._known_tags_by_name

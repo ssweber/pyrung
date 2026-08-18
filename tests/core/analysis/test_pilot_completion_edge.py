@@ -25,7 +25,7 @@ from pyrung.core.analysis.pilot.pipeline_graph import (
     build_static_transition_graphs,
     detect_opaque_loop,
 )
-from pyrung.core.analysis.pilot.trace import compute_reference_constants
+from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
 from pyrung.core.analysis.steerable import compute_steerable
 
 

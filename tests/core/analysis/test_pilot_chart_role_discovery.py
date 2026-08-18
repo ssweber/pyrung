@@ -13,7 +13,7 @@ from pyrung.core.analysis.pilot.evidence import (
     selected_chart_producer_guard_rungs,
 )
 from pyrung.core.analysis.pilot.pipeline_graph import build_static_transition_graphs
-from pyrung.core.analysis.pilot.trace import compute_reference_constants
+from pyrung.core.analysis.pilot.program_facts import compute_reference_constants
 from pyrung.core.analysis.steerable import compute_steerable
 
 ChartForward = Bool("ChartDiscoveryForward", external=True)

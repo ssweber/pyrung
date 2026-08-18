@@ -14,10 +14,8 @@ from pyrung.core.analysis.pilot.overlay import (
     _set_pilot_rungs,
     fork_with_pilot_rungs,
 )
-from pyrung.core.analysis.pilot.trace import (
-    compute_edge_tags,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.program_facts import compute_edge_tags
+from pyrung.core.analysis.pilot.trace import trace_back
 from pyrung.core.analysis.simplified import Atom
 from pyrung.core.analysis.steerable import compute_steerable
 

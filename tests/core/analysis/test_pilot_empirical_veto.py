@@ -22,8 +22,8 @@ from pyrung.core.analysis.pilot.causal import (
     chase_cause_roots,
     empirical_program_writes,
 )
+from pyrung.core.analysis.pilot.program_facts import compute_resting_values
 from pyrung.core.analysis.pilot.skiff import _frontier_probes
-from pyrung.core.analysis.pilot.trace import compute_resting_values
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.runner import PLC
 
