@@ -2,8 +2,8 @@
 
 from pyrung import PLC, Bool, Int, Program, branch, call, copy, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
+from pyrung.core.analysis.pilot.api import pilot_events
 from pyrung.core.analysis.pilot.bootstrap import bootstrap_designations
-from pyrung.core.analysis.pilot.pilot import pilot_events
 from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.types import BootstrapExecutionSnapshot
 

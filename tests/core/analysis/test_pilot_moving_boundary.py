@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung import PLC, Int, Program, Timer, calc, copy, on_delay, rung
-from pyrung.core.analysis.pilot.pilot import pilot_events
+from pyrung.core.analysis.pilot.api import pilot_events
 
 
 def _oven_ramp_program() -> tuple[Program, dict[str, Any]]:

@@ -142,8 +142,9 @@ def test_stepping_couples_through_constant_indirect_table() -> None:
     no longer dead-ends at ``no_candidates`` — all for a state register written
     only by an indirect copy over a constant jump table."""
     from pyrung.core.analysis.pdg import build_program_graph
+    from pyrung.core.analysis.pilot.api import pilot_events
     from pyrung.core.analysis.pilot.evidence import infer_pipeline_roles
-    from pyrung.core.analysis.pilot.pilot import _build_prover_context, pilot_events
+    from pyrung.core.analysis.pilot.pilot import _build_prover_context
     from pyrung.core.analysis.pilot.pipeline_graph import detect_opaque_loop
     from pyrung.core.analysis.prove.classify import _compute_stepping_tags
     from pyrung.core.analysis.steerable import compute_steerable

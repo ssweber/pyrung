@@ -10,7 +10,7 @@ import pytest
 from pyrung import PLC, Bool, Program, Rung, latch, out
 from pyrung.core.analysis.causal._rung_writes import ScanRungWriteProjection
 from pyrung.core.analysis.pilot import entry_execution as entry_execution_module
-from pyrung.core.analysis.pilot.pilot import pilot_events
+from pyrung.core.analysis.pilot.api import pilot_events
 from pyrung.core.analysis.pilot.types import (
     BootstrapExecutionSnapshot,
     PilotEvent,

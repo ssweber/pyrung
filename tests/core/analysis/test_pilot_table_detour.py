@@ -388,7 +388,7 @@ def test_awaited_action_surfaces_ack_as_candidate() -> None:
     """Wait-over-steer ordering: at HELD the pilot's candidate list carries the
     avoided C_Complete route AND the awaited-action-prescribed InterlockAck; the avoided
     command is rejected and the program-awaited action is accepted."""
-    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.analysis.pilot.api import pilot_events
     from pyrung.core.runner import _compile_avoid
 
     logic, tags = _packml_table_detour_program()

@@ -443,7 +443,7 @@ def test_program_owned_held_scan_checkpoint_keeps_the_next_decision() -> None:
     tag, and history state at this scan without replaying the full tumbler
     drive.
     """
-    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.analysis.pilot.api import pilot_events
     from pyrung.core.runner import _compile_avoid
 
     logic, tags = _door_cycle_program()
@@ -495,7 +495,7 @@ def test_clean_detour_is_investigated_before_retention_without_poisoning_later_a
     open-door recipe transition, never the avoided Complete button.
     """
     from pyrung.core.analysis.pilot import progress as progress_module
-    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.analysis.pilot.api import pilot_events
     from pyrung.core.analysis.sp_values import _SnapshotView
     from pyrung.core.runner import _compile_avoid
 
@@ -659,7 +659,7 @@ def test_pending_departure_keeps_the_ordinary_pilot_loop_active() -> None:
     The route first falsifies open-door Unholding, ordinary investigation
     learns the correction, and the detour works at Execute rejoin—without
     pressing the avoided ``C_Complete``."""
-    from pyrung.core.analysis.pilot.pilot import pilot_events
+    from pyrung.core.analysis.pilot.api import pilot_events
     from pyrung.core.runner import _compile_avoid
 
     logic, tags = _door_cycle_program()
