@@ -1033,6 +1033,7 @@ def _theory_correction_composition(
 
     view = getattr(world.context, "theory_view", None)
     if view is None or view.temporal_intent not in {
+        TheoryTemporalIntent.SETUP_FIRST,
         TheoryTemporalIntent.RETRY_TOGETHER,
         TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
     }:
@@ -2840,6 +2841,22 @@ def _orient_read(
             rearm = _theory_rearm_bearing(world, candidates, target)
             if rearm is not None:
                 return rearm
+
+        if setup_first:
+            composition = _theory_correction_composition(
+                world,
+                candidates,
+                target,
+            )
+            if composition is not None:
+                return composition
+            configured_scan = _theory_pending_configuration_bearing(
+                world,
+                candidates,
+                target,
+            )
+            if configured_scan is not None:
+                return configured_scan
 
         theory_setup = _theory_setup_bearing(world, candidates, target)
         continuation_traceback = _theory_intrascan_continuation_traceback(

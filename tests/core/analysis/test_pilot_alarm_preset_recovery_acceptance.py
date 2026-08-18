@@ -75,14 +75,14 @@ def test_startup_alarm_becomes_a_compass_setup_bearing_in_one_scan() -> None:
     assert requirement.deadline.scan_id == 1
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
-    temporal_tries = tuple(
+    compositions = tuple(
         event
         for event in events
-        if event.kind == "candidate_try"
-        and event.data["applied"] == ((fixture.WatchdogPresetMs.name, 11),)
+        if event.kind == "theory_correction_composed"
+        and event.data["configuration"] == ((fixture.WatchdogPresetMs.name, 11),)
     )
-    assert len(temporal_tries) == 1
-    assert temporal_tries[0].scan == 0
+    assert len(compositions) == 1
+    assert compositions[0].scan == 0
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
     _assert_no_historical_replay(events)
@@ -99,11 +99,15 @@ def test_startup_alarm_becomes_a_compass_setup_bearing_in_one_scan() -> None:
     assert plan.state.tags[fixture.WatchdogPresetMs.name] == 11
     assert plan.ordered_steps == [(1, {fixture.WatchdogPresetMs.name: 11})]
     assert tuple(
-        pair
+        step.inputs
+        for step in plan.journal
+        if step.kind == "patch"
+    ) == (((fixture.WatchdogPresetMs.name, 11),),)
+    assert not any(
+        rung.dest == fixture.WatchdogPresetMs.name
         for entry in plan.hold_log
-        for pair in entry.tags
-        if pair[0] == fixture.WatchdogPresetMs.name
-    ) == ((fixture.WatchdogPresetMs.name, 11),)
+        for rung in entry.pilot_rungs
+    )
 
     replay = plan.replay()
     assert replay.state.scan_id == 1
