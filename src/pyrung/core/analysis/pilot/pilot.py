@@ -21,6 +21,7 @@ import pyrung.core.analysis.pilot.recovery_continuation as _recovery_continuatio
 import pyrung.core.analysis.pilot.requirement_repair as _requirement_repair
 import pyrung.core.analysis.pilot.target_route as _target_route
 import pyrung.core.analysis.pilot.theory_drive as _theory_drive
+import pyrung.core.analysis.pilot.trial_commit as _trial_commit
 from pyrung.core.analysis.graph import (
     PlanStep,
 )
@@ -35,7 +36,6 @@ from pyrung.core.analysis.pilot.compass import (
 )
 from pyrung.core.analysis.pilot.earned_work import (
     build_earned_work,
-    earned_work_is_useful_motion,
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
@@ -60,7 +60,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Coast,
     ComposeCorrection,
     IntrascanPulse,
-    LocalProgressKind,
     NavigationConstraints,
     NeedIntrascanBoundaryRealization,
     NeedIntrascanTraceback,
@@ -75,16 +74,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.overlay import (
-    PilotRung,
-    _target_unresolved_condition,
-    _until_unresolved_condition,
     fork_with_pilot_rungs,
 )
 from pyrung.core.analysis.pilot.program_step import (
     read_program_step,
 )
 from pyrung.core.analysis.pilot.progress import (
-    _anchor_bearing_receipt,
     _anchor_frame_receipt,
     _install_confirmed_correction,
     _monitor_trend,
@@ -114,7 +109,7 @@ from pyrung.core.analysis.pilot.requirement_evidence import (
     _selected_terminal_target_expectation,
 )
 from pyrung.core.analysis.pilot.skiff import probe_live_guard_frontiers
-from pyrung.core.analysis.pilot.steer import _install_prerequisites, execute
+from pyrung.core.analysis.pilot.steer import execute
 from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_boundary_from_checkpoint,
     _theory_live_boundary,
@@ -141,7 +136,6 @@ from pyrung.core.analysis.pilot.trace_read import (
 from pyrung.core.analysis.pilot.trace_routes import enumerate_trace_choices
 from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
-    AssessedMotion,
     PilotEvent,
     WorldView,
     _AcceptedTrial,
@@ -149,13 +143,11 @@ from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
     _CausalCheckpoint,
     _Checkpoint,
-    _CommittedAct,
     _ContinuationCheckpoint,
     _IterationFrame,
     _PilotContext,
     _PilotState,
     _Step,
-    _StepContext,
     _World,
 )
 from pyrung.core.analysis.pilot.verify import (
@@ -220,53 +212,6 @@ class _IterationTransition:
 # Core PILOT loop — layered acceptance (causal momentum)
 # ---------------------------------------------------------------------------
 
-
-def _commit_step(
-    fork: PLC,
-    inputs: dict[str, Any],
-    scan_before: int,
-    resting: dict[str, Any],
-    edge_tags: set[str],
-    *,
-    edge_inputs: dict[str, Any] | None = None,
-) -> tuple[PLC, tuple[_Step, ...]]:
-    """Record a step (or release+pulse pair) and swap the work fork.
-
-    ``inputs`` is the policy's full ``ActPolicy.applied`` set, not only its
-    primary candidate. A ``rise()``/``fall()`` gate needs an edge — a transition
-    — but a recorded ``_Step`` holds its ``inputs`` constant across the step's
-    scans and the patch persists into the next step, so the naive replay
-    (``patch(inputs); step``) cannot recreate the transition once the edge is
-    already at the pulsed level (the consecutive-command case).  PILOT's live
-    pulse drops the edge to resting for one scan before raising it
-    (``_apply_actions``); mirror that here by recording an explicit 1-scan release
-    step whenever the inputs drive an edge tag *off* resting, so the replay
-    reproduces the same edge.
-    """
-    pulsed_inputs = inputs if edge_inputs is None else edge_inputs
-    edge_release = {
-        t: resting.get(t, False)
-        for t in pulsed_inputs
-        if t in edge_tags and not _values_match(pulsed_inputs[t], resting.get(t, False))
-    }
-    if edge_release:
-        steps = (
-            _Step(inputs=edge_release, scan_before=scan_before, scan_after=scan_before + 1),
-            _Step(
-                inputs=dict(inputs),
-                scan_before=scan_before + 1,
-                scan_after=fork.state.scan_id,
-            ),
-        )
-    else:
-        steps = (
-            _Step(
-                inputs=dict(inputs),
-                scan_before=scan_before,
-                scan_after=fork.state.scan_id,
-            ),
-        )
-    return fork, steps
 
 
 def _with_avoid_reason(
@@ -451,87 +396,6 @@ def _resolve_excursion(
         pulse.release_projections()
 
 
-def _step_context(
-    trial: _AcceptedTrial,
-    frame: _IterationFrame,
-    state: _PilotState,
-) -> _StepContext:
-    """Build the context owned by one committed operation.
-
-    Commit adds only unresolved frontier tags and exact executable pilot
-    rungs; every other view derives from the policy and execution-evidence
-    owners already inside the trial.
-    """
-    bearing = trial.attempt.bearing
-    policy = bearing.act.policy
-    is_coast = policy.motion.is_coast
-
-    frontier_tags: tuple[str, ...] = ()
-    pilot_rungs: tuple[Any, ...] = ()
-
-    if is_coast:
-        seen: set[str] = set()
-        frontier: list[str] = []
-        for n in frame.tree.leaves():
-            if (
-                not n.satisfied
-                and not n.is_steerable
-                and not getattr(n, "pipeline_internal", False)
-                and n.tag not in seen
-            ):
-                seen.add(n.tag)
-                frontier.append(n.tag)
-        frontier_tags = tuple(frontier)
-        pilot_rungs = tuple(state.pilot_rungs)
-
-    return _StepContext(
-        policy=policy,
-        execution=trial.execution,
-        frontier_tags=frontier_tags,
-        pilot_rungs=pilot_rungs,
-    )
-
-
-def _adopt_trial(
-    trial: _AcceptedTrial,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> _AcceptedTrial:
-    """Adopt one gate-approved trial without applying post-commit policy.
-
-    Verification already ran inside the steering wrapper and
-    ``_record_attempt`` already committed its knowledge.  This is the shared
-    local commit used by the live loop and disposable composition; only the
-    live caller may subsequently invoke ``_monitor_trend``.
-    """
-    # Capture a satisfied bearing's launch world before commit. Its landing
-    # remains pending until ordinary progress is banked; an Alarm ejection must
-    # replays from this exact source with its PilotRungs, not an older trend CP.
-    _anchor_bearing_receipt(trial, frame, state)
-
-    # Knowledge handling may have installed an excursion correction after verification built the
-    # trial.  The accepted world key must describe that effective rung overlay,
-    # not the pre-correction one used by the diagnostic fork.
-    verified = trial.verification
-    execution = trial.execution
-    if isinstance(verified, AssessedMotion):
-        assert state.key_config is not None
-        trial = replace(
-            trial,
-            verification=replace(
-                verified,
-                new_key=_pilot_world_key(
-                    dict(execution.after_snap),
-                    state.key_config,
-                    state.pilot_rungs,
-                    state.active_requirements,
-                ),
-            ),
-        )
-    _commit_trial(trial, frame, state, ctx)
-    return trial
-
 
 def _monitor_committed_trial(
     trial: _AcceptedTrial,
@@ -603,128 +467,6 @@ def _monitor_committed_trial(
     if not continuation_hop:
         yield from _monitor_trend(trial, frame, state, ctx)
 
-
-def _commit_trial(
-    trial: _AcceptedTrial,
-    frame: _IterationFrame,
-    state: _PilotState,
-    ctx: _PilotContext,
-) -> None:
-    assert_recovery_disposable_state(state, "commit")
-    attempt = trial.attempt
-    pulse = attempt.pulse
-    bearing = attempt.bearing
-    policy = bearing.act.policy
-    execution = trial.execution
-    verified = trial.verification
-    key_was_seen = isinstance(verified, AssessedMotion) and verified.new_key in state.seen_keys
-    if isinstance(verified, AssessedMotion):
-        state.seen_keys.add(verified.new_key)
-    # Record what was physically applied — the candidate plus its co-actions (the
-    # command button and its one-shot ``rise(CmdChgRequest)`` edge gate) — not the
-    # policy's narrow primary candidate. Replay and live apply must reproduce every input
-    # that drove the transition.  ``applied`` is the full set and is empty exactly
-    # for bearing/let-run coasts, where an empty action means "coast, no input".
-    # A terminal let-run animates conditional holds during its coast; record them
-    # on the step so the path is self-describing.  ``pilot_rungs`` is the live
-    # round-by-round accumulator — snapshot the conditional ones active now.  A
-    # pulse/bearing-coast step animates nothing, so it carries no reactive holds.
-    #
-    # The *steady* holds active during the coast (e.g. the Enable that drives a
-    # harness sensor's ramp) are the input that makes the coast advance — fold
-    # them into the recorded inputs so replay re-establishes them.  ``applied``
-    # is empty for a let-run, so this is the only place the driver is recorded.
-    configuration_inputs = {
-        tag: value
-        for configuration in execution.applied_configurations
-        for tag, value in configuration.assignments
-    }
-    step_inputs = {**configuration_inputs, **dict(policy.applied)}
-    work, steps = _commit_step(
-        pulse.fork,
-        step_inputs,
-        pulse.scan_before,
-        ctx.resting,
-        ctx.edge_tags,
-        edge_inputs=dict(policy.applied),
-    )
-    act = _CommittedAct(steps=steps, context=_step_context(trial, frame, state))
-    # Adopt the physical fork and its replay evidence in one persistent-world
-    # update. No consumer can observe steps detached from their operation owner.
-    state.world = state.world.set(
-        work=work,
-        committed_acts=state.committed_acts.append(act),
-    )
-    if policy.local_progress in {
-        LocalProgressKind.TRACE_SETUP,
-        LocalProgressKind.TEMPORAL_SETUP,
-        LocalProgressKind.THEORY_CORRECTIVE,
-    }:
-        if policy.local_progress is LocalProgressKind.TRACE_SETUP:
-            ctx.compass = replace(
-                ctx.compass,
-                knowledge=ctx.compass.knowledge.after_stable_context_change(frame.key),
-            )
-        orientation = bearing.orientation
-        trace_details = (
-            orientation.candidates.trace.detail_by_pair if orientation is not None else {}
-        )
-        retained_list: list[PilotRung] = []
-        for tag, value in policy.applied:
-            detail = trace_details.get((tag, value))
-            operation = getattr(detail, "operation", None)
-            lifetime = getattr(detail, "until", None)
-            if lifetime is None:
-                lifetime = getattr(operation, "until", None)
-            if (
-                tag in ctx.edge_tags
-                or tag in ctx.clear_only
-                or not _values_match(state.work.state.tags.get(tag), value)
-            ):
-                continue
-            if lifetime is None:
-                if policy.local_progress not in {
-                    LocalProgressKind.TEMPORAL_SETUP,
-                    LocalProgressKind.THEORY_CORRECTIVE,
-                }:
-                    continue
-                guard = _target_unresolved_condition(
-                    state.work,
-                    ctx.target.tag,
-                    ctx.target.value,
-                    ctx.target.predicate,
-                )
-            else:
-                try:
-                    guard = _until_unresolved_condition(state.work, lifetime)
-                except (KeyError, ValueError):
-                    continue
-            retained_list.append(PilotRung(tag, value, guard, operation=operation))
-        retained = tuple(retained_list)
-        _install_prerequisites(state, retained)
-    if isinstance(verified, AssessedMotion):
-        # Revisit novelty is invocation knowledge. Consume every credential
-        # only after adopting the accepted execution, and never roll it back
-        # with _World.
-        state.consumed_revisits.update(verified.revisit_credentials)
-    # The world record reverts; the flattened journey is the append-only public
-    # history of every physical step, including later-reverted operations.
-    state.journey.extend(steps)
-    # Waiting is not searching: an accepted coast's span is dwell — the machine
-    # advancing itself while the pilot holds heading — so it must not drain the
-    # invocation's search budget. A revert rewinds this credit with the world.
-    # The credit is earned only when the machine actually moved its own work —
-    # the coast reached its channel target or advanced earned work; a
-    # coast that parks with nothing moving is the *search* failing. Sterile laps
-    # must still drain the budget so a parked machine has a terminating force.
-    if policy.motion.is_coast:
-        productive = (
-            not key_was_seen
-            or execution.channel_motion.reached
-            or earned_work_is_useful_motion(trial.earned_work_receipt)
-        )
-        if productive:
-            state.dwell_scans += state.work.state.scan_id - pulse.scan_before
 
 
 def _prepare_oriented_result(
@@ -1124,7 +866,7 @@ def _transition_once(
             adoption_checkpoint=receipt_checkpoint,
         )
 
-    trial = _adopt_trial(attempt.trial, frame, state, ctx)
+    trial = _trial_commit.adopt_trial(attempt.trial, frame, state, ctx)
     if isinstance(act, ObserveScan):
         if expectation_checkpoint is None:
             raise RuntimeError("entry observation lost its source checkpoint")
@@ -1179,7 +921,7 @@ def _adopt_deferred_transition(
         raise ValueError("deferred adoption requires one accepted trial")
     if not isinstance(transition.result, Bearing):
         raise ValueError("deferred adoption requires one Bearing")
-    trial = _adopt_trial(transition.trial, transition.frame, state, ctx)
+    trial = _trial_commit.adopt_trial(transition.trial, transition.frame, state, ctx)
     _retain_expectation_receipt(
         trial,
         transition.result.act,

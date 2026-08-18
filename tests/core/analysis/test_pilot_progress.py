@@ -66,7 +66,6 @@ from pyrung.core.analysis.pilot.outcome import (
     ProgressEffect,
     TrialAssessment,
 )
-from pyrung.core.analysis.pilot.pilot import _commit_trial
 from pyrung.core.analysis.pilot.progress import (
     DepartureAction,
     DepartureBasis,
@@ -84,6 +83,7 @@ from pyrung.core.analysis.pilot.progress import (
     _monitor_trend,
     _open_pending_departure,
 )
+from pyrung.core.analysis.pilot.trial_commit import commit_trial
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,
@@ -397,7 +397,7 @@ def test_exact_earned_work_replay_is_rejected_after_world_revert():
         revisit_credentials=(departure_credential, earned_credential),
     )
 
-    _commit_trial(
+    commit_trial(
         trial,
         SimpleNamespace(),
         state,
@@ -461,7 +461,7 @@ def test_commit_shares_verified_execution_evidence_and_policy() -> None:
     frame = SimpleNamespace()
     ctx = SimpleNamespace(resting={}, edge_tags=set())
 
-    _commit_trial(trial, frame, state, ctx)
+    commit_trial(trial, frame, state, ctx)
 
     context = state.committed_acts[-1].context
     assert context.execution is trial.execution
