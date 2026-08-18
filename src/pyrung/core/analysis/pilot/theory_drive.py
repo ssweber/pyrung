@@ -57,6 +57,19 @@ from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_requirement_snapshot,
     _TheoryTransitionEvidence,
 )
+from pyrung.core.analysis.pilot.theory_reducer import (
+    AbandonTheory,
+    AdvanceTheory,
+    ComposeTheoryCorrection,
+    OpenTheory,
+    ProveTheory,
+    RebaseTheoryWorld,
+    RecordTheoryAttempt,
+    RecordUnattributedEvidence,
+    RefineTheory,
+    RetainedCorrectionReceipt,
+    reduce_theory,
+)
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
     _AcceptedTrial,
@@ -69,18 +82,8 @@ from pyrung.core.analysis.pilot.types import (
     _PilotState,
 )
 from pyrung.core.analysis.pilot.working_theory import (
-    AbandonTheory,
-    AdvanceTheory,
-    ComposeTheoryCorrection,
     IntrascanTracebackFinding,
-    OpenTheory,
     ProgramTransaction,
-    ProveTheory,
-    RebaseTheoryWorld,
-    RecordTheoryAttempt,
-    RecordUnattributedEvidence,
-    RefineTheory,
-    RetainedCorrectionReceipt,
     TemporalNeedRequest,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
@@ -96,7 +99,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     active_theory_pilot_rung_identities,
     active_theory_superseded_pilot_rung_identities,
     assert_temporal_need_current,
-    reduce_theory,
     theory_source_is_retained,
     theory_view,
 )

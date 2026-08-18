@@ -40,18 +40,12 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     RouteEdgeContext,
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
-from pyrung.core.analysis.pilot.trace import TraceChoice
-from pyrung.core.analysis.pilot.types import _Checkpoint, _World
-from pyrung.core.analysis.pilot.working_theory import (
+from pyrung.core.analysis.pilot.theory_reducer import (
     AbandonTheory,
     AdvanceTheory,
     ComposeTheoryCorrection,
-    ConductivityResearchFinding,
-    IntrascanTracebackFinding,
-    IntrascanTracebackFrontier,
     OpenSuccessor,
     OpenTheory,
-    ProgramTransaction,
     ProveTheory,
     RebaseTheoryWorld,
     RecordConductivityResearch,
@@ -59,6 +53,15 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordIntrascanTracebackFrontier,
     RecordTheoryAttempt,
     RefineTheory,
+    reduce_theory,
+)
+from pyrung.core.analysis.pilot.trace import TraceChoice
+from pyrung.core.analysis.pilot.types import _Checkpoint, _World
+from pyrung.core.analysis.pilot.working_theory import (
+    ConductivityResearchFinding,
+    IntrascanTracebackFinding,
+    IntrascanTracebackFrontier,
+    ProgramTransaction,
     TheoryAttemptDisposition,
     TheoryBoundaryIdentity,
     TheoryClaim,
@@ -77,7 +80,6 @@ from pyrung.core.analysis.pilot.working_theory import (
     active_theory_superseded_pilot_rung_identities,
     assert_detached_theory_value,
     assert_temporal_need_current,
-    reduce_theory,
     temporal_need_request,
     theory_view,
 )

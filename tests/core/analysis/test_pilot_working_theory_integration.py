@@ -20,7 +20,7 @@ from pyrung.core.analysis.pilot.conductivity import (
     ConductivityReach,
 )
 from pyrung.core.analysis.pilot.effects import EffectObservationSnapshot
-from pyrung.core.analysis.pilot.working_theory import (
+from pyrung.core.analysis.pilot.theory_reducer import (
     AdvanceTheory,
     ComposeTheoryCorrection,
     OpenTheory,
@@ -29,6 +29,8 @@ from pyrung.core.analysis.pilot.working_theory import (
     RecordTheoryAttempt,
     RecordUnattributedEvidence,
     RefineTheory,
+)
+from pyrung.core.analysis.pilot.working_theory import (
     active_theory_configurations,
     theory_view,
 )

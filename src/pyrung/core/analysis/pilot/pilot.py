@@ -142,6 +142,12 @@ from pyrung.core.analysis.pilot.theory_evidence import (
     _theory_transition_from_attempt,
     _TheoryTransitionEvidence,
 )
+from pyrung.core.analysis.pilot.theory_reducer import (
+    AbandonTheory,
+    RecordConductivityResearch,
+    RecordIntrascanTraceback,
+    RecordIntrascanTracebackFrontier,
+)
 from pyrung.core.analysis.pilot.trace import (
     DomainPrior,
     TraceChoice,
@@ -177,14 +183,10 @@ from pyrung.core.analysis.pilot.verify import (
     verify_gates,
 )
 from pyrung.core.analysis.pilot.working_theory import (
-    AbandonTheory,
     ConductivityResearchFinding,
     IntrascanOrdinarySteerFinding,
     IntrascanTracebackFinding,
     IntrascanTracebackFrontier,
-    RecordConductivityResearch,
-    RecordIntrascanTraceback,
-    RecordIntrascanTracebackFrontier,
     TheoryAttemptDisposition,
     TheoryTermination,
     active_theory,
