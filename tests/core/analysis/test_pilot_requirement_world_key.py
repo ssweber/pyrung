@@ -5,7 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import PLC, Bool, Int, Program, Rung, call, copy, subroutine
-from pyrung.core.analysis.pilot import orientation, pilot_events
+from pyrung.core.analysis.pilot import orientation_reading as orientation
+from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
     TargetSpec,

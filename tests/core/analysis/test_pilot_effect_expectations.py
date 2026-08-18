@@ -41,7 +41,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
 )
 from pyrung.core.analysis.pilot.options import _Candidate
-from pyrung.core.analysis.pilot.orientation import _pulse_policy
+from pyrung.core.analysis.pilot.orientation_reading import _pulse_policy
 from pyrung.core.analysis.pilot.recording import _accepted_payload, _candidate_payload
 from pyrung.core.analysis.pilot.skiff import _skiff_expectation, run_pinned_scan
 from pyrung.core.analysis.pilot.steer import (

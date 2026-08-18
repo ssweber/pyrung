@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from pyrsistent import pvector
 
 from pyrung import PLC
-from pyrung.core.analysis.pilot import orientation
+from pyrung.core.analysis.pilot import orientation, theory_orientation
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.navigation_contracts import (
     NavigationConstraints,
@@ -81,7 +81,7 @@ def test_orientation_receives_active_requirement_views_unchanged(monkeypatch) ->
     selected = object()
     seen: list[tuple[object, ...]] = []
 
-    monkeypatch.setattr(orientation, "_current_work_evidence", lambda *_args: ())
+    monkeypatch.setattr(theory_orientation, "_current_work_evidence", lambda *_args: ())
 
     def read_group(_compass, worlds, _target, **_kwargs):
         seen.append(worlds[0].context.active_requirements)

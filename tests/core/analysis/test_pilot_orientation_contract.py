@@ -260,7 +260,7 @@ def test_unresolved_executable_policies_are_explicitly_exempt(monkeypatch) -> No
 def test_temporal_retry_augments_fresh_trigger_instead_of_requirement_candidate(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -318,7 +318,7 @@ def test_temporal_retry_augments_fresh_trigger_instead_of_requirement_candidate(
 def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -365,7 +365,7 @@ def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
 def test_retry_through_deadline_carries_the_transaction_consumer_boundary(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     boundary = object()
     trigger = pulse_identity((("Request", True),))
@@ -413,7 +413,7 @@ def test_retry_through_deadline_carries_the_transaction_consumer_boundary(
 def test_pending_configuration_retries_only_the_horizon_owned_transaction(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     boundary = object()
     transaction = (("Request", True),)
@@ -498,7 +498,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
 ) -> None:
     """A Coast is reread from ProgramStep; its failed receipt is identity only."""
 
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     heading = ChannelHeading("SequenceStep", 60)
     prescription = WaitPrescription(heading, "continue the autonomous sequence")
@@ -576,7 +576,7 @@ def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
 def test_temporal_retry_lazily_adds_current_trace_sibling_without_assigning_internal(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -617,7 +617,7 @@ def test_temporal_retry_continues_past_an_accepted_trace_companion(
     monkeypatch,
 ) -> None:
     """A wider trigger is identity; fresh trace siblings own the next width."""
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -679,7 +679,7 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
 ) -> None:
     """Fresh reader authority preserves the complete consumer-bound transaction."""
 
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     transaction = (("Request", True), ("Mode", True))
     identity = pulse_identity(transaction)
@@ -754,7 +754,7 @@ def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
 def test_consumer_stop_does_not_escape_its_transaction() -> None:
     """A pulse missing any owned transaction action cannot inherit its stop."""
 
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     consumer_boundary = object()
     transaction_attempt_id = ("attempt", 1)
@@ -773,7 +773,7 @@ def test_consumer_stop_does_not_escape_its_transaction() -> None:
 def test_temporal_retry_does_not_widen_through_an_avoided_trace_sibling(
     monkeypatch,
 ) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -821,6 +821,7 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
 ) -> None:
     """A missing ordinary Bearing does not discard an executable new need."""
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     compass = Compass()
     world = _world(compass)
@@ -851,7 +852,7 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
         lambda _self, _view: None,
     )
     monkeypatch.setattr(
-        orientation,
+        theory_orientation,
         "_iter_temporal_schedules",
         lambda *_args: iter(
             (
@@ -880,7 +881,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
     monkeypatch,
 ) -> None:
     """A conducted parent becomes a hypothetical consumer write, not a hold."""
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     parent = SimpleNamespace(
@@ -905,6 +906,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
             world.context,
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+                has_traceback_result=lambda _identity: False,
             ),
             temporal_requirements=(parent,),
         ),
@@ -949,7 +951,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
             world.context,
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
-                has_traceback_finding=lambda _identity: True,
+                has_traceback_result=lambda _identity: True,
             ),
         ),
     )
@@ -964,7 +966,7 @@ def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf
 
 
 def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     step = Int("ProgramOwnedStep", default=20)
@@ -996,7 +998,7 @@ def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing(
             world.context,
             theory_view=SimpleNamespace(
                 temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
-                has_traceback_finding=lambda _identity: False,
+                has_traceback_result=lambda _identity: False,
             ),
             temporal_requirements=(requirement,),
         ),
@@ -1030,7 +1032,7 @@ def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing(
 
 def test_traceback_finding_selects_only_one_exact_program_stage_scan() -> None:
     """A finding authorizes its immediate producer scan, not its consumer steer."""
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -1115,7 +1117,7 @@ def test_traceback_finding_selects_only_one_exact_program_stage_scan() -> None:
 
 def test_direct_traceback_finding_selects_only_its_fresh_scan_start_steer() -> None:
     """A direct consumer finding must not compose the prior rejected act."""
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -1168,7 +1170,7 @@ def test_parent_requirement_is_conducted_inside_appeared_to_displacement_interva
     monkeypatch,
 ) -> None:
     """The immutable occurrence stream qualifies a parent without live markers."""
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     appeared = SimpleNamespace(scan_id=7, ordinal=10)
     demanding = SimpleNamespace(
@@ -1210,6 +1212,7 @@ def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     compass = Compass()
     request = SimpleNamespace(reason="same stop with a changed deadline")
@@ -1231,7 +1234,7 @@ def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
         lambda _self, _view: request,
     )
     monkeypatch.setattr(
-        orientation,
+        theory_orientation,
         "_theory_correction_composition",
         lambda *_args: pytest.fail("research must preempt correction composition"),
     )
@@ -1249,6 +1252,7 @@ def test_temporal_retry_researches_after_pending_overlay_was_in_exact_attempt(
     monkeypatch,
 ) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     compass = Compass()
     attempt_id = ("attempt", 2)
@@ -1257,7 +1261,7 @@ def test_temporal_retry_researches_after_pending_overlay_was_in_exact_attempt(
         comparison=SimpleNamespace(later_attempt_id=attempt_id),
     )
     correction = PilotRung("Correction", True, Int("Guard") == 1)
-    correction_identity = orientation._rung_identity(correction)
+    correction_identity = theory_orientation._rung_identity(correction)
     world = _world(compass)
     world = replace(
         world,
@@ -1291,7 +1295,7 @@ def test_temporal_retry_researches_after_pending_overlay_was_in_exact_attempt(
 
 
 def test_untried_pending_overlay_still_preempts_conductivity_research() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     correction = PilotRung("Correction", True, Int("Guard") == 1)
     correction_identity = orientation._rung_identity(correction)
@@ -1320,7 +1324,7 @@ def test_untried_pending_overlay_still_preempts_conductivity_research() -> None:
 
 
 def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     program_value = Int("ProgramValue")
     occurrence = SimpleNamespace(
@@ -1415,7 +1419,7 @@ def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() ->
 
 
 def test_temporal_rearm_declares_one_assertion_scan() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -1445,7 +1449,7 @@ def test_temporal_rearm_declares_one_assertion_scan() -> None:
 
 
 def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     configuration = ScanEntryConfiguration((("WatchdogPreset", 31),))
@@ -1491,7 +1495,7 @@ def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None
 
 
 def test_temporal_rearm_preserves_the_original_level_command() -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     compass = Compass()
     world = _world(compass)
@@ -1520,7 +1524,7 @@ def test_temporal_rearm_preserves_the_original_level_command() -> None:
 
 
 def test_temporal_rearm_releases_an_asserted_competing_command(monkeypatch) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as orientation
 
     writes = {
         "Reset": {"CommandCode": 1, "RequestReady": True},
@@ -1586,7 +1590,7 @@ def _world(compass: Compass) -> OrientationWorld:
 
 def test_proof_rejection_is_scoped_to_the_exact_input_context() -> None:
     from pyrung.core.analysis.pilot.compass import EvidenceScope
-    from pyrung.core.analysis.pilot.orientation import _act_preserves_requirements
+    from pyrung.core.analysis.pilot.theory_orientation import _act_preserves_requirements
 
     world = _world(Compass())
     world.snapshot["Guard"] = False
@@ -1638,7 +1642,7 @@ def test_candidate_read_exposes_only_owned_receipts() -> None:
 
 
 def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) -> None:
-    import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.orientation_reading as orientation
     from pyrung.core.analysis.pilot.trace import TraceChoice
 
     route_a = TraceChoice(id="route-a", label="A", route=("A",))
@@ -1669,7 +1673,7 @@ def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) 
 
 
 def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
-    from pyrung.core.analysis.pilot.orientation import _assemble_world
+    from pyrung.core.analysis.pilot.orientation_reading import _assemble_world
     from pyrung.core.analysis.pilot.trace import TraceChoice
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
@@ -1715,12 +1719,13 @@ def test_orient_passes_blocked_actions_to_candidate_admission(monkeypatch) -> No
 
 def test_orient_returns_one_act_without_route_suffix(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     compass = Compass()
     first = _candidate("First")
     monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
-        orientation,
+        theory_orientation,
         "_candidate_applied",
         lambda option, _options, _context: (option.pair,),
     )
@@ -1935,7 +1940,7 @@ def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() ->
 
 
 def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
-    from pyrung.core.analysis.pilot.orientation import _current_work_evidence
+    from pyrung.core.analysis.pilot.theory_orientation import _current_work_evidence
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     frame = SimpleNamespace(
@@ -2032,13 +2037,14 @@ def test_open_operation_maintenance_owns_before_a_sibling_intervention(
 def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
     """A Boolean target keeps the state-register goal Orientation traced for it."""
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
     from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     compass = Compass()
     first = _candidate("First")
     monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options(first))
     monkeypatch.setattr(
-        orientation,
+        theory_orientation,
         "_candidate_applied",
         lambda option, _options, _context: (option.pair,),
     )
@@ -2225,6 +2231,7 @@ def test_orient_does_not_mutate_world_context_or_knowledge(monkeypatch) -> None:
 
 def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
+    import pyrung.core.analysis.pilot.theory_orientation as theory_orientation
 
     first = _candidate("First")
     second = _candidate("Second")
@@ -2234,7 +2241,7 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
         lambda *_args: _options(first, second),
     )
     monkeypatch.setattr(
-        orientation,
+        theory_orientation,
         "_candidate_applied",
         lambda option, _options, _context: (option.pair,),
     )
@@ -2261,7 +2268,7 @@ def test_rejected_act_knowledge_forces_fresh_next_orientation(monkeypatch) -> No
 
 
 def test_trace_rejections_require_exact_singleton_pulse_artifact() -> None:
-    from pyrung.core.analysis.pilot.orientation import _exact_rejected_actions
+    from pyrung.core.analysis.pilot.orientation_reading import _exact_rejected_actions
 
     first = ("First", True)
     second = ("Second", True)
