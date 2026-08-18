@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         ScanRungWriteProjection,
     )
     from pyrung.core.analysis.pdg import ProgramGraph
-    from pyrung.core.analysis.pilot.trace import TraceNode
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
 StaticRungAddress = tuple[str | None, int, tuple[int, ...]]
 

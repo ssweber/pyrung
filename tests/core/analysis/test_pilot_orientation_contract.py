@@ -1565,7 +1565,7 @@ def test_temporal_rearm_releases_an_asserted_competing_command(monkeypatch) -> N
 
 
 def _world(compass: Compass) -> OrientationWorld:
-    from pyrung.core.analysis.pilot.trace import TraceNode
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     context = _Context(compass, resting={})
     return OrientationWorld(
@@ -1670,7 +1670,8 @@ def test_inferred_root_routes_are_read_together_without_commitment(monkeypatch) 
 
 def test_assembled_route_receipt_is_shared_by_world_and_context() -> None:
     from pyrung.core.analysis.pilot.orientation import _assemble_world
-    from pyrung.core.analysis.pilot.trace import TraceChoice, TraceNode
+    from pyrung.core.analysis.pilot.trace import TraceChoice
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
 
     route = TraceChoice(id="route-a", label="A", route=("A",))
@@ -1935,7 +1936,7 @@ def test_awaited_action_candidate_recording_keeps_route_diagnostic_distinct() ->
 
 def test_live_operation_owns_its_successor_residual_after_boundary_crosses() -> None:
     from pyrung.core.analysis.pilot.orientation import _current_work_evidence
-    from pyrung.core.analysis.pilot.trace import TraceNode
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     frame = SimpleNamespace(
         snap={"Heat_tmr_Acc": 2, "Heat_CurStep": 2},
@@ -2031,7 +2032,7 @@ def test_open_operation_maintenance_owns_before_a_sibling_intervention(
 def test_bearing_preserves_downstream_channel_goal(monkeypatch) -> None:
     """A Boolean target keeps the state-register goal Orientation traced for it."""
     import pyrung.core.analysis.pilot.orientation as orientation
-    from pyrung.core.analysis.pilot.trace import TraceNode
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     compass = Compass()
     first = _candidate("First")

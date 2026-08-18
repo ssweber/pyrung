@@ -60,7 +60,8 @@ if TYPE_CHECKING:
         ExpectationReceipt,
         FailedEffectReceipt,
     )
-    from pyrung.core.analysis.pilot.trace import DomainPrior, TraceAction, TraceChoice
+    from pyrung.core.analysis.pilot.trace import DomainPrior, TraceChoice
+    from pyrung.core.analysis.pilot.trace_tree import TraceAction
     from pyrung.core.analysis.pilot.world_key import _StateKeyConfig
     from pyrung.core.runner import PLC, EpochRef
 

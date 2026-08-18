@@ -29,7 +29,7 @@ from pyrung.core.analysis.pilot.steer import (
     _settle_watched_tags,
     _try_terminal_letrun,
 )
-from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.types import _IterationFrame
 from pyrung.core.analysis.pilot.world_key import _pilot_world_key, _StateKeyConfig
 from pyrung.core.runner import PLC

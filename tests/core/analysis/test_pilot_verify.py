@@ -65,7 +65,7 @@ from pyrung.core.analysis.pilot.requirements import (
     RequirementPhase,
     RequirementStatus,
 )
-from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     RevisitCredential,

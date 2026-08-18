@@ -38,7 +38,6 @@ from pyrung.core.analysis.pilot.program_facts import (
 )
 from pyrung.core.analysis.pilot.static_expressions import _resolve_inequality_target
 from pyrung.core.analysis.pilot.trace import (
-    TraceNode,
     TraceReadConstraints,
     UnsupportedConstruct,
     _apply_writer_attempt,
@@ -55,6 +54,7 @@ from pyrung.core.analysis.pilot.trace import (
     trace_back,
     trace_relational,
 )
+from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.writer_selection import _rank_writers
 from pyrung.core.analysis.simplified import Atom, _condition_to_expr, _negate
 from pyrung.core.analysis.steerable import compute_steerable
@@ -1882,7 +1882,7 @@ def test_crossing_proposal_preserves_conjunctive_dnf_branches(monkeypatch):
 
 
 def test_crossing_branch_composes_direct_outer_and_action():
-    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+    from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceCrossingBranch
     from pyrung.core.crossing import Eq
 
     crossing = TraceNode(
@@ -1914,7 +1914,7 @@ def test_crossing_branch_composes_direct_outer_and_action():
 
 
 def test_two_crossing_siblings_cartesian_compose():
-    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+    from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceCrossingBranch
 
     def branch(tag: str) -> TraceCrossingBranch:
         return TraceCrossingBranch(
@@ -1965,7 +1965,7 @@ def test_two_crossing_siblings_cartesian_compose():
 )
 def test_crossing_declines_staged_or_pulsed_outer_sibling(stage_fields, action_fields):
     """A prior stage, owned lifetime, or pulse cannot masquerade as one overlay."""
-    from pyrung.core.analysis.pilot.trace import TraceAction, TraceCrossingBranch
+    from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceCrossingBranch
 
     crossing = TraceNode(
         "Internal",

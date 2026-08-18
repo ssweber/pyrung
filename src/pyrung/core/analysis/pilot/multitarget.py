@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from pyrung.core.analysis.pdg import resolve_rung
-from pyrung.core.analysis.pilot.trace import _env_for, _scope_ref, _visit_key, trace_back
+from pyrung.core.analysis.pilot.trace import _env_for, _scope_ref, trace_back
+from pyrung.core.analysis.pilot.trace_tree import _visit_key
 from pyrung.core.analysis.pilot.writer_selection import _can_produce
 from pyrung.core.analysis.sp_values import _values_match, _written_value_for_tag
 

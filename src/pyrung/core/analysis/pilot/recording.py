@@ -25,7 +25,8 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
 from pyrung.core.analysis.pilot.overlay import _pilot_rung_execution_receipt
-from pyrung.core.analysis.pilot.trace import UnsupportedConstruct, frontier_pairs
+from pyrung.core.analysis.pilot.trace import UnsupportedConstruct
+from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     PilotEvent,

@@ -800,7 +800,8 @@ def test_route_conflict_set_alias_intersection_semantics():
     no conflict. This is the set-intersection test :func:`_route_conflicts`
     performs: empty intersection means contradiction."""
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflicts
+    from pyrung.core.analysis.pilot.trace import _route_conflicts
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("Mode")
     HiLo = Bool("HiLo")
@@ -828,7 +829,8 @@ def test_route_conflicts_distinguish_value_pairs_on_the_same_tag():
     witnesses subtract only the genuinely identical ``0 ↔ 1`` pair.
     """
     from pyrung.core.analysis.pdg import build_program_graph
-    from pyrung.core.analysis.pilot.trace import TraceNode, _route_conflicts
+    from pyrung.core.analysis.pilot.trace import _route_conflicts
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("WitnessMode")
     ManualMode = Bool("WitnessManualMode")

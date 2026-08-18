@@ -58,9 +58,9 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.pipeline_graph import ANY_FROM, target_reachable_values
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
-    frontier_pairs,
     trace_back,
 )
+from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import _ActionPair
 from pyrung.core.analysis.pilot.world_key import wait_edge_nogood
 from pyrung.core.analysis.sp_values import _values_match
@@ -69,7 +69,7 @@ from pyrung.core.instruction.advance import constraint_holds
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.program_step import ProgramStep
-    from pyrung.core.analysis.pilot.trace import TraceAction
+    from pyrung.core.analysis.pilot.trace_tree import TraceAction
 
 # ---------------------------------------------------------------------------
 # Dataclasses

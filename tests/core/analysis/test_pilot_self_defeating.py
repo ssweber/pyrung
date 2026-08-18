@@ -69,7 +69,8 @@ from pyrung.core.analysis.pilot.progress import (
     _revoke_corrections,
 )
 from pyrung.core.analysis.pilot.steer import _install_prerequisites
-from pyrung.core.analysis.pilot.trace import frontier_pairs, trace_back
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     BearingDeparture,

@@ -269,10 +269,10 @@ def test_table_enablement_value_skips_exact_rejected_action():
 
     from pyrung import Bool, Int, Program, out, rung
     from pyrung.core.analysis.pilot.trace import (
-        TraceNode,
         _env_for,
         _select_table_enablement_value,
     )
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("SelectionMode", external=True)
     Enabled = Bool("SelectionEnabled")
@@ -302,10 +302,10 @@ def test_table_enablement_value_keeps_all_avoided_choice_blocked():
 
     from pyrung import Bool, Int, Program, out, rung
     from pyrung.core.analysis.pilot.trace import (
-        TraceNode,
         _env_for,
         _select_table_enablement_value,
     )
+    from pyrung.core.analysis.pilot.trace_tree import TraceNode
 
     Mode = Int("AvoidedSelectionMode", external=True)
     Enabled = Bool("AvoidedSelectionEnabled")

@@ -72,10 +72,10 @@ from pyrung.core.analysis.pilot.overlay import project_pilot_overlay
 from pyrung.core.analysis.pilot.requirement_admission import active_requirement_violations
 from pyrung.core.analysis.pilot.trace import (
     TraceReadConstraints,
-    frontier_pairs,
     target_reached,
     trace_back,
 )
+from pyrung.core.analysis.pilot.trace_tree import frontier_pairs
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     IntrascanActReceipt,

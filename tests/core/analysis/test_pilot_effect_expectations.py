@@ -50,7 +50,7 @@ from pyrung.core.analysis.pilot.steer import (
     _reconcile_completed_handoffs,
     _reconcile_landing_receipts,
 )
-from pyrung.core.analysis.pilot.trace import TraceNode
+from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.pilot.types import (
     TargetReached,
     _AcceptedTrial,

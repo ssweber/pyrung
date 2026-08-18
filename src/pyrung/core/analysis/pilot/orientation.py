@@ -68,15 +68,13 @@ from pyrung.core.analysis.pilot.requirement_admission import (
 from pyrung.core.analysis.pilot.requirements import OperandAuthority
 from pyrung.core.analysis.pilot.temporal_need import iter_temporal_need_branches
 from pyrung.core.analysis.pilot.trace import (
-    TraceAction,
     TraceChoice,
-    TraceNode,
     TraceReadConstraints,
-    frontier_pairs,
     rank_trace_choices,
     trace_back,
     trace_relational,
 )
+from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode, frontier_pairs
 from pyrung.core.analysis.pilot.types import _ActionPair, _IterationFrame
 from pyrung.core.analysis.pilot.working_theory import (
     ProgramTransaction,

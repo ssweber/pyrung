@@ -81,11 +81,11 @@ from pyrung.core.analysis.pilot.program_step import (
     ProgramStep,
     ProgramStepStatus,
 )
-from pyrung.core.analysis.pilot.trace import (
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_tree import (
     TraceAction,
     TraceCrossingBranch,
     TraceNode,
-    trace_back,
 )
 from pyrung.core.crossing import Eq
 
@@ -2638,7 +2638,7 @@ def test_effect_paths_compose_only_the_exact_local_writer_conjunction() -> None:
 
 
 def test_crossing_effect_shape_excludes_heuristic_and_relational_children() -> None:
-    from pyrung.core.analysis.pilot.trace import _crossing_at_node
+    from pyrung.core.analysis.pilot.trace_tree import _crossing_at_node
 
     branch = TraceCrossingBranch(
         actions=(TraceAction("Action", True),),

@@ -44,12 +44,12 @@ from pyrung.core.analysis.pilot.overlay import (
     _until_unresolved_condition,
 )
 from pyrung.core.analysis.pilot.trace import (
-    TraceAction,
     UnsupportedConstruct,
     _constraint_atom,
     _inequality_levers,
     trace_back,
 )
+from pyrung.core.analysis.pilot.trace_tree import TraceAction
 from pyrung.core.analysis.pilot.types import BearingDeparture
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match, _writer_for_tag

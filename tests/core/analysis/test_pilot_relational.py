@@ -10,10 +10,8 @@ from __future__ import annotations
 from pyrung import PLC, Bool, Int, Program, Real, Rung, copy, out
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
-from pyrung.core.analysis.pilot.trace import (
-    TraceNode,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_tree import TraceNode
 from pyrung.core.analysis.steerable import compute_steerable
 from pyrung.core.physical import Physical, Ramp
 

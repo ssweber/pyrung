@@ -30,11 +30,8 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.observed import runs_for_node, writer_runs_for_node
 from pyrung.core.analysis.pilot.advance import build_advance_index, demand_holds
 from pyrung.core.analysis.pilot.overlay import fork_with_pilot_rungs
-from pyrung.core.analysis.pilot.trace import (
-    TraceAction,
-    TraceNode,
-    trace_back,
-)
+from pyrung.core.analysis.pilot.trace import trace_back
+from pyrung.core.analysis.pilot.trace_tree import TraceAction, TraceNode
 from pyrung.core.analysis.sp_values import _values_match
 from pyrung.core.crossing import AffineCmp, Cmp, Eq
 from pyrung.core.instruction.advance import AdvanceStep, constraint_holds
