@@ -495,7 +495,6 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
         source_world=bearing.world_key,
         decision_identity=act_identity(bearing.act),
         applied_configurations=applied_configurations,
-        entry_snap=(source_snap if applied_configurations else None),
         stop=getattr(pulse, "stop_receipt", None),
     )
     return _ExecutedAttempt(

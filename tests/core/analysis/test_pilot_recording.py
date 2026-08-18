@@ -157,13 +157,12 @@ def test_scan_entry_configuration_is_a_patch_not_a_pulse() -> None:
         motion=MotionKind.INTERVENTION,
     )
     receipt = ExecutionReceipt(
-        before_snap={"WatchdogPresetMs": 0, "Reconnect": False},
+        before_snap={"WatchdogPresetMs": 11, "Reconnect": False},
         after_snap={"WatchdogPresetMs": 11, "Reconnect": True},
         channel_motion=ChannelMotion(),
         coast_receipt=None,
         timeline=(),
         applied_configurations=(configuration,),
-        entry_snap={"WatchdogPresetMs": 11, "Reconnect": False},
     )
     state = SimpleNamespace(
         committed_acts=(

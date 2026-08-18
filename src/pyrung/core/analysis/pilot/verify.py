@@ -403,7 +403,6 @@ def _rebind_replay_attempt(
         ),
         source_scan=replay_trial.scan_before,
         applied_configurations=configurations,
-        entry_snap=(source_snap if configurations else None),
         stop=replay_trial.stop_receipt,
     )
     return replace(

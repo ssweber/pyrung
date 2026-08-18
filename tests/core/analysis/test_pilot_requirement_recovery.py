@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from pyrung import PLC, Bool, Int, Program, copy, rung
-from pyrung.core.analysis.pilot.pilot import _copy_repair_knowledge
 from pyrung.core.analysis.pilot.requirement_recovery import (
     compile_scalar_schedule,
     guard_alternatives,
@@ -133,25 +132,3 @@ def test_guard_any_remains_separate_repair_alternatives() -> None:
     condition = GuardRequirementExpr(GuardLogic.ANY, (left, right))
 
     assert guard_alternatives(condition) == ((left,), (right,))
-
-
-def test_disposable_repair_retains_exact_proof_rejection() -> None:
-    """A failed local retry must make the unchanged outer act inadmissible."""
-
-    rejected = (("source-world",), ("pulse", (("Command", True),)))
-    source = SimpleNamespace(
-        expectation_receipts=[],
-        active_requirements=[],
-        failed_effect_receipts=[],
-        proof_rejected_acts={rejected},
-    )
-    target = SimpleNamespace(
-        expectation_receipts=[],
-        active_requirements=[],
-        failed_effect_receipts=[],
-        proof_rejected_acts=set(),
-    )
-
-    assert _copy_repair_knowledge(source, target) is True
-    assert target.proof_rejected_acts == {rejected}
-    assert _copy_repair_knowledge(source, target) is False

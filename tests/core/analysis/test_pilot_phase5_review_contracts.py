@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from pyrung import PLC, Int, Program, Timer, copy, on_delay, rung, system
 from pyrung.core.analysis.pilot import pilot_events
-from pyrung.core.analysis.pilot.pilot import (
-    _bootstrap_local_designation_survived,
-    _monitor_committed_trial,
-)
+from pyrung.core.analysis.pilot.pilot import _monitor_committed_trial
 from pyrung.core.analysis.pilot.types import ChannelMotion, ScanProgressReceipt
 
 
@@ -61,36 +56,6 @@ def test_bootstrap_retries_an_intermediate_designation_before_reaching_target() 
     assert events[-1].kind == "finished"
     assert events[-1].data["reached"] is True
     assert events[-1].scan == 2
-
-
-@pytest.mark.parametrize(
-    "failed_disposition",
-    ["ABSENT", "OVERWRITTEN", "STRANDED", "DISPLACED", "UNKNOWN"],
-)
-def test_bootstrap_local_proof_rejects_every_non_surviving_disposition(
-    failed_disposition: str,
-) -> None:
-    """A target endpoint cannot substitute for exact local effect proof."""
-
-    designation = object()
-    observation = SimpleNamespace(
-        designation=designation,
-        observation=SimpleNamespace(disposition=failed_disposition),
-    )
-
-    assert not _bootstrap_local_designation_survived((observation,), designation)
-
-
-def test_bootstrap_local_proof_requires_the_exact_designation_identity() -> None:
-    designation = SimpleNamespace(tag="Intermediate", value=1)
-    equal_but_detached = SimpleNamespace(tag="Intermediate", value=1)
-    observation = SimpleNamespace(
-        designation=equal_but_detached,
-        observation=SimpleNamespace(disposition="SURVIVED"),
-    )
-
-    assert designation == equal_but_detached
-    assert not _bootstrap_local_designation_survived((observation,), designation)
 
 
 def test_post_commit_progress_follows_the_exact_scan_receipt(monkeypatch) -> None:

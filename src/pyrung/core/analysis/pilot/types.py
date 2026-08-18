@@ -619,7 +619,6 @@ class DeviationIncident:
     # recovery projects only the corrected direct conjuncts out of this tuple;
     # the remaining terms are the correction's executable lifetime.
     occurrence_conditions: tuple[Any, ...] = ()
-    occurrence_writer: tuple[str | None, int] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -837,7 +836,6 @@ class ExecutionReceipt:
     source_world: _StateKey | None = None
     decision_identity: tuple[Any, ...] = ()
     applied_configurations: tuple[ScanEntryConfiguration, ...] = ()
-    entry_snap: Mapping[str, Any] | None = None
     stop: StopReceipt | None = None
 
     def __post_init__(self) -> None:
@@ -847,15 +845,9 @@ class ExecutionReceipt:
         object.__setattr__(self, "effect_observations", tuple(self.effect_observations))
         object.__setattr__(self, "spans", tuple(self.spans))
         object.__setattr__(self, "applied_configurations", tuple(self.applied_configurations))
-        if self.entry_snap is not None:
-            object.__setattr__(self, "entry_snap", MappingProxyType(dict(self.entry_snap)))
         scans = self.kernel_scan_ids
         if scans and self.source_scan is not None and scans[0] <= self.source_scan:
             raise ValueError("execution receipt scans must follow their source")
-        if bool(self.applied_configurations) != (self.entry_snap is not None):
-            raise ValueError(
-                "applied scan-entry configuration requires its exact entry snapshot"
-            )
 
     @property
     def accelerators(self) -> tuple[_ActionPair, ...]:
@@ -932,11 +924,6 @@ class _HoldLogEntry:
     scan: int
     source: str
     pilot_rungs: tuple[PilotRung, ...]
-
-    @property
-    def tags(self) -> tuple[_ActionPair, ...]:
-        """Concise recording view derived from the installed executable form."""
-        return tuple((rung.dest, rung.value) for rung in self.pilot_rungs)
 
 
 class CorrectionStatus(Enum):
@@ -1060,10 +1047,6 @@ class _PilotState:
     # Some exact temporal facts now guide Compass, while optional lifecycle
     # recording remains isolated at its explicit adapter boundary.
     theory_state: TheoryState = field(default_factory=TheoryState)
-    # Exact Phase-5 local schedules already admitted from one causal source.
-    # Attempt identity is knowledge-side so restoring that source cannot turn
-    # the same failed repair into another lap.
-    requirement_repair_attempts: set[tuple[Any, ...]] = field(default_factory=set)
     # A locally repaired source may continue through fresh, exact current-world
     # reads.  This receipt is knowledge, not retained executable work.
     recovery_continuation: _RecoveryContinuation | None = None
@@ -1080,7 +1063,6 @@ class _PilotState:
     # relative to this anchor; accepted productive dwell is removed separately
     # by ``dwell_scans`` as the world advances and reverts.
     search_start_scan: int = 0
-    last_wait_log: tuple[Any, ...] | None = None
     # Reporting-only provenance from the most recently selected current-world
     # bearing. It never feeds Orientation or constrains a later read.
     recorded_root_route: TraceChoice | None = None

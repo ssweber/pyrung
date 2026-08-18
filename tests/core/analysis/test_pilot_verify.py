@@ -126,7 +126,6 @@ def _executed(
             source_world=bearing.world_key,
             decision_identity=act_identity(bearing.act),
             applied_configurations=configurations,
-            entry_snap=(source_snap if configurations else None),
             stop=getattr(pulse, "stop_receipt", None),
         ),
     )

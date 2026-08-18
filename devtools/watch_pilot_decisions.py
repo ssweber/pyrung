@@ -729,15 +729,13 @@ def _drive_worker(
                             for requirement in world.state.active_requirements[-8:]
                         ),
                         "progress_attempt": progress_attempt,
-                        "pending_corrections": tuple(
-                            sorted(
-                                getattr(
-                                    view,
-                                    "pending_correction_rung_identities",
-                                    (),
-                                ),
-                                key=repr,
-                            )
+                        "pending_overlays": tuple(
+                            sorted(view.pending_overlay_identities, key=repr)
+                        )
+                        if view is not None
+                        else (),
+                        "pending_configurations": tuple(
+                            sorted(view.pending_configuration_identities, key=repr)
                         )
                         if view is not None
                         else (),
@@ -1284,7 +1282,8 @@ def watch_worker(
                     f"focus={message['focus']!r} "
                     f"requirements={message['active_requirements']!r} "
                     f"progress_attempt={message['progress_attempt']!r} "
-                    f"pending={message['pending_corrections']!r} "
+                    f"pending_overlays={message['pending_overlays']!r} "
+                    f"pending_configurations={message['pending_configurations']!r} "
                     f"scope={message['investigation_scope']!r} "
                     f"trigger_boundary={message['trigger_consumer_boundary']!r} "
                     f"consumer_stop={message['consumer_stop']!r} "

@@ -832,18 +832,6 @@ class TheoryTombstone:
 
 
 @dataclass(frozen=True)
-class NogoodProof:
-    """Proof-level negative evidence; attempt recording never manufactures one."""
-
-    proof_id: tuple[Any, ...]
-    executable_world_identity: tuple[Any, ...]
-    claim_scope: tuple[Any, ...]
-    finite_domain: tuple[Any, ...]
-    completeness_evidence: tuple[Any, ...]
-    rejected_artifacts: tuple[tuple[Any, ...], ...]
-
-
-@dataclass(frozen=True)
 class TheorySuccessor:
     parent_receipt_id: TheoryReceiptId
     successor_theory_id: TheoryId
@@ -885,7 +873,6 @@ class TheoryLedger:
     receipts: PMap[Any, TheoryReceipt] = pmap()
     tombstones: PMap[Any, TheoryTombstone] = pmap()
     successors: PMap[Any, TheorySuccessor] = pmap()
-    nogood_proofs: PMap[Any, NogoodProof] = pmap()
     unattributed: PMap[Any, UnattributedTheoryEvidence] = pmap()
     applied_facts: PMap[Any, TheoryFact] = pmap()
 
