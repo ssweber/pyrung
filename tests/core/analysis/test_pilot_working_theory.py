@@ -83,6 +83,11 @@ from pyrung.core.analysis.pilot.working_theory import (
 )
 from pyrung.core.context import RungId
 from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
+from pyrung.core.runner import EpochRef
+
+
+def _execution_ref(label: str) -> EpochRef:
+    return EpochRef(int.from_bytes(label.encode(), "big"))
 
 
 def _boundary(label: str, scan: int) -> TheoryBoundaryIdentity:
@@ -90,7 +95,7 @@ def _boundary(label: str, scan: int) -> TheoryBoundaryIdentity:
         world_key=("world", label),
         scan_id=scan,
         checkpoint_token=("checkpoint", label),
-        execution_owner_token=("execution", label),
+        execution_ref=_execution_ref(label),
         occurrence_identity=("occurrence", label),
     )
 
@@ -128,7 +133,7 @@ def _requirement(label: str) -> TheoryRequirementSnapshot:
         source_world_key=("world", "source"),
         source_scan=0,
         checkpoint_token=("checkpoint", "source"),
-        execution_owner_token=("execution", "source"),
+        execution_ref=_execution_ref("source"),
         phase="assertion",
         status="active",
         provenance="projection",
@@ -220,14 +225,14 @@ def _attempt(
     first_edge_identity: tuple[Any, ...] | None = None,
 ) -> RecordTheoryAttempt:
     source = _boundary("source", 0)
-    execution_owner = ("attempt-owner", transition)
+    execution_ref = _execution_ref(f"attempt-{transition}")
     occurrence = ("attempt-occurrence", transition)
     return RecordTheoryAttempt(
         theory_id=theory_id,
         version_id=version_id,
-        attempt_identity=(transition, execution_owner, occurrence),
+        attempt_identity=(transition, execution_ref, occurrence),
         source=source,
-        execution_owner_token=execution_owner,
+        execution_ref=execution_ref,
         occurrence_evidence=occurrence,
         act_identity=actions,
         act_pairs=actions,
@@ -750,7 +755,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
         world_key=(("physical", "source"), ()),
         scan_id=0,
         checkpoint_token=("checkpoint", "source"),
-        execution_owner_token=("execution", "source"),
+        execution_ref=_execution_ref("source"),
         occurrence_identity=("occurrence", "source"),
     )
     claim = replace(_claim(), source=source, selected_boundary=source)
@@ -767,7 +772,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
         version_id=version_id,
         attempt_identity=("accepted", "owner", "occurrence"),
         source=source,
-        execution_owner_token=("attempt-owner",),
+        execution_ref=_execution_ref("attempt-owner"),
         occurrence_evidence=("attempt-occurrence",),
         act_identity=(("Reset", True),),
         pilot_rung_identities=(correction,),
@@ -779,7 +784,7 @@ def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundar
         source,
         scan_id=1,
         checkpoint_token=("checkpoint", "executed"),
-        execution_owner_token=("execution", "executed"),
+        execution_ref=_execution_ref("executed"),
         occurrence_identity=("occurrence", "executed"),
     )
     state = reduce_theory(
@@ -882,7 +887,7 @@ def test_duplicate_transition_identity_with_different_fact_fails_closed() -> Non
         version_id=version_id,
         attempt_identity=first.attempt_identity,
         source=first.source,
-        execution_owner_token=first.execution_owner_token,
+        execution_ref=first.execution_ref,
         occurrence_evidence=first.occurrence_evidence,
         act_identity=(("producer", False),),
         pilot_rung_identities=(),
@@ -906,15 +911,15 @@ def test_attempt_preserves_exact_execution_owner_and_occurrence_evidence() -> No
     state = reduce_theory(state, attempt)
     receipt = state.ledger.attempts[attempt.attempt_identity]
 
-    assert receipt.execution_owner_token == ("attempt-owner", "owner-occurrence")
+    assert receipt.execution_ref == _execution_ref("attempt-owner-occurrence")
     assert receipt.occurrence_evidence == ("attempt-occurrence", "owner-occurrence")
     assert receipt.attempt_id == (
         "owner-occurrence",
-        receipt.execution_owner_token,
+        receipt.execution_ref,
         receipt.occurrence_evidence,
     )
-    assert receipt.source.execution_owner_token == ("execution", "source")
-    assert receipt.execution_owner_token != receipt.source.execution_owner_token
+    assert receipt.source.execution_ref == _execution_ref("source")
+    assert receipt.execution_ref != receipt.source.execution_ref
 
 
 def test_attempt_passes_immutable_conductivity_observation_through_to_view() -> None:
@@ -2187,7 +2192,7 @@ def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
         world_key=("world", "earlier"),
         scan_id=0,
         checkpoint_token=("checkpoint", "earlier"),
-        execution_owner_token=(),
+        execution_ref=None,
     )
     requirement = replace(
         _requirement("prior"),
@@ -2245,7 +2250,7 @@ def test_attempt_fails_closed_without_exact_execution_evidence(missing: str) -> 
         actions=(("producer", True),),
     )
     if missing == "owner":
-        attempt = replace(attempt, execution_owner_token=())
+        attempt = replace(attempt, execution_ref=None)  # type: ignore[arg-type]
     else:
         attempt = replace(attempt, occurrence_evidence=())
 
@@ -2460,7 +2465,7 @@ def test_refine_retains_changed_boundary_in_the_row_behind_a_compact_version_id(
         world_key=("world", "requirements-changed"),
         scan_id=1,
         checkpoint_token=("checkpoint", "requirements-changed"),
-        execution_owner_token=("execution", "requirements-changed"),
+        execution_ref=_execution_ref("requirements-changed"),
         occurrence_identity=("requirements", "producer"),
     )
 
@@ -2493,7 +2498,7 @@ def test_refine_fails_closed_on_inexact_refined_boundary(changed: str) -> None:
     if changed == "backward_scan":
         refined_source = replace(refined_source, scan_id=-1)
     elif changed == "owner_after_scan":
-        refined_source = replace(refined_source, scan_id=1, execution_owner_token=())
+        refined_source = replace(refined_source, scan_id=1, execution_ref=None)
     else:
         refined_source = replace(refined_source, checkpoint_token=())
 

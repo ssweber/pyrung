@@ -9,7 +9,7 @@ import pytest
 from pyrung import PLC
 from pyrung.core.analysis.pilot.overlay import _set_synth_holds
 from pyrung.core.rung import Rung
-from pyrung.core.runner import Epoch, EpochQuery
+from pyrung.core.runner import Epoch, EpochQuery, EpochRef
 
 
 def test_epoch_is_frozen_and_lineage_owns_records_not_plcs() -> None:
@@ -102,6 +102,29 @@ def test_current_epoch_record_is_reused_at_one_tip_and_replaced_after_scan() -> 
     replacement = plc._causal_lineage.current_epoch()
     assert replacement is not current
     assert replacement.last_scan == 2
+
+
+def test_epoch_reference_survives_live_reseal_and_fork_inheritance() -> None:
+    parent = PLC(logic=[])
+    parent.step()
+    first = parent._causal_lineage.current_epoch()
+    assert first is not None
+    assert isinstance(first.reference, EpochRef)
+
+    parent.step()
+    extended = parent._causal_lineage.current_epoch()
+    assert extended is not None
+    assert extended is not first
+    assert extended.reference == first.reference
+
+    child = parent.fork()
+    (inherited,) = child._causal_lineage.sealed_epochs
+    assert inherited.reference == first.reference
+
+    child.step()
+    child_epoch = child._causal_lineage.current_epoch()
+    assert child_epoch is not None
+    assert child_epoch.reference != inherited.reference
 
 
 def test_hold_change_replaces_live_query_memo_but_preserves_sealed_memo() -> None:

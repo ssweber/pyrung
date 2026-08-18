@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from contextvars import Token
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from itertools import count
 
 logger = logging.getLogger(__name__)
 from types import MappingProxyType
@@ -80,6 +81,8 @@ _REPLAY_SLAB_MAX_ANCHORS = 1
 # by execution epoch; one slot thrashes when a counterfactual investigation
 # alternates among the same source/action/landing scans.
 _REPLAY_CAPTURE_CACHE_SCANS = 16
+
+_EPOCH_REFERENCE_VALUES = count(1)
 
 # Byte budget for the recent-state cache (default for ``history_budget``).
 _HISTORY_BUDGET_BYTES_DEFAULT = 100 * 1024 * 1024  # 100 MB
@@ -597,10 +600,22 @@ class EpochCaches:
         self._invalidate("replay_evidence_discarded")
 
 
+@dataclass(frozen=True, order=True)
+class EpochRef:
+    """Stable identity of one physical execution interval in a lineage."""
+
+    value: int
+
+
+def _new_epoch_ref() -> EpochRef:
+    return EpochRef(next(_EPOCH_REFERENCE_VALUES))
+
+
 @dataclass(frozen=True)
 class Epoch:
     """One immutable executed interval and the evidence needed to replay it."""
 
+    reference: EpochRef
     first_scan: int
     last_scan: int
     initial_scan_id: int
@@ -635,6 +650,7 @@ class Epoch:
         cls,
         plc: PLC,
         *,
+        reference: EpochRef,
         first_scan: int,
         last_scan: int,
     ) -> Epoch:
@@ -653,6 +669,7 @@ class Epoch:
             )
         )
         return cls(
+            reference=reference,
             first_scan=first_scan,
             last_scan=last_scan,
             initial_scan_id=plc._initial_scan_id,
@@ -851,6 +868,7 @@ class CausalLineage:
         self._live_query: EpochQuery | None = None
         self._current_epoch_cache: Epoch | None = None
         self._current_epoch_key: tuple[int, int, int] | None = None
+        self._current_epoch_ref = _new_epoch_ref()
 
     @property
     def sealed_epochs(self) -> tuple[Epoch, ...]:
@@ -875,6 +893,7 @@ class CausalLineage:
             return cached
         current = Epoch.seal(
             self._plc,
+            reference=self._current_epoch_ref,
             first_scan=first_scan,
             last_scan=self._plc._state.scan_id,
         )
@@ -974,6 +993,7 @@ class CausalLineage:
             owner = self._query_for(epoch)
             sliced = Epoch.seal(
                 owner._runner(),
+                reference=epoch.reference,
                 first_scan=epoch.first_scan,
                 last_scan=scan_id,
             )
@@ -990,6 +1010,7 @@ class CausalLineage:
             if epoch.first_scan < scan_id:
                 epoch = Epoch.seal(
                     query._runner(),
+                    reference=epoch.reference,
                     first_scan=scan_id,
                     last_scan=epoch.last_scan,
                 )

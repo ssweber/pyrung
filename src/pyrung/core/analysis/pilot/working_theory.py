@@ -23,6 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     EffectOccurrenceSnapshot,
 )
 from pyrung.core.analysis.pilot.world_key import _semantic_key
+from pyrung.core.runner import EpochRef
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.intrascan import (
@@ -135,7 +136,7 @@ class TheoryBoundaryIdentity:
     world_key: tuple[Any, ...]
     scan_id: int
     checkpoint_token: tuple[Any, ...]
-    execution_owner_token: tuple[Any, ...] = ()
+    execution_ref: EpochRef | None = None
     occurrence_identity: tuple[Any, ...] = ()
 
 
@@ -178,7 +179,7 @@ class TheoryRequirementSnapshot:
     source_world_key: tuple[Any, ...]
     source_scan: int | None
     checkpoint_token: tuple[Any, ...]
-    execution_owner_token: tuple[Any, ...]
+    execution_ref: EpochRef
     phase: str
     status: str
     provenance: str
@@ -341,7 +342,7 @@ class TheoryAttemptReceipt:
     version_id: TheoryVersionId
     attempt_id: tuple[Any, ...]
     source: TheoryBoundaryIdentity
-    execution_owner_token: tuple[Any, ...]
+    execution_ref: EpochRef
     occurrence_evidence: tuple[Any, ...]
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
@@ -1001,7 +1002,7 @@ def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
         raise TheoryInvariantError("claim source checkpoint evidence is incomplete")
     scan_id = work.state.scan_id
     world_key = tuple(key)
-    owner_token: tuple[Any, ...] = ()
+    execution_ref: EpochRef | None = None
     lineage = getattr(work, "_causal_lineage", None)
     if lineage is not None:
         try:
@@ -1015,17 +1016,17 @@ def theory_boundary_from_checkpoint(checkpoint: Any) -> TheoryBoundaryIdentity:
         if len(owners) > 1:
             raise TheoryInvariantError("claim source execution evidence is ambiguous")
         if owners:
-            epoch, query = owners[0]
-            owner_token = ("execution-owner", id(epoch), id(query))
+            epoch, _query = owners[0]
+            execution_ref = epoch.reference
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
         checkpoint_token=(
-            ("execution-boundary", world_key, scan_id, owner_token)
-            if owner_token
+            ("execution-boundary", world_key, scan_id, execution_ref)
+            if execution_ref is not None
             else ("checkpoint-owner", id(owner), world_key, scan_id)
         ),
-        execution_owner_token=owner_token,
+        execution_ref=execution_ref,
     )
 
 
@@ -1203,8 +1204,8 @@ def theory_claim_from_intrascan_witness(
     unambiguous satisfying observation owned by the same exact execution.
     """
 
-    owner_token = tuple(getattr(witness, "execution_owner_token", ()))
-    if len(owner_token) != 3 or owner_token[0] != "execution-owner":
+    execution_ref = getattr(witness, "execution_ref", None)
+    if not isinstance(execution_ref, EpochRef):
         raise TheoryInvariantError("intrascan witness execution owner is unavailable")
     assertion_scan = getattr(witness, "assertion_scan", None)
     if not isinstance(assertion_scan, int) or assertion_scan <= source.scan_id:
@@ -1289,7 +1290,7 @@ def theory_claim_from_intrascan_witness(
         selected_boundary=replace(
             source,
             scan_id=assertion_scan,
-            execution_owner_token=owner_token,
+            execution_ref=execution_ref,
             occurrence_identity=(
                 "intrascan-witness",
                 tuple(selected),
@@ -1310,7 +1311,7 @@ def theory_boundary_claim(
 ) -> TheoryClaim:
     """Detach an already-owned cross-scan boundary before Stage 7 transfer."""
 
-    if not source.execution_owner_token:
+    if source.execution_ref is None:
         raise TheoryInvariantError("cross-scan boundary owner is unavailable")
 
     target = objective.target
@@ -1677,7 +1678,7 @@ class RecordTheoryAttempt:
     version_id: TheoryVersionId
     attempt_identity: tuple[Any, ...]
     source: TheoryBoundaryIdentity
-    execution_owner_token: tuple[Any, ...]
+    execution_ref: EpochRef
     occurrence_evidence: tuple[Any, ...]
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
@@ -2263,7 +2264,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 raise TheoryInvariantError(
                     "attempt observation is outside its active investigation scope"
                 )
-        if not fact.execution_owner_token:
+        if not isinstance(fact.execution_ref, EpochRef):
             raise TheoryInvariantError("attempt execution owner evidence is missing")
         if not fact.occurrence_evidence:
             raise TheoryInvariantError("attempt occurrence evidence is missing")
@@ -2272,7 +2273,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             or not fact.execution_source.checkpoint_token
             or (
                 fact.execution_source.scan_id > 0
-                and not fact.execution_source.execution_owner_token
+                and fact.execution_source.execution_ref is None
             )
         ):
             raise TheoryInvariantError("attempt execution source evidence is inconsistent")
@@ -2311,7 +2312,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             version_id=fact.version_id,
             attempt_id=fact.attempt_identity,
             source=fact.source,
-            execution_owner_token=fact.execution_owner_token,
+            execution_ref=fact.execution_ref,
             occurrence_evidence=fact.occurrence_evidence,
             act_identity=fact.act_identity,
             pilot_rung_identities=fact.pilot_rung_identities,
@@ -2582,7 +2583,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 )
             if not fact.execution_source.checkpoint_token or (
                 fact.execution_source.scan_id > 0
-                and not fact.execution_source.execution_owner_token
+                and fact.execution_source.execution_ref is None
             ):
                 raise TheoryInvariantError("advance execution source evidence is missing")
         remaining = (
@@ -2654,7 +2655,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("world rebase source is not the current progress boundary")
         if fact.rebased_source == fact.source or (
             fact.rebased_source.scan_id != fact.source.scan_id
-            or fact.rebased_source.execution_owner_token != fact.source.execution_owner_token
+            or fact.rebased_source.execution_ref != fact.source.execution_ref
             or fact.rebased_source.occurrence_identity != fact.source.occurrence_identity
         ):
             raise TheoryInvariantError("world rebase changed its physical execution boundary")
@@ -2778,7 +2779,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.composed_source != fact.source:
             raise TheoryInvariantError("scan-entry composition changed the physical World")
         if not fact.composed_source.checkpoint_token or (
-            fact.composed_source.scan_id > 0 and not fact.composed_source.execution_owner_token
+            fact.composed_source.scan_id > 0 and fact.composed_source.execution_ref is None
         ):
             raise TheoryInvariantError("composition boundary evidence is incomplete")
         prior_configurations = {
@@ -2854,7 +2855,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("refinement addresses a stale theory version")
         _require_allowed_source(state, theory, fact.source)
         if not fact.refined_source.checkpoint_token or (
-            fact.refined_source.scan_id > 0 and not fact.refined_source.execution_owner_token
+            fact.refined_source.scan_id > 0 and fact.refined_source.execution_ref is None
         ):
             raise TheoryInvariantError("refined source exact boundary evidence is missing")
         parent = state.ledger.versions[fact.parent_version_id]

@@ -73,6 +73,7 @@ from pyrung.core.context import RungId
 from pyrung.core.crossing import Cmp
 from pyrung.core.instruction.advance import constraint_holds
 from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
+from pyrung.core.runner import EpochRef
 
 
 @dataclass(frozen=True)
@@ -281,7 +282,7 @@ class IntrascanAttempt:
     requirement_observations: tuple[IntrascanRequirementObservation, ...]
     witnessed: bool
     detail: str = ""
-    execution_owner_token: tuple[Any, ...] = ()
+    execution_ref: EpochRef | None = None
     findings: tuple[IntrascanFinding, ...] = field(default=(), compare=False, repr=False)
 
 
@@ -294,7 +295,7 @@ class IntrascanWitness:
     observations: tuple[EffectObservationSnapshot, ...]
     requirement_observations: tuple[IntrascanRequirementObservation, ...]
     added_pilot_rungs: tuple[PilotRung, ...] = ()
-    execution_owner_token: tuple[Any, ...] = ()
+    execution_ref: EpochRef | None = None
 
 
 @dataclass(frozen=True)
@@ -2258,7 +2259,7 @@ def close_intrascan(question: IntrascanClosureQuestion) -> IntrascanClosureResul
                             attempt.observations,
                             attempt.requirement_observations,
                             added_pilot_rungs=added_pilot_rungs,
-                            execution_owner_token=attempt.execution_owner_token,
+                            execution_ref=attempt.execution_ref,
                         ),
                         tuple(attempts),
                         frozenset(known),
@@ -2463,20 +2464,16 @@ def _execute_closure_attempt(
             for item in observations
         )
     snapshots = tuple(item.diagnostic_snapshot() for item in observations)
-    owner_pairs = {
-        (id(item.execution_epoch), id(item.execution_owner))
-        for item in observations
-        if item.execution_epoch is not None and item.execution_owner is not None
-    }
-    execution_owner_token = (
-        ("execution-owner", *next(iter(owner_pairs)))
+    execution_ref = (
+        owner_matches[0][0].reference
         if len(observations) > 0
-        and len(owner_pairs) == 1
+        and len(owner_matches) == 1
         and all(
-            item.execution_epoch is not None and item.execution_owner is not None
+            item.execution_epoch is owner_matches[0][0]
+            and item.execution_owner is owner_matches[0][1]
             for item in observations
         )
-        else ()
+        else None
     )
     requirement_observations = tuple(
         observe_intrascan_requirement(item, projection) for item in question.requirements
@@ -2495,7 +2492,7 @@ def _execute_closure_attempt(
         for item in requirement_observations
     )
     avoid_holds = not _avoid_snap_names(question.avoid_predicate, dict(fork.state.tags))
-    witnessed = effects_hold and requirements_hold and avoid_holds and bool(execution_owner_token)
+    witnessed = effects_hold and requirements_hold and avoid_holds and execution_ref is not None
     detail = (
         ""
         if witnessed
@@ -2558,7 +2555,7 @@ def _execute_closure_attempt(
         requirement_observations,
         witnessed,
         detail,
-        execution_owner_token,
+        execution_ref,
         findings,
     )
 

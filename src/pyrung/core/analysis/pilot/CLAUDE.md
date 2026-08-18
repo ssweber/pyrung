@@ -237,6 +237,9 @@ it also records the scan-entry configuration actually applied and the exact
 `StopReceipt`. VERIFY, replay, progress, departure, and recording consume this
 association rather than reconstructing physical ownership from mutable state.
 Timer and counter presets are `ScanEntryConfiguration` values, not PilotRungs.
+Each physical Epoch interval has one lineage-issued `EpochRef` which survives
+live-tip resealing and fork inheritance; detached theory facts carry that typed
+reference rather than Python object-ID owner tokens.
 
 WorkingTheory handles a different problem: an executed scan can reveal the
 next condition needed to keep the selected producer/frontier conductive. It

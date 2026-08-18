@@ -481,7 +481,7 @@ def test_witness_claim_records_prevention_without_inventing_an_occurrence() -> N
     assert prevented[3] is not None  # Static relocatable selector.
     assert prevented[4] == "PREVENTED"
     assert prevented[5] is None  # Absence proof cannot invent a dynamic write.
-    assert claim.selected_boundary.execution_owner_token == (result.witness.execution_owner_token)
+    assert claim.selected_boundary.execution_ref == result.witness.execution_ref
     assert_detached_theory_value(claim, path="claim")
 
 
@@ -490,20 +490,20 @@ def test_cross_scan_boundary_claim_requires_and_retains_exact_live_owner() -> No
     source.step()
     boundary = theory_boundary_from_checkpoint(_checkpoint(source, "cross-scan-owner"))
 
-    assert boundary.execution_owner_token[0] == "execution-owner"
+    assert boundary.execution_ref is not None
     claim = theory_boundary_claim(
         BearingObjective(TargetSpec(TwoStepper.name, 1)),
         boundary,
         ChannelHeading(TwoStepper.name, 1),
     )
 
-    assert claim.source.execution_owner_token == boundary.execution_owner_token
-    assert claim.selected_boundary.execution_owner_token == boundary.execution_owner_token
+    assert claim.source.execution_ref == boundary.execution_ref
+    assert claim.selected_boundary.execution_ref == boundary.execution_ref
     assert_detached_theory_value(claim, path="cross_scan_claim")
     with pytest.raises(TheoryInvariantError, match="owner is unavailable"):
         theory_boundary_claim(
             BearingObjective(TargetSpec(TwoStepper.name, 1)),
-            replace(boundary, execution_owner_token=()),
+            replace(boundary, execution_ref=None),
             ChannelHeading(TwoStepper.name, 1),
         )
 
@@ -1595,8 +1595,8 @@ def test_witness_claim_selects_exact_surviving_repeated_call() -> None:
     assert producer[5][5] == 1
     assert claim.source == source_boundary
     assert claim.selected_boundary.scan_id == result.witness.assertion_scan
-    assert claim.selected_boundary.execution_owner_token == (result.witness.execution_owner_token)
-    assert claim.selected_boundary.execution_owner_token != source_boundary.execution_owner_token
+    assert claim.selected_boundary.execution_ref == result.witness.execution_ref
+    assert claim.selected_boundary.execution_ref != source_boundary.execution_ref
     assert_detached_theory_value(claim, path="claim")
 
     survived = next(item for item in result.witness.observations if item.disposition == "SURVIVED")

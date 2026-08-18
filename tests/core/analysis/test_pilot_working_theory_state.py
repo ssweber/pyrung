@@ -18,6 +18,11 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryState,
     reduce_theory,
 )
+from pyrung.core.runner import EpochRef
+
+
+def _execution_ref(label: str) -> EpochRef:
+    return EpochRef(int.from_bytes(label.encode(), "big"))
 
 
 def _boundary(label: str, scan: int = 0) -> TheoryBoundaryIdentity:
@@ -25,7 +30,7 @@ def _boundary(label: str, scan: int = 0) -> TheoryBoundaryIdentity:
         world_key=("world", label),
         scan_id=scan,
         checkpoint_token=("checkpoint", label),
-        execution_owner_token=("execution", label),
+        execution_ref=_execution_ref(label),
         occurrence_identity=("occurrence", label),
     )
 
@@ -101,7 +106,7 @@ def test_disposable_requirement_clone_cannot_mutate_source_theory_state() -> Non
             version_id=version_id,
             attempt_identity=("clone-attempt",),
             source=_boundary("source"),
-            execution_owner_token=("execution", "clone"),
+            execution_ref=_execution_ref("clone"),
             occurrence_evidence=("occurrence", "clone"),
             act_identity=(("producer", True),),
             pilot_rung_identities=(),

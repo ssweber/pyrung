@@ -276,7 +276,7 @@ if TYPE_CHECKING:
     from pyrung.core.analysis.pdg import ProgramGraph
     from pyrung.core.analysis.pilot.evidence import PipelineRoles, TransitionEvidence
     from pyrung.core.analysis.pilot.pipeline_graph import StaticTransitionGraph
-    from pyrung.core.runner import PLC
+    from pyrung.core.runner import PLC, EpochRef
 
 logger = logging.getLogger(__name__)
 
@@ -2458,11 +2458,7 @@ def _open_theory_from_program_guard_rebases(
     transition = _TheoryTransitionEvidence(
         claim=_theory_claim(failed.expectation, failed.local_bearing.objective, source),
         source=source,
-        execution_owner_token=(
-            "execution-owner",
-            id(failed.execution_epoch),
-            id(failed.execution_owner),
-        ),
+        execution_ref=failed.execution_epoch.reference,
         occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
         act_identity=failed.act_identity,
         act_pairs=tuple(failed.local_bearing.act.policy.applied),
@@ -2558,11 +2554,7 @@ def _refine_active_theory_from_program_guard_rebases(
             version_id=theory.current_version_id,
             attempt_identity=attempt_identity,
             source=trigger_source,
-            execution_owner_token=(
-                "execution-owner",
-                id(failed.execution_epoch),
-                id(failed.execution_owner),
-            ),
+            execution_ref=failed.execution_epoch.reference,
             occurrence_evidence=tuple(_semantic_key(item.explanation) for item in failed_receipts),
             act_identity=failed.act_identity,
             act_pairs=tuple(failed.local_bearing.act.policy.applied),
@@ -3768,7 +3760,7 @@ class _TheoryTransitionEvidence:
 
     claim: TheoryClaim
     source: TheoryBoundaryIdentity
-    execution_owner_token: tuple[Any, ...]
+    execution_ref: EpochRef
     occurrence_evidence: tuple[Any, ...]
     act_identity: tuple[Any, ...]
     act_pairs: tuple[_ActionPair, ...]
@@ -3793,7 +3785,7 @@ class _TheoryTransitionEvidence:
             "observed-transition",
             self.claim.identity,
             self.source,
-            self.execution_owner_token,
+            self.execution_ref,
             self.occurrence_evidence,
             self.act_identity,
             self.pilot_rung_identities,
@@ -3849,12 +3841,12 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
             scan_id=scan_id,
             checkpoint_token=("checkpoint-owner", id(checkpoint.owner), world_key, scan_id),
         )
-    owner_token = ("execution-owner", id(epoch_owner[0]), id(epoch_owner[1]))
+    execution_ref = epoch_owner[0].reference
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
-        checkpoint_token=("execution-boundary", world_key, scan_id, owner_token),
-        execution_owner_token=owner_token,
+        checkpoint_token=("execution-boundary", world_key, scan_id, execution_ref),
+        execution_ref=execution_ref,
     )
 
 
@@ -3875,7 +3867,7 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
     epoch_owner = _execution_epoch_owner(state.work, scan_id)
     if epoch_owner is None:
         raise ValueError("working theory requires one exact live execution owner")
-    owner_token = ("execution-owner", id(epoch_owner[0]), id(epoch_owner[1]))
+    execution_ref = epoch_owner[0].reference
     world_key = tuple(key)
     return TheoryBoundaryIdentity(
         world_key=world_key,
@@ -3884,9 +3876,9 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
             "execution-boundary",
             world_key,
             scan_id,
-            owner_token,
+            execution_ref,
         ),
-        execution_owner_token=owner_token,
+        execution_ref=execution_ref,
     )
 
 
@@ -3976,11 +3968,7 @@ def _theory_requirement_snapshot(requirement: ActiveRequirement) -> TheoryRequir
         source_world_key=source_world_identity,
         source_scan=diagnostic.source_scan,
         checkpoint_token=("checkpoint-owner", diagnostic.causal_identity[2]),
-        execution_owner_token=(
-            "execution-owner",
-            diagnostic.causal_identity[0],
-            diagnostic.causal_identity[1],
-        ),
+        execution_ref=requirement.execution_epoch.reference,
         phase=diagnostic.phase.value,
         status=diagnostic.status.value,
         provenance=diagnostic.provenance,
@@ -4023,7 +4011,7 @@ def _theory_claim(
 def _theory_execution_evidence(
     execution: Any,
 ) -> tuple[
-    tuple[Any, ...],
+    Any,
     tuple[Any, ...],
     tuple[EffectObservationSnapshot, ...],
 ]:
@@ -4036,7 +4024,7 @@ def _theory_execution_evidence(
     snapshots = tuple(observation.diagnostic_snapshot() for observation in observations)
     occurrence_evidence = tuple(_semantic_key(snapshot) for snapshot in snapshots)
     return (
-        ("execution-owner", id(owned[0]), id(owned[1])),
+        owned[0].reference,
         occurrence_evidence,
         snapshots,
     )
@@ -4223,7 +4211,7 @@ def _theory_transition_from_attempt(
         else immediate_expectation or execution.landing_expectation or route_claim_expectation
     )
     source = _theory_boundary_from_checkpoint(checkpoint)
-    execution_owner, effects, conductivity_observations = _theory_execution_evidence(execution)
+    execution_ref, effects, conductivity_observations = _theory_execution_evidence(execution)
     conductivity_observations = _merge_conductivity_observations(
         conductivity_observations,
         intrascan_observations,
@@ -4301,7 +4289,7 @@ def _theory_transition_from_attempt(
     return _TheoryTransitionEvidence(
         claim=claim,
         source=source,
-        execution_owner_token=execution_owner,
+        execution_ref=execution_ref,
         occurrence_evidence=effects,
         act_identity=act_identity(bearing.act),
         act_pairs=tuple(bearing.act.policy.applied),
@@ -4390,15 +4378,13 @@ def _theory_transition_after_monitor(
             {id(failed.expectation): failed.expectation for failed in failed_receipts}.values()
         )
         act_identities = {failed.act_identity for failed in failed_receipts}
-        owner_pairs = {
-            (id(failed.execution_epoch), id(failed.execution_owner)) for failed in failed_receipts
-        }
+        execution_refs = {failed.execution_epoch.reference for failed in failed_receipts}
         bearings = {id(failed.local_bearing): failed.local_bearing for failed in failed_receipts}
         if (
             len(checkpoints) != 1
             or not expectations
             or len(act_identities) != 1
-            or len(owner_pairs) != 1
+            or len(execution_refs) != 1
             or len(bearings) != 1
         ):
             return None, frozenset()
@@ -4414,8 +4400,7 @@ def _theory_transition_after_monitor(
         bearing = next(iter(bearings.values()))
         selected_act_identity = next(iter(act_identities))
         source = _theory_boundary_from_checkpoint(source_checkpoint or checkpoint)
-        epoch_id, owner_id = next(iter(owner_pairs))
-        owner = ("execution-owner", epoch_id, owner_id)
+        execution_ref = next(iter(execution_refs))
         occurrence_evidence = tuple(_semantic_key(failed.explanation) for failed in failed_receipts)
         interpretation = interpret_failed_requirements(
             exact_pairs=exact_pairs,
@@ -4439,7 +4424,7 @@ def _theory_transition_after_monitor(
         synthesized = _TheoryTransitionEvidence(
             claim=_theory_claim(expectation, bearing.objective, source),
             source=source,
-            execution_owner_token=owner,
+            execution_ref=execution_ref,
             occurrence_evidence=occurrence_evidence,
             act_identity=selected_act_identity,
             act_pairs=tuple(bearing.act.policy.applied),
@@ -4697,11 +4682,7 @@ def _theory_bootstrap_transition(
     return _TheoryTransitionEvidence(
         claim=claim,
         source=source,
-        execution_owner_token=(
-            "execution-owner",
-            id(receipt.execution_epoch),
-            id(receipt.execution_owner),
-        ),
+        execution_ref=receipt.execution_epoch.reference,
         occurrence_evidence=("bootstrap-scan", receipt.scan_after, effects),
         act_identity=("executed-program-scan", receipt.scan_before, receipt.scan_after),
         act_pairs=(),
@@ -4784,7 +4765,7 @@ def _theory_attempt_identity(
         "theory-attempt",
         theory_id,
         observation.identity,
-        observation.execution_owner_token,
+        observation.execution_ref,
         observation.occurrence_evidence,
     )
 
@@ -4848,7 +4829,7 @@ def _record_theory_transition(
             version_id=theory.current_version_id,
             attempt_identity=attempt_identity,
             source=observation.source,
-            execution_owner_token=observation.execution_owner_token,
+            execution_ref=observation.execution_ref,
             occurrence_evidence=observation.occurrence_evidence,
             act_identity=observation.act_identity,
             act_pairs=observation.act_pairs,
@@ -4962,7 +4943,7 @@ def _records_controlling_need(observation: _TheoryTransitionEvidence | None) -> 
 class _ControlledSetupAttempt:
     request: TemporalNeedRequest
     attempt_id: tuple[Any, ...]
-    execution_owner_token: tuple[Any, ...]
+    execution_ref: EpochRef
     occurrence_evidence: tuple[Any, ...]
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
@@ -5131,7 +5112,7 @@ def _rebase_restored_theory_world(
     live_key = live.world_key
     if (
         live.scan_id != request.source.scan_id
-        or live.execution_owner_token != request.source.execution_owner_token
+        or live.execution_ref != request.source.execution_ref
         or live.occurrence_identity != request.source.occurrence_identity
         or len(source_key) != 2
         or len(live_key) != 2
@@ -5415,16 +5396,7 @@ def _record_controlled_setup_attempt(
     )
     occurrence_evidence = ("setup-assertion-scan", execution.assertion_scan, occurrences)
     execution_source = _theory_boundary_from_checkpoint(source_checkpoint)
-    # A temporal source can be restored and the same deterministic phase can
-    # be observed again on a fresh disposable fork.  Python object identities
-    # would make those equivalent scan receipts conflict in the immutable
-    # theory ledger.  Bind ownership to the retained source plus the exact
-    # assertion occurrence instead.
-    owner_token = (
-        "execution-owner",
-        request.source.checkpoint_token,
-        occurrence_evidence,
-    )
+    execution_ref = execution_receipt.epoch_ref
     action_identity = act_identity(result.act)
     local_sources = (
         result.act.policy.local_progress_sources or result.act.policy.local_progress_requirements
@@ -5476,7 +5448,7 @@ def _record_controlled_setup_attempt(
             version_id=request.version_id,
             attempt_identity=attempt_id,
             source=request.source,
-            execution_owner_token=owner_token,
+            execution_ref=execution_ref,
             occurrence_evidence=occurrence_evidence,
             act_identity=action_identity,
             act_pairs=tuple(result.act.policy.applied),
@@ -5502,7 +5474,7 @@ def _record_controlled_setup_attempt(
     return _ControlledSetupAttempt(
         request,
         attempt_id,
-        owner_token,
+        execution_ref,
         occurrence_evidence,
         action_identity,
         rung_identities,
@@ -6970,11 +6942,7 @@ def _record_theory_execution_advance(
                 version_id=theory.current_version_id,
                 attempt_identity=attempt_id,
                 source=source,
-                execution_owner_token=(
-                    "execution-owner",
-                    source.checkpoint_token,
-                    occurrence,
-                ),
+                execution_ref=trial.execution.epoch_ref,
                 occurrence_evidence=occurrence,
                 act_identity=attempted_act_identity,
                 act_pairs=selected_pairs,

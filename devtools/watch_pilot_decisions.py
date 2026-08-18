@@ -662,8 +662,8 @@ def _drive_worker(
                 policy = getattr(act, "policy", None)
                 consumer_boundary = getattr(policy, "consumer_boundary", None)
                 investigation_scope = view.investigation_scope if view is not None else None
-                execution_horizon = (
-                    investigation_scope.consumer_execution_horizon
+                consumer_stop = (
+                    investigation_scope.consumer_stop
                     if investigation_scope is not None
                     else None
                 )
@@ -763,13 +763,15 @@ def _drive_worker(
                         "trigger_consumer_boundary": _consumer_boundary_summary(
                             view.trigger_consumer_boundary if view is not None else None
                         ),
-                        "consumer_execution_horizon": (
+                        "consumer_stop": (
                             (
-                                execution_horizon.source.scan_id,
-                                execution_horizon.tip.scan_id,
-                                _consumer_boundary_summary(execution_horizon.consumer_boundary),
+                                investigation_scope.execution_source.scan_id,
+                                consumer_stop.scan_id,
+                                _consumer_boundary_summary(
+                                    investigation_scope.consumer_boundary
+                                ),
                             )
-                            if execution_horizon is not None
+                            if investigation_scope is not None and consumer_stop is not None
                             else None
                         ),
                         "traceback_frontiers": tuple(
@@ -818,7 +820,7 @@ def _drive_worker(
             return (
                 observation.claim.identity,
                 observation.source,
-                observation.execution_owner_token,
+                observation.execution_ref,
                 observation.act_identity,
             )
 
@@ -1285,7 +1287,7 @@ def watch_worker(
                     f"pending={message['pending_corrections']!r} "
                     f"scope={message['investigation_scope']!r} "
                     f"trigger_boundary={message['trigger_consumer_boundary']!r} "
-                    f"execution_horizon={message['consumer_execution_horizon']!r} "
+                    f"consumer_stop={message['consumer_stop']!r} "
                     f"traceback_frontiers={message['traceback_frontiers']!r} "
                     f"frontier_trace={message['frontier_trace']!r} "
                     f"active_actions={message['active_actions']!r} "

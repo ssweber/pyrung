@@ -869,6 +869,15 @@ class ExecutionReceipt:
         return tuple(scan for span in self.spans for scan in span.kernel_scan_ids)
 
     @property
+    def epoch_ref(self) -> Any:
+        """The one physical Epoch interval owned by this ordinary execution."""
+
+        references = tuple(dict.fromkeys(span.epoch.reference for span in self.spans))
+        if len(references) != 1:
+            raise ValueError("execution receipt does not have exactly one Epoch reference")
+        return references[0]
+
+    @property
     def consumer_boundary_reached(self) -> bool | None:
         """Whether this execution reached its requested consumer occurrence."""
 
