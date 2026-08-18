@@ -22,6 +22,7 @@ from pyrung.core.analysis.pilot.world_key import _semantic_key
 from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.candidate_read import CandidateRead
     from pyrung.core.analysis.pilot.conductivity import ConductivityResearchRequest
     from pyrung.core.analysis.pilot.effects import (
         ConsumerBoundary,
@@ -32,7 +33,6 @@ if TYPE_CHECKING:
         IntrascanProducerGoal,
         IntrascanWriteEvidence,
     )
-    from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.requirements import ActiveRequirement
     from pyrung.core.analysis.pilot.trace import TraceChoice

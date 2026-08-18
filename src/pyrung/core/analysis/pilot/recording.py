@@ -50,8 +50,8 @@ from pyrung.core.validation.render import (
 )
 
 if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.candidate_read import CandidateRead, _Candidate
     from pyrung.core.analysis.pilot.compass import Compass
-    from pyrung.core.analysis.pilot.options import CandidateRead, _Candidate
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
     from pyrung.core.analysis.pilot.program_step import ProgramStep
 

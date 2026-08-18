@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from pyrung import PLC
+from pyrung.core.analysis.pilot.candidate_read import CandidateRead
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.conductivity import (
     ConductivityProgress,
@@ -38,7 +39,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationRead,
     RouteEdgeContext,
 )
-from pyrung.core.analysis.pilot.options import CandidateRead
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.trace import TraceChoice
 from pyrung.core.analysis.pilot.types import _Checkpoint, _World

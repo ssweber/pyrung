@@ -13,6 +13,7 @@ from typing import Any
 import pyrung.core.analysis.pilot.orientation_reading as _orientation_reading
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import _button_writes
+from pyrung.core.analysis.pilot.candidate_read import CandidateRead
 from pyrung.core.analysis.pilot.compass import EvidenceScope
 from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.execution import (
@@ -48,11 +49,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     act_identity,
     pulse_identity,
 )
-from pyrung.core.analysis.pilot.options import (
-    CandidateRead,
-    _build_candidates,
-    _candidate_applied,
-)
+from pyrung.core.analysis.pilot.options import _build_candidates, _candidate_applied
 from pyrung.core.analysis.pilot.overlay import (
     _target_unresolved_condition,
 )

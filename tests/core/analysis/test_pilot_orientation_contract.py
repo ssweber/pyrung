@@ -6,6 +6,16 @@ from types import SimpleNamespace
 import pytest
 
 from pyrung import Int
+from pyrung.core.analysis.pilot.candidate_read import (
+    CandidateDiagnosis,
+    CandidateRead,
+    CrossingBatchRead,
+    LearnedBatchRead,
+    PrerequisiteRead,
+    WaitPrescription,
+    WaitRead,
+    _TraceAdmission,
+)
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
@@ -42,16 +52,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
     pulse_identity,
-)
-from pyrung.core.analysis.pilot.options import (
-    CandidateDiagnosis,
-    CandidateRead,
-    CrossingBatchRead,
-    LearnedBatchRead,
-    PrerequisiteRead,
-    WaitPrescription,
-    WaitRead,
-    _TraceAdmission,
 )
 from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.recording import _candidate_payload

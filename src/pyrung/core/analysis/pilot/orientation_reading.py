@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from pyrung.core.analysis.pilot.candidate_read import CandidateRead
 from pyrung.core.analysis.pilot.execution import (
     PulseHorizon,
     StopCondition,
@@ -32,9 +33,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Stuck,
     TargetSpec,
     act_identity,
-)
-from pyrung.core.analysis.pilot.options import (
-    CandidateRead,
 )
 from pyrung.core.analysis.pilot.overlay import (
     _pilot_rung_execution_receipt,

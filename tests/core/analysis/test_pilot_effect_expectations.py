@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from pyrung import PLC, Bool, Int, Program, calc, call, copy, latch, out, reset, rung, subroutine
 from pyrung.core.analysis.pdg import build_program_graph
 from pyrung.core.analysis.pilot import pilot_how
+from pyrung.core.analysis.pilot.candidate_read import _Candidate
 from pyrung.core.analysis.pilot.coast import (
     TARGET,
     CoastReceipt,
@@ -40,7 +41,6 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.options import _Candidate
 from pyrung.core.analysis.pilot.orientation_reading import _pulse_policy
 from pyrung.core.analysis.pilot.recording import _accepted_payload, _candidate_payload
 from pyrung.core.analysis.pilot.skiff import _skiff_expectation, run_pinned_scan

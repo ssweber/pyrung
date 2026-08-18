@@ -20,11 +20,12 @@ execute a trial, apply observations, or commit state.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from itertools import product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, cast
 
+import pyrung.core.analysis.pilot.candidate_read as _candidate_read
 from pyrung.core.analysis.pilot.availability import _WriterAvailability
 from pyrung.core.analysis.pilot.avoid import _avoid_forces
 from pyrung.core.analysis.pilot.awaited_actions import AwaitedAction
@@ -68,64 +69,11 @@ from pyrung.core.instruction.advance import constraint_holds
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.pipeline_graph import StaticPath
-    from pyrung.core.analysis.pilot.program_step import ProgramStep
     from pyrung.core.analysis.pilot.trace_tree import TraceAction
 
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _Candidate:
-    """One action option with exactly one provenance category."""
-
-    tag: str
-    value: Any
-    source: ActSource
-    provenance: tuple[str, ...] = ()
-    downstream_reach: int | None = None
-    # The first compass edge's executable promise. Trial verification uses this for every
-    # route-prescribed action, not only a bearing coast: landing elsewhere means
-    # the program displaced the route and must be investigated.
-    bearing_channel_tag: str | None = None
-    bearing_channel_value: Any = None
-    bearing_boundary: Any = None
-    route_context: RouteEdgeContext | None = None
-    # A program-awaited action (awaited_actions.py): the one operator action the program
-    # is dwelling on at the current state of an opaque-loop channel, surfaced when
-    # the trace dead-ends and the compass route is the avoided command.  Ordered
-    # like a prescribed edge (a recognized bearing), but below static-route and
-    # learned-action evidence, so it never overrides an available route.
-    awaited_action_note: str = ""
-    # An external input required by the exact program producer selected for an
-    # automatic route edge. It is a current-world bearing below an established
-    # route/awaited-action evidence and above an unrelated trace action.
-    program_note: str = ""
-    program_context_actions: tuple[_ActionPair, ...] = ()
-    # The exact consumer-relative reason this candidate was selected.  This is
-    # minted once from the rich trace receipt and must survive every lowering.
-    expectation: EffectExpectation | None = None
-
-    @property
-    def pair(self) -> _ActionPair:
-        return (self.tag, self.value)
-
-    @property
-    def route_prescribed(self) -> bool:
-        return self.source is ActSource.ROUTE
-
-    @property
-    def learned_prescribed(self) -> bool:
-        return self.source is ActSource.LEARNED_ACTION
-
-    @property
-    def awaited_action_prescribed(self) -> bool:
-        return self.source is ActSource.AWAITED_ACTION
-
-    @property
-    def program_prescribed(self) -> bool:
-        return self.source is ActSource.PROGRAM
 
 
 def _action_allowed(ctx: Any, pair: _ActionPair) -> bool:
@@ -134,204 +82,13 @@ def _action_allowed(ctx: Any, pair: _ActionPair) -> bool:
     return pair not in ctx.blocked_actions
 
 
-@dataclass(frozen=True)
-class WaitPrescription:
-    """One valid-by-construction wait bearing."""
-
-    heading: ChannelHeading | None
-    reason: str | None = None
-    frontier: tuple[_ActionPair, ...] = ()
-    expectation: EffectExpectation | None = None
-    landing_receipt_authority: LandingReceiptAuthority = LandingReceiptAuthority.ORIENTATION
-
-
-@dataclass(frozen=True)
-class WaitRead:
-    """One wait prescription together with every action its read discovered.
-
-    The prescription cannot cross candidate construction on its own.  Its
-    completion and exact-producer details travel with it into one ordinary
-    admission pass.
-    """
-
-    prescription: WaitPrescription | None
-    details: tuple[TraceAction, ...] = ()
-    declined_reason: str | None = None
-    program_step: ProgramStep | None = None
-    declined_frontier: tuple[_ActionPair, ...] = ()
-
-    @property
-    def reason(self) -> str | None:
-        return self.prescription.reason if self.prescription is not None else self.declined_reason
-
-    @property
-    def frontier(self) -> tuple[_ActionPair, ...]:
-        return (
-            self.prescription.frontier if self.prescription is not None else self.declined_frontier
-        )
-
-    def without_prescription(self) -> WaitRead:
-        """Remove coast authorization without discarding the reading's evidence."""
-
-        if self.prescription is None:
-            return self
-        return replace(
-            self,
-            prescription=None,
-            declined_reason=self.reason,
-            declined_frontier=self.frontier,
-        )
-
-
-@dataclass(frozen=True)
-class _TraceAdmission:
-    """One application of the candidate pool's ordinary admission rules."""
-
-    active_actions: tuple[_ActionPair, ...]
-    actions: tuple[_ActionPair, ...]
-    details: tuple[TraceAction, ...]
-    detail_by_pair: Mapping[_ActionPair, TraceAction]
-    managed_boolean_rungs: tuple[PilotRung, ...]
-    establish_pending: bool
-    # All current-world trace readings before pair nogoods remove executable
-    # singletons. Typed theory retries may re-resolve their exact rejected
-    # trigger here while every companion still passes ordinary admission.
-    read_details: tuple[TraceAction, ...] = ()
-
-
-@dataclass(frozen=True)
-class _AdmittedWait:
-    """A complete wait read after the candidate pool admitted its details."""
-
-    read: WaitRead
-    admission: _TraceAdmission
-
-    @property
-    def admitted_pairs(self) -> frozenset[_ActionPair]:
-        return frozenset(
-            (
-                *self.admission.actions,
-                *((rung.dest, rung.value) for rung in self.admission.managed_boolean_rungs),
-            )
-        )
-
-    @property
-    def executable_pairs(self) -> frozenset[_ActionPair]:
-        """Pairs whose ordinary Trace receipt permits use in this world.
-
-        Admission answers whether a pair survived policy and empirical
-        filters.  Availability is the separate present-tense receipt: a
-        chart-selected future producer must not turn an
-        ``UNAVAILABLE_FROM_HERE`` input into the current bearing merely by
-        naming it as a supplement.
-        """
-
-        step = self.read.program_step
-        handed_off = frozenset(step.handoff_by_action) if step is not None else frozenset()
-        return frozenset(
-            pair
-            for pair in self.admitted_pairs
-            for detail in (self.admission.detail_by_pair.get(pair),)
-            if detail is None
-            or detail.availability <= _WriterAvailability.AFTER_PREREQ
-            or pair in handed_off
-        )
-
-    @property
-    def admitted_supplement(self) -> bool:
-        step = self.read.program_step
-        if step is not None and step.required_pairs:
-            return step.required_pairs <= self.executable_pairs
-        return any(detail.pair in self.executable_pairs for detail in self.read.details)
-
-    @property
-    def viable(self) -> bool:
-        """Whether every exact-producer input survived this admission.
-
-        The program cannot be observed crossing an owned boundary unless every
-        external input that exact producer currently requires will be applied
-        by the same candidate result.
-        """
-
-        step = self.read.program_step
-        required_pairs = step.required_pairs if step is not None else frozenset()
-        return self.read.prescription is not None and (
-            not required_pairs or required_pairs <= self.executable_pairs
-        )
-
-    @property
-    def prescription(self) -> WaitPrescription | None:
-        return self.candidate_read.prescription
-
-    @property
-    def candidate_read(self) -> WaitRead:
-        """The evidence-preserving wait result candidate construction may use."""
-
-        if self.viable and not self.admission.establish_pending:
-            return self.read
-        return self.read.without_prescription()
-
-
-@dataclass(frozen=True)
-class RouteRead:
-    """The selected static route and its immediate executable action context."""
-
-    plan: StaticPath
-    candidates: tuple[_ActionPair, ...] = ()
-    co_actions: tuple[_ActionPair, ...] = ()
-
-
-@dataclass(frozen=True)
-class PrerequisiteRead:
-    """Executable prerequisites admitted by this read."""
-
-    pilot_rungs: tuple[PilotRung, ...] = ()
-
-
-@dataclass(frozen=True)
-class LearnedBatchRead:
-    """One learned joint action retained as a single executable artifact."""
-
-    actions: tuple[_ActionPair, ...]
-    expectation: EffectExpectation | None = None
-
-
-@dataclass(frozen=True)
-class CrossingBatchRead:
-    """One retained crossing DNF branch as an atomic executable overlay."""
-
-    actions: tuple[_ActionPair, ...]
-    fidelity: CrossingFidelity
-    expectation: EffectExpectation | None = None
-
-    @property
-    def constraints(self) -> tuple[Any, ...]:
-        return self.fidelity.constraints
-
-    @property
-    def reason(self) -> str:
-        return self.fidelity.reason
-
-    @property
-    def verify_required(self) -> bool:
-        return self.fidelity.verify_required
-
-    @property
-    def exact(self) -> bool | None:
-        return self.fidelity.exact
-
-    @property
-    def proposed(self) -> bool:
-        return self.fidelity.proposed
-
-
 def _effect_operation_batches(
     details: Sequence[TraceAction],
     snapshot: Mapping[str, Any],
     pdg: Any,
     program: Any,
     steerable: frozenset[str],
-) -> tuple[CrossingBatchRead, ...]:
+) -> tuple[_candidate_read.CrossingBatchRead, ...]:
     """Compose inputs which cover one exact writer's local conjunction.
 
     Target-wide trace actions are not an executable batch.  They become one
@@ -370,7 +127,7 @@ def _effect_operation_batches(
                 ):
                     operation["by_requirement"].setdefault(requirement, []).append(detail.pair)
 
-    reads: list[CrossingBatchRead] = []
+    reads: list[_candidate_read.CrossingBatchRead] = []
     seen: set[tuple[_ActionPair, ...]] = set()
     for operation in operations.values():
         step = operation["step"]
@@ -413,7 +170,7 @@ def _effect_operation_batches(
                 continue
             seen.add(actions)
             reads.append(
-                CrossingBatchRead(
+                _candidate_read.CrossingBatchRead(
                     actions=actions,
                     fidelity=CrossingFidelity(
                         constraints=(),
@@ -426,83 +183,6 @@ def _effect_operation_batches(
                 )
             )
     return tuple(reads)
-
-
-@dataclass(frozen=True)
-class CandidateDiagnosis:
-    """Terminal diagnosis owned by candidate construction."""
-
-    reason: str
-
-
-@dataclass(frozen=True)
-class CandidateRead:
-    """Owned current-world readings composed for Orientation."""
-
-    trace: _TraceAdmission
-    options: tuple[_Candidate, ...]
-    downstream_reach_cap: int
-    route: RouteRead | None = None
-    wait: WaitRead | None = None
-    prerequisites: PrerequisiteRead = PrerequisiteRead()
-    learned_batch: LearnedBatchRead | None = None
-    crossing_batches: tuple[CrossingBatchRead, ...] = ()
-    diagnosis: CandidateDiagnosis | None = None
-    # Exact widening artifact -> the sole selected primary-path promise.
-    # Missing entries are deliberately unresolved, never an invitation to
-    # borrow another active action's path.
-    widening_expectations: tuple[tuple[tuple[_ActionPair, ...], EffectExpectation], ...] = ()
-
-
-@dataclass(frozen=True)
-class _RouteAndCompletionRead:
-    """The admitted trace, static route, and charted-completion evidence."""
-
-    trace: _TraceAdmission
-    route: RouteRead | None
-    charted_completion: WaitRead | None
-
-    @property
-    def charted_wait(self) -> WaitRead | None:
-        """The charted completion that may participate in wait selection."""
-
-        if self.trace.establish_pending:
-            return None
-        return self.charted_completion
-
-
-@dataclass(frozen=True)
-class _PrerequisiteSeparation:
-    """Trace evidence after executable prerequisites have been separated."""
-
-    trace: _TraceAdmission
-    prerequisites: PrerequisiteRead
-    instruction_boundary: ChannelHeading | None
-
-
-@dataclass(frozen=True)
-class _LearnedWait:
-    """A learned transition whose next step is program-owned motion."""
-
-    read: WaitRead
-
-
-@dataclass(frozen=True)
-class _LearnedAction:
-    """A learned transition whose next step is one action."""
-
-    action: _ActionPair
-    expectation: EffectExpectation | None = None
-
-
-@dataclass(frozen=True)
-class _LearnedBatch:
-    """A learned transition whose next step is one atomic action batch."""
-
-    read: LearnedBatchRead
-
-
-_LearnedFallback: TypeAlias = _LearnedWait | _LearnedAction | _LearnedBatch
 
 
 def _hold_values(hold_value: Any) -> tuple[Any, ...]:
@@ -1594,7 +1274,7 @@ def _prescribe_wait(
     ctx: Any,
     *,
     reason: str | None = None,
-) -> WaitRead:
+) -> _candidate_read.WaitRead:
     """Mint a prescribed-wait bearing from one current-world edge read.
 
     The single owner of "a wait is prescribed" for both mint paths. A route
@@ -1608,9 +1288,9 @@ def _prescribe_wait(
     `_build_candidates` can pass them through ordinary trace admission.
     """
     if edge is None:
-        return WaitRead(WaitPrescription(None, reason))
+        return _candidate_read.WaitRead(_candidate_read.WaitPrescription(None, reason))
     if not _edge_grounded(edge):
-        return WaitRead(
+        return _candidate_read.WaitRead(
             None,
             declined_reason="completion edge has no grounded source value",
         )
@@ -1629,12 +1309,12 @@ def _prescribe_wait(
     route_expectation = _expectation_from_route_writer(ctx, edge, frame.snap)
 
     def _read(
-        prescription: WaitPrescription | None,
+        prescription: _candidate_read.WaitPrescription | None,
         *,
         step: Any = None,
         declined_reason: str | None = None,
         declined_frontier: tuple[_ActionPair, ...] = (),
-    ) -> WaitRead:
+    ) -> _candidate_read.WaitRead:
         if prescription is not None and step is not None:
             prescription = replace(
                 prescription,
@@ -1647,7 +1327,7 @@ def _prescribe_wait(
             if step is not None
             else ()
         )
-        return WaitRead(
+        return _candidate_read.WaitRead(
             prescription,
             details,
             declined_reason=declined_reason,
@@ -1786,7 +1466,7 @@ def _prescribe_wait(
                 else f"; {step.reason}"
             )
             return _read(
-                WaitPrescription(
+                _candidate_read.WaitPrescription(
                     _route_heading(coast_heading, step.boundary),
                     f"{route_reason}{observation}",
                     frontier=(
@@ -1812,7 +1492,7 @@ def _prescribe_wait(
                         ),
                     )
                 return _read(
-                    WaitPrescription(
+                    _candidate_read.WaitPrescription(
                         _route_heading(motion_heading or boundary_heading, boundary),
                         (
                             f"{route_reason}; supply its current input and hand off to "
@@ -1841,7 +1521,7 @@ def _prescribe_wait(
             )
         if step.status is ProgramStepStatus.INTERRUPTED:
             return _read(
-                WaitPrescription(
+                _candidate_read.WaitPrescription(
                     _route_heading(motion_heading),
                     f"{route_reason}; {step.reason}",
                     expectation=program_expectation,
@@ -1850,7 +1530,7 @@ def _prescribe_wait(
             )
         return _read(None, step=step, declined_reason=f"{route_reason}; {step.reason}")
 
-    prescription = WaitPrescription(
+    prescription = _candidate_read.WaitPrescription(
         _route_heading(),
         route_reason,
         expectation=route_expectation,
@@ -1860,7 +1540,7 @@ def _prescribe_wait(
     if edge is not None and not edge.program_producers and edge.completion:
         details, frontier = _completion_reread(edge, frame, state, ctx)
         prescription = replace(prescription, frontier=frontier)
-    return WaitRead(prescription, details)
+    return _candidate_read.WaitRead(prescription, details)
 
 
 def _admit_trace_details(
@@ -1869,7 +1549,7 @@ def _admit_trace_details(
     state: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
-) -> _TraceAdmission:
+) -> _candidate_read._TraceAdmission:
     """Apply one admission policy to every current-world trace reading.
 
     The broad target trace and supplemental completion/program reads differ in
@@ -2011,7 +1691,7 @@ def _admit_trace_details(
         )
         trace_action_details = establish_details
 
-    return _TraceAdmission(
+    return _candidate_read._TraceAdmission(
         active_actions=active_trace_actions,
         actions=trace_actions,
         read_details=tuple(ordered_details),
@@ -2023,16 +1703,16 @@ def _admit_trace_details(
 
 
 def _admit_wait_read(
-    read: WaitRead,
+    read: _candidate_read.WaitRead,
     base_details: tuple[TraceAction, ...],
     frame: Any,
     state: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
-) -> _AdmittedWait:
+) -> _candidate_read._AdmittedWait:
     """Admit one whole wait read through the candidate pool's only policy."""
 
-    return _AdmittedWait(
+    return _candidate_read._AdmittedWait(
         read=read,
         admission=_admit_trace_details(
             (*base_details, *read.details),
@@ -2049,7 +1729,7 @@ def _read_route_and_wait(
     state: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
-) -> _RouteAndCompletionRead:
+) -> _candidate_read._RouteAndCompletionRead:
     """Read the current trace, static route, and charted completion together."""
 
     admission = _admit_trace_details(
@@ -2077,7 +1757,7 @@ def _read_route_and_wait(
     route_plan = (
         None if route_blocked else _compass_route_plan(frame, ctx, key_nogoods, state=state)
     )
-    admitted_completion: _AdmittedWait | None = None
+    admitted_completion: _candidate_read._AdmittedWait | None = None
     if route_plan is not None and route_plan.first_edge.action is not None:
         general = _general_chart_completion_plan(
             frame,
@@ -2172,26 +1852,26 @@ def _read_route_and_wait(
         if route_candidates and route_plan is not None
         else ()
     )
-    charted_completion: WaitRead | None = None
+    charted_completion: _candidate_read.WaitRead | None = None
     if is_charted_completion:
         assert admitted_completion is not None
         charted_completion = admitted_completion.candidate_read
         admission = admitted_completion.admission
 
     route = (
-        RouteRead(route_plan, route_candidates, route_co_actions)
+        _candidate_read.RouteRead(route_plan, route_candidates, route_co_actions)
         if route_plan is not None
         else None
     )
-    return _RouteAndCompletionRead(admission, route, charted_completion)
+    return _candidate_read._RouteAndCompletionRead(admission, route, charted_completion)
 
 
 def _separate_prerequisites(
-    route_and_wait: _RouteAndCompletionRead,
+    route_and_wait: _candidate_read._RouteAndCompletionRead,
     frame: Any,
     state: Any,
     ctx: Any,
-) -> _PrerequisiteSeparation:
+) -> _candidate_read._PrerequisiteSeparation:
     """Separate executable holds without selecting among wait sources."""
 
     admission = route_and_wait.trace
@@ -2340,21 +2020,21 @@ def _separate_prerequisites(
         actions=trace_actions,
         details=trace_action_details,
     )
-    return _PrerequisiteSeparation(
+    return _candidate_read._PrerequisiteSeparation(
         updated_trace,
-        PrerequisiteRead(tuple(prerequisite_pilot_rungs)),
+        _candidate_read.PrerequisiteRead(tuple(prerequisite_pilot_rungs)),
         instruction_boundary,
     )
 
 
 def _read_learned_fallback(
-    route_and_wait: _RouteAndCompletionRead,
-    separated: _PrerequisiteSeparation,
+    route_and_wait: _candidate_read._RouteAndCompletionRead,
+    separated: _candidate_read._PrerequisiteSeparation,
     frame: Any,
     state: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
-) -> _LearnedFallback | None:
+) -> _candidate_read._LearnedFallback | None:
     """Read exactly one learned wait, action, or batch fallback."""
 
     route = route_and_wait.route
@@ -2438,7 +2118,7 @@ def _read_learned_fallback(
             destination=first_destination,
         )
         if not is_action(first_step):
-            return _LearnedWait(
+            return _candidate_read._LearnedWait(
                 _prescribe_wait(
                     None,
                     frame,
@@ -2450,10 +2130,10 @@ def _read_learned_fallback(
         if is_composite_action(first_step):
             members = cast("tuple[_ActionPair, ...]", tuple(first_step))
             if all(pair not in key_nogoods and _action_allowed(ctx, pair) for pair in members):
-                return _LearnedBatch(LearnedBatchRead(members, learned_expectation))
+                return _candidate_read._LearnedBatch(_candidate_read.LearnedBatchRead(members, learned_expectation))
             continue
         if first_step not in key_nogoods and _action_allowed(ctx, first_step):
-            return _LearnedAction(first_step, learned_expectation)
+            return _candidate_read._LearnedAction(first_step, learned_expectation)
     return None
 
 
@@ -2484,11 +2164,11 @@ def _unique_learned_expectation(
 
 def _select_wait(
     *,
-    charted_completion: WaitRead | None,
+    charted_completion: _candidate_read.WaitRead | None,
     instruction_boundary: ChannelHeading | None,
-    learned: _LearnedFallback | None,
+    learned: _candidate_read._LearnedFallback | None,
     has_candidates: bool,
-) -> WaitRead | None:
+) -> _candidate_read.WaitRead | None:
     """Select one wait from three explicit evidence sources.
 
     This is the sole chooser among learned motion, charted completion, and an
@@ -2518,7 +2198,7 @@ def _select_wait(
             prescription=replace(charted.prescription, heading=heading),
         )
 
-    selected = learned.read if isinstance(learned, _LearnedWait) else None
+    selected = learned.read if isinstance(learned, _candidate_read._LearnedWait) else None
     if charted is not None and (selected is None or selected.prescription is None):
         selected = charted
     if (
@@ -2530,8 +2210,8 @@ def _select_wait(
             f"advance {instruction_boundary.channel_tag} to its next boundary "
             f"{instruction_boundary.target_value!r}"
         )
-        selected = WaitRead(
-            WaitPrescription(
+        selected = _candidate_read.WaitRead(
+            _candidate_read.WaitPrescription(
                 instruction_boundary,
                 reason,
                 frontier=(),
@@ -2541,16 +2221,16 @@ def _select_wait(
 
 
 def _assemble_candidate_read(
-    route_and_wait: _RouteAndCompletionRead,
-    separated: _PrerequisiteSeparation,
-    learned: _LearnedFallback | None,
+    route_and_wait: _candidate_read._RouteAndCompletionRead,
+    separated: _candidate_read._PrerequisiteSeparation,
+    learned: _candidate_read._LearnedFallback | None,
     awaited_action: AwaitedAction | None,
     frame: Any,
     ctx: Any,
     key_nogoods: set[_ActionPair],
     *,
     state: Any = None,
-) -> CandidateRead:
+) -> _candidate_read.CandidateRead:
     """Compose the final durable candidate read from explicit phase receipts."""
 
     trace = separated.trace
@@ -2578,9 +2258,9 @@ def _assemble_candidate_read(
             if reach_by_tag.get(tag, 0) <= downstream_reach_cap
         )
 
-    learned_action = learned.action if isinstance(learned, _LearnedAction) else None
+    learned_action = learned.action if isinstance(learned, _candidate_read._LearnedAction) else None
     learned_action_expectation = (
-        learned.expectation if isinstance(learned, _LearnedAction) else None
+        learned.expectation if isinstance(learned, _candidate_read._LearnedAction) else None
     )
     program_step = (
         route_and_wait.charted_completion.program_step
@@ -2594,8 +2274,8 @@ def _assemble_candidate_read(
         if tree is not None and hasattr(tree, "ordered_crossing_branches")
         else ()
     )
-    structural_crossing_batches: tuple[CrossingBatchRead, ...] = tuple(
-        CrossingBatchRead(
+    structural_crossing_batches: tuple[_candidate_read.CrossingBatchRead, ...] = tuple(
+        _candidate_read.CrossingBatchRead(
             actions=branch.pairs,
             fidelity=branch.fidelity,
             expectation=expectation_from_selected_path(
@@ -2647,14 +2327,14 @@ def _assemble_candidate_read(
             prior.actions for prior in (*operation_batches, *structural_crossing_batches)[:index]
         }
     )
-    candidates: list[_Candidate] = []
+    candidates: list[_candidate_read._Candidate] = []
     seen_candidates: set[_ActionPair] = set()
     route_candidate_set = set(route_candidates)
 
     def _candidate_for(
         pair: _ActionPair,
         detail_override: TraceAction | None = None,
-    ) -> _Candidate:
+    ) -> _candidate_read._Candidate:
         source = (
             ActSource.ROUTE
             if pair in route_candidate_set
@@ -2824,7 +2504,7 @@ def _assemble_candidate_read(
             if source is ActSource.PROGRAM and program_step is not None
             else None
         )
-        return _Candidate(
+        return _candidate_read._Candidate(
             tag=pair[0],
             value=pair[1],
             source=source,
@@ -2983,7 +2663,7 @@ def _assemble_candidate_read(
         learned=learned,
         has_candidates=bool(candidates or crossing_batches),
     )
-    learned_batch = learned.read if isinstance(learned, _LearnedBatch) else None
+    learned_batch = learned.read if isinstance(learned, _candidate_read._LearnedBatch) else None
     stuck_reason: str | None = None
     if (
         not candidates
@@ -3020,7 +2700,7 @@ def _assemble_candidate_read(
         )
         if expectation is not None:
             widening_expectations.append((artifact, expectation))
-    return CandidateRead(
+    return _candidate_read.CandidateRead(
         trace=final_trace,
         options=tuple(candidates),
         downstream_reach_cap=downstream_reach_cap,
@@ -3029,7 +2709,7 @@ def _assemble_candidate_read(
         prerequisites=separated.prerequisites,
         learned_batch=learned_batch,
         crossing_batches=crossing_batches,
-        diagnosis=CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
+        diagnosis=_candidate_read.CandidateDiagnosis(stuck_reason) if stuck_reason is not None else None,
         widening_expectations=tuple(widening_expectations),
     )
 
@@ -3038,7 +2718,7 @@ def _build_candidates(
     frame: Any,
     state: Any,
     ctx: Any,
-) -> CandidateRead:
+) -> _candidate_read.CandidateRead:
     """Build one candidate read through explicit evidence-owning phases."""
 
     key_nogoods = set(ctx.compass.knowledge.nogood_pairs(frame.key))
@@ -3071,8 +2751,8 @@ def _build_candidates(
 
 
 def _candidate_applied(
-    candidate: _Candidate,
-    candidates: CandidateRead,
+    candidate: _candidate_read._Candidate,
+    candidates: _candidate_read.CandidateRead,
     ctx: Any,
 ) -> tuple[_ActionPair, ...]:
     pair = candidate.pair

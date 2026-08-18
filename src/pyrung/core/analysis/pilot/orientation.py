@@ -7,6 +7,7 @@ from typing import Any
 
 import pyrung.core.analysis.pilot.orientation_reading as _orientation_reading
 import pyrung.core.analysis.pilot.theory_orientation as _theory_orientation
+from pyrung.core.analysis.pilot.candidate_read import CandidateRead
 from pyrung.core.analysis.pilot.execution import (
     MotionKind,
 )
@@ -33,10 +34,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.options import (
-    CandidateRead,
-    _build_candidates,
-)
+from pyrung.core.analysis.pilot.options import _build_candidates
 from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
 )
