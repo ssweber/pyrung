@@ -205,11 +205,11 @@ def capture_execution_spans(
     return tuple(spans)
 
 
-def execution_epoch_owner(work: PLC, scan_id: int) -> tuple[Epoch, EpochQuery] | None:
+def execution_owner(work: PLC, scan_id: int) -> EpochQuery | None:
     """Resolve one physical scan to its unique immutable Epoch owner."""
 
     matches = tuple(
-        (epoch, owner)
+        owner
         for epoch, owner in work._causal_lineage.seal_through(scan_id)
         if epoch.first_scan <= scan_id <= epoch.last_scan
     )

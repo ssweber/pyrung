@@ -24,7 +24,7 @@ from pyrung.core.analysis.pilot.effects import ConsumerBoundary
 from pyrung.core.analysis.pilot.execution import (
     PulseHorizon,
     ScanEntryConfiguration,
-    execution_epoch_owner,
+    execution_owner,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
@@ -953,8 +953,8 @@ def _record_controlled_setup_attempt(
     execution_receipt = execution.execution
     if execution_receipt is None:
         raise ValueError("setup-first execution has no immutable execution receipt")
-    owned = execution_epoch_owner(execution.pulse.fork, execution.assertion_scan)
-    if owned is None:
+    owner = execution_owner(execution.pulse.fork, execution.assertion_scan)
+    if owner is None:
         raise ValueError("setup-first execution has no exact assertion owner")
     projection = execution.projection_at(execution.assertion_scan)
     if projection is None:

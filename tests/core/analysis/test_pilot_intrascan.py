@@ -357,9 +357,7 @@ def test_repeated_calls_keep_dynamic_identity_and_suppress_a_surviving_obligatio
 
     service_snapshots = _snapshots(result.observations)
     assert service_snapshots == _snapshots(_direct_window(expectation, plc))
-    assert tuple(replace(snapshot, execution_epoch=None) for snapshot in service_snapshots) == (
-        _snapshots(direct_ordered)
-    )
+    assert service_snapshots == _snapshots(direct_ordered)
     assert [observation.disposition for observation in result.observations] == [
         "OVERWRITTEN",
         "SURVIVED",

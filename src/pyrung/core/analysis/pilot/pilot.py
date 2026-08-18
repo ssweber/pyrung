@@ -61,7 +61,7 @@ from pyrung.core.analysis.pilot.execution import (
     ChannelMotion,
     ExecutionReceipt,
     capture_execution_spans,
-    execution_epoch_owner,
+    execution_owner,
 )
 from pyrung.core.analysis.pilot.intrascan import (
     research_intrascan_boundary_realization,
@@ -1345,8 +1345,8 @@ def _certify_current_target_prefix(
 
     if address(projected_occurrences[0]) != address(historical):
         return None
-    epoch_owner = execution_epoch_owner(pulse.fork, adoption_scan)
-    if epoch_owner is None:
+    owner = execution_owner(pulse.fork, adoption_scan)
+    if owner is None:
         return None
     assert state.key_config is not None
     boundary_key = _pilot_world_key(
@@ -1359,7 +1359,7 @@ def _certify_current_target_prefix(
         scan_id=adoption_scan,
         world_key=boundary_key,
         kind="target_prefix",
-        execution_ref=epoch_owner[0].reference,
+        execution_ref=owner.epoch.reference,
         landing_occurrence=occurrence_snapshot(historical),
     )
 

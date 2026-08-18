@@ -20,7 +20,7 @@ from pyrung.core.analysis.pilot.effects import (
     occurrence_snapshot,
     promote_terminal_target_observation,
 )
-from pyrung.core.analysis.pilot.execution import MotionKind, execution_epoch_owner
+from pyrung.core.analysis.pilot.execution import MotionKind, execution_owner
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     Bearing,
@@ -371,14 +371,14 @@ def adjacent_continuation_source(
         and prefix_proof.execution_ref == tip.execution_ref
         and prefix_proof.landing_occurrence is not None
     )
-    pulse_epoch_owner = execution_epoch_owner(pulse.fork, pulse.scan_before)
+    pulse_owner = execution_owner(pulse.fork, pulse.scan_before)
     exact_scan_ids = tuple(range(pulse.scan_before + 1, pulse.fork.state.scan_id + 1))
     if (
         not (tip.program_step_certified or ephemeral_prefix)
         or tip.scan_id != pulse.scan_before
         or tip.world_key != current_key
-        or pulse_epoch_owner is None
-        or pulse_epoch_owner[0].reference != tip.execution_ref
+        or pulse_owner is None
+        or pulse_owner.epoch.reference != tip.execution_ref
         or pulse.kernel_scan_ids != exact_scan_ids
         or any(pulse.projection_at(scan_id) is None for scan_id in exact_scan_ids)
     ):
@@ -434,10 +434,10 @@ def recovery_anchor_program_step(
         return None
     if continuation.tip.world_key != frame.key:
         return None
-    owned = execution_epoch_owner(state.work, state.work.state.scan_id)
+    owner = execution_owner(state.work, state.work.state.scan_id)
     if (
-        owned is None
-        or owned[0].reference != continuation.tip.execution_ref
+        owner is None
+        or owner.epoch.reference != continuation.tip.execution_ref
     ):
         return None
     expectation = _selected_terminal_target_expectation(frame, target, ctx)
@@ -598,9 +598,9 @@ def advance_recovery_continuation(
     if not certified:
         state.recovery_continuation = None
         return False
-    epoch_owner = execution_epoch_owner(pulse.fork, state.work.state.scan_id)
+    owner = execution_owner(pulse.fork, state.work.state.scan_id)
     projections = tuple(pulse.projection_at(scan_id) for scan_id in pulse.kernel_scan_ids)
-    if epoch_owner is None or any(projection is None for projection in projections):
+    if owner is None or any(projection is None for projection in projections):
         state.recovery_continuation = None
         return False
     exact_projections = tuple(projection for projection in projections if projection is not None)
@@ -631,7 +631,7 @@ def advance_recovery_continuation(
                 scan_id=state.work.state.scan_id,
                 world_key=key,
                 kind="unchanged_coast",
-                execution_ref=epoch_owner[0].reference,
+                execution_ref=owner.epoch.reference,
                 landing_occurrence=landing_occurrence,
             ),
         ),

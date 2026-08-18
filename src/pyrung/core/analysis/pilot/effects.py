@@ -181,15 +181,6 @@ class EffectOccurrenceSnapshot:
 
 
 @dataclass(frozen=True)
-class EffectEpochSnapshot:
-    """Detached interval metadata for the Epoch which owns an observation."""
-
-    first_scan: int
-    last_scan: int
-    initial_scan_id: int
-
-
-@dataclass(frozen=True)
 class EffectObligationSnapshot:
     tag: str
     value: Any
@@ -214,7 +205,6 @@ class EffectObservationSnapshot:
     observed_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
     displacement_enabling_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
     detail: str = ""
-    execution_epoch: EffectEpochSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -322,15 +312,6 @@ class EffectObservation:
                 occurrence_snapshot(read) for read in self.displacement_enabling_reads
             ),
             detail=self.detail,
-            execution_epoch=(
-                EffectEpochSnapshot(
-                    self.execution_epoch.first_scan,
-                    self.execution_epoch.last_scan,
-                    self.execution_epoch.initial_scan_id,
-                )
-                if self.execution_epoch is not None
-                else None
-            ),
         )
 
 

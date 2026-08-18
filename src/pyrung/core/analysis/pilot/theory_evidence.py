@@ -26,7 +26,7 @@ from pyrung.core.analysis.pilot.effects import (
 )
 from pyrung.core.analysis.pilot.execution import (
     ScanEntryConfiguration,
-    execution_epoch_owner,
+    execution_owner,
 )
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import (
@@ -143,14 +143,14 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
             owner_ref=checkpoint.owner.reference,
         )
     scan_id = checkpoint.world.work.state.scan_id
-    epoch_owner = execution_epoch_owner(checkpoint.world.work, scan_id)
+    owner = execution_owner(checkpoint.world.work, scan_id)
     # Requirement constraints belong to the theory version, not to the
     # physical scan-source identity. Compass world keys append them as a third
     # member for candidate/nogood isolation; strip that suffix here so adding a
     # later requirement does not manufacture a different historical source.
     raw_world_key = tuple(checkpoint.key)
     world_key = raw_world_key[:2] if len(raw_world_key) == 3 else raw_world_key
-    if epoch_owner is None:
+    if owner is None:
         # Boundary zero precedes the first execution epoch. Its retained
         # checkpoint owner is the exact source identity; the subsequent attempt
         # separately carries the owner of scan 1.
@@ -159,7 +159,7 @@ def _theory_boundary_from_checkpoint(checkpoint: _CausalCheckpoint) -> TheoryBou
             scan_id=scan_id,
             owner_ref=checkpoint.owner.reference,
         )
-    execution_ref = epoch_owner[0].reference
+    execution_ref = owner.epoch.reference
     return TheoryBoundaryIdentity(
         world_key=world_key,
         scan_id=scan_id,
@@ -180,10 +180,10 @@ def _theory_live_boundary(state: _PilotState) -> TheoryBoundaryIdentity:
     )
     key = key[:2] if len(key) == 3 else key
     scan_id = state.work.state.scan_id
-    epoch_owner = execution_epoch_owner(state.work, scan_id)
-    if epoch_owner is None:
+    owner = execution_owner(state.work, scan_id)
+    if owner is None:
         raise ValueError("working theory requires one exact live execution owner")
-    execution_ref = epoch_owner[0].reference
+    execution_ref = owner.epoch.reference
     world_key = tuple(key)
     return TheoryBoundaryIdentity(
         world_key=world_key,
@@ -322,13 +322,13 @@ def _theory_execution_evidence(
     """Detach one exact attempt owner and its dynamic occurrence evidence."""
 
     observations = execution.effect_observations
-    owned = execution_epoch_owner(execution.pulse.fork, execution.assertion_scan)
-    if owned is None:
+    owner = execution_owner(execution.pulse.fork, execution.assertion_scan)
+    if owner is None:
         raise ValueError("theory attempt requires one exact assertion owner")
     snapshots = tuple(observation.diagnostic_snapshot() for observation in observations)
     occurrence_evidence = tuple(_semantic_key(snapshot) for snapshot in snapshots)
     return (
-        owned[0].reference,
+        owner.epoch.reference,
         occurrence_evidence,
         snapshots,
     )

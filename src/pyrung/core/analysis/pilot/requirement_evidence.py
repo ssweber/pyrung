@@ -23,7 +23,7 @@ from pyrung.core.analysis.pilot.effects import (
     promote_terminal_target_observation,
     terminal_target_replay_scan_ids,
 )
-from pyrung.core.analysis.pilot.execution import ExecutionReceipt, execution_epoch_owner
+from pyrung.core.analysis.pilot.execution import ExecutionReceipt, execution_owner
 from pyrung.core.analysis.pilot.intrascan import (
     IntrascanQuestion,
     IntrascanResult,
@@ -323,7 +323,7 @@ def _derive_route_landing_requirements(
             # Until that receipt exists, fail closed instead of "preventing"
             # productive route work such as the dwell that starts a watchdog.
             continue
-        owner = execution_epoch_owner(executed.pulse.fork, crossing.projection.scan_id)
+        owner = execution_owner(executed.pulse.fork, crossing.projection.scan_id)
         if owner is None:
             continue
         exact_nodes = tuple(
@@ -339,8 +339,8 @@ def _derive_route_landing_requirements(
             derive_overwriter_guard_requirement_from_write(
                 crossing.write,
                 crossing.projection,
-                execution_epoch=owner[0],
-                execution_owner=owner[1],
+                execution_epoch=owner.epoch,
+                execution_owner=owner,
                 selected_writer=(node.subroutine, node.rung_index, node.branch_path),
                 source_world_key=checkpoint.key,
                 source_checkpoint=checkpoint,

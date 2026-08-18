@@ -63,7 +63,6 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
 
     epoch_ref = EpochRef(10_001)
     epoch = SimpleNamespace(reference=epoch_ref)
-    owner = object()
     source_key = ("repaired-source",)
     continuation = _RecoveryContinuation(
         checkpoint_owner=object(),
@@ -117,8 +116,8 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
     )
     monkeypatch.setattr(
         recovery_continuation,
-        "execution_epoch_owner",
-        lambda work, scan_id: (epoch, owner),
+        "execution_owner",
+        lambda work, scan_id: SimpleNamespace(epoch=epoch),
     )
     monkeypatch.setattr(
         recovery_continuation,
@@ -147,7 +146,6 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
 def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> None:
     epoch_ref = EpochRef(10_002)
     epoch = SimpleNamespace(reference=epoch_ref)
-    owner = object()
     checkpoint_owner = object()
     source_checkpoint = object()
     source_key = ("source",)
@@ -190,8 +188,8 @@ def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> 
     )
     monkeypatch.setattr(
         recovery_continuation,
-        "execution_epoch_owner",
-        lambda work, scan_id: (epoch, owner),
+        "execution_owner",
+        lambda work, scan_id: SimpleNamespace(epoch=epoch),
     )
 
     assert recovery_continuation.adjacent_continuation_source(state, pulse) is source_checkpoint
