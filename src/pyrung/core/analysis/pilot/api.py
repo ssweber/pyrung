@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 import pyrung.core.analysis.pilot.pilot as _engine
+import pyrung.core.analysis.pilot.target_route as _target_route
 from pyrung.core.analysis.graph import Plan, PlanStatus, RouteTaken
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import PilotEvent, _ActionPair
@@ -121,14 +122,14 @@ def _single_target_plan(
     linked_block = (
         None
         if outcome.reached
-        else _engine._linked_feedback_block(
+        else _target_route.linked_feedback_block(
             target_tag,
             target_value,
             setup.diag_snapshot,
             setup.pdg,
             setup.program,
             setup.steerable,
-            _engine._harness_couplings(setup.work),
+            _target_route.harness_couplings(setup.work),
         )
     )
     return Plan(
@@ -145,7 +146,7 @@ def _single_target_plan(
             else PlanStatus.STOPPED
         ),
         route=(
-            _engine._report_selected_route(route_taken, outcome.root_route)
+            _target_route.report_selected_route(route_taken, outcome.root_route)
             if outcome.reached
             else None
         ),

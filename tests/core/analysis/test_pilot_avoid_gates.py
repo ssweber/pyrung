@@ -8,7 +8,7 @@ The user's contract:
 
 Three internal gates enforce it:
 
-* **Route gate** (``_prepare_route`` / ``_route_forces``) — a route whose trace
+* **Route gate** (``prepare_target_route`` / ``_route_forces``) — a route whose trace
   forces the avoided predicate is pruned before the drive begins.
 * **Action gate** (``_try_action_batch`` — the convergence seam for command
   pulses, prescribed batches and widening; ``candidates`` prerequisite holds;
