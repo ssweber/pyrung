@@ -40,6 +40,7 @@ from pyrung.core.analysis.pilot.earned_work import (
 )
 from pyrung.core.analysis.pilot.effects import (
     EffectObservation,
+    exact_first_departure_write,
     exact_last_landing_write,
     fulfilled_expectation_observations,
     occurrence_snapshot,
@@ -80,8 +81,9 @@ from pyrung.core.analysis.pilot.requirements import (
     classify_bound_operand_authority,
     derive_advance_requirement_from_effect,
     derive_overwriter_guard_requirement_from_effect,
+    expectation_occurrence_ownerships,
     match_expectation_receipt,
-    resolve_expectation_receipt_producer,
+    resolve_expectation_receipt_consumer,
 )
 from pyrung.core.analysis.pilot.trace import target_reached
 from pyrung.core.analysis.pilot.types import (
@@ -93,6 +95,7 @@ from pyrung.core.analysis.pilot.types import (
     TargetReached,
     _AcceptedTrial,
     _ActionPair,
+    _CausalCheckpoint,
     _Checkpoint,
     _CheckpointOwner,
     _ConfirmedCorrection,
@@ -114,7 +117,19 @@ from pyrung.core.analysis.sp_values import _values_match
 if TYPE_CHECKING:
     from pyrung.core.runner import PLC
 
+
 _PENDING_DEPARTURE_SCAN_BUDGET = 2000
+
+
+@dataclass(frozen=True)
+class _ConductivityDepartureLink:
+    """One root-owned transaction and its later consumed flow boundary."""
+
+    source: EffectObservation
+    frontier: EffectObservation
+    departure: BearingDeparture
+    harmful_write: Any
+    projection: Any
 
 
 def _delayed_overwriter_fallback_allowed(observation: EffectObservation) -> bool:
@@ -160,13 +175,19 @@ def _delayed_requirement_from_regression(
     state: _PilotState,
     ctx: _PilotContext,
     witness: RegressionWitness | None,
-) -> tuple[ExpectationReceipt, Any, EffectObservation, FailedEffectReceipt] | None:
+    *,
+    recovery_checkpoint: _CausalCheckpoint | None = None,
+) -> tuple[_CausalCheckpoint, Any, EffectObservation, FailedEffectReceipt] | None:
     """Adapt a later exact regression into the ordinary failed-effect seam."""
 
     source = _regression_expectation_source(state, witness)
     if source is None or witness is None:
         return None
     receipt, source_link = source
+    source_checkpoint = recovery_checkpoint or receipt.source_checkpoint
+    source_world_key = source_checkpoint.key
+    if source_world_key is None:
+        return None
     producer_snapshot = occurrence_snapshot(source_link.exact_write)
     producer_indices = tuple(
         index
@@ -204,10 +225,10 @@ def _delayed_requirement_from_regression(
         execution_owner=harmful_link.execution_owner,
         execution_projection=projection,
     )
-    source_work = receipt.source_checkpoint.world.work
+    source_work = source_checkpoint.world.work
     source_tags = source_work.state.tags
     known = source_work._known_tags_by_name
-    configured = getattr(receipt.source_checkpoint, "configured_inputs", None)
+    configured = getattr(source_checkpoint, "configured_inputs", None)
     if configured is None:
         # Lightweight unit-test checkpoints predate the immutable provenance
         # field; retain their exact manager-backed behavior as a safe fallback.
@@ -250,8 +271,8 @@ def _delayed_requirement_from_regression(
         execution_epoch=harmful_link.execution_epoch,
         execution_owner=harmful_link.execution_owner,
         selected_writer=obligation.producer,
-        source_world_key=receipt.source_world_key,
-        source_checkpoint=receipt.source_checkpoint,
+        source_world_key=source_world_key,
+        source_checkpoint=source_checkpoint,
         provenance="delayed-regression",
     )
     if derivation.requirement is None and _delayed_overwriter_fallback_allowed(observation):
@@ -261,8 +282,8 @@ def _delayed_requirement_from_regression(
             execution_epoch=harmful_link.execution_epoch,
             execution_owner=harmful_link.execution_owner,
             selected_writer=obligation.producer,
-            source_world_key=receipt.source_world_key,
-            source_checkpoint=receipt.source_checkpoint,
+            source_world_key=source_world_key,
+            source_checkpoint=source_checkpoint,
             provenance="delayed-regression-overwriter",
         )
     if derivation.requirement is None:
@@ -271,11 +292,11 @@ def _delayed_requirement_from_regression(
         explanation=derivation.explanation,
         observation=observation.diagnostic_snapshot(),
         selected_writer=obligation.producer,
-        source_world_key=receipt.source_world_key,
-        checkpoint_owner=receipt.checkpoint_owner,
+        source_world_key=source_world_key,
+        checkpoint_owner=source_checkpoint.owner,
         execution_epoch=harmful_link.execution_epoch,
         execution_owner=harmful_link.execution_owner,
-        source_checkpoint=receipt.source_checkpoint,
+        source_checkpoint=source_checkpoint,
         act_identity=receipt.act_identity,
         local_act=receipt.local_act,
         local_bearing=receipt.local_bearing,
@@ -290,7 +311,75 @@ def _delayed_requirement_from_regression(
         for current in state.active_requirements
     ):
         state.active_requirements.append(requirement)
-    return receipt, requirement, observation, failed
+    return source_checkpoint, requirement, observation, failed
+
+
+def _productive_tip_checkpoint(
+    trial: _AcceptedTrial,
+    state: _PilotState,
+    ctx: _PilotContext,
+    source_checkpoint: Any,
+    *,
+    departure_scan: int | None,
+) -> _CausalCheckpoint | None:
+    """Retain an exact consumed scan only when a later deadline follows it.
+
+    This is an executable prefix of the already-adopted act, not a folded
+    continuation or predicted state.  The runner forks its immutable lineage
+    at the ScanProgressReceipt's productive scan and the replay journal is
+    clipped at that same physical boundary.
+    """
+
+    progress = trial.execution.scan_progress
+    pulse = trial.attempt.pulse
+    if (
+        progress is None
+        or progress.kind != "selected-producer"
+        or departure_scan is None
+        or departure_scan <= progress.productive_scan
+        or progress.productive_scan not in pulse.kernel_scan_ids
+        or pulse.projection_at(progress.productive_scan) is None
+        or not state.work.history.contains(progress.productive_scan)
+    ):
+        return None
+    scan_id = progress.productive_scan
+    work = fork_with_pilot_rungs(
+        state.work,
+        state.pilot_rungs,
+        scan_id=scan_id,
+    )
+    committed = []
+    for act in state.committed_acts:
+        steps = tuple(
+            step if step.scan_after <= scan_id else replace(step, scan_after=scan_id)
+            for step in act.steps
+            if step.scan_before < scan_id
+        )
+        if steps:
+            committed.append(replace(act, steps=steps))
+    world = state.world.set(
+        work=work,
+        committed_acts=pvector(committed),
+    )
+    assert state.key_config is not None
+    key = _pilot_world_key(
+        dict(work.state.tags),
+        state.key_config,
+        state.pilot_rungs,
+        state.active_requirements,
+    )
+    configured = frozenset(
+        {
+            *ctx.configured_inputs,
+            *getattr(source_checkpoint, "configured_inputs", frozenset()),
+        }
+    )
+    return _CausalCheckpoint(
+        key=key,
+        world=world,
+        objective=trial.attempt.bearing.objective,
+        configured_inputs=configured,
+    )
 
 
 class DepartureAction(Enum):
@@ -1561,31 +1650,65 @@ def _investigate_and_revert(
         retained_sources: list[EffectObservation] = []
         if channel_motion.channel_tag is not None:
             tenure_value = execution.before_snap.get(channel_motion.channel_tag)
-            for receipt in state.expectation_receipts:
-                for index, obligation in enumerate(receipt.expectation.obligations):
-                    if obligation.tag != channel_motion.channel_tag or not _values_match(
-                        obligation.value, tenure_value
-                    ):
-                        continue
-                    producer = resolve_expectation_receipt_producer(receipt, index)
-                    if producer is None or producer.scan_id < origin.anchor_scan:
-                        continue
-                    projection = state.work._replay_rung_write_projection_at(producer.scan_id)
-                    if projection is None:
-                        continue
-                    retained_sources.append(
-                        EffectObservation(
-                            obligation=obligation,
-                            disposition="SURVIVED",
-                            appeared=producer,
-                            displacement=None,
-                            observed_reads=(),
-                            detail="accepted route landing established this channel tenure",
-                            execution_epoch=receipt.execution_epoch,
-                            execution_owner=receipt.execution_owner,
-                            execution_projection=projection,
+            live_epochs = tuple(
+                epoch for epoch, _owner in state.work._causal_lineage.seal_through(end_scan)
+            )
+            for ownership in expectation_occurrence_ownerships(state.expectation_receipts):
+                qualifying = tuple(
+                    support
+                    for support in ownership.supports
+                    if any(support.receipt.execution_epoch is epoch for epoch in live_epochs)
+                    if (
+                        obligation := support.receipt.expectation.obligations[
+                            support.obligation_index
+                        ]
+                    ).tag
+                    == channel_motion.channel_tag
+                    and _values_match(obligation.value, tenure_value)
+                )
+                if not qualifying:
+                    continue
+                consumed = tuple(
+                    (support, consumer)
+                    for support in qualifying
+                    if (
+                        consumer := resolve_expectation_receipt_consumer(
+                            support.receipt,
+                            support.obligation_index,
                         )
                     )
+                    is not None
+                )
+                selected = (
+                    consumed[0]
+                    if len(consumed) == 1
+                    else (qualifying[0], None)
+                    if len(qualifying) == 1
+                    else None
+                )
+                if selected is None:
+                    continue
+                support, consumer = selected
+                receipt = support.receipt
+                obligation = receipt.expectation.obligations[support.obligation_index]
+                projection = state.work._replay_rung_write_projection_at(support.producer.scan_id)
+                if projection is None:
+                    continue
+                retained_sources.append(
+                    EffectObservation(
+                        obligation=obligation,
+                        disposition="SURVIVED",
+                        appeared=support.producer,
+                        consumer_read=consumer,
+                        displacement=None,
+                        observed_reads=(),
+                        detail="accepted occurrence group established this channel tenure",
+                        execution_epoch=receipt.execution_epoch,
+                        execution_owner=receipt.execution_owner,
+                        execution_projection=projection,
+                    )
+                )
+        retained_source: EffectObservation | None = None
         if retained_sources:
             latest_scan = max(item.appeared.scan_id for item in retained_sources if item.appeared)
             latest = tuple(
@@ -1594,8 +1717,60 @@ def _investigate_and_revert(
                 if item.appeared is not None and item.appeared.scan_id == latest_scan
             )
             if len(latest) == 1:
-                fulfilled = (*fulfilled, latest[0])
-        exact_delayed_links: list[tuple[Any, BearingDeparture, Any, Any]] = []
+                retained_source = latest[0]
+        exact_delayed_links: list[_ConductivityDepartureLink] = []
+        bridged_frontier: EffectObservation | None = None
+        consumed_frontiers = tuple(
+            observation
+            for observation in fulfilled
+            if observation.consumer_read is not None
+            and retained_source is not None
+            and observation.obligation.tag == retained_source.obligation.tag
+            and observation.appeared is not None
+            and retained_source.appeared is not None
+            and (observation.appeared.scan_id, observation.appeared.ordinal)
+            > (retained_source.appeared.scan_id, retained_source.appeared.ordinal)
+        )
+        if retained_source is not None and len(consumed_frontiers) == 1:
+            frontier = consumed_frontiers[0]
+            consumer = frontier.consumer_read
+            assert consumer is not None
+            projections = tuple(
+                projection
+                for scan_id in range(consumer.scan_id, end_scan + 1)
+                if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
+            )
+            # The consumed frontier may legitimately hand the channel back to
+            # its route source before the eventual bad landing (41 -> 40 ->
+            # 91 in the neutral route).  The transaction receipt owns that
+            # route source; select the exact later writer which owns the
+            # observed final landing instead of misclassifying the ordinary
+            # hand-back as the departure.
+            departure_write = exact_last_landing_write(
+                projections,
+                after=consumer,
+                tag=frontier.obligation.tag,
+                target_value=frontier.obligation.value,
+                landing_value=execution.after_snap.get(frontier.obligation.tag),
+            )
+            if departure_write is not None:
+                projection, write = departure_write
+                bridged_frontier = frontier
+                exact_delayed_links.append(
+                    _ConductivityDepartureLink(
+                        source=retained_source,
+                        frontier=frontier,
+                        departure=BearingDeparture(
+                            retained_source.obligation.tag,
+                            retained_source.obligation.value,
+                            write.scan_id,
+                        ),
+                        harmful_write=write,
+                        projection=projection,
+                    )
+                )
+        if not exact_delayed_links and retained_source is not None:
+            fulfilled = (*fulfilled, retained_source)
         for observation in fulfilled:
             consumer = observation.consumer_read
             appeared = observation.appeared
@@ -1608,28 +1783,46 @@ def _investigate_and_revert(
                 for scan_id in range(start_scan, end_scan + 1)
                 if (projection := state.work._replay_rung_write_projection_at(scan_id)) is not None
             )
-            landing = exact_last_landing_write(
-                projections,
-                after=consumer if consumer is not None else appeared,
-                tag=observation.obligation.tag,
-                target_value=observation.obligation.value,
-                landing_value=landing_value,
+            landing = (
+                exact_last_landing_write(
+                    projections,
+                    after=consumer,
+                    tag=observation.obligation.tag,
+                    target_value=observation.obligation.value,
+                    landing_value=landing_value,
+                )
+                if consumer is not None and observation is bridged_frontier
+                else exact_first_departure_write(
+                    projections,
+                    after=consumer,
+                    tag=observation.obligation.tag,
+                    tenure_value=observation.obligation.value,
+                )
+                if consumer is not None
+                else exact_last_landing_write(
+                    projections,
+                    after=appeared,
+                    tag=observation.obligation.tag,
+                    target_value=observation.obligation.value,
+                    landing_value=landing_value,
+                )
             )
             if landing is not None:
                 projection, write = landing
                 exact_delayed_links.append(
-                    (
-                        observation,
-                        BearingDeparture(
+                    _ConductivityDepartureLink(
+                        source=observation,
+                        frontier=observation,
+                        departure=BearingDeparture(
                             observation.obligation.tag,
                             observation.obligation.value,
                             write.scan_id,
                         ),
-                        write,
-                        projection,
+                        harmful_write=write,
+                        projection=projection,
                     )
                 )
-        exact_delayed_departures = [link[1] for link in exact_delayed_links]
+        exact_delayed_departures = [link.departure for link in exact_delayed_links]
         delayed_bearing = tuple(
             (departure.tag, departure.value) for departure in exact_delayed_departures
         )
@@ -1705,16 +1898,24 @@ def _investigate_and_revert(
         # Join later causes on the adopted live lineage.  The disposable pulse
         # fork can contain equal history under distinct Epoch/query objects;
         # expectation receipts are intentionally bound to ``state.work``.
-        exact_witnesses: list[RegressionWitness] = []
+        exact_witnesses: list[
+            tuple[RegressionWitness, ExpectationReceipt, _ConductivityDepartureLink]
+        ] = []
         sealed = state.work._causal_lineage.seal_through(end_scan)
-        for observation, departure, harmful_write, projection in exact_delayed_links:
+        for link in exact_delayed_links:
+            observation = link.source
+            if observation.appeared is None:
+                continue
+            departure = link.departure
+            harmful_write = link.harmful_write
+            projection = link.projection
             source_matches = tuple(
-                (receipt, index, producer)
-                for receipt in state.expectation_receipts
-                for index, snapshot in enumerate(receipt.producer_occurrences)
-                if snapshot == occurrence_snapshot(observation.appeared)
-                for producer in (resolve_expectation_receipt_producer(receipt, index),)
-                if producer is not None
+                (support.receipt, support.obligation_index, support.producer)
+                for ownership in expectation_occurrence_ownerships(state.expectation_receipts)
+                if ownership.occurrence == occurrence_snapshot(observation.appeared)
+                for support in ownership.supports
+                if support.receipt.expectation.obligations[support.obligation_index]
+                is observation.obligation
             )
             harmful_owner = next(
                 (
@@ -1751,37 +1952,77 @@ def _investigate_and_revert(
                 execution_projection=projection,
             )
             exact_witnesses.append(
-                RegressionWitness(
-                    channel_tag=departure.tag,
-                    source=departure.value,
-                    departed=harmful_write.transition.to_value,
-                    landing=execution.after_snap.get(departure.tag),
-                    departure_scan=departure.scan,
-                    cause=(harmful_link,),
-                    causal_spine=frozenset(
-                        (
-                            departure.tag,
-                            *(
-                                read.occurrence.name
-                                for read in projection.enabling_read_closure_observed_by_write(
-                                    harmful_write
-                                )
-                            ),
-                        )
+                (
+                    RegressionWitness(
+                        channel_tag=departure.tag,
+                        source=departure.value,
+                        departed=harmful_write.transition.to_value,
+                        landing=execution.after_snap.get(departure.tag),
+                        departure_scan=departure.scan,
+                        cause=(harmful_link,),
+                        causal_spine=frozenset(
+                            (
+                                departure.tag,
+                                *(
+                                    read.occurrence.name
+                                    for read in projection.enabling_read_closure_observed_by_write(
+                                        harmful_write
+                                    )
+                                ),
+                            )
+                        ),
+                        owner_snapshot=dict(projection.entry_tags),
+                        receipt_links=(source_link,),
                     ),
-                    owner_snapshot=dict(projection.entry_tags),
-                    receipt_links=(source_link,),
+                    receipt,
+                    link,
                 )
             )
-        regression_witness = (
-            exact_witnesses[0]
+        current_act_identity = act_identity(bearing_owner.act)
+        direct_current = tuple(
+            item
+            for item in exact_witnesses
+            for witness, receipt, link in (item,)
+            if receipt.act_identity == current_act_identity and link.source is link.frontier
+        )
+        current_owned = tuple(
+            item
+            for item in exact_witnesses
+            for _witness, receipt, _link in (item,)
+            if receipt.act_identity == current_act_identity
+        )
+        selected_exact = (
+            direct_current[0]
+            if len(direct_current) == 1
+            else current_owned[0]
+            if len(current_owned) == 1
+            else exact_witnesses[0]
             if len(exact_witnesses) == 1
+            else None
+        )
+        regression_witness = (
+            selected_exact[0]
+            if selected_exact is not None
             else incident_regression_witness(state.work, incident)
+        )
+        recovery_checkpoint = (
+            _productive_tip_checkpoint(
+                trial,
+                state,
+                ctx,
+                selected_exact[1].source_checkpoint,
+                departure_scan=regression_witness.departure_scan,
+            )
+            if selected_exact is not None
+            and selected_exact[1].act_identity == current_act_identity
+            and regression_witness is not None
+            else None
         )
         delayed_requirement = _delayed_requirement_from_regression(
             state,
             ctx,
             regression_witness,
+            recovery_checkpoint=recovery_checkpoint,
         )
         if delayed_requirement is None and exact_witnesses:
             regression_witness = incident_regression_witness(state.work, generic_incident)
@@ -1791,13 +2032,17 @@ def _investigate_and_revert(
                 regression_witness,
             )
         if delayed_requirement is not None:
-            expectation_receipt, requirement, _observation, failed_receipt = delayed_requirement
-            # The matched expectation owns the rollback source.  Its historical
-            # future remains causal evidence on the retained Epoch receipt, but
-            # is not an executable prefix: restore the source world and return
-            # immediately so the outer loop performs one bounded local retry.
+            recovery_source, requirement, _observation, failed_receipt = delayed_requirement
+            # Same-scan failures restore the matched transaction source.  A
+            # later exact deadline may instead retain its already-executed
+            # productive tip.  In either case the selected checkpoint is an
+            # executable prefix, never a folded future.
             incident_scan = state.work.state.scan_id
-            state.load_world(expectation_receipt.source_checkpoint.world)
+            state.load_world(recovery_source.world)
+            if all(
+                current.owner is not recovery_source.owner for current in state.temporal_checkpoints
+            ):
+                state.temporal_checkpoints.append(recovery_source)
             state.checkpoints.clear()
             state.pending_departure = None
             return (
@@ -1832,14 +2077,14 @@ def _investigate_and_revert(
                     {
                         "from_trend": verified.trend,
                         "to_trend": state.best_trend,
-                        "checkpoint_key": expectation_receipt.source_world_key,
+                        "checkpoint_key": recovery_source.key,
                         "regression_nogoods": frozenset(),
                         "pilot_rungs": tuple(state.pilot_rungs),
                         "channel_transitions": (),
                         "investigation": {
                             "delayed_expectation": True,
                             "requirement": requirement.diagnostic_snapshot(),
-                            "receipt": expectation_receipt.diagnostic_snapshot(),
+                            "receipt": failed_receipt.diagnostic_snapshot(),
                             "retained_suffix": False,
                         },
                         "revoked_corrections": (),

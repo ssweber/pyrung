@@ -15,6 +15,7 @@ from pyrung.core.analysis.pilot.requirements import (
     ActiveRequirement,
     GuardRequirementAtom,
     GuardRequirementExpr,
+    OperandAuthority,
 )
 from pyrung.core.analysis.pilot.world_key import _semantic_key
 
@@ -27,6 +28,22 @@ class TemporalNeedAtom:
     condition: Any
     source_path: tuple[int, ...] = ()
     guard_atom: GuardRequirementAtom | None = None
+
+    @property
+    def occurrence(self) -> Any:
+        """Exact read occurrence at which this scalar condition was demanded."""
+
+        if self.guard_atom is not None:
+            return self.guard_atom.deadline
+        return self.requirement.demanding_occurrence
+
+    @property
+    def operand_authority(self) -> OperandAuthority:
+        """Ownership attached to this exact scalar occurrence."""
+
+        if self.guard_atom is not None:
+            return self.guard_atom.operand_authority
+        return self.requirement.operand_authority
 
     @property
     def identity(self) -> tuple[Any, ...]:
@@ -45,8 +62,115 @@ class TemporalNeedBranch:
     atoms: tuple[TemporalNeedAtom, ...]
 
     @property
+    def occurrence_demands(self) -> tuple[OccurrenceDemand, ...]:
+        """Physical scalar demands, retaining every logical supporter."""
+
+        return _occurrence_demands(self.atoms)
+
+    @property
     def identity(self) -> tuple[Any, ...]:
         return ("temporal-need-branch", tuple(atom.identity for atom in self.atoms))
+
+
+@dataclass(frozen=True)
+class OccurrenceDemand:
+    """One physical missing occurrence supported by one or more obligations.
+
+    A terminal and a nonterminal obligation can observe the same false scalar
+    read.  They remain distinct logical owners, but they are not two physical
+    traceback hops.  This read model makes that relationship explicit before
+    Compass chooses any navigation action.
+    """
+
+    condition: Any
+    occurrence: Any
+    supporting_atoms: tuple[TemporalNeedAtom, ...]
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            "occurrence-demand",
+            _semantic_key(self.condition),
+            _semantic_key(self.occurrence),
+        )
+
+    @property
+    def supporting_requirements(self) -> tuple[ActiveRequirement, ...]:
+        """All distinct live requirements which own this physical demand."""
+
+        retained: list[ActiveRequirement] = []
+        identities: list[Any] = []
+        for atom in self.supporting_atoms:
+            identity = _semantic_key(atom.requirement.navigation_identity)
+            if identity in identities:
+                continue
+            identities.append(identity)
+            retained.append(atom.requirement)
+        return tuple(retained)
+
+    @property
+    def operand_authorities(self) -> frozenset[OperandAuthority]:
+        """Every ownership claim; conflicts remain visible and fail closed."""
+
+        return frozenset(atom.operand_authority for atom in self.supporting_atoms)
+
+    @property
+    def selected_writers(self) -> tuple[Any, ...]:
+        """Every distinct writer designation retained by the supporters."""
+
+        writers: list[Any] = []
+        identities: list[Any] = []
+        for requirement in self.supporting_requirements:
+            writer = getattr(requirement, "selected_writer", None)
+            identity = _semantic_key(writer)
+            if identity in identities:
+                continue
+            identities.append(identity)
+            writers.append(writer)
+        return tuple(writers)
+
+    @property
+    def obstruction_occurrences(self) -> tuple[Any, ...]:
+        """All exact harmful writes claimed by the logical supporters."""
+
+        occurrences: list[Any] = []
+        identities: list[Any] = []
+        for requirement in self.supporting_requirements:
+            occurrence = getattr(requirement, "obstruction_occurrence", None)
+            if occurrence is None:
+                continue
+            identity = _semantic_key(occurrence)
+            if identity in identities:
+                continue
+            identities.append(identity)
+            occurrences.append(occurrence)
+        return tuple(occurrences)
+
+
+def _occurrence_demands(
+    atoms: Sequence[TemporalNeedAtom],
+) -> tuple[OccurrenceDemand, ...]:
+    """Group logical aliases only when condition and exact occurrence agree."""
+
+    groups: list[tuple[tuple[Any, ...], list[TemporalNeedAtom]]] = []
+    for atom in atoms:
+        key = (
+            _semantic_key(atom.condition),
+            _semantic_key(atom.occurrence),
+        )
+        matching = next((group for group in groups if group[0] == key), None)
+        if matching is None:
+            groups.append((key, [atom]))
+        else:
+            matching[1].append(atom)
+    return tuple(
+        OccurrenceDemand(
+            condition=group[0].condition,
+            occurrence=group[0].occurrence,
+            supporting_atoms=tuple(group),
+        )
+        for _key, group in groups
+    )
 
 
 def _requirement_alternatives(

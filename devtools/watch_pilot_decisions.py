@@ -37,6 +37,7 @@ from pyrung.core.analysis.pilot import pilot_events
 from pyrung.core.analysis.pilot.compass import Compass
 from pyrung.core.analysis.pilot.intrascan import IntrascanResult
 from pyrung.core.analysis.pilot.navigation_contracts import Bearing
+from pyrung.core.analysis.pilot.trace import TraceReadConstraints, trace_relational
 from pyrung.core.analysis.pilot.types import (
     _AttemptResult,
     _CausalCheckpoint,
@@ -55,6 +56,10 @@ _DECISION_EVENT_KINDS = frozenset(
         "bearing_coast",
         "candidate_try",
         "conductivity_research_requested",
+        "intrascan_boundary_realization_researched",
+        "intrascan_pulse",
+        "intrascan_traceback_researched",
+        "program_scan",
         "skiff",
         "theory_correction_composed",
     }
@@ -131,12 +136,93 @@ def _target_condition(tag: Any, value: Any) -> Any:
     return tag == value
 
 
+def _consumer_boundary_summary(boundary: Any) -> tuple[Any, ...] | None:
+    """Keep one exact consumer receipt readable in the bounded stream."""
+
+    if boundary is None:
+        return None
+    return (
+        boundary.produced_occurrence.tag,
+        boundary.produced_occurrence.values,
+        boundary.producer_scan_offset,
+        boundary.consumer_occurrence.values,
+        boundary.consumer_scan_offset,
+    )
+
+
 def _decision_lines(
     event: Any,
     snapshot: Mapping[str, Any],
     stop_action: tuple[str, Any] | None,
+    *,
+    compact: bool = False,
 ) -> tuple[tuple[str, ...], bool]:
-    if event.kind == "candidate_rejected":
+    if event.kind == "intrascan_traceback_researched":
+        realization = event.data["boundary_realization"]
+        step = event.data.get("traceback_step")
+        useful = getattr(step, "useful_write", None)
+        if compact:
+            useful_summary = (
+                (
+                    useful.tag,
+                    useful.before,
+                    useful.after,
+                    useful.run_order,
+                    useful.ordinal,
+                )
+                if useful is not None
+                else None
+            )
+            return (
+                (
+                    "[intrascan-traceback] "
+                    f"scan={event.scan} direct={realization.direct!r} "
+                    f"staged={realization.staged!r} "
+                    f"applied_once={event.data.get('applied_exactly_once')!r} "
+                    f"useful={useful_summary!r} "
+                    "producer_goals="
+                    f"{len(tuple(realization.unresolved_producer_goals))} "
+                    f"reason={event.data.get('reason')!r}"
+                ),
+            ), False
+        return (
+            (
+                "[intrascan-traceback] "
+                f"scan={event.scan} direct={realization.direct!r} "
+                f"staged={realization.staged!r} "
+                f"request={event.data.get('request_identity')!r} "
+                f"applied_once={event.data.get('applied_exactly_once')!r} "
+                f"application_values={event.data.get('application_values')!r} "
+                f"useful={useful!r} witness={event.data.get('witness_detail')!r} "
+                f"blocked_edges={event.data.get('blocked_edges')!r} "
+                f"reason={event.data.get('reason')!r}"
+            ),
+        ), False
+    if event.kind == "intrascan_boundary_realization_researched":
+        realization = event.data["boundary_realization"]
+        goal = event.data.get("producer_goal_identity") or ()
+        assignment = getattr(realization, "consumer_assignments", ())
+        return (
+            (
+                "[intrascan-realization] "
+                f"scan={event.scan} direct={realization.direct!r} "
+                f"staged={realization.staged!r} "
+                f"goal={(goal[1:3] if len(goal) >= 3 else goal)!r} "
+                f"consumer_assignments={tuple(assignment)!r} "
+                f"proved={event.data.get('finding_identity') is not None!r} "
+                f"reason={event.data.get('reason')!r}"
+            ),
+        ), False
+    if event.kind in {"intrascan_pulse", "program_scan"}:
+        return (
+            (
+                f"[{event.kind.replace('_', '-')}] "
+                f"scan={event.scan} applied={tuple(event.data.get('applied', ()))!r} "
+                f"expected_write={event.data.get('expected_write')!r} "
+                f"reason={event.data.get('reason')!r}"
+            ),
+        ), False
+    if event.kind in {"candidate_accepted", "candidate_rejected"}:
         local_progress = next(
             (
                 gate
@@ -156,15 +242,26 @@ def _decision_lines(
         )
         return (
             (
-                "[candidate-rejected] "
+                f"[candidate-{'accepted' if event.kind == 'candidate_accepted' else 'rejected'}] "
                 f"scan={event.scan} applied={tuple(event.data['applied'])!r} "
                 "local_progress="
                 f"{dict(local_progress.evidence) if local_progress is not None else None!r} "
+                f"gates={tuple((gate.event, gate.detail, dict(gate.evidence)) for gate in event.data.get('gates', ()))!r} "
                 f"effects={effects!r}"
             ),
         ), False
     if event.kind == "conductivity_research_requested":
         stop = event.data["displacement"]
+        if compact:
+            return (
+                (
+                    "[research] "
+                    f"scan={event.scan} stop={(stop.tag, stop.rung, stop.values)!r} "
+                    f"enabling_reads={len(tuple(event.data['enabling_reads']))} "
+                    f"requirement_drifts={len(tuple(event.data['requirement_drifts']))} "
+                    f"reason={event.data.get('reason')!r}"
+                ),
+            ), False
         return (
             (
                 "[research] "
@@ -176,11 +273,12 @@ def _decision_lines(
         ), False
     if event.kind == "theory_correction_composed":
         rung = event.data["pilot_rung"]
+        conditions = tuple(event.data["conditions"])
         return (
             (
                 "[composition] "
                 f"scan={event.scan} rung={(rung.dest, rung.value)!r} "
-                f"conditions={tuple(event.data['conditions'])!r} "
+                f"conditions={len(conditions) if compact else conditions!r} "
                 f"reason={event.data.get('reason')!r}"
             ),
         ), False
@@ -234,6 +332,32 @@ def _decision_lines(
                 f"effects={effects!r}"
             ),
         ), False
+    if event.kind in {"departure_investigated", "trend_regression"}:
+        investigation = event.data.get("investigation") or {}
+        confirmed = tuple(
+            (
+                item.get("kind"),
+                tuple(item.get("holds", ())),
+                tuple(item.get("sources", ())),
+            )
+            for item in investigation.get("confirmed_detail", ())
+        )
+        rejected = tuple(
+            (
+                item.get("kind"),
+                item.get("slug"),
+                repr(item.get("ground"))[:320],
+            )
+            for item in investigation.get("rejected_detail", ())
+        )
+        return (
+            (
+                f"[{event.kind.replace('_', '-')}] "
+                f"scan={event.scan} retained={event.data.get('retained')!r} "
+                f"confirmed={confirmed!r} rejected={rejected!r} "
+                f"unresolved={investigation.get('unresolved')!r}"
+            ),
+        ), False
     if event.kind != "candidates_built":
         return (), False
 
@@ -261,6 +385,15 @@ def _decision_lines(
         f"alarm_extent={snapshot.get('A_AlmExtent')!r} "
         f"active_alarms={active_alarms!r}"
     ]
+    if compact:
+        program_step = event.data.get("program_step") or {}
+        producer = program_step.get("producer") or {}
+        lines = [
+            "[decision] "
+            f"scan={event.scan} candidates={candidates!r} "
+            f"wait={event.data.get('wait_reason')!r} "
+            f"program={(program_step.get('status'), producer.get('rung_index'))!r}"
+        ]
     stopped = stop_action is not None and (
         stop_action in candidates or stop_action in trace or stop_action in prerequisites
     )
@@ -338,6 +471,28 @@ def _interpretation_line(message: Mapping[str, Any]) -> str:
     )
 
 
+def _compact_interpretation_line(message: Mapping[str, Any]) -> str:
+    """Render the decision-bearing part without expanding proof support."""
+
+    requirements = tuple(
+        (
+            requirement.get("deadline"),
+            requirement.get("demanding"),
+            requirement.get("phase"),
+            requirement.get("authority"),
+        )
+        if isinstance(requirement, Mapping)
+        else type(requirement).__name__
+        for requirement in message["requirements"]
+    )
+    return (
+        "[interpretation] "
+        f"scan={message['scan']} kind={message['kind']} "
+        f"projected_scans={message['projected_scans']} "
+        f"requirements={requirements!r}"
+    )
+
+
 def _conductivity_line(message: Mapping[str, Any]) -> str:
     """Render the small immutable front receipt captured after theory reduction."""
 
@@ -382,7 +537,12 @@ def _drive_worker(
     last_scan: int | None = None
     try:
         fixture = importlib.import_module(config["fixture"])
-        plc = PLC(fixture.logic, dt=config["dt"])
+        watch_plc = getattr(fixture, "watch_plc", None)
+        plc = (
+            watch_plc(dt=config["dt"])
+            if callable(watch_plc)
+            else PLC(fixture.logic, dt=config["dt"])
+        )
         for _ in range(config["entry_steps"]):
             plc.step()
         tags = plc._known_tags_by_name
@@ -391,9 +551,225 @@ def _drive_worker(
         avoid_conditions = tuple(tags[name] for name in config["avoid"])
         avoid_pred = _compile_avoid(avoid_conditions) if avoid_conditions else None
         formatter = _PilotProgressFormatter()
+        original_orient = Compass.orient
         original_interpret = pilot_module._theory_transition_from_attempt
         original_record = pilot_module._record_working_theory_transition
         projection_receipts: dict[tuple[Any, ...], tuple[int, tuple[int, ...], bool]] = {}
+
+        def observe_orientation(
+            self: Compass,
+            world: Any,
+            target: Any,
+            constraints: Any,
+        ) -> Any:
+            result = original_orient(self, world, target, constraints)
+            if config["compact"]:
+                view = constraints.theory_view
+                frontier_trace: tuple[Any, ...] = ()
+                current_frontiers = (
+                    tuple(
+                        frontier
+                        for frontier in getattr(view, "traceback_frontiers", ())
+                        if frontier.source == view.source
+                    )
+                    if view is not None
+                    else ()
+                )
+                if current_frontiers:
+                    traces: list[Any] = []
+                    for frontier in current_frontiers[-1:]:
+                        for goal in frontier.producer_goals[:4]:
+                            occurrence = {
+                                **dict(world.state.work.state.tags),
+                                **dict(goal.observed_values),
+                            }
+                            atom_traces = []
+                            for alternative in goal.guard_alternatives:
+                                for atom in alternative:
+                                    tree = trace_relational(
+                                        atom,
+                                        occurrence,
+                                        world.context.pdg,
+                                        world.context.program,
+                                        world.context.steerable,
+                                        constraints=TraceReadConstraints.from_context(
+                                            world.context,
+                                            world.state.work,
+                                            route=None,
+                                            avoid_pred=constraints.avoid_predicate,
+                                            rejected_actions=frozenset(
+                                                frontier.consumer_assignments
+                                            ),
+                                        ),
+                                    )
+                                    atom_traces.append(
+                                        (
+                                            (atom.tag, atom.form, atom.operand),
+                                            tuple(
+                                                detail.pair
+                                                for detail in tree.ordered_action_details()
+                                            )[:8],
+                                            tuple(
+                                                (
+                                                    leaf.tag,
+                                                    leaf.value,
+                                                    leaf.satisfied,
+                                                    leaf.is_steerable,
+                                                )
+                                                for leaf in tree.leaves()
+                                            )[:8],
+                                        )
+                                    )
+                            traces.append(
+                                (
+                                    (goal.tag, goal.value, goal.node_index),
+                                    goal.observed_values,
+                                    tuple(atom_traces),
+                                )
+                            )
+                    frontier_trace = tuple(traces)
+                progress_attempt = (
+                    next(
+                        (
+                            (
+                                attempt.act_identity,
+                                getattr(attempt.disposition, "value", attempt.disposition),
+                            )
+                            for attempt in getattr(view, "investigation_attempts", ())
+                            if attempt.attempt_id
+                            == getattr(view, "current_progress_attempt_id", None)
+                        ),
+                        None,
+                    )
+                    if view is not None
+                    else None
+                )
+                act = getattr(result, "act", None)
+                policy = getattr(act, "policy", None)
+                consumer_boundary = getattr(policy, "consumer_boundary", None)
+                investigation_scope = view.investigation_scope if view is not None else None
+                execution_horizon = (
+                    investigation_scope.consumer_execution_horizon
+                    if investigation_scope is not None
+                    else None
+                )
+                candidate_read = getattr(
+                    getattr(result, "orientation", None),
+                    "candidates",
+                    None,
+                )
+                candidate_trace = getattr(candidate_read, "trace", None)
+                messages.put(
+                    {
+                        "type": "orientation",
+                        "elapsed": time.monotonic() - started,
+                        "scan": world.state.work.state.scan_id,
+                        "intent": (
+                            getattr(view.temporal_intent, "value", view.temporal_intent)
+                            if view is not None
+                            else None
+                        ),
+                        "source_scan": (view.source.scan_id if view is not None else None),
+                        "trigger": (view.trigger_act_identity if view is not None else None),
+                        "trigger_values": tuple(
+                            (tag, world.snapshot.get(tag))
+                            for tag, _value in (
+                                view.trigger_act_identity[1]
+                                if view is not None
+                                and isinstance(view.trigger_act_identity, tuple)
+                                and len(view.trigger_act_identity) == 2
+                                and isinstance(view.trigger_act_identity[1], tuple)
+                                else ()
+                            )
+                        ),
+                        "focus": tuple(
+                            (tag, value)
+                            for tag, value in world.snapshot.items()
+                            if tag.endswith(
+                                (
+                                    "SequenceStep",
+                                    "HeelStep",
+                                    "CheckpointSensor",
+                                    "Watchdog_Acc",
+                                )
+                            )
+                        ),
+                        "progress_attempt": progress_attempt,
+                        "pending_corrections": tuple(
+                            sorted(
+                                getattr(
+                                    view,
+                                    "pending_correction_rung_identities",
+                                    (),
+                                ),
+                                key=repr,
+                            )
+                        )
+                        if view is not None
+                        else (),
+                        "investigation_scope": (
+                            (
+                                view.investigation_scope.execution_source.scan_id,
+                                view.investigation_scope.frontier.scan_id,
+                                view.investigation_scope.transaction_act_identity,
+                                view.investigation_scope.transaction_act_pairs,
+                                view.investigation_scope.transaction_selected_pairs,
+                                view.investigation_scope.transaction_rearmed,
+                                view.investigation_scope.retry_act_identity,
+                                view.version_history[-1].source.scan_id,
+                                (
+                                    view.version_history[-1].temporal_source.scan_id
+                                    if view.version_history[-1].temporal_source is not None
+                                    else None
+                                ),
+                            )
+                            if view is not None and view.investigation_scope is not None
+                            else None
+                        ),
+                        "trigger_consumer_boundary": _consumer_boundary_summary(
+                            view.trigger_consumer_boundary if view is not None else None
+                        ),
+                        "consumer_execution_horizon": (
+                            (
+                                execution_horizon.source.scan_id,
+                                execution_horizon.tip.scan_id,
+                                _consumer_boundary_summary(execution_horizon.consumer_boundary),
+                            )
+                            if execution_horizon is not None
+                            else None
+                        ),
+                        "traceback_frontiers": tuple(
+                            tuple(
+                                (goal.tag, goal.value, goal.node_index)
+                                for goal in frontier.producer_goals
+                            )
+                            for frontier in getattr(view, "traceback_frontiers", ())
+                            if frontier.source == view.source
+                        )
+                        if view is not None
+                        else (),
+                        "frontier_trace": frontier_trace,
+                        "active_actions": tuple(getattr(candidate_trace, "active_actions", ())),
+                        "result": type(result).__name__,
+                        "act": type(act).__name__ if act is not None else None,
+                        "applied": tuple(getattr(policy, "applied", ())),
+                        "local_progress": getattr(
+                            getattr(policy, "local_progress", None),
+                            "value",
+                            getattr(policy, "local_progress", None),
+                        ),
+                        "pulse_horizon": getattr(
+                            getattr(policy, "pulse_horizon", None),
+                            "value",
+                            getattr(policy, "pulse_horizon", None),
+                        ),
+                        "consumer_boundary": _consumer_boundary_summary(consumer_boundary),
+                        "overlay": tuple(
+                            (rung.dest, rung.value) for rung in world.state.pilot_rungs
+                        ),
+                    }
+                )
+            return result
 
         def observation_key(
             observation: pilot_module._TheoryTransitionEvidence,
@@ -465,6 +841,7 @@ def _drive_worker(
                         {
                             "deadline": requirement.deadline_occurrence[1],
                             "demanding": requirement.demanding_occurrence[1],
+                            "condition": requirement.condition_identity,
                             "phase": getattr(requirement.phase, "value", requirement.phase),
                             "authority": getattr(
                                 requirement.operand_authority,
@@ -512,6 +889,7 @@ def _drive_worker(
                 }
             )
 
+        Compass.orient = observe_orientation
         vars(pilot_module)["_theory_transition_from_attempt"] = observe_interpretation
         vars(pilot_module)["_record_working_theory_transition"] = observe_recorded_interpretation
         messages.put(
@@ -539,6 +917,7 @@ def _drive_worker(
                 event,
                 last_snapshot,
                 config["stop_action"],
+                compact=config["compact"],
             )
             messages.put(
                 {
@@ -692,6 +1071,7 @@ def watch_worker(
     memory_budget_mb: int | None = None,
     history: int = 8,
     dump_grace_s: float = 1.0,
+    compact: bool = False,
 ) -> int:
     """Stream one worker and enforce clocks outside the computation under test."""
 
@@ -742,7 +1122,7 @@ def watch_worker(
                 last_event = message
                 recent.append(message)
                 rendered = message.get("rendered")
-                if rendered:
+                if rendered and not compact:
                     print(rendered, end="", flush=True)
                     last_visible_at = now
                     last_visible = {
@@ -755,7 +1135,11 @@ def watch_worker(
                     last_visible = {"visible": line, "elapsed": message["elapsed"]}
             elif kind == "interpretation":
                 last_event_at = now
-                line = _interpretation_line(message)
+                line = (
+                    _compact_interpretation_line(message)
+                    if compact
+                    else _interpretation_line(message)
+                )
                 print(line, flush=True)
                 last_visible_at = now
                 last_visible = {"visible": line, "elapsed": message["elapsed"]}
@@ -769,7 +1153,40 @@ def watch_worker(
                     return EXIT_STOPPED
             elif kind == "conductivity":
                 last_event_at = now
-                line = _conductivity_line(message)
+                line = (
+                    f"[conductivity] attempts={len(tuple(message['attempts']))} "
+                    f"comparisons={tuple(message['comparisons'])!r} "
+                    f"research={message['research']!r}"
+                    if compact
+                    else _conductivity_line(message)
+                )
+                print(line, flush=True)
+                last_visible_at = now
+                last_visible = {"visible": line, "elapsed": message["elapsed"]}
+            elif kind == "orientation":
+                last_event_at = now
+                line = (
+                    "[orientation] "
+                    f"scan={message['scan']} intent={message['intent']!r} "
+                    f"source_scan={message['source_scan']!r} "
+                    f"trigger={message['trigger']!r} "
+                    f"trigger_values={message['trigger_values']!r} "
+                    f"focus={message['focus']!r} "
+                    f"progress_attempt={message['progress_attempt']!r} "
+                    f"pending={message['pending_corrections']!r} "
+                    f"scope={message['investigation_scope']!r} "
+                    f"trigger_boundary={message['trigger_consumer_boundary']!r} "
+                    f"execution_horizon={message['consumer_execution_horizon']!r} "
+                    f"traceback_frontiers={message['traceback_frontiers']!r} "
+                    f"frontier_trace={message['frontier_trace']!r} "
+                    f"active_actions={message['active_actions']!r} "
+                    f"result={message['result']} act={message['act']} "
+                    f"applied={message['applied']!r} "
+                    f"local={message['local_progress']!r} "
+                    f"horizon={message['pulse_horizon']!r} "
+                    f"consumer_boundary={message['consumer_boundary']!r} "
+                    f"overlay={message['overlay']!r}"
+                )
                 print(line, flush=True)
                 last_visible_at = now
                 last_visible = {"visible": line, "elapsed": message["elapsed"]}
@@ -942,6 +1359,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=8,
         help="recent event receipts printed on timeout (default: 8)",
     )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="print decisions without expanding narration or proof support",
+    )
     return parser.parse_args(argv)
 
 
@@ -958,6 +1380,7 @@ def main(argv: list[str] | None = None) -> int:
         "dt": args.dt,
         "stop_action": args.stop_action,
         "stop_interpretation": args.stop_interpretation,
+        "compact": args.compact,
     }
     context = mp.get_context("spawn")
     messages = context.Queue()
@@ -991,6 +1414,7 @@ def main(argv: list[str] | None = None) -> int:
             output_budget_s=args.output_budget,
             memory_budget_mb=args.memory_budget_mb,
             history=max(1, args.history),
+            compact=args.compact,
         )
     except KeyboardInterrupt:
         print("\n[watch] interrupted; stopping worker", file=sys.stderr, flush=True)

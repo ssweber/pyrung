@@ -39,6 +39,20 @@ from pyrung.core.analysis.pilot.working_theory import TheoryState
 from pyrung.core.crossing import Cmp
 
 
+def test_assertion_scan_uses_an_occurrence_owned_by_the_execution() -> None:
+    executed = _ExecutedAttempt(
+        pulse=SimpleNamespace(
+            action_scan=2,
+            coast_receipt=SimpleNamespace(end_scan=2),
+            kernel_scan_ids=(3,),
+            fork=SimpleNamespace(state=SimpleNamespace(scan_id=3)),
+        ),
+        bearing=SimpleNamespace(),
+    )
+
+    assert executed.assertion_scan == 3
+
+
 def _adapter_state() -> SimpleNamespace:
     """Minimal state surface required by the production receipt adapter."""
 

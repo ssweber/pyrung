@@ -18,7 +18,9 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     BatchPulse,
     Coast,
     Dwell,
+    IntrascanPulse,
     ObserveScan,
+    ProgramScan,
     Pulse,
 )
 from pyrung.core.analysis.pilot.outcome import BearingEffect
@@ -747,6 +749,34 @@ def _act_event(
 ) -> PilotEvent | None:
     """Render one navigation-act lifecycle event through a single kind dispatch."""
 
+    if isinstance(act, IntrascanPulse):
+        payload = {
+            "actions": act.actions,
+            "applied": act.policy.applied,
+            "reason": rationale,
+            "expected_write": act.expected_write,
+            "evidence_identity": act.evidence_identity,
+        }
+        if phase == "try":
+            return PilotEvent("intrascan_pulse", scan, payload)
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent(
+                "intrascan_pulse_rejected",
+                scan,
+                {**payload, "gates": attempt.gate_events},
+            )
+        assert trial is not None
+        return PilotEvent(
+            "intrascan_pulse_accepted",
+            scan,
+            {
+                **payload,
+                "gates": trial.gate_events,
+                "snapshot": dict(trial.attempt.pulse.snap),
+            },
+        )
+
     if isinstance(act, Pulse):
         if act.crossing is not None:
             crossing = {
@@ -814,6 +844,35 @@ def _act_event(
             "candidate_accepted",
             scan,
             _accepted_payload(act.policy, trial, frame, state, seen_keys),
+        )
+
+    if isinstance(act, ProgramScan):
+        payload = {
+            "reason": rationale,
+            "expected_write": act.expected_write,
+            "evidence_identity": act.evidence_identity,
+        }
+        if phase == "try":
+            return PilotEvent("program_scan", scan, payload)
+        if phase == "rejected":
+            assert attempt is not None
+            return PilotEvent(
+                "program_scan_rejected",
+                scan,
+                {
+                    **payload,
+                    "gates": attempt.gate_events,
+                },
+            )
+        assert trial is not None
+        return PilotEvent(
+            "program_scan_accepted",
+            scan,
+            {
+                **payload,
+                "gates": trial.gate_events,
+                "snapshot": dict(trial.attempt.pulse.snap),
+            },
         )
 
     if isinstance(act, (Coast, Dwell, ObserveScan)):

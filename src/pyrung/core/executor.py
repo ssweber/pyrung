@@ -494,6 +494,202 @@ class _NoopExecutionObserver:
 NOOP_OBSERVER: ExecutionObserver = _NoopExecutionObserver()
 
 
+class CompositeExecutionObserver:
+    """Fan executor boundaries out to ordered cooperating observers."""
+
+    def __init__(self, *observers: ExecutionObserver) -> None:
+        self._observers = observers
+
+    def _begin(self, method: str, *args: Any) -> None:
+        for observer in self._observers:
+            getattr(observer, method)(*args)
+
+    def _end(self, method: str, *args: Any) -> None:
+        for observer in reversed(self._observers):
+            getattr(observer, method)(*args)
+
+    def begin_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_rung",
+            ctx,
+            rung_index,
+            rung,
+            kind,
+            depth,
+            subroutine_name,
+            call_stack,
+        )
+
+    def end_rung(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+        enabled: bool,
+    ) -> None:
+        self._end(
+            "end_rung",
+            ctx,
+            rung_index,
+            rung,
+            kind,
+            depth,
+            subroutine_name,
+            call_stack,
+            enabled,
+        )
+
+    def begin_condition(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        kind: ExecutionKind,
+        depth: int,
+        subroutine_name: str | None,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_condition",
+            ctx,
+            rung_index,
+            rung,
+            kind,
+            depth,
+            subroutine_name,
+            call_stack,
+        )
+
+    def begin_branch(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        branch: Rung,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_branch",
+            ctx,
+            rung_index,
+            branch,
+            depth,
+            enabled,
+            call_stack,
+        )
+
+    def begin_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_instruction",
+            ctx,
+            rung_index,
+            rung,
+            instruction,
+            depth,
+            enabled,
+            call_stack,
+        )
+
+    def end_instruction(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        rung: Rung,
+        instruction: Instruction,
+        depth: int,
+        enabled: bool,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._end(
+            "end_instruction",
+            ctx,
+            rung_index,
+            rung,
+            instruction,
+            depth,
+            enabled,
+            call_stack,
+        )
+
+    def begin_subroutine_call(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: CallInstruction,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_subroutine_call",
+            ctx,
+            rung_index,
+            instruction,
+            depth,
+            call_stack,
+        )
+
+    def begin_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._begin(
+            "begin_loop_iteration",
+            ctx,
+            rung_index,
+            instruction,
+            iteration,
+            depth,
+            call_stack,
+        )
+
+    def end_loop_iteration(
+        self,
+        ctx: ScanContext,
+        rung_index: int,
+        instruction: ForLoopInstruction,
+        iteration: int,
+        depth: int,
+        call_stack: tuple[str, ...],
+    ) -> None:
+        self._end(
+            "end_loop_iteration",
+            ctx,
+            rung_index,
+            instruction,
+            iteration,
+            depth,
+            call_stack,
+        )
+
+
 class ConditionViewCapture(_NoopExecutionObserver):
     """Selected-replay observer for a faithful recursive execution journal.
 

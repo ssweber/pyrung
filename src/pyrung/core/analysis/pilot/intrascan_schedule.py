@@ -44,6 +44,10 @@ class RequirementSchedule:
     # discharge. Ordinary scalar compilation has a one-to-one mapping and
     # therefore leaves this empty.
     requirement_sources: tuple[ActiveRequirement, ...] = ()
+    # Exact branch-lowered leaves grouped under their lifecycle parent. This
+    # lets correction composition name ownership without asking a Boolean
+    # parent expression for a scalar destination.
+    requirement_bindings: tuple[tuple[ActiveRequirement, tuple[ActiveRequirement, ...]], ...] = ()
 
     @property
     def identity(self) -> tuple[Any, ...]:

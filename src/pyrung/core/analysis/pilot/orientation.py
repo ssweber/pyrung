@@ -13,6 +13,7 @@ from pyrung.core.analysis.pilot.earned_work import earned_work_is_useful_motion
 from pyrung.core.analysis.pilot.intrascan_schedule import (
     RequirementSchedule,
     compile_scalar_schedule,
+    satisfying_values,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     ActPolicy,
@@ -25,8 +26,13 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ComposeCorrection,
     Dwell,
     ExpectationExemption,
+    IntrascanPulse,
+    IntrascanTracebackRequest,
+    InvestigationSelection,
     LocalProgressKind,
     NavigationConstraints,
+    NeedIntrascanBoundaryRealization,
+    NeedIntrascanTraceback,
     NeedProbe,
     NeedResearch,
     ObserveScan,
@@ -34,6 +40,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     OrientationResult,
     OrientationWorld,
     ProbeRequest,
+    ProgramScan,
     Pulse,
     PulseHorizon,
     Stuck,
@@ -53,6 +60,7 @@ from pyrung.core.analysis.pilot.overlay import (
 from pyrung.core.analysis.pilot.requirement_recovery import (
     actions_preserve_active_requirements,
 )
+from pyrung.core.analysis.pilot.requirements import OperandAuthority
 from pyrung.core.analysis.pilot.temporal_need import iter_temporal_need_branches
 from pyrung.core.analysis.pilot.trace import (
     TraceAction,
@@ -65,16 +73,34 @@ from pyrung.core.analysis.pilot.trace import (
     trace_relational,
 )
 from pyrung.core.analysis.pilot.types import MotionKind, _ActionPair, _IterationFrame
-from pyrung.core.analysis.pilot.working_theory import TheoryTemporalIntent
+from pyrung.core.analysis.pilot.working_theory import (
+    ProgramTransaction,
+    TheoryTemporalIntent,
+)
 from pyrung.core.analysis.pilot.world_key import (
     _pilot_world_key,
+    _rung_identity,
     _semantic_key,
     _StateKeyConfig,
     wait_edge_nogood,
 )
 from pyrung.core.analysis.sp_values import _values_match
+from pyrung.core.context import RungId
+from pyrung.core.crossing import Cmp
+from pyrung.core.instruction.advance import constraint_holds
+from pyrung.core.intrascan_counterfactual import CounterfactualPatch, OccurrenceBoundary
 
 _PROBE_BUDGET = 2
+
+
+def _has_traceback_result(view: Any, request_identity: tuple[Any, ...]) -> bool:
+    """Read the new open/completed contract with narrow fixture compatibility."""
+
+    reader = getattr(view, "has_traceback_result", None)
+    if reader is not None:
+        return bool(reader(request_identity))
+    legacy = getattr(view, "has_traceback_finding", None)
+    return bool(legacy is not None and legacy(request_identity))
 
 
 def _act_preserves_requirements(world: OrientationWorld, act: Any) -> bool:
@@ -224,7 +250,10 @@ def _temporal_base_matches_trigger(
     """
 
     view = getattr(world.context, "theory_view", None)
-    trigger = getattr(view, "trigger_act_identity", None)
+    scope = getattr(view, "investigation_scope", None)
+    trigger = getattr(scope, "retry_act_identity", None) or getattr(
+        view, "trigger_act_identity", None
+    )
     if (
         not isinstance(trigger, tuple)
         or len(trigger) != 2
@@ -250,6 +279,82 @@ def _temporal_base_matches_trigger(
     return reconstructed is not None and pulse_identity(reconstructed) == trigger
 
 
+def _reader_authorized_transaction_pairs(
+    world: OrientationWorld,
+    base: ActPolicy,
+    setup: tuple[_ActionPair, ...],
+    current_actions: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...]:
+    """Return an owned transaction only when fresh readers expose every pair."""
+
+    view = getattr(world.context, "theory_view", None)
+    scope = getattr(view, "investigation_scope", None)
+    transaction = tuple(getattr(scope, "transaction_act_pairs", ()))
+    transaction_identity = getattr(scope, "transaction_act_identity", None)
+    if (
+        not transaction
+        or getattr(scope, "retry_act_identity", None) != transaction_identity
+        or pulse_identity(transaction) != transaction_identity
+    ):
+        return ()
+    reader_pairs = (*base.action_pairs, *setup, *current_actions)
+    if not all(_pair_matches_any(pair, reader_pairs) for pair in transaction):
+        return ()
+    return transaction
+
+
+def _owned_consumer_execution_horizon(scope: Any) -> Any:
+    """Return one internally consistent receipt-owned execution horizon."""
+
+    if scope is None:
+        return None
+    horizon = getattr(scope, "consumer_execution_horizon", None)
+    if (
+        horizon is None
+        or not getattr(scope, "transaction_act_pairs", ())
+        or getattr(scope, "transaction_attempt_id", None)
+        != getattr(horizon, "transaction_attempt_id", None)
+        or getattr(scope, "consumer_boundary_attempt_id", None)
+        != getattr(horizon, "consumer_boundary_attempt_id", None)
+        or getattr(scope, "consumer_boundary", None) != getattr(horizon, "consumer_boundary", None)
+    ):
+        return None
+    return horizon
+
+
+def _reader_authorized_horizon_transaction_pairs(
+    world: OrientationWorld,
+    base: ActPolicy,
+    setup: tuple[_ActionPair, ...],
+    current_actions: tuple[_ActionPair, ...],
+) -> tuple[_ActionPair, ...]:
+    """Rebuild only the transaction named by a valid horizon receipt."""
+
+    scope = getattr(getattr(world.context, "theory_view", None), "investigation_scope", None)
+    if _owned_consumer_execution_horizon(scope) is None:
+        return ()
+    transaction = tuple(getattr(scope, "transaction_act_pairs", ()))
+    if pulse_identity(transaction) != getattr(scope, "transaction_act_identity", None):
+        return ()
+    reader_pairs = (*base.action_pairs, *setup, *current_actions)
+    if not all(_pair_matches_any(pair, reader_pairs) for pair in transaction):
+        return ()
+    return transaction
+
+
+def _owned_consumer_boundary(
+    scope: Any,
+    actions: tuple[_ActionPair, ...],
+) -> Any:
+    """Return the boundary only when this pulse continues its owning receipt."""
+
+    horizon = _owned_consumer_execution_horizon(scope)
+    transaction = tuple(getattr(scope, "transaction_act_pairs", ()))
+    if horizon is None or not all(_pair_matches_any(pair, actions) for pair in transaction):
+        return None
+    return horizon.consumer_boundary
+
+
 def _theory_temporal_retry_bearing(
     world: OrientationWorld,
     candidates: CandidateRead,
@@ -262,12 +367,26 @@ def _theory_temporal_retry_bearing(
     if not requirements:
         raise ValueError("retry-together theory has no resolved live requirements")
     prescription = candidates.wait.prescription if candidates.wait is not None else None
-    if prescription is None:
+    temporal_intent = getattr(world.context.theory_view, "temporal_intent", None)
+    pending_configuration = _pending_correction_pairs(world)
+    scope = getattr(world.context.theory_view, "investigation_scope", None)
+    configured_corrections = (
+        _configured_correction_pairs(world)
+        if scope is not None and getattr(scope, "transaction_rearmed", False)
+        else pending_configuration
+    )
+    rearm_retained_transaction = bool(
+        temporal_intent is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE
+        and pending_configuration
+        and scope is not None
+        and getattr(scope, "transaction_selected_pairs", ())
+        and not getattr(scope, "transaction_rearmed", False)
+    )
+    if prescription is None or rearm_retained_transaction:
         rearm = _theory_rearm_bearing(world, candidates, target)
         if rearm is not None:
             return rearm
     structural_companions = _temporal_transaction_pairs(world, candidates)
-    temporal_intent = getattr(world.context.theory_view, "temporal_intent", None)
 
     # CandidateRead has already applied availability, tide-table, route,
     # Crossings, action-block and prerequisite admission.  Iterate its pulse
@@ -330,12 +449,13 @@ def _theory_temporal_retry_bearing(
         (
             _pulse_policy(
                 option,
-                _candidate_applied(option, candidates, world.context),
+                _current_candidate_applied(option, candidates, world),
                 world,
             ),
             None,
         )
         for option in candidates.options
+        if not _candidate_is_pending_configuration(option, world)
     )
     if prescription is not None:
         # A fresh ProgramStep/AdvanceProfile read may say that unchanged
@@ -359,9 +479,59 @@ def _theory_temporal_retry_bearing(
                 None,
             )
         )
-
     for schedule in _iter_temporal_schedules(world, target, requirements):
         setup = tuple(schedule.assignments)
+        schedule_requirements = tuple(getattr(schedule, "requirements", ()))
+        schedule_sources = tuple(
+            getattr(schedule, "requirement_sources", ()) or schedule_requirements
+        )
+        if prescription is not None and pending_configuration:
+            # An autonomous program transaction has no pulse pairs to rebuild.
+            # Its prior Coast receipt is identity only; executable authority
+            # comes from this read's fresh ProgramStep prescription.  Continue
+            # only when that newly read Coast is the exact transaction which
+            # exposed the temporal need.
+            heading = prescription.heading
+            route = heading.route if heading is not None else None
+            expectation = prescription.expectation
+            coast_policy = ActPolicy(
+                source=ActSource.ROUTE if route is not None else ActSource.PROGRAM,
+                heading=heading,
+                motion=MotionKind.COAST_TO_BEARING,
+                expectation=expectation,
+                expectation_exemption=(
+                    ExpectationExemption.UNRESOLVED_EFFECT if expectation is None else None
+                ),
+                landing_receipt_authority=prescription.landing_receipt_authority,
+            )
+            coast = Coast("bearing", coast_policy)
+            trigger_transaction = getattr(
+                world.context.theory_view,
+                "trigger_program_transaction",
+                None,
+            )
+            if (
+                trigger_transaction is not None
+                and ProgramTransaction.from_heading(heading, world.snapshot) == trigger_transaction
+            ):
+                policy = replace(
+                    coast_policy,
+                    source=ActSource.WIDENING,
+                    note="working theory: retry fresh program transaction",
+                    provenance=("working-theory configured program continuation",),
+                    local_progress=LocalProgressKind.TEMPORAL_EDGE,
+                    local_progress_requirements=schedule_requirements,
+                    local_progress_sources=schedule_sources,
+                    pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                )
+                return _bearing(
+                    world,
+                    replace(coast, policy=policy),
+                    candidates,
+                    target=target,
+                    prerequisites=tuple(schedule.pilot_rungs),
+                    rationale="working theory: continue the freshly read program transaction",
+                )
         matched_live_base = False
         for base, crossing in alternatives:
             if not _temporal_base_matches_trigger(
@@ -378,41 +548,98 @@ def _theory_temporal_retry_bearing(
                 base,
                 structural_companions,
             ):
+                # A correction composed in the preceding Compass turn is
+                # already persistent configuration.  It authorizes retrying
+                # the one current producer, but does not authorize folding a
+                # future consumer/sibling steer into that same physical act.
+                current_companions = () if configured_corrections else companions
+                consumer_boundary = None
                 if temporal_intent is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE:
+                    retry_authorized = bool(
+                        pending_configuration
+                        or (scope is not None and getattr(scope, "transaction_rearmed", False))
+                    )
                     additions = tuple(
-                        pair for pair in (*setup, *companions) if pair not in tuple(base.applied)
+                        pair
+                        for pair in (*setup, *current_companions)
+                        if pair not in tuple(base.applied)
+                        and not _pair_matches_any(pair, configured_corrections)
                     )
-                    if not additions:
+                    if pending_configuration:
+                        # One retained correction changes the World, then
+                        # yields.  The fresh reader must retry the producer
+                        # which owns this temporal transaction before another
+                        # correction can be installed.
+                        if _owned_consumer_execution_horizon(scope) is not None:
+                            actions = _reader_authorized_horizon_transaction_pairs(
+                                world,
+                                base,
+                                setup,
+                                candidates.trace.active_actions,
+                            )
+                            if not actions:
+                                continue
+                        else:
+                            actions = tuple(base.applied)
+                    elif additions:
+                        actions = (additions[0],)
+                        policy = ActPolicy(
+                            source=ActSource.WIDENING,
+                            action_pairs=actions,
+                            applied=actions,
+                            note="working theory: persist one corrective before fresh steer",
+                            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+                            provenance=("working-theory sequential corrective",),
+                            local_progress=LocalProgressKind.THEORY_CORRECTIVE,
+                            pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                        )
+                        act = Pulse(policy)
+                        if (
+                            _act_preserves_requirements(world, act)
+                            and not _avoid_forces(world.context, actions, world.snapshot)
+                            and not world.context.compass.knowledge.act_is_nogood(
+                                world.world_key,
+                                act_identity(act),
+                            )
+                        ):
+                            return _bearing(
+                                world,
+                                act,
+                                candidates,
+                                target=target,
+                                rationale=(
+                                    "working theory: persist one corrective, then steer again"
+                                ),
+                            )
                         continue
-                    actions = (additions[0],)
-                    policy = ActPolicy(
-                        source=ActSource.WIDENING,
-                        action_pairs=actions,
-                        applied=actions,
-                        note="working theory: persist one corrective before fresh steer",
-                        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
-                        provenance=("working-theory sequential corrective",),
-                        local_progress=LocalProgressKind.THEORY_CORRECTIVE,
-                        pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                    else:
+                        actions = tuple(base.applied) if retry_authorized else ()
+                    consumer_boundary = _owned_consumer_boundary(scope, actions) or (
+                        (
+                            getattr(scope, "consumer_boundary", None)
+                            or getattr(world.context.theory_view, "trigger_consumer_boundary", None)
+                        )
+                        if retry_authorized
+                        else None
                     )
-                    act = Pulse(policy)
-                    if (
-                        _act_preserves_requirements(world, act)
-                        and not _avoid_forces(world.context, actions, world.snapshot)
-                        and not world.context.compass.knowledge.act_is_nogood(
-                            world.world_key,
-                            act_identity(act),
-                        )
-                    ):
-                        return _bearing(
-                            world,
-                            act,
-                            candidates,
-                            target=target,
-                            rationale=("working theory: persist one corrective, then steer again"),
-                        )
-                    continue
-                actions = _merge_temporal_actions(setup, tuple(base.applied), companions)
+                else:
+                    transaction_retry = _reader_authorized_transaction_pairs(
+                        world,
+                        base,
+                        setup,
+                        candidates.trace.active_actions,
+                    )
+                    merged = _merge_temporal_actions(
+                        setup,
+                        transaction_retry or tuple(base.applied),
+                        current_companions,
+                    )
+                    actions = tuple(
+                        pair
+                        for pair in merged or ()
+                        if not _pair_matches_any(pair, configured_corrections)
+                    )
+                    consumer_boundary = _owned_consumer_boundary(scope, actions)
                 if not actions:
                     continue
                 policy = replace(
@@ -423,7 +650,14 @@ def _theory_temporal_retry_bearing(
                     note="working theory: retry current bearing with exact temporal need",
                     provenance=(*base.provenance, "working-theory temporal retry"),
                     local_progress=LocalProgressKind.TEMPORAL_EDGE,
-                    pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+                    local_progress_requirements=schedule_requirements,
+                    local_progress_sources=schedule_sources,
+                    pulse_horizon=(
+                        PulseHorizon.CONSUMER_BOUNDARY
+                        if consumer_boundary is not None
+                        else PulseHorizon.ASSERTION_SCAN
+                    ),
+                    consumer_boundary=consumer_boundary,
                 )
                 act = (
                     Pulse(policy, crossing=crossing)
@@ -433,7 +667,13 @@ def _theory_temporal_retry_bearing(
                         crossing=crossing,
                     )
                 )
-                trigger_identity = getattr(world.context.theory_view, "trigger_act_identity", None)
+                view = world.context.theory_view
+                scope = getattr(view, "investigation_scope", None)
+                trigger_identity = getattr(scope, "retry_act_identity", None) or getattr(
+                    view,
+                    "trigger_act_identity",
+                    None,
+                )
                 candidate_identity = act_identity(act)
                 trigger_pairs = (
                     frozenset(trigger_identity[1])
@@ -455,6 +695,12 @@ def _theory_temporal_retry_bearing(
                     temporal_intent is not TheoryTemporalIntent.SETUP_FIRST
                     and candidate_pairs
                     and candidate_pairs <= trigger_pairs
+                    and not pending_configuration
+                    and not (
+                        scope is not None
+                        and getattr(scope, "transaction_rearmed", False)
+                        and candidate_identity == scope.transaction_act_identity
+                    )
                 ):
                     # Correlation can recover a fresh live base from the prior
                     # batch, but every subset already contained in that trigger
@@ -481,6 +727,77 @@ def _theory_temporal_retry_bearing(
                         prerequisites=tuple(schedule.pilot_rungs),
                         rationale=("working theory: retry fresh bearing with exact same-scan need"),
                     )
+        if not matched_live_base and setup and configured_corrections:
+            continuation_authorized = bool(
+                pending_configuration
+                or (scope is not None and getattr(scope, "transaction_rearmed", False))
+            )
+            if ordinary is None or not continuation_authorized:
+                return None
+            owned_horizon = _owned_consumer_execution_horizon(scope)
+            if owned_horizon is not None:
+                actions = _reader_authorized_horizon_transaction_pairs(
+                    world,
+                    ordinary.act.policy,
+                    setup,
+                    candidates.trace.active_actions,
+                )
+                if not actions:
+                    return None
+                consumer_boundary = _owned_consumer_boundary(scope, actions)
+                if consumer_boundary is None:
+                    return None
+                policy = replace(
+                    ordinary.act.policy,
+                    source=ActSource.WIDENING,
+                    action_pairs=actions,
+                    applied=actions,
+                    note="working theory: retry the receipt-owned transaction",
+                    provenance=(
+                        *ordinary.act.policy.provenance,
+                        "working-theory receipt-owned continuation",
+                    ),
+                    local_progress=LocalProgressKind.TEMPORAL_EDGE,
+                    local_progress_requirements=schedule_requirements,
+                    local_progress_sources=schedule_sources,
+                    pulse_horizon=PulseHorizon.CONSUMER_BOUNDARY,
+                    consumer_boundary=consumer_boundary,
+                )
+                act = (
+                    Pulse(policy, crossing=getattr(ordinary.act, "crossing", None))
+                    if len(actions) == 1
+                    else BatchPulse(policy, crossing=getattr(ordinary.act, "crossing", None))
+                )
+                return _bearing(
+                    world,
+                    act,
+                    candidates,
+                    target=target,
+                    prerequisites=tuple(schedule.pilot_rungs),
+                    rationale="working theory: continue the receipt-owned transaction",
+                )
+            policy = replace(
+                ordinary.act.policy,
+                source=ActSource.WIDENING,
+                note="working theory: continue one fresh act under composed configuration",
+                provenance=(
+                    *ordinary.act.policy.provenance,
+                    "working-theory configured continuation",
+                ),
+                local_progress=LocalProgressKind.TEMPORAL_EDGE,
+                local_progress_requirements=schedule_requirements,
+                local_progress_sources=schedule_sources,
+                pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+            )
+            act = replace(ordinary.act, policy=policy)
+            return _bearing(
+                world,
+                act,
+                candidates,
+                target=target,
+                prerequisites=tuple(schedule.pilot_rungs),
+                rationale="working theory: continue after one composed correction",
+            )
         if not matched_live_base and setup:
             # The prior scan may already have advanced the theory tip beyond
             # its producer while a retained look-ahead exposed the next direct
@@ -495,8 +812,8 @@ def _theory_temporal_retry_bearing(
                 expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
                 provenance=("working-theory temporal tip setup",),
                 local_progress=LocalProgressKind.TEMPORAL_SETUP,
-                local_progress_requirements=tuple(schedule.requirements),
-                local_progress_sources=tuple(schedule.requirement_sources or schedule.requirements),
+                local_progress_requirements=schedule_requirements,
+                local_progress_sources=schedule_sources,
                 pulse_horizon=PulseHorizon.ASSERTION_SCAN,
             )
             act = Pulse(policy) if len(setup) == 1 else BatchPulse(policy)
@@ -525,14 +842,39 @@ def _theory_rearm_bearing(
     """Release spent edge inputs before rereading the temporal retry at its tip."""
 
     view = world.context.theory_view
-    identity = getattr(view, "trigger_act_identity", None)
+    scope = getattr(view, "investigation_scope", None)
+    retained_transaction = bool(
+        getattr(view, "temporal_intent", None) is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE
+        and _pending_correction_pairs(world)
+        and scope is not None
+        and getattr(scope, "transaction_act_pairs", ())
+        and getattr(scope, "transaction_selected_pairs", ())
+        and not getattr(scope, "transaction_rearmed", False)
+    )
+    identity = (
+        scope.transaction_act_identity
+        if retained_transaction
+        else getattr(scope, "retry_act_identity", None)
+        or getattr(view, "trigger_act_identity", None)
+    )
     if not identity or len(identity) != 2 or identity[0] != "pulse":
         return None
-    trigger_actions = tuple(identity[1])
+    trigger_actions = (
+        tuple(scope.transaction_act_pairs)
+        if retained_transaction and pulse_identity(tuple(scope.transaction_act_pairs)) == identity
+        else tuple(identity[1])
+    )
+    selected_tags = (
+        {tag for tag, _value in scope.transaction_selected_pairs} if retained_transaction else set()
+    )
     releases = tuple(
         (tag, world.context.resting.get(tag, False))
         for tag, value in trigger_actions
-        if (tag in world.context.edge_tags or tag in world.context.clear_only)
+        if (
+            tag in selected_tags
+            or tag in world.context.edge_tags
+            or tag in world.context.clear_only
+        )
         and _values_match(world.snapshot.get(tag), value)
         and not _values_match(world.snapshot.get(tag), world.context.resting.get(tag, False))
     )
@@ -634,6 +976,7 @@ def _iter_temporal_schedules(
             )
             for atom in branch.atoms
         )
+        requirement_bindings = _temporal_requirement_bindings(lowered)
         schedule = compile_scalar_schedule(
             tuple(requirement for _atom, requirement in lowered),
             world.state.work,
@@ -653,7 +996,30 @@ def _iter_temporal_schedules(
                     continue
                 if not any(atom.requirement is source for source in sources):
                     sources.append(atom.requirement)
-            yield replace(schedule, requirement_sources=tuple(sources))
+            yield replace(
+                schedule,
+                requirement_sources=tuple(sources),
+                requirement_bindings=requirement_bindings,
+            )
+
+
+def _temporal_requirement_bindings(
+    lowered: tuple[tuple[Any, Any], ...],
+) -> tuple[tuple[Any, tuple[Any, ...]], ...]:
+    """Group adjustable lowered leaves under their lifecycle parent."""
+
+    selected_by_parent: dict[tuple[Any, ...], list[Any]] = {}
+    parents: dict[tuple[Any, ...], Any] = {}
+    for atom, requirement in lowered:
+        if not requirement.permits_assignment:
+            continue
+        parent_identity = _semantic_key(atom.requirement.navigation_identity)
+        parents[parent_identity] = atom.requirement
+        selected_by_parent.setdefault(parent_identity, []).append(requirement)
+    return tuple(
+        (parents[parent_identity], tuple(selected))
+        for parent_identity, selected in selected_by_parent.items()
+    )
 
 
 def _theory_correction_composition(
@@ -662,7 +1028,7 @@ def _theory_correction_composition(
     target: TargetSpec,
     *,
     research_finding_identity: tuple[Any, ...] | None = None,
-) -> ComposeCorrection | None:
+) -> ComposeCorrection | NeedIntrascanTraceback | None:
     """Choose one persistent correction without executing a program scan."""
 
     view = getattr(world.context, "theory_view", None)
@@ -674,10 +1040,10 @@ def _theory_correction_composition(
     requirements = tuple(getattr(world.context, "temporal_requirements", ()))
     if not requirements:
         raise ValueError("temporal retry has no resolved live requirements")
-    installed = tuple(world.state.pilot_rungs)
+    installed = frozenset(_rung_identity(rung) for rung in world.state.pilot_rungs)
     for schedule in _iter_temporal_schedules(world, target, requirements):
         for rung in schedule.pilot_rungs:
-            if rung in installed or _avoid_forces(
+            if _rung_identity(rung) in installed or _avoid_forces(
                 world.context,
                 ((rung.dest, rung.value),),
                 world.snapshot,
@@ -689,8 +1055,6 @@ def _theory_correction_composition(
                 for requirement in sources
                 if getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
             )
-            if not owned:
-                continue
             frontier = _frontier(world, candidates)
             orientation_read = OrientationRead(
                 world_key=world.world_key,
@@ -702,6 +1066,59 @@ def _theory_correction_composition(
                     world.context.compass.knowledge.nogood_identities(world.world_key)
                 ),
             )
+            if not owned:
+                conducted = tuple(
+                    (parent, _theory_conducted_occurrence(world.context.compass, view, parent))
+                    for parent, selected in schedule.requirement_bindings
+                    if any(
+                        getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
+                        for requirement in selected
+                    )
+                )
+                exact = tuple(
+                    (parent, occurrence)
+                    for parent, occurrence in conducted
+                    if occurrence is not None and _counterfactual_boundary(occurrence) is not None
+                )
+                if not exact:
+                    continue
+                parent, occurrence = exact[0]
+                boundary = _counterfactual_boundary(
+                    occurrence,
+                    getattr(parent, "selected_writer", None),
+                )
+                assert boundary is not None
+                prevented_write = _requirement_obstruction(parent)
+                tag = getattr(world.state.work, "_known_tags_by_name", {}).get(rung.dest)
+                patch = CounterfactualPatch(
+                    dest=rung.dest,
+                    value=rung.value,
+                    guard=(
+                        tag != rung.value
+                        if prevented_write is not None and tag is not None
+                        else rung.guard
+                    ),
+                    boundary=boundary,
+                )
+                request = IntrascanTracebackRequest(
+                    patch=patch,
+                    requirements=(parent,),
+                    consumer_assignments=((rung.dest, rung.value),),
+                    research_finding_identity=research_finding_identity,
+                    prevented_write=prevented_write,
+                )
+                if _has_traceback_result(view, request.identity):
+                    continue
+                return NeedIntrascanTraceback(
+                    world_key=world.world_key,
+                    frontier=frontier,
+                    request=request,
+                    rationale=(
+                        "working theory: test the conducted consumer handoff, then "
+                        "trace its preconditions backward"
+                    ),
+                    orientation=orientation_read,
+                )
             return ComposeCorrection(
                 world_key=world.world_key,
                 frontier=frontier,
@@ -712,6 +1129,481 @@ def _theory_correction_composition(
                 orientation=orientation_read,
             )
     return None
+
+
+def _theory_intrascan_bearing(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+) -> Bearing | None:
+    """Select only the next ordinary scan proved by a traceback finding.
+
+    The retained finding is evidence, not a stored two-scan plan.  Compass
+    rereads the current World, proves that the producer's entry requirements
+    still hold, and authorizes one exact program scan.  The later consumer
+    assignment remains unselected until the landing World is read afresh.
+    """
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None:
+        return None
+    findings = tuple(getattr(view, "traceback_findings", ()))
+    if not findings:
+        return None
+    current_key = tuple(world.world_key)
+    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    if physical_key != tuple(view.source.world_key):
+        return None
+    for finding in reversed(findings):
+        if (
+            finding.theory_id != view.theory_id
+            or finding.version_id != view.version_id
+            or finding.source != view.source
+        ):
+            continue
+        realization = getattr(finding, "realization", None)
+        if realization is None:
+            # Completed research may prove that this remains ordinary user
+            # configuration. Its receipt suppresses repeated hypothetical
+            # work but grants no intrascan act; the temporal reader below
+            # chooses the fresh steer.
+            continue
+        step = finding.witness.traceback_step
+        if realization.direct:
+            assignments = tuple(realization.consumer_assignments)
+            if (
+                realization.consumer_write is None
+                or not assignments
+                or any(tag not in world.context.steerable for tag, _value in assignments)
+            ):
+                continue
+            policy = ActPolicy(
+                source=ActSource.WIDENING,
+                action_pairs=assignments,
+                applied=assignments,
+                note="working theory: execute one exact intrascan consumer steer",
+                expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+                provenance=("working-theory intrascan direct realization",),
+                local_progress=LocalProgressKind.INTRASCAN_DIRECT,
+                pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+            )
+            act = IntrascanPulse(
+                policy=policy,
+                expected_write=realization.consumer_write,
+                evidence_identity=finding.identity,
+            )
+            if (
+                _act_preserves_requirements(world, act)
+                and not _avoid_forces(world.context, assignments, world.snapshot)
+                and not world.context.compass.knowledge.act_is_nogood(
+                    world.world_key,
+                    act_identity(act),
+                )
+            ):
+                return _bearing(
+                    world,
+                    act,
+                    candidates,
+                    target=target,
+                    rationale="working theory: steer one exact intrascan consumer scan",
+                )
+            continue
+        stage_write = realization.stage_write
+        if (
+            not realization.witnessed
+            or step is None
+            or stage_write is None
+            or realization.stage_scan != view.source.scan_id + 1
+            or stage_write.counterfactual
+        ):
+            continue
+        requirements = tuple(getattr(realization, "stage_requirements", ()))
+        if not requirements:
+            producers = tuple(
+                producer for producer in step.producer_traces if producer.write == stage_write
+            )
+            if len(producers) != 1:
+                continue
+            requirements = producers[0].enabling_requirements
+        if not requirements or any(
+            requirement.source_kind != "entry"
+            or not _values_match(world.snapshot.get(requirement.tag), requirement.value)
+            for requirement in requirements
+        ):
+            continue
+        return _bearing(
+            world,
+            ProgramScan(
+                expected_write=stage_write,
+                evidence_identity=finding.identity,
+            ),
+            candidates,
+            target=target,
+            rationale="working theory: execute one exact intrascan staging scan",
+        )
+    return None
+
+
+def _theory_intrascan_frontier_bearing(
+    world: OrientationWorld,
+    target: TargetSpec,
+) -> Bearing | None:
+    """Trace one open occurrence goal through the ordinary current-world reader.
+
+    An open frontier grants no act. It only locks ordinary Trace to the exact
+    static writer which can supply the missing value. Compass still derives
+    one current action, and the downstream consumer steer stays for a later
+    fresh World.
+    """
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None:
+        return None
+    current_frontiers = getattr(view, "current_traceback_frontiers", None)
+    frontiers = (
+        tuple(current_frontiers())
+        if current_frontiers is not None
+        else tuple(getattr(view, "traceback_frontiers", ()))
+    )
+    if not frontiers:
+        return None
+    current_key = tuple(world.world_key)
+    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    if physical_key != tuple(view.source.world_key):
+        return None
+
+    ctx = world.context
+    constraints = NavigationConstraints(
+        blocked_actions=frozenset(getattr(ctx, "blocked_actions", ())),
+        avoid_predicate=getattr(ctx, "avoid_pred", None),
+        active_requirements=tuple(getattr(ctx, "active_requirements", ())),
+    )
+    exclusions = frozenset(ctx.compass.knowledge.nogood_identities(world.world_key))
+    rejected_actions = _exact_rejected_actions(exclusions)
+    from pyrung.core.analysis.prove.expr import _eval_expr_from_state
+    from pyrung.core.analysis.sp_values import writer_value_facts
+
+    for frontier in reversed(frontiers):
+        if frontier.theory_id != view.theory_id or frontier.source != view.source:
+            continue
+        consumer_assignments = frozenset(frontier.consumer_assignments)
+        stage_rejected_actions = frozenset((*rejected_actions, *consumer_assignments))
+        for goal in frontier.producer_goals:
+            if (
+                goal.node_index < 0
+                or goal.node_index >= len(ctx.pdg.rung_nodes)
+                or goal.node_index not in ctx.pdg.writers_of.get(goal.tag, frozenset())
+            ):
+                continue
+            node = ctx.pdg.rung_nodes[goal.node_index]
+            if RungId(node.subroutine, node.rung_index) != goal.rung_id or tuple(
+                node.branch_path
+            ) != tuple(goal.branch_path):
+                continue
+            occurrence_snapshot = {**world.snapshot, **dict(goal.observed_values)}
+            useful = frontier.witness.traceback_step.useful_write
+            excluded_writers = frozenset(
+                index
+                for index, candidate_node in enumerate(ctx.pdg.rung_nodes)
+                if RungId(candidate_node.subroutine, candidate_node.rung_index)
+                == useful.boundary.rung_id
+                and tuple(candidate_node.branch_path) == tuple(useful.boundary.branch_path or ())
+            )
+
+            def orient_guard_target(
+                concrete_target: TargetSpec,
+                route: TraceChoice | None,
+                *,
+                rejected: frozenset[tuple[str, Any]] = stage_rejected_actions,
+                consumer: frozenset[tuple[str, Any]] = consumer_assignments,
+                frontier_id: tuple[Any, ...] = frontier.identity,
+                goal_id: tuple[Any, ...] = goal.identity,
+                goal_evidence: Any = goal,
+            ) -> Bearing | None:
+                """Let ordinary Compass orient one exact frontier prerequisite."""
+
+                tree = _trace_for_route(
+                    world,
+                    concrete_target,
+                    constraints,
+                    route,
+                    rejected,
+                )
+                key_config = world.key_config
+                if key_config is None:
+                    tree_tags = {
+                        concrete_target.tag,
+                        *tree.pivot_tags(),
+                        *(
+                            leaf.tag
+                            for leaf in tree.leaves()
+                            if not leaf.is_steerable
+                            and not getattr(leaf, "pipeline_internal", False)
+                        ),
+                    }
+                    key_config = _StateKeyConfig(
+                        stateful_names=tuple(sorted(tree_tags)),
+                        done_specs=(),
+                        threshold_vector_specs=(),
+                        acc_indices=frozenset(),
+                    )
+                producer_world = _assemble_world(
+                    replace(world, frame=None, root_route=None),
+                    route,
+                    tree,
+                    key_config,
+                )
+                producer_candidates = _build_candidates(
+                    producer_world.frame,
+                    producer_world.state,
+                    producer_world.context,
+                )
+                ordinary = _orient_read(
+                    ctx.compass,
+                    producer_world,
+                    concrete_target,
+                    _allow_theory=False,
+                    _candidate_read=producer_candidates,
+                )
+                if not isinstance(ordinary, Bearing):
+                    return None
+                applied = frozenset(getattr(ordinary.act.policy, "applied", ()))
+                if applied & consumer:
+                    return None
+                return _bearing(
+                    producer_world,
+                    ordinary.act,
+                    producer_candidates,
+                    target=target,
+                    prerequisites=ordinary.prerequisites,
+                    rationale=(
+                        "working theory: follow one ordinary bearing toward the "
+                        "missing intrascan producer guard"
+                    ),
+                    investigation_selection=InvestigationSelection(
+                        frontier_id=frontier_id,
+                        producer_goal_id=goal_id,
+                        producer_goal=goal_evidence,
+                    ),
+                )
+
+            for alternative in goal.guard_alternatives:
+                missing = tuple(
+                    atom
+                    for atom in alternative
+                    if _eval_expr_from_state(atom, occurrence_snapshot) is False
+                )
+                for atom in missing:
+                    if atom.tag in ctx.steerable and not atom.operand_is_tag:
+                        direct_values: tuple[Any, ...] = ()
+                        tag = getattr(world.state.work, "_known_tags_by_name", {}).get(atom.tag)
+                        if atom.form in {"xic", "rise", "truthy"}:
+                            direct_values = (True,)
+                        elif atom.form in {"xio", "fall"}:
+                            direct_values = (False,)
+                        elif atom.form == "eq":
+                            direct_values = (atom.operand,)
+                        elif tag is not None and atom.form in {
+                            "ne",
+                            "lt",
+                            "le",
+                            "gt",
+                            "ge",
+                        }:
+                            direct_values = satisfying_values(
+                                tag,
+                                (
+                                    Cmp(
+                                        atom.tag,
+                                        {
+                                            "ne": "!=",
+                                            "lt": "<",
+                                            "le": "<=",
+                                            "gt": ">",
+                                            "ge": ">=",
+                                        }[atom.form],
+                                        atom.operand,
+                                    ),
+                                ),
+                                dict(world.snapshot),
+                            )
+                        for value in direct_values:
+                            direct = orient_guard_target(
+                                TargetSpec(atom.tag, value),
+                                None,
+                            )
+                            if direct is not None:
+                                return direct
+
+                    facts = tuple(
+                        sorted(
+                            (
+                                fact
+                                for fact in writer_value_facts(ctx.program, ctx.pdg).get(
+                                    atom.tag, ()
+                                )
+                                if fact.node_index not in excluded_writers
+                                and _eval_expr_from_state(
+                                    atom,
+                                    {
+                                        **occurrence_snapshot,
+                                        atom.tag: fact.written_value,
+                                    },
+                                )
+                                is True
+                            ),
+                            key=lambda fact: fact.node_index,
+                        )
+                    )
+                    if not facts or len(facts) > 8:
+                        continue
+                    for fact in facts:
+                        concrete_target = TargetSpec(atom.tag, fact.written_value)
+                        route = TraceChoice(
+                            id=f"intrascan-guard-writer-{fact.node_index}",
+                            label=(
+                                f"exact writer for intrascan guard "
+                                f"{atom.tag} {atom.form} {atom.operand!r}"
+                            ),
+                            route=("working-theory intrascan guard writer",),
+                            writer_locks=((atom.tag, fact.written_value, fact.node_index),),
+                        )
+                        ordinary = orient_guard_target(concrete_target, route)
+                        if ordinary is not None:
+                            return ordinary
+    return None
+
+
+def _theory_intrascan_boundary_realization(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+) -> NeedIntrascanBoundaryRealization | None:
+    """Request one fresh proof after an owned producer advanced the World."""
+
+    view = getattr(world.context, "theory_view", None)
+    reader = getattr(view, "realized_traceback_frontier", None)
+    resolved = reader() if reader is not None else None
+    if resolved is None:
+        return None
+    frontier, goal, attempt = resolved
+    source = getattr(view, "source", None)
+    if source is None:
+        return None
+    current_key = tuple(world.world_key)
+    physical_key = current_key[:2] if len(current_key) == 3 else current_key
+    if physical_key != tuple(source.world_key) or not _values_match(
+        world.snapshot.get(goal.tag), goal.value
+    ):
+        return None
+    return NeedIntrascanBoundaryRealization(
+        world_key=world.world_key,
+        frontier=_frontier(world, candidates),
+        traceback_frontier=frontier,
+        producer_goal=goal,
+        producer_attempt_id=attempt.attempt_id,
+        rationale=(
+            "working theory: the exact producer stage advanced; reprove its "
+            "retained consumer at this fresh World"
+        ),
+        orientation=OrientationRead(
+            world_key=world.world_key,
+            world=world,
+            candidates=candidates,
+            considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
+            rankings=tuple(candidates.options),
+            exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
+        ),
+    )
+
+
+def _theory_conducted_occurrence(
+    compass: Any,
+    view: Any,
+    requirement: Any,
+) -> Any | None:
+    """Return the exact parent consumer occurrence crossed by conductivity."""
+
+    front = compass.conductivity_front(view)
+    if front is None:
+        return None
+    demanding = requirement.demanding_occurrence
+    identity = (demanding.kind, demanding.tag, demanding.dynamic_address)
+    for flow in front.flows:
+        if flow.displacement is None:
+            continue
+        exact = next(
+            (
+                read
+                for read in flow.consumer_reads
+                if (read.kind, read.tag, read.dynamic_address) == identity
+            ),
+            None,
+        )
+        if exact is not None:
+            return demanding
+        if (
+            flow.appeared is not None
+            and any(
+                obligation.tag == demanding.tag and obligation.value in demanding.values
+                for obligation in flow.obligations
+            )
+            and (flow.appeared.scan_id, flow.appeared.ordinal)
+            < (demanding.scan_id, demanding.ordinal)
+            < (flow.displacement.scan_id, flow.displacement.ordinal)
+        ):
+            return demanding
+    return None
+
+
+def _theory_requirement_was_conducted(
+    compass: Any,
+    view: Any,
+    requirement: Any,
+) -> bool:
+    """Compatibility predicate over the exact conducted occurrence reader."""
+
+    return _theory_conducted_occurrence(compass, view, requirement) is not None
+
+
+def _counterfactual_boundary(
+    occurrence: Any,
+    static_address: tuple[Any, ...] | None = None,
+) -> OccurrenceBoundary | None:
+    """Relocate a read to the executor boundary before its condition snapshot."""
+
+    if occurrence.kind != "read":
+        return None
+    subroutine, rung_index = occurrence.rung
+    return OccurrenceBoundary(
+        rung_id=RungId(subroutine, rung_index),
+        execution_kind=occurrence.execution_kind,
+        caller_rung=occurrence.caller_rung,
+        call_stack=tuple(occurrence.call_stack),
+        depth=occurrence.depth,
+        call_invocation=occurrence.call_invocation,
+        run_order=getattr(occurrence, "run_order", None),
+        branch_path=(
+            tuple(occurrence.branch_path)
+            if getattr(occurrence, "branch_path", None) is not None
+            else tuple(static_address[2])
+            if static_address is not None and len(static_address) >= 3
+            else None
+        ),
+    )
+
+
+def _requirement_obstruction(requirement: Any) -> Any | None:
+    """Return the exact harmful write carried by one requirement receipt."""
+
+    direct = getattr(requirement, "obstruction_occurrence", None)
+    if direct is not None:
+        return direct
+    matches = tuple(
+        item[1]
+        for item in getattr(requirement, "scope", ())
+        if isinstance(item, tuple) and len(item) == 2 and item[0] == "overwriter_guard"
+    )
+    return matches[0] if len(matches) == 1 else None
 
 
 def _theory_setup_bearing(
@@ -767,6 +1659,428 @@ def _theory_setup_bearing(
     # not direct scalar Bearings. Other current-world readers may still return
     # a coast or upstream act; otherwise the ordinary typed result wins.
     return None
+
+
+def _theory_setup_traceback(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    ordinary: Bearing | None,
+) -> NeedIntrascanTraceback | None:
+    """Request one exact backward proof for a program-owned setup leaf."""
+
+    view = getattr(world.context, "theory_view", None)
+    if (
+        view is None
+        or view.temporal_intent is not TheoryTemporalIntent.SETUP_FIRST
+        or ordinary is None
+    ):
+        return None
+    consumer_assignments = tuple(ordinary.act.policy.applied)
+    if not consumer_assignments:
+        return None
+    requirements = tuple(getattr(world.context, "temporal_requirements", ()))
+    for branch in iter_temporal_need_branches(requirements):
+        for atom in branch.atoms:
+            condition = atom.condition
+            authority = (
+                atom.guard_atom.operand_authority
+                if atom.guard_atom is not None
+                else atom.requirement.operand_authority
+            )
+            occurrence = (
+                atom.guard_atom.deadline
+                if atom.guard_atom is not None
+                else atom.requirement.demanding_occurrence
+            )
+            if (
+                authority is not OperandAuthority.PROGRAM_WRITTEN
+                or not isinstance(condition, Cmp)
+                or condition.bound_is_tag
+                or occurrence.kind != "read"
+                or occurrence.tag != condition.tag
+                or len(occurrence.values) != 1
+                or constraint_holds(condition, {condition.tag: occurrence.values[0]}) is not False
+            ):
+                continue
+            tag = getattr(world.state.work, "_known_tags_by_name", {}).get(condition.tag)
+            if tag is None:
+                continue
+            values = satisfying_values(tag, (condition,), dict(world.snapshot))
+            boundary = _counterfactual_boundary(
+                occurrence,
+                getattr(atom.requirement, "selected_writer", None),
+            )
+            patch_guard = _counterfactual_guard(tag, condition)
+            if not values or boundary is None or patch_guard is None:
+                continue
+            request = IntrascanTracebackRequest(
+                patch=CounterfactualPatch(
+                    dest=condition.tag,
+                    value=values[0],
+                    guard=patch_guard,
+                    boundary=boundary,
+                ),
+                requirements=(atom.requirement,),
+                consumer_assignments=consumer_assignments,
+                required_condition=condition,
+            )
+            if _has_traceback_result(view, request.identity):
+                continue
+            return NeedIntrascanTraceback(
+                world_key=world.world_key,
+                frontier=_frontier(world, candidates),
+                request=request,
+                rationale=(
+                    "working theory: trace one program-owned setup occurrence "
+                    "back to a real earlier writer"
+                ),
+                orientation=OrientationRead(
+                    world_key=world.world_key,
+                    world=world,
+                    candidates=candidates,
+                    considered_paths=(
+                        (candidates.route.plan,) if candidates.route is not None else ()
+                    ),
+                    rankings=tuple(candidates.options),
+                    exclusions=tuple(
+                        world.context.compass.knowledge.nogood_identities(world.world_key)
+                    ),
+                ),
+            )
+    return None
+
+
+def _traceback_hop_ancestry(
+    view: Any,
+    frontier: Any,
+) -> frozenset[tuple[Any, ...]] | None:
+    """Exact physical hops from one selected frontier back to its root."""
+
+    by_id = {
+        candidate.identity: candidate for candidate in getattr(view, "traceback_frontiers", ())
+    }
+    ancestry: set[tuple[Any, ...]] = set()
+    seen: set[tuple[Any, ...]] = set()
+    current = frontier
+    while current is not None:
+        if current.identity in seen or not getattr(current, "hop_identity", None):
+            return None
+        seen.add(current.identity)
+        ancestry.add(current.hop_identity)
+        parent_id = getattr(current, "parent_frontier_id", None)
+        if parent_id is None:
+            break
+        current = by_id.get(parent_id)
+        if current is None:
+            return None
+    return frozenset(ancestry)
+
+
+def _theory_intrascan_continuation_traceback(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+) -> NeedIntrascanTraceback | None:
+    """Extend one retained backward chain through its newly exposed writer.
+
+    The frontier's ordinary bearing has already executed and been rejected.
+    Its exact trigger remains the scan-entry action.  When the resulting
+    prevention requirement has one complete Boolean branch with exactly one
+    false program-owned scalar occurrence, research only that occurrence as
+    the next hypothetical hop.  Adjustable or multiply-missing branches stay
+    with ordinary composition/navigation.
+    """
+
+    view = getattr(world.context, "theory_view", None)
+    if view is None or view.temporal_intent not in {
+        TheoryTemporalIntent.SETUP_FIRST,
+        TheoryTemporalIntent.RETRY_TOGETHER,
+        TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+    }:
+        return None
+    current_frontiers = getattr(view, "current_traceback_frontiers", None)
+    frontiers = (
+        tuple(current_frontiers())
+        if current_frontiers is not None
+        else tuple(
+            frontier
+            for frontier in getattr(view, "traceback_frontiers", ())
+            if frontier.source == view.source
+        )
+    )
+    trigger = getattr(view, "trigger_act_identity", None)
+    if (
+        not isinstance(trigger, tuple)
+        or len(trigger) != 2
+        or trigger[0] != "pulse"
+        or not isinstance(trigger[1], tuple)
+        or not trigger[1]
+    ):
+        return None
+    trigger_actions = tuple(trigger[1])
+    trigger_attempt_id = getattr(view, "trigger_attempt_id", None)
+    trigger_attempts = tuple(
+        attempt
+        for attempt in getattr(view, "conductivity_attempts", ())
+        if attempt.attempt_id == trigger_attempt_id and attempt.act_identity == trigger
+    )
+    if len(trigger_attempts) != 1:
+        return None
+    trigger_attempt = trigger_attempts[0]
+    parent_frontier_id = getattr(trigger_attempt, "investigation_frontier_id", None)
+    parent_producer_goal_id = getattr(trigger_attempt, "producer_goal_id", None)
+    selected_frontiers = tuple(
+        frontier for frontier in frontiers if frontier.identity == parent_frontier_id
+    )
+    if len(selected_frontiers) != 1 or parent_producer_goal_id is None:
+        return None
+    parent_frontier = selected_frontiers[0]
+    selected_goals = tuple(
+        goal for goal in parent_frontier.producer_goals if goal.identity == parent_producer_goal_id
+    )
+    if len(selected_goals) != 1:
+        return None
+    hop_ancestry = _traceback_hop_ancestry(view, parent_frontier)
+    if hop_ancestry is None:
+        return None
+    requirements = tuple(getattr(world.context, "temporal_trigger_requirements", ()))
+    if not requirements:
+        return None
+
+    for branch in iter_temporal_need_branches(requirements):
+        evaluated: list[tuple[Any, bool]] = []
+        for demand in branch.occurrence_demands:
+            condition = demand.condition
+            occurrence = demand.occurrence
+            if (
+                not isinstance(condition, Cmp)
+                or condition.bound_is_tag
+                or occurrence.kind != "read"
+                or occurrence.tag != condition.tag
+                or len(occurrence.values) != 1
+            ):
+                evaluated = []
+                break
+            holds = constraint_holds(
+                condition,
+                {condition.tag: occurrence.values[0]},
+            )
+            if holds is None:
+                evaluated = []
+                break
+            evaluated.append((demand, holds))
+        missing = tuple(demand for demand, holds in evaluated if holds is False)
+        if len(missing) != 1:
+            continue
+        demand = missing[0]
+        condition = demand.condition
+        occurrence = demand.occurrence
+        if demand.operand_authorities != frozenset((OperandAuthority.PROGRAM_WRITTEN,)):
+            continue
+        obstruction_occurrences = demand.obstruction_occurrences
+        if len(obstruction_occurrences) > 1:
+            continue
+        tag = getattr(world.state.work, "_known_tags_by_name", {}).get(condition.tag)
+        boundary = _counterfactual_boundary(
+            occurrence,
+            demand.selected_writers[0] if len(demand.selected_writers) == 1 else None,
+        )
+        patch_guard = _counterfactual_guard(tag, condition) if tag is not None else None
+        values = (
+            satisfying_values(tag, (condition,), dict(world.snapshot)) if tag is not None else ()
+        )
+        if boundary is None or patch_guard is None or not values:
+            continue
+        request = IntrascanTracebackRequest(
+            patch=CounterfactualPatch(
+                dest=condition.tag,
+                value=values[0],
+                guard=patch_guard,
+                boundary=boundary,
+            ),
+            requirements=demand.supporting_requirements,
+            consumer_assignments=trigger_actions,
+            required_condition=condition,
+            prevented_write=(obstruction_occurrences[0] if obstruction_occurrences else None),
+            parent_frontier_id=parent_frontier.identity,
+            parent_producer_goal_id=selected_goals[0].identity,
+            parent_attempt_id=trigger_attempt.attempt_id,
+        )
+        if request.hop_identity in hop_ancestry:
+            continue
+        if _has_traceback_result(view, request.identity):
+            continue
+        return NeedIntrascanTraceback(
+            world_key=world.world_key,
+            frontier=_frontier(world, candidates),
+            request=request,
+            rationale=(
+                "working theory: extend the retained intrascan traceback "
+                "through one newly exposed program writer"
+            ),
+            orientation=OrientationRead(
+                world_key=world.world_key,
+                world=world,
+                candidates=candidates,
+                considered_paths=((candidates.route.plan,) if candidates.route is not None else ()),
+                rankings=tuple(candidates.options),
+                exclusions=tuple(
+                    world.context.compass.knowledge.nogood_identities(world.world_key)
+                ),
+            ),
+        )
+    return None
+
+
+def _counterfactual_guard(tag: Any, condition: Cmp) -> Any | None:
+    """Rebuild one inert scalar requirement as an analysis-only condition."""
+
+    complements = {
+        "==": tag.__ne__,
+        "!=": tag.__eq__,
+        "<": tag.__ge__,
+        "<=": tag.__gt__,
+        ">": tag.__le__,
+        ">=": tag.__lt__,
+    }
+    compare = complements.get(condition.op)
+    return compare(condition.bound) if compare is not None else None
+
+
+def _theory_pending_correction_bearing(
+    world: OrientationWorld,
+    candidates: CandidateRead,
+    target: TargetSpec,
+) -> Bearing | None:
+    """Execute one newly composed correction before any trigger is retried."""
+
+    view = getattr(world.context, "theory_view", None)
+    pending = getattr(view, "pending_correction_rung_identities", frozenset())
+    if not pending:
+        return None
+    rungs = tuple(rung for rung in world.state.pilot_rungs if _rung_identity(rung) in pending)
+    if len(rungs) != 1:
+        return None
+    rung = rungs[0]
+    requirements = tuple(
+        requirement
+        for requirement in getattr(world.context, "temporal_requirements", ())
+        if getattr(getattr(requirement, "condition", None), "tag", None) == rung.dest
+    )
+    if not requirements:
+        return None
+    actions = ((rung.dest, rung.value),)
+    act = Pulse(
+        ActPolicy(
+            source=ActSource.WIDENING,
+            action_pairs=actions,
+            applied=actions,
+            note="working theory: execute one newly composed correction",
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+            local_progress=LocalProgressKind.TEMPORAL_SETUP,
+            local_progress_requirements=requirements,
+            local_progress_sources=requirements,
+            pulse_horizon=PulseHorizon.ASSERTION_SCAN,
+        )
+    )
+    if not _act_preserves_requirements(world, act) or world.context.compass.knowledge.act_is_nogood(
+        world.world_key,
+        act_identity(act),
+    ):
+        return None
+    return _bearing(
+        world,
+        act,
+        candidates,
+        target=target,
+        rationale="working theory: execute one correction, then read Compass again",
+    )
+
+
+def _pending_correction_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """Installed theory configuration which is not a fresh candidate action."""
+
+    view = getattr(world.context, "theory_view", None)
+    pending = getattr(view, "pending_correction_rung_identities", frozenset())
+    return tuple(
+        (rung.dest, rung.value)
+        for rung in world.state.pilot_rungs
+        if _rung_identity(rung) in pending
+    )
+
+
+def _untried_pending_correction_pairs(
+    world: OrientationWorld,
+    research: Any,
+) -> tuple[_ActionPair, ...]:
+    """Pending configuration absent from the exact attempt being researched.
+
+    Composition alone is not physical evidence, so a newly installed
+    correction must participate in one execution before Compass researches
+    what stopped that execution.  Once the later attempt in the exact
+    conductivity comparison names the correction rung, however, ``pending``
+    only means that its dedicated setup phase has not completed.  It must not
+    hide a different overwrite which that same scan has now exposed.
+    """
+
+    pending_pairs = _pending_correction_pairs(world)
+    if not pending_pairs:
+        return ()
+    view = getattr(world.context, "theory_view", None)
+    later_attempt_id = getattr(
+        getattr(research, "comparison", None),
+        "later_attempt_id",
+        None,
+    )
+    attempts = tuple(
+        attempt
+        for attempt in getattr(view, "conductivity_attempts", ())
+        if attempt.attempt_id == later_attempt_id
+    )
+    if len(attempts) != 1:
+        return pending_pairs
+    tried = frozenset(attempts[0].pilot_rung_identities)
+    pending = getattr(view, "pending_correction_rung_identities", frozenset())
+    untried = pending - tried
+    return tuple(
+        (rung.dest, rung.value)
+        for rung in world.state.pilot_rungs
+        if _rung_identity(rung) in untried
+    )
+
+
+def _configured_correction_pairs(world: OrientationWorld) -> tuple[_ActionPair, ...]:
+    """All currently installed theory corrections, whether pending or observed."""
+
+    view = getattr(world.context, "theory_view", None)
+    configured = getattr(view, "correction_rung_identities", frozenset())
+    return tuple(
+        (rung.dest, rung.value)
+        for rung in world.state.pilot_rungs
+        if _rung_identity(rung) in configured
+    )
+
+
+def _pair_matches_any(pair: _ActionPair, others: tuple[_ActionPair, ...]) -> bool:
+    return any(pair[0] == other[0] and _values_match(pair[1], other[1]) for other in others)
+
+
+def _candidate_is_pending_configuration(candidate: Any, world: OrientationWorld) -> bool:
+    return _pair_matches_any(candidate.pair, _pending_correction_pairs(world))
+
+
+def _current_candidate_applied(
+    candidate: Any,
+    candidates: CandidateRead,
+    world: OrientationWorld,
+) -> tuple[_ActionPair, ...]:
+    """Keep installed corrections in the overlay, not the next act identity."""
+
+    pending = _pending_correction_pairs(world)
+    return tuple(
+        pair
+        for pair in _candidate_applied(candidate, candidates, world.context)
+        if not _pair_matches_any(pair, pending)
+    )
 
 
 def _tree_work_anchors(tree: Any, route: Any) -> tuple[_ActionPair, ...]:
@@ -1153,6 +2467,7 @@ def _bearing(
     target: TargetSpec,
     rationale: str,
     prerequisites: tuple[Any, ...] = (),
+    investigation_selection: InvestigationSelection | None = None,
 ) -> Bearing:
     """Assemble one Bearing with its target-relative objective.
 
@@ -1172,12 +2487,14 @@ def _bearing(
         exclusions=tuple(world.context.compass.knowledge.nogood_identities(world.world_key)),
         selected_bearing_id=repr(act_identity(act)),
     )
-    # ObserveScan exists to acquire the first exact program projection.  Route
-    # prerequisites are hypotheses produced by the still-unobserved static
-    # reading; installing them would turn observation into an intervention and
-    # corrupt the evidence Compass is about to bind.  Every other act executes
-    # the current selected route and therefore inherits its prerequisites.
-    inherited = () if isinstance(act, ObserveScan) else candidates.prerequisites.pilot_rungs
+    # Single program scans must execute the already-established World. Route
+    # prerequisites are hypotheses from the current static read; installing
+    # them would turn observation/staging into an intervention and corrupt the
+    # occurrence receipt. Every other act executes the selected route and
+    # therefore inherits its prerequisites.
+    inherited = (
+        () if isinstance(act, (ObserveScan, ProgramScan)) else candidates.prerequisites.pilot_rungs
+    )
     merged_prerequisites = tuple(dict.fromkeys((*inherited, *prerequisites)))
     return Bearing(
         world_key=world.world_key,
@@ -1186,6 +2503,7 @@ def _bearing(
         prerequisites=merged_prerequisites,
         rationale=rationale,
         orientation=orientation_read,
+        investigation_selection=investigation_selection,
     )
 
 
@@ -1312,12 +2630,42 @@ def _orient_read(
 
     view = getattr(world.context, "theory_view", None)
     if _allow_theory:
+        boundary_realization = _theory_intrascan_boundary_realization(
+            world,
+            candidates,
+        )
+        if boundary_realization is not None:
+            return boundary_realization
         if view is not None and view.temporal_intent in {
             TheoryTemporalIntent.RETRY_TOGETHER,
             TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
         }:
+            scope = getattr(view, "investigation_scope", None)
+            if (
+                view.temporal_intent is TheoryTemporalIntent.RETRY_THROUGH_DEADLINE
+                and scope is not None
+                and getattr(scope, "transaction_rearmed", False)
+            ):
+                ordinary = _orient_read(
+                    compass,
+                    world,
+                    target,
+                    _allow_theory=False,
+                    _candidate_read=candidates,
+                )
+                retry = _theory_temporal_retry_bearing(
+                    world,
+                    candidates,
+                    target,
+                    ordinary=ordinary if isinstance(ordinary, Bearing) else None,
+                )
+                if retry is not None:
+                    return retry
             research = compass.conductivity_research(view)
-            if research is not None:
+            if research is not None and not _untried_pending_correction_pairs(
+                world,
+                research,
+            ):
                 frontier = _frontier(world, candidates)
                 return NeedResearch(
                     world_key=world.world_key,
@@ -1350,6 +2698,22 @@ def _orient_read(
             )
             if composition is not None:
                 return composition
+            continuation_traceback = _theory_intrascan_continuation_traceback(
+                world,
+                candidates,
+            )
+            if continuation_traceback is not None:
+                return continuation_traceback
+            stage = _theory_intrascan_bearing(
+                world,
+                candidates,
+                target,
+            )
+            if stage is not None:
+                return stage
+            frontier_stage = _theory_intrascan_frontier_bearing(world, target)
+            if frontier_stage is not None:
+                return frontier_stage
             ordinary = _orient_read(
                 compass,
                 world,
@@ -1380,6 +2744,12 @@ def _orient_read(
                 return rearm
 
         theory_setup = _theory_setup_bearing(world, candidates, target)
+        continuation_traceback = _theory_intrascan_continuation_traceback(
+            world,
+            candidates,
+        )
+        if continuation_traceback is not None:
+            return continuation_traceback
         if theory_setup is not None:
             return theory_setup
         if setup_first and prescription is None:
@@ -1388,18 +2758,32 @@ def _orient_read(
             # original trigger is now a legitimate next transaction even
             # though its action identity is unchanged; the provisional tip is
             # what makes it new work rather than replay at the old source.
-            ordinary = _orient_read(
+            stage = _theory_intrascan_bearing(world, candidates, target)
+            if stage is not None:
+                return stage
+            frontier_stage = _theory_intrascan_frontier_bearing(world, target)
+            if frontier_stage is not None:
+                return frontier_stage
+            ordinary_result = _orient_read(
                 compass,
                 world,
                 target,
                 _allow_theory=False,
                 _candidate_read=candidates,
             )
+            ordinary = ordinary_result if isinstance(ordinary_result, Bearing) else None
+            traceback = _theory_setup_traceback(
+                world,
+                candidates,
+                ordinary,
+            )
+            if traceback is not None:
+                return traceback
             retry = _theory_temporal_retry_bearing(
                 world,
                 candidates,
                 target,
-                ordinary=ordinary if isinstance(ordinary, Bearing) else None,
+                ordinary=ordinary,
             )
             if retry is not None:
                 return retry
@@ -1417,7 +2801,9 @@ def _orient_read(
     for option in candidates.options:
         if option.source is not ActSource.AWAITED_ACTION:
             continue
-        applied = _candidate_applied(option, candidates, world.context)
+        if _candidate_is_pending_configuration(option, world):
+            continue
+        applied = _current_candidate_applied(option, candidates, world)
         act = Pulse(_pulse_policy(option, applied, world))
         if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
             world.world_key, act_identity(act)
@@ -1467,8 +2853,14 @@ def _orient_read(
                 landing_receipt_authority=prescription.landing_receipt_authority,
             ),
         )
-        if _act_preserves_requirements(world, act) and not compass.knowledge.act_is_nogood(
-            world.world_key, act_identity(act)
+        wait_edge_rejected = bool(
+            wait_nogood is not None
+            and wait_nogood in compass.knowledge.nogood_pairs(world.world_key)
+        )
+        if (
+            _act_preserves_requirements(world, act)
+            and not wait_edge_rejected
+            and not compass.knowledge.act_is_nogood(world.world_key, act_identity(act))
         ):
             return _bearing(
                 world,
@@ -1537,7 +2929,9 @@ def _orient_read(
             )
 
     for option in candidates.options:
-        applied = _candidate_applied(option, candidates, world.context)
+        if _candidate_is_pending_configuration(option, world):
+            continue
+        applied = _current_candidate_applied(option, candidates, world)
         act = Pulse(_pulse_policy(option, applied, world))
         if not _act_preserves_requirements(world, act) or compass.knowledge.act_is_nogood(
             world.world_key, act_identity(act)
@@ -1667,7 +3061,14 @@ def _read_group(
     for world in worlds:
         result = _orient_read(compass, world, target)
         results.append(result)
-        if isinstance(result, Bearing | ComposeCorrection | NeedResearch):
+        if isinstance(
+            result,
+            Bearing
+            | ComposeCorrection
+            | NeedResearch
+            | NeedIntrascanTraceback
+            | NeedIntrascanBoundaryRealization,
+        ):
             if maintenance_owns or not _is_maintenance(result):
                 return result, tuple(results)
             if maintenance is None:
@@ -1723,6 +3124,8 @@ def orient(
         context_changes["theory_view"] = constraints.theory_view
     if hasattr(world.context, "temporal_requirements"):
         context_changes["temporal_requirements"] = constraints.temporal_requirements
+    if hasattr(world.context, "temporal_trigger_requirements"):
+        context_changes["temporal_trigger_requirements"] = constraints.temporal_trigger_requirements
     if hasattr(world.context, "temporal_source_anchor"):
         context_changes["temporal_source_anchor"] = constraints.temporal_source_anchor
     read_context = replace(world.context, **context_changes)

@@ -20,6 +20,7 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryVersionId,
     TheoryView,
 )
+from pyrung.core.analysis.pilot.world_key import _semantic_key
 
 
 class ConductivityReach(StrEnum):
@@ -212,6 +213,39 @@ def _stop_identity(occurrence: EffectOccurrenceSnapshot) -> tuple[Any, ...]:
     )
 
 
+def _front_identity(flow: ConductivityFlow) -> tuple[Any, ...]:
+    """Structural produced-value front, independent of physical scan number.
+
+    The front is the exact writer and value that entered the hose.  Entry
+    state and later consumer annotation can vary between otherwise identical
+    retries; neither changes which produced front reached the stopping writer.
+    """
+
+    appeared = flow.appeared
+    if appeared is not None:
+        return (
+            appeared.kind,
+            appeared.rung,
+            appeared.execution_kind,
+            appeared.caller_rung,
+            appeared.call_stack,
+            appeared.depth,
+            appeared.tag,
+            _semantic_key(appeared.values[-1] if appeared.values else None),
+        )
+    return (
+        "unappeared",
+        tuple(
+            (
+                obligation.tag,
+                _semantic_key(obligation.value),
+                obligation.producer,
+            )
+            for obligation in flow.obligations
+        ),
+    )
+
+
 def _effect_occurrence_identity(
     occurrence: EffectOccurrenceSnapshot,
 ) -> tuple[Any, ...]:
@@ -279,16 +313,16 @@ def _compare_attempts(
     later: ConductivityAttemptFront,
 ) -> ConductivityComparison:
     earlier_stops = tuple(
-        (_stop_identity(flow.displacement), flow)
+        ((_stop_identity(flow.displacement), _front_identity(flow)), flow)
         for flow in earlier.flows
         if flow.displacement is not None
     )
     later_stops = tuple(
-        (_stop_identity(flow.displacement), flow)
+        ((_stop_identity(flow.displacement), _front_identity(flow)), flow)
         for flow in later.flows
         if flow.displacement is not None
     )
-    common = next(
+    common_pair = next(
         (
             identity
             for identity, _flow in later_stops
@@ -296,7 +330,18 @@ def _compare_attempts(
         ),
         None,
     )
-    if common is not None:
+    common = next(
+        (
+            stop_identity
+            for (stop_identity, _front), _flow in later_stops
+            if any(
+                stop_identity == earlier_stop
+                for (earlier_stop, _earlier_front), _earlier_flow in earlier_stops
+            )
+        ),
+        None,
+    )
+    if common_pair is not None:
         progress = ConductivityProgress.SAME_STOP
     elif earlier_stops and later_stops:
         progress = ConductivityProgress.STOP_CHANGED
@@ -440,6 +485,54 @@ def conductivity_front(view: TheoryView | None) -> ConductivityFront | None:
     )
 
 
+def charted_front_extends_current(
+    view: TheoryView,
+    observations: tuple[EffectObservationSnapshot, ...],
+) -> bool:
+    """Whether a fallback chart front may join the current exact history.
+
+    A no-effect setup scan may repeat the retained stopped front.  It may move
+    to a different chart front only after research has completed for the
+    latest retained attempt; otherwise the fallback would skip an unresolved
+    physical obstruction merely because the latest setup act lacked its own
+    effect expectation.
+    """
+
+    front = conductivity_front(view)
+    if front is None or not front.attempts:
+        return True
+    latest = front.attempts[-1]
+    groups: list[list[EffectObservationSnapshot]] = []
+    for observation in observations:
+        matching = next(
+            (
+                group
+                for group in groups
+                if (group[0].appeared is not None and group[0].appeared == observation.appeared)
+                or (
+                    group[0].appeared is None
+                    and observation.appeared is None
+                    and group[0].obligation == observation.obligation
+                )
+            ),
+            None,
+        )
+        if matching is None:
+            groups.append([observation])
+        else:
+            matching.append(observation)
+    candidate = ConductivityAttemptFront(
+        attempt_id=("charted-front-candidate",),
+        source=view.source,
+        flows=tuple(_flow(("charted-front-candidate",), tuple(group)) for group in groups),
+    )
+    if _compare_attempts(latest, candidate).progress is ConductivityProgress.SAME_STOP:
+        return True
+    return any(
+        finding.compared_attempt_ids[-1] == latest.attempt_id for finding in view.research_findings
+    )
+
+
 def conductivity_research_request(
     front: ConductivityFront | None,
 ) -> ConductivityResearchRequest | None:
@@ -449,7 +542,8 @@ def conductivity_research_request(
         return None
     comparison = front.comparisons[-1]
     if (
-        comparison.progress is not ConductivityProgress.SAME_STOP
+        comparison.progress
+        not in {ConductivityProgress.SAME_STOP, ConductivityProgress.STOP_CHANGED}
         or comparison.common_stop_identity is None
         or not comparison.requirement_drifts
     ):

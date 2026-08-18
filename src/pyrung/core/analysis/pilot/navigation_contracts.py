@@ -17,12 +17,25 @@ from pyrung.core.analysis.sp_values import _values_match
 
 if TYPE_CHECKING:
     from pyrung.core.analysis.pilot.conductivity import ConductivityResearchRequest
-    from pyrung.core.analysis.pilot.effects import EffectExpectation
+    from pyrung.core.analysis.pilot.effects import (
+        ConsumerBoundary,
+        EffectExpectation,
+        EffectOccurrenceSnapshot,
+    )
+    from pyrung.core.analysis.pilot.intrascan import (
+        IntrascanProducerGoal,
+        IntrascanWriteEvidence,
+    )
     from pyrung.core.analysis.pilot.options import CandidateRead
     from pyrung.core.analysis.pilot.overlay import PilotRung
     from pyrung.core.analysis.pilot.requirements import ActiveRequirement
     from pyrung.core.analysis.pilot.trace import TraceChoice
-    from pyrung.core.analysis.pilot.working_theory import TheoryClaim, TheoryView
+    from pyrung.core.analysis.pilot.working_theory import (
+        IntrascanTracebackFrontier,
+        TheoryClaim,
+        TheoryView,
+    )
+    from pyrung.core.intrascan_counterfactual import CounterfactualPatch
 
 
 @dataclass(frozen=True)
@@ -76,6 +89,8 @@ class NavigationConstraints:
     # Exact live requirements resolved by the drive for the active detached
     # temporal request. Empty on every ordinary orientation fast path.
     temporal_requirements: tuple[ActiveRequirement, ...] = ()
+    # Exact live subset introduced by the triggering rejected attempt.
+    temporal_trigger_requirements: tuple[ActiveRequirement, ...] = ()
     # Exact (checkpoint owner, world key) selected as this read's executable
     # edge. Requirement evidence may come from several later diagnostics.
     temporal_source_anchor: tuple[Any, Any] | None = None
@@ -140,12 +155,15 @@ class LocalProgressKind(StrEnum):
     THEORY_CORRECTIVE = "theory_corrective"
     TEMPORAL_EDGE = "temporal_edge"
     OBSERVE_ENTRY = "observe_entry"
+    INTRASCAN_STAGE = "intrascan_stage"
+    INTRASCAN_DIRECT = "intrascan_direct"
 
 
 class PulseHorizon(StrEnum):
     """How far physical pulse execution may run before yielding to Compass."""
 
     ASSERTION_SCAN = "assertion_scan"
+    CONSUMER_BOUNDARY = "consumer_boundary"
     LOOKAHEAD_SCAN = "lookahead_scan"
 
 
@@ -211,10 +229,16 @@ class ActPolicy:
     # provisional while Compass follows program-owned work.
     local_progress_sources: tuple[ActiveRequirement, ...] = ()
     pulse_horizon: PulseHorizon = PulseHorizon.LOOKAHEAD_SCAN
+    consumer_boundary: ConsumerBoundary | None = None
 
     def __post_init__(self) -> None:
         if self.expectation is not None and self.expectation_exemption is not None:
             raise ValueError("an act cannot both promise and exempt an effect")
+        owns_consumer_boundary = self.consumer_boundary is not None
+        if (self.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY) != owns_consumer_boundary:
+            raise ValueError(
+                "consumer-bound execution requires exactly one consumer boundary receipt"
+            )
 
     @property
     def primary_action(self) -> _ActionPair | None:
@@ -299,6 +323,19 @@ class BatchPulse:
 
 
 @dataclass(frozen=True)
+class IntrascanPulse:
+    """One scan-start steer proved at an exact downstream occurrence."""
+
+    policy: ActPolicy
+    expected_write: IntrascanWriteEvidence
+    evidence_identity: tuple[Any, ...]
+
+    @property
+    def actions(self) -> tuple[_ActionPair, ...]:
+        return self.policy.action_pairs
+
+
+@dataclass(frozen=True)
 class Coast:
     """One coast act consuming navigation's complete typed heading."""
 
@@ -334,7 +371,28 @@ class ObserveScan:
     )
 
 
-NavigationAct = Pulse | BatchPulse | Coast | Dwell | ObserveScan
+@dataclass(frozen=True)
+class ProgramScan:
+    """One exact program-owned scan selected from occurrence evidence.
+
+    Unlike :class:`ObserveScan`, this act is not an open-ended observation.
+    Compass selects it only when a retained traceback finding proves that the
+    current World will produce ``expected_write`` in the next ordinary scan.
+    Execution must receipt that exact occurrence and its retained exit value,
+    then yield before Compass chooses any consumer steer.
+    """
+
+    expected_write: IntrascanWriteEvidence
+    evidence_identity: tuple[Any, ...]
+    policy: ActPolicy = ActPolicy(
+        ActSource.PROGRAM,
+        motion=MotionKind.COAST_HOLDING_WORLD,
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        local_progress=LocalProgressKind.INTRASCAN_STAGE,
+    )
+
+
+NavigationAct = Pulse | BatchPulse | IntrascanPulse | Coast | Dwell | ObserveScan | ProgramScan
 
 
 @dataclass(frozen=True)
@@ -357,6 +415,19 @@ class OrientationRead:
 
 
 @dataclass(frozen=True)
+class InvestigationSelection:
+    """Exact open frontier work item authorizing one ordinary Bearing."""
+
+    frontier_id: tuple[Any, ...]
+    producer_goal_id: tuple[Any, ...]
+    producer_goal: IntrascanProducerGoal | None = None
+
+    def __post_init__(self) -> None:
+        if self.producer_goal is not None and self.producer_goal.identity != self.producer_goal_id:
+            raise ValueError("investigation selection producer identity is inconsistent")
+
+
+@dataclass(frozen=True)
 class Bearing:
     """Exactly one immediate executable act."""
 
@@ -372,6 +443,10 @@ class Bearing:
     # Detached chart artifact selected as this exact first move. It is scoped
     # by the attached theory/version/source when recorded, never replayed.
     first_edge_identity: tuple[Any, ...] | None = None
+    # An ordinary act may have been selected specifically to advance one open
+    # occurrence traceback. Carry that ownership through execution so a later
+    # continuation never has to infer its parent from ambient theory state.
+    investigation_selection: InvestigationSelection | None = None
 
     @property
     def expectation(self) -> EffectExpectation | None:
@@ -425,6 +500,94 @@ class NeedResearch:
 
 
 @dataclass(frozen=True)
+class IntrascanTracebackRequest:
+    """Ask analysis to test one occurrence-local hypothetical, never a patch."""
+
+    patch: CounterfactualPatch
+    requirements: tuple[ActiveRequirement, ...]
+    # Fresh Compass-authorized scan-start act needed by the real consumer.
+    # This remains distinct from the analysis-only occurrence patch.
+    consumer_assignments: tuple[_ActionPair, ...] = ()
+    research_finding_identity: tuple[Any, ...] | None = None
+    # The physical condition the hypothetical value demonstrates.  A real
+    # producer may establish a different concrete value which satisfies this
+    # same condition (for example, ``Mode=0`` satisfies ``Mode != 100`` even
+    # when the disposable witness used ``99``).
+    required_condition: Any | None = None
+    # Exact harmful write suppressed by this hypothetical, when the hop is
+    # preventive rather than positively conducted.
+    prevented_write: EffectOccurrenceSnapshot | None = None
+    parent_frontier_id: tuple[Any, ...] | None = None
+    parent_producer_goal_id: tuple[Any, ...] | None = None
+    parent_attempt_id: tuple[Any, ...] | None = None
+
+    def __post_init__(self) -> None:
+        parent_fields = (
+            self.parent_frontier_id,
+            self.parent_producer_goal_id,
+            self.parent_attempt_id,
+        )
+        if any(item is not None for item in parent_fields) and any(
+            item is None for item in parent_fields
+        ):
+            raise ValueError("intrascan traceback parent ownership is incomplete")
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        return (
+            "intrascan-traceback-request",
+            self.hop_identity,
+            tuple(requirement.navigation_identity for requirement in self.requirements),
+            self.consumer_assignments,
+            self.research_finding_identity,
+            _semantic_key(self.required_condition),
+            self.prevented_write,
+            self.parent_frontier_id,
+            self.parent_producer_goal_id,
+            self.parent_attempt_id,
+        )
+
+    @property
+    def hop_identity(self) -> tuple[Any, ...]:
+        """Physical hypothetical identity, independent of its logical owners."""
+
+        patch = self.patch
+        return (
+            "intrascan-traceback-hop",
+            patch.dest,
+            _semantic_key(patch.value),
+            _semantic_key(patch.guard),
+            patch.boundary,
+            _semantic_key(self.required_condition),
+            _semantic_key(self.prevented_write),
+        )
+
+
+@dataclass(frozen=True)
+class NeedIntrascanTraceback:
+    """Compass needs a disposable intrascan witness before another steer."""
+
+    world_key: _StateKey
+    frontier: tuple[_ActionPair, ...]
+    request: IntrascanTracebackRequest
+    rationale: str
+    orientation: OrientationRead | None = None
+
+
+@dataclass(frozen=True)
+class NeedIntrascanBoundaryRealization:
+    """An accepted producer stage asks analysis to reprove its consumer."""
+
+    world_key: _StateKey
+    frontier: tuple[_ActionPair, ...]
+    traceback_frontier: IntrascanTracebackFrontier
+    producer_goal: IntrascanProducerGoal
+    producer_attempt_id: tuple[Any, ...]
+    rationale: str
+    orientation: OrientationRead | None = None
+
+
+@dataclass(frozen=True)
 class Stuck:
     """Structured, evidence-backed terminal navigation diagnosis."""
 
@@ -437,7 +600,15 @@ class Stuck:
     orientation: OrientationRead | None = None
 
 
-OrientationResult = Bearing | ComposeCorrection | NeedProbe | NeedResearch | Stuck
+OrientationResult = (
+    Bearing
+    | ComposeCorrection
+    | NeedProbe
+    | NeedResearch
+    | NeedIntrascanTraceback
+    | NeedIntrascanBoundaryRealization
+    | Stuck
+)
 
 
 def _applied_identity(applied: tuple[_ActionPair, ...]) -> tuple[_ActionPair, ...]:
@@ -463,6 +634,13 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
         return pulse_identity(act.applied)
     if isinstance(act, BatchPulse):
         return pulse_identity(act.policy.applied)
+    if isinstance(act, IntrascanPulse):
+        return (
+            "intrascan-pulse",
+            _applied_identity(act.policy.applied),
+            _semantic_key(act.expected_write),
+            _semantic_key(act.evidence_identity),
+        )
     if isinstance(act, Coast):
         heading = act.policy.heading
         route = heading.route if heading is not None else None
@@ -485,4 +663,10 @@ def act_identity(act: NavigationAct) -> tuple[Any, ...]:
         return identity
     if isinstance(act, ObserveScan):
         return ("observe-scan",)
+    if isinstance(act, ProgramScan):
+        return (
+            "program-scan",
+            _semantic_key(act.expected_write),
+            _semantic_key(act.evidence_identity),
+        )
     return ("dwell", _applied_identity(act.policy.applied))

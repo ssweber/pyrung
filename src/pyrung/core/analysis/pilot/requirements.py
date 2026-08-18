@@ -358,6 +358,7 @@ class ActiveRequirementSnapshot:
     status: RequirementStatus
     provenance: str
     scope: tuple[Any, ...]
+    obstruction_occurrence: EffectOccurrenceSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -383,6 +384,9 @@ class ActiveRequirement:
     status: RequirementStatus = RequirementStatus.ACTIVE
     provenance: str = ""
     scope: tuple[Any, ...] = ()
+    # Exact harmful write whose guard this requirement prevents. Keeping this
+    # typed avoids rediscovering the physical obstruction from ``scope``.
+    obstruction_occurrence: EffectOccurrenceSnapshot | None = None
 
     @property
     def permits_assignment(self) -> bool:
@@ -434,6 +438,7 @@ class ActiveRequirement:
             status=self.status,
             provenance=self.provenance,
             scope=self.scope,
+            obstruction_occurrence=self.obstruction_occurrence,
         )
 
     @property
@@ -454,6 +459,7 @@ class ActiveRequirement:
             self.status,
             self.provenance,
             self.scope,
+            self.obstruction_occurrence,
         )
 
 
@@ -608,6 +614,29 @@ class ExpectationReceipt:
         )
 
 
+@dataclass(frozen=True)
+class ExpectationOccurrenceSupport:
+    """One logical expectation supported by an exact committed write."""
+
+    receipt: ExpectationReceipt
+    obligation_index: int
+    producer: RungWrite = field(compare=False, repr=False)
+
+
+@dataclass(frozen=True)
+class ExpectationOccurrenceOwnership:
+    """All logical receipt aliases owned by one physical write occurrence.
+
+    A producer may satisfy both an immediate handoff and a route-landing
+    obligation.  Those are distinct logical supports, not ambiguous physical
+    ownership, so consumers must retain the complete support set rather than
+    selecting whichever receipt happens to be encountered last.
+    """
+
+    occurrence: EffectOccurrenceSnapshot
+    supports: tuple[ExpectationOccurrenceSupport, ...]
+
+
 def resolve_expectation_receipt_producer(
     receipt: ExpectationReceipt,
     index: int,
@@ -634,6 +663,67 @@ def resolve_expectation_receipt_producer(
         return None
     matches = tuple(write for write in projection.writes if occurrence_snapshot(write) == snapshot)
     return matches[0] if len(matches) == 1 else None
+
+
+def resolve_expectation_receipt_consumer(
+    receipt: ExpectationReceipt,
+    index: int,
+) -> RungRead | None:
+    """Rebuild the exact consumer read for one receipt obligation, if any."""
+
+    if index < 0 or index >= len(receipt.obligations):
+        return None
+    obligation = receipt.expectation.obligations[index]
+    if obligation.consumer_rung is None:
+        return None
+    snapshots = tuple(
+        snapshot
+        for snapshot in receipt.consumer_occurrences
+        if snapshot.kind == "read"
+        and snapshot.tag == obligation.tag
+        and snapshot.rung[:2] == obligation.consumer[:2]
+    )
+    if len(snapshots) != 1:
+        return None
+    snapshot = snapshots[0]
+    owner = receipt.execution_owner
+    if getattr(owner, "epoch", None) is not receipt.execution_epoch:
+        return None
+    runner_factory = getattr(owner, "_runner", None)
+    if runner_factory is None:
+        return None
+    projection = runner_factory()._replay_rung_write_projection_at(snapshot.scan_id)
+    if projection is None:
+        return None
+    matches = tuple(
+        read
+        for read in projection.reads
+        if occurrence_snapshot(read) == snapshot and read.run.rung is obligation.consumer_rung
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def expectation_occurrence_ownerships(
+    receipts: tuple[ExpectationReceipt, ...] | list[ExpectationReceipt],
+) -> tuple[ExpectationOccurrenceOwnership, ...]:
+    """Group logical receipt aliases by immutable physical occurrence owner."""
+
+    grouped: dict[
+        tuple[EffectOccurrenceSnapshot, int, int],
+        list[ExpectationOccurrenceSupport],
+    ] = {}
+    for receipt in receipts:
+        for index, occurrence in enumerate(receipt.producer_occurrences):
+            producer = resolve_expectation_receipt_producer(receipt, index)
+            if producer is None:
+                continue
+            key = (occurrence, id(receipt.execution_epoch), id(receipt.execution_owner))
+            grouped.setdefault(key, []).append(
+                ExpectationOccurrenceSupport(receipt, index, producer)
+            )
+    return tuple(
+        ExpectationOccurrenceOwnership(key[0], tuple(supports)) for key, supports in grouped.items()
+    )
 
 
 def match_expectation_receipt(
@@ -1787,6 +1877,7 @@ def derive_overwriter_guard_requirement_from_write(
             phase=phase,
             provenance=provenance,
             scope=(*scope, ("overwriter_guard", occurrence_snapshot(displacement))),
+            obstruction_occurrence=occurrence_snapshot(displacement),
         ),
         source_walk=source_walk,
     )

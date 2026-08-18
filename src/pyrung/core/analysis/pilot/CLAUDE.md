@@ -62,10 +62,11 @@ that read:
 
 `options.py` materializes these readings into exactly one `CandidateRead` per
 world, and `orientation.py` applies the explicit current-world precedence to
-return one `Bearing | NeedProbe | Stuck`. Ordinary and WorkingTheory lowering
-consume that same read; neither may rebuild it to obtain a more convenient
-answer. The readers contribute facts, none chooses an action alone, and every
-complete read expires after the next observation.
+return one `OrientationResult`: a `Bearing`, one typed research/composition
+request, `NeedProbe`, or `Stuck`. Ordinary and WorkingTheory lowering consume
+that same read; neither may rebuild it to obtain a more convenient answer. The
+readers contribute facts, none chooses an action alone, and every complete read
+expires after the next observation.
 
 `program_step.py` asks a narrower question than whether the whole target will
 eventually be reached. For one exact selected producer or instruction-owned
@@ -201,8 +202,9 @@ silent churn.
 
 1. `pilot.py` snapshots the runtime world and calls `Compass.orient`.
 2. Compass reads trace, static catalogs, awaited-action evidence, constraints,
-   and knowledge;
-   `OrientationResult` permits exactly `Bearing | NeedProbe | Stuck`.
+   and knowledge. `OrientationResult` permits one executable `Bearing`, one
+   typed request (`ComposeCorrection`, conductivity/intrascan research, or
+   boundary realization), `NeedProbe`, or `Stuck`.
 3. `steer.execute` rejects stale bearings, installs their declarative
    prerequisites, and executes exactly one act through `verify.verify_gates`.
    A spin-shaped excursion is returned with its exact execution rather than
@@ -233,20 +235,43 @@ WorkingTheory handles a different problem: an executed scan can reveal the
 next condition needed to keep the selected producer/frontier conductive. It
 retains only causal facts and lifecycle state: the exact source/provisional
 tip, selected claim, unresolved requirements, attempts, exclusions, and typed
-`SETUP_FIRST` or `RETRY_TOGETHER` intent. It never retains a `Bearing`, action
-suffix, `CandidateRead`, world, checkpoint object, fork, or branch iterator.
+`SETUP_FIRST`, `RETRY_TOGETHER`, or `RETRY_THROUGH_DEADLINE` intent. It never
+retains a `Bearing`, action suffix, `CandidateRead`, world, checkpoint object,
+fork, or branch iterator.
 
 On every iteration Compass performs one fresh read at the theory's current tip
-and lowers the typed need through the readers available in that world. It may
-compose the requirement assignment with the ordinary same-transaction steer,
-or emit the requirement assignment as its own one-scan setup when the prior
-scan already moved past the old producer. Either way the result is one ordinary
-`Bearing`, executed and verified once. The accepted landing becomes the next
-tip only through the exact scan-progress receipt; PILOT never proves a sequence
-and then replays it.
+and lowers the typed need through the readers available in that world. One
+correction is installed as configuration and yields immediately; Compass then
+rereads the changed world before retrying, researching, or composing another
+correction. ProgramStep context remains evidence for that reread and is not
+automatically folded into the physical retry. The accepted landing becomes the
+next tip only through an exact scan-progress receipt; PILOT never proves a
+sequence and then replays it.
+
+WorkingTheory retains the complete ordered effect observations from every
+relevant attempt. Compass derives a `ConductivityFront` from those immutable
+receipts: where the produced value appeared, which exact consumer read it, and
+which later write displaced it. Conductivity is therefore a read model, not a
+second stored verdict. `intrascan.py` uses the same occurrence order to walk
+backward from a failed consumer or displacement. When a backward question
+needs execution, `intrascan_counterfactual.py` may inject an analysis-only
+value at one exact occurrence boundary on a disposable fork. That patch is a
+"what if" instrument and can never be emitted as a production `Bearing`.
+
+A `ConsumerBoundary` names the exact dynamic consumer occurrence where the
+transaction's value was observed. A `ConsumerExecutionHorizon` names the
+furthest accepted World still owned by that same receipt-bound transaction.
+The horizon can authorize only a fresh reader's reconstruction of that exact
+transaction; it cannot broaden a retry with sibling or future actions.
+`ProgramTransaction` supplies the corresponding frozen identity for
+program-owned motion. It normalizes an outer route, a later direct heading, or
+an exact physically observed target write into the same channel/source/target
+and effect identity. This correlates an actionless Coast across fresh reads but
+does not itself grant execution authority.
 
 Temporal Boolean structure is lazy. All atoms in one `AND` branch are one
-atomic obligation. `OR` alternatives are yielded depth-first, one complete
+logical obligation; that does not mean all resulting correctives are installed
+in one physical act. `OR` alternatives are yielded depth-first, one complete
 branch at a time, within the current read budget; no power-set or eager branch
 product is retained across reads. Direct assignment is allowed only for
 authority-approved, adjustable operands that are not already configured.
@@ -375,13 +400,22 @@ this table only locates the owner.
   `intrascan.py`. Its projection is the semantic oracle; diagnostic closure
   remains disposable and cannot install logic, mutate PILOT state, adopt a
   world, or retain a navigation future.
+- Analysis-only execution at an exact occurrence boundary:
+  `core/intrascan_counterfactual.py`. It owns `CounterfactualPatch` execution
+  and its application receipt; PILOT may consume the evidence but may never
+  promote the patch into temporary production logic.
+- Conductivity read model: `conductivity.py`. Compass derives ordered fronts
+  and attempt comparisons from WorkingTheory's exact effect receipts; the
+  ledger stores the observations, not the derived front.
 - Lazy temporal Boolean normalization: `temporal_need.py`; one top-level `AND`
-  branch is yielded atomically and `OR` alternatives are visited depth-first.
+  branch is yielded as one logical requirement set and `OR` alternatives are
+  visited depth-first.
 - Pure scalar/guard lowering: `intrascan_schedule.py`; it compiles only
   authority-approved current-world assignments. `requirement_recovery.py`
   remains the compatibility facade and owns active-requirement admission.
 - Controlling theory knowledge: `working_theory.py` owns detached immutable
-  claims, versions, attempt/progress receipts, temporal intent, lifecycle
+  claims, versions, attempt/progress receipts, temporal intent, consumer-bound
+  execution horizons, normalized program-transaction identities, lifecycle
   facts, and the pure reducer. The live outer loop alone applies facts to
   `_PilotState.theory_state`; Compass consumes a detached `TheoryView` and
   resolves it through the same current-world `CandidateRead` as ordinary
@@ -536,8 +570,13 @@ Static reading and orientation:
   observation adapter
 - `effects.py` — act-owned effect obligations, required-shape policy, exact
   execution-window observation, and detached recording snapshots
-- `intrascan.py` — exact assertion-scan observation, inert failed-effect
-  derivation, and bounded diagnostic one-scan closure over disposable forks
+- `conductivity.py` — Compass-owned read model of immutable occurrence-ordered
+  effect history and progress between attempts
+- `intrascan.py` — exact assertion-scan observation, backward occurrence
+  research, inert failed-effect derivation, and bounded diagnostic one-scan
+  closure over disposable forks
+- `core/intrascan_counterfactual.py` — analysis-only patches at exact dynamic
+  occurrence boundaries; never an executable PILOT correction
 - `temporal_need.py` — lazy current-world `AND`/`OR` requirement branches
 - `intrascan_schedule.py` — pure authority-aware scalar schedule compilation
 - `requirements.py` — failed-effect explanations, active requirements, exact
@@ -545,9 +584,10 @@ Static reading and orientation:
   walks
 - `requirement_recovery.py` — production compatibility facade for intrascan
   schedules plus current-world active-requirement admission and preservation
-- `working_theory.py` — controlling theory facts, typed temporal intent, and
-  pure lifecycle reducer; it stores semantic identities only, never navigation
-  reads, acts, checkpoints, worlds, forks, PilotRungs, routes, or callables
+- `working_theory.py` — controlling detached facts, typed temporal intent,
+  consumer execution horizons, normalized program transactions, and pure
+  lifecycle reducer; it never stores navigation reads, acts, checkpoints,
+  worlds, forks, PilotRungs, routes, or callables
 - `navigation_contracts.py` — immutable navigation contracts
 
 Execution and observation:
@@ -634,8 +674,24 @@ plain language on first use.
   local owner), including whether the retained landing still owns that tip.
 - **working theory** — rollback-stable causal facts and lifecycle state used to
   ask Compass what the current tip needs next; never a stored executable plan.
+- **conductivity front** — Compass's occurrence-ordered view of how far one
+  produced value traveled through its exact consumers before displacement or
+  scan exit; derived from receipts rather than stored as a conclusion.
+- **consumer boundary** — the exact dynamic read occurrence that consumed the
+  transaction's produced value.
+- **consumer execution horizon** — the furthest accepted World still owned by
+  one exact consumer-bound transaction receipt; never authority for unrelated
+  future work.
+- **program transaction** — a frozen channel/source/target/effect identity used
+  to correlate the same program-owned transition across route-wrapped, direct,
+  or exact observed-write representations. A fresh Compass read still supplies
+  executable authority.
+- **intrascan counterfactual patch** — an analysis-only value injection at one
+  exact occurrence boundary on a disposable fork; evidence for traceback, not
+  valid temporary production logic.
 - **temporal need** — an exact intrascan condition to establish or compose with
-  the next ordinary steer. `AND` atoms are atomic; `OR` branches are lazy.
+  the next ordinary transaction. `AND` atoms form one logical obligation, `OR`
+  branches are lazy, and corrective installations still yield one at a time.
 - **expectation receipt** — an accepted local act's exact source checkpoint,
   selected obligations, producer/consumer occurrences, and execution identity.
 - **checkpoint-local repair** — restore the receipt's exact source on a
@@ -712,9 +768,11 @@ continue. This runner is observational: its private hooks must not become a
 second projection or navigation path.
 
 For temporal changes, first run the focused timer-preset and scan-progress
-tests. They must cover setup-first, same-transaction retry, edge rearm, lazy
-`OR`, atomic `AND`, configured/program-owned operands, one `CandidateRead` per
-world, and both values of `landing_owns_tip`. Then run `make test-pilot`; only
+tests. They must cover setup-first, same-transaction retry, retry through a
+later deadline, edge rearm, consumer-bound execution horizons, actionless
+program transactions, lazy `OR`, logical `AND`, configured/program-owned
+operands, one `CandidateRead` per world, and both values of
+`landing_owns_tip`. Then run `make test-pilot`; only
 after that cheap pass should `make test-tumbler` validate the generated Burner
 and Completed journeys. Use the watch runners when a fixture stops emitting
 useful work so the last exact scan, receipt, and correction are visible.

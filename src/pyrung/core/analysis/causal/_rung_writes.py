@@ -42,6 +42,7 @@ class RungWrite:
     instruction: InstructionRun | None = field(compare=False, repr=False)
     occurrence: WriteOccurrence = field(compare=False, repr=False)
     transition: Transition
+    branch_path: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class RungRead:
     run: RungRun = field(compare=False, repr=False)
     instruction: InstructionRun | None = field(compare=False, repr=False)
     occurrence: ReadOccurrence = field(compare=False, repr=False)
+    branch_path: tuple[int, ...] = ()
 
 
 EffectDisposition = Literal[
@@ -642,6 +644,7 @@ def build_scan_rung_write_projection(
     writes: list[RungWrite] = []
     reads: list[RungRead] = []
     call_invocations = _dynamic_call_invocations(runs)
+    branch_paths = _dynamic_branch_paths(runs)
     for run_order, run in enumerate(runs):
         for instruction, occurrence in _direct_accesses(run):
             if isinstance(occurrence, ReadOccurrence):
@@ -657,6 +660,7 @@ def build_scan_rung_write_projection(
                         run=run,
                         instruction=instruction,
                         occurrence=occurrence,
+                        branch_path=branch_paths.get(id(run), ()),
                     )
                 )
                 continue
@@ -680,6 +684,7 @@ def build_scan_rung_write_projection(
                     instruction=instruction,
                     occurrence=occurrence,
                     transition=transition,
+                    branch_path=branch_paths.get(id(run), ()),
                 )
             )
 
@@ -877,6 +882,61 @@ def _dynamic_call_invocations(runs: tuple[RungRun, ...]) -> dict[int, int | None
             continue
         result[id(run)] = None
         _walk(run.body, None)
+    return result
+
+
+def _dynamic_branch_paths(runs: tuple[RungRun, ...]) -> dict[int, tuple[int, ...]]:
+    """Map each dynamic rung run to its immutable nested-branch address."""
+
+    from pyrung.core.executor import InstructionRun, LoopIterationRun, RungRun
+
+    nested: set[int] = set()
+
+    def _collect_nested(body: tuple[object, ...]) -> None:
+        for item in body:
+            if isinstance(item, RungRun):
+                nested.add(id(item))
+                _collect_nested(item.body)
+            elif isinstance(item, (InstructionRun, LoopIterationRun)):
+                _collect_nested(item.body)
+
+    for run in runs:
+        _collect_nested(run.body)
+
+    result: dict[int, tuple[int, ...]] = {}
+
+    def _walk(
+        body: tuple[object, ...],
+        parent_run: RungRun | None,
+        parent_path: tuple[int, ...],
+    ) -> None:
+        for item in body:
+            if isinstance(item, RungRun):
+                path: tuple[int, ...] = ()
+                if item.kind == "branch":
+                    if parent_run is None:
+                        raise RuntimeError("captured branch has no parent rung")
+                    branch_index = next(
+                        (
+                            index
+                            for index, candidate in enumerate(parent_run.rung._branches)
+                            if candidate is item.rung
+                        ),
+                        None,
+                    )
+                    if branch_index is None:
+                        raise RuntimeError("captured branch is absent from its parent rung")
+                    path = (*parent_path, branch_index)
+                result[id(item)] = path
+                _walk(item.body, item, path)
+            elif isinstance(item, (InstructionRun, LoopIterationRun)):
+                _walk(item.body, parent_run, parent_path)
+
+    for run in runs:
+        if id(run) in nested:
+            continue
+        result[id(run)] = ()
+        _walk(run.body, run, ())
     return result
 
 

@@ -32,12 +32,7 @@ def _assert_clicknick_success(
 
     # ProgramStep reads the communication transaction as context for a fresh
     # reconnect.  WorkingTheory corrections remain separate World changes.
-    contextual_reconnect = (
-        (fixture.NetworkAvailable.name, True),
-        (fixture.SimulationMode.name, False),
-        (fixture.NetworkPeerReady.name, True),
-    )
-    assert attempted[simulation_index + 1] == contextual_reconnect
+    assert attempted[simulation_index + 1] == reconnect
     contextual_try = tries[simulation_index + 1]
     assert contextual_try.data["candidate"]["program_context_actions"] == (
         (fixture.SimulationMode.name, False),
@@ -47,7 +42,14 @@ def _assert_clicknick_success(
     contextual_rejection = next(
         event
         for event in events
-        if event.kind == "candidate_rejected" and event.data.get("applied") == contextual_reconnect
+        if event.kind == "candidate_rejected"
+        and event.data.get("applied") == reconnect
+        and any(
+            observation.appeared is not None
+            and observation.appeared.tag == fixture.SequenceStep.name
+            and observation.appeared.values == (98, 40)
+            for observation in event.data.get("effect_observations", ())
+        )
     )
     watchdog_overwrite = next(
         observation
@@ -92,8 +94,8 @@ def _assert_clicknick_success(
         "bearing_coast",
     )
     assert tuple(next_decisions[index].data["applied"] for index in range(2)) == (
-        contextual_reconnect,
-        contextual_reconnect,
+        reconnect,
+        reconnect,
     )
     assert next_decisions[2].data["applied"] == ((fixture.CheckpointSensor.name, True),)
 
@@ -114,12 +116,14 @@ def _assert_clicknick_success(
     adjacent = next(
         event
         for event in events
-        if event.kind == "pending_departure_started"
-        and event.data["from_value"] == 41
-        and event.data["settled_value"] == 50
+        if event.kind == "bearing_coast_accepted"
+        and event.data["bearing_coast_before_value"] == 41
+        and event.data["bearing_coast_target_value"] == 50
     )
-    assert adjacent.data["classification"] == "clean_continuation"
-    assert adjacent.data["settle_scans"] == 2
+    assert adjacent.data["bearing_coast_actual_value"] == 50
+    assert adjacent.data["bearing_stop_reason"] == "reached"
+    assert adjacent.data["agency"] == "program"
+    assert adjacent.data["coast_logical_scans"] == 1
 
     assert plan.reachable, plan.reason
     assert plan.anchor_scan == anchor_scan
@@ -178,3 +182,49 @@ def test_neutral_route_resolves_corrections_after_runner_has_already_stepped() -
         on_event=events.append,
     )
     _assert_clicknick_success(tuple(events), plan, anchor_scan=1)
+
+
+def test_neutral_reconnect_boundary_uses_one_exact_intrascan_pulse() -> None:
+    """A retained 98 is consumed alone before Compass considers another steer."""
+
+    boundary = PLC(fixture.logic, dt=0.010)
+    boundary.step()
+    runner = PLC(
+        fixture.logic,
+        dt=0.010,
+        initial_state=boundary.state.with_tags(
+            {
+                fixture.SequenceStep.name: 98,
+                fixture.SafetyPermit.name: True,
+            }
+        ),
+    )
+    assert runner.state.scan_id == 1
+    assert runner.state.tags[fixture.SequenceStep.name] == 98
+
+    events: list[Any] = []
+    plan = runner.how(
+        fixture.SequenceStep == 10,
+        max_scans=30,
+        on_event=events.append,
+    )
+
+    assert plan.reachable, plan.reason
+    assert plan.state.scan_id == 2
+    assert plan.state.tags[fixture.SequenceStep.name] == 10
+    researched = tuple(event for event in events if event.kind == "intrascan_traceback_researched")
+    assert len(researched) == 1
+    realization = researched[0].data["boundary_realization"]
+    assert realization.direct
+    assert not realization.staged
+    assert realization.consumer_assignments == ((fixture.NetworkAvailable.name, True),)
+
+    pulse = next(event for event in events if event.kind == "intrascan_pulse")
+    accepted = next(event for event in events if event.kind == "intrascan_pulse_accepted")
+    assert pulse.data["applied"] == ((fixture.NetworkAvailable.name, True),)
+    assert accepted.data["applied"] == pulse.data["applied"]
+    assert pulse.data["expected_write"].tag == fixture.SequenceStep.name
+    assert (
+        pulse.data["expected_write"].before,
+        pulse.data["expected_write"].after,
+    ) == (98, 10)

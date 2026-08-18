@@ -369,14 +369,12 @@ def test_retained_reset_done_overwrites_are_sequential_exact_attempts(
             for requirement in observation.requirements
         )
     )
-    assert len(observations) == 3
-    initial, refined, later = observations
-    assert tuple(item.source.scan_id for item in observations) == (1, 1, 3)
-    assert initial.act_identity == refined.act_identity
-    assert later.act_identity != refined.act_identity
+    assert len(observations) == 2
+    initial, later = observations
+    assert tuple(item.source.scan_id for item in observations) == (1, 2)
+    assert later.act_identity != initial.act_identity
     assert tuple(item.interpretation.kind for item in observations) == (
         AttemptInterpretationKind.RETRY_TOGETHER,
-        AttemptInterpretationKind.RETRY_THROUGH_DEADLINE,
         AttemptInterpretationKind.RETRY_TOGETHER,
     )
     assert all(item.conductivity_observations for item in observations)
@@ -386,7 +384,7 @@ def test_retained_reset_done_overwrites_are_sequential_exact_attempts(
         for item in observation.conductivity_observations
     )
     requirements = tuple(observation.requirements[0] for observation in observations)
-    assert tuple(item.deadline_occurrence[2] for item in requirements) == (2, 3, 4)
+    assert tuple(item.deadline_occurrence[2] for item in requirements) == (2, 3)
     assert all(
         item.deadline_occurrence[1] == fixture.WatchdogPresetMs.name
         and item.demanding_occurrence[1] == fixture.Watchdog.Done.name
@@ -407,8 +405,8 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
     )
 
     assert result.reachable
-    assert len(captured) == 3
-    assert tuple(len(front.flows) for front in captured) == (1, 2, 4)
+    assert len(captured) == 2
+    assert tuple(len(front.flows) for front in captured) == (1, 2)
     flows = tuple(
         flow
         for flow in captured[-1].flows
@@ -417,10 +415,9 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
             for obligation in flow.obligations
         )
     )
-    assert len(flows) == 3
+    assert len(flows) == 1
     assert all(flow.reach is ConductivityReach.CONSUMER for flow in flows)
     assert flows[0] == captured[0].flows[0]
-    assert flows[:2] == captured[1].flows
     assert tuple(
         (
             flow.appeared.scan_id if flow.appeared is not None else None,
@@ -430,14 +427,20 @@ def test_sequential_retry_retains_prior_consumer_displacement_fronts(
             flow.displacement.ordinal if flow.displacement is not None else None,
         )
         for flow in flows
-    ) == (
-        (2, 5, 6, 2, 21),
-        (2, 7, 8, 3, 20),
-        (2, 7, 8, None, None),
+    ) == ((2, 5, 6, 2, 21),)
+    terminal = captured[-1].flows[-1]
+    assert tuple((item.tag, item.value) for item in terminal.obligations) == (
+        (fixture.ProcessStep.name, fixture.COMPLETE),
+        (fixture.ProcessStep.name, fixture.COMPLETE),
     )
+    assert terminal.reach is ConductivityReach.PRODUCER
+    assert terminal.appeared is not None
+    assert (terminal.appeared.scan_id, terminal.appeared.ordinal) == (3, 10)
+    assert terminal.displacement is not None
+    assert (terminal.displacement.scan_id, terminal.displacement.ordinal) == (3, 23)
 
 
-def test_nested_reconnect_research_yields_before_watchdog_research_and_replacement(
+def test_advanced_reconnect_front_yields_to_watchdog_research_and_replacement(
     monkeypatch: Any,
 ) -> None:
     captured: list[Any] = []
@@ -490,30 +493,29 @@ def test_nested_reconnect_research_yields_before_watchdog_research_and_replaceme
             close()
 
     research_events = tuple(
-        event for event in events if event.kind == "conductivity_research_requested"
+        event
+        for event in events
+        if event.kind == "conductivity_research_requested"
+        and event.data["displacement"].rung == (None, 16)
     )
-    assert len(research_events) == 2
-    assert len(captured) == 2
-    reconnect, watchdog = captured
-    reconnect_finding = reconnect[0]
-    reconnect_event, event = research_events
-    assert reconnect_event.data["finding_identity"] == reconnect_finding.identity
-    assert reconnect_finding.displacement.rung == (None, 19)
-    assert tuple(read.tag for read in reconnect_finding.enabling_reads) == (
-        sequence_route.NetworkAvailable.name,
-        sequence_route.SequenceStep.name,
-        sequence_route.RecoveryCounter.Done.name,
-        sequence_route.ServiceStatus.name,
-        "_oneshot:i31",
+    watchdog_captures = tuple(item for item in captured if item[0].displacement.rung == (None, 16))
+    assert len(research_events) == 1
+    assert len(watchdog_captures) == 1
+    (event,) = research_events
+    finding, progress_before, progress_after, view, repeated_request = watchdog_captures[0]
+    front = Compass().conductivity_front(view)
+    assert front is not None
+    assert tuple(comparison.progress for comparison in front.comparisons) == (
+        ConductivityProgress.SAME_STOP,
+        ConductivityProgress.STOP_CHANGED,
+        ConductivityProgress.SAME_STOP,
     )
-    first_research_index = events.index(reconnect_event)
-    watchdog_research_index = events.index(event)
-    assert any(
-        item.kind == "candidate_try"
-        for item in events[first_research_index + 1 : watchdog_research_index]
-    )
-
-    finding, progress_before, progress_after, view, repeated_request = watchdog
+    assert tuple(
+        flow.displacement.rung
+        for attempt in front.attempts
+        for flow in attempt.flows
+        if flow.displacement is not None
+    ) == ((None, 19), (None, 19), (None, 16), (None, 16))
     assert event.data["finding_identity"] == finding.identity
     assert finding.source.scan_id == event.scan
     assert finding.comparison_identity[3] is ConductivityProgress.SAME_STOP
@@ -527,6 +529,7 @@ def test_nested_reconnect_research_yields_before_watchdog_research_and_replaceme
     assert view is not None
     assert view.research_findings[-1] == finding
     assert repeated_request is None
+    watchdog_research_index = events.index(event)
     post_research = events[watchdog_research_index + 1 :]
     assert not any(item.kind == "candidate_try" for item in post_research)
     assert events[-1].kind == "theory_correction_composed"
@@ -542,7 +545,7 @@ def test_nested_reconnect_research_yields_before_watchdog_research_and_replaceme
     assert tuple(rung.value for rung in preset_rungs) == (21,)
 
 
-def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
+def test_neutral_route_steers_again_before_researching_third_intrascan_correction(
     monkeypatch: Any,
 ) -> None:
     compositions: list[tuple[Any, tuple[Any, ...]]] = []
@@ -564,11 +567,7 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
     try:
         for emitted in stream:
             events.append(emitted)
-            if (
-                len(compositions) == 3
-                and emitted.kind == "candidate_try"
-                and emitted.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
-            ):
+            if len(compositions) == 3 and emitted.kind == "bearing_coast":
                 break
     finally:
         close = getattr(stream, "close", None)
@@ -610,23 +609,38 @@ def test_neutral_route_steers_again_before_composing_third_intrascan_correction(
         and event.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
         for event in intervening
     )
-    assert not any(event.kind == "conductivity_research_requested" for event in intervening)
+    assert sum(event.kind == "conductivity_research_requested" for event in intervening) == 1
 
     third_fact, installed = compositions[-1]
-    assert third_fact.research_finding_identity is None
+    assert third_fact.research_finding_identity is not None
     assert len(third_fact.superseded_pilot_rung_identities) == 1
     preset_rungs = tuple(
         rung for rung in installed if rung.dest == sequence_route.FirstWatchdogPresetMs.name
     )
     assert tuple(rung.value for rung in preset_rungs) == (31,)
 
-    post_third_checkpoint = events[-1]
-    obligation = post_third_checkpoint.data["candidate"]["effect_expectation"][0]
+    checkpoint_try = next(
+        event
+        for event in intervening
+        if event.kind == "candidate_try"
+        and event.data["applied"] == ((sequence_route.CheckpointSensor.name, True),)
+    )
+    obligation = checkpoint_try.data["candidate"]["effect_expectation"][0]
     assert obligation.tag == sequence_route.SequenceStep.name
     assert obligation.value == 41
     assert obligation.producer == (None, 4, (0,))
     assert obligation.consumer == (None, 5, ())
     assert obligation.required_shape == ((sequence_route.SequenceStep.name, 41),)
+    assert events[-1].kind == "bearing_coast"
+    post_composition_decision = next(
+        event
+        for event in events[third_composition_index + 1 :]
+        if event.kind in {"candidate_try", "bearing_coast"}
+    )
+    assert post_composition_decision.kind == "candidate_try"
+    assert post_composition_decision.data["applied"] == (
+        (sequence_route.CheckpointSensor.name, True),
+    )
 
 
 def test_prestepped_watchdog_retains_composed_world_for_followup_research(

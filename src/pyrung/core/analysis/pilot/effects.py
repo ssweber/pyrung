@@ -162,6 +162,7 @@ class EffectOccurrenceSnapshot:
     enabled: bool
     tag: str
     values: tuple[Any, ...]
+    branch_path: tuple[int, ...] | None = None
 
     @property
     def dynamic_address(self) -> tuple[Any, ...]:
@@ -214,6 +215,38 @@ class EffectObservationSnapshot:
     displacement_enabling_reads: tuple[EffectOccurrenceSnapshot, ...] = ()
     detail: str = ""
     execution_epoch: EffectEpochSnapshot | None = None
+
+
+@dataclass(frozen=True)
+class ConsumerBoundary:
+    """Exact historical handoff plus its relocatable replay selectors.
+
+    The occurrence snapshots are immutable evidence of what the accepted
+    transaction actually did. The selectors name the same accesses without
+    depending on scan ordinals or synthetic-rung run order, while the offsets
+    place a hard bound on a replay from that transaction's source.
+    """
+
+    produced_occurrence: EffectOccurrenceSnapshot
+    consumer_occurrence: EffectOccurrenceSnapshot
+    producer_selector: EffectOccurrenceSelector
+    consumer_selector: EffectOccurrenceSelector
+    producer_scan_offset: int
+    consumer_scan_offset: int
+
+    def __post_init__(self) -> None:
+        if self.produced_occurrence.kind != "write" or self.producer_selector.kind != "write":
+            raise ValueError("consumer boundary producer must be an exact write")
+        if self.consumer_occurrence.kind != "read" or self.consumer_selector.kind != "read":
+            raise ValueError("consumer boundary consumer must be an exact read")
+        if (
+            self.produced_occurrence.tag != self.consumer_occurrence.tag
+            or self.producer_selector.tag != self.produced_occurrence.tag
+            or self.consumer_selector.tag != self.consumer_occurrence.tag
+        ):
+            raise ValueError("consumer boundary must follow one produced tag")
+        if not 1 <= self.producer_scan_offset <= self.consumer_scan_offset:
+            raise ValueError("consumer boundary scan offsets are invalid")
 
 
 @dataclass(frozen=True)
@@ -418,6 +451,161 @@ def occurrence_selector(
     )
 
 
+def displacement_consumer_read(observation: EffectObservation) -> RungRead | None:
+    """Return the one guard read which consumed an appeared value before displacing it.
+
+    A cross-scan overwriter cannot point its entry read directly at the prior
+    scan's ``WriteOccurrence``.  Its exact guard ancestry still records the
+    handoff: one read of the appeared tag/value enabled the displacement.
+    Ambiguous repeated reads fail closed instead of inventing a consumer.
+    """
+
+    appeared = observation.appeared
+    if appeared is None or observation.displacement is None:
+        return None
+    matches = tuple(
+        read
+        for read in observation.displacement_enabling_reads
+        if read.occurrence.name == appeared.transition.tag_name
+        and _values_match(read.occurrence.value, appeared.transition.to_value)
+    )
+    return matches[0] if len(matches) == 1 else None
+
+
+def resolve_occurrence_selector(
+    projection: ScanRungWriteProjection,
+    selector: EffectOccurrenceSelector,
+) -> RungRead | RungWrite | None:
+    """Resolve one relocatable access on an exact replay projection."""
+
+    runs = tuple(
+        run
+        for run in projection.runs
+        if _run_static_address(projection, run) == selector.static_address
+        and run.kind == selector.execution_kind
+        and run.caller_rung == selector.caller_rung
+        and run.call_stack == selector.call_stack
+        and run.depth == selector.depth
+        and projection._call_invocation_by_run.get(id(run)) == selector.call_invocation
+    )
+    if len(runs) != 1:
+        return None
+    run = runs[0]
+
+    def matches_instruction(access: RungRead | RungWrite) -> bool:
+        return (
+            selector.instruction_path == ()
+            if access.instruction is None
+            else _instruction_path(run, access.instruction) == selector.instruction_path
+        )
+
+    accesses: tuple[RungRead | RungWrite, ...]
+    if selector.kind == "write":
+        accesses = tuple(
+            write
+            for write in projection.writes_for_run(run)
+            if matches_instruction(write) and write.transition.tag_name == selector.tag
+        )
+    else:
+        accesses = tuple(
+            read
+            for read in projection.reads_for_run(run)
+            if matches_instruction(read) and read.occurrence.name == selector.tag
+        )
+    if selector.access_index < 0 or selector.access_index >= len(accesses):
+        return None
+    return accesses[selector.access_index]
+
+
+def consumer_boundary_reached(
+    boundary: ConsumerBoundary,
+    *,
+    source_scan: int,
+    projection_at: Callable[[int], ScanRungWriteProjection | None],
+) -> bool:
+    """Whether a replay carried the same produced value into the same consumer."""
+
+    producer_scan = source_scan + boundary.producer_scan_offset
+    consumer_scan = source_scan + boundary.consumer_scan_offset
+    producer_projection = projection_at(producer_scan)
+    consumer_projection = projection_at(consumer_scan)
+    if producer_projection is None or consumer_projection is None:
+        return False
+    produced = resolve_occurrence_selector(producer_projection, boundary.producer_selector)
+    consumed = resolve_occurrence_selector(consumer_projection, boundary.consumer_selector)
+    if not isinstance(produced, RungWrite) or not isinstance(consumed, RungRead):
+        return False
+    historical_value = boundary.produced_occurrence.values[-1]
+    consumed_value = boundary.consumer_occurrence.values[-1]
+    if (
+        not produced.run.enabled
+        or not consumed.run.enabled
+        or not _values_match(historical_value, consumed_value)
+        or not _values_match(produced.transition.to_value, historical_value)
+        or not _values_match(consumed.occurrence.value, consumed_value)
+    ):
+        return False
+    tag = produced.transition.tag_name
+    if producer_scan == consumer_scan:
+        transition = consumer_projection.transition_observed_by_read(consumed)
+        return bool(
+            transition is not None
+            and transition.tag_name == tag
+            and transition.occurrence_ordinal == produced.ordinal
+        )
+
+    # An entry read intentionally has no same-scan WriteOccurrence source.
+    # Prove the retained handoff from the complete ordered projections instead:
+    # the selected producer must own scan exit, every intervening scan must
+    # preserve that value without replacing its identity, and the selected
+    # consumer must read it before any same-tag write in its own scan.
+    if any(
+        write.transition.tag_name == tag and write.ordinal > produced.ordinal
+        for write in producer_projection.writes
+    ) or not _values_match(producer_projection.exit_tags.get(tag), historical_value):
+        return False
+    for scan_id in range(producer_scan + 1, consumer_scan):
+        projection = projection_at(scan_id)
+        if (
+            projection is None
+            or not _values_match(projection.entry_tags.get(tag), historical_value)
+            or not _values_match(projection.exit_tags.get(tag), historical_value)
+            or any(write.transition.tag_name == tag for write in projection.writes)
+        ):
+            return False
+    return bool(
+        _values_match(consumer_projection.entry_tags.get(tag), historical_value)
+        and consumer_projection.transition_observed_by_read(consumed) is None
+        and not any(
+            write.transition.tag_name == tag and write.ordinal < consumed.ordinal
+            for write in consumer_projection.writes
+        )
+    )
+
+
+def consumer_execution_horizon_reached(
+    boundary: ConsumerBoundary,
+    *,
+    source_scan: int,
+    projection_at: Callable[[int], ScanRungWriteProjection | None],
+) -> bool:
+    """Whether replay evaluated the exact consumer occurrence named by the receipt.
+
+    This is deliberately weaker than :func:`consumer_boundary_reached`. A
+    correction may change or remove the historical producer value; that is an
+    observed result of the retry, not evidence that execution stopped short.
+    The relocatable consumer selector still fails closed when its call or rung
+    was not executed.
+    """
+
+    consumer_scan = source_scan + boundary.consumer_scan_offset
+    projection = projection_at(consumer_scan)
+    if projection is None:
+        return False
+    consumed = resolve_occurrence_selector(projection, boundary.consumer_selector)
+    return isinstance(consumed, RungRead)
+
+
 def required_shape(
     path: tuple[EffectPathStep, ...],
     pdg: ProgramGraph,
@@ -579,6 +767,34 @@ def exact_last_landing_write(
         and _values_match(write.transition.to_value, landing_value)
     )
     return candidates[-1] if candidates else None
+
+
+def exact_first_departure_write(
+    projections: Iterable[ScanRungWriteProjection],
+    *,
+    after: RungRead | RungWrite | EffectOccurrenceSnapshot,
+    tag: str,
+    tenure_value: Any,
+) -> tuple[ScanRungWriteProjection, RungWrite] | None:
+    """Return the first exact write which ends a consumed value's tenure.
+
+    Once an outer consumer has read the selected write, that handoff is
+    fulfilled.  A later channel loss is a new occurrence-level problem whose
+    causal boundary is the first transition away from the consumed value, not
+    whichever later writer happens to own the final macro-state landing.
+    """
+
+    candidates = tuple(
+        (projection, write)
+        for projection in projections
+        for write in projection.writes
+        if (write.scan_id, write.ordinal) > (after.scan_id, after.ordinal)
+        and write.run.enabled
+        and write.transition.tag_name == tag
+        and _values_match(write.transition.from_value, tenure_value)
+        and not _values_match(write.transition.to_value, tenure_value)
+    )
+    return candidates[0] if candidates else None
 
 
 def promote_terminal_target_observation(
@@ -2005,6 +2221,7 @@ def occurrence_snapshot(read: RungRead | RungWrite) -> EffectOccurrenceSnapshot:
         enabled=read.run.enabled,
         tag=read.occurrence.name,
         values=(_detached(read.occurrence.value),),
+        branch_path=read.branch_path,
     )
 
 
@@ -2026,4 +2243,5 @@ def _write_snapshot(write: RungWrite) -> EffectOccurrenceSnapshot:
             _detached(write.transition.from_value),
             _detached(write.transition.to_value),
         ),
+        branch_path=write.branch_path,
     )

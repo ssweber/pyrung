@@ -9,18 +9,27 @@ a future.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import StrEnum
 from hashlib import sha256
-from typing import Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pyrsistent import PMap, pmap
 
 from pyrung.core.analysis.pilot.effects import (
+    ConsumerBoundary,
     EffectObservationSnapshot,
     EffectOccurrenceSnapshot,
 )
 from pyrung.core.analysis.pilot.world_key import _semantic_key
+
+if TYPE_CHECKING:
+    from pyrung.core.analysis.pilot.intrascan import (
+        IntrascanBoundaryRealization,
+        IntrascanProducerGoal,
+        IntrascanTracebackWitness,
+    )
 
 TheoryId: TypeAlias = tuple[Any, ...]
 TheoryVersionId: TypeAlias = tuple[Any, ...]
@@ -67,7 +76,13 @@ class TheoryPhaseKind(StrEnum):
 
     SCAN_PROGRESS = "scan_progress"
     TEMPORAL_SETUP = "temporal_setup"
+    REARM = "rearm"
+    TRANSACTION_ATTEMPT = "transaction_attempt"
+    CONSUMER_BOUNDARY = "consumer_boundary"
+    CONSUMER_EXECUTION_HORIZON = "consumer_execution_horizon"
     CORRECTION_COMPOSITION = "correction_composition"
+    CORRECTION_INSTALL = "correction_install"
+    WORLD_REBASE = "world_rebase"
 
 
 @dataclass(frozen=True)
@@ -79,6 +94,8 @@ class TheoryPhaseReceipt:
     requirement_identities: tuple[tuple[Any, ...], ...] = ()
     pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
     superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    execution_source: TheoryBoundaryIdentity | None = None
+    execution_tip: TheoryBoundaryIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +153,7 @@ class TheoryRequirementSnapshot:
     status: str
     provenance: str
     scope: tuple[Any, ...]
+    obstruction_occurrence: tuple[Any, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +204,119 @@ class TheoryProgressSnapshot:
 
 
 @dataclass(frozen=True)
+class ConsumerExecutionHorizon:
+    """Furthest accepted World still owned by one consumer-bound transaction."""
+
+    transaction_attempt_id: tuple[Any, ...]
+    source: TheoryBoundaryIdentity
+    consumer_boundary_attempt_id: tuple[Any, ...]
+    consumer_boundary: ConsumerBoundary
+    tip: TheoryBoundaryIdentity
+
+
+@dataclass(frozen=True)
+class ProgramTransaction:
+    """Detached identity of one program-owned channel transition.
+
+    Navigation may describe the same transition first as an inner heading
+    wrapped by an outer route and later as a direct heading.  Preserve the
+    effective outer channel/effect so WorkingTheory can correlate those two
+    observations without retaining an executable Act or decoding its identity.
+    """
+
+    channel_tag: str
+    source_value: Any
+    target_value: Any
+    effect_tag: str
+    effect_value: Any
+
+    @classmethod
+    def from_heading(
+        cls,
+        heading: Any,
+        snapshot: Mapping[str, Any],
+    ) -> ProgramTransaction | None:
+        if heading is None:
+            return None
+        route = getattr(heading, "route", None)
+        channel_tag = route.channel_tag if route is not None else heading.channel_tag
+        target_value = route.target_value if route is not None else heading.target_value
+        source_value = route.from_value if route is not None else snapshot.get(channel_tag)
+        effect_tag = (
+            route.effect_tag if route is not None and route.effect_tag is not None else channel_tag
+        )
+        effect_value = (
+            route.effect_value
+            if route is not None and route.effect_tag is not None
+            else target_value
+        )
+        return cls(
+            channel_tag=channel_tag,
+            source_value=_semantic_key(source_value),
+            target_value=_semantic_key(target_value),
+            effect_tag=effect_tag,
+            effect_value=_semantic_key(effect_value),
+        )
+
+    @classmethod
+    def from_effect_observation(
+        cls,
+        observation: EffectObservationSnapshot,
+        *,
+        channel_tag: str,
+        target_value: Any,
+    ) -> ProgramTransaction | None:
+        """Name an unheaded transaction from its exact physical target write."""
+
+        appeared = observation.appeared
+        values = tuple(appeared.values) if appeared is not None else ()
+        if (
+            appeared is None
+            or appeared.kind != "write"
+            or appeared.tag != channel_tag
+            or len(values) != 2
+            or _semantic_key(values[-1]) != _semantic_key(target_value)
+        ):
+            return None
+        return cls(
+            channel_tag=channel_tag,
+            source_value=_semantic_key(values[0]),
+            target_value=_semantic_key(target_value),
+            effect_tag=channel_tag,
+            effect_value=_semantic_key(target_value),
+        )
+
+
+@dataclass(frozen=True)
+class TheoryInvestigationScope:
+    """Exact transaction receipt paired with its current proved frontier.
+
+    ``execution_source`` is the boundary from which the accepted temporal
+    transaction actually ran. ``frontier`` is the latest World proved by that
+    execution. ``transaction_act_pairs`` are immutable facts about that
+    execution, not a retained navigation decision; Compass must authorize a
+    new attempt against ``frontier`` before they can run again.
+    """
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    execution_source: TheoryBoundaryIdentity
+    frontier: TheoryBoundaryIdentity
+    source_progress_id: TheoryProgressId
+    frontier_progress_id: TheoryProgressId
+    accepted_attempt_id: tuple[Any, ...]
+    transaction_attempt_id: tuple[Any, ...] | None = None
+    transaction_act_identity: tuple[Any, ...] | None = None
+    transaction_act_pairs: tuple[tuple[str, Any], ...] = ()
+    transaction_selected_pairs: tuple[tuple[str, Any], ...] = ()
+    consumer_boundary: ConsumerBoundary | None = None
+    consumer_boundary_attempt_id: tuple[Any, ...] | None = None
+    consumer_execution_horizon: ConsumerExecutionHorizon | None = None
+    transaction_rearmed: bool = False
+    retry_act_identity: tuple[Any, ...] | None = None
+
+
+@dataclass(frozen=True)
 class TheoryAttemptReceipt:
     theory_id: TheoryId
     version_id: TheoryVersionId
@@ -196,12 +327,23 @@ class TheoryAttemptReceipt:
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     disposition: TheoryAttemptDisposition
+    # Exact values observed at execution. Unlike ``act_identity`` these are
+    # not semantic-key encodings, so Compass never has to decode an identity
+    # into an executable value.
+    act_pairs: tuple[tuple[str, Any], ...] = ()
+    selected_act_pairs: tuple[tuple[str, Any], ...] = ()
     evidence: tuple[Any, ...] = ()
     first_edge_identity: tuple[Any, ...] | None = None
     # Exact immutable effect observations pass through from the execution
     # boundary. WorkingTheory stores the facts; Compass may derive a
     # conductivity/front view without the ledger retaining that conclusion.
     conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
+    consumer_boundary: ConsumerBoundary | None = None
+    execution_source: TheoryBoundaryIdentity | None = None
+    investigation_frontier_id: tuple[Any, ...] | None = None
+    producer_goal_id: tuple[Any, ...] | None = None
+    observation_boundary: TheoryBoundaryIdentity | None = None
+    program_transaction: ProgramTransaction | None = None
 
 
 @dataclass(frozen=True)
@@ -267,6 +409,118 @@ class ConductivityResearchFinding:
 
 
 @dataclass(frozen=True)
+class IntrascanTracebackFinding:
+    """Detached proof of a real or naturally reached consumer realization."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    request_identity: tuple[Any, ...]
+    hop_identity: tuple[Any, ...]
+    requirement_identities: tuple[tuple[Any, ...], ...]
+    witness: IntrascanTracebackWitness
+    realization: IntrascanBoundaryRealization
+    parent_frontier_id: tuple[Any, ...] | None = None
+    parent_producer_goal_id: tuple[Any, ...] | None = None
+    parent_attempt_id: tuple[Any, ...] | None = None
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        payload = (
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.request_identity,
+            self.hop_identity,
+            self.requirement_identities,
+            self.witness,
+            self.realization,
+            self.parent_frontier_id,
+            self.parent_producer_goal_id,
+            self.parent_attempt_id,
+        )
+        digest = sha256(repr(payload).encode("utf-8")).hexdigest()
+        return ("intrascan-traceback-finding", digest)
+
+
+@dataclass(frozen=True)
+class IntrascanOrdinarySteerFinding:
+    """Exact hypothetical found no intrascan handoff; retry as user configuration."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    request_identity: tuple[Any, ...]
+    hop_identity: tuple[Any, ...]
+    requirement_identities: tuple[tuple[Any, ...], ...]
+    witness: IntrascanTracebackWitness
+    consumer_assignments: tuple[tuple[str, Any], ...]
+    parent_frontier_id: tuple[Any, ...] | None = None
+    parent_producer_goal_id: tuple[Any, ...] | None = None
+    parent_attempt_id: tuple[Any, ...] | None = None
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        payload = (
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.request_identity,
+            self.hop_identity,
+            self.requirement_identities,
+            self.witness,
+            self.consumer_assignments,
+            self.parent_frontier_id,
+            self.parent_producer_goal_id,
+            self.parent_attempt_id,
+        )
+        digest = sha256(repr(payload).encode("utf-8")).hexdigest()
+        return ("intrascan-ordinary-steer-finding", digest)
+
+
+@dataclass(frozen=True)
+class IntrascanTracebackFrontier:
+    """Detached backward hop whose real producer still needs navigation.
+
+    Unlike :class:`IntrascanTracebackFinding`, this receipt grants no scan
+    authority.  It keeps the exact hypothetical and its bounded static writer
+    goals alive while Compass derives one ordinary act from the current World.
+    """
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    request_identity: tuple[Any, ...]
+    hop_identity: tuple[Any, ...]
+    requirement_identities: tuple[tuple[Any, ...], ...]
+    witness: IntrascanTracebackWitness
+    producer_goals: tuple[IntrascanProducerGoal, ...]
+    consumer_assignments: tuple[tuple[str, Any], ...] = ()
+    parent_frontier_id: tuple[Any, ...] | None = None
+    parent_producer_goal_id: tuple[Any, ...] | None = None
+    parent_attempt_id: tuple[Any, ...] | None = None
+
+    @property
+    def identity(self) -> tuple[Any, ...]:
+        payload = (
+            self.theory_id,
+            self.version_id,
+            self.source,
+            self.request_identity,
+            self.hop_identity,
+            self.requirement_identities,
+            self.witness,
+            self.producer_goals,
+            self.consumer_assignments,
+            self.parent_frontier_id,
+            self.parent_producer_goal_id,
+            self.parent_attempt_id,
+        )
+        digest = sha256(repr(payload).encode("utf-8")).hexdigest()
+        return ("intrascan-traceback-frontier", digest)
+
+
+@dataclass(frozen=True)
 class TheoryView:
     """Detached read-only projection of the active theory for navigation.
 
@@ -280,12 +534,18 @@ class TheoryView:
     version_id: TheoryVersionId
     source: TheoryBoundaryIdentity
     root: TheoryBoundaryIdentity
+    investigation_scope: TheoryInvestigationScope | None
     claim: TheoryClaim
     requirements: tuple[TheoryRequirementSnapshot, ...]
     # Root-to-tip immutable version chain. This supplies historical context
     # for evidence readers without broadening current-version route authority.
     version_history: tuple[TheoryVersion, ...]
     attempts: tuple[TheoryAttemptReceipt, ...]
+    # Full attempt lineage for explicitly selected investigation work.  Unlike
+    # ordinary attempts, an accepted producer stage must remain visible after
+    # it advances the provisional World so the retained frontier can discharge
+    # its consumer from that new boundary.
+    investigation_attempts: tuple[TheoryAttemptReceipt, ...]
     # Full ordered effect history for this open theory. Unlike ``attempts``,
     # this is not narrowed to the current version/tip because earlier physical
     # scans explain how the latest temporal need was reached.
@@ -294,9 +554,16 @@ class TheoryView:
     # finding from suppressing a changed version, World, stop, or requirement.
     research_findings: tuple[ConductivityResearchFinding, ...]
     first_edge_exclusions: tuple[TheoryFirstEdgeExclusion, ...]
+    current_progress_attempt_id: tuple[Any, ...] | None = None
+    traceback_findings: tuple[IntrascanTracebackFinding | IntrascanOrdinarySteerFinding, ...] = ()
+    traceback_frontiers: tuple[IntrascanTracebackFrontier, ...] = ()
     temporal_intent: TheoryTemporalIntent | None = None
     trigger_attempt_id: tuple[Any, ...] | None = None
     trigger_act_identity: tuple[Any, ...] | None = None
+    trigger_consumer_boundary: ConsumerBoundary | None = None
+    trigger_program_transaction: ProgramTransaction | None = None
+    correction_rung_identities: frozenset[tuple[Any, ...]] = frozenset()
+    pending_correction_rung_identities: frozenset[tuple[Any, ...]] = frozenset()
 
     def excludes_first_edge(self, artifact_identity: tuple[Any, ...]) -> bool:
         """Whether this exact theory/version/source already rejected an artifact."""
@@ -324,6 +591,180 @@ class TheoryView:
                 if finding.request_identity == request_identity
             ),
             None,
+        )
+
+    def traceback_finding(
+        self,
+        request_identity: tuple[Any, ...],
+    ) -> IntrascanTracebackFinding | IntrascanOrdinarySteerFinding | None:
+        """Return a still-supported finding for this occurrence question."""
+
+        return next(
+            (
+                finding
+                for finding in self.traceback_findings
+                if finding.request_identity == request_identity
+                and self._traceback_scope_is_current(
+                    finding.version_id,
+                    finding.source,
+                    finding.requirement_identities,
+                )
+            ),
+            None,
+        )
+
+    def has_traceback_finding(self, request_identity: tuple[Any, ...]) -> bool:
+        return self.traceback_finding(request_identity) is not None
+
+    def traceback_frontier(
+        self,
+        request_identity: tuple[Any, ...],
+    ) -> IntrascanTracebackFrontier | None:
+        """Return an open hop still supported at this exact physical source."""
+
+        return next(
+            (
+                frontier
+                for frontier in self.traceback_frontiers
+                if frontier.request_identity == request_identity
+                and self.traceback_frontier_is_current(frontier)
+            ),
+            None,
+        )
+
+    def _traceback_scope_is_current(
+        self,
+        version_id: TheoryVersionId,
+        source: TheoryBoundaryIdentity,
+        requirement_identities: tuple[tuple[Any, ...], ...],
+    ) -> bool:
+        """Whether immutable traceback evidence survived later refinement.
+
+        Refinement appends requirements to one WorkingTheory.  That does not
+        invalidate an exact earlier rung observation when its physical source
+        is unchanged and every requirement which justified it is still owned.
+        A World rebase or a dropped requirement fails this check and requires
+        fresh research.
+        """
+
+        ancestry = frozenset(version.version_id for version in self.version_history)
+        current_requirements = frozenset(
+            requirement.semantic_identity for requirement in self.requirements
+        )
+        return (
+            version_id in ancestry
+            and source == self.source
+            and frozenset(requirement_identities) <= current_requirements
+        )
+
+    def traceback_frontier_is_current(
+        self,
+        frontier: IntrascanTracebackFrontier,
+    ) -> bool:
+        """Whether an open frontier remains evidence in the refined theory."""
+
+        return frontier.theory_id == self.theory_id and self._traceback_scope_is_current(
+            frontier.version_id,
+            frontier.source,
+            frontier.requirement_identities,
+        )
+
+    def current_traceback_frontiers(self) -> tuple[IntrascanTracebackFrontier, ...]:
+        """Actionable leaf hops which remain supported by the current version.
+
+        A child hop is append-only evidence that its exact parent goal was
+        selected and investigated.  The parent remains queryable as history,
+        but it is no longer open work for Compass; otherwise an older producer
+        can repeatedly win orientation over the newly exposed obstruction.
+        """
+
+        supported = tuple(
+            frontier
+            for frontier in self.traceback_frontiers
+            if self.traceback_frontier_is_current(frontier)
+        )
+        superseded = frozenset(
+            item.parent_frontier_id
+            for item in (*supported, *self.traceback_findings)
+            if item.parent_frontier_id is not None
+            and (
+                isinstance(item, IntrascanTracebackFrontier)
+                or self._traceback_scope_is_current(
+                    item.version_id,
+                    item.source,
+                    item.requirement_identities,
+                )
+            )
+        )
+        return tuple(frontier for frontier in supported if frontier.identity not in superseded)
+
+    def realized_traceback_frontier(
+        self,
+    ) -> (
+        tuple[
+            IntrascanTracebackFrontier,
+            IntrascanProducerGoal,
+            TheoryAttemptReceipt,
+        ]
+        | None
+    ):
+        """The exact producer stage which advanced into the current World."""
+
+        if self.current_progress_attempt_id is None:
+            return None
+        attempts = tuple(
+            attempt
+            for attempt in self.investigation_attempts
+            if attempt.attempt_id == self.current_progress_attempt_id
+            and attempt.disposition is TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            and attempt.investigation_frontier_id is not None
+            and attempt.producer_goal_id is not None
+        )
+        if len(attempts) != 1:
+            return None
+        attempt = attempts[0]
+        frontiers = tuple(
+            frontier
+            for frontier in self.traceback_frontiers
+            if frontier.identity == attempt.investigation_frontier_id
+            and frontier.theory_id == self.theory_id
+            and frontier.source == attempt.source
+        )
+        if len(frontiers) != 1 or attempt.source == self.source:
+            return None
+        frontier = frontiers[0]
+        ancestry = frozenset(version.version_id for version in self.version_history)
+        current_requirements = frozenset(
+            requirement.semantic_identity for requirement in self.requirements
+        )
+        if (
+            frontier.version_id not in ancestry
+            or not frozenset(frontier.requirement_identities) <= current_requirements
+        ):
+            return None
+        goals = tuple(
+            goal for goal in frontier.producer_goals if goal.identity == attempt.producer_goal_id
+        )
+        if len(goals) != 1:
+            return None
+        already_realized = any(
+            finding.parent_frontier_id == frontier.identity
+            and finding.parent_producer_goal_id == goals[0].identity
+            and finding.parent_attempt_id == attempt.attempt_id
+            and self._traceback_scope_is_current(
+                finding.version_id,
+                finding.source,
+                finding.requirement_identities,
+            )
+            for finding in self.traceback_findings
+        )
+        return None if already_realized else (frontier, goals[0], attempt)
+
+    def has_traceback_result(self, request_identity: tuple[Any, ...]) -> bool:
+        """Whether this World already researched the exact occurrence question."""
+
+        return self.has_traceback_finding(request_identity) or (
+            self.traceback_frontier(request_identity) is not None
         )
 
 
@@ -402,6 +843,8 @@ class WorkingTheory:
     status: TheoryStatus = TheoryStatus.OPEN
     attempt_ids: tuple[tuple[Any, ...], ...] = ()
     research_finding_ids: tuple[tuple[Any, ...], ...] = ()
+    traceback_finding_ids: tuple[tuple[Any, ...], ...] = ()
+    traceback_frontier_ids: tuple[tuple[Any, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -412,6 +855,10 @@ class TheoryLedger:
     theories: PMap[Any, WorkingTheory] = pmap()
     attempts: PMap[Any, TheoryAttemptReceipt] = pmap()
     research_findings: PMap[Any, ConductivityResearchFinding] = pmap()
+    traceback_findings: PMap[Any, IntrascanTracebackFinding | IntrascanOrdinarySteerFinding] = (
+        pmap()
+    )
+    traceback_frontiers: PMap[Any, IntrascanTracebackFrontier] = pmap()
     receipts: PMap[Any, TheoryReceipt] = pmap()
     tombstones: PMap[Any, TheoryTombstone] = pmap()
     successors: PMap[Any, TheorySuccessor] = pmap()
@@ -439,7 +886,10 @@ def temporal_setup_rung_identities(state: TheoryState) -> frozenset[tuple[Any, .
         for receipt in progress.phase_receipts:
             if receipt.kind not in {
                 TheoryPhaseKind.TEMPORAL_SETUP,
+                TheoryPhaseKind.REARM,
+                TheoryPhaseKind.TRANSACTION_ATTEMPT,
                 TheoryPhaseKind.CORRECTION_COMPOSITION,
+                TheoryPhaseKind.CORRECTION_INSTALL,
             }:
                 continue
             owned.update(receipt.pilot_rung_identities)
@@ -462,10 +912,86 @@ def active_theory_correction_rung_identities(
         raise TheoryInvariantError("active theory correction history is incomplete")
     active: set[tuple[Any, ...]] = set()
     for receipt in progress.phase_receipts:
-        if receipt.kind is not TheoryPhaseKind.CORRECTION_COMPOSITION:
+        if receipt.kind not in {
+            TheoryPhaseKind.CORRECTION_COMPOSITION,
+            TheoryPhaseKind.CORRECTION_INSTALL,
+        }:
             continue
         active.difference_update(receipt.superseded_pilot_rung_identities)
         active.update(receipt.pilot_rung_identities)
+    return frozenset(active)
+
+
+def active_theory_superseded_correction_rung_identities(
+    state: TheoryState,
+) -> frozenset[tuple[Any, ...]]:
+    """Read correction identities explicitly replaced on the active tip."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return frozenset()
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        return frozenset()
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if progress is None:
+        raise TheoryInvariantError("active theory correction history is incomplete")
+    superseded: set[tuple[Any, ...]] = set()
+    for receipt in progress.phase_receipts:
+        if receipt.kind is not TheoryPhaseKind.CORRECTION_COMPOSITION:
+            continue
+        superseded.update(receipt.superseded_pilot_rung_identities)
+        superseded.difference_update(receipt.pilot_rung_identities)
+    return frozenset(superseded)
+
+
+def active_theory_superseded_pilot_rung_identities(
+    state: TheoryState,
+) -> frozenset[tuple[Any, ...]]:
+    """Read every exact overlay explicitly replaced on the active theory tip."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return frozenset()
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        return frozenset()
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if progress is None:
+        raise TheoryInvariantError("active theory overlay history is incomplete")
+    superseded: set[tuple[Any, ...]] = set()
+    for receipt in progress.phase_receipts:
+        superseded.update(receipt.superseded_pilot_rung_identities)
+        superseded.difference_update(receipt.pilot_rung_identities)
+    return frozenset(superseded)
+
+
+def active_theory_pilot_rung_identities(
+    state: TheoryState,
+) -> frozenset[tuple[Any, ...]]:
+    """Read every exact overlay identity owned by the active theory tip."""
+
+    theory_id = state.active_theory_id
+    if theory_id is None:
+        return frozenset()
+    theory = state.ledger.theories.get(theory_id)
+    if theory is None or theory.status is not TheoryStatus.OPEN:
+        return frozenset()
+    progress = state.ledger.progress.get(theory.current_progress_id)
+    if progress is None:
+        raise TheoryInvariantError("active theory overlay history is incomplete")
+    active: set[tuple[Any, ...]] = set()
+    for receipt in progress.phase_receipts:
+        active.difference_update(receipt.superseded_pilot_rung_identities)
+        if receipt.kind in {
+            TheoryPhaseKind.TEMPORAL_SETUP,
+            TheoryPhaseKind.REARM,
+            TheoryPhaseKind.TRANSACTION_ATTEMPT,
+            TheoryPhaseKind.CORRECTION_COMPOSITION,
+            TheoryPhaseKind.CORRECTION_INSTALL,
+            TheoryPhaseKind.WORLD_REBASE,
+        }:
+            active.update(receipt.pilot_rung_identities)
     return frozenset(active)
 
 
@@ -868,11 +1394,26 @@ def theory_view(state: TheoryState) -> TheoryView | None:
     conductivity_attempts = tuple(
         attempt for attempt in all_attempts if attempt.conductivity_observations
     )
+    investigation_attempts = tuple(
+        attempt for attempt in all_attempts if attempt.investigation_frontier_id is not None
+    )
     research_findings = tuple(
         finding
         for finding_id in theory.research_finding_ids
         for finding in (state.ledger.research_findings.get(finding_id),)
         if finding is not None
+    )
+    traceback_findings = tuple(
+        finding
+        for finding_id in theory.traceback_finding_ids
+        for finding in (state.ledger.traceback_findings.get(finding_id),)
+        if finding is not None
+    )
+    traceback_frontiers = tuple(
+        frontier
+        for frontier_id in theory.traceback_frontier_ids
+        for frontier in (state.ledger.traceback_frontiers.get(frontier_id),)
+        if frontier is not None
     )
     rejected = frozenset(
         (
@@ -897,21 +1438,151 @@ def theory_view(state: TheoryState) -> TheoryView | None:
         if version.trigger_attempt_id is not None
         else None
     )
+    pending_corrections: set[tuple[Any, ...]] = set()
+    transaction_attempt: TheoryAttemptReceipt | None = None
+    boundary_attempt: TheoryAttemptReceipt | None = None
+    transaction_execution_source = _transaction_execution_source(state, theory, progress)
+    transaction_execution_tip: TheoryBoundaryIdentity | None = None
+    transaction_rearmed = False
+    for receipt in progress.phase_receipts:
+        pending_corrections.difference_update(receipt.superseded_pilot_rung_identities)
+        if receipt.kind in {
+            TheoryPhaseKind.CORRECTION_COMPOSITION,
+            TheoryPhaseKind.CORRECTION_INSTALL,
+        }:
+            pending_corrections.update(receipt.pilot_rung_identities)
+        elif receipt.kind in {
+            TheoryPhaseKind.TEMPORAL_SETUP,
+            TheoryPhaseKind.REARM,
+            TheoryPhaseKind.TRANSACTION_ATTEMPT,
+            TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+        }:
+            pending_corrections.difference_update(receipt.pilot_rung_identities)
+        if receipt.kind is TheoryPhaseKind.TRANSACTION_ATTEMPT:
+            candidate = state.ledger.attempts.get(receipt.evidence_identity)
+            if (
+                candidate is None
+                or candidate.theory_id != theory_id
+                or candidate.disposition is not TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            ):
+                raise TheoryInvariantError(
+                    "investigation transaction phase lost its accepted attempt"
+                )
+            transaction_attempt = candidate
+            boundary_attempt = candidate if candidate.consumer_boundary is not None else None
+            transaction_rearmed = False
+        elif receipt.kind is TheoryPhaseKind.CONSUMER_BOUNDARY:
+            candidate = state.ledger.attempts.get(receipt.evidence_identity)
+            if (
+                transaction_attempt is None
+                or candidate is None
+                or candidate.theory_id != theory_id
+                or candidate.disposition is not TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+                or candidate.consumer_boundary is None
+            ):
+                raise TheoryInvariantError(
+                    "consumer boundary phase lost its accepted transaction receipt"
+                )
+            boundary_attempt = candidate
+        elif receipt.kind is TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON:
+            if receipt.execution_tip is None:
+                raise TheoryInvariantError("execution horizon phase lost its exact tip")
+            transaction_execution_tip = receipt.execution_tip
+        elif receipt.kind is TheoryPhaseKind.REARM and transaction_attempt is not None:
+            transaction_rearmed = True
+    consumer_execution_horizon = (
+        ConsumerExecutionHorizon(
+            transaction_attempt_id=transaction_attempt.attempt_id,
+            source=(
+                transaction_execution_source
+                if transaction_execution_source is not None
+                else transaction_attempt.source
+            ),
+            consumer_boundary_attempt_id=boundary_attempt.attempt_id,
+            consumer_boundary=boundary_attempt.consumer_boundary,
+            tip=transaction_execution_tip,
+        )
+        if transaction_attempt is not None
+        and boundary_attempt is not None
+        and boundary_attempt.consumer_boundary is not None
+        and transaction_execution_tip is not None
+        else None
+    )
+    investigation_scope = (
+        TheoryInvestigationScope(
+            theory_id=theory_id,
+            version_id=version.version_id,
+            execution_source=(
+                transaction_execution_source
+                if transaction_execution_source is not None
+                else progress.execution_source
+            ),
+            frontier=progress.provisional_tip,
+            source_progress_id=(
+                progress.parent_progress_id
+                if progress.parent_progress_id is not None
+                else progress.progress_id
+            ),
+            frontier_progress_id=progress.progress_id,
+            accepted_attempt_id=progress.accepted_attempt_id,
+            transaction_attempt_id=(
+                transaction_attempt.attempt_id if transaction_attempt is not None else None
+            ),
+            transaction_act_identity=(
+                transaction_attempt.act_identity if transaction_attempt is not None else None
+            ),
+            transaction_act_pairs=(
+                transaction_attempt.act_pairs if transaction_attempt is not None else ()
+            ),
+            transaction_selected_pairs=(
+                transaction_attempt.selected_act_pairs if transaction_attempt is not None else ()
+            ),
+            consumer_boundary=(
+                boundary_attempt.consumer_boundary if boundary_attempt is not None else None
+            ),
+            consumer_boundary_attempt_id=(
+                boundary_attempt.attempt_id if boundary_attempt is not None else None
+            ),
+            consumer_execution_horizon=consumer_execution_horizon,
+            transaction_rearmed=transaction_rearmed,
+            retry_act_identity=(
+                transaction_attempt.act_identity
+                if transaction_attempt is not None
+                and consumer_execution_horizon is not None
+                and trigger is not None
+                and trigger.source == consumer_execution_horizon.source
+                and trigger.observation_boundary is not None
+                and trigger.observation_boundary == consumer_execution_horizon.tip
+                else None
+            ),
+        )
+        if progress.execution_source is not None and progress.accepted_attempt_id is not None
+        else None
+    )
     view = TheoryView(
         theory_id=theory_id,
         version_id=version.version_id,
         source=progress.provisional_tip,
         root=version.source,
+        investigation_scope=investigation_scope,
         claim=claim,
         requirements=version.requirements,
         version_history=version_history,
         attempts=attempts,
+        investigation_attempts=investigation_attempts,
         conductivity_attempts=conductivity_attempts,
         research_findings=research_findings,
         first_edge_exclusions=exclusions,
+        current_progress_attempt_id=progress.accepted_attempt_id,
+        traceback_findings=traceback_findings,
+        traceback_frontiers=traceback_frontiers,
         temporal_intent=version.temporal_intent,
         trigger_attempt_id=version.trigger_attempt_id,
         trigger_act_identity=(trigger.act_identity if trigger is not None else None),
+        trigger_consumer_boundary=(trigger.consumer_boundary if trigger is not None else None),
+        trigger_program_transaction=(trigger.program_transaction if trigger is not None else None),
+        correction_rung_identities=active_theory_correction_rung_identities(state),
+        pending_correction_rung_identities=frozenset(pending_corrections),
     )
     assert_detached_theory_value(view, path="theory_view")
     return view
@@ -1010,9 +1681,17 @@ class RecordTheoryAttempt:
     act_identity: tuple[Any, ...]
     pilot_rung_identities: tuple[tuple[Any, ...], ...]
     disposition: TheoryAttemptDisposition
+    act_pairs: tuple[tuple[str, Any], ...] = ()
+    selected_act_pairs: tuple[tuple[str, Any], ...] = ()
     evidence: tuple[Any, ...] = ()
     first_edge_identity: tuple[Any, ...] | None = None
     conductivity_observations: tuple[EffectObservationSnapshot, ...] = ()
+    consumer_boundary: ConsumerBoundary | None = None
+    execution_source: TheoryBoundaryIdentity | None = None
+    investigation_frontier_id: tuple[Any, ...] | None = None
+    producer_goal_id: tuple[Any, ...] | None = None
+    observation_boundary: TheoryBoundaryIdentity | None = None
+    program_transaction: ProgramTransaction | None = None
 
 
 @dataclass(frozen=True)
@@ -1020,6 +1699,20 @@ class RecordConductivityResearch:
     """Record one completed evidence-only research question without scanning."""
 
     finding: ConductivityResearchFinding
+
+
+@dataclass(frozen=True)
+class RecordIntrascanTraceback:
+    """Retain one completed occurrence research result without choosing an action."""
+
+    finding: IntrascanTracebackFinding | IntrascanOrdinarySteerFinding
+
+
+@dataclass(frozen=True)
+class RecordIntrascanTracebackFrontier:
+    """Retain one open backward hop without granting execution authority."""
+
+    frontier: IntrascanTracebackFrontier
 
 
 @dataclass(frozen=True)
@@ -1033,6 +1726,31 @@ class AdvanceTheory:
     phase_receipts: tuple[TheoryPhaseReceipt, ...] = ()
     remaining_budget: int | None = None
     execution_source: TheoryBoundaryIdentity | None = None
+
+
+@dataclass(frozen=True)
+class RetainedCorrectionReceipt:
+    """Detached proof that the trend monitor owns a retained overlay."""
+
+    receipt_id: int
+    correction_identity: tuple[tuple[Any, ...], ...]
+    pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    origin_world_key: tuple[Any, ...]
+    status: str
+
+
+@dataclass(frozen=True)
+class RebaseTheoryWorld:
+    """Move one same-owner progress tip across already-owned overlay facts."""
+
+    theory_id: TheoryId
+    version_id: TheoryVersionId
+    source: TheoryBoundaryIdentity
+    rebased_source: TheoryBoundaryIdentity
+    retained_pilot_rung_identities: tuple[tuple[Any, ...], ...]
+    rebase_identity: tuple[Any, ...]
+    superseded_pilot_rung_identities: tuple[tuple[Any, ...], ...] = ()
+    retained_correction_receipts: tuple[RetainedCorrectionReceipt, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1101,7 +1819,10 @@ TheoryFact: TypeAlias = (
     OpenTheory
     | RecordTheoryAttempt
     | RecordConductivityResearch
+    | RecordIntrascanTraceback
+    | RecordIntrascanTracebackFrontier
     | AdvanceTheory
+    | RebaseTheoryWorld
     | ComposeTheoryCorrection
     | RefineTheory
     | ProveTheory
@@ -1205,6 +1926,18 @@ def _put_unique(mapping: PMap[Any, Any], key: Any, value: Any, label: str) -> PM
     return mapping.set(key, value)
 
 
+def _ledger_identity(kind: str, *components: Any) -> tuple[Any, ...]:
+    """Return a compact content handle for one immutable ledger row.
+
+    Parent/version/progress relationships live in explicit fields and maps.
+    Embedding the complete parent row identity into every new key turns an
+    ordinary lookup into a recursive hash walk as the investigation grows.
+    """
+
+    digest = sha256(repr(components).encode("utf-8")).hexdigest()
+    return (kind, digest)
+
+
 def _active(state: TheoryState, theory_id: TheoryId) -> WorkingTheory:
     if state.active_theory_id != theory_id:
         raise TheoryInvariantError("fact does not address the active theory")
@@ -1212,6 +1945,36 @@ def _active(state: TheoryState, theory_id: TheoryId) -> WorkingTheory:
     if theory is None or theory.status is not TheoryStatus.OPEN:
         raise TheoryInvariantError("active theory is missing or closed")
     return theory
+
+
+def _transaction_execution_source(
+    state: TheoryState,
+    theory: WorkingTheory,
+    progress: TheoryProgressSnapshot,
+) -> TheoryBoundaryIdentity | None:
+    """Resolve only the root owned by the latest active transaction phases."""
+
+    source: TheoryBoundaryIdentity | None = None
+    for receipt in progress.phase_receipts:
+        if receipt.kind is TheoryPhaseKind.TRANSACTION_ATTEMPT:
+            attempt = state.ledger.attempts.get(receipt.evidence_identity)
+            if (
+                attempt is None
+                or attempt.theory_id != theory.theory_id
+                or attempt.disposition is not TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+            ):
+                raise TheoryInvariantError(
+                    "investigation transaction phase lost its accepted attempt"
+                )
+            source = attempt.execution_source
+        elif (
+            receipt.kind is TheoryPhaseKind.WORLD_REBASE
+            and source is not None
+            and receipt.execution_source is not None
+            and receipt.execution_source.scan_id == source.scan_id
+        ):
+            source = receipt.execution_source
+    return source
 
 
 def _allowed_source_boundaries(
@@ -1229,6 +1992,7 @@ def _allowed_source_boundaries(
     claim = state.ledger.claims[theory.claim_id]
     version = state.ledger.versions[theory.current_version_id]
     progress = state.ledger.progress[theory.current_progress_id]
+    transaction_source = _transaction_execution_source(state, theory, progress)
     prior = (
         state.ledger.progress[progress.parent_progress_id].provisional_tip
         if progress.parent_progress_id is not None
@@ -1241,6 +2005,7 @@ def _allowed_source_boundaries(
             version.source,
             progress.provisional_tip,
             progress.execution_source,
+            transaction_source,
             prior,
         )
         if boundary is not None
@@ -1289,6 +2054,58 @@ def _version_descends_from(
             return False
         current = version.parent_version_id
     return False
+
+
+def _require_traceback_parent(
+    state: TheoryState,
+    theory: WorkingTheory,
+    item: (IntrascanTracebackFinding | IntrascanOrdinarySteerFinding | IntrascanTracebackFrontier),
+) -> None:
+    """Validate the exact attempted frontier goal which opened a child hop."""
+
+    parent_fields = (
+        item.parent_frontier_id,
+        item.parent_producer_goal_id,
+        item.parent_attempt_id,
+    )
+    if not any(value is not None for value in parent_fields):
+        return
+    if any(value is None for value in parent_fields):
+        raise TheoryInvariantError("traceback parent ownership is incomplete")
+    parent = state.ledger.traceback_frontiers.get(item.parent_frontier_id)
+    attempt = state.ledger.attempts.get(item.parent_attempt_id)
+    progress = state.ledger.progress[theory.current_progress_id]
+    same_source = parent is not None and parent.source == item.source
+    advanced_source = bool(
+        parent is not None
+        and parent.source != item.source
+        and progress.provisional_tip == item.source
+        and progress.accepted_attempt_id == item.parent_attempt_id
+        and attempt is not None
+        and attempt.disposition is TheoryAttemptDisposition.ACCEPTED_PROVISIONAL
+    )
+    if (
+        parent is None
+        or parent.theory_id != item.theory_id
+        or parent.identity not in theory.traceback_frontier_ids
+        or not (same_source or advanced_source)
+        or not _version_descends_from(
+            state.ledger,
+            item.version_id,
+            parent.version_id,
+        )
+    ):
+        raise TheoryInvariantError("traceback parent frontier is not owned")
+    if item.parent_producer_goal_id not in tuple(goal.identity for goal in parent.producer_goals):
+        raise TheoryInvariantError("traceback parent producer goal is not owned")
+    if (
+        attempt is None
+        or attempt.theory_id != item.theory_id
+        or attempt.source != parent.source
+        or attempt.investigation_frontier_id != item.parent_frontier_id
+        or attempt.producer_goal_id != item.parent_producer_goal_id
+    ):
+        raise TheoryInvariantError("traceback parent attempt did not select that goal")
 
 
 def _open(
@@ -1359,8 +2176,14 @@ def _fact_identity(fact: TheoryFact) -> tuple[Any, ...]:
         return ("attempt", fact.attempt_identity)
     if isinstance(fact, RecordConductivityResearch):
         return ("conductivity-research", fact.finding.identity)
+    if isinstance(fact, RecordIntrascanTraceback):
+        return ("intrascan-traceback", fact.finding.identity)
+    if isinstance(fact, RecordIntrascanTracebackFrontier):
+        return ("intrascan-traceback-frontier", fact.frontier.identity)
     if isinstance(fact, AdvanceTheory):
         return ("advance", fact.advance_identity)
+    if isinstance(fact, RebaseTheoryWorld):
+        return ("world-rebase", fact.rebase_identity)
     if isinstance(fact, ComposeTheoryCorrection):
         return ("compose", fact.composition_identity)
     if isinstance(fact, RefineTheory):
@@ -1426,10 +2249,61 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.version_id != theory.current_version_id:
             raise TheoryInvariantError("attempt addresses a stale theory version")
         _require_allowed_source(state, theory, fact.source)
+        observation_boundary = fact.observation_boundary or fact.source
+        _require_allowed_source(state, theory, observation_boundary)
+        if observation_boundary != fact.source:
+            progress = state.ledger.progress[theory.current_progress_id]
+            if (
+                _transaction_execution_source(state, theory, progress) != fact.source
+                or progress.provisional_tip != observation_boundary
+                or progress.accepted_attempt_id is None
+            ):
+                raise TheoryInvariantError(
+                    "attempt observation is outside its active investigation scope"
+                )
         if not fact.execution_owner_token:
             raise TheoryInvariantError("attempt execution owner evidence is missing")
         if not fact.occurrence_evidence:
             raise TheoryInvariantError("attempt occurrence evidence is missing")
+        if fact.execution_source is not None and (
+            fact.execution_source.scan_id != fact.source.scan_id
+            or not fact.execution_source.checkpoint_token
+            or (
+                fact.execution_source.scan_id > 0
+                and not fact.execution_source.execution_owner_token
+            )
+        ):
+            raise TheoryInvariantError("attempt execution source evidence is inconsistent")
+        if (fact.investigation_frontier_id is None) != (fact.producer_goal_id is None):
+            raise TheoryInvariantError("attempt investigation ownership is incomplete")
+        if fact.investigation_frontier_id is not None:
+            frontier = state.ledger.traceback_frontiers.get(fact.investigation_frontier_id)
+            if (
+                frontier is None
+                or frontier.theory_id != fact.theory_id
+                or frontier.identity not in theory.traceback_frontier_ids
+                or frontier.source != observation_boundary
+                or not _version_descends_from(
+                    state.ledger,
+                    fact.version_id,
+                    frontier.version_id,
+                )
+            ):
+                raise TheoryInvariantError(
+                    "attempt investigation frontier is not current theory work"
+                )
+            version = state.ledger.versions[fact.version_id]
+            owned_requirements = frozenset(
+                requirement.semantic_identity for requirement in version.requirements
+            )
+            if not frozenset(frontier.requirement_identities) <= owned_requirements:
+                raise TheoryInvariantError(
+                    "attempt investigation frontier lost requirement ownership"
+                )
+            if fact.producer_goal_id not in tuple(
+                goal.identity for goal in frontier.producer_goals
+            ):
+                raise TheoryInvariantError("attempt producer goal does not belong to its frontier")
         receipt = TheoryAttemptReceipt(
             theory_id=fact.theory_id,
             version_id=fact.version_id,
@@ -1440,9 +2314,17 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             act_identity=fact.act_identity,
             pilot_rung_identities=fact.pilot_rung_identities,
             disposition=fact.disposition,
+            act_pairs=fact.act_pairs,
+            selected_act_pairs=fact.selected_act_pairs,
             evidence=fact.evidence,
             first_edge_identity=fact.first_edge_identity,
             conductivity_observations=fact.conductivity_observations,
+            consumer_boundary=fact.consumer_boundary,
+            execution_source=fact.execution_source,
+            investigation_frontier_id=fact.investigation_frontier_id,
+            producer_goal_id=fact.producer_goal_id,
+            observation_boundary=observation_boundary,
+            program_transaction=fact.program_transaction,
         )
         attempts = _put_unique(state.ledger.attempts, fact.attempt_identity, receipt, "attempt")
         if attempts is state.ledger.attempts:
@@ -1521,6 +2403,156 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 theories=state.ledger.theories.set(finding.theory_id, updated_theory),
             ),
         )
+    if isinstance(fact, RecordIntrascanTraceback):
+        finding = fact.finding
+        theory = _active(state, finding.theory_id)
+        if finding.version_id != theory.current_version_id:
+            raise TheoryInvariantError("traceback addresses a stale theory version")
+        _require_allowed_source(state, theory, finding.source)
+        progress = state.ledger.progress[theory.current_progress_id]
+        if finding.source != progress.provisional_tip:
+            raise TheoryInvariantError("traceback source is not the current same-scan World")
+        if not finding.requirement_identities:
+            raise TheoryInvariantError("traceback finding has no owned requirement")
+        if not finding.hop_identity:
+            raise TheoryInvariantError("traceback finding has no physical hop identity")
+        version = state.ledger.versions[theory.current_version_id]
+        owned_requirements = frozenset(
+            requirement.semantic_identity for requirement in version.requirements
+        )
+        if not frozenset(finding.requirement_identities) <= owned_requirements:
+            raise TheoryInvariantError("traceback finding requirement is not theory-owned")
+        _require_traceback_parent(state, theory, finding)
+        if finding.witness.request_identity != finding.request_identity:
+            raise TheoryInvariantError("traceback witness answers another request")
+        if isinstance(finding, IntrascanOrdinarySteerFinding):
+            if (
+                not finding.witness.applied_exactly_once
+                or finding.witness.traceback_step is not None
+                or finding.witness.blocked_edges
+                or not finding.consumer_assignments
+            ):
+                raise TheoryInvariantError(
+                    "ordinary-steer finding is not an exact exhausted hypothetical"
+                )
+            findings = _put_unique(
+                state.ledger.traceback_findings,
+                finding.identity,
+                finding,
+                "intrascan ordinary-steer finding",
+            )
+            if findings is state.ledger.traceback_findings:
+                return state
+            updated_theory = replace(
+                theory,
+                traceback_finding_ids=(*theory.traceback_finding_ids, finding.identity),
+            )
+            return replace(
+                state,
+                ledger=replace(
+                    state.ledger,
+                    traceback_findings=findings,
+                    theories=state.ledger.theories.set(finding.theory_id, updated_theory),
+                ),
+            )
+        realization = finding.realization
+        natural_horizon = bool(
+            finding.witness.consumer_execution_horizon_reached
+            and finding.witness.consumer_horizon_read is not None
+            and realization.consumer_execution_horizon_reached
+            and realization.consumer_horizon_read == finding.witness.consumer_horizon_read
+            and realization.consumer_scan == finding.source.scan_id + 1
+            and realization.consumer_assignments
+        )
+        if finding.witness.traceback_step is None and not natural_horizon:
+            raise TheoryInvariantError("traceback finding has no exact backward hop")
+        direct = bool(
+            realization.direct
+            and realization.consumer_scan == finding.source.scan_id + 1
+            and realization.consumer_write is not None
+            and realization.consumer_assignments
+        )
+        staged = bool(
+            realization.staged
+            and realization.stage_scan == finding.source.scan_id + 1
+            and realization.consumer_scan == finding.source.scan_id + 2
+            and realization.consumer_write is not None
+            and realization.consumer_assignments
+        )
+        if not (direct or staged or natural_horizon):
+            raise TheoryInvariantError("traceback finding has no exact boundary realization")
+        findings = _put_unique(
+            state.ledger.traceback_findings,
+            finding.identity,
+            finding,
+            "intrascan traceback finding",
+        )
+        if findings is state.ledger.traceback_findings:
+            return state
+        updated_theory = replace(
+            theory,
+            traceback_finding_ids=(*theory.traceback_finding_ids, finding.identity),
+        )
+        return replace(
+            state,
+            ledger=replace(
+                state.ledger,
+                traceback_findings=findings,
+                theories=state.ledger.theories.set(finding.theory_id, updated_theory),
+            ),
+        )
+    if isinstance(fact, RecordIntrascanTracebackFrontier):
+        frontier = fact.frontier
+        theory = _active(state, frontier.theory_id)
+        if frontier.version_id != theory.current_version_id:
+            raise TheoryInvariantError("traceback frontier addresses a stale theory version")
+        _require_allowed_source(state, theory, frontier.source)
+        progress = state.ledger.progress[theory.current_progress_id]
+        if frontier.source != progress.provisional_tip:
+            raise TheoryInvariantError(
+                "traceback frontier source is not the current same-scan World"
+            )
+        if not frontier.requirement_identities:
+            raise TheoryInvariantError("traceback frontier has no owned requirement")
+        if not frontier.hop_identity:
+            raise TheoryInvariantError("traceback frontier has no physical hop identity")
+        version = state.ledger.versions[theory.current_version_id]
+        owned_requirements = frozenset(
+            requirement.semantic_identity for requirement in version.requirements
+        )
+        if not frozenset(frontier.requirement_identities) <= owned_requirements:
+            raise TheoryInvariantError("traceback frontier requirement is not theory-owned")
+        _require_traceback_parent(state, theory, frontier)
+        if frontier.witness.request_identity != frontier.request_identity:
+            raise TheoryInvariantError("traceback frontier witness answers another request")
+        if frontier.witness.traceback_step is None:
+            raise TheoryInvariantError("traceback frontier has no exact backward hop")
+        if not frontier.producer_goals or any(
+            goal.node_index < 0 for goal in frontier.producer_goals
+        ):
+            raise TheoryInvariantError("traceback frontier has no exact producer goal")
+        if not frontier.consumer_assignments:
+            raise TheoryInvariantError("traceback frontier lost its consumer boundary steer")
+        frontiers = _put_unique(
+            state.ledger.traceback_frontiers,
+            frontier.identity,
+            frontier,
+            "intrascan traceback frontier",
+        )
+        if frontiers is state.ledger.traceback_frontiers:
+            return state
+        updated_theory = replace(
+            theory,
+            traceback_frontier_ids=(*theory.traceback_frontier_ids, frontier.identity),
+        )
+        return replace(
+            state,
+            ledger=replace(
+                state.ledger,
+                traceback_frontiers=frontiers,
+                theories=state.ledger.theories.set(frontier.theory_id, updated_theory),
+            ),
+        )
     if isinstance(fact, AdvanceTheory):
         theory = _active(state, fact.theory_id)
         if fact.version_id != theory.current_version_id:
@@ -1555,8 +2587,29 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         )
         if remaining < 0 or remaining > parent.remaining_budget:
             raise TheoryInvariantError("advance cannot replenish or overdraw its budget")
+        for index, receipt in enumerate(fact.phase_receipts):
+            if receipt.kind is TheoryPhaseKind.TRANSACTION_ATTEMPT:
+                transaction = state.ledger.attempts.get(receipt.evidence_identity)
+                if (
+                    transaction is None
+                    or receipt.execution_source is None
+                    or transaction.execution_source != receipt.execution_source
+                    or fact.execution_source != receipt.execution_source
+                ):
+                    raise TheoryInvariantError("transaction phase lacks its exact execution source")
+            if receipt.kind is not TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON:
+                continue
+            preceding = (*parent.phase_receipts, *fact.phase_receipts[:index])
+            if (
+                receipt.execution_tip != fact.boundary
+                or not any(item.kind is TheoryPhaseKind.TRANSACTION_ATTEMPT for item in preceding)
+                or not any(item.kind is TheoryPhaseKind.CONSUMER_BOUNDARY for item in preceding)
+            ):
+                raise TheoryInvariantError(
+                    "execution horizon lacks its exact tip, transaction, or consumer boundary"
+                )
         phases = (*parent.phase_receipts, *fact.phase_receipts)
-        progress_id: TheoryProgressId = (
+        progress_id: TheoryProgressId = _ledger_identity(
             "progress",
             fact.theory_id,
             parent.progress_id,
@@ -1579,6 +2632,125 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         if theory.current_progress_id == progress_id:
             return state
+        updated = replace(theory, current_progress_id=progress_id)
+        return replace(
+            state,
+            ledger=replace(
+                state.ledger,
+                progress=progress_map,
+                theories=state.ledger.theories.set(fact.theory_id, updated),
+            ),
+        )
+    if isinstance(fact, RebaseTheoryWorld):
+        theory = _active(state, fact.theory_id)
+        if fact.version_id != theory.current_version_id:
+            raise TheoryInvariantError("world rebase addresses a stale theory version")
+        _require_allowed_source(state, theory, fact.source)
+        parent = state.ledger.progress[theory.current_progress_id]
+        if fact.source != parent.provisional_tip:
+            raise TheoryInvariantError("world rebase source is not the current progress boundary")
+        if fact.rebased_source == fact.source or (
+            fact.rebased_source.scan_id != fact.source.scan_id
+            or fact.rebased_source.execution_owner_token != fact.source.execution_owner_token
+            or fact.rebased_source.occurrence_identity != fact.source.occurrence_identity
+        ):
+            raise TheoryInvariantError("world rebase changed its physical execution boundary")
+        if not fact.retained_pilot_rung_identities and not fact.superseded_pilot_rung_identities:
+            raise TheoryInvariantError("world rebase has no overlay change evidence")
+        source_key = fact.source.world_key
+        rebased_key = fact.rebased_source.world_key
+        if len(source_key) != 2 or len(rebased_key) != 2 or source_key[0] != rebased_key[0]:
+            raise TheoryInvariantError("world rebase changed its physical state")
+        source_rungs = tuple(source_key[1])
+        rebased_rungs = tuple(rebased_key[1])
+        added = tuple(rung for rung in rebased_rungs if rung not in source_rungs)
+        removed = tuple(rung for rung in source_rungs if rung not in rebased_rungs)
+        if set(added) != set(fact.retained_pilot_rung_identities):
+            raise TheoryInvariantError("world rebase overlay delta lacks exact ownership")
+        if set(removed) != set(fact.superseded_pilot_rung_identities):
+            raise TheoryInvariantError("world rebase overlay removal lacks exact ownership")
+        owned: set[tuple[Any, ...]] = set()
+        for receipt in parent.phase_receipts:
+            owned.difference_update(receipt.superseded_pilot_rung_identities)
+            if receipt.kind in {
+                TheoryPhaseKind.TEMPORAL_SETUP,
+                TheoryPhaseKind.REARM,
+                TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                TheoryPhaseKind.CORRECTION_INSTALL,
+            }:
+                owned.update(receipt.pilot_rung_identities)
+            elif receipt.kind is TheoryPhaseKind.CORRECTION_COMPOSITION:
+                owned.update(receipt.pilot_rung_identities)
+            elif receipt.kind is TheoryPhaseKind.WORLD_REBASE:
+                owned.update(receipt.pilot_rung_identities)
+        correction_owned: set[tuple[Any, ...]] = set()
+        for receipt in fact.retained_correction_receipts:
+            if (
+                receipt.receipt_id <= 0
+                or not receipt.origin_world_key
+                or receipt.status not in {"probationary", "active"}
+                or not receipt.pilot_rung_identities
+                or tuple(sorted(receipt.pilot_rung_identities, key=repr))
+                != receipt.correction_identity
+                or not set(receipt.pilot_rung_identities) & set(added)
+            ):
+                raise TheoryInvariantError("retained correction receipt is malformed or inactive")
+            correction_owned.update(set(receipt.pilot_rung_identities) & set(added))
+        allowed = owned | correction_owned
+        if not set(added) <= allowed:
+            unowned_identities = tuple(identity for identity in added if identity not in allowed)
+            unowned = tuple((identity[0], identity[1]) for identity in unowned_identities)
+            related_owned = tuple(
+                identity
+                for identity in owned
+                if any(identity[:2] == missing[:2] for missing in unowned_identities)
+            )
+            phases = tuple(
+                (
+                    receipt.kind.value,
+                    tuple((identity[0], identity[1]) for identity in receipt.pilot_rung_identities),
+                )
+                for receipt in parent.phase_receipts
+            )
+            raise TheoryInvariantError(
+                "world rebase uses an overlay not owned by this theory: "
+                f"{unowned!r}; exact={unowned_identities!r}; "
+                f"related_owned={related_owned!r}; phases={phases!r}"
+            )
+        superseded = {
+            rung_identity
+            for phase in parent.phase_receipts
+            for rung_identity in phase.superseded_pilot_rung_identities
+        }
+        if not set(removed) <= superseded:
+            raise TheoryInvariantError("world rebase removed an overlay without supersession")
+        receipt = TheoryPhaseReceipt(
+            kind=TheoryPhaseKind.WORLD_REBASE,
+            evidence_identity=fact.rebase_identity,
+            pilot_rung_identities=tuple(added),
+            superseded_pilot_rung_identities=tuple(removed),
+            execution_source=fact.rebased_source,
+        )
+        phases = (*parent.phase_receipts, receipt)
+        progress_id: TheoryProgressId = _ledger_identity(
+            "progress-rebase",
+            fact.theory_id,
+            parent.progress_id,
+            fact.rebased_source,
+            phases,
+            fact.rebase_identity,
+        )
+        progress = TheoryProgressSnapshot(
+            fact.theory_id,
+            progress_id,
+            fact.rebased_source,
+            phases,
+            parent.remaining_budget,
+            parent.progress_id,
+            parent.accepted_attempt_id,
+            parent.execution_source,
+        )
+        progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         updated = replace(theory, current_progress_id=progress_id)
         return replace(
             state,
@@ -1637,7 +2809,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             pilot_rung_identities=fact.pilot_rung_identities,
             superseded_pilot_rung_identities=fact.superseded_pilot_rung_identities,
         )
-        progress_id: TheoryProgressId = (
+        progress_id: TheoryProgressId = _ledger_identity(
             "progress-compose",
             fact.theory_id,
             parent.progress_id,
@@ -1652,6 +2824,12 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             (*parent.phase_receipts, receipt),
             parent.remaining_budget,
             parent.progress_id,
+            parent.accepted_attempt_id,
+            (
+                fact.composed_source
+                if parent.execution_source == fact.source
+                else parent.execution_source
+            ),
         )
         progress_map = _put_unique(state.ledger.progress, progress_id, progress, "progress")
         updated = replace(theory, current_progress_id=progress_id)
@@ -1694,19 +2872,39 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.temporal_source is not None:
             if temporal_intent is None:
                 raise TheoryInvariantError("temporal source has no temporal intent")
-            if fact.temporal_source not in (fact.source, fact.refined_source):
-                raise TheoryInvariantError("temporal source is not an exact refinement boundary")
+            active_progress = state.ledger.progress[theory.current_progress_id]
+            retained_transaction_source = (
+                active_progress.execution_source
+                if active_progress.accepted_attempt_id is not None
+                else None
+            )
+            if fact.temporal_source not in (
+                fact.source,
+                fact.refined_source,
+                retained_transaction_source,
+            ):
+                raise TheoryInvariantError(
+                    "temporal source is not an exact refinement boundary: "
+                    f"source={fact.source!r}; refined={fact.refined_source!r}; "
+                    f"temporal={fact.temporal_source!r}; "
+                    f"transaction={retained_transaction_source!r}"
+                )
         if fact.trigger_attempt_id is not None:
             trigger = state.ledger.attempts.get(fact.trigger_attempt_id)
+            carried_trigger = parent.trigger_attempt_id == fact.trigger_attempt_id
             if trigger is None:
                 raise TheoryInvariantError("refinement triggering attempt is missing")
             if (
                 trigger.theory_id != fact.theory_id
-                or trigger.version_id != parent.version_id
-                or trigger.source != fact.source
+                or not _version_descends_from(
+                    state.ledger,
+                    parent.version_id,
+                    trigger.version_id,
+                )
+                or not (carried_trigger or theory_source_is_retained(state, trigger.source))
             ):
                 raise TheoryInvariantError(
-                    "refinement triggering attempt does not match its theory version and source"
+                    "refinement trigger is not retained in its theory ancestry"
                 )
             if trigger.disposition is not TheoryAttemptDisposition.REJECTED_EXACT:
                 raise TheoryInvariantError("temporal refinement requires an exact rejected attempt")
@@ -1719,10 +2917,18 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             not novel
             and temporal_intent == parent.temporal_intent
             and trigger_attempt_id == parent.trigger_attempt_id
+            and (
+                temporal_intent is None
+                or (
+                    fact.temporal_source == parent.temporal_source
+                    and fact.refined_source == parent.source
+                    and tuple(fact.requirements) == parent.temporal_requirements
+                )
+            )
         ):
             return state
         requirements = (*parent.requirements, *novel)
-        version_id: TheoryVersionId = (
+        version_id: TheoryVersionId = _ledger_identity(
             "version",
             fact.theory_id,
             parent.version_id,
@@ -1754,7 +2960,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
         if fact.temporal_source is not None:
             parent_progress = state.ledger.progress[theory.current_progress_id]
             if fact.temporal_source != parent_progress.provisional_tip:
-                current_progress_id = (
+                current_progress_id = _ledger_identity(
                     "progress-refine",
                     fact.theory_id,
                     parent_progress.progress_id,
@@ -1765,9 +2971,11 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                     fact.theory_id,
                     current_progress_id,
                     fact.temporal_source,
-                    (),
+                    parent_progress.phase_receipts,
                     parent_progress.remaining_budget,
                     parent_progress.progress_id,
+                    parent_progress.accepted_attempt_id,
+                    parent_progress.execution_source,
                 )
                 progress_map = _put_unique(
                     progress_map,

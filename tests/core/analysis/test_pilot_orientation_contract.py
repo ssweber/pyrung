@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from pyrung import Int
 from pyrung.core.analysis.pilot.compass import (
     ActionNogoodObservation,
     Compass,
@@ -21,12 +22,16 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     CrossingFidelity,
     Dwell,
     ExpectationExemption,
+    IntrascanPulse,
     LandingReceiptAuthority,
     LocalProgressKind,
+    MotionKind,
     NavigationConstraints,
+    NeedIntrascanTraceback,
     NeedProbe,
     NeedResearch,
     OrientationWorld,
+    ProgramScan,
     Pulse,
     PulseHorizon,
     RouteEdgeContext,
@@ -45,8 +50,15 @@ from pyrung.core.analysis.pilot.options import (
     WaitRead,
     _TraceAdmission,
 )
+from pyrung.core.analysis.pilot.overlay import PilotRung
 from pyrung.core.analysis.pilot.recording import _candidate_payload
-from pyrung.core.analysis.pilot.working_theory import TheoryTemporalIntent
+from pyrung.core.analysis.pilot.requirements import OperandAuthority
+from pyrung.core.analysis.pilot.working_theory import (
+    ProgramTransaction,
+    TheoryTemporalIntent,
+)
+from pyrung.core.context import RungId
+from pyrung.core.crossing import Cmp
 
 
 @dataclass
@@ -68,6 +80,7 @@ class _Context:
     theory_view: object = None
     active_requirements: tuple = ()
     temporal_requirements: tuple = ()
+    temporal_trigger_requirements: tuple = ()
     temporal_source_anchor: object = None
 
 
@@ -333,7 +346,6 @@ def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
         "_iter_temporal_schedules",
         lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
     )
-
     result = orientation._theory_temporal_retry_bearing(
         world,
         candidates,
@@ -345,6 +357,216 @@ def test_retry_through_deadline_persists_one_companion_before_fresh_steer(
     assert result.act.policy.applied == (("FirstCorrective", True),)
     assert result.act.policy.local_progress is LocalProgressKind.THEORY_CORRECTIVE
     assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+
+
+def test_retry_through_deadline_carries_the_transaction_consumer_boundary(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    boundary = object()
+    trigger = pulse_identity((("Request", True),))
+    world = _world(Compass())
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+                trigger_act_identity=trigger,
+                claim=SimpleNamespace(obligations=()),
+                investigation_scope=SimpleNamespace(
+                    retry_act_identity=trigger,
+                    transaction_act_identity=trigger,
+                    transaction_rearmed=True,
+                    consumer_boundary=boundary,
+                ),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        _candidate("Request"),
+        active_trace_actions=(("Request", True),),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
+    )
+
+    result = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.applied == (("Request", True),)
+    assert result.act.policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+    assert result.act.policy.consumer_boundary is boundary
+
+
+def test_pending_configuration_retries_only_the_horizon_owned_transaction(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    boundary = object()
+    transaction = (("Request", True),)
+    transaction_identity = pulse_identity(transaction)
+    transaction_attempt_id = ("attempt", "transaction")
+    boundary_attempt_id = ("attempt", "consumer")
+    horizon = SimpleNamespace(
+        transaction_attempt_id=transaction_attempt_id,
+        consumer_boundary_attempt_id=boundary_attempt_id,
+        consumer_boundary=boundary,
+    )
+    scope = SimpleNamespace(
+        transaction_attempt_id=transaction_attempt_id,
+        transaction_act_identity=transaction_identity,
+        transaction_act_pairs=transaction,
+        transaction_selected_pairs=transaction,
+        transaction_rearmed=False,
+        retry_act_identity=None,
+        consumer_boundary_attempt_id=boundary_attempt_id,
+        consumer_boundary=boundary,
+        consumer_execution_horizon=horizon,
+    )
+    world = _world(Compass())
+    world.snapshot["SequenceStep"] = 50
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+                trigger_act_identity=transaction_identity,
+                claim=SimpleNamespace(obligations=()),
+                investigation_scope=scope,
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        active_trace_actions=(
+            ("Request", True),
+            ("TestingMode", False),
+            ("Ready", True),
+        ),
+    )
+    schedule = SimpleNamespace(
+        assignments=(("TestingMode", False), ("Ready", True)),
+        pilot_rungs=(),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((schedule,)),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_pending_correction_pairs",
+        lambda *_args: (("TestingMode", True),),
+    )
+    broad_policy = ActPolicy(
+        source=ActSource.WIDENING,
+        action_pairs=(("Request", True), ("TestingMode", False), ("Ready", True)),
+        applied=(("Request", True), ("TestingMode", False), ("Ready", True)),
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+    )
+    ordinary = Bearing(
+        world_key=world.world_key,
+        act=BatchPulse(broad_policy),
+        objective=BearingObjective(TargetSpec("Target", True)),
+    )
+
+    result = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+        ordinary=ordinary,
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, Pulse)
+    assert result.act.policy.applied == transaction
+    assert result.act.policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+    assert result.act.policy.consumer_boundary is boundary
+
+
+def test_pending_configuration_retries_the_fresh_actionless_program_transaction(
+    monkeypatch,
+) -> None:
+    """A Coast is reread from ProgramStep; its failed receipt is identity only."""
+
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    heading = ChannelHeading("SequenceStep", 60)
+    prescription = WaitPrescription(heading, "continue the autonomous sequence")
+    coast = Coast(
+        "bearing",
+        ActPolicy(
+            source=ActSource.PROGRAM,
+            heading=heading,
+            motion=MotionKind.COAST_TO_BEARING,
+            expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+        ),
+    )
+    world = _world(Compass())
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+                trigger_act_identity=act_identity(coast),
+                trigger_program_transaction=ProgramTransaction.from_heading(
+                    heading,
+                    world.snapshot,
+                ),
+                claim=SimpleNamespace(obligations=()),
+                investigation_scope=None,
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(wait=WaitRead(prescription))
+    corrective = PilotRung("WatchdogPreset", 11, Int("Guard") != 81)
+    schedule = SimpleNamespace(
+        assignments=(("WatchdogPreset", 11),),
+        pilot_rungs=(corrective,),
+        requirements=("watchdog-requirement",),
+        requirement_sources=("watchdog-parent",),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((schedule,)),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_pending_correction_pairs",
+        lambda *_args: (("WatchdogPreset", 11),),
+    )
+
+    result = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, Coast)
+    assert result.act.mode == "bearing"
+    assert result.act.policy.heading is heading
+    assert result.act.policy.applied == ()
+    assert result.act.policy.local_progress is LocalProgressKind.TEMPORAL_EDGE
+    assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+    assert result.act.policy.local_progress_requirements == ("watchdog-requirement",)
+    assert result.act.policy.local_progress_sources == ("watchdog-parent",)
+    assert result.prerequisites == (corrective,)
+    assert act_identity(result.act) == act_identity(coast)
 
 
 def test_temporal_retry_lazily_adds_current_trace_sibling_without_assigning_internal(
@@ -446,6 +668,110 @@ def test_temporal_retry_continues_past_an_accepted_trace_companion(
         ("Mode", True),
         ("Production", True),
     )
+
+
+def test_retry_together_keeps_an_owned_unchanged_transaction_pair(
+    monkeypatch,
+) -> None:
+    """Fresh reader authority preserves the complete consumer-bound transaction."""
+
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    transaction = (("Request", True), ("Mode", True))
+    identity = pulse_identity(transaction)
+    consumer_boundary = object()
+    transaction_attempt_id = ("attempt", 1)
+    boundary_attempt_id = ("attempt", 2)
+    world = _world(Compass())
+    world.snapshot.update(transaction)
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+                trigger_act_identity=("coast", "later-displacement"),
+                claim=SimpleNamespace(obligations=()),
+                investigation_scope=SimpleNamespace(
+                    retry_act_identity=identity,
+                    transaction_act_identity=identity,
+                    transaction_act_pairs=transaction,
+                    transaction_attempt_id=transaction_attempt_id,
+                    consumer_boundary=consumer_boundary,
+                    consumer_boundary_attempt_id=boundary_attempt_id,
+                    consumer_execution_horizon=SimpleNamespace(
+                        transaction_attempt_id=transaction_attempt_id,
+                        consumer_boundary_attempt_id=boundary_attempt_id,
+                        consumer_boundary=consumer_boundary,
+                    ),
+                    transaction_rearmed=False,
+                ),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    candidates = _options(
+        _candidate("Request"),
+        _candidate("Mode"),
+        active_trace_actions=transaction,
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter((SimpleNamespace(assignments=(), pilot_rungs=()),)),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_pending_correction_pairs",
+        lambda _world: (("WatchdogPreset", 11),),
+    )
+    base = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=(("Request", True),),
+        applied=(),
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+    )
+    ordinary = Bearing(
+        world_key=world.world_key,
+        act=Pulse(base),
+        objective=BearingObjective(TargetSpec("Target", True)),
+    )
+
+    retry = orientation._theory_temporal_retry_bearing(
+        world,
+        candidates,
+        TargetSpec("Target", True),
+        ordinary=ordinary,
+    )
+
+    assert isinstance(retry, Bearing)
+    assert retry.act.policy.applied == transaction
+    assert act_identity(retry.act) == identity
+    assert retry.act.policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+    assert retry.act.policy.consumer_boundary is consumer_boundary
+
+
+def test_consumer_execution_horizon_does_not_escape_its_transaction() -> None:
+    """A pulse missing any owned transaction action cannot inherit its horizon."""
+
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    consumer_boundary = object()
+    transaction_attempt_id = ("attempt", 1)
+    boundary_attempt_id = ("attempt", 2)
+    scope = SimpleNamespace(
+        transaction_act_pairs=(("Request", True), ("Mode", True)),
+        transaction_attempt_id=transaction_attempt_id,
+        consumer_boundary=consumer_boundary,
+        consumer_boundary_attempt_id=boundary_attempt_id,
+        consumer_execution_horizon=SimpleNamespace(
+            transaction_attempt_id=transaction_attempt_id,
+            consumer_boundary_attempt_id=boundary_attempt_id,
+            consumer_boundary=consumer_boundary,
+        ),
+    )
+
+    assert orientation._owned_consumer_boundary(scope, (("Request", True),)) is None
 
 
 def test_temporal_retry_does_not_widen_through_an_avoided_trace_sibling(
@@ -554,6 +880,336 @@ def test_temporal_retry_uses_one_read_and_can_lower_standalone_tip_setup(
     assert result.act.policy.local_progress_sources == ("parent-requirement",)
 
 
+def test_conducted_boolean_parent_requests_occurrence_traceback_for_lowered_leaf(
+    monkeypatch,
+) -> None:
+    """A conducted parent becomes a hypothetical consumer write, not a hold."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    parent = SimpleNamespace(
+        condition=SimpleNamespace(),
+        navigation_identity=("parent",),
+        demanding_occurrence=SimpleNamespace(
+            kind="read",
+            rung=("ErrorHandling", 5),
+            execution_kind="subroutine",
+            caller_rung=30,
+            call_stack=("ErrorHandling",),
+            depth=1,
+            call_invocation=2,
+        ),
+    )
+    lowered = SimpleNamespace(condition=SimpleNamespace(tag="Link"))
+    rung = PilotRung("Link", True, SimpleNamespace())
+    world = _world(compass)
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            ),
+            temporal_requirements=(parent,),
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_iter_temporal_schedules",
+        lambda *_args: iter(
+            (
+                SimpleNamespace(
+                    requirements=(lowered,),
+                    requirement_sources=(parent,),
+                    requirement_bindings=((parent, (lowered,)),),
+                    pilot_rungs=(rung,),
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        orientation,
+        "_theory_conducted_occurrence",
+        lambda *_args: parent.demanding_occurrence,
+    )
+
+    result = orientation._theory_correction_composition(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, NeedIntrascanTraceback)
+    assert result.request.patch.dest == "Link"
+    assert result.request.patch.value is True
+    assert result.request.patch.guard is rung.guard
+    assert result.request.patch.boundary.rung_id == RungId("ErrorHandling", 5)
+    assert result.request.patch.boundary.call_invocation == 2
+    assert result.request.requirements == (parent,)
+
+    researched_world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+                has_traceback_finding=lambda _identity: True,
+            ),
+        ),
+    )
+    assert (
+        orientation._theory_correction_composition(
+            researched_world,
+            _options(),
+            TargetSpec("Target", True),
+        )
+        is None
+    )
+
+
+def test_program_owned_setup_requests_exact_branch_traceback_from_fresh_bearing() -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    step = Int("ProgramOwnedStep", default=20)
+    condition = Cmp(step.name, "==", 98)
+    occurrence = SimpleNamespace(
+        kind="read",
+        tag=step.name,
+        values=(40,),
+        rung=("ErrorHandling", 5),
+        execution_kind="branch",
+        caller_rung=30,
+        call_stack=("ErrorHandling",),
+        depth=2,
+        call_invocation=2,
+        run_order=77,
+    )
+    requirement = SimpleNamespace(
+        condition=condition,
+        operand_authority=OperandAuthority.PROGRAM_WRITTEN,
+        demanding_occurrence=occurrence,
+        navigation_identity=("program-owned-step",),
+    )
+    world = _world(compass)
+    world.snapshot.update({step.name: 20, "Link": False})
+    world.state.work = SimpleNamespace(_known_tags_by_name={step.name: step})
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.SETUP_FIRST,
+                has_traceback_finding=lambda _identity: False,
+            ),
+            temporal_requirements=(requirement,),
+        ),
+    )
+    policy = ActPolicy(
+        source=ActSource.TRACE,
+        action_pairs=(("Link", True),),
+        applied=(("Link", True),),
+        expectation_exemption=ExpectationExemption.UNRESOLVED_EFFECT,
+    )
+    ordinary = Bearing(
+        world_key=world.world_key,
+        act=Pulse(policy),
+        objective=BearingObjective(TargetSpec("Target", True)),
+    )
+
+    result = orientation._theory_setup_traceback(
+        world,
+        _options(_candidate("Link")),
+        ordinary,
+    )
+
+    assert isinstance(result, NeedIntrascanTraceback)
+    assert result.request.patch.dest == step.name
+    assert result.request.patch.value == 98
+    assert result.request.patch.boundary.execution_kind == "branch"
+    assert result.request.patch.boundary.run_order == 77
+    assert result.request.consumer_assignments == (("Link", True),)
+    assert result.request.requirements == (requirement,)
+
+
+def test_traceback_finding_selects_only_one_exact_program_stage_scan() -> None:
+    """A finding authorizes its immediate producer scan, not its consumer steer."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    world.snapshot.update({"Link": False, "Step": 10})
+    source = SimpleNamespace(world_key=world.world_key, scan_id=7)
+    stage_write = SimpleNamespace(counterfactual=False)
+    producer = SimpleNamespace(
+        write=stage_write,
+        enabling_requirements=(
+            SimpleNamespace(tag="Link", value=False, source_kind="entry"),
+            SimpleNamespace(tag="Step", value=10, source_kind="entry"),
+        ),
+    )
+    finding = SimpleNamespace(
+        theory_id=("theory", 1),
+        version_id=("version", 1),
+        source=source,
+        identity=("traceback-finding", 1),
+        witness=SimpleNamespace(
+            traceback_step=SimpleNamespace(producer_traces=(producer,)),
+        ),
+        realization=SimpleNamespace(
+            direct=False,
+            witnessed=True,
+            stage_scan=8,
+            stage_write=stage_write,
+            # This is retained research evidence only. It must not appear in
+            # the selected act before Compass reads the stage landing.
+            consumer_assignments=(("Link", True),),
+        ),
+    )
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                theory_id=finding.theory_id,
+                version_id=finding.version_id,
+                source=source,
+                traceback_findings=(finding,),
+            ),
+        ),
+    )
+
+    result = orientation._theory_intrascan_bearing(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, ProgramScan)
+    assert result.act.expected_write is stage_write
+    assert result.act.evidence_identity == finding.identity
+    assert result.act.policy.applied == ()
+    assert result.act.policy.local_progress is LocalProgressKind.INTRASCAN_STAGE
+    assert result.prerequisites == ()
+
+    landed_source = SimpleNamespace(world_key=("landed-world",), scan_id=8)
+    landed = replace(
+        world,
+        world_key=landed_source.world_key,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                theory_id=finding.theory_id,
+                version_id=finding.version_id,
+                source=landed_source,
+                traceback_findings=(finding,),
+            ),
+        ),
+    )
+    assert (
+        orientation._theory_intrascan_bearing(
+            landed,
+            _options(),
+            TargetSpec("Target", True),
+        )
+        is None
+    )
+
+
+def test_direct_traceback_finding_selects_only_its_fresh_scan_start_steer() -> None:
+    """A direct consumer finding must not compose the prior rejected act."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    world = _world(compass)
+    source = SimpleNamespace(world_key=world.world_key, scan_id=7)
+    consumer_write = SimpleNamespace(tag="Step", before=98, after=10)
+    finding = SimpleNamespace(
+        theory_id=("theory", 1),
+        version_id=("version", 1),
+        source=source,
+        identity=("traceback-finding", "direct"),
+        witness=SimpleNamespace(traceback_step=SimpleNamespace()),
+        realization=SimpleNamespace(
+            direct=True,
+            witnessed=True,
+            consumer_write=consumer_write,
+            consumer_assignments=(("Link", True),),
+        ),
+    )
+    requirement = object()
+    world = replace(
+        world,
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                theory_id=finding.theory_id,
+                version_id=finding.version_id,
+                source=source,
+                traceback_findings=(finding,),
+            ),
+            temporal_requirements=(requirement,),
+            steerable=frozenset({"Link"}),
+        ),
+    )
+
+    result = orientation._theory_intrascan_bearing(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert isinstance(result.act, IntrascanPulse)
+    assert result.act.policy.applied == (("Link", True),)
+    assert result.act.expected_write is consumer_write
+    assert result.act.policy.local_progress is LocalProgressKind.INTRASCAN_DIRECT
+    assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+
+
+def test_parent_requirement_is_conducted_inside_appeared_to_displacement_interval(
+    monkeypatch,
+) -> None:
+    """The immutable occurrence stream qualifies a parent without live markers."""
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    appeared = SimpleNamespace(scan_id=7, ordinal=10)
+    demanding = SimpleNamespace(
+        kind="read",
+        tag="Link",
+        values=(False,),
+        scan_id=7,
+        ordinal=12,
+        rung=("ErrorHandling", 5),
+        execution_kind="subroutine",
+        caller_rung=31,
+        call_stack=("ErrorHandling",),
+        depth=1,
+        call_invocation=0,
+        dynamic_address=(("ErrorHandling", 5), "subroutine", 31, ("ErrorHandling",), 1, 0, 8, 12),
+    )
+    displacement = SimpleNamespace(scan_id=7, ordinal=14)
+    flow = SimpleNamespace(
+        appeared=appeared,
+        consumer_reads=(),
+        displacement=displacement,
+        obligations=(SimpleNamespace(tag="Link", value=False),),
+    )
+    compass = Compass()
+    monkeypatch.setattr(
+        Compass,
+        "conductivity_front",
+        lambda _self, _view: SimpleNamespace(flows=(flow,)),
+    )
+
+    assert orientation._theory_requirement_was_conducted(
+        compass,
+        object(),
+        SimpleNamespace(demanding_occurrence=demanding),
+    )
+
+
 def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
     monkeypatch,
 ) -> None:
@@ -593,6 +1249,175 @@ def test_temporal_retry_yields_to_conductivity_research_before_another_steer(
     assert result.orientation.candidates.options == ()
 
 
+def test_temporal_retry_researches_after_pending_correction_was_in_exact_attempt(
+    monkeypatch,
+) -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    attempt_id = ("attempt", 2)
+    request = SimpleNamespace(
+        reason="the exercised correction exposed another stopped flow",
+        comparison=SimpleNamespace(later_attempt_id=attempt_id),
+    )
+    correction = PilotRung("Correction", True, Int("Guard") == 1)
+    correction_identity = orientation._rung_identity(correction)
+    world = _world(compass)
+    world = replace(
+        world,
+        state=SimpleNamespace(**{**vars(world.state), "pilot_rungs": (correction,)}),
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+                pending_correction_rung_identities=frozenset((correction_identity,)),
+                conductivity_attempts=(
+                    SimpleNamespace(
+                        attempt_id=attempt_id,
+                        pilot_rung_identities=(correction_identity,),
+                    ),
+                ),
+            ),
+            temporal_requirements=(object(),),
+        ),
+    )
+    monkeypatch.setattr(orientation, "_build_candidates", lambda *_args: _options())
+    monkeypatch.setattr(
+        Compass,
+        "conductivity_research",
+        lambda _self, _view: request,
+    )
+
+    result = orientation._orient_read(compass, world, TargetSpec("Target", True))
+
+    assert isinstance(result, NeedResearch)
+    assert result.request is request
+
+
+def test_untried_pending_correction_still_preempts_conductivity_research() -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    correction = PilotRung("Correction", True, Int("Guard") == 1)
+    correction_identity = orientation._rung_identity(correction)
+    world = _world(Compass())
+    world = replace(
+        world,
+        state=SimpleNamespace(**{**vars(world.state), "pilot_rungs": (correction,)}),
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                pending_correction_rung_identities=frozenset((correction_identity,)),
+                conductivity_attempts=(
+                    SimpleNamespace(
+                        attempt_id=("attempt", 2),
+                        pilot_rung_identities=(),
+                    ),
+                ),
+            ),
+        ),
+    )
+    request = SimpleNamespace(
+        comparison=SimpleNamespace(later_attempt_id=("attempt", 2)),
+    )
+
+    assert orientation._untried_pending_correction_pairs(world, request) == (("Correction", True),)
+
+
+def test_rejected_frontier_bearing_requests_one_program_owned_traceback_hop() -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    program_value = Int("ProgramValue")
+    occurrence = SimpleNamespace(
+        kind="read",
+        tag=program_value.name,
+        values=(100,),
+        rung=(None, 7),
+        execution_kind="rung",
+        caller_rung=7,
+        call_stack=(),
+        depth=0,
+        call_invocation=None,
+        run_order=12,
+        ordinal=19,
+        branch_path=(),
+    )
+    requirement = SimpleNamespace(
+        condition=Cmp(program_value.name, "!=", 100),
+        demanding_occurrence=occurrence,
+        operand_authority=OperandAuthority.PROGRAM_WRITTEN,
+        selected_writer=(None, 7, ()),
+        navigation_identity=("program-owned-prevention", program_value.name),
+    )
+    terminal_alias = SimpleNamespace(
+        condition=requirement.condition,
+        demanding_occurrence=occurrence,
+        operand_authority=OperandAuthority.PROGRAM_WRITTEN,
+        selected_writer=(None, 7, ()),
+        navigation_identity=("terminal-prevention", program_value.name),
+    )
+    producer_goal = SimpleNamespace(identity=("producer-goal", "program-value"))
+    frontier = SimpleNamespace(
+        identity=("traceback-frontier", "program-value"),
+        hop_identity=("intrascan-traceback-hop", "ProtectedStep", 98),
+        parent_frontier_id=None,
+        producer_goals=(producer_goal,),
+    )
+    view = SimpleNamespace(
+        temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+        trigger_act_identity=pulse_identity((("Reset", True),)),
+        trigger_attempt_id=("attempt", "reset"),
+        conductivity_attempts=(
+            SimpleNamespace(
+                attempt_id=("attempt", "reset"),
+                act_identity=pulse_identity((("Reset", True),)),
+                investigation_frontier_id=frontier.identity,
+                producer_goal_id=producer_goal.identity,
+                conductivity_observations=(
+                    SimpleNamespace(
+                        obligation=SimpleNamespace(tag="ProtectedStep"),
+                        appeared=object(),
+                        displacement=object(),
+                    ),
+                ),
+            ),
+        ),
+        traceback_frontiers=(frontier,),
+        current_traceback_frontiers=lambda: (frontier,),
+        has_traceback_result=lambda _identity: False,
+    )
+    world = _world(Compass())
+    world.snapshot[program_value.name] = 100
+    world = replace(
+        world,
+        state=SimpleNamespace(
+            **{
+                **vars(world.state),
+                "work": SimpleNamespace(_known_tags_by_name={program_value.name: program_value}),
+            }
+        ),
+        context=replace(
+            world.context,
+            theory_view=view,
+            temporal_trigger_requirements=(requirement, terminal_alias),
+        ),
+    )
+
+    result = orientation._theory_intrascan_continuation_traceback(
+        world,
+        _options(),
+    )
+
+    assert isinstance(result, NeedIntrascanTraceback)
+    assert result.request.consumer_assignments == (("Reset", True),)
+    assert result.request.requirements == (requirement, terminal_alias)
+    assert result.request.parent_frontier_id == frontier.identity
+    assert result.request.parent_producer_goal_id == producer_goal.identity
+    assert result.request.parent_attempt_id == ("attempt", "reset")
+    assert result.request.patch.dest == program_value.name
+    assert result.request.patch.value != 100
+    assert result.request.patch.boundary.rung_id == RungId(None, 7)
+
+
 def test_temporal_rearm_declares_one_assertion_scan() -> None:
     import pyrung.core.analysis.pilot.orientation as orientation
 
@@ -608,6 +1433,53 @@ def test_temporal_rearm_declares_one_assertion_scan() -> None:
             ),
             edge_tags=frozenset(("Request",)),
             resting={"Request": False},
+        ),
+    )
+
+    result = orientation._theory_rearm_bearing(
+        world,
+        _options(),
+        TargetSpec("Target", True),
+    )
+
+    assert isinstance(result, Bearing)
+    assert result.act.policy.applied == (("Request", False),)
+    assert result.act.policy.local_progress is LocalProgressKind.REARM
+    assert result.act.policy.pulse_horizon is PulseHorizon.ASSERTION_SCAN
+
+
+def test_corrected_frontier_rearms_the_exact_selected_transaction_pair() -> None:
+    import pyrung.core.analysis.pilot.orientation as orientation
+
+    compass = Compass()
+    correction = PilotRung("WatchdogPreset", 31, Int("Guard") != 81)
+    correction_identity = orientation._rung_identity(correction)
+    source = SimpleNamespace(scan_id=5)
+    actions = (("Request", True),)
+    requirement = object()
+    world = _world(compass)
+    world.snapshot["Request"] = True
+    world = replace(
+        world,
+        state=SimpleNamespace(**{**vars(world.state), "pilot_rungs": (correction,)}),
+        context=replace(
+            world.context,
+            theory_view=SimpleNamespace(
+                temporal_intent=TheoryTemporalIntent.RETRY_THROUGH_DEADLINE,
+                source=source,
+                investigation_scope=SimpleNamespace(
+                    frontier=source,
+                    transaction_act_identity=pulse_identity(actions),
+                    transaction_act_pairs=actions,
+                    transaction_selected_pairs=actions,
+                    transaction_rearmed=False,
+                ),
+                pending_correction_rung_identities=frozenset((correction_identity,)),
+            ),
+            steerable=frozenset(("Request",)),
+            edge_tags=frozenset(("Request",)),
+            resting={"Request": False},
+            temporal_requirements=(requirement,),
         ),
     )
 

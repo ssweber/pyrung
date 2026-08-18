@@ -131,6 +131,8 @@ class ScanProgressReceipt:
         "earned-work",
         "conductivity",
         "observation",
+        "intrascan-stage",
+        "intrascan-direct",
     ]
     source_world: _StateKey
     landing_world: _StateKey
@@ -138,6 +140,35 @@ class ScanProgressReceipt:
     distance_before: int
     distance_after: int | None = None
     landing_owns_tip: bool = True
+
+
+@dataclass(frozen=True)
+class InvestigationProducerReceipt:
+    """Verified writer occurrence discharging one traceback producer goal.
+
+    A Bearing only declares frontier ownership.  Verification creates this
+    receipt after observing exactly one matching write in the selected scan
+    and its value at the accepted landing.  WorkingTheory can therefore carry
+    the exact ownership across a World advance without parsing diagnostics.
+    """
+
+    frontier_id: tuple[Any, ...]
+    producer_goal_id: tuple[Any, ...]
+    assertion_scan: int
+    write_identity: tuple[Any, ...]
+    retained_assignment: _ActionPair
+
+
+@dataclass(frozen=True)
+class IntrascanActReceipt:
+    """Exact stage or consumer write accepted from one evidence-owned scan."""
+
+    evidence_identity: tuple[Any, ...]
+    kind: Literal["stage", "consumer"]
+    assertion_scan: int
+    expected_write_identity: tuple[Any, ...]
+    matched_write_identity: tuple[Any, ...]
+    retained_assignment: _ActionPair
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +718,10 @@ class _PilotContext:
     # Drive-resolved live requirements for one exceptional temporal read.
     # Ordinary reads leave this empty and pay no temporal-branch cost.
     temporal_requirements: tuple[ActiveRequirement, ...] = ()
+    # The exact requirements introduced by the latest rejected attempt. The
+    # broader temporal set above reconstructs the whole retry transaction;
+    # this narrow set lets evidence readers extend only the new obstruction.
+    temporal_trigger_requirements: tuple[ActiveRequirement, ...] = ()
     temporal_source_anchor: tuple[Any, Any] | None = None
 
 
@@ -711,6 +746,8 @@ class _ExecutionEvidence:
     # channel for another departure.
     replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
     scan_progress: ScanProgressReceipt | None = None
+    investigation_producer: InvestigationProducerReceipt | None = None
+    intrascan_act: IntrascanActReceipt | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "before_snap", MappingProxyType(dict(self.before_snap)))
@@ -1132,6 +1169,11 @@ class _PulseState:
     # Original operation boundary for causal replay.  Unlike
     # ``channel_motion``, this is never rebound to an ejection channel.
     replay_motion: ChannelMotion = field(default_factory=ChannelMotion)
+    # ``None`` means this act did not request a consumer-bound horizon. A
+    # Boolean says whether execution evaluated the receipt's exact consumer
+    # occurrence. Whether the historical value flowed there is separate
+    # conductivity evidence and may intentionally change after a correction.
+    consumer_execution_horizon_reached: bool | None = None
     # Snapshot immediately before this act's first owned kernel scan.  This is
     # the execution-window entry value needed to distinguish a whole-window
     # zero-net excursion from ordinary non-zero channel motion without replaying
@@ -1197,8 +1239,21 @@ class _ExecutedAttempt:
     def assertion_scan(self) -> int:
         """Exact scan which asserted the selected act, or the physical landing."""
 
-        if self.pulse.action_scan is not None:
+        if self.pulse.action_scan is not None and (
+            not self.pulse.kernel_scan_ids or self.pulse.action_scan in self.pulse.kernel_scan_ids
+        ):
             return self.pulse.action_scan
+        if (
+            self.pulse.coast_receipt is not None
+            and self.pulse.coast_receipt.end_scan in self.pulse.kernel_scan_ids
+        ):
+            return self.pulse.coast_receipt.end_scan
+        if self.pulse.kernel_scan_ids:
+            # ProgramScan/ObserveScan own the exact kernel scan they selected.
+            # VERIFY may inspect or settle the fork afterward; that later fork
+            # tip is not the assertion occurrence and may have no projection
+            # in this execution's bounded cache.
+            return self.pulse.kernel_scan_ids[-1]
         if self.pulse.coast_receipt is not None:
             return self.pulse.coast_receipt.end_scan
         return self.pulse.fork.state.scan_id

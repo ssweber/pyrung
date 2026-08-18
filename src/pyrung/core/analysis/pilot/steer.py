@@ -19,7 +19,10 @@ from typing import TYPE_CHECKING, Any
 from pyrung.core.analysis.pdg import resolve_rung
 from pyrung.core.analysis.pilot.advance import estimate_owned_boundary_scans
 from pyrung.core.analysis.pilot.avoid import _avoid_violations
-from pyrung.core.analysis.pilot.bootstrap import selected_route_landing_expectation
+from pyrung.core.analysis.pilot.bootstrap import (
+    selected_route_landing_expectation,
+    unexplained_route_landing_tags,
+)
 from pyrung.core.analysis.pilot.causal import action_caused_change as _action_caused_change
 from pyrung.core.analysis.pilot.coast import (
     _COAST_BUDGET,
@@ -38,6 +41,7 @@ from pyrung.core.analysis.pilot.compass import WAIT, ActionPair, CompassObservat
 from pyrung.core.analysis.pilot.effects import (
     EffectExpectation,
     EffectObservation,
+    consumer_execution_horizon_reached,
     effect_reached_consumer,
     expectation_from_writer,
     observe_execution_window,
@@ -48,9 +52,11 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
     Coast,
     Dwell,
+    IntrascanPulse,
     LandingReceiptAuthority,
     ObserveScan,
     OrientationWorld,
+    ProgramScan,
     Pulse,
     PulseHorizon,
 )
@@ -261,7 +267,9 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
     """Bind immediate and route-landing expectations to one physical window."""
 
     action_scan = (
-        None if isinstance(bearing.act, (Coast, Dwell, ObserveScan)) else pulse.action_scan
+        None
+        if isinstance(bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
+        else pulse.action_scan
     )
     immediate = observe_execution_window(
         bearing.expectation,
@@ -276,7 +284,15 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
     projections = ()
     heading = None
     orientation = bearing.orientation
-    if orientation is not None and not isinstance(bearing.act, ObserveScan):
+    route_landing_admissible = pulse.coast_receipt is None or not pulse.coast_receipt.avoided
+    if (
+        route_landing_admissible
+        and orientation is not None
+        and not isinstance(
+            bearing.act,
+            (ObserveScan, ProgramScan, IntrascanPulse),
+        )
+    ):
         world = orientation.world
         ctx = world.context
         heading = bearing.act.policy.heading
@@ -323,7 +339,45 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                     )
                 )
             )
+        channel_tags: frozenset[str] = frozenset()
+        charted_values: dict[str, tuple[Any, ...]] = {}
+        unexplained_landing = frozenset()
         if not program_handoff:
+            channel_tags = frozenset(
+                {
+                    ctx.target.tag,
+                    *(
+                        role.channel_tag
+                        for role in (*ctx.pipeline_roles, *ctx.chart_roles)
+                        if role.channel_tag not in ctx.opaque_loop
+                        and role.channel_tag not in ctx.edge_tags
+                        and role.channel_tag not in ctx.clear_only
+                        and not scan_transient_rest(
+                            role.channel_tag,
+                            ctx.pdg,
+                            ctx.program,
+                        )[0]
+                    ),
+                }
+            )
+            charted_values = (
+                {
+                    ctx.target.tag: charted_target_values,
+                    route.channel_tag: charted_target_values,
+                }
+                if route is not None
+                else {}
+            )
+            unexplained_landing = unexplained_route_landing_tags(
+                world.frame.tree,
+                ctx.pdg,
+                ctx.program,
+                landing=pulse.snap,
+                steerable=ctx.steerable,
+                channel_tags=channel_tags,
+                charted_values=charted_values,
+            )
+        if unexplained_landing:
             exact_scan_ids = tuple(
                 scan_id
                 for scan_id in pulse.kernel_scan_ids
@@ -335,28 +389,13 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 for scan_id in exact_scan_ids
                 if (projection := pulse.projection_at(scan_id)) is not None
             )
-        if not program_handoff and len(projections) == len(exact_scan_ids):
+        if unexplained_landing and len(projections) == len(exact_scan_ids):
             # A literal-looking register can be discovered as a chart role and
             # still be an opaque indirection or a same-scan handoff that
             # provably returns to rest.  Both remain exact execution evidence,
             # but neither is a retained route coordinate.  Keep the terminal
             # target authoritative; immediate expectations still own exact
             # transient consumers when the selected bearing depends on one.
-            channel_tags = {
-                ctx.target.tag,
-                *(
-                    role.channel_tag
-                    for role in (*ctx.pipeline_roles, *ctx.chart_roles)
-                    if role.channel_tag not in ctx.opaque_loop
-                    and role.channel_tag not in ctx.edge_tags
-                    and role.channel_tag not in ctx.clear_only
-                    and not scan_transient_rest(
-                        role.channel_tag,
-                        ctx.pdg,
-                        ctx.program,
-                    )[0]
-                ),
-            }
             landing_expectation = selected_route_landing_expectation(
                 world.frame.tree,
                 ctx.pdg,
@@ -364,13 +403,8 @@ def _executed_attempt(bearing: Bearing, pulse: _PulseState) -> _ExecutedAttempt:
                 projections,
                 landing=pulse.snap,
                 steerable=ctx.steerable,
-                channel_tags=frozenset(channel_tags),
-                charted_values={
-                    ctx.target.tag: charted_target_values,
-                    route.channel_tag: charted_target_values,
-                }
-                if route is not None
-                else {},
+                channel_tags=channel_tags,
+                charted_values=charted_values,
             )
             if bearing.expectation is not None and landing_expectation is not None:
                 distinct = tuple(
@@ -503,7 +537,8 @@ def _apply_actions(
     state: _PilotState,
     ctx: _PilotContext,
     *,
-    lookahead: bool = False,
+    horizon: PulseHorizon = PulseHorizon.ASSERTION_SCAN,
+    consumer_boundary: Any = None,
 ) -> _PulseState:
     key_config = state.key_config
     assert key_config is not None
@@ -544,12 +579,23 @@ def _apply_actions(
     def _reached(tags: dict[str, Any]) -> bool:
         return target_reached(tags, ctx.target.tag, ctx.target.value, ctx.target.predicate)
 
-    if _reached(action_snap) or not lookahead:
+    if _reached(action_snap) or horizon is PulseHorizon.ASSERTION_SCAN:
         wait_snaps: list[dict[str, Any]] = []
-    else:
+    elif horizon is PulseHorizon.LOOKAHEAD_SCAN:
         session.step_kernel()
         session.note_pens()
         wait_snaps = [dict(fork.state.tags)]
+    else:
+        assert horizon is PulseHorizon.CONSUMER_BOUNDARY
+        assert consumer_boundary is not None
+        wait_snaps = []
+        consumer_scan = scan_before + consumer_boundary.consumer_scan_offset
+        while fork.state.scan_id < consumer_scan:
+            session.step_kernel()
+            session.note_pens()
+            wait_snaps.append(dict(fork.state.tags))
+            if _reached(wait_snaps[-1]):
+                break
 
     post_pulse_snap = dict(fork.state.tags)
     post_pulse_key = _pilot_world_key(
@@ -563,7 +609,7 @@ def _apply_actions(
         wait_snaps.append(fork_snap)
     elif not wait_snaps and action_snap != fork_snap:
         wait_snaps.append(fork_snap)
-    return _PulseState(
+    pulse = _PulseState(
         fork=fork,
         scan_before=scan_before,
         action_scan=action_scan,
@@ -583,6 +629,13 @@ def _apply_actions(
         kernel_scan_ids=session.kernel_scan_ids,
         source_snap=source_snap,
     )
+    if horizon is PulseHorizon.CONSUMER_BOUNDARY:
+        pulse.consumer_execution_horizon_reached = consumer_execution_horizon_reached(
+            consumer_boundary,
+            source_scan=scan_before,
+            projection_at=pulse.projection_at,
+        )
+    return pulse
 
 
 # ---------------------------------------------------------------------------
@@ -750,7 +803,8 @@ def _try_action_batch(
         frame,
         state,
         ctx,
-        lookahead=policy.pulse_horizon is PulseHorizon.LOOKAHEAD_SCAN,
+        horizon=policy.pulse_horizon,
+        consumer_boundary=policy.consumer_boundary,
     )
     key_config = state.key_config
     assert key_config is not None
@@ -855,6 +909,13 @@ def execute(
             state,
             ctx,
         )
+    if isinstance(act, IntrascanPulse):
+        return _try_action_batch(
+            bearing,
+            frame,
+            state,
+            ctx,
+        )
     if isinstance(act, Coast):
         if act.mode == "bearing":
             return _try_bearing_coast(
@@ -876,25 +937,25 @@ def execute(
             state,
             ctx,
         )
-    if isinstance(act, ObserveScan):
-        return _try_observe_scan(bearing, frame, state, ctx)
+    if isinstance(act, (ObserveScan, ProgramScan)):
+        return _try_single_program_scan(bearing, frame, state, ctx)
     raise TypeError(f"unsupported navigation act {type(act).__name__}")
 
 
-def _try_observe_scan(
+def _try_single_program_scan(
     bearing: Bearing,
     frame: _IterationFrame,
     state: _PilotState,
     ctx: _PilotContext,
 ) -> _AttemptResult:
-    """Execute the entry observation bearing for exactly one program scan."""
+    """Execute an observation or evidence-selected stage for exactly one scan."""
 
     fork = fork_with_pilot_rungs(state.work, state.pilot_rungs)
     scan_before = fork.state.scan_id
     snap_before = dict(fork.state.tags)
     session = CoastSession(
         fork,
-        kind="observe_scan",
+        kind=("observe_scan" if isinstance(bearing.act, ObserveScan) else "program_scan"),
         kernel_budget=(None if getattr(ctx, "collect_action_attribution", True) else False),
     )
     session.arm_avoid(ctx.avoid_pred)

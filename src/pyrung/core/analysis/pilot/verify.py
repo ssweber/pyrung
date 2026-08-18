@@ -46,10 +46,13 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     ActSource,
     Coast,
     Dwell,
+    IntrascanPulse,
     LocalProgressKind,
     NavigationConstraints,
     ObserveScan,
     OrientationWorld,
+    ProgramScan,
+    PulseHorizon,
     TargetSpec,
     act_identity,
 )
@@ -72,6 +75,8 @@ from pyrung.core.analysis.pilot.trace import (
 from pyrung.core.analysis.pilot.types import (
     AssessedMotion,
     ChannelMotion,
+    IntrascanActReceipt,
+    InvestigationProducerReceipt,
     MotionKind,
     PilotGateEvent,
     RevisitCredential,
@@ -102,6 +107,112 @@ class _DeadEndResult:
     trend: int
     has_new_frontier: bool = False
     advanced_frontier: tuple[_ActionPair, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ProgramScanOccurrenceReceipt:
+    """Exact producer observation owned by one evidence-selected scan."""
+
+    projection_available: bool
+    matching_writes: int
+    retained: bool
+    receipt: IntrascanActReceipt | None = None
+
+    @property
+    def witnessed(self) -> bool:
+        return self.receipt is not None
+
+
+@dataclass(frozen=True)
+class _InvestigationProducerReceipt:
+    """Exact ordinary writer which discharged one selected frontier goal."""
+
+    projection_available: bool = False
+    matching_writes: int = 0
+    retained: bool = False
+    receipt: InvestigationProducerReceipt | None = None
+
+    @property
+    def witnessed(self) -> bool:
+        return self.receipt is not None
+
+
+def _observe_investigation_producer(
+    attempt: _ExecutedAttempt,
+) -> _InvestigationProducerReceipt:
+    """Receipt a frontier goal without weakening ordinary attempt gates."""
+
+    selection = attempt.bearing.investigation_selection
+    goal = selection.producer_goal if selection is not None else None
+    if selection is None or goal is None or goal.identity != selection.producer_goal_id:
+        return _InvestigationProducerReceipt()
+    projection = attempt.projection_at(attempt.assertion_scan)
+    if projection is None:
+        return _InvestigationProducerReceipt()
+    matches = tuple(
+        write
+        for write in projection.writes
+        if write.rung_id == goal.rung_id
+        and tuple(write.branch_path) == tuple(goal.branch_path)
+        and write.transition.tag_name == goal.tag
+        and _values_match(write.transition.to_value, goal.value)
+    )
+    retained = _values_match(attempt.pulse.snap.get(goal.tag), goal.value)
+    receipt = (
+        InvestigationProducerReceipt(
+            frontier_id=selection.frontier_id,
+            producer_goal_id=goal.identity,
+            assertion_scan=attempt.assertion_scan,
+            write_identity=_semantic_key(matches[0]),
+            retained_assignment=(goal.tag, goal.value),
+        )
+        if len(matches) == 1 and retained
+        else None
+    )
+    return _InvestigationProducerReceipt(
+        projection_available=True,
+        matching_writes=len(matches),
+        retained=retained,
+        receipt=receipt,
+    )
+
+
+def _observe_intrascan_act_occurrence(
+    attempt: _ExecutedAttempt,
+) -> _ProgramScanOccurrenceReceipt:
+    """Read the exact stage occurrence without granting execution authority."""
+
+    act = attempt.bearing.act
+    if not isinstance(act, (ProgramScan, IntrascanPulse)):
+        raise TypeError("intrascan occurrence observation requires a typed intrascan act")
+    projection = attempt.projection_at(attempt.pulse.scan_before + 1)
+    matching = (
+        tuple(write for write in projection.writes if act.expected_write.matches(write))
+        if projection is not None
+        else ()
+    )
+    retained = _values_match(
+        attempt.pulse.snap.get(act.expected_write.tag),
+        act.expected_write.after,
+    )
+    receipt = (
+        IntrascanActReceipt(
+            evidence_identity=act.evidence_identity,
+            kind="consumer" if isinstance(act, IntrascanPulse) else "stage",
+            assertion_scan=attempt.pulse.scan_before + 1,
+            expected_write_identity=_semantic_key(act.expected_write),
+            matched_write_identity=_semantic_key(matching[0]),
+            retained_assignment=(act.expected_write.tag, act.expected_write.after),
+        )
+        if len(matching) == 1 and retained
+        else None
+    )
+    return _ProgramScanOccurrenceReceipt(
+        projection_available=projection is not None,
+        matching_writes=len(matching),
+        retained=retained,
+        receipt=receipt,
+    )
 
 
 @dataclass(frozen=True)
@@ -236,7 +347,7 @@ def _rebind_replay_attempt(
         scan_before=replay_trial.scan_before,
         action_scan=(
             None
-            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
             else replay_trial.action_scan
         ),
         coast_receipt=replay_trial.coast_receipt,
@@ -249,7 +360,7 @@ def _rebind_replay_attempt(
         scan_before=replay_trial.scan_before,
         action_scan=(
             None
-            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+            if isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
             else replay_trial.action_scan
         ),
         coast_receipt=replay_trial.coast_receipt,
@@ -468,6 +579,8 @@ def _accepted_trial(
     verification: TargetReached | AssessedMotion,
     *,
     exact_frontier_advanced: bool = False,
+    investigation_producer: InvestigationProducerReceipt | None = None,
+    intrascan_act: IntrascanActReceipt | None = None,
 ) -> _AcceptedTrial:
     """Preserve the final executed attempt and its PLC-free evidence."""
     pulse = attempt.pulse
@@ -556,7 +669,7 @@ def _accepted_trial(
         )
         if selected_receipts
         else pulse.action_scan
-        if not isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan))
+        if not isinstance(attempt.bearing.act, (Coast, Dwell, ObserveScan, ProgramScan))
         and pulse.action_scan is not None
         else pulse.fork.state.scan_id
     )
@@ -591,6 +704,8 @@ def _accepted_trial(
         ),
         replay_motion=pulse.replay_motion,
         scan_progress=scan_progress,
+        investigation_producer=investigation_producer,
+        intrascan_act=intrascan_act,
     )
     return _AcceptedTrial(
         attempt=attempt,
@@ -1402,6 +1517,24 @@ def _verify_gates(
                     avoid_names=wink,
                 )
 
+    if (
+        policy.pulse_horizon is PulseHorizon.CONSUMER_BOUNDARY
+        and trial.consumer_execution_horizon_reached is not True
+        and not target_reached(
+            trial.snap,
+            ctx.target.tag,
+            ctx.target.value,
+            ctx.target.predicate,
+        )
+    ):
+        gate_events.append(
+            PilotGateEvent(
+                "consumer-execution-horizon-rejected",
+                "transaction did not evaluate its exact consumer occurrence",
+            )
+        )
+        return _reject(nogoods=(), proof_rejection=True)
+
     # An intervention may explore a new frontier, but it may not erase
     # target-relative work the current world has already earned.  Earned work is
     # deliberately conservative: absent or unclassifiable coordinates yield
@@ -1476,6 +1609,26 @@ def _verify_gates(
         )
         return _reject(nogoods=(), proof_rejection=True)
 
+    intrascan_act_receipt = None
+    if isinstance(bearing.act, (ProgramScan, IntrascanPulse)):
+        expected = bearing.act.expected_write
+        stage_receipt = _observe_intrascan_act_occurrence(attempt)
+        if not stage_receipt.witnessed:
+            gate_events.append(
+                PilotGateEvent(
+                    "intrascan-stage-rejected",
+                    "the exact producer occurrence was not observed and retained",
+                    {
+                        "projection_available": stage_receipt.projection_available,
+                        "matching_writes": stage_receipt.matching_writes,
+                        "retained": stage_receipt.retained,
+                        "expected_write": expected,
+                    },
+                )
+            )
+            return _reject(nogoods=(), proof_rejection=True)
+        intrascan_act_receipt = stage_receipt.receipt
+
     # Reaching the target does not pardon an intervention that got there by
     # erasing already-earned work (for example, calling init so a completion
     # bit momentarily reads true).  The banked-work veto therefore precedes
@@ -1488,7 +1641,7 @@ def _verify_gates(
     ):
         return _accept_target()
 
-    if policy.local_progress is LocalProgressKind.OBSERVE_ENTRY:
+    if isinstance(bearing.act, (ObserveScan, ProgramScan, IntrascanPulse)):
         exact_one_scan = (
             trial.fork.state.scan_id == trial.scan_before + 1
             and trial.kernel_scan_ids == (trial.scan_before + 1,)
@@ -1496,19 +1649,36 @@ def _verify_gates(
         if not exact_one_scan:
             gate_events.append(
                 PilotGateEvent(
-                    "entry-observation-rejected",
-                    "entry observation did not execute exactly one scan",
+                    "single-program-scan-rejected",
+                    "program scan did not execute exactly once",
                 )
             )
             return _reject(nogoods=(), proof_rejection=True)
-        gate_events.append(
-            PilotGateEvent(
-                "entry-observed",
-                "one exact program scan is available for landing orientation",
+        if isinstance(bearing.act, ObserveScan):
+            gate_events.append(
+                PilotGateEvent(
+                    "entry-observed",
+                    "one exact program scan is available for landing orientation",
+                )
             )
-        )
+        elif isinstance(bearing.act, ProgramScan):
+            gate_events.append(
+                PilotGateEvent(
+                    "intrascan-stage-observed",
+                    "one exact producer scan is available for fresh Compass orientation",
+                    {"expected_write": bearing.act.expected_write},
+                )
+            )
+        else:
+            gate_events.append(
+                PilotGateEvent(
+                    "intrascan-consumer-observed",
+                    "one exact scan-start steer reached its conducted consumer",
+                    {"expected_write": bearing.act.expected_write},
+                )
+            )
         assessment = TrialAssessment(
-            agency=Agency.PROGRAM,
+            agency=(Agency.PILOT if isinstance(bearing.act, IntrascanPulse) else Agency.PROGRAM),
             bearing=BearingEffect.SATISFIED,
             progress=ProgressEffect.UNCHANGED,
             new_frontier=False,
@@ -1525,6 +1695,7 @@ def _verify_gates(
                 trend=frame.distance_before,
                 assessment=assessment,
             ),
+            intrascan_act=intrascan_act_receipt,
         )
         scan_progress = accepted.execution.scan_progress
         assert scan_progress is not None
@@ -1534,8 +1705,14 @@ def _verify_gates(
                 accepted.execution,
                 scan_progress=replace(
                     scan_progress,
-                    kind="observation",
-                    landing_owns_tip=False,
+                    kind=(
+                        "observation"
+                        if isinstance(bearing.act, ObserveScan)
+                        else "intrascan-direct"
+                        if isinstance(bearing.act, IntrascanPulse)
+                        else "intrascan-stage"
+                    ),
+                    landing_owns_tip=not isinstance(bearing.act, ObserveScan),
                 ),
             ),
         )
@@ -1565,6 +1742,8 @@ def _verify_gates(
             observation.appeared is not None and effect_reached_consumer(observation)
             for observation in attempt.effect_observations
         )
+        investigation_producer_receipt = _observe_investigation_producer(attempt)
+        investigation_producer_witnessed = investigation_producer_receipt.witnessed
         selected_trace_setup = bool(
             policy.source is ActSource.TRACE
             and primary is not None
@@ -1576,6 +1755,7 @@ def _verify_gates(
             or selected_trace_setup
             or declared_lifetime is not None
             or selected_effect_consumed
+            or investigation_producer_witnessed
         )
         landing_tree = _selected_route_landing_tree(trial, frame, ctx)
         landing_distance = landing_tree.unsatisfied_count() if landing_tree is not None else None
@@ -1592,9 +1772,12 @@ def _verify_gates(
             else ()
         )
         route_owned = policy.local_progress is not LocalProgressKind.TRACE_SETUP or (
-            landing_distance is not None
-            and landing_distance <= frame.distance_before
-            and not route_blockers
+            investigation_producer_witnessed
+            or (
+                landing_distance is not None
+                and landing_distance <= frame.distance_before
+                and not route_blockers
+            )
         )
         changed = tuple(
             (tag, value)
@@ -1670,6 +1853,7 @@ def _verify_gates(
             (
                 (bool(changed) and assignments_reached)
                 or intrascan_configuration_consumed
+                or investigation_producer_witnessed
                 or (
                     temporal_setup_requirements_observed
                     and len(temporal_setup_consumed) == len(applied_actions)
@@ -1703,6 +1887,10 @@ def _verify_gates(
                         "selected_trace_setup": selected_trace_setup,
                         "declared_lifetime": declared_lifetime is not None,
                         "selected_effect_consumed": selected_effect_consumed,
+                        "investigation_producer_witnessed": (investigation_producer_witnessed),
+                        "investigation_producer_matching_writes": (
+                            investigation_producer_receipt.matching_writes
+                        ),
                         "intrascan_configuration_consumed": (intrascan_configuration_consumed),
                         "temporal_setup_consumed": temporal_setup_consumed,
                         "temporal_setup_requirements_observed": (
@@ -1738,6 +1926,7 @@ def _verify_gates(
                         trend=frame.distance_before,
                         assessment=assessment,
                     ),
+                    investigation_producer=investigation_producer_receipt.receipt,
                 ),
                 gate_events=tuple(gate_events),
                 nogood_pairs=frozenset(collected_nogoods),

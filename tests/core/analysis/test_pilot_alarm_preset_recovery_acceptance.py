@@ -128,8 +128,7 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
         for requirement in requirements
     ) == (
         (">", 10, "adjustable", 1, 2),
-        (">", 20, "adjustable", 1, 3),
-        (">", 30, "adjustable", 3, 4),
+        (">", 20, "adjustable", 2, 3),
     )
 
     assert not any(event.kind == "requirement_locally_repaired" for event in events)
@@ -139,7 +138,7 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
         if event.kind == "theory_correction_composed"
         and event.data["pilot_rung"].dest == fixture.WatchdogPresetMs.name
     )
-    assert corrections == (11, 21, 31)
+    assert corrections == (11, 21)
     assert not any(
         any(tag == fixture.WatchdogPresetMs.name for tag, _value in event.data["applied"])
         for event in events
@@ -160,10 +159,10 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
     )
     assert plan.reachable, plan.reason
     assert plan.anchor_scan == 0
-    assert plan.total_scans == 4
-    assert plan.state.scan_id == 4
+    assert plan.total_scans == 3
+    assert plan.state.scan_id == 3
     assert plan.state.tags[fixture.ProcessStep.name] == fixture.COMPLETE
-    assert plan.state.tags[fixture.WatchdogPresetMs.name] == 31
+    assert plan.state.tags[fixture.WatchdogPresetMs.name] == 21
     assert plan.state.tags[fixture.Reset.name] is True
     assert plan.state.tags[fixture.AtTarget.name] is True
     assert plan.changes == {
@@ -172,25 +171,23 @@ def test_alarm_retry_uses_one_fresh_compass_transaction_per_discovery() -> None:
     }
     assert plan.ordered_steps == [
         (2, {fixture.Reset.name: True}),
-        (4, {fixture.AtTarget.name: True}),
+        (3, {fixture.AtTarget.name: True}),
     ]
 
     command_steps = tuple(step for step in plan.journal if step.kind == "pulse")
     assert len(command_steps) == 2
     assert command_steps[0].scan == 1
-    assert command_steps[0].scans == 2
+    assert command_steps[0].scans == 1
     assert command_steps[0].inputs == ((fixture.Reset.name, True),)
-    assert command_steps[1].scan == 3
+    assert command_steps[1].scan == 2
     assert command_steps[1].scans == 1
     assert command_steps[1].inputs == ((fixture.AtTarget.name, True),)
-    assert _recorded_correction_values(plan, fixture.WatchdogPresetMs.name) == frozenset(
-        {11, 21, 31}
-    )
+    assert _recorded_correction_values(plan, fixture.WatchdogPresetMs.name) == frozenset({11, 21})
 
     replay = plan.replay()
-    assert replay.state.scan_id == 4
+    assert replay.state.scan_id == 3
     assert replay.state.tags[fixture.ProcessStep.name] == fixture.COMPLETE
-    assert replay.state.tags[fixture.WatchdogPresetMs.name] == 31
+    assert replay.state.tags[fixture.WatchdogPresetMs.name] == 21
     assert replay.state.tags[fixture.Reset.name] is True
     assert replay.state.tags[fixture.AtTarget.name] is True
 

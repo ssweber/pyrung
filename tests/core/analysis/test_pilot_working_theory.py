@@ -15,14 +15,27 @@ from pyrung.core.analysis.pilot.conductivity import (
     ConductivityReach,
 )
 from pyrung.core.analysis.pilot.effects import (
+    ConsumerBoundary,
     EffectObligationSnapshot,
     EffectObservationSnapshot,
+    EffectOccurrenceSelector,
     EffectOccurrenceSnapshot,
+)
+from pyrung.core.analysis.pilot.intrascan import (
+    IntrascanBoundaryRealization,
+    IntrascanProducerGoal,
+    IntrascanProducerTrace,
+    IntrascanReadRequirement,
+    IntrascanTracebackStep,
+    IntrascanTracebackWitness,
+    IntrascanWriteEvidence,
 )
 from pyrung.core.analysis.pilot.navigation_contracts import (
     Bearing,
+    ChannelHeading,
     NavigationAct,
     OrientationRead,
+    RouteEdgeContext,
 )
 from pyrung.core.analysis.pilot.options import CandidateRead
 from pyrung.core.analysis.pilot.overlay import PilotRung
@@ -33,10 +46,16 @@ from pyrung.core.analysis.pilot.working_theory import (
     AdvanceTheory,
     ComposeTheoryCorrection,
     ConductivityResearchFinding,
+    IntrascanTracebackFinding,
+    IntrascanTracebackFrontier,
     OpenSuccessor,
     OpenTheory,
+    ProgramTransaction,
     ProveTheory,
+    RebaseTheoryWorld,
     RecordConductivityResearch,
+    RecordIntrascanTraceback,
+    RecordIntrascanTracebackFrontier,
     RecordTheoryAttempt,
     RefineTheory,
     TheoryAttemptDisposition,
@@ -53,12 +72,17 @@ from pyrung.core.analysis.pilot.working_theory import (
     TheoryTemporalIntent,
     TheoryTermination,
     active_theory_correction_rung_identities,
+    active_theory_pilot_rung_identities,
+    active_theory_superseded_correction_rung_identities,
+    active_theory_superseded_pilot_rung_identities,
     assert_detached_theory_value,
     assert_temporal_need_current,
     reduce_theory,
     temporal_need_request,
     theory_view,
 )
+from pyrung.core.context import RungId
+from pyrung.core.intrascan_counterfactual import OccurrenceBoundary
 
 
 def _boundary(label: str, scan: int) -> TheoryBoundaryIdentity:
@@ -112,6 +136,65 @@ def _requirement(label: str) -> TheoryRequirementSnapshot:
     )
 
 
+def _consumer_boundary(*, source_scan: int = 0) -> ConsumerBoundary:
+    produced = EffectOccurrenceSnapshot(
+        kind="write",
+        ordinal=20,
+        scan_id=source_scan + 1,
+        run_order=4,
+        call_invocation=None,
+        rung=(None, 4),
+        execution_kind="rung",
+        caller_rung=4,
+        call_stack=(),
+        depth=0,
+        enabled=True,
+        tag="Step",
+        values=(40, 41),
+        branch_path=(0,),
+    )
+    consumer = replace(
+        produced,
+        kind="read",
+        ordinal=23,
+        run_order=5,
+        rung=(None, 5),
+        caller_rung=5,
+        values=(41,),
+        branch_path=None,
+    )
+    return ConsumerBoundary(
+        produced_occurrence=produced,
+        consumer_occurrence=consumer,
+        producer_selector=EffectOccurrenceSelector(
+            kind="write",
+            tag="Step",
+            static_address=(None, 4, (0,)),
+            instruction_path=(0,),
+            execution_kind="rung",
+            caller_rung=4,
+            call_stack=(),
+            depth=0,
+            call_invocation=None,
+            access_index=0,
+        ),
+        consumer_selector=EffectOccurrenceSelector(
+            kind="read",
+            tag="Step",
+            static_address=(None, 5, ()),
+            instruction_path=(0,),
+            execution_kind="rung",
+            caller_rung=5,
+            call_stack=(),
+            depth=0,
+            call_invocation=None,
+            access_index=0,
+        ),
+        producer_scan_offset=1,
+        consumer_scan_offset=1,
+    )
+
+
 def _open_fact(*, identity: str = "open-1", claim: str = "stepper-complete") -> OpenTheory:
     return OpenTheory(
         claim=_claim(target=claim),
@@ -147,6 +230,8 @@ def _attempt(
         execution_owner_token=execution_owner,
         occurrence_evidence=occurrence,
         act_identity=actions,
+        act_pairs=actions,
+        selected_act_pairs=actions,
         pilot_rung_identities=(),
         disposition=disposition,
         evidence=(("scan", 1),),
@@ -303,6 +388,460 @@ def test_no_scan_composition_moves_the_progress_tip_to_the_composed_world() -> N
     assert progress.provisional_tip == replacement
     assert progress.phase_receipts[-1].superseded_pilot_rung_identities == (("PresetMs", 11),)
     assert active_theory_correction_rung_identities(state) == frozenset((replacement_identity,))
+    assert active_theory_superseded_correction_rung_identities(state) == frozenset(
+        (("PresetMs", 11),)
+    )
+
+
+def test_intrascan_traceback_finding_is_retained_without_advancing_world() -> None:
+    state, theory_id, version_id = _opened()
+    source = _boundary("source", 0)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=source,
+            refined_source=source,
+            requirements=(_requirement("link"),),
+            refinement_identity=("own-intrascan-link-requirement",),
+        ),
+    )
+    version_id = state.ledger.theories[theory_id].current_version_id
+    producer_boundary = OccurrenceBoundary(
+        RungId("route", 0),
+        "subroutine",
+        0,
+        ("route",),
+        1,
+        0,
+    )
+    consumer_boundary = replace(producer_boundary, rung_id=RungId("route", 1))
+    producer_write = IntrascanWriteEvidence(
+        producer_boundary,
+        1,
+        4,
+        "Step",
+        10,
+        98,
+    )
+    patch_write = IntrascanWriteEvidence(
+        consumer_boundary,
+        2,
+        7,
+        "Link",
+        False,
+        True,
+        counterfactual=True,
+    )
+    useful_write = IntrascanWriteEvidence(
+        consumer_boundary,
+        3,
+        10,
+        "Step",
+        98,
+        10,
+    )
+    consumer_requirements = (
+        IntrascanReadRequirement(
+            consumer_boundary,
+            2,
+            8,
+            "Link",
+            True,
+            "counterfactual_write",
+            patch_write,
+        ),
+        IntrascanReadRequirement(
+            consumer_boundary,
+            3,
+            9,
+            "Step",
+            98,
+            "program_write",
+            producer_write,
+        ),
+    )
+    producer_requirements = (
+        IntrascanReadRequirement(
+            producer_boundary,
+            1,
+            2,
+            "Link",
+            False,
+            "entry",
+        ),
+        IntrascanReadRequirement(
+            producer_boundary,
+            1,
+            3,
+            "Step",
+            10,
+            "entry",
+        ),
+    )
+    request_identity = ("intrascan-traceback-request", "Link", True)
+    witness = IntrascanTracebackWitness(
+        request_identity=request_identity,
+        source_scan=0,
+        assertion_scan=1,
+        applied_exactly_once=True,
+        application_values=((False, True),),
+        traceback_step=IntrascanTracebackStep(
+            useful_write,
+            consumer_requirements,
+            (IntrascanProducerTrace(producer_write, producer_requirements),),
+        ),
+    )
+    realization = IntrascanBoundaryRealization(
+        stage_scan=1,
+        consumer_scan=2,
+        stage_write=producer_write,
+        consumer_write=useful_write,
+        consumer_assignments=(("Link", True),),
+        witnessed=True,
+    )
+    finding = IntrascanTracebackFinding(
+        theory_id=theory_id,
+        version_id=version_id,
+        source=source,
+        request_identity=request_identity,
+        hop_identity=("intrascan-traceback-hop", "Link", True),
+        requirement_identities=(("requirement", "link"),),
+        witness=witness,
+        realization=realization,
+    )
+    fact = RecordIntrascanTraceback(finding)
+    progress_id = state.ledger.theories[theory_id].current_progress_id
+
+    recorded = reduce_theory(state, fact)
+    view = theory_view(recorded)
+
+    assert recorded.ledger.theories[theory_id].current_progress_id == progress_id
+    assert recorded.ledger.theories[theory_id].traceback_finding_ids == (finding.identity,)
+    assert recorded.ledger.traceback_findings[finding.identity] is finding
+    assert view is not None
+    assert view.traceback_finding(request_identity) is finding
+    assert view.has_traceback_finding(request_identity)
+    assert reduce_theory(recorded, fact) is recorded
+
+    with pytest.raises(TheoryInvariantError, match="no exact boundary realization"):
+        reduce_theory(
+            state,
+            RecordIntrascanTraceback(
+                replace(
+                    finding,
+                    realization=replace(realization, witnessed=False),
+                )
+            ),
+        )
+
+
+def test_open_intrascan_traceback_frontier_is_retained_without_scan_authority() -> None:
+    state, theory_id, version_id = _opened()
+    source = _boundary("source", 0)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=source,
+            refined_source=source,
+            requirements=(_requirement("step"),),
+            refinement_identity=("own-intrascan-step-requirement",),
+        ),
+    )
+    version_id = state.ledger.theories[theory_id].current_version_id
+    boundary = OccurrenceBoundary(
+        RungId("route", 1),
+        "subroutine",
+        0,
+        ("route",),
+        1,
+        0,
+    )
+    useful_write = IntrascanWriteEvidence(boundary, 3, 10, "Step", 98, 10)
+    request_identity = ("intrascan-traceback-request", "Step", 98)
+    witness = IntrascanTracebackWitness(
+        request_identity=request_identity,
+        source_scan=0,
+        assertion_scan=1,
+        applied_exactly_once=True,
+        traceback_step=IntrascanTracebackStep(
+            useful_write,
+            (
+                IntrascanReadRequirement(
+                    boundary,
+                    3,
+                    9,
+                    "Step",
+                    98,
+                    "program_write",
+                ),
+            ),
+            (),
+        ),
+    )
+    goal = IntrascanProducerGoal(
+        tag="Step",
+        value=98,
+        node_index=7,
+        rung_id=RungId("route", 0),
+        branch_path=(),
+    )
+    frontier = IntrascanTracebackFrontier(
+        theory_id=theory_id,
+        version_id=version_id,
+        source=source,
+        request_identity=request_identity,
+        hop_identity=("intrascan-traceback-hop", "Step", 98),
+        requirement_identities=(("requirement", "step"),),
+        witness=witness,
+        producer_goals=(goal,),
+        consumer_assignments=(("Link", True),),
+    )
+    fact = RecordIntrascanTracebackFrontier(frontier)
+    progress_id = state.ledger.theories[theory_id].current_progress_id
+
+    recorded = reduce_theory(state, fact)
+    view = theory_view(recorded)
+
+    assert recorded.ledger.theories[theory_id].current_progress_id == progress_id
+    assert recorded.ledger.theories[theory_id].traceback_frontier_ids == (frontier.identity,)
+    assert recorded.ledger.traceback_frontiers[frontier.identity] is frontier
+    assert view is not None
+    assert view.traceback_frontier(request_identity) is frontier
+    assert view.has_traceback_result(request_identity)
+    assert not view.has_traceback_finding(request_identity)
+    assert reduce_theory(recorded, fact) is recorded
+
+    selected_attempt = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="selected-frontier-goal",
+            actions=(("Reset", True),),
+        ),
+        investigation_frontier_id=frontier.identity,
+        producer_goal_id=goal.identity,
+    )
+    selected = reduce_theory(recorded, selected_attempt)
+    selected_receipt = selected.ledger.attempts[selected_attempt.attempt_identity]
+    assert selected_receipt.investigation_frontier_id == frontier.identity
+    assert selected_receipt.producer_goal_id == goal.identity
+
+    accepted_attempt = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-frontier-goal",
+            actions=(("Reset", True),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        investigation_frontier_id=frontier.identity,
+        producer_goal_id=goal.identity,
+    )
+    advanced = reduce_theory(recorded, accepted_attempt)
+    advanced_source = _boundary("accepted-frontier-goal", 1)
+    advanced = reduce_theory(
+        advanced,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted_attempt.attempt_identity,
+            source=source,
+            boundary=advanced_source,
+            advance_identity=("advance-accepted-frontier-goal",),
+        ),
+    )
+    advanced_view = theory_view(advanced)
+    assert advanced_view is not None
+    assert advanced_view.current_progress_attempt_id == accepted_attempt.attempt_identity
+    assert advanced_view.realized_traceback_frontier() == (
+        frontier,
+        goal,
+        advanced.ledger.attempts[accepted_attempt.attempt_identity],
+    )
+    realized_finding = IntrascanTracebackFinding(
+        theory_id=theory_id,
+        version_id=version_id,
+        source=advanced_source,
+        request_identity=frontier.request_identity,
+        hop_identity=frontier.hop_identity,
+        requirement_identities=frontier.requirement_identities,
+        witness=frontier.witness,
+        realization=IntrascanBoundaryRealization(
+            stage_scan=None,
+            consumer_scan=advanced_source.scan_id + 1,
+            stage_write=None,
+            consumer_write=useful_write,
+            consumer_assignments=frontier.consumer_assignments,
+            witnessed=True,
+        ),
+        parent_frontier_id=frontier.identity,
+        parent_producer_goal_id=goal.identity,
+        parent_attempt_id=accepted_attempt.attempt_identity,
+    )
+    realized = reduce_theory(advanced, RecordIntrascanTraceback(realized_finding))
+    assert realized.ledger.traceback_findings[realized_finding.identity] is realized_finding
+    realized_view = theory_view(realized)
+    assert realized_view is not None
+    assert realized_view.realized_traceback_frontier() is None
+
+    with pytest.raises(TheoryInvariantError, match="does not belong"):
+        reduce_theory(
+            recorded,
+            replace(
+                selected_attempt,
+                attempt_identity=("wrong-goal", "owner", "occurrence"),
+                producer_goal_id=("intrascan-producer-goal", "other"),
+            ),
+        )
+
+    refined = reduce_theory(
+        selected,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=source,
+            refined_source=source,
+            requirements=(_requirement("later-displacement"),),
+            refinement_identity=("retain-frontier-through-later-displacement",),
+        ),
+    )
+    refined_view = theory_view(refined)
+    assert refined_view is not None
+    assert refined_view.traceback_frontier(request_identity) is frontier
+    assert refined_view.current_traceback_frontiers() == (frontier,)
+
+    refined_version_id = refined.ledger.theories[theory_id].current_version_id
+    child = replace(
+        frontier,
+        version_id=refined_version_id,
+        request_identity=("intrascan-traceback-request", "RouteMode", 99),
+        hop_identity=("intrascan-traceback-hop", "RouteMode", 99),
+        witness=replace(
+            frontier.witness,
+            request_identity=("intrascan-traceback-request", "RouteMode", 99),
+        ),
+        requirement_identities=(("requirement", "later-displacement"),),
+        parent_frontier_id=frontier.identity,
+        parent_producer_goal_id=goal.identity,
+        parent_attempt_id=selected_attempt.attempt_identity,
+    )
+    chained = reduce_theory(refined, RecordIntrascanTracebackFrontier(child))
+    assert chained.ledger.traceback_frontiers[child.identity] is child
+    chained_view = theory_view(chained)
+    assert chained_view is not None
+    assert chained_view.current_traceback_frontiers() == (child,)
+    # Supersession changes actionability, not immutable research history.
+    assert chained_view.traceback_frontier(request_identity) is frontier
+
+    with pytest.raises(TheoryInvariantError, match="did not select"):
+        reduce_theory(
+            refined,
+            RecordIntrascanTracebackFrontier(
+                replace(child, parent_attempt_id=("unlinked-attempt",))
+            ),
+        )
+
+
+def test_world_rebase_retains_only_theory_owned_overlay_at_same_physical_boundary() -> None:
+    source = TheoryBoundaryIdentity(
+        world_key=(("physical", "source"), ()),
+        scan_id=0,
+        checkpoint_token=("checkpoint", "source"),
+        execution_owner_token=("execution", "source"),
+        occurrence_identity=("occurrence", "source"),
+    )
+    claim = replace(_claim(), source=source, selected_boundary=source)
+    state = reduce_theory(
+        TheoryState(),
+        OpenTheory(claim=claim, opening_identity=("world-rebase",), remaining_budget=8),
+    )
+    theory_id = state.active_theory_id
+    assert theory_id is not None
+    version_id = state.ledger.theories[theory_id].current_version_id
+    correction = ("Link", False, "guard")
+    composed = replace(source, world_key=(source.world_key[0], (correction,)))
+    state = reduce_theory(
+        state,
+        ComposeTheoryCorrection(
+            theory_id=theory_id,
+            version_id=version_id,
+            source=source,
+            composed_source=composed,
+            requirement_identities=(("requirement", "link-low"),),
+            pilot_rung_identities=(correction,),
+            composition_identity=("compose", "link-low"),
+        ),
+    )
+    rejected = RecordTheoryAttempt(
+        theory_id=theory_id,
+        version_id=version_id,
+        attempt_identity=("rejected", "owner", "occurrence"),
+        source=composed,
+        execution_owner_token=("attempt-owner",),
+        occurrence_evidence=("attempt-occurrence",),
+        act_identity=(("Reset", True),),
+        pilot_rung_identities=(correction,),
+        disposition=TheoryAttemptDisposition.REJECTED_EXACT,
+        evidence=(("scan", 1),),
+    )
+    state = reduce_theory(state, rejected)
+    state = reduce_theory(
+        state,
+        RefineTheory(
+            theory_id=theory_id,
+            parent_version_id=version_id,
+            source=composed,
+            refined_source=source,
+            requirements=(_requirement("link-high"),),
+            refinement_identity=("rewind-for-link-high",),
+            temporal_intent=TheoryTemporalIntent.RETRY_TOGETHER,
+            trigger_attempt_id=rejected.attempt_identity,
+            temporal_source=source,
+        ),
+    )
+    refined_version = state.ledger.theories[theory_id].current_version_id
+
+    state = reduce_theory(
+        state,
+        RebaseTheoryWorld(
+            theory_id=theory_id,
+            version_id=refined_version,
+            source=source,
+            rebased_source=composed,
+            retained_pilot_rung_identities=(correction,),
+            rebase_identity=("restore-owned-link-low",),
+        ),
+    )
+
+    view = theory_view(state)
+    assert view is not None
+    assert view.source == composed
+    progress = state.ledger.progress[state.ledger.theories[theory_id].current_progress_id]
+    assert tuple(receipt.kind for receipt in progress.phase_receipts) == (
+        TheoryPhaseKind.CORRECTION_COMPOSITION,
+        TheoryPhaseKind.WORLD_REBASE,
+    )
+
+    foreign = ("Foreign", True, "guard")
+    with pytest.raises(TheoryInvariantError, match="not owned by this theory"):
+        reduce_theory(
+            state,
+            RebaseTheoryWorld(
+                theory_id=theory_id,
+                version_id=refined_version,
+                source=composed,
+                rebased_source=replace(
+                    composed,
+                    world_key=(composed.world_key[0], (correction, foreign)),
+                ),
+                retained_pilot_rung_identities=(foreign,),
+                rebase_identity=("foreign-overlay",),
+            ),
+        )
 
 
 def test_multiple_attempts_share_one_version_and_duplicate_is_idempotent() -> None:
@@ -469,6 +1008,44 @@ def _effect_occurrence(
     )
 
 
+def test_program_transaction_normalizes_declared_route_and_exact_target_write() -> None:
+    wrapped = ChannelHeading(
+        "InnerStep",
+        41,
+        route=RouteEdgeContext(
+            channel_tag="Step",
+            from_value=3,
+            target_value=4,
+            effect_tag="Step",
+            effect_value=4,
+        ),
+    )
+    direct = ChannelHeading("Step", 4)
+    observation = EffectObservationSnapshot(
+        disposition="OVERWRITTEN",
+        obligation=EffectObligationSnapshot(
+            tag="Step",
+            value=4,
+            producer=(None, 0, ()),
+            consumer=None,
+            required_shape=(),
+            boundary=None,
+        ),
+        appeared=_effect_occurrence("write", 4, tag="Step", values=(3, 4)),
+    )
+
+    transaction = ProgramTransaction.from_heading(wrapped, {"Step": 3})
+    assert transaction == ProgramTransaction.from_heading(direct, {"Step": 3})
+    assert transaction == ProgramTransaction.from_effect_observation(
+        observation,
+        channel_tag="Step",
+        target_value=4,
+    )
+    assert transaction is not None
+    with pytest.raises(FrozenInstanceError):
+        transaction.target_value = 5  # ty: ignore[invalid-assignment]
+
+
 def test_compass_derives_one_consumer_front_from_split_neutral_receipts() -> None:
     state, theory_id, version_id = _opened()
     obligation = EffectObligationSnapshot(
@@ -558,6 +1135,124 @@ def test_conductivity_front_uses_occurrence_order_not_scan_zero() -> None:
     assert flow.reach is ConductivityReach.PRODUCER
     assert flow.front_occurrence is appeared
     assert flow.displacement is displacement
+
+
+def test_conductivity_comparison_ignores_entry_state_and_consumer_annotation() -> None:
+    state, theory_id, version_id = _opened()
+
+    def observation(
+        scan_id: int,
+        before: int,
+        consumer: tuple[Any, ...] | None,
+    ) -> EffectObservationSnapshot:
+        return EffectObservationSnapshot(
+            disposition="OVERWRITTEN",
+            obligation=EffectObligationSnapshot(
+                tag="Step",
+                value=40,
+                producer=(None, 2, ()),
+                consumer=consumer,
+                required_shape=(),
+                boundary=None,
+            ),
+            appeared=_effect_occurrence(
+                "write",
+                5,
+                scan_id=scan_id,
+                values=(before, 40),
+                rung_index=2,
+            ),
+            displacement=_effect_occurrence(
+                "write",
+                21,
+                scan_id=scan_id,
+                values=(40, 91),
+                rung_index=16,
+            ),
+        )
+
+    for index, current in enumerate((observation(4, 98, (None, 4, ())), observation(5, 10, None))):
+        state = reduce_theory(
+            state,
+            replace(
+                _attempt(
+                    theory_id,
+                    version_id,
+                    transition=f"same-produced-front-{index}",
+                    actions=(("Retry", index),),
+                ),
+                conductivity_observations=(current,),
+            ),
+        )
+
+    front = Compass().conductivity_front(theory_view(state))
+
+    assert front is not None
+    assert front.comparisons[-1].progress is ConductivityProgress.SAME_STOP
+
+
+def test_conductivity_comparison_changes_when_the_produced_front_advances() -> None:
+    state, theory_id, version_id = _opened()
+
+    def observation(
+        scan_id: int,
+        value: int,
+        producer_rung: int,
+    ) -> EffectObservationSnapshot:
+        return EffectObservationSnapshot(
+            disposition="OVERWRITTEN",
+            obligation=EffectObligationSnapshot(
+                tag="Step",
+                value=value,
+                producer=(None, producer_rung, ()),
+                consumer=None,
+                required_shape=(),
+                boundary=None,
+            ),
+            appeared=_effect_occurrence(
+                "write",
+                5,
+                scan_id=scan_id,
+                values=(40 if value == 41 else 98, value),
+                rung_index=producer_rung,
+            ),
+            displacement=_effect_occurrence(
+                "write",
+                21,
+                scan_id=scan_id,
+                values=(value, 91),
+                rung_index=16,
+            ),
+        )
+
+    for index, current in enumerate((observation(4, 40, 2), observation(5, 41, 4))):
+        state = reduce_theory(
+            state,
+            replace(
+                _attempt(
+                    theory_id,
+                    version_id,
+                    transition=f"advanced-produced-front-{index}",
+                    actions=(("Advance", index),),
+                ),
+                conductivity_observations=(current,),
+            ),
+        )
+
+    front = Compass().conductivity_front(theory_view(state))
+
+    assert front is not None
+    comparison = front.comparisons[-1]
+    assert comparison.progress is ConductivityProgress.STOP_CHANGED
+    assert comparison.common_stop_identity == (
+        "write",
+        (None, 16),
+        "rung",
+        16,
+        (),
+        0,
+        "Step",
+    )
 
 
 def test_theory_view_retains_conductivity_history_across_refinement() -> None:
@@ -1146,12 +1841,17 @@ def test_adjacent_monitor_receipt_can_rewind_to_the_parent_progress_boundary() -
 
 def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() -> None:
     state, theory_id, version_id = _opened()
-    accepted = _attempt(
-        theory_id,
-        version_id,
-        transition="accepted-overlay-scan",
-        actions=(("setup", True),),
-        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    boundary = _consumer_boundary()
+    accepted = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-overlay-scan",
+            actions=(("setup", True),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        consumer_boundary=boundary,
+        execution_source=_boundary("source-with-new-correctives", 0),
     )
     state = reduce_theory(state, accepted)
     overlay_source = _boundary("source-with-new-correctives", 0)
@@ -1165,8 +1865,32 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
             boundary=_boundary("overlay-landing", 1),
             advance_identity=("accept-overlay-scan",),
             execution_source=overlay_source,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                    evidence_identity=accepted.attempt_identity,
+                    execution_source=overlay_source,
+                ),
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.CONSUMER_BOUNDARY,
+                    evidence_identity=accepted.attempt_identity,
+                ),
+                TheoryPhaseReceipt(
+                    kind=TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                    evidence_identity=accepted.attempt_identity,
+                    execution_tip=_boundary("overlay-landing", 1),
+                ),
+            ),
         ),
     )
+    landing = _boundary("overlay-landing", 1)
+    scoped_view = theory_view(state)
+    assert scoped_view is not None
+    assert scoped_view.investigation_scope is not None
+    assert scoped_view.investigation_scope.execution_source == overlay_source
+    assert scoped_view.investigation_scope.frontier == landing
+    assert scoped_view.investigation_scope.accepted_attempt_id == accepted.attempt_identity
+    assert scoped_view.investigation_scope.consumer_boundary is boundary
 
     successor = replace(
         _attempt(
@@ -1176,8 +1900,10 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
             actions=(("successor", True),),
         ),
         source=overlay_source,
+        observation_boundary=landing,
     )
     state = reduce_theory(state, successor)
+    assert state.ledger.attempts[successor.attempt_identity].observation_boundary == landing
     requirement = _requirement("successor-at-overlay-source")
     state = reduce_theory(
         state,
@@ -1199,6 +1925,261 @@ def test_adjacent_monitor_receipt_can_rewind_to_its_structural_overlay_source() 
     assert request is not None
     assert request.source == overlay_source
     assert request.requirements == (requirement,)
+    retried_view = theory_view(state)
+    assert retried_view is not None
+    assert retried_view.investigation_scope is not None
+    assert retried_view.investigation_scope.retry_act_identity == accepted.act_identity
+    assert retried_view.investigation_scope.transaction_act_pairs == (("setup", True),)
+    assert retried_view.investigation_scope.transaction_selected_pairs == (("setup", True),)
+    assert retried_view.investigation_scope.consumer_boundary is boundary
+    assert retried_view.investigation_scope.transaction_rearmed is False
+
+
+def test_child_consumer_boundary_advances_without_replacing_transaction_owner() -> None:
+    state, theory_id, version_id = _opened()
+    transaction_boundary = _consumer_boundary()
+    transaction = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-context-transaction",
+            actions=(("Context", True),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        consumer_boundary=transaction_boundary,
+        execution_source=_boundary("transaction-execution", 0),
+    )
+    state = reduce_theory(state, transaction)
+    transaction_landing = _boundary("transaction-landing", 1)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=transaction.attempt_identity,
+            source=transaction.source,
+            boundary=transaction_landing,
+            advance_identity=("accept-context-transaction",),
+            execution_source=transaction.execution_source,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                    transaction.attempt_identity,
+                    execution_source=transaction.execution_source,
+                ),
+            ),
+        ),
+    )
+
+    child_boundary = _consumer_boundary(source_scan=1)
+    child = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-child-consumer",
+            actions=(("Child", True),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        source=transaction_landing,
+        consumer_boundary=child_boundary,
+        execution_source=transaction_landing,
+    )
+    state = reduce_theory(state, child)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=child.attempt_identity,
+            source=transaction_landing,
+            boundary=_boundary("child-landing", 2),
+            advance_identity=("accept-child-consumer",),
+            execution_source=transaction_landing,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    TheoryPhaseKind.CONSUMER_BOUNDARY,
+                    child.attempt_identity,
+                ),
+            ),
+        ),
+    )
+    child_landing = _boundary("child-landing", 2)
+    continuation = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-consumer-continuation",
+            actions=(),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        source=child_landing,
+    )
+    state = reduce_theory(state, continuation)
+    horizon_tip = _boundary("consumer-horizon-tip", 3)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=continuation.attempt_identity,
+            source=child_landing,
+            boundary=horizon_tip,
+            advance_identity=("extend-consumer-horizon",),
+            execution_source=child_landing,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    TheoryPhaseKind.CONSUMER_EXECUTION_HORIZON,
+                    continuation.attempt_identity,
+                    execution_tip=horizon_tip,
+                ),
+            ),
+        ),
+    )
+
+    view = theory_view(state)
+    assert view is not None
+    assert view.investigation_scope is not None
+    assert view.investigation_scope.transaction_attempt_id == transaction.attempt_identity
+    assert view.investigation_scope.transaction_act_pairs == (("Context", True),)
+    assert view.investigation_scope.execution_source == transaction.execution_source
+    assert view.investigation_scope.consumer_boundary is child_boundary
+    assert view.investigation_scope.consumer_boundary_attempt_id == child.attempt_identity
+    assert view.investigation_scope.consumer_execution_horizon is not None
+    assert (
+        view.investigation_scope.consumer_execution_horizon.transaction_attempt_id
+        == transaction.attempt_identity
+    )
+    assert (
+        view.investigation_scope.consumer_execution_horizon.source == transaction.execution_source
+    )
+    assert view.investigation_scope.consumer_execution_horizon.consumer_boundary is child_boundary
+    assert view.investigation_scope.consumer_execution_horizon.tip == horizon_tip
+
+    later_failure = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="failure-at-consumer-horizon",
+            actions=(),
+        ),
+        source=transaction.execution_source,
+        observation_boundary=horizon_tip,
+    )
+    state = reduce_theory(state, later_failure)
+    assert later_failure.attempt_identity in state.ledger.attempts
+
+
+def test_transaction_phase_can_supersede_an_exact_earlier_overlay() -> None:
+    state, theory_id, version_id = _opened()
+    setup = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-setup",
+            actions=(("Mode", True),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        pilot_rung_identities=(("Mode", True, "setup-guard"),),
+    )
+    state = reduce_theory(state, setup)
+    landing = _boundary("setup-landing", 1)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=setup.attempt_identity,
+            source=setup.source,
+            boundary=landing,
+            advance_identity=("accept-setup",),
+            execution_source=setup.source,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    TheoryPhaseKind.TEMPORAL_SETUP,
+                    setup.attempt_identity,
+                    pilot_rung_identities=setup.pilot_rung_identities,
+                ),
+            ),
+        ),
+    )
+    transaction = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="accepted-mode-transaction",
+            actions=(("Mode", False),),
+            disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+        ),
+        source=landing,
+        execution_source=landing,
+    )
+    state = reduce_theory(state, transaction)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=transaction.attempt_identity,
+            source=landing,
+            boundary=_boundary("transaction-landing", 2),
+            advance_identity=("accept-mode-transaction",),
+            execution_source=landing,
+            phase_receipts=(
+                TheoryPhaseReceipt(
+                    TheoryPhaseKind.TRANSACTION_ATTEMPT,
+                    transaction.attempt_identity,
+                    superseded_pilot_rung_identities=setup.pilot_rung_identities,
+                    execution_source=landing,
+                ),
+            ),
+        ),
+    )
+
+    assert active_theory_pilot_rung_identities(state) == frozenset()
+    assert active_theory_superseded_pilot_rung_identities(state) == frozenset(
+        setup.pilot_rung_identities
+    )
+
+
+def test_attempt_cannot_pair_a_retained_execution_source_with_an_unowned_observation() -> None:
+    state, theory_id, version_id = _opened()
+    accepted = _attempt(
+        theory_id,
+        version_id,
+        transition="accepted-owned-scan",
+        actions=(("setup", True),),
+        disposition=TheoryAttemptDisposition.ACCEPTED_PROVISIONAL,
+    )
+    state = reduce_theory(state, accepted)
+    execution_source = _boundary("execution-source", 0)
+    state = reduce_theory(
+        state,
+        AdvanceTheory(
+            theory_id=theory_id,
+            version_id=version_id,
+            accepted_attempt_id=accepted.attempt_identity,
+            source=accepted.source,
+            boundary=_boundary("owned-frontier", 1),
+            advance_identity=("accept-owned-scan",),
+            execution_source=execution_source,
+        ),
+    )
+    mismatched = replace(
+        _attempt(
+            theory_id,
+            version_id,
+            transition="mismatched-observation",
+            actions=(("successor", True),),
+        ),
+        source=execution_source,
+        observation_boundary=accepted.source,
+    )
+
+    with pytest.raises(
+        TheoryInvariantError,
+        match="attempt observation is outside its active investigation scope",
+    ):
+        reduce_theory(state, mismatched)
 
 
 def test_refinement_can_authorize_an_exact_earlier_temporal_source() -> None:
@@ -1480,7 +2461,7 @@ def test_refine_rejects_a_source_outside_the_active_boundary_chain() -> None:
         )
 
 
-def test_refine_retains_requirements_changed_boundary_for_the_new_version() -> None:
+def test_refine_retains_changed_boundary_in_the_row_behind_a_compact_version_id() -> None:
     state, theory_id, version_id = _opened()
     source = _boundary("source", 0)
     refined_source = replace(
@@ -1505,9 +2486,12 @@ def test_refine_retains_requirements_changed_boundary_for_the_new_version() -> N
     )
 
     refined_version_id = state.ledger.theories[theory_id].current_version_id
-    assert state.ledger.versions[refined_version_id].source == refined_source
-    assert source in refined_version_id
-    assert refined_source in refined_version_id
+    refined = state.ledger.versions[refined_version_id]
+    assert refined.source == refined_source
+    assert refined.parent_version_id == version_id
+    assert refined_version_id[0] == "version"
+    assert len(refined_version_id) == 2
+    assert len(refined_version_id[1]) == 64
 
 
 @pytest.mark.parametrize("changed", ["backward_scan", "owner_after_scan", "checkpoint"])

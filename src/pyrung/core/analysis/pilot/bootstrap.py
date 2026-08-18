@@ -415,22 +415,14 @@ def selected_route_landing_expectation(
 
     if not projections or not channel_tags:
         return None
-    base = bootstrap_designations(
+    off_route_tags = unexplained_route_landing_tags(
         trace,
         pdg,
         program,
+        landing=landing,
         steerable=steerable,
         channel_tags=channel_tags,
-    )
-    charted_values = charted_values or {}
-    off_route_tags = frozenset(
-        tag
-        for tag in channel_tags
-        if not any(_values_match(landing.get(tag), value) for value in charted_values.get(tag, ()))
-        if not any(
-            designation.tag == tag and _values_match(landing.get(tag), designation.value)
-            for designation in base
-        )
+        charted_values=charted_values,
     )
     if not off_route_tags:
         return None
@@ -484,6 +476,45 @@ def selected_route_landing_expectation(
         for _tag, effect in sorted(last_by_tag.items())
     )
     return EffectExpectation(obligations) if obligations else None
+
+
+def unexplained_route_landing_tags(
+    trace: TraceNode,
+    pdg: ProgramGraph,
+    program: Any,
+    *,
+    landing: Mapping[str, Any],
+    steerable: frozenset[str],
+    channel_tags: frozenset[str],
+    charted_values: Mapping[str, tuple[Any, ...]] | None = None,
+) -> frozenset[str]:
+    """Name retained channel values the selected route does not explain.
+
+    This endpoint-only question is intentionally answerable before requesting
+    ordered scan projections.  Exact occurrence research is still required to
+    attribute every returned tag; an on-route landing has no unexplained value
+    to attribute and therefore needs no historical projection replay.
+    """
+
+    if not channel_tags:
+        return frozenset()
+    base = bootstrap_designations(
+        trace,
+        pdg,
+        program,
+        steerable=steerable,
+        channel_tags=channel_tags,
+    )
+    known_values = charted_values or {}
+    return frozenset(
+        tag
+        for tag in channel_tags
+        if not any(_values_match(landing.get(tag), value) for value in known_values.get(tag, ()))
+        if not any(
+            designation.tag == tag and _values_match(landing.get(tag), designation.value)
+            for designation in base
+        )
+    )
 
 
 def observe_bootstrap_effects(
