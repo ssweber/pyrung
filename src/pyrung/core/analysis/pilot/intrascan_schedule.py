@@ -1,4 +1,4 @@
-"""Pure schedule compilation owned by the one-scan closure service.
+"""Pure finite scheduling for exact temporal requirements.
 
 The functions in this module only normalize Boolean alternatives and compile
 compatible scalar requirements to executable :class:`PilotRung` records. They

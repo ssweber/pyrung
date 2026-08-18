@@ -1743,8 +1743,8 @@ def derive_guard_requirement_from_effect(
     return RequirementDerivation(
         explanation=explanation,
         requirement=ActiveRequirement(
-            # The Stage-2 walk is report-only. Production retains the exact
-            # one-hop requirement until bounded closure owns execution.
+            # The transitive source walk is report-only. Production navigation
+            # consumes this exact occurrence-local requirement independently.
             condition=condition,
             demanding_occurrence=demanding,
             # A compound false guard is decided at its final observed read.
@@ -1858,9 +1858,9 @@ def derive_overwriter_guard_requirement_from_write(
         projection,
         preserved_values=preserved_values,
     )
-    # Preserve the pre-Stage-2 production seam: only protected terminal tags
-    # use the established deadline refinement. The complete transitive walk is
-    # exposed separately as report evidence for later bounded closure.
+    # Only protected terminal tags use the established deadline refinement.
+    # The complete transitive walk remains separate report evidence; it is not
+    # executable navigation authority.
     condition = _refine_preserved_tag_deadlines(condition, projection, preserved_values)
     demanding = occurrence_snapshot(evaluation.supporting_reads[-1])
     explanation_kind = (

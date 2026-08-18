@@ -1140,191 +1140,6 @@ def theory_occurrence_token(
     return token
 
 
-def _claim_occurrence_token(occurrence: Any) -> tuple[Any, ...]:
-    """Compatibility name for intrascan claim binding."""
-
-    return theory_occurrence_token(occurrence)
-
-
-def _observation_matches_claim_obligation(
-    observation: Any,
-    obligation: TheoryObligationSnapshot,
-) -> bool:
-    recorded = observation.obligation
-    return (
-        recorded.tag == obligation.tag
-        and _semantic_key(recorded.value) == obligation.value
-        and tuple(recorded.producer) == obligation.producer
-        and (tuple(recorded.consumer) if recorded.consumer is not None else None)
-        == obligation.consumer
-        and tuple((tag, _semantic_key(value)) for tag, value in recorded.required_shape)
-        == obligation.required_shape
-        and (
-            (recorded.boundary[0], _semantic_key(recorded.boundary[1]))
-            if recorded.boundary is not None
-            else None
-        )
-        == obligation.boundary
-        and recorded.terminal_target == obligation.terminal_target
-        and getattr(recorded, "projected_consumer", False) == obligation.projected_consumer
-    )
-
-
-def theory_claim_from_intrascan_witness(
-    witness: Any,
-    objective: Any,
-    source: TheoryBoundaryIdentity,
-    *,
-    selected_artifact_identity: tuple[Any, ...] | None = None,
-) -> TheoryClaim:
-    """Bind a selected claim to one exact detached disposable execution.
-
-    The witness contributes evidence only: its live fork has already been
-    discarded.  A claim is admitted only when every obligation has one
-    unambiguous satisfying observation owned by the same exact execution.
-    """
-
-    execution_ref = getattr(witness, "execution_ref", None)
-    if not isinstance(execution_ref, EpochRef):
-        raise TheoryInvariantError("intrascan witness execution owner is unavailable")
-    assertion_scan = getattr(witness, "assertion_scan", None)
-    if not isinstance(assertion_scan, int) or assertion_scan <= source.scan_id:
-        raise TheoryInvariantError("intrascan witness assertion boundary is invalid")
-
-    claim = theory_claim(
-        witness.overlay.expectation,
-        objective,
-        source,
-        selected_artifact_identity=selected_artifact_identity,
-    )
-    observations = tuple(witness.observations)
-    selected: list[tuple[Any, ...]] = []
-    for obligation in claim.obligations:
-        related = tuple(
-            observation
-            for observation in observations
-            if _observation_matches_claim_obligation(observation, obligation)
-        )
-        if obligation.polarity == "prevent":
-            satisfying = tuple(
-                observation for observation in related if observation.disposition == "PREVENTED"
-            )
-        else:
-            satisfying = tuple(
-                observation for observation in related if observation.disposition == "SURVIVED"
-            )
-        if len(satisfying) != 1:
-            raise TheoryInvariantError(
-                "intrascan claim requires one unambiguous satisfying occurrence"
-            )
-        observation = satisfying[0]
-        epoch = observation.execution_epoch
-        if (
-            epoch is None
-            or not (epoch.first_scan <= assertion_scan <= epoch.last_scan)
-            or (observation.appeared is not None and observation.appeared.scan_id != assertion_scan)
-            or (
-                observation.consumer_read is not None
-                and observation.consumer_read.scan_id != assertion_scan
-            )
-        ):
-            raise TheoryInvariantError("intrascan claim occurrence boundary is inconsistent")
-        if obligation.polarity != "prevent" and observation.appeared is None:
-            raise TheoryInvariantError("intrascan claim producer occurrence is unavailable")
-        if obligation.consumer is not None and observation.consumer_read is None:
-            raise TheoryInvariantError("intrascan claim consumer occurrence is unavailable")
-        selected.append(
-            (
-                "obligation-occurrence",
-                obligation.producer,
-                obligation.consumer,
-                obligation.occurrence_selector,
-                observation.disposition,
-                (
-                    _claim_occurrence_token(observation.appeared)
-                    if observation.appeared is not None
-                    else None
-                ),
-                (
-                    _claim_occurrence_token(observation.consumer_read)
-                    if observation.consumer_read is not None
-                    else None
-                ),
-                (epoch.first_scan, epoch.last_scan, epoch.initial_scan_id),
-                _semantic_key(observation),
-            )
-        )
-
-    requirement_evidence = tuple(
-        (
-            "requirement-observation",
-            _semantic_key(item.requirement_identity),
-            str(item.disposition),
-            tuple(_claim_occurrence_token(read) for read in item.observed_reads),
-            item.detail,
-        )
-        for item in witness.requirement_observations
-    )
-    bound = replace(
-        claim,
-        selected_boundary=replace(
-            source,
-            scan_id=assertion_scan,
-            owner_ref=execution_ref,
-            occurrence_identity=(
-                "intrascan-witness",
-                tuple(selected),
-                requirement_evidence,
-            ),
-        ),
-    )
-    assert_detached_theory_value(bound, path="intrascan_claim")
-    return bound
-
-
-def theory_boundary_claim(
-    objective: Any,
-    source: TheoryBoundaryIdentity,
-    boundary: Any,
-    *,
-    selected_artifact_identity: tuple[Any, ...] | None = None,
-) -> TheoryClaim:
-    """Detach an already-owned cross-scan boundary before Stage 7 transfer."""
-
-    if source.execution_ref is None:
-        raise TheoryInvariantError("cross-scan boundary owner is unavailable")
-
-    target = objective.target
-    predicate = _semantic_key(target.predicate) if target.predicate is not None else None
-    objective_snapshot = TheoryObjectiveSnapshot(
-        target_tag=target.tag,
-        target_value=_semantic_key(target.value),
-        predicate_identity=(predicate if isinstance(predicate, tuple) else (predicate,))
-        if predicate is not None
-        else None,
-        frontier=tuple((tag, _semantic_key(value)) for tag, value in objective.frontier),
-    )
-    heading = getattr(boundary, "boundary", None)
-    selected_boundary = replace(
-        source,
-        occurrence_identity=(
-            "selected-cross-scan-boundary",
-            getattr(boundary, "channel_tag", None),
-            _semantic_key(getattr(boundary, "target_value", None)),
-            _semantic_key(heading),
-        ),
-    )
-    claim = TheoryClaim(
-        source=source,
-        objective=objective_snapshot,
-        obligations=(),
-        selected_boundary=selected_boundary,
-        selected_artifact_identity=selected_artifact_identity,
-    )
-    assert_detached_theory_value(claim, path="boundary_claim")
-    return claim
-
-
 def theory_view(state: TheoryState) -> TheoryView | None:
     """Return the exact active navigation view, or ``None`` when no theory is open."""
 
@@ -2248,10 +2063,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             raise TheoryInvariantError("attempt occurrence evidence is missing")
         if fact.execution_source is not None and (
             fact.execution_source.scan_id != fact.source.scan_id
-            or (
-                fact.execution_source.scan_id > 0
-                and fact.execution_source.execution_ref is None
-            )
+            or (fact.execution_source.scan_id > 0 and fact.execution_source.execution_ref is None)
         ):
             raise TheoryInvariantError("attempt execution source evidence is inconsistent")
         if (fact.investigation_frontier_id is None) != (fact.producer_goal_id is None):
@@ -2558,10 +2370,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
                 raise TheoryInvariantError(
                     "advance execution source is not the source scan boundary"
                 )
-            if (
-                fact.execution_source.scan_id > 0
-                and fact.execution_source.execution_ref is None
-            ):
+            if fact.execution_source.scan_id > 0 and fact.execution_source.execution_ref is None:
                 raise TheoryInvariantError("advance execution source evidence is missing")
         remaining = (
             parent.remaining_budget if fact.remaining_budget is None else fact.remaining_budget
@@ -2788,9 +2597,7 @@ def _reduce_new_theory_fact(state: TheoryState, fact: TheoryFact) -> TheoryState
             evidence_identity=fact.composition_identity,
             requirement_identities=fact.requirement_identities,
             configurations=(fact.configuration,),
-            superseded_configuration_identities=(
-                fact.superseded_configuration_identities
-            ),
+            superseded_configuration_identities=(fact.superseded_configuration_identities),
         )
         progress_id: TheoryProgressId = _ledger_identity(
             "progress-compose",
