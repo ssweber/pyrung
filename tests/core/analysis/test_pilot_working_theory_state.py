@@ -6,7 +6,7 @@ from pyrsistent import pvector
 
 from pyrung import PLC, Bool, Program, out, rung
 from pyrung.core.analysis.pilot.navigation_contracts import BearingObjective, TargetSpec
-from pyrung.core.analysis.pilot.pilot import _disposable_requirement_state
+from pyrung.core.analysis.pilot.requirement_evidence import _disposable_requirement_state
 from pyrung.core.analysis.pilot.types import _CausalCheckpoint, _PilotState, _World
 from pyrung.core.analysis.pilot.working_theory import (
     OpenTheory,

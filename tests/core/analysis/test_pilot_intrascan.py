@@ -27,7 +27,7 @@ from pyrung.core.analysis.pilot.navigation_contracts import (
     TargetSpec,
     act_identity,
 )
-from pyrung.core.analysis.pilot.pilot import _derive_attempt_requirements
+from pyrung.core.analysis.pilot.requirement_evidence import _derive_attempt_requirements
 from pyrung.core.analysis.pilot.requirements import (
     GuardRequirementAtom,
     bind_guard_operand_authorities,

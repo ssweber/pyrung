@@ -115,7 +115,7 @@ def test_multi_scan_recovery_coast_adds_one_checkpoint_at_exact_last_landing(
     )
     monkeypatch.setattr(
         pilot_module,
-        "_execution_epoch_owner",
+        "execution_epoch_owner",
         lambda work, scan_id: (epoch, owner),
     )
     monkeypatch.setattr(
@@ -188,7 +188,7 @@ def test_multi_scan_recovery_window_retains_exact_causal_source(monkeypatch) -> 
     )
     monkeypatch.setattr(
         pilot_module,
-        "_execution_epoch_owner",
+        "execution_epoch_owner",
         lambda work, scan_id: (epoch, owner),
     )
 
